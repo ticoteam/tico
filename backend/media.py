@@ -480,7 +480,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
-    # The owner's Strategy Bot chat takes pictures too (backend/assistant.py, POST /api/v2/uploads/assistant/messages).
+    # POST /api/v2/uploads/assistant/messages uses this too; it refuses every upload (an Assistant room is text only).
     app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
                                         attach=chat_uploads,
                                         write=write)

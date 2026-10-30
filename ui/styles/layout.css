@@ -2,10 +2,17 @@
    The cascade runs in the order index.html links these files; keep rules in order. */
 /* main */
 #main{grid-column:2;grid-row:2;min-width:0;padding:8px 28px 60px;overflow-y:auto;max-width:1180px}
-#tree .node[draggable="true"],#tree .noderow[draggable="true"]{cursor:grab}#tree .node.dragging{opacity:.5}#tree .node.drop-target{outline:2px solid var(--accent);outline-offset:1px;border-radius:6px}
+#tree .node[draggable="true"],#tree .noderow[draggable="true"]{cursor:grab}#tree .node.dragging{opacity:.5}#tree .node.drop-target{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:6px}
 /* The nudge to the desktop app: browsers only, dismissable for a week (ui: appNudge). */
 /* The top bar holds the desktop-app nudge; search lives above the account in the sidebar. */
 #topbar{grid-column:2;grid-row:1;flex-wrap:wrap;display:flex;align-items:flex-start;justify-content:flex-end;gap:12px;padding:10px 28px 0}
+/* An empty top strip (no app nudge) takes no grid row on any page, so #main's box starts at the window's top on every
+   page and a page change never moves it. The pages that sat below the strip keep its 10px as a transparent top border;
+   the Updates chat and bot pages run their rails to the top edge and place their headers themselves (18px down). */
+@media (min-width:761px){
+  body:not(:has(#app-nudge:not([hidden]))) #topbar{display:none}
+  body:not(:has(#app-nudge:not([hidden]))) #main:not(.upd-chat-layout):not(.bot-split-layout){border-top:10px solid transparent}
+}
 #app-nudge{flex:1;display:flex;align-items:center;gap:12px;padding:8px 14px;border:1px solid var(--line);border-radius:10px;background:var(--surface);font-size:var(--t-base)}
 #app-nudge .app-nudge-text{flex:1;min-width:0}
 #app-nudge .app-nudge-get{padding:6px 12px;border-radius:8px;background:var(--accent);color:var(--accent-ink);text-decoration:none;font-weight:600;white-space:nowrap}
@@ -29,9 +36,8 @@ body.native #app-nudge{display:none}
   .tree a.node{font-size:var(--t-lg);min-height:46px;padding:6px 8px}
   .tree .dept-label{font-size:var(--t-base);min-height:44px;display:flex;align-items:center;cursor:pointer}
   .tree .cnt{font-size:var(--t-sm);padding:1px 8px}
-  .chev{width:44px;height:44px;font-size:24px;margin-left:-8px}
-  .tree li:not(.dept) .noderow{padding-left:36px}
-  .tree ul{margin-left:14px}
+  .chev{width:44px;height:44px;font-size:24px;margin-right:-8px}
+  .tree{--tree-lead:8px}
   .section-toggle{min-height:44px;font-size:var(--t-base)}
   /* iOS Safari zooms into any field whose text is under 16px and leaves the page zoomed, so on a
      phone every text field is 16px. Zoom itself stays allowed. */

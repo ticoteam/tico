@@ -247,7 +247,7 @@ function auDrawTable() {
   const box = AU.root.querySelector('.au-tbl');
   if (AU.listError) { box.innerHTML = `<p class="err au-pad">${esc(AU.listError)}</p>`; return; }
   if (AU.list === null) { box.innerHTML = '<p class="muted au-pad">Loading…</p>'; return; }
-  box.innerHTML = AU.tab === 'runs' ? auAllHTML() : auTableHTML();
+  patchLiveHTML(box, AU.tab === 'runs' ? auAllHTML() : auTableHTML());   // a fresh read that changed nothing moves nothing
   box.scrollTop = AU.scroll[AU.tab] || 0;
 }
 
@@ -316,15 +316,4 @@ function auOverviewWire(root) {
     // Scrolling near the end of the Runs tab reads the next page.
     if (AU.tab === 'runs' && AU.all?.next && !AU.all.loading && box.scrollTop + box.clientHeight > box.scrollHeight - 200) void auAllLoad(AU, true);
   }, {passive: true});
-}
-
-// What BotOps is told the viewer is looking at when no automation is open (refs.automations_filter, CONTRACT §2).
-function auBotScope() {
-  if (!AU) return {};
-  const f = AU.f, out = {range: AU.range, tab: AU.tab, shown: auShown().length};
-  if (f.q) out.q = f.q;
-  if (f.trig.size) out.trigger = [...f.trig];
-  for (const k of ['status', 'team', 'owner']) if (f[k]) out[k] = f[k];
-  if (AU.tab === 'runs' && AU.rstatus) out.run_status = AU.rstatus;
-  return {automations_filter: out};
 }

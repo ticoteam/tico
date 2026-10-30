@@ -1025,6 +1025,26 @@ class UnknownDatabase(RuntimeError):
     """The file has Tico's tables but no version record: not a database this code made."""
 
 
+def backfill_credential_uses(conn):
+    """Once: each credential's newest use per (actor, bot), from the events log (the rule credentials.record_use
+    applies from now on: a bot's run or a computer sent it, never a person's reveal). One grouped read: a per-credential
+    loop measured 62 s cold on TIDY against 16 s for this (2 s each warm). Reads events by (target, action)."""
+    if conn.execute("SELECT 1 FROM registry_metadata WHERE key='credential-use-backfill'").fetchone():
+        return
+    known = {row[0] for row in conn.execute("SELECT id FROM credentials")}
+    rows = conn.execute("SELECT target, actor, COALESCE(NULLIF(CASE WHEN detail_json LIKE '{%' "
+                        "THEN json_extract(detail_json,'$.bot') END,''), "
+                        "CASE WHEN actor LIKE 'bot:%' THEN substr(actor,5) END, '') AS bot, MAX(ts) "
+                        "FROM events WHERE action IN ('credential.revealed','credential.sent_to_computer') "
+                        "AND actor NOT LIKE 'human:%' GROUP BY target, actor, bot").fetchall()
+    # The newest event row of a pair is both its newest use and the last one logged.
+    conn.executemany("INSERT INTO credential_uses(credential_id,actor,bot,at,logged) VALUES(?,?,?,?,?) "
+                     "ON CONFLICT(credential_id,actor,bot) DO UPDATE SET at=MAX(at,excluded.at),logged=MAX(logged,excluded.logged)",
+                     [(target, actor, bot or '', at, at) for target, actor, bot, at in rows
+                      if at and target in known])
+    conn.execute("INSERT INTO registry_metadata VALUES('credential-use-backfill',?)", (json.dumps(True),))
+
+
 def add_column(conn, table, column, declaration):
     """ALTER TABLE ... ADD COLUMN unless the column is there: SQLite has no IF NOT EXISTS for it."""
     if column not in {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}:
@@ -1457,7 +1477,6 @@ def migrate(conn, adopt_legacy=False):
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schedule_occurrences'").fetchone():
         conn.execute("CREATE INDEX IF NOT EXISTS schedule_occurrences_task ON schedule_occurrences(task_id)")
     conn.execute("CREATE INDEX IF NOT EXISTS events_task_origin ON events(actor,action,target,ts DESC)")
-    conn.execute("CREATE INDEX IF NOT EXISTS events_target_action ON events(target,action)")
     # A tag's attach events (the tag list, privacy_index.tags): only ~6k rows of a 2M-row events table, read with
     # their detail. Partial and covering, so the list's IN(...) reads a few dense pages, not one row per event.
     conn.execute("CREATE INDEX IF NOT EXISTS events_tag_attach ON events(target, detail_json) WHERE action='tag.attach'")

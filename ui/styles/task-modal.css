@@ -24,6 +24,7 @@
 .task-run-form label{display:grid;gap:3px;min-width:0;font-size:var(--t-xs);color:var(--muted)}
 .task-run-form select{min-width:0;max-width:100%}
 .task-run-form button{justify-self:start}
+@media (max-width:760px){.task-run-form button{height:40px}}   /* as tall as the phone select beside it */
 .tlabels,.tlinks{display:flex;flex-wrap:wrap;gap:5px;align-items:center}
 .tlabels form.inline,.tlinks form.inline{display:inline-flex;margin:0}
 .tlabels form.inline input,.tlinks form.inline input{font-size:var(--t-sm);padding:2px 6px;width:auto}

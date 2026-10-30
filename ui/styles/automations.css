@@ -1,18 +1,20 @@
 /* ui/styles/automations.css — Automations (redesign, ui/app/automations*.js): the filters, the list and its Runs tab,
-   the flow, the editor, runs and the BotOps chat. A computer shows filters | list-or-flow | editor-or-bot; a phone
-   shows one screen at a time (#au-root[data-screen]: list, detail, bot), its filters behind a button and the editor
-   as a sheet.
+   the flow, the editor and runs. A computer shows filters | list-or-flow, and the editor beside them while one is
+   open; a phone shows one screen at a time (#au-root[data-screen]: list, detail), its filters behind a button and the
+   editor as a sheet.
    The cascade runs in the order index.html links these files; keep rules in order. */
 #main.au-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .au{display:flex;flex-direction:column;height:100%;min-height:0}
 /* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
-.au-ph{display:flex;align-items:center;gap:12px;padding:12px 20px}
+.au-ph{display:flex;align-items:center;gap:12px;padding:8px 28px;min-height:48px}
 .au-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .au-sp{flex:1}
 .au-sp-phone{display:none}
 .au-pad{padding:14px}
 .au-vh{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
-.au-body{flex:1;min-height:0;display:grid;grid-template-columns:216px minmax(0,1fr) var(--rail-right,340px)}
+.au-body{flex:1;min-height:0;display:grid;grid-template-columns:216px minmax(0,1fr)}
+.au.ed-open .au-body{grid-template-columns:216px minmax(0,1fr) var(--rail-right,340px)}
+.au:not(.ed-open) .au-side{display:none}
 .au [hidden]{display:none!important}
 
 /* the range: 5m, 1h, 24h, 7d */
@@ -26,7 +28,7 @@
 .au-fg{display:grid;align-content:start;gap:1px}
 .au-fg .au-lb{padding:0 6px 4px}
 .au-fb{display:flex;align-items:center;gap:8px;min-width:0;padding:4px 6px;border:0;border-radius:6px;background:none;color:var(--g7);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
-.au-fb:hover{background:var(--surface)}
+.au-fb:hover{background:var(--surface2)}
 .au-fb[aria-pressed="true"]{background:var(--surface2);color:var(--ink)}
 .au-fb[aria-pressed="true"] .nav-icon{color:var(--accent)}
 .au-fb .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
@@ -47,7 +49,7 @@
 .au-tbl{flex:1;min-height:0;overflow:auto;container-type:inline-size}
 /* fixed columns: long names and triggers end in "…" so the counts on the right always show */
 .au-tbl-t{width:100%;border-collapse:collapse;table-layout:fixed;font-size:var(--t-base)}
-.au-tbl-t th{position:sticky;top:0;z-index:1;padding:7px 10px;border-bottom:1px solid var(--line);background:var(--bg);color:var(--muted);font-size:var(--t-label);font-weight:500;letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left;white-space:nowrap}
+.au-tbl-t th{position:sticky;top:0;z-index:1;padding:7px 10px;border-bottom:1px solid var(--line);background:var(--bg);color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left;white-space:nowrap;font-size:var(--t-label);font-weight:600}
 .au-tbl-t td{padding:6px 10px;border-bottom:1px solid var(--line);white-space:nowrap;vertical-align:middle;overflow:hidden;text-overflow:ellipsis}
 .au-tbl-t th.au-tt{width:15%}
 .au-tbl-t th.au-to{width:64px}
@@ -60,7 +62,7 @@
 .au-tbl-t th.au-cst{width:92px}
 .au-tbl-t th.au-why{width:24%}
 .au-tbl-t th.au-out{width:20%}
-/* a narrow table beside BotOps folds Next (and a run's Steps and Time) to nothing, then Cost; folded, not removed, so a
+/* a narrow table beside the editor folds Next (and a run's Steps and Time) to nothing, then Cost; folded, not removed, so a
    group row's colspan still matches the columns. A phone keeps them all and scrolls sideways instead. */
 @media (min-width:761px){
   @container (max-width:1000px){
@@ -73,7 +75,7 @@
   }
 }
 .au-row,.au-arow{cursor:pointer}
-.au-row:hover td,.au-arow:hover td{background:var(--surface)}
+.au-row:hover td,.au-arow:hover td{background:var(--surface2)}
 .au-tn>div{display:flex;align-items:center;gap:8px;min-width:0}
 .au-tn a{display:flex;align-items:center;gap:8px;min-width:0;color:var(--ink);text-decoration:none;font-weight:500}
 .au-tn .nav-icon{font-size:17px;width:18px;height:18px;flex:none;color:var(--muted)}
@@ -88,7 +90,7 @@
 .au-grp td{padding:6px 10px;background:var(--surface);font-size:var(--t-sm);font-weight:600;cursor:pointer}
 .au-grp td>*{vertical-align:middle}
 .au-grp td>.nav-icon{font-size:17px;width:18px;height:18px;margin-right:6px;color:var(--muted)}
-.au-grp .au-chev{transition:transform var(--dur-fast,.12s)}
+.au-grp .au-chev{transition:transform var(--dur-fast) var(--ease)}
 .au-grp.closed .au-chev{transform:rotate(-90deg)}
 .au-grp .au-fn{margin-left:8px}
 .au-why{color:var(--g7)}
@@ -121,7 +123,7 @@
 /* a narrow pane puts the spend limit and Flow/Runs on a second row, as a phone does, so the name stays whole */
 @media (min-width:761px){.au-c{container-type:inline-size}}
 @container (max-width:640px){.au-c .au-hd{flex-wrap:wrap}.au-c .au-hd2{order:10;flex-basis:100%}.au-hd2 .au-sp-phone{display:block;flex:1}}
-.au-hd{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 20px;min-height:53px;border-bottom:1px solid var(--line)}
+.au-hd{display:flex;align-items:center;flex-wrap:wrap;gap:8px 10px;padding:10px 28px;min-height:53px;border-bottom:1px solid var(--line)}
 /* a long name keeps its line and the controls wrap after it; why a built-in has no switch goes on a line of its own */
 .au-hd>.au-lock,.au-hd>.au-warn,.au-hd>.au-hold{order:20;flex-basis:100%}
 .au-hold{display:flex;align-items:center;flex-wrap:wrap;gap:6px 8px;color:var(--muted);font-size:var(--t-sm)}
@@ -144,10 +146,9 @@ button.au-chip:hover{background:var(--surface2)}
 .au-icon{display:inline-flex;align-items:center;justify-content:center;flex:none;width:32px;height:32px;border:0;border-radius:7px;background:none;color:var(--muted);cursor:pointer;text-decoration:none}
 .au-icon:hover{background:var(--surface2);color:var(--ink)}
 .au-icon .nav-icon{font-size:20px;width:20px;height:20px}
-.au-back,.au-botbtn{display:none}
 
 /* the flow */
-.au-pane{flex:1;min-height:0;overflow:auto;padding:16px 20px 48px}
+.au-pane{flex:1;min-height:0;overflow:auto;padding:16px 28px 48px}
 .au-track{max-width:620px}
 .au-card{background:var(--surface);border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer}
 .au-card:hover{border-color:var(--g4)}
@@ -172,7 +173,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-add{position:relative;width:20px;height:20px;padding:0;border:1px solid var(--g4);border-radius:50%;background:var(--bg);color:var(--muted);font-size:14px;line-height:17px;cursor:pointer;transition:transform var(--dur-fast,.12s) var(--ease,ease-out)}
 .au-add::after{content:"";position:absolute;inset:-8px}
 .au-ln:hover .au-add,.au-add:hover,.au-add:focus-visible{color:var(--accent);border-color:var(--accent);transform:scale(1.2)}
-.au-add:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.au-add:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 /* the end of a list: a line down to an Add step button */
 .au-ln-end{height:auto;padding-top:16px}
 .au-ln-end::before{bottom:auto;height:16px}
@@ -207,7 +208,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-menu button:hover:not(:disabled),.au-menu button:focus-visible{background:var(--surface2)}
 .au-menu .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
 
-/* the side: an editor, else the BotOps chat */
+/* the side: the open editor */
 .au-side{display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line)}
 .au-scrim{display:none}
 .au-grab{display:none}
@@ -220,7 +221,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-edf{display:flex;align-items:center;gap:12px;padding:12px 16px;border-top:1px solid var(--line)}
 .au-del{color:var(--fail)}
 .au-f{display:grid;gap:6px;min-width:0}
-.au-lb{color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.au-lb{color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .au-f textarea{min-height:150px}
 .au-rb{display:grid;gap:6px;padding:8px;border:1px solid var(--line);border-radius:8px}
 .au-rb.focus{border-color:var(--accent)}
@@ -248,31 +249,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-vr .muted{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .au-vr>:not(.muted){flex:none}
 
-/* the BotOps chat: a panel as the Strategy Bot's rail is, on the surface colour */
-.au-botp{display:flex;flex-direction:column;min-height:0;height:100%;background:var(--surface)}
-.au-bh{display:flex;align-items:center;gap:8px;padding:12px 16px;min-height:53px;box-sizing:border-box;border-bottom:1px solid var(--line)}
-.au-bh h2{margin:0;font-size:var(--t-md);font-weight:600}
-.au-bav{display:inline-flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:var(--ok-bg);color:var(--accent);font-size:16px}
-.au-bm{flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;padding:12px}
-.au-msgs{margin-top:auto;overflow-wrap:anywhere}
-/* the app's chat look, as Goals: the name once, inside the bubble */
-.au-msgs .conv-run.chat{border:0;padding:6px 0}
-.au-msgs .conv-run-head{display:none}
-.au-msgs .bubble{margin:0}
-.au-msgs .bubble.you{border:0}
-.au-msgs .bubble.bot.reply{background:transparent;border-radius:0}
-.au-berr{margin:0 12px}
-.au-bf{display:flex;align-items:center;gap:12px;padding:6px 12px 12px}
-.au-bf>.ask{flex:1 1 auto;min-width:0}
-.au-bf .au-blank{flex:none;color:var(--muted);text-decoration:none;font-size:var(--t-sm)}
-.au-bf .au-blank:hover{color:var(--ink)}
-.au-bf .au-blank[hidden]{display:none}
-/* the composer: one line, send inside it on the right (the shared pill without the question-card box) */
-.au-bf .ask{display:flex;flex-direction:column;gap:0;margin:0;padding:0;border:0;background:transparent}
-.au-bf .p-pill{flex-wrap:nowrap;align-items:flex-end;min-height:42px;padding:3px 3px 3px 14px;border-radius:21px}
-.au-bf .ask textarea{order:0;flex:1 1 auto;min-width:0;height:34px;max-height:120px;padding:6px 0}
-.au-bf .ask .p-send-icon{width:36px;height:36px;border-width:2px}
-.au-bf :is(.p-chips,.p-why,.p-slow,.p-hint):empty{display:none}
+/* a bot's proposed change, above the versions */
 .au-prop{margin-top:10px;padding:10px 12px;border:1px solid var(--line);border-radius:10px;background:var(--surface)}
 .au-prop-t{display:flex;align-items:center;gap:8px}
 .au-prop-x{margin:4px 0 8px;font-size:var(--t-base)}
@@ -284,10 +261,10 @@ button.au-chip:hover{background:var(--surface2)}
 
 /* runs */
 .au-runs{width:100%;border-collapse:collapse;font-size:var(--t-base)}
-.au-runs th{padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);font-size:var(--t-label);font-weight:500;letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left}
+.au-runs th{padding:6px 8px;border-bottom:1px solid var(--line);color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;text-align:left;font-size:var(--t-label);font-weight:600}
 .au-runs td{padding:8px;border-bottom:1px solid var(--line);vertical-align:middle}
 .au-rr{cursor:pointer}
-.au-rr:hover{background:var(--surface)}
+.au-rr:hover{background:var(--surface2)}
 .au-rt{white-space:nowrap;color:var(--muted)}
 .au-rt .nav-icon{font-size:16px;width:16px;height:16px;vertical-align:-3px;margin-right:2px}
 .au-ro{width:100%;max-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
@@ -302,7 +279,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-sl>span:nth-child(2){flex:1;min-width:0}
 .au-more{display:flex;justify-content:center;padding:12px}
 
-@media (max-width:1099px) and (min-width:761px){.au-body{grid-template-columns:184px minmax(0,1fr) 300px}}
+@media (max-width:1099px) and (min-width:761px){.au-body{grid-template-columns:184px minmax(0,1fr)}.au.ed-open .au-body{grid-template-columns:184px minmax(0,1fr) 300px}}
 
 /* a phone: one screen at a time, the editor a sheet from the bottom, the paths a swipe with dots */
 @media (max-width:760px){
@@ -322,21 +299,16 @@ button.au-chip:hover{background:var(--surface2)}
   .au-ctl{padding:8px 12px}
   .au-ctl .au-sp,.au-sel{display:none}
   /* the table scrolls sideways in its own box; the page scrolls down */
-  .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:76px}
+  .au-tbl{flex:none;overflow-x:auto;overflow-y:visible;padding-bottom:24px}
   .au-tbl-t{min-width:820px}
   .au-crumb{padding:8px 12px 0}
   .au-hd{padding:8px 12px;border:0;flex-wrap:wrap}
-  .au-botbtn{display:inline-flex}
-  .au[data-screen="bot"] .au-botbtn,.au.ed-open .au-botbtn{display:none}
-  .au-bh .au-back{display:inline-flex;margin-left:-6px}
   .au-own,.au-hd>.au-sp{display:none}
   .au-name{flex:1 1 0}
   .au-hd2{order:10;flex-basis:100%}
   .au-sp-phone{display:block;flex:1}
   .au-icon{width:40px;height:40px}
   .au-pane{padding:4px 12px 24px;overflow:visible}
-  /* room under the last row for the BotOps button */
-  .au-pane{padding-bottom:76px}
   .au-paths{display:flex;overflow-x:auto;scroll-snap-type:x mandatory;overscroll-behavior-x:contain;scrollbar-width:none}
   .au-paths::-webkit-scrollbar{display:none}
   .au-pth{flex:0 0 84%;scroll-snap-align:start}
@@ -349,11 +321,6 @@ button.au-chip:hover{background:var(--surface2)}
   .au-add-end{height:40px;padding:0 16px 0 14px}
   .au-menu{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
   .au-menu button{min-height:44px}
-  /* the bot: its own screen above the tab bar */
-  .au[data-screen="bot"] .au-side{display:flex;height:calc(100dvh - var(--mobile-nav-height) - env(safe-area-inset-bottom))}
-  .au-bh{border:0;padding:8px 12px}
-  .au-bf .ask textarea{font-size:16px}
-  .au-bf .p-pill{border-radius:21px;padding:3px 3px 3px 14px}
   /* an editor: a sheet over the flow */
   .au.ed-open .au-side{display:flex;position:fixed;z-index:41;left:0;right:0;bottom:0;height:auto;max-height:88dvh;border-radius:14px 14px 0 0;background:var(--surface);box-shadow:0 -10px 40px rgba(0,0,0,.4)}
   .au.ed-open .au-ed{height:auto;max-height:88dvh}

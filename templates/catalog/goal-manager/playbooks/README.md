@@ -3,7 +3,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `which-run.md`: which playbook a run needs, by the work it starts from.
 - `levels.md`: what Passive, level 2 and level 3 each allow, and the limit on Needs you items.
 - `strategy-and-bets.md`: the strategy page, bets, goals, KPIs, and the commands that read and write them.
-- `draft-the-strategy.md`: a task "Draft the strategy", or the owner asking in chat. From the market pages and the
+- `draft-the-strategy.md`: a task "Draft the strategy", or the owner asking through their Assistant. From the market pages and the
   default guide, build claims the owner confirms or strikes, propose three to five bets and the four sections as
   one `strategy_draft` proposal, and ask the owner to confirm and publish. Never write the page, never publish.
 - `bet-tripped.md`: a task "Bet N: may be wrong", filed by the server when a bet's wrong-if trips, at every level.
@@ -21,7 +21,7 @@ One file per recurring kind of work. A playbook is the checklist you would hand 
 - `recoveries.md`: where the Strategy Bot is on at level 2, recoveries for red or stalled goals and merged asks.
 - `acts-on-its-own.md`: at level 3, decisions on bot tasks for red or stalled goals and clashes between Heads,
   answering bots' questions from recorded rules and decisions, and BotOps asks for broken bots.
-- `owner-chat.md`: a turn in the owner's chat with you, where you are their Assistant and act as them.
+- `owner-chat.md`: a task the owner's Assistant hands you, quoting their words: advice, or the change they asked for.
 
 ## Proposals
 Every change to a goal or a KPI that is not yours to make is a proposal the owner confirms. Write the payload

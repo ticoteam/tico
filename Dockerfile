@@ -115,6 +115,8 @@ RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
 FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin-compiled
+# The release this binary reports (runner-rs/build.rs). A release build must say its own version: checked below.
+ARG TICO_VERSION=dev
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
@@ -122,7 +124,8 @@ COPY runner-rs/src ./src
 # the source fingerprint (build.rs, `tico-runner --build-id`).
 COPY runner/harnesses /src/runner/harnesses
 COPY LICENSE /src/LICENSE
-RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner
+RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner \
+    && { [ "$TICO_VERSION" = dev ] || [ "$(/out/tico-runner --release)" = "${TICO_VERSION#v}" ]; }
 
 FROM scratch AS runner-bin-prebuilt
 ARG TARGETARCH

@@ -1,6 +1,5 @@
 /* ui/app/redesign.js — The app's shell (redesign PLAN §1, wave 1): the sidebar order, the Strategy tabs
-   (Market / Strategy / Org / Goals / Budget), the Strategy Bot's panel beside them, the moved pages and the old
-   addresses that lead to them.
+   (Market / Strategy / Org / Goals / Budget), the moved pages and the old addresses that lead to them.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -111,13 +110,12 @@ function redesignRoute(r) {
   if (r === MARKET_ROUTE || rdUnder(r, RD_BRIEFING)) { pageRdBriefing(); return true; }
   return false;
 }
-// After every route: leave Automations' state when off its page, and put the Strategy Bot beside the Strategy tabs.
+// After every route: leave Automations' and Tools' state when off their pages.
 function redesignAfterRoute() {
   if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
   if (!rdUnder(S.route || '', RD_TOOLS)) rdToolsStop();
   pagesStop(S.route || '');
   rdLibSync();
-  syncStrategyBot();
 }
 
 // The Strategy section's heading with the redesign's tabs. Lenses are the Strategy tab's second view.
@@ -134,31 +132,3 @@ function redesignStrategyHead(tab) {
 }
 
 // Org (ui/app/redesign-org.js), Market's Briefing and Listening (ui/app/redesign-market.js) are their own files.
-
-// ----------------------------------------------------------------- the Strategy Bot's panel
-// Beside every Strategy tab: a right rail on a desktop, a sheet behind a button on a phone. It stays mounted while
-// the tabs change, so a conversation and a half-typed message survive a switch; leaving Strategy stops it.
-let SBOT = null;            // {el, fab, rail}
-function syncStrategyBot() {
-  const want = rdUnder((S.route || '').split('?')[0], '#/strategy');
-  if (!want) {
-    if (SBOT) { SBOT.rail.stop?.(); SBOT.el.remove(); SBOT.fab.remove(); SBOT = null; }
-    return;
-  }
-  $('#main').classList.add('sbot-open');
-  if (SBOT?.el.isConnected) return;
-  const name = strategyBotName();
-  const el = document.createElement('aside');
-  el.id = 'sbot'; el.className = 'sbot'; el.setAttribute('aria-label', name);
-  el.innerHTML = `<header class="sbot-head"><span class="nav-icon" aria-hidden="true">auto_awesome</span><h2>${esc(name)}</h2>
-      <button class="sbot-close" type="button" aria-label="Close">✕</button></header><div class="sbot-body"></div>`;
-  const fab = document.createElement('button');
-  fab.type = 'button'; fab.id = 'sbot-fab'; fab.className = 'sbot-fab'; fab.setAttribute('aria-controls', 'sbot');
-  fab.innerHTML = `<span class="nav-icon" aria-hidden="true">auto_awesome</span><span>${esc(name)}</span>`;
-  document.body.append(el, fab);
-  const rail = {host: el.querySelector('.sbot-body')};
-  SBOT = {el, fab, rail};
-  fab.onclick = () => { el.classList.add('open'); el.querySelector('.p-text')?.focus(); };
-  el.querySelector('.sbot-close').onclick = () => el.classList.remove('open');
-  void goalManagerMount(rail);
-}

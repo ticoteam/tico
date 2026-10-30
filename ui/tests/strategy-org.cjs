@@ -3,7 +3,7 @@
 // it, pinch, the zoom toolbar above the frame and a first look that fits the width (or centres the owner) with nothing
 // clipped at either end; a teammate's sheet with its group and Move to…; the owner, and a lead inside the
 // groups it leads, move at once (PATCH /api/v2/groups), anyone else sees the group and no Move to…; no proposals and no
-// approvals; the Strategy Bot's starters ask for org changes. A phone first, then a computer.
+// approvals. A phone first, then a computer.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strategy-fake.cjs');
@@ -11,11 +11,20 @@ const {openStrategy, PHONE, DESKTOP, sideways, shot} = require('./support/strate
 const card = ref => `.rdo-card[data-rdo-ref="${ref}"]`;
 const inGroup = (page, ref, gid) => page.locator(`[data-rdo-group="${gid}"] ${card(ref)}`).count().then(n => n === 1);
 const zoomOf = page => page.evaluate(() => RDO.zoom);
+// The fit has settled: the sizer and the chart's transform read the same on two frames in a row (the fit runs again
+// once the web font is in or given up on, and when the chart or the frame changes size).
+const settled = page => page.waitForFunction(() => {
+  const sz = document.querySelector('#rdo-sz'), cv = document.querySelector('#rdo-cv');
+  const now = sz && cv ? [sz.style.width, sz.style.height, getComputedStyle(cv).transform, document.querySelector('#rdo-pane').scrollLeft].join('|') : '';
+  const same = now && now === window.__rdoLast;
+  window.__rdoLast = now;
+  return same && document.fonts.status === 'loaded';
+}, null, {polling: 'raf'});
 
 // The first look, fitted: every card inside the frame across, the owner over the middle of its row, the toolbar above the
 // frame and clear of it.
 async function fitted(page, tag) {
-  await page.evaluate(() => new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r))));
+  await settled(page);
   const f = await page.evaluate(() => {
     const box = el => el.getBoundingClientRect(), pane = document.querySelector('#rdo-pane'), p = box(pane);
     const cards = [...document.querySelectorAll('#rdo-cv .rdo-card')].map(box);
@@ -51,6 +60,7 @@ async function chart(page, tag) {
       const {page, errors, writes} = await openStrategy(browser);
       await chart(page, tag);
       // Opens readable (names 12px or more), centred on the owner, the frame down to the tab bar, the page still.
+      await settled(page);
       const look = await page.evaluate(() => {
         const pane = document.querySelector('#rdo-pane'), cv = document.querySelector('#rdo-cv');
         const name = parseFloat(getComputedStyle(cv.querySelector('.rdo-card b')).fontSize) * RDO.zoom;
@@ -188,12 +198,7 @@ async function chart(page, tag) {
       await shot(page, 'desktop-org-sheet');
       await page.locator('dialog[open] [data-close]').first().click();
       await shot(page, 'desktop-org');
-      // The Strategy Bot beside it offers org starters here, and its usual ones on Goals.
-      const starters = () => page.locator('#sbot [data-gm-starter]').allInnerTexts();
-      await page.locator('#sbot [data-gm-starter]').first().waitFor();
-      assert.deepEqual(await starters(), ['Suggest org changes', 'Who should lead each group?', 'Fix reporting lines'], tag + ': org starters');
-      await page.evaluate(() => { location.hash = '#/strategy/goals'; });
-      await page.waitForFunction(() => document.querySelector('#sbot [data-gm-starter]')?.textContent === 'Set a goal');
+      assert.equal(await page.locator('#sbot').count(), 0, tag + ': no Strategy Bot beside the chart');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
@@ -215,6 +220,7 @@ async function chart(page, tag) {
         }
         rdoDraw({refit: true});
       });
+      await settled(page);
       const ends = await page.evaluate(() => {
         const pane = document.querySelector('#rdo-pane'), p = pane.getBoundingClientRect(), l = p.left + pane.clientLeft, r = l + pane.clientWidth;
         const cards = () => [...document.querySelectorAll('#rdo-cv .rdo-card')].map(el => el.getBoundingClientRect());

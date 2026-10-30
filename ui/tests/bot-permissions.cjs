@@ -196,6 +196,7 @@ async function access(browser) {
   // The settings hook is present so only the access check can hide the Tasks header icons.
   await page.evaluate(() => { window.botTaskSettingsOpen = () => {}; });
   await page.goto('https://tico-ui.test/#/bot/intake');
+  await page.waitForFunction(() => S.route === '#/bot/intake');   // a page change draws a frame later (its fade)
   await page.locator('#btabs').waitFor({state: 'attached'});
   assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['chat', 'tasks', 'info']);
   await page.locator('#bot-tasks .rail-head').waitFor({state: 'attached'});
@@ -212,6 +213,7 @@ async function access(browser) {
   assert.match(await about.innerText(), /Owner\s*Ana/);
   assert.match(await about.innerText(), /See it and send requests/);
   await page.goto('https://tico-ui.test/#/bot/sales');
+  await page.waitForFunction(() => S.route === '#/bot/sales');
   await page.locator('#btabs').waitFor({state: 'attached'});
   assert.deepEqual(await page.locator('#btabs [data-bt]').evaluateAll(ns => ns.map(n => n.dataset.bt)), ['info'], 'see only: no chat, no tasks');
   assert.match(await page.locator('#pane-more').innerText(), /See it only/);

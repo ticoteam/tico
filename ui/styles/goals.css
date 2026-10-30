@@ -1,9 +1,9 @@
 /* ui/styles/goals.css — Goals: tree, editor, KPI panel.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* goals: one tree, a line per owner (indent guides like the org chart), the goal to the right */
-.gt{--ind:14px;--name-w:230px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
+/* goals: one tree, a line per owner, hung from its manager like the team list, the goal to the right */
+.gt{--gt-pad:10px;--gt-gpad:10px;--gt-av:20px;--gt-el:12px;--ind:calc(var(--gt-av) / 2 + var(--gt-el) + var(--tree-gap));--name-w:230px;list-style:none;margin:0 0 var(--s5);padding:4px 0;background:var(--surface);border:1px solid var(--line);border-radius:var(--radius)}
 .gt-row,.gt-group{display:grid;grid-template-columns:calc(var(--d,0) * var(--ind)) 28px max(48px,calc(var(--name-w) - var(--d,0) * var(--ind) - 28px)) minmax(0,1fr) auto;
-  grid-template-areas:"ind av name goal kpis";align-items:stretch;min-height:36px;padding:0 10px;font-size:var(--t-base);line-height:var(--lh-tight)}
+  grid-template-areas:"ind av name goal kpis";align-items:stretch;min-height:36px;padding:0 var(--gt-pad);font-size:var(--t-base);line-height:var(--lh-tight)}
 .gt-row{cursor:pointer}.gt-row:hover,.gt-row:focus-visible{background:var(--surface2);outline:none}
 /* "+" adds a goal for the line's owner (a group's: its lead), shown under a pointer; a phone long-presses the line. */
 .gt-row,.gt-group{position:relative}
@@ -11,14 +11,25 @@
 .gt-add:hover{border-color:var(--accent);color:var(--accent)}
 @media (hover:hover){.gt-row:hover>.gt-add,.gt-row:focus-within>.gt-add,.gt-group:hover>.gt-add{display:inline-flex}}
 .gt-row>.gt-goal{cursor:pointer}
-.gt-ind{grid-area:ind;background:repeating-linear-gradient(to right,transparent 0 6px,var(--line) 6px 7px,transparent 7px var(--ind))}
+.gt-ind{grid-area:ind}
+/* The lines (tree-lines.css), measured from the line's left edge. The rows are one flat list, each with its depth
+   (--d), so goalTreeLines (goals-kpis.js) says which piece each row draws: gt-elbow, from the row's top into its
+   avatar; gt-kids, the stub out of the foot of its own avatar (a group's: its name's left edge); and a gt-rail for
+   each level whose line runs on through it. A level's rail hangs from its manager's avatar, or a group's left edge. */
+.gt-ind,.gt-rail{--gt-px:calc(var(--gt-pad) + var(--gt-av) / 2)}
+.gt-ind.gt-gp,.gt-rail.gt-gp{--gt-px:var(--gt-gpad)}
+.gt-ind{--tree-x:calc(var(--gt-px) + (var(--d) - 1) * var(--ind));--tree-elbow:calc(var(--gt-pad) + var(--d) * var(--ind) - var(--tree-gap) - var(--tree-x));
+  --tree-y:50%;--tree-stub-x:calc(var(--gt-pad) + var(--d) * var(--ind) + var(--gt-av) / 2);--tree-from:calc(var(--tree-y) + var(--gt-av) / 2)}
+.gt-group>.gt-ind{--tree-stub-x:calc(var(--gt-gpad) + var(--d) * var(--ind));
+  --tree-elbow:calc(var(--gt-gpad) + var(--d) * var(--ind) - var(--tree-gap) - var(--tree-x));--tree-from:calc(50% + var(--t-label) / 2)}
+.gt-rail{display:contents;--tree-x:calc(var(--gt-px) + (var(--l) - 1) * var(--ind))}
 .gt-av,.gt-name,.gt-goal,.gt-kpis{display:flex;align-items:center;min-width:0}
 .gt-av{grid-area:av}.gt-name{grid-area:name;padding-right:12px}.gt-goal{grid-area:goal;gap:8px}.gt-kpis{grid-area:kpis;gap:6px;padding-left:12px}
 .gt-name>span,.gt-title{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gt-co .gt-name{font-weight:600}
 .gt-co-av{width:20px;height:20px;border-radius:5px;background:var(--ink);color:var(--bg);font-size:var(--t-xs);font-weight:600}
 .gt-standing{color:var(--muted)}
-.gt-group{min-height:26px;grid-template-areas:"ind name name name name"}
+.gt-group{min-height:26px;padding-left:var(--gt-gpad);grid-template-areas:"ind name name name name"}
 .gt-group>.gt-name{font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
 .gt-chip{display:inline-flex;align-items:center;gap:5px;max-width:120px;height:20px;padding:0 7px;border-radius:10px;background:var(--surface2);font-size:var(--t-sm);white-space:nowrap}
 .gt-chip>.tnum{overflow:hidden;text-overflow:ellipsis}
@@ -30,9 +41,13 @@
 .gt-needs-h .cnt{font-size:var(--t-xs);padding:0 6px;border-radius:9px;background:var(--wait-bg);color:var(--wait-ink);letter-spacing:var(--track-normal)}
 .gt-needs ul{list-style:none;margin:0;padding:0}
 @media (max-width:760px){
-  .gt{--ind:10px;padding:2px 0}
-  .gt-row{grid-template-columns:calc(var(--d,0) * var(--ind)) 26px minmax(0,1fr) auto;grid-template-areas:"ind av name kpis" "ind . goal goal";min-height:44px;padding:0 8px}
+  .gt{--gt-pad:8px;--gt-el:var(--tree-r);--gt-line:22px;padding:2px 0}
+  .gt-row{grid-template-columns:calc(var(--d,0) * var(--ind)) 26px minmax(0,1fr) auto;grid-template-areas:"ind av name kpis" "ind . goal goal";min-height:44px;padding:0 var(--gt-pad)}
   .gt-row.gt-cont{grid-template-areas:"ind . goal kpis"}
+  /* a line with no goal is one row, its avatar in the middle; with one, the avatar's row is a fixed line, for its elbow */
+  .gt-row:not(.gt-cont):not(:has(>.gt-goal)){grid-template-areas:"ind av name kpis"}
+  .gt-row:not(.gt-cont):has(>.gt-goal){grid-template-rows:var(--gt-line) auto}
+  .gt-row:has(>.gt-goal)>.gt-ind{--tree-y:calc(var(--gt-line) / 2)}
   .gt-row>.gt-goal{padding-bottom:6px}.gt-row.gt-cont>.gt-goal{padding-bottom:0}
   .gt-group{grid-template-columns:calc(var(--d,0) * var(--ind)) minmax(0,1fr);grid-template-areas:"ind name"}
   .gt-chip,.gt-kmore{display:none}.gt-kn{display:inline-flex}
@@ -56,12 +71,12 @@
 /* the bot page's Goals card: a goal edited in place */
 .goal-lines{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:1px;min-width:0}
 .goal-lines li{display:flex;align-items:center;gap:7px;line-height:var(--lh);cursor:pointer;border-radius:4px;padding:0 4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.goal-lines li:hover{background:var(--surface)}
+.goal-lines li:hover{background:var(--surface2)}
 .goal-lines li>span:last-child{overflow:hidden;text-overflow:ellipsis}
 .head-goals{margin-top:6px;font-size:var(--t-base)}.head-goals:empty{display:none}.head-goals li{padding-left:0}.head-goals li:hover{background:var(--surface2)}
 .goal-ed-row{display:flex;align-items:center;gap:4px}
 input.goal-ed-text{flex:1;min-width:0;width:100%;font:inherit;color:var(--ink);background:transparent;border:1px solid transparent;border-radius:4px;padding:2px 6px;margin-left:-6px}
-input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:none;border-color:var(--accent);background:var(--bg)}
+input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-text:focus{outline:var(--focus-halo);outline-offset:0;border-color:var(--accent);background:var(--bg)}
 .goal-ed-link{flex:none;width:28px;height:28px;padding:0;display:inline-flex;align-items:center;justify-content:center}
 .goal-ed-link .nav-icon{font-size:18px}
 .goal-ed-supports{font-size:var(--t-sm);color:var(--muted)}.goal-ed-supports:empty{display:none}.goal-ed-supports a{color:inherit;text-decoration:underline}
@@ -194,22 +209,6 @@ input.goal-ed-text:hover:not([readonly]){border-color:var(--line)}input.goal-ed-
 }
 
 #goal-body{max-width:1180px}
-.gm-chat{display:flex;flex-direction:column;justify-content:flex-start;gap:6px;min-width:0}
-.gm-chat>.rail-h{margin:0}
-.gm-thread{display:flex;flex-direction:column;min-height:100px;max-height:55vh;overflow-y:auto;overscroll-behavior:contain;overflow-wrap:anywhere;padding-right:4px}
-.gm-thread .conv-run.chat{border:0;padding:6px 0}
-.gm-thread .conv-run-head{display:none}
-.gm-thread .bubble{margin:0}
-.gm-thread .bubble.you{border:0}
-.gm-thread .bubble.bot.reply{background:transparent;border-radius:0}
-.gm-thread [data-gm-live]{min-width:0}
-.gm-starters{display:flex;flex-wrap:wrap;gap:6px;margin-top:auto}
-.gm-starters button{font-size:var(--t-sm)}
-.gm-form{min-width:0}
-.gm-form .ask{margin:0}
-.gm-form .p-chips:empty{display:none}
-.gm-chat .err{margin:0;font-size:var(--t-sm)}
-.gm-on{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:0}
 /* Strategy proposals in Needs you (ui/goals-kpis.js strategyDraftPropHtml, strategyRealignPropHtml): a compact list of
    what changes, or one row per goal with its Keep / Retire / Move to. */
 .kpi-prop.strat-prop{align-items:flex-start}

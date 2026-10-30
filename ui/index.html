@@ -20,6 +20,7 @@
 <!-- bundle:css:start -->
 <link rel="stylesheet" href="/tico/ui/styles/tokens.css">
 <link rel="stylesheet" href="/tico/ui/styles/base.css">
+<link rel="stylesheet" href="/tico/ui/styles/tree-lines.css">
 <link rel="stylesheet" href="/tico/ui/styles/sidebar.css">
 <link rel="stylesheet" href="/tico/ui/styles/team-add.css">
 <link rel="stylesheet" href="/tico/ui/styles/avatars.css">
@@ -98,8 +99,8 @@
   <header class="side-head">
     <button class="side-close" type="button" aria-label="Close navigation">×</button>
   </header>
-  <!-- The rail is Tasks, the Assistant, BotOps, Goals, Docs, Strategy (with Market) and Meetings, then the team and
-       the message bots. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
+  <!-- The rail is Overview, Updates, Tasks, Docs, Strategy (with Market) and Meetings, then the team and the message
+       bots; the Assistant is Ask, and its helpers have no row. Tools, Runs, Replay, Usage, Changelog and Settings sit in the account menu below.
        The phone drawer (More) shows the same, opened. -->
   <nav class="side-scroll" aria-label="Pages and bots">
     <div id="side-update" class="side-rec finishing" role="status" hidden title="Tico is installing an update. Bots finish what they are doing; new work waits a few minutes, then starts on its own."><span class="dot" aria-hidden="true"></span><span class="side-rec-time">Updating</span><span class="side-rec-title">Tico · new bot work starts after</span></div>
@@ -107,7 +108,6 @@
     <a class="nav-link" href="#/welcome" data-nav="welcome" id="nav-welcome" hidden><span class="nav-icon" aria-hidden="true">check_circle</span>Finish setup</a>
     <a class="nav-link" href="#/updates" data-nav="updates"><span class="nav-icon" aria-hidden="true">dynamic_feed</span>Updates<span class="nav-badge" data-upd-badge hidden></span></a>
     <a class="nav-link" href="#/tasks" data-nav="tasks"><span class="nav-icon" aria-hidden="true">task_alt</span>Tasks</a>
-    <!-- The Librarian's settings are on the Docs page (ui/docs-page.js), not beside Docs here. -->
     <a class="nav-link" href="#/docs" data-nav="docs"><span class="nav-icon" aria-hidden="true">docs</span>Docs</a>
     <a class="nav-link" href="#/strategy" data-nav="strategy"><span class="nav-icon" aria-hidden="true">strategy</span>Strategy</a>
     <a class="nav-link" href="#/meetings" data-nav="meetings"><span class="nav-icon" aria-hidden="true">forum</span>Meetings<span class="nav-badge meet-pending-badge" data-meet-pending hidden></span></a>
@@ -205,7 +205,6 @@
 <script src="/tico/ui/bot-tools.js"></script>
 <script src="/tico/ui/docs-search.js"></script>
 <script src="/tico/ui/docs-editor.js"></script>
-<script src="/tico/ui/docs-ask.js"></script>
 <script src="/tico/ui/docs-page.js"></script>
 <script src="/tico/ui/market-briefing.js"></script>
 <script src="/tico/ui/market-page.js"></script>
@@ -335,7 +334,6 @@
 <script src="/tico/ui/app/automations-editors.js"></script>
 <script src="/tico/ui/app/automations-runs.js"></script>
 <script src="/tico/ui/app/automations-overview.js"></script>
-<script src="/tico/ui/app/automations-bot.js"></script>
 <script src="/tico/ui/app/usage.js"></script>
 <script src="/tico/ui/app/replay.js"></script>
 <script src="/tico/ui/app/computer-screen.js"></script>

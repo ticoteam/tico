@@ -30,9 +30,9 @@ const MARKET_TYPES = [
 
 const MARKET_BRIEF = 'brief';
 
-// Nothing about the market is written here: the Overview is the page the Librarian writes
-// (playbooks/market-setup.md). Until the market has content the page is its own empty state, drawn in
-// the app's theme rather than the graph's dark room: the Librarian's questions, or the notice while it works.
+// Nothing about the market is written here: the Overview is the page the Librarian, a helper nobody chats with,
+// writes (playbooks/market-setup.md). Until the market has content the page is its own empty state, drawn in the app's
+// theme rather than the graph's dark room: the setup questions, or the notice while the research runs.
 const marketStyle = document.createElement('style');
 marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-items:center;justify-content:center;overflow:auto;padding:32px 16px 12vh;background:var(--bg);color:var(--ink)}
 .market-start{width:min(560px,100%);display:grid;gap:10px;margin:0}
@@ -41,8 +41,6 @@ marketStyle.textContent = `.market-shell.market-shell-blank{display:flex;align-i
 .market-start h1 label{font-size:inherit;color:inherit}
 .market-start textarea{min-height:112px;font:inherit;font-size:14px}
 .market-start .err{margin:0;font-size:13px}
-.market-who{display:flex;align-items:center;gap:6px;margin:0;color:var(--muted);font-size:13px}
-.market-who .nav-icon{font-size:17px;color:var(--accent)}
 .market-hint{margin:0;color:var(--muted);font-size:13.5px;line-height:1.5}
 .market-count{white-space:nowrap;opacity:.8}
 .market-count::before{content:"· "}
@@ -215,7 +213,7 @@ async function mountMarket(shell) {
     clearTimeout(listTimer); ++listVersion;
     listTimer = setTimeout(() => void fetchIndex(filter.value), 180);
   };
-  // Research with the Librarian on the page or entry being read (ui/docs-editor.js).
+  // Research on the page or entry being read (ui/docs-editor.js).
   let shownBody = '';
   $('#market-read').addEventListener('click', event => {
     const button = event.target.closest('[data-market-research]');
@@ -277,7 +275,7 @@ async function mountMarket(shell) {
 }
 
 // ---------------------------------------------------------------- an empty market
-// On a first visit the Librarian asks the owner four questions, one at a time (backend/librarian_setup.py): what you
+// On a first visit Market asks the owner four questions, one at a time (backend/librarian_setup.py): what you
 // sell, who buys it, who you compete with, what to watch. Each answer is kept on the server as it is given, so
 // "Skip for now" leaves and Continue picks up at the same question, in any browser. The last one files "Set up the
 // market map" (templates/catalog/librarian/playbooks/market-setup.md), which builds the map and sets what Market
@@ -287,12 +285,12 @@ async function mountMarket(shell) {
 const MARKET_RESEARCH_KEY = 'tico.market.researching';
 const MARKET_RESEARCH_MIN = 2 * 60 * 1000, MARKET_RESEARCH_MAX = 30 * 60 * 1000, MARKET_RESEARCH_POLL = 30 * 1000;
 let MARKET_RESEARCH = null;        // the same record in memory, for a browser that will not store it
-// [key, question, hint, placeholder]. Only the first must be answered: the Librarian finds the rest.
+// [key, question, hint, placeholder]. Only the first must be answered: the research finds the rest.
 const MARKET_QUESTIONS = [
   ['sell', 'What do you sell?', 'Your website, or a sentence or two.', 'https://example.com'],
-  ['buyers', 'Who buys it?', "The kinds of companies or people, and where they are. Leave it blank and I'll work it out.", 'Property managers in the US Midwest'],
-  ['competitors', 'Who do you compete with?', "Names or websites, one per line. Leave it blank and I'll find them.", 'CleanCo\nhttps://sparkle.example'],
-  ['watch', 'What should Market watch?', "Where your buyers talk, topics, rules or people to follow. Leave it blank and I'll suggest some.", 'r/PropertyManagement, new licensing rules'],
+  ['buyers', 'Who buys it?', 'The kinds of companies or people, and where they are. Optional.', 'Property managers in the US Midwest'],
+  ['competitors', 'Who do you compete with?', 'Names or websites, one per line. Optional.', 'CleanCo\nhttps://sparkle.example'],
+  ['watch', 'What should Market watch?', 'Where your buyers talk, topics, rules or people to follow. Optional.', 'r/PropertyManagement, new licensing rules'],
 ];
 
 function marketResearchGet() {
@@ -317,13 +315,10 @@ async function marketSig() {
   return `${(entities.total ?? (entities.entities || []).length)}|${written.reduce((a, b) => a > b ? a : b, '')}`;
 }
 
-const MARKET_WHO = '<p class="market-who"><span class="nav-icon" aria-hidden="true">auto_awesome</span>Librarian</p>';
-
 function marketQuestionHtml(setup) {
   const [key, question, hint, placeholder] = MARKET_QUESTIONS[setup.step];
   const last = setup.step === MARKET_QUESTIONS.length - 1;
   return `<form class="market-start" data-market-setup data-step="${setup.step}" novalidate>
-      ${MARKET_WHO}
       <h1><label for="market-answer">${esc(question)}</label></h1>
       <p class="market-hint" id="market-hint">${esc(hint)} <span class="market-count">${setup.step + 1} of ${MARKET_QUESTIONS.length}</span></p>
       <textarea id="market-answer" name="answer" rows="4" maxlength="4000" autocomplete="off" aria-describedby="market-hint" placeholder="${esc(placeholder)}">${esc(setup.answers[key] || '')}</textarea>
@@ -338,15 +333,14 @@ function marketQuestionHtml(setup) {
 function marketBlankHtml(row, setup) {
   if (row) return `<div class="market-researching" data-market-researching role="status">
       <span class="market-spin" aria-hidden="true"></span>
-      <div><strong>The Librarian is researching your market.</strong>
+      <div><strong>Researching your market.</strong>
         <p>This usually takes 5–10 minutes.${row.task ? ` <a href="#/task/${esc(row.task)}">View task</a>` : ''}</p></div></div>`;
   if (!(S.me?.cloud && S.me.role === 'owner') || !setup) return '<p class="market-none">Nothing here yet.</p>';
   if (!setup.skipped) return marketQuestionHtml(setup);
   const answered = MARKET_QUESTIONS.filter(([key]) => setup.answers[key]).length;
   return `<div class="market-start" data-market-resume>
-      ${MARKET_WHO}
       <h1>Set up Market</h1>
-      <p class="market-hint">I have ${MARKET_QUESTIONS.length} questions about your market, to set what Market tracks. You've answered ${answered}.</p>
+      <p class="market-hint">${MARKET_QUESTIONS.length} questions about your market set what Market tracks. You've answered ${answered}.</p>
       <div class="market-start-actions"><button class="primary" type="button" data-market-continue>Continue</button>
         <a href="#/docs?import=1">Attach files</a></div>
     </div>`;
@@ -439,7 +433,7 @@ async function mountBlank(shell) {
   return {shell, open: async () => {}, stop: () => watch(false)};
 }
 
-// The note's kicker, and Research for a page or entry the Librarian can add to.
+// The note's kicker, and Research for a page or entry the research can add to.
 function marketHead(kicker, target) {
   return `<div class="market-read-head"><p class="market-kicker">${esc(kicker)}</p>${target && S.me?.role === 'owner'
     ? `<button class="market-research" type="button" data-market-research="${esc(target)}">Research</button>` : ''}</div>`;

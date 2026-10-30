@@ -287,6 +287,11 @@ CREATE VIRTUAL TABLE IF NOT EXISTS mail_fts USING fts5(
  subject, body, from_addr, to_text, mailbox UNINDEXED, msg_id UNINDEXED, tokenize='porter unicode61');
 CREATE TABLE IF NOT EXISTS credential_keys(
  id TEXT PRIMARY KEY, kms_key TEXT NOT NULL, wrapped_key BLOB NOT NULL);
+CREATE TABLE IF NOT EXISTS credential_uses(
+ credential_id TEXT NOT NULL, actor TEXT NOT NULL, bot TEXT NOT NULL DEFAULT '', at TEXT NOT NULL,
+ logged TEXT NOT NULL DEFAULT '',
+ PRIMARY KEY(credential_id, actor, bot));
+CREATE INDEX IF NOT EXISTS credential_uses_at ON credential_uses(credential_id, at);
 CREATE TABLE IF NOT EXISTS credentials(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, username TEXT NOT NULL DEFAULT '',
  kind TEXT NOT NULL, env TEXT NOT NULL DEFAULT '', preview TEXT NOT NULL DEFAULT '',
@@ -549,8 +554,9 @@ def sweep_deltas(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
 # The `events` log keeps every action except these bookkeeping ones, which the hourly sweep drops once they are older
 # than EVENT_RETENTION_DAYS. Not swept, because a reader needs old rows of them: `attempt.input.moved` (the privacy
 # and provenance of an old run: live_privacy, read_deps, provenance_clock), `attempt.limited` (login_holds names the
-# runtime of an old limited run that kept no limit_source), `credential.revealed` (credentials.last_used reads the
-# newest use of a credential, however old).
+# runtime of an old limited run that kept no limit_source). `credential.revealed` and `credential.sent_to_computer`
+# are not swept: they are the credential's audit trail, and their repeats are written less often (credentials.record_use).
+# Old rows of them stay; credential_uses keeps each last use, so nothing reads them for it.
 EVENT_SWEEP_ACTIONS = ("message.delivered", "turn.start", "turn.finish", "status.set", "wake.skipped", "sql.query",
                        "message.notice")
 EVENT_RETENTION_DAYS = 30
@@ -961,6 +967,8 @@ class Store:
             # Destinations saved in Settings > Listening (backend/listening.py).
             from . import listening as _listening
             _listening.ensure(c)
+            # Each credential's newest use per (actor, bot) (credentials.last_used): credentials.record_use keeps it.
+            H.backfill_credential_uses(c)
             c.execute("BEGIN IMMEDIATE")
             try:
                 # Who may see, read and write to each bot (backend/bot_access.py); NULL is Open.
@@ -1622,6 +1630,15 @@ class Store:
                                    ("task_links_pr_head", "task_links(json_extract(detail_json,'$.head_sha')) WHERE kind='pr'"),
                                    # A task's runs (the task view's runs and its Runs section, backend/run_view.py).
                                    ("turns_task", "turns(task_id, started)"),
+                                   # A message's runs: task_delete counts them on every delete, and topic_change
+                                   # and the run visibility (sql.py) look them up by message.
+                                   ("turns_message", "turns(message_id)"),
+                                   # A conversation's runs: task_delete counts them, the foreign key check of a
+                                   # deleted conversation reads them, and stream_capture looks them up.
+                                   ("attempt_conversations_conversation", "attempt_conversations(conversation_id)"),
+                                   # A task's file activity: task_delete counts it, and the activity a person may
+                                   # see by task (sql.py) reads it.
+                                   ("bot_file_activity_task", "bot_file_activity(task_id)"),
                                    # A blob's provenance (task_privacy.blob_readable), read for every
                                    # version of every file a bot's Files tab lists and for each download.
                                    ("message_assets_blob", "message_assets(blob_id)"),
@@ -1655,6 +1672,10 @@ class Store:
                 c.execute("DROP INDEX IF EXISTS jobs_state_bot_created")
                 # Duplicated the UNIQUE(channel, ts) autoindex.
                 c.execute("DROP INDEX IF EXISTS slack_events_channel_ts")
+                # Redundant with events_action_target (action, target, ts): every action-and-target read plans on it
+                # (backend/tests/test_events_indexes.py), and no read is target-only. 118 MB on TIDY. An older release
+                # recreates it when it starts; the next start drops it again.
+                c.execute("DROP INDEX IF EXISTS events_target_action")
                 R.ensure_task_sweep(c)
                 # The Assistant's pending actions (backend/assistant.py) and the "via" of a task-history row.
                 from .assistant import ensure_schema as ensure_assistant_schema
@@ -1693,6 +1714,10 @@ class Store:
                 # Idempotent.
                 from . import strategy_bot as StrategyBot
                 StrategyBot.migrate(c)
+                # Cards waiting in the owner's earlier Strategy Bot chat move to their Assistant room
+                # (backend/assistant.py: one Assistant for everyone). Idempotent.
+                from . import assistant as Assistant
+                Assistant.migrate(c, self.settings)
                 # Every bot gets a profile by its name, once; a bot that has one is left alone (backend/profiles.py).
                 from . import profiles as Profiles
                 Profiles.migrate(c)

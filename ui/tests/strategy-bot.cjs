@@ -1,8 +1,8 @@
 // The Strategy Bot on every install (backend/strategy_bot.py): a built-in bot, like BotOps and the Librarian, so it is not a row
 // on the Team chart. The Heads, their departments and the bots with no manager that the server hangs under it report to
 // the owner instead: on the sidebar they sit at the top beside the owner's row (the top of the chart is not one more
-// level), on Goals under the owner. Strategy's rail calls it by its name, the Strategy Bot unless the owner
-// renamed it; a bot still named "CEO Bot" or "Goal Manager" shows as the Strategy Bot and the old names are never shown.
+// level), on Goals under the owner. Nobody chats with it (the Assistant hands it work), so Strategy has no rail for it;
+// where it is named (Settings > System) it goes by its name, the Strategy Bot unless the owner renamed it; a bot still named "CEO Bot" or "Goal Manager" shows as the Strategy Bot and the old names are never shown.
 // There is no Hide from my chart any more: a person who once chose it sees the same chart. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -55,7 +55,6 @@ async function open(browser, server, width = 1440) {
   });
   await page.goto('http://tico-ui.test/#/goals');
   await page.locator('#goal-tree .gt-row').first().waitFor();
-  await page.locator('#sbot h2').waitFor({state: 'attached'});
   return {page, errors};
 }
 const goalLines = page => page.locator('#goal-tree > li').evaluateAll(els => els
@@ -84,12 +83,10 @@ async function check(page, name = 'Strategy Bot') {
   assert.deepEqual(await above(page, 'b:scribe'), []);
   assert.deepEqual(await topRows(page), ['p:ana', 'g:marketing', 'b:scribe']);
   assert.equal(await page.locator('#tree a.node[data-org="b:coo"]').count(), 0, 'the Assistant stays off the chart');
-  // The Goals tab's tree nests them the same way, and Strategy's rail and its labels use its name.
+  // The Goals tab's tree nests them the same way; Strategy has no chat with it, and where it is named it uses its name.
   assert.deepEqual(await goalLines(page), ['bot:scribe@1', 'group:Marketing@1', 'bot:cmo@2', 'bot:seo@3']);
-  assert.equal(await page.locator('#sbot h2').textContent(), name);
-  assert.equal(await page.locator('#sbot').getAttribute('aria-label'), name);
-  await page.locator('#sbot .p-text').waitFor({state: 'attached'});
-  assert.equal(await page.locator('#sbot .p-text').getAttribute('aria-label'), `Message to the ${name}`);
+  assert.equal(await page.locator('#sbot, .gm-form').count(), 0, 'no Strategy Bot chat');
+  assert.equal(await page.evaluate(() => strategyBotName()), name);
   // The old names an install stored before the upgrade are never shown.
   assert.doesNotMatch(await page.locator('body').innerText(), /Goal Manager|CEO Bot/);
 }
@@ -128,9 +125,10 @@ async function check(page, name = 'Strategy Bot') {
       assert.deepEqual(await topRows(page), ['p:ana', 'g:marketing', 'b:analyst', 'b:scribe']);
       assert.deepEqual(await above(page, 'b:cmo'), ['g:marketing']);
       assert.deepEqual(await above(page, 'b:scribe'), []);
-      assert.equal(await page.locator('#sbot h2').textContent(), 'Atlas', 'Strategy still has it');
+      assert.equal(await page.evaluate(() => strategyBotName()), 'Atlas', 'it keeps its name');
       await page.evaluate(() => { location.hash = '#/settings'; });
-      await page.waitForFunction(() => typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
+      // The page change draws a frame later (its fade); Settings' data can already be loaded before it does.
+      await page.waitForFunction(() => S.route === '#/settings' && typeof SETTINGS_DATA !== 'undefined' && SETTINGS_DATA.models);
       await page.evaluate(() => settingsShow('bots'));
       const row = page.locator('[data-settings-bot="goal-manager"]');
       await row.waitFor();

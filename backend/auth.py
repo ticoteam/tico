@@ -401,14 +401,11 @@ class Auth:
         reference). Any other turn of the assistant bot (a Slack route, a meeting delivery, a routine) stays the bot's
         own.
 
-        The Strategy Bot is the owner's Assistant (backend/assistant.py): its turn in the owner's Strategy Bot chat acts
-        as the owner, with the same rights, while that person is still the owner. Its every other turn (the regular
-        checks, goal work, a bot's message) stays the bot's own."""
-        from . import strategy_bot
+        Everyone's chat is the Assistant, the owner's too (backend/assistant.py): a Strategy Bot turn, even one queued
+        in the owner's earlier Strategy Bot chat (`rooms.STRATEGY_ROOM`), is the bot's own and never the owner's."""
         # Only a live lease: a token kept from a finished turn means nothing (validate_identity says the
         # same for the plain bot identity; this repeats it where the token turns into a person).
-        room_key = (rooms.ASSISTANT_ROOM if attempt["bot"] == self.settings.assistant_bot
-                    else rooms.STRATEGY_ROOM if attempt["bot"] == strategy_bot.SLUG else None)
+        room_key = rooms.ASSISTANT_ROOM if attempt["bot"] == self.settings.assistant_bot else None
         if (not room_key or attempt["state"] not in ("leased", "running")
                 or str(attempt["lease_until"] or "") <= H.now()):
             return None
@@ -422,23 +419,17 @@ class Auth:
         return self.chat_person(c, row["owner_actor"], attempt["bot"], attempt["id"], attempt["runner_id"])
 
     def chat_person(self, c, owner_actor, bot, attempt_id="", runner_id=""):
-        """The person a turn of their chat bot (`bot`: the Assistant, or the Strategy Bot for the owner) acts as, with
-        their rights and nobody more, or None: a person who is gone or suspended, or for the Strategy Bot one who is no
-        longer the owner (ownership moved on since they asked: the turn is the bot's own, never theirs)."""
-        from . import strategy_bot
-        if not str(owner_actor or "").startswith("human:"):
+        """The person a turn of their chat bot (`bot`: the Assistant) acts as, with their rights and nobody more, or
+        None: a person who is gone or suspended, or a bot that is not the Assistant."""
+        if not str(owner_actor or "").startswith("human:") or bot != self.settings.assistant_bot:
             return None
         human = H.human(c, H.actor_id(owner_actor))
         if not human or standing(c, human["id"]):
             return None
         email = str(human.get("email") or "").lower()
         owner = bool(email) and email == self.owner_email
-        is_strategy = bot == strategy_bot.SLUG
-        if is_strategy and not owner:
-            return None
         return Identity(owner_actor, "owner" if owner else "human",
-                        email=email, via_token=True,
-                        token_label=strategy_bot.name(c) if is_strategy else self.settings.assistant_name,
+                        email=email, via_token=True, token_label=self.settings.assistant_name,
                         via="assistant", task_actor="bot:" + bot,
                         attempt_id=attempt_id, runner_id=runner_id)
 
@@ -1023,8 +1014,8 @@ class Auth:
             # Personal assistant rooms do not inherit the normal owner inspection bypass.
             if who.actor != owner:
                 raise Problem("forbidden", "This personal conversation belongs to another person", 403)
-            # The Strategy Bot chat belongs to the owner seat: a person who is no longer the owner reads it no more,
-            # even before it moves to the new owner (backend/assistant.py move_strategy_room).
+            # The owner's earlier Strategy Bot chat belongs to the owner seat: a person who is no longer the owner reads
+            # it no more, even before it moves to the new owner (backend/assistant.py move_strategy_room).
             if row.get("room_key") == rooms.STRATEGY_ROOM and who.role != "owner":
                 raise Problem("forbidden", "This chat belongs to the company's owner", 403)
         elif scope == rooms.SHARED:

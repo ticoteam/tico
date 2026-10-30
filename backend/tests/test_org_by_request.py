@@ -17,7 +17,7 @@ def cited(api, method, path, body, token, ref="turn", expected=200):
 
 def test_the_strategy_bot_makes_the_org_change_the_owner_asked_for(api):
     strategy_bot(api)
-    _, attempt = turn(api, "goal-manager", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
+    _, attempt = turn(api, "coo", "ana-test", "Make a Research group with ops leading it, and Ben reports to me")
     token = attempt["token"]
     # Without citing what they said it changes nothing.
     refused = cited(api, "POST", "groups", {"name": "Research"}, token, ref=None, expected=403)

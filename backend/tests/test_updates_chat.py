@@ -33,7 +33,7 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
         bot(api, slug, name)
     hidden = post(api, "tasks", {"title": "Quietly let the agency go", "body": "See notes", "owner": "fixer", "private": True})
     with api.app.state.store.transaction() as c:
-        restrict(c, "finance", people=["ana"], bots=["goal-manager"])
+        restrict(c, "finance", people=["ana"], bots=["coo"])
         updates.post(c, "sales", "- Closed the Acme renewal", day="2026-09-29")
         updates.post(c, "finance", "- Runway is nine months", day="2026-09-29")
         updates.post(c, "fixer", f"- Sorted out [the agency](#/task/{hidden['id']})", day="2026-09-29")
@@ -53,12 +53,10 @@ def test_a_question_from_updates_is_handed_only_the_updates_the_person_may_read_
     text = json.dumps(attempt)
     for secret in ("Runway", "agency", hidden["id"], "Finance"):
         assert secret not in text, secret + " reached the bot"
-    # The owner reads Finance's too, in her Strategy Bot chat; not the ones that link a private task her Strategy Bot is
+    # The owner reads Finance's too, in her own Assistant chat; not the ones that link a private task her Assistant is
     # no party to.
     strategy_bot(api)
-    assign(api, r, "goal-manager")
-    ready(api, r, ["goal-manager"])
-    _, owner = claim(api, r, "goal-manager", "What's the top update today?", "ana-test")
+    _, owner = claim(api, r, "coo", "What's the top update today?", "ana-test")
     assert sorted(u["text"] for u in owner["updates"]["updates"]) == ["- Closed the Acme renewal", "- Runway is nine months"]
 
 

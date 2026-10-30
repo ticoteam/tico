@@ -88,7 +88,7 @@ MOVED = {
         "playbooks/levels.md": "## Limits at every level",
         "playbooks/strategy-and-bets.md": "## Talking to Tico: the commands",
         "playbooks/which-run.md": "# Which playbook a run needs",
-        "playbooks/owner-chat.md": "# A run in the owner's chat with you",
+        "playbooks/owner-chat.md": "# Work the owner asks for through their Assistant",
     },
 }
 

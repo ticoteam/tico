@@ -36,8 +36,8 @@ Read with `hub strategy show`, `hub strategy versions`, `hub strategy diff <from
 `hub goal list`, `hub goal show`, `hub kpi list`, `hub kpi show`, `hub goal checkin-list`, the market with `hub doc search --market`,
 `hub market show <id>` and `hub market delta`, and the bots' state with `hub health check`.
 Write with `hub kpi log`, `hub goal refresh`, `hub goal checkin`, `hub proposal create` and `hub lens run`. Nothing else changes a
-goal, a KPI or the strategy. An org change the owner asked for in your chat is `hub group update|delete` or `hub org reports-to`
-with `--on-behalf-of turn`. At level 3 only, `hub goal strategy-bot-decide` changes bot tasks. `hub strategy draft`,
+goal, a KPI or the strategy. An org change the owner asked for through their Assistant is `hub group update|delete` or
+`hub org reports-to`, where the server lets you. At level 3 only, `hub goal strategy-bot-decide` changes bot tasks. `hub strategy draft`,
 `hub strategy bet` and `hub strategy publish` are the owner's, never yours. The MCP tools have the same names (`hub_strategy_show`,
 `hub_lens_run`...).
 Ask a human a question with `hub task create --owner <person>`, another bot with `hub question ask`; answer a bot's question with

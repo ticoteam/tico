@@ -324,7 +324,7 @@ async function pageBot(slug, tab) {
     </div>
     <div id="pane-more" role="tabpanel" aria-labelledby="bot-tab-info" hidden>
     <div class="bot-more-top" id="bot-more-top"></div>
-    ${slug === GM && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
+    ${slug === 'goal-manager' && strategyBotLogShown() ? `<section class="card" id="strategy-bot-log-card"><header><h2>${esc(strategyBotName())} log</h2></header>
       <div id="strategy-bot-log"><div class="empty">Loading…</div></div></section>` : ''}
     ${limited ? `    <section class="card"><header><h2>About</h2></header>
       <dl class="bot-setup">
@@ -394,7 +394,7 @@ async function pageBot(slug, tab) {
   frBotWire(slug);
   orgHistoryVisit('b:' + slug);
   bindChatSwipe($('#conv-thread'));
-  if (e.can_chat) {
+  if (e.can_chat && !isAssistantHelper(slug)) {
     $('#chat-composer').append(botPill(slug).el);
     chatDropZone($('#pane-chat'), BOT_PILL);
     // A restored draft sizes the box once it is on the page.
@@ -403,12 +403,10 @@ async function pageBot(slug, tab) {
   } else {
     if (BOT_PILL) chatDraftSave(BOT_PILL);
     if (BOT_PILL?.slug === slug) { PILLS.delete(BOT_PILL); BOT_PILL = null; }
-    // The Strategy Bot: of people, only the owner talks to it, in their menu tab; anyone's earlier chat here stays
-    // readable.
-    $('#chat-composer').innerHTML = slug === 'goal-manager' && e.my_access?.write
-      ? `<section class="card"><p class="muted">${meStrategyBot()
-        ? `You talk to ${esc(strategyBotName())} in your own chat: <a href="${ASSISTANT}">open it</a>.`
-        : `Only the company's owner talks to ${esc(strategyBotName())}. Ask <a href="${ASSISTANT}">your Assistant</a> instead.`}</p></section>`
+    // A helper (BotOps, the Strategy Bot, the Librarian): nobody chats with it, the Assistant hands it the work; any
+    // earlier chat here stays readable.
+    $('#chat-composer').innerHTML = isAssistantHelper(slug)
+      ? `<section class="card"><p class="muted">The Assistant hands ${esc(e.display_name || slug)} its work. <button class="linkish" type="button" data-ask-open>Ask</button></p></section>`
       : `<section class="card"><h2>Chat is not open to you</h2><p class="muted">You can see ${esc(e.display_name || slug)} but not send it requests. Ask its owner for Write access.</p></section>`;
   }
   window.botTools?.mountStrip($('#bot-tool-strip'), {slug, get, esc, href: `${base}/tools`, skipModel: !!runtimeTag(e)});
@@ -598,7 +596,7 @@ function showBotTab(tab) {
     botLatestSeen();
   }
   if (view === 'info') once('toolslist', slug => window.botTools?.mountList($('#bot-tools'), {slug, get, esc}));
-  if (view === 'info' && BOT.slug === GM && strategyBotLogShown())
+  if (view === 'info' && BOT.slug === 'goal-manager' && strategyBotLogShown())
     once('strategy-log', () => renderStrategyBotLog($('#strategy-bot-log')));
   if (!BOT.limited) {
     if (view === 'history') {

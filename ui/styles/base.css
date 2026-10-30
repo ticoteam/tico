@@ -71,7 +71,8 @@ html,body{height:100%}
 :root{--rail-left:236px;--rail-right:320px;--rail-chat:360px}
 body{margin:0;font:var(--t-md)/var(--lh) var(--sans);color:var(--ink);background:var(--bg);display:grid;grid-template-columns:var(--rail-left) minmax(0,1fr);grid-template-rows:auto minmax(0,1fr);min-height:100vh}
 a{color:var(--accent);text-decoration:none}a:hover{text-decoration:underline}
-button,input,select,textarea{font:inherit;color:inherit}
+/* no specificity of its own, so forms.css's one line-height (20px: every field and button 32px tall) is not reset by it */
+:where(button,input,select,textarea){font:inherit;color:inherit}
 h1,h2,h3{margin:0;font-weight:600;text-wrap:balance}
 /* The type scale (tokens.css): 13px text, page titles 16px, card headings 13-14px, one 11px uppercase label. Three
    weights: 400 text, 500 emphasis and controls, 600 names, titles and labels (bold text is 600 too). Set apart from
@@ -117,8 +118,15 @@ html:not(.icons-ready) :is(.nav-icon,.mobile-nav-icon,.ob-ms,.agent-mark,.person
 :where(.nav-link,.tree a.node,.inbox-list a,.tl-row,.mail-row,.meet-row,.kpi-line,.need-row,.req>summary,.settings-table tbody tr,
   .search-results li,.market-list a,.slash-row,.p-menu button,#docs-menu button,.mg-menu button,.people-menu button,.section-toggle,
   button.ghost,button.primary){transition:background-color var(--dur-fast) var(--ease),border-color var(--dur-fast) var(--ease),color var(--dur-fast) var(--ease)}
+/* A page change cross-fades the window, opacity only (ui/app/router.js routeChanged). The whole window, not #main
+   alone: a named #main reports as a layout shift when the fade ends. The fade's layer takes no pointer; Chrome still
+   gives a press during the fade to the root element, so the router ends the fade and passes the press on. */
+::view-transition{pointer-events:none}
+::view-transition-group(root){animation:none}
+::view-transition-old(root),::view-transition-new(root){animation-duration:min(var(--dur),150ms);animation-timing-function:var(--ease)}
 /* Reduced motion: no entrances, no spinners' travel, no smooth scrolling. State still changes, instantly. */
 @media (prefers-reduced-motion:reduce){
+  ::view-transition-group(*),::view-transition-old(*),::view-transition-new(*){animation:none!important}
   *,*::before,*::after{animation-duration:1ms!important;animation-iteration-count:1!important;transition-duration:1ms!important;scroll-behavior:auto!important}
 }
 /* A hidden or minimized window: every animation holds where it is until the window shows again (ui/app/avatars.js). */

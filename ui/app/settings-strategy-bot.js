@@ -1,12 +1,13 @@
-/* ui/app/settings-strategy-bot.js — Settings > Strategy Bot: "Regular checks" and "How much your Strategy Bot does"
+/* ui/app/settings-strategy-bot.js — Settings > System > Strategy Bot: "Regular checks" and "How much your Strategy Bot does"
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 // Regular checks on or off (the KPI pass and the automatic goal colours), then three levels (backend/strategy_bot.py LEVELS),
 // each with its one sentence of what it will and won't do. Picking a level shows that sentence again with a Confirm
 // before anything changes. Where the level is only the default (`level_chosen` false), the owner can confirm it too,
-// so a later default never moves them. Only the owner sees the tab; the server refuses everyone else, admins and every bot
-// included. Its name is the bot's own Name field (Settings > Bots), the owner's too.
+// so a later default never moves them. It is a helper's settings, beside the Task Manager's: nobody chats with it, the
+// Assistant hands it the work. Only the owner sees the card; the server refuses everyone else, admins and every bot
+// included. Its name, pause and budget are its bot settings (Settings > Bots, its page's Info).
 let STRATEGY_BOT_PICK = null;
 const settingsStrategyBotShown = () => S.me?.role === 'owner';
 async function renderSettingsStrategyBot() {
@@ -14,7 +15,7 @@ async function renderSettingsStrategyBot() {
   if (!host || formBusy(host)) return;
   const v = await v2Get('/v2/strategy-bot');
   const name = esc(v?.name || strategyBotName());
-  if (!v) { host.innerHTML = `<div class="empty">Couldn't load the ${name}'s settings. Try again in a moment.</div>`; return; }
+  if (!Array.isArray(v?.levels)) { host.innerHTML = `<div class="empty">Couldn't load the ${name}'s settings. Try again in a moment.</div>`; return; }
   const pick = v.levels.find(lv => lv.level === STRATEGY_BOT_PICK && (lv.level !== v.level || !v.level_chosen));
   const keep = pick?.level === v.level;
   const now = v.levels.find(lv => lv.level === v.level);
@@ -22,7 +23,7 @@ async function renderSettingsStrategyBot() {
     : `${esc(now?.name || 'Level ' + v.level)}, where every company starts.`;
   host.innerHTML = `<h3>Regular checks</h3>
     <label class="row strategy-checks"><input type="checkbox" data-strategy-checks${v.regular_checks ? ' checked' : ''}>
-      <span>KPI readings and the automatic goal colours. Off, neither runs until you turn them back on; you can still talk to the ${name}.</span></label>
+      <span>KPI readings and the automatic goal colours. Off, neither runs until you turn them back on; your Assistant can still ask the ${name}.</span></label>
     <h3>How much your ${name} does</h3>
     <p>${last} Whatever the level, spending, publishing, people and changes to your goals or vision stay yours.</p>
     <div class="strategy-levels" role="radiogroup" aria-label="How much your ${name} does">${v.levels.map(lv => `

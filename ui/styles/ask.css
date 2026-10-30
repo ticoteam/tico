@@ -4,7 +4,15 @@
   border:0;background:var(--accent);color:var(--accent-ink);display:inline-flex;align-items:center;justify-content:center;
   cursor:pointer;box-shadow:0 6px 18px rgba(0,0,0,.28)}
 .ask-fab[hidden]{display:none}
-.ask-fab .nav-icon{font-size:22px;font-variation-settings:"FILL" 1}
+/* What it floats over keeps its footprint clear at the end of the scroll, so no last row hides under it. */
+@media (min-width:761px){
+  #main{padding-bottom:var(--fab-room)}
+  .tasks-pane,#main.upd-chat-layout>.upd-col,.au-rail,.lc-scroll,.dash-grid{padding-bottom:var(--fab-room)}
+  /* a bot's message box sits at the bottom too: it starts --s3 clear of the button (16px + 44px in from the rail, less
+     the page's 28px gutter) */
+  body:has(#ask-fab:not([hidden])) #main.bot-chat-layout #chat-composer{padding-left:calc(16px + 44px + var(--s3) - 28px)}
+}
+.ask-fab .nav-icon{font-size:22px;color:inherit}
 .ask-fab:hover{filter:brightness(1.08)}
 .ask-fab[aria-expanded="true"]{background:var(--surface2);color:var(--ink)}
 .ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:25;width:min(400px,calc(100vw - var(--rail-left) - 32px));

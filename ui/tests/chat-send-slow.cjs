@@ -58,22 +58,22 @@ async function check(engine) {
       if (p.endsWith('.js')) return reply('', 'application/javascript');
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
+        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
       if (p.endsWith('/snapshot')) return json({messages: [], execution: null});
       if (p === '/api/v2/events' || p.endsWith('/watch')) {
         response.writeHead(200, {'Content-Type': 'text/event-stream'});
         response.write('event: ready\ndata: {"seq":0}\n\n');
         return;
       }
-      if (p === '/api/v2/bots/botops/stop') { await stopHold; return json({ok: true}); }
-      if (p === '/api/v2/uploads/chat/botops') {
+      if (p === '/api/v2/bots/sales/stop') { await stopHold; return json({ok: true}); }
+      if (p === '/api/v2/uploads/chat/sales') {
         uploads.push(body.toString());
         return json({conversation: {id: 'c1'}, message: {id: 'u' + uploads.length, from_actor: 'human:ana', body: 'With a file', created: new Date().toISOString()}});
       }
-      if (p === '/api/v2/chat/botops') {
+      if (p === '/api/v2/chat/sales') {
         const text = JSON.parse(body).text;
         const key = request.headers['idempotency-key']; keys.push(key);
         // Current access is checked before replay, and this denial does not overwrite the stored result.
@@ -143,7 +143,7 @@ async function check(engine) {
         liveConnected() && LIVE.es?.readyState === EventSource.OPEN), true,
         'the fixture stream is settled for the current session before navigation');
     };
-    await loaded(() => page.goto(origin + '/#/bot/botops'));
+    await loaded(() => page.goto(origin + '/#/bot/sales'));
     const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
     const slow = page.locator('#chat-composer .p-slow');
     await page.evaluate(() => { CHAT_SEND.slow = 300; });
@@ -288,12 +288,12 @@ async function check(engine) {
 
     // Switching bots and returning during a send restores a new composer sharing the in-flight identity.
     let switchOpen; hold = new Promise(done => switchOpen = done);
-    const switchRequest = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/chat/botops');
+    const switchRequest = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/chat/sales');
     await box.fill('Sent while switching bots'); await page.keyboard.press('Enter');
     const switchKey = (await switchRequest).headers()['idempotency-key'];
     await page.evaluate(() => {
       const old = BOT_PILL;
-      botPill('other'); const restored = botPill('botops'); old.el.replaceWith(restored.el);
+      botPill('other'); const restored = botPill('sales'); old.el.replaceWith(restored.el);
     });
     assert.ok(await send.isDisabled(), 'restored composer waits on the in-flight identity');
     switchOpen(); hold = null;
@@ -342,7 +342,7 @@ async function check(engine) {
     assert.ok(uploads[0].includes(uploadText) && uploads[0].includes('notes.txt'), 'the upload includes the text and attachment');
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'upload acknowledgement leaves no uncertain identity');
     assert.equal(await page.evaluate(signature => pendingWrites.has(signature), uploadSignature), false, 'the old text request leaves the cache');
-    assert.equal(await page.evaluate(() => CHAT_PENDING.has('botops')), false, 'the old identity is removed from the per-tab map');
+    assert.equal(await page.evaluate(() => CHAT_PENDING.has('sales')), false, 'the old identity is removed from the per-tab map');
     await readsSettled();
     await loaded(() => page.reload());
     assert.equal(await page.evaluate(() => BOT_PILL.unconfirmed), null, 'reload cannot restore the acknowledged identity');
@@ -356,7 +356,7 @@ async function check(engine) {
     await page.evaluate(() => { CHAT_SEND.timeout = 1500; });
     answer = 'stall';
     const stalled = 'Sent into a stalled connection';
-    const firstAttempt = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/chat/botops');
+    const firstAttempt = page.waitForRequest(r => new URL(r.url()).pathname === '/api/v2/chat/sales');
     await box.fill(stalled); await page.keyboard.press('Enter');
     const firstAttemptKey = (await firstAttempt).headers()['idempotency-key'];
     // A person may type then undo, or clear then restore, while the request is still out. Its outcome is not known
@@ -408,7 +408,7 @@ async function check(engine) {
     // Switching away and back in the same tab must not lose the pending identity or its original age.
     await page.evaluate(() => {
       const old = BOT_PILL; chatDraftSave(old); PILLS.delete(old); BOT_PILL = null;
-      const restored = botPill('botops'); old.el.replaceWith(restored.el);
+      const restored = botPill('sales'); old.el.replaceWith(restored.el);
       const now = window.chatRealNow(); Date.now = () => now + 49 * 60 * 60000;
       document.querySelectorAll('.toast').forEach(t => t.remove());
       CHAT_SEND.timeout = 30000;
@@ -428,7 +428,7 @@ async function check(engine) {
     await page.evaluate(() => pillNeeds(BOT_PILL, null));
     assert.match((await why())[0], /may already have sent/, 'label redraw preserves the expiry reason');
     await page.evaluate(() => {
-      chatRetryLater(BOT_PILL, 'An old pending message', 'botops', {}, {});
+      chatRetryLater(BOT_PILL, 'An old pending message', 'sales', {}, {});
       window.dispatchEvent(new Event('online'));
     });
     assert.equal(keys.length, beforeExpiry, 'online recovery also refuses an expired replay');
@@ -445,7 +445,7 @@ async function check(engine) {
       const realFetch = window.fetch, realProbe = sessionProbe;
       const started = performance.now(); let finishProbe, probeTimer, probedAt, requests = 0;
       window.fetch = (url, init) => {
-        if (url !== API + '/v2/chat/botops') return realFetch(url, init);
+        if (url !== API + '/v2/chat/sales') return realFetch(url, init);
         requests++; return new Promise((_, fail) => setTimeout(() => fail(new TypeError('offline')), 300));
       };
       sessionProbe = () => {
@@ -453,7 +453,7 @@ async function check(engine) {
         return new Promise(done => { finishProbe = done; probeTimer = setTimeout(() => done(true), 1500); });
       };
       try {
-        await writeRequestOnce('POST', '/v2/chat/botops', {text: 'late network'}, undefined, {timeout: 400});
+        await writeRequestOnce('POST', '/v2/chat/sales', {text: 'late network'}, undefined, {timeout: 400});
         return {resolved: true};
       } catch (e) {
         finishProbe(true);
@@ -471,7 +471,7 @@ async function check(engine) {
     const zeroBudget = await page.evaluate(async () => {
       const real = window.fetch; let requests = 0;
       window.fetch = () => { requests++; throw new Error('zero budget must not fetch'); };
-      try { await writeRequestOnce('POST', '/v2/chat/botops', {text: 'zero budget'}, undefined, {timeout: 0}); }
+      try { await writeRequestOnce('POST', '/v2/chat/sales', {text: 'zero budget'}, undefined, {timeout: 0}); }
       catch (e) { return {timedOut: !!e.timedOut, requests}; }
       finally { window.fetch = real; }
     });
@@ -482,7 +482,7 @@ async function check(engine) {
       const real = window.fetch;
       window.fetch = (url, init) => Promise.resolve({status: 200, ok: true, headers: new Headers(),
         json: () => new Promise((_, fail) => init.signal.addEventListener('abort', () => fail(new DOMException('aborted', 'AbortError'))))});
-      try { await writeRequestOnce('POST', '/v2/chat/botops', {text: 'body stall'}, undefined, {timeout: 200}); return 'resolved'; }
+      try { await writeRequestOnce('POST', '/v2/chat/sales', {text: 'body stall'}, undefined, {timeout: 200}); return 'resolved'; }
       catch (e) { return {timedOut: !!e.timedOut, kept: [...pendingWrites.keys()].some(k => k.includes('body stall'))}; }
       finally { window.fetch = real; }
     });

@@ -1,5 +1,5 @@
 /* ui/app/automations-editors.js — The editor beside the flow (a sheet on a phone): the trigger, each step type, the
-   spend cap and the versions
+   spend cap and the versions, with a bot's proposed changes above them
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    An editor works on a copy; Save writes the whole flow back (PATCH, CONTRACT §2), which makes a new version. Fields
    bind by path (data-b="step.rules.0.when.1.value") into AU.ed; adding or removing a row redraws the editor. With
@@ -275,6 +275,7 @@ function auEdWire(box) {
     if (op === 'del') { void auStepDelete(ed.id); return; }
     if (op === 'nocap') { void auSpendSave(null); return; }
     if (op === 'restore') { void auRestore(+m.dataset.n); return; }
+    if (['diff', 'prop-on', 'discard'].includes(op)) { void auPropAct(op, +m.dataset.n, m); return; }
     const at = m.dataset.at, list = auPathGet(ed, at) || [];
     if (op === 'rm') list.splice(+m.dataset.i, 1);
     if (op === 'add') {
@@ -344,18 +345,20 @@ async function auSpendSave(v) {
   if (out && AU?.ed === ed) { AU.ed = null; auDrawSide(); }
 }
 
-// Versions: newest first; any but the current one restores as a new version.
+// Versions: newest first; any but the current one restores as a new version. Proposals (pending) come first.
 async function auVersionsLoad(ed) {
   try {
     const r = await get(auApi(AU.cur.id) + '/versions');
-    ed.rows = (r.versions || []).filter(v => v.status !== 'pending').sort((x, y) => y.n - x.n);
+    const all = (r.versions || []).sort((x, y) => y.n - x.n);
+    ed.rows = all.filter(v => v.status !== 'pending');
+    ed.props = all.filter(v => v.status === 'pending').map(v => ({...v, diff: false}));
   } catch (e) { ed.error = e.message; }
   if (AU?.ed === ed) auDrawSide();
 }
 function auVersionsHTML(ed) {
   if (ed.error) return `<p class="err">${esc(ed.error)}</p>`;
   if (!ed.rows) return '<p class="muted">Loading…</p>';
-  return `<div class="au-vers">${ed.rows.map(v => `<div class="au-vr"><strong>v${esc(v.n)}</strong>
+  return `${auPropsHTML(ed)}<div class="au-vers">${ed.rows.map(v => `<div class="au-vr"><strong>v${esc(v.n)}</strong>
     <span class="muted" title="${esc(fmt(v.at))}">${esc(auActorName(v.actor))} · ${esc(auRunTime(v.at))}</span><span class="au-sp"></span>
     ${v.n === AU.cur.version ? '<span class="pill ok">Current</span>' : AU.cur.can_edit ? `<button class="ghost" type="button" data-op="restore" data-n="${esc(v.n)}">Restore</button>` : ''}</div>`).join('')}</div>`;
 }
@@ -371,6 +374,88 @@ async function auRestore(n) {
   } catch (e) { toast(e.message, true); return null; }
 }
 
+
+// A bot's proposal is a pending version, listed above the versions: View diff, Turn on restores it (POST
+// .../versions/{n}/restore, keeping its number), Discard deletes it; either way Versions is read again.
+function auPropsHTML(ed) {
+  const a = AU.cur;
+  return (ed.props || []).map(p => {
+    const lines = auDiff(a, p.flow || {});
+    const summary = p.summary || lines.slice(0, 2).join(' · ') || 'No changes';
+    return `<div class="au-prop" data-n="${esc(p.n)}">
+      <div class="au-prop-t"><strong>v${esc(p.n)}</strong><span class="muted">${esc(auActorName(p.actor))}</span><span class="pill">Proposed</span></div>
+      <div class="au-prop-x">${esc(summary)}</div>
+      ${p.diff ? `<pre class="au-diff">${lines.map(l => `<span class="${l[0] === '+' ? 'add' : 'del'}">${esc(l)}</span>`).join('\n') || 'No changes'}</pre>` : ''}
+      <div class="au-prop-b"><button class="ghost" type="button" data-op="diff" data-n="${esc(p.n)}" aria-expanded="${!!p.diff}">View diff</button>
+        ${a.can_edit ? `<button class="primary" type="button" data-op="prop-on" data-n="${esc(p.n)}">Turn on</button><button class="linkish" type="button" data-op="discard" data-n="${esc(p.n)}">Discard</button>` : ''}</div>
+    </div>`;
+  }).join('');
+}
+// A proposal settled: the list row stops counting it as pending.
+function auPendingDone(id) {
+  const row = (AU.list || []).find(x => x.id === id);
+  if (row?.pending) row.pending -= 1;
+}
+async function auPropAct(op, n, button) {
+  const ed = AU.ed, a = AU.cur, state = AU, p = (ed?.props || []).find(x => x.n === n);
+  if (!p || !a) return;
+  if (op === 'diff') { p.diff = !p.diff; auDrawSide(); return; }
+  button.disabled = true;
+  try {
+    if (op === 'prop-on') {
+      const out = auNormal(await post(`${auApi(a.id)}/versions/${n}/restore`, {}));
+      if (AU !== state) return;
+      auPendingDone(a.id);
+      auAdopt(out);
+      toast(`${out.name} v${out.version} is on`);
+    } else {
+      await writeRequest('DELETE', `${auApi(a.id)}/versions/${n}`);
+      if (AU !== state) return;
+      auPendingDone(a.id); auDrawList(); auDrawHead();
+      toast(`v${n} discarded`);
+    }
+    if (AU.ed === ed) { ed.rows = null; auDrawSide(); void auVersionsLoad(ed); }
+  } catch (e) { toast(e.message, true); if (button.isConnected) button.disabled = false; }
+}
+
+// A flow as lines, for the diff: the trigger, then each step, paths indented under their fork.
+function auFlowLines(flow) {
+  const out = [];
+  const t = flow?.trigger || {};
+  out.push(`trigger ${AU_TRIGGER_WORDS[t.type] || t.type || ''} · ${auSource(t)}`.trim());
+  for (const c of t.filters || []) out.push('  filter ' + auCondText(c));
+  const walk = (steps, pad) => (steps || []).forEach(s => {
+    const off = s.enabled === false ? ' (off)' : '';
+    if (s.type === 'filter') (s.rules || []).forEach(r => out.push(`${pad}filter ${auCondsText(r.when, r.match)} → ${auThenWords(r.then).join(', ')}${off}`));
+    else if (s.type === 'decide') {
+      out.push(`${pad}decide ${s.set ? auSetWords(s.set) : 'custom'} · ${s.level || 'medium'}${off}`);
+      if (!s.set) Object.entries(s.questions || {}).forEach(([q, d]) => out.push(`${pad}  question ${q} · ${(AU_QTYPES.find(([k]) => k === d.type) || [, d.type])[1]}`));
+    } else if (s.type === 'llm') out.push(`${pad}llm as ${auActorName(s.as)}: ${s.prompt || ''}${off}`);
+    else if (s.type === 'bot_turn') out.push(`${pad}bot turn ${auActorName(s.bot)}: ${s.prompt || ''}${off}`);
+    else if (s.type === 'find') out.push(`${pad}find ${AU_FIND[s.source] || s.source} ${s.query || ''}${off}`.trim());
+    else if (s.type === 'action') out.push(`${pad}${AU_ACTIONS[s.do] || s.do}${auActionArgs(s) ? ' ' + auActionArgs(s) : ''}${off}`);
+    else if (s.type === 'paths') {
+      (s.paths || []).forEach(p => { out.push(`${pad}path ${p.name} · ${auCondsText(p.when, p.match) || 'no condition'}`); walk(p.steps, pad + '  '); });
+      out.push(`${pad}path Otherwise`); walk(s.otherwise?.steps, pad + '  ');
+    }
+  });
+  walk(flow?.steps, '');
+  return out;
+}
+// The changed lines between two flows (a longest-common-subsequence diff): "+ added", "- removed".
+function auDiff(before, after) {
+  const a = auFlowLines(before), b = auFlowLines(after), n = a.length, m = b.length;
+  const L = Array.from({length: n + 1}, () => new Array(m + 1).fill(0));
+  for (let i = n - 1; i >= 0; i--) for (let j = m - 1; j >= 0; j--) L[i][j] = a[i] === b[j] ? L[i + 1][j + 1] + 1 : Math.max(L[i + 1][j], L[i][j + 1]);
+  const out = [];
+  let i = 0, j = 0;
+  while (i < n || j < m) {
+    if (i < n && j < m && a[i] === b[j]) { i++; j++; }
+    else if (j < m && (i >= n || L[i][j + 1] >= L[i + 1][j])) out.push('+ ' + b[j++].trim());
+    else out.push('- ' + a[i++].trim());
+  }
+  return out;
+}
 // Test run: the trigger's output as JSON (CONTRACT §2 Feeding input), or nothing. A sample the trigger's filters drop
 // makes no run; a run opens expanded in Runs.
 function auSample(t = {}) {

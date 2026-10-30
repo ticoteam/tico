@@ -23,8 +23,8 @@ function botInstructionsMount(slug) {
   host.innerHTML = `<form class="bot-instructions-form">
     <label for="bot-instructions-changes">Request instruction changes</label>
     <textarea id="bot-instructions-changes" name="changes" required rows="6" aria-label="Instructions changes" placeholder="Describe what should change in this bot’s instructions"></textarea>
-    <p class="muted">BotOps applies your changes to AGENT.md on the bot’s computer and verifies the file.</p>
-    <div class="row"><button class="primary" type="submit">Send changes to BotOps</button><button class="ghost" type="reset">Cancel</button><span role="status" data-instructions-status></span></div>
+    <p class="muted">Sent through your Assistant: the changes are made to AGENT.md on the bot’s computer and the file is checked.</p>
+    <div class="row"><button class="primary" type="submit">Send changes</button><button class="ghost" type="reset">Cancel</button><span role="status" data-instructions-status></span></div>
   </form>`;
   const form = host.querySelector('form'), status = host.querySelector('[data-instructions-status]');
   form.onreset = () => { status.textContent = ''; };
@@ -34,8 +34,8 @@ function botInstructionsMount(slug) {
     const button = form.querySelector('[type=submit]');
     button.disabled = true; status.textContent = 'Sending…';
     try {
-      await post('/v2/chat/botops', {text: `Update the Instructions (AGENT.md) for ${bot.display_name} [${slug}]. Apply these changes and verify the file on its computer:\n\n${changes}`});
-      form.reset(); status.textContent = 'Changes sent to BotOps.';
+      await post('/v2/assistant/messages', {text: `Update the Instructions (AGENT.md) for ${bot.display_name} [${slug}]. Apply these changes and verify the file on its computer:\n\n${changes}`});
+      form.reset(); status.textContent = 'Changes sent.';
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   };

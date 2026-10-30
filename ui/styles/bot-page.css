@@ -101,14 +101,14 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .trow-waits{font-size:var(--t-sm);padding:0 0 2px 2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .rail-more{border:0;background:none;padding:1px 0;margin:0;font:inherit;font-size:var(--t-sm);font-weight:600;color:var(--muted);cursor:pointer;font-variant-numeric:tabular-nums}
 .rail-more:hover{color:var(--ink)}
-.rail-more:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.rail-more:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 .bot-rail a{color:var(--accent-quiet)}
 .bot-rail a:hover{color:var(--accent)}
 .rail-fold:not([open]){padding-bottom:var(--s2)}
 .rail-fold>summary{cursor:pointer;list-style:none;margin:0}
 .rail-fold>summary::-webkit-details-marker{display:none}
 .rail-fold>summary::before{content:"";flex:none;border-left:4px solid currentColor;border-top:3.5px solid transparent;border-bottom:3.5px solid transparent;transition:transform var(--dur-fast) var(--ease)}
-.rail-fold[open]>summary::before{transform:rotate(90deg)}
+.rail-fold[open]>summary::before{transform:var(--chev-open)}
 .rail-fold>summary:hover{color:var(--ink)}
 .rail-fold>summary:focus:not(:focus-visible){outline:none}
 /* The sidebar's widgets (ui/app/bot-sidebar.js), in the bot's order. A hidden one is not drawn; a set height is the
@@ -137,7 +137,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .editing>.bot-w>.rail-sec{border-top:0}
 .editing .bot-w-bar{display:flex;align-items:center;gap:6px;padding:4px 6px 0;font-size:var(--t-sm);font-weight:600;color:var(--muted)}
 .bot-w-bar .spacer{flex:1}
-.bot-w-name{text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label)}
+.bot-w-name{text-transform:uppercase;letter-spacing:var(--track-caps);font-size:var(--t-label);font-weight:600}
 .bot-w:not([data-off]):has(>.rail-sec:not([hidden]))>.bot-w-bar>.bot-w-name{visibility:hidden}   /* its own heading says it, just below */
 .bot-w-grip{display:inline-grid;place-items:center;width:22px;height:22px;padding:0;border:0;border-radius:5px;background:none;color:var(--muted);cursor:grab;touch-action:none}
 .bot-w-grip:hover,.bot-w-grip:focus-visible{color:var(--ink);background:var(--surface2)}
@@ -150,7 +150,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-w-size{flex:1;position:relative;height:12px;cursor:ns-resize;touch-action:none;border-radius:4px}
 .bot-w-size::after{content:"";position:absolute;left:calc(50% - 16px);width:32px;top:5px;height:2px;border-radius:1px;background:var(--muted);opacity:.5}
 .bot-w-size:hover::after,.bot-w-size:focus-visible::after{opacity:1}
-.bot-w-size:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+.bot-w-size:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-inset)}
 /* While Done saves, nothing in the draft moves (bot-sidebar.js botDrafting). */
 #pane-tasks[data-saving] :is(.bot-w-size,.bot-w-bar,.bot-task-tabs){pointer-events:none;opacity:.6}
 .bot-w-reset{flex:none;padding:0 6px;font-size:var(--t-sm)}
@@ -204,7 +204,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
   #bot-tool-strip{display:none}               /* no room beside the name; the Tools card under More lists them */
   .bot-top>.bot-goal{display:none}            /* the Goals card leads More on a phone */
   .bot-top .bot-switch{margin-left:auto;border:0;background:none;padding:0;gap:0}
-  .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:38px;height:36px;padding:0;border-radius:8px}
+  .bot-switch button{display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;padding:0;border-radius:8px}
   .bot-switch .bt-label{display:none}
   .bot-switch .bt-icon{display:inline;font-size:20px}
   .bot-switch button.cur{background:var(--surface2);color:var(--accent)}
@@ -224,7 +224,7 @@ button.rail-ico{border:0;padding:0;background:none;font:inherit;cursor:pointer}
 .bot-more-top:empty,.more-cut{display:none!important}
 .more-all{display:block;margin:6px 0 0;padding:2px 0;border:0;background:none;font:inherit;font-size:var(--t-sm);color:var(--muted);cursor:pointer}
 .more-all:hover{color:var(--ink)}
-.more-all:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:3px}
+.more-all:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:3px}
 /* Status history: one tight line a change, newest first */
 .sh-list{list-style:none;margin:0;padding:0}
 .sh-row{display:flex;align-items:center;gap:8px;min-height:28px;padding:3px 0;border-top:1px solid var(--line);font-size:var(--t-base);line-height:var(--lh)}

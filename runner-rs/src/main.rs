@@ -305,6 +305,11 @@ fn main() {
     if argv.get(1).is_some_and(|a| a == reap::FLAG) {
         std::process::exit(reap::main(&argv[2..]));
     }
+    if argv.get(1).is_some_and(|a| a == "--release") {
+        // The release this binary was built for (build.rs; "dev" for a source build). `--version` stays the protocol version.
+        println!("{}", runner::RUNNER_RELEASE);
+        std::process::exit(0);
+    }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
         // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.
         println!("{}", BUILD_ID);
@@ -451,7 +456,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
         stopper.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         stopper.events.wake.notify_one();
     });
-    util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_VERSION, service.config.runner_id()));
+    util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_RELEASE, service.config.runner_id()));
     tls::announce(util::log);
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);

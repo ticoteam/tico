@@ -1,28 +1,33 @@
 /* ui/app/automations.js — Automations (redesign): routing, the page's state and an open automation's header
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them.
    The list of every automation, its filters and the Runs tab are automations-overview.js; the flow and its "+" menu
-   automations-flow.js, the step editors automations-editors.js, the run log automations-runs.js and the BotOps chat
-   automations-bot.js. Payloads: redesign CONTRACT §2 (/api/v2/automations).
+   automations-flow.js, the step editors automations-editors.js and the run log automations-runs.js. Ask (the Ask
+   panel) has the Assistant build or change one. Payloads: redesign CONTRACT §2 (/api/v2/automations).
    #/automations?q=<words> opens the list searched (a bot's or a webhook's automations, linked from their pages). */
 'use strict';
 
 const AUTOMATIONS = '#/automations';
 function isAutomationsRoute(r) { return r === AUTOMATIONS || r.startsWith(AUTOMATIONS + '/') || r.startsWith(AUTOMATIONS + '?'); }
-const AU_BOT = 'botops';                             // builds and edits automations with the viewer's rights (CONTRACT §2)
+const AU_BOT = 'botops';                             // builds automations for the Assistant; not offered as a step's bot
 const auPhone = () => matchMedia('(max-width:760px)').matches;
 const auClone = x => x == null ? x : JSON.parse(JSON.stringify(x));
 const auApi = id => '/v2/automations/' + encodeURIComponent(id);
 // One page visit's state; a route within the page keeps it (the list, the chat), leaving drops it.
 let AU = null;
-function automationsStop() { if (!AU) return; AU.botStop?.(); AU = null; }
+// Leaving keeps the list, its teams and its counts for the next visit (S.lastRead), which draws them at once.
+function automationsStop() {
+  if (!AU) return;
+  if (AU.list && !AU.listError) S.lastRead.automations = {list: AU.list, groups: AU.groups, stats: AU.stats, range: AU.range};
+  AU = null;
+}
 
-// #/automations[/<id>[/runs|/bot]]; #/automations/bot is the bot with no automation open (New).
+// #/automations[/<id>[/runs]]; an old #/automations/bot or <id>/bot link opens the list or the flow.
 function auRouteParts(r) {
   const [id = '', view = ''] = r.slice(AUTOMATIONS.length + 1).split('?')[0].split('/').map(decodeURIComponent);
-  if (id === 'bot') return {id: '', view: 'bot'};
-  return {id, view: ['runs', 'bot'].includes(view) ? view : 'flow'};
+  if (id === 'bot') return {id: '', view: 'flow'};
+  return {id, view: view === 'runs' ? view : 'flow'};
 }
-const auHref = (id, view) => AUTOMATIONS + (id ? '/' + encodeURIComponent(id) : view === 'bot' ? '/bot' : '') + (id && view && view !== 'flow' ? '/' + view : '');
+const auHref = (id, view) => AUTOMATIONS + (id ? '/' + encodeURIComponent(id) : '') + (id && view && view !== 'flow' ? '/' + view : '');
 
 // The hub writes people as person:<id> (CONTRACT); older rows say human:<id>.
 const auPersonId = a => /^(person|human):/.test(String(a || '')) ? String(a).split(':').slice(1).join(':') : '';
@@ -89,15 +94,27 @@ async function pageAutomations() {
   $('#main').classList.add('au-layout');
   if (!AU || !document.body.contains(AU.root)) {
     automationsStop();
-    AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null, bot: null,
+    AU = {list: null, groups: [], sets: null, cur: null, id: '', view: 'flow', ed: null, runs: null, menu: null, root: null,
           ...auOverviewState()};
+    const kept = S.lastRead.automations;
+    if (kept) {
+      Object.assign(AU, {list: kept.list, groups: kept.groups}, kept.range === AU.range ? {stats: kept.stats} : {});
+      // Read again behind the kept copy; only an answer that differs draws the list again.
+      const state = AU;
+      void auLoadList(state).then(() => {
+        if (AU !== state) return;
+        if (state.listError) { state.list = kept.list; state.listError = ''; return; }   // a failed read leaves the list as it was
+        if (sameData(state.list, kept.list) && sameData(state.groups, kept.groups)) return;
+        if (state.id) auFacetsDraw(); else auDrawList();
+      });
+    }
     auShell();
     const q = new URLSearchParams(S.route.split('?')[1] || '').get('q');
     if (q) { AU.f.q = q.trim().toLowerCase(); AU.root.querySelector('.au-q').value = q; }
   }
   const state = AU;
   state.view = view;
-  state.root.dataset.screen = view === 'bot' ? 'bot' : id ? 'detail' : 'list';
+  state.root.dataset.screen = id ? 'detail' : 'list';
   if (state.list === null) { auRangeDraw(); auDrawTable(); await auLoadList(state); }
   if (AU !== state) return;
   // The page opens on the list; an automation opens from its row.
@@ -117,14 +134,13 @@ async function pageAutomations() {
   auDrawHead(); auDrawPane(); auDrawSide();
   if (id) auFacetsDraw(); else auOverviewShow(state);
   if (state.view === 'runs' && state.cur && !state.runs) void auRunsLoad(state);
-  auBotSync();
 }
 // GET answers the automation itself; a wrapped {automation} is read the same.
 const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.trigger ||= {}; return a; };
 
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
-    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="primary au-new" type="button">+ New</button></header>
+    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask"><span class="nav-icon" aria-hidden="true">auto_awesome</span><span class="docs-ask-word">Ask</span></button><button class="primary au-new" type="button">+ New</button></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>
@@ -133,14 +149,13 @@ function auShell() {
       <section class="au-c" aria-live="polite">
         <div class="au-ov"><div class="au-ctl"></div><div class="au-tbl"></div></div>
         <div class="au-crumb"></div><div class="au-hd"></div><div class="au-pane"></div><div class="au-menu" role="menu" hidden></div></section>
-      <aside class="au-side"><div class="au-ed" hidden></div><div class="au-botp"></div></aside>
+      <aside class="au-side"><div class="au-ed" hidden></div></aside>
       <div class="au-scrim" hidden></div>
     </div>
-    <a class="sbot-fab au-botbtn" href="${auHref('', 'bot')}"><span class="nav-icon" aria-hidden="true">smart_toy</span><span>BotOps</span></a>
   </div>`;
   const root = AU.root = $('#au-root');
   auOverviewWire(root);
-  root.querySelector('.au-new').onclick = () => { location.hash = auHref('', 'bot'); };
+  root.querySelector('.au-new').onclick = e => void auBlank(e.currentTarget);
   root.querySelector('.au-scrim').onclick = () => auEdClose();
   root.addEventListener('change', auOnSwitch);
   root.addEventListener('click', auOnClick);
@@ -149,7 +164,23 @@ function auShell() {
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
-  auBotMount(root.querySelector('.au-botp'));
+}
+
+// + New: the viewer's own, off, weekdays at 9 in their zone, no steps (POST /v2/automations), then open it. Ask
+// (the Ask panel) has the Assistant build one instead.
+async function auBlank(button) {
+  const state = AU;
+  button.disabled = true;
+  try {
+    let tz = 'UTC';
+    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { /* UTC */ }
+    const out = auNormal(await post('/v2/automations', {name: 'New automation', owner: 'person:' + S.me.id, enabled: false,
+      builtin: false, trigger: {type: 'schedule', cron: '0 9 * * 1-5', tz}, steps: []}));
+    if (AU !== state) return;
+    await auLoadList(state);
+    if (AU === state) location.hash = auHref(out.id);
+  } catch (e) { toast(e.message, true); }
+  finally { if (button.isConnected) button.disabled = false; }
 }
 
 // Every automation the viewer may see: the list pages by cursor, up to 500 a page.
@@ -168,7 +199,11 @@ async function auLoadList(state) {
     auAllAutomations().catch(e => ({error: e})),
     get('/v2/groups').catch(() => ({groups: []})),
   ]);
-  if (AU !== state) return;
+  // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
+  if (AU !== state) {
+    if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || []};
+    return;
+  }
   state.groups = Array.isArray(groups) ? groups : groups.groups || [];
   if (list.error) { state.list = []; state.listError = list.error.message; return; }
   state.listError = '';
@@ -216,7 +251,7 @@ function auDrawHead() {
   if (!AU.id) { hd.innerHTML = ''; return; }
   const row = a && (AU.list || []).find(x => x.id === a.id);
   const name = a?.name || row?.name || '';
-  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v || (v === 'flow' && AU.view === 'bot')}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
+  const seg = ['flow', 'runs'].map(v => `<a role="tab" href="${auHref(AU.id, v)}" aria-selected="${AU.view === v}">${v === 'flow' ? 'Flow' : 'Runs'}</a>`).join('');
   hd.innerHTML = `<h2 class="au-name">${esc(name)}</h2>
     ${a ? `<span class="au-own" title="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}<span class="au-own-n">${esc(auActorName(a.owner))}</span></span>
     <span class="au-sp"></span>
@@ -228,7 +263,7 @@ function auDrawHead() {
       <span class="au-sp au-sp-phone"></span>
       <div class="au-seg" role="tablist" aria-label="View">${seg}</div>
     </div>
-    <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}</button>
+    <button class="au-chip au-ver" type="button" data-versions aria-label="Versions, v${a.version}">v${esc(a.version)}${row?.pending ? ' · Proposed' : ''}</button>
     <button class="au-icon au-more" type="button" aria-label="Options" aria-haspopup="menu" data-more><span class="nav-icon" aria-hidden="true">more_horiz</span></button>
     ${auHeadLock(a)}${auHoldLine(a)}${auWarn(a)}` : ''}`;
 }
@@ -243,7 +278,7 @@ function auDrawPane() {
   if (AU.view !== 'runs') auPathsWire(pane);
 }
 
-// The right side: an open editor, else BotOps. A phone shows the editor as a sheet over the flow.
+// The right side: an open editor, else nothing (the list or flow takes the width). A phone shows it as a sheet over the flow.
 // A redraw while a field is being typed in (a late load of question sets or the last run) keeps that field focused.
 function auDrawSide() {
   const ed = AU.root.querySelector('.au-ed'), html = AU.ed ? auEdHTML() : '';
@@ -255,7 +290,6 @@ function auDrawSide() {
   if (again) { again.focus({preventScroll: true}); if (sel) try { again.setSelectionRange(...sel); } catch { /* not a text field */ } }
   AU.root.classList.toggle('ed-open', !!html);
   AU.root.querySelector('.au-scrim').hidden = !html;
-  AU.root.querySelector('.au-botp').hidden = !!html;
 }
 
 // Writes. The answer is the automation as saved (a flow change carries its new version).
@@ -274,7 +308,7 @@ function auAdopt(a) {
   if (AU.cur?.id === a.id) AU.cur = a;
   const i = (AU.list || []).findIndex(x => x.id === a.id);
   if (i >= 0) AU.list[i] = {...AU.list[i], ...a};
-  auDrawList(); auDrawHead(); auDrawPane(); auDrawSide(); auPropsDraw();
+  auDrawList(); auDrawHead(); auDrawPane(); auDrawSide();
 }
 
 async function auOnSwitch(e) {

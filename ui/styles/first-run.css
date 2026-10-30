@@ -60,7 +60,7 @@
 .ob-hq input::after,.ob-helper input::after{content:"";position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.3);transition:transform var(--dur) var(--ease)}
 .ob-hq input:checked,.ob-helper input:checked{background:var(--accent)}
 .ob-hq input:checked::after,.ob-helper input:checked::after{transform:translateX(14px)}
-.ob-hq input:focus-visible,.ob-helper input:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.ob-hq input:focus-visible,.ob-helper input:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .ob-hq.off{cursor:default;opacity:.75}
 .ob-hq-off{font-size:var(--t-sm);color:var(--muted)}
 .ob-said{display:flex;justify-content:flex-end;align-items:center;gap:6px;margin:0 0 18px}
@@ -82,7 +82,7 @@
   transition:border-color var(--dur) var(--ease),background-color var(--dur) var(--ease),box-shadow var(--dur) var(--ease)}
 .ob-bot:hover{border-color:color-mix(in srgb,var(--dc) 45%,var(--line))}
 .ob-bot input{position:absolute;width:1px;height:1px;opacity:0;pointer-events:none}
-.ob-bot:has(input:focus-visible){outline:2px solid var(--accent);outline-offset:2px}
+.ob-bot:has(input:focus-visible){outline:var(--focus-ring);outline-offset:var(--focus-offset)}
 .ob-bot-body{display:flex;flex-direction:column;min-width:0}
 .ob-bot-name{display:flex;align-items:center;flex-wrap:wrap;gap:6px;font-size:var(--t-md);font-weight:600;line-height:var(--lh-tight);letter-spacing:var(--track-snug)}
 .ob-head{padding:1px 6px;border-radius:6px;background:color-mix(in srgb,var(--dc) 14%,transparent);color:var(--dci);font-size:var(--t-2xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase}
@@ -277,7 +277,7 @@ button.oc-node:hover{border-color:color-mix(in srgb,var(--dc,var(--accent)) 50%,
   .ss{grid-template-columns:minmax(0,1fr);gap:16px}
   .ss-side{position:static}
   .ss-bet-actions{margin-left:0}
-  .ss-bet-actions .strat-mini{min-height:36px;padding:4px 12px}
+  .ss-bet-actions .strat-mini{min-height:40px;padding:4px 12px}
   .ss-found-row{grid-template-columns:minmax(0,1fr) auto}
   .ss-found-row .strat-bet-k{grid-column:1/-1}
 }

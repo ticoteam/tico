@@ -4,11 +4,11 @@
 /* ---------------------------------------------------------------- Org: the chart */
 #main.rd-org-layout{display:flex;flex-direction:column}
 .rdo-wrap{position:relative;flex:none}
-.rdo-pane{position:relative;isolation:isolate;overflow:auto;scrollbar-gutter:stable;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 164px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
+.rdo-pane{position:relative;isolation:isolate;overflow:auto;touch-action:pan-x pan-y;overscroll-behavior:contain;max-height:calc(100dvh - 164px);min-height:240px;border:1px solid var(--line);border-radius:var(--radius);background:var(--surface)}
 /* The sizer is the scaled chart's size (ui/app/redesign-org.js rdoLayout); the chart inside keeps its own layout box and
    is scaled from its top left, so zooming moves only a transform. */
 .rdo-sz{position:relative;min-width:100%}
-.rdo-cv{position:absolute;top:0;left:0;width:max-content;padding:18px 14px 28px;transform-origin:0 0;transition:transform var(--dur) var(--ease);--rdo-line:var(--g5)}
+.rdo-cv{position:absolute;top:0;left:0;width:max-content;padding:18px 14px 28px;transform-origin:0 0;transition:transform var(--dur) var(--ease)}
 .rdo-pane.dragging{cursor:grabbing;user-select:none}
 /* The zoom toolbar: a slim row above the frame, on the right, never over the chart. */
 .rdo-bar{display:flex;align-items:center;justify-content:flex-end;gap:2px;height:28px;margin-bottom:6px}
@@ -21,7 +21,7 @@
 .rdo-card{transition:transform var(--dur-fast) var(--ease)}
 .rdo-card:hover{transform:translateY(-1px);border-color:color-mix(in srgb,var(--muted) 60%,var(--ink))}
 /* The app's focus ring (forms.css), on the card's own corners. */
-.rdo-card:focus-visible{outline:2px solid var(--accent);outline-offset:2px;border-radius:9px}
+.rdo-card:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset);border-radius:9px}
 .rdo-card b{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;font-size:var(--t-base);line-height:var(--lh-tight);font-weight:600}
 .rdo-card.lead{border-color:var(--muted)}
 .rdo-card.top{width:150px;min-height:48px;background:color-mix(in srgb,var(--accent) 14%,var(--surface));border-color:var(--accent)}
@@ -29,26 +29,42 @@
 .rdo-r{display:flex;align-items:center;gap:5px;min-width:0}
 .rdo-rl{font-size:var(--t-xs);line-height:var(--lh-tight);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0}
 
-/* The owner on top, a bus under them, a drop to each column. */
+/* The lines (tree-lines.css), measured from the cards: the width and side padding of .rdo-card above, its 16px avatar,
+   and the room the rows leave for a line. They sit under the cards (the pane is a stacking context of its own), each
+   running a pixel under the card it meets, so a join holds at any zoom; a group's tab hides the end of its stub. */
+.rdo-cv{--rdo-w:118px;--rdo-px:8px;--rdo-av:16px;--rdo-ax:calc(1px + var(--rdo-px) + var(--rdo-av) / 2);
+  --rdo-drop:14px;--rdo-col-px:4px;--rdo-gap:6px;--rdo-el:calc(var(--tree-r) + var(--s1));--rdo-mid:27px;--rdo-tuck:1px}
+/* The owner on top, a bar under them, a drop into each column: from the owner's bottom middle to the bar, and from
+   the bar to each column's card (its middle) or group (its tab); the bar turns down, round, into the end columns. */
 .rdo-top{display:flex;justify-content:center}
-.rdo-top.has-row{position:relative;padding-bottom:14px}
-.rdo-top.has-row::after{content:"";position:absolute;left:50%;bottom:0;height:14px;border-left:1.5px solid var(--rdo-line)}
+.rdo-top.has-row{position:relative;padding-bottom:var(--rdo-drop)}
+.rdo-top.has-row::after{content:"";position:absolute;z-index:-1;left:calc(50% - var(--tree-w) / 2);bottom:calc(-1 * var(--tree-w));
+  height:calc(var(--rdo-tuck) + var(--rdo-drop) + var(--tree-w));border-left:var(--tree-w) solid var(--tree-line)}
 .rdo-row{display:flex;align-items:flex-start;list-style:none;margin:0;padding:0}
-.rdo-row>li{position:relative;padding:14px 4px 0}
-.rdo-row>li::before{content:"";position:absolute;top:0;left:50%;height:14px;border-left:1.5px solid var(--rdo-line)}
-.rdo-row>li::after{content:"";position:absolute;top:0;left:0;right:0;border-top:1.5px solid var(--rdo-line)}
-.rdo-row>li:first-child::after{left:50%}
-.rdo-row>li:last-child::after{right:50%}
-.rdo-row>li:only-child::after{display:none}
+.rdo-row>li{position:relative;padding:var(--rdo-drop) var(--rdo-col-px) 0;--rdo-sx:calc(var(--rdo-col-px) + var(--rdo-w) / 2)}
+.rdo-row>li:has(>.rdo-g){--rdo-sx:50%}
+.rdo-top.has-row+.rdo-row>li::before{content:"";position:absolute;z-index:-1;top:0;left:calc(var(--rdo-sx) - var(--tree-w) / 2);
+  height:calc(var(--rdo-drop) + var(--rdo-tuck));border-left:var(--tree-w) solid var(--tree-line)}
+.rdo-top.has-row+.rdo-row>li::after{content:"";position:absolute;z-index:-1;box-sizing:border-box;top:0;left:0;right:0;
+  border-top:var(--tree-w) solid var(--tree-line)}
+.rdo-top.has-row+.rdo-row>li:first-child::after{left:calc(var(--rdo-sx) - var(--tree-w) / 2);height:calc(var(--rdo-drop) + var(--rdo-tuck));
+  border-left:var(--tree-w) solid var(--tree-line);border-top-left-radius:var(--tree-r)}
+.rdo-top.has-row+.rdo-row>li:last-child::after{right:calc(100% - var(--rdo-sx) - var(--tree-w) / 2);height:calc(var(--rdo-drop) + var(--rdo-tuck));
+  border-right:var(--tree-w) solid var(--tree-line);border-top-right-radius:var(--tree-r)}
+.rdo-top.has-row+.rdo-row>li:not(:only-child):is(:first-child,:last-child)::before,
+.rdo-top.has-row+.rdo-row>li:only-child::after{display:none}
 
-/* Reports under a card, on a rail; an elbow into each. */
-.rdo-stack{list-style:none;margin:0;padding:6px 0 0 16px}
-.rdo-stack>li{position:relative;--mid:27px}
-.rdo-stack>li.is-g{--mid:4px;margin-top:10px}
-.rdo-stack>li+li{margin-top:6px}
-.rdo-stack>li.is-g+li,.rdo-stack>li+li.is-g{margin-top:14px}
-.rdo-stack>li::before{content:"";position:absolute;left:-9px;top:-6px;width:9px;height:calc(var(--mid) + 6px);border-left:1.5px solid var(--rdo-line);border-bottom:1.5px solid var(--rdo-line);border-bottom-left-radius:4px}
-.rdo-stack>li:not(:last-child)::after{content:"";position:absolute;left:-9px;top:0;bottom:-14px;border-left:1.5px solid var(--rdo-line)}
+/* Reports under a card, on a rail from its avatar out of its bottom; an elbow into each one's left edge, at the middle
+   of a card or on the straight of a group's outline, under its tab. */
+.rdo-stack{list-style:none;margin:0;padding:var(--rdo-gap) 0 0 calc(var(--rdo-ax) + var(--rdo-el))}
+.rdo-stack>li{position:relative;--rdo-mt:0px;margin-top:var(--rdo-mt);
+  --tree-x:calc(-1 * var(--rdo-el));--tree-elbow:calc(var(--rdo-el) + var(--rdo-tuck));--tree-y:var(--rdo-mid);--tree-up:var(--rdo-mt)}
+.rdo-stack>li:first-child{--tree-up:calc(var(--rdo-tuck) + var(--rdo-gap) + var(--rdo-mt))}
+.rdo-stack>li.is-g{--rdo-mt:10px;--tree-y:20px}
+.rdo-stack>li.is-g:has(>.rdo-g.folded){--tree-y:50%}
+.rdo-stack>li+li{--rdo-mt:var(--rdo-gap)}
+.rdo-stack>li.is-g+li,.rdo-stack>li+li.is-g{--rdo-mt:14px}
+.rdo-stack>li::before,.rdo-stack>li::after{z-index:-1}
 
 /* A group: a dashed outline, its name on a tab that folds it. */
 .rdo-g{position:relative;min-width:134px;padding:18px 8px 8px;border:1px dashed var(--line);border-radius:12px;background:color-mix(in srgb,var(--accent) 3%,transparent)}
@@ -72,11 +88,9 @@
   .rdo-card{width:96px;min-height:46px;padding:5px 6px 4px}
   .rdo-card b{display:block;white-space:nowrap;text-overflow:ellipsis}
   .rdo-card.top{width:128px}
-  .rdo-row>li{padding:14px 2px 0}
-  .rdo-stack{padding:6px 0 0 9px}
-  .rdo-stack>li{--mid:23px}
-  .rdo-stack>li::before{left:-6px;width:6px}
-  .rdo-stack>li:not(:last-child)::after{left:-6px}
+  /* Its stacks hang from the card's corner, under its padding, rather than its avatar, on a short elbow: an indent of
+     12px, not 23, so a small team still fits across at a readable size (rdoFit). */
+  .rdo-cv{--rdo-w:96px;--rdo-px:6px;--rdo-col-px:2px;--rdo-ax:var(--rdo-px);--rdo-el:6px;--rdo-mid:23px}
   .rdo-g{min-width:104px;padding:16px 4px 6px}
   .rdo-g.folded{padding:14px 4px 2px}
   .rdo-tab{max-width:calc(100% - 8px);padding:0 7px}
@@ -92,12 +106,12 @@
 /* The lead's and owner's role reads a step under the name. */
 .rdo-card:is(.top,.lead) .rdo-rl{color:var(--muted);font-weight:400}
 /* The tab's chevron points down when the group is open, along when folded; the count shows only folded. */
-.rdo-cx{display:inline-block;font-size:12px;line-height:var(--lh-none);letter-spacing:0;transform:rotate(90deg);transition:transform var(--dur) var(--ease)}
+.rdo-cx{display:inline-block;font-size:12px;line-height:var(--lh-none);letter-spacing:0;transform:var(--chev-open);transition:transform var(--dur-fast) var(--ease)}
 .rdo-tab[aria-expanded="false"] .rdo-cx{transform:none}
 .rdo-g:not(.folded)>.rdo-tab .rdo-n{display:none}
 @media (max-width:760px){
-  .rdo-bar{height:36px;margin-bottom:4px}
-  .rdo-bar button{min-width:36px;height:36px}
+  .rdo-bar{height:40px;margin-bottom:4px}
+  .rdo-bar button{min-width:40px;height:40px}
   .rdo-pct{display:none}
 }
 @media (prefers-reduced-motion:reduce){.rdo-cv,.rdo-card,.rdo-cx{transition:none}.rdo-card:hover{transform:none}}
@@ -114,7 +128,7 @@
 .rdb-hl{margin:2px 0 0;font-size:var(--t-xl);font-weight:700;line-height:var(--lh-tight);color:var(--ink)}
 .rdb-deck{margin:0;font-size:var(--t-md);font-style:italic;line-height:var(--lh);color:var(--muted)}
 .rdb-cols{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:6px 18px;padding-top:7px;border-top:1px solid var(--line);font:var(--t-base)/var(--lh) var(--sans)}
-.rdb-cols h3{margin:0 0 3px;font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.rdb-cols h3{margin:0 0 3px;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 .rdb-cols p{margin:0 0 5px}
 .rdb-foot{display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:2px;padding-top:6px;border-top:1px solid var(--line);font:var(--t-sm)/var(--lh-tight) var(--sans);color:var(--muted)}
 .rdb-foot a{color:var(--muted)}
@@ -124,7 +138,7 @@
 /* ---------------------------------------------------------------- Market › Listening */
 .rdm{display:flex;flex-direction:column;gap:6px;max-width:1000px}
 .rdm-hd{display:flex;align-items:center;gap:12px;flex-wrap:wrap;min-height:24px}
-.rdm-cap{font-size:var(--t-xs);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
+.rdm-cap{letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);font-size:var(--t-label);font-weight:600}
 .rdm-leg{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-left:auto;font-size:var(--t-xs);color:var(--muted)}
 .rdm-leg>span{display:inline-flex;align-items:center;gap:5px;white-space:nowrap}
 .rdm-leg i{width:8px;height:8px;border-radius:2px;display:inline-block}
@@ -154,8 +168,8 @@ a.rdm-row:hover{background:var(--surface2)}
 }
 
 /* ---------------------------------------------------------------- Strategy and Goals */
-/* The Strategy Bot's rail sits beside every tab, so the Strategy tab drops its contents column and reads as one column,
-   as in the mock; the version line sits tight under the tabs. */
+/* The Strategy tab drops its contents column and reads as one column, as in the mock; the version line sits tight
+   under the tabs. */
 html.redesign #main.strategy-layout .strat-grid{grid-template-columns:minmax(0,860px)}
 html.redesign #main.strategy-layout .strat-toc{display:none}
 html.redesign #main.strategy-layout .strat-meta{margin-bottom:4px}

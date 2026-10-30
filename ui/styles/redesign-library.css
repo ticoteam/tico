@@ -3,7 +3,7 @@
 #main.lc-layout{max-width:none;padding:0;overflow:hidden;height:100%}
 .lc{display:flex;flex-direction:column;height:100%;min-height:0}
 /* The page header has no rule under it, as on Updates, Tasks, Docs and Meetings. */
-.lc-ph{display:flex;align-items:center;gap:6px;padding:12px 20px}
+.lc-ph{display:flex;align-items:center;gap:6px;padding:8px 28px;min-height:48px}
 .lc-ph h1{margin:0;font-size:var(--t-lg);font-weight:600}
 .lc-ph .spacer{flex:1}
 .lc-pad{padding:14px 6px}
@@ -12,9 +12,9 @@
 /* the list */
 .lc-list{display:flex;flex-direction:column;min-height:0;border-right:1px solid var(--line)}
 .lc-scroll{flex:1;min-height:0;overflow-y:auto;padding:4px 8px 16px}
-.lc-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase}
+.lc-gh{display:flex;justify-content:space-between;padding:14px 6px 6px;color:var(--muted);letter-spacing:var(--track-caps);text-transform:uppercase;font-size:var(--t-label);font-weight:600}
 .lc-row{display:flex;align-items:center;gap:8px;min-height:32px;padding:6px 8px;border:1px solid transparent;border-radius:7px;color:var(--ink);text-decoration:none}
-.lc-row:hover{background:var(--surface);text-decoration:none}
+.lc-row:hover{background:var(--surface2);text-decoration:none}
 .lc-row:hover *,a.lc-who-row:hover{text-decoration:none}
 .lc-row.sel{background:var(--surface2);border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
 .lc-row .nav-icon{flex:none;font-size:17px;width:18px;height:18px;color:var(--muted)}
@@ -34,7 +34,7 @@
 .lc-add{margin-left:auto}.lc-add button{padding:3px 10px;font-size:var(--t-sm)}
 
 /* the page: the tool's own page (integrations.js), its heading with a back link on a phone */
-.lc-pane{min-width:0;min-height:0;overflow-y:auto;padding:16px 20px 48px}
+.lc-pane{min-width:0;min-height:0;overflow-y:auto;padding:16px 28px 48px}
 .lc-pane #int-detail{max-width:860px}
 .lc .meeting-head{flex-direction:row;align-items:center;justify-content:flex-start;gap:6px}
 .lc .meeting-head h1{margin:0;overflow-wrap:anywhere}

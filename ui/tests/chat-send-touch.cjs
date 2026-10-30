@@ -23,18 +23,18 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
       if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
       if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
       if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
       if (p === '/api/v2/conversations')
-        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
+        return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
       if (p.endsWith('/snapshot')) { await snapshotHeld; return json({messages: [], execution: null}); }
       if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-      if (p === '/api/v2/uploads/chat/botops') {
+      if (p === '/api/v2/uploads/chat/sales') {
         uploads.push(route.request().postDataBuffer().length);
         if (answer === 'upload-auth') return json({error:{code:'forbidden',detail:'Access refused'}}, 403);
         return json({error:{code:'too_large',detail:'Request exceeds the upload limit'}}, 413);
       }
-      if (p === '/api/v2/chat/botops') {
+      if (p === '/api/v2/chat/sales') {
         const text = route.request().postDataJSON().text;
         if (answer === 'long') return json({error:{code:'validation', detail:'body.text: String should have at most 200000 characters', retryable:false}}, 422);
         if (answer === 'unavailable') return json({error:{code:'not_found', detail:'Not found', idempotency_refused:true}}, 404);
@@ -49,7 +49,7 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
       }
       return json(unrouted(p));
     });
-    await page.goto('https://tico-ui.test/#/bot/botops');
+    await page.goto('https://tico-ui.test/#/bot/sales');
     release();
     const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
     await box.waitFor();
