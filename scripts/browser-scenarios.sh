@@ -254,7 +254,8 @@ sc_captcha() {
   PHASE_ON=task browser_phase challenge || { grant_trail "after S7's sign-in failed"; login_names; return 1; }
   local rid card id task key out="$WORK/captcha-person.json" person
   rid="$(runner_id)" || return 1
-  send POST "/api/v2/runners/$rid/screen" '{"mode": "view"}' >/dev/null || { say "the screen could not be turned on"; return 1; }
+  # Control mode: the person's Control button exists only then, and the server grants control only in this mode.
+  send POST "/api/v2/runners/$rid/screen" '{"mode": "control"}' >/dev/null || { say "the screen could not be turned on"; return 1; }
   node "$REPO/e2e/browser/captcha-person.mjs" "http://127.0.0.1:$TICO_PORT" "$rid" > "$out" 2>"$WORK/captcha.err"
   person=$?
   send POST "/api/v2/runners/$rid/screen" '{"mode": "off"}' >/dev/null
