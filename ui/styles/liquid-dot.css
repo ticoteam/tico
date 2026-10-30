@@ -13,14 +13,13 @@
 .ldot.sm .body{background:var(--dot)}
 
 /* Idle breathes, on the dot itself, without a break; every 6-14 s the scheduler (ldotIdle) swaps the body's variant
-   (sway, look, squish, hop, or none). Each variant loops with a long rest and never ends by itself, so a swap costs one
+   (sway, look, squish, hop, or none; the shadow stays put, so it never needs a layer of its own). Each variant loops with a long rest and never ends by itself, so a swap costs one
    style change and no animation ever finishes on the main thread. */
 .ldot[data-state="idle"]{animation:ld-breathe 5s ease-in-out infinite}
 .ldot[data-idle="sway"] .body{animation:ld-sway 6s ease-in-out infinite}
 .ldot[data-idle="look"] .body{animation:ld-look 6s ease-in-out infinite}
 .ldot[data-idle="squish"] .body{animation:ld-squish 6s cubic-bezier(.3,0,.2,1) infinite}
 .ldot[data-idle="hop"] .body{animation:ld-idle-hop 6s cubic-bezier(.3,0,.2,1) infinite}
-.ldot[data-idle="hop"] .shadow{animation:ld-idle-shadow-hop 6s cubic-bezier(.3,0,.2,1) infinite}
 /* States: listening leans in; thinking turns and wobbles; talking squashes and stretches; done hops once. */
 .ldot:not(.sm)[data-state="listening"] .body{transform-origin:50% 100%;animation:ld-listen 1.6s ease-in-out infinite}
 .ldot:not(.sm)[data-state="thinking"] .body{animation:ld-think 2.4s ease-in-out infinite}
@@ -39,7 +38,6 @@
 @keyframes ld-squish{0%,13.3%,100%{transform:scale(1)}4.7%{transform:scale(1.08,.9)}9.3%{transform:scale(.97,1.04)}}
 @keyframes ld-idle-hop{0%,15%,100%{transform:translateY(0) scale(1)}2.3%{transform:translateY(5%) scale(1.12,.88)}6.8%{transform:translateY(-30%) scale(.94,1.07)}
   11.3%{transform:translateY(0) scale(1.1,.9)}13.2%{transform:scale(.98,1.02)}}
-@keyframes ld-idle-shadow-hop{0%,15%,100%{transform:scaleX(1);opacity:1}6.8%{transform:scaleX(.6);opacity:.45}11.3%{transform:scaleX(1.12);opacity:1}}
 @keyframes ld-hop{0%,100%{transform:translateY(0) scale(1)}15%{transform:translateY(5%) scale(1.12,.88)}45%{transform:translateY(-30%) scale(.94,1.07)}
   75%{transform:translateY(0) scale(1.1,.9)}88%{transform:scale(.98,1.02)}}
 @keyframes ld-shadow-hop{0%,100%{transform:scaleX(1);opacity:1}45%{transform:scaleX(.6);opacity:.45}75%{transform:scaleX(1.12);opacity:1}}

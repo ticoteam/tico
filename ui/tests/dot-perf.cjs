@@ -2,6 +2,7 @@
 // CDP, fixtures only:
 // - Idle 10 s with Ask closed: no layout, at most 4 style recalcs per idle swap (one or two land in 10 s), under 150 ms of main-thread work, no paints from
 //   the dot, and every running animation on a dot moves transform or opacity only, on one dot at most.
+// - Each idle variant swapped in by hand: no layout and no paint.
 // - With the CPU slowed 4x, opening Ask (the dot flies in), a reply (it flies to the new turn) and closing (it flies
 //   back): frame gaps p95 <= 20 ms and max <= 50 ms, and no long task over 50 ms. On a loaded runner
 //   (TICO_UI_SLOWDOWN > 1) the frame budgets stretch by that factor; the counts never do.
@@ -94,7 +95,7 @@ const round = v => Math.round(v * 10) / 10;
 
     // ---- Idle, Ask closed.
     // Count the scheduler's swaps in the window: each may cost a few style recalcs (4 at most), nothing else may.
-    await page.evaluate(() => { window.__swaps = 0; new MutationObserver(l => { window.__swaps += l.length; })
+    await page.evaluate(() => { window.__swaps = 0; new MutationObserver(l => { window.__swaps += l.length; console.timeStamp('idle-swap'); })
       .observe(document.body, {subtree: true, attributes: true, attributeFilter: ['data-idle']}); });
     const before = await metrics(cdp);
     await browser.startTracing(page, {categories: ['devtools.timeline', 'disabled-by-default-devtools.timeline.stack']});
@@ -115,9 +116,27 @@ const round = v => Math.round(v * 10) / 10;
     assert.equal(idle.layouts, 0, `idle: ${idle.layouts} layouts: ${JSON.stringify(why)}`);
     assert.ok(idle.recalcs <= 4 * Math.max(1, swaps), `idle: ${idle.recalcs} style recalcs over ${swaps} idle swaps`);
     assert.ok(idle.taskMs < 150, `idle: ${idle.taskMs} ms of main-thread work`);
-    assert.ok(idle.paints <= 1, `idle: ${idle.paints} paints`);
+    // Each paint: what it painted and how long after the nearest idle swap, for the message.
+    const marks = (trace.traceEvents || trace).filter(e => e.name === 'TimeStamp' && e.args?.data?.message === 'idle-swap').map(e => e.ts);
+    const painted = events.filter(e => e.name === 'Paint').map(e => `${e.args?.data?.nodeName || '?'} ${JSON.stringify(e.args?.data?.clip || []).slice(0, 40)}`
+      + (marks.length ? ` ${Math.round(Math.min(...marks.map(m => Math.abs(e.ts - m))) / 1000)} ms from a swap` : ''));
+    assert.ok(idle.paints <= 1, `idle: ${idle.paints} paints: ${JSON.stringify(painted)}`);
     assert.ok(idle.props.every(p => DOT_ANIMATED.has(p)), `the dot animates ${idle.props}`);
     assert.equal(idle.liveDots, 1, 'one moving dot on the screen');
+
+    // ---- Every idle variant, swapped in by hand: a swap never lays out or paints, whichever variant comes up.
+    const swapsBefore = await metrics(cdp);
+    await browser.startTracing(page, {categories: ['devtools.timeline']});
+    for (const v of await page.evaluate(() => LDOT_IDLES)) {
+      await page.evaluate(v => { document.querySelector('#ask-fab .ldot').dataset.idle = v; }, v);
+      await page.waitForTimeout(400);
+    }
+    const swapsAfter = await metrics(cdp);
+    const swapPaints = JSON.parse((await browser.stopTracing()).toString()).traceEvents.filter(e => e.name === 'Paint')
+      .map(e => e.args?.data?.nodeName || '?');
+    out.variants = {layouts: swapsAfter.LayoutCount - swapsBefore.LayoutCount, paints: swapPaints.length};
+    assert.equal(out.variants.layouts, 0, `idle variants: ${out.variants.layouts} layouts`);
+    assert.ok(swapPaints.length <= 1, `idle variants: paints ${JSON.stringify(swapPaints)}`);
 
     // ---- Open, a reply, close, with the CPU slowed 4x. A first open and close loads the chat; the second is timed.
     await page.locator('#ask-fab').click();
