@@ -754,14 +754,14 @@ def install(app, settings, store, auth):
         return out
 
     class Order(Contract):
-        kind: str = Field(pattern="^(shared|private|lease)$")
+        kind: str = Field(pattern="^(shared|private)$")
         state: str = Field(pattern="^[A-Z]{2}$")
         company_name: str = Field(min_length=1, max_length=200)
 
     @app.post("/api/v2/postal/orders")
     def mail_order(request: Request, body: Order):
-        """Order a mailing address (`shared` or `private`) or an office lease in a state. Tico staff fulfil it; its
-        status comes back as a notice. Owner or admin; send an Idempotency-Key."""
+        """Order a mailing address (`shared` or `private`) in a state. Tico staff fulfil it; its status comes back
+        as a notice. Owner or admin; send an Idempotency-Key."""
         who = request.state.identity
         with store.read() as c:
             member(c, who)

@@ -38,7 +38,7 @@ class Mail:
         if path == "/v1/gateway/mail/addresses":
             return httpx.Response(200, json={**({"prices": self.prices} if self.prices else {}), "items": [{"id": "ma_1", "state": "DE", "kind": "shared", "agent": True,
                                                         "status": "active", "address": "1 Main St, Claymont DE"}],
-                                              "orders": [{"order_id": "mo_0", "kind": "lease", "state": "CA", "status": "open"}]})
+                                              "orders": [{"order_id": "mo_0", "kind": "private", "state": "CA", "status": "open"}]})
         if path == "/v1/gateway/mail/orders":
             self.orders.append((json.loads(request.content), request.headers.get("idempotency-key")))
             return httpx.Response(200, json={"order": {"id": "mo_1", "status": "requested"}})
@@ -309,8 +309,9 @@ def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
     listed = get(api, "postal/addresses")
     assert listed["addresses"][0]["state"] == "DE" and listed["orders"][0]["order_id"] == "mo_0"
     assert "prices" not in listed
-    mail.prices = {"shared": 10, "private": 25, "lease": 437.5}
-    assert get(api, "postal/addresses")["prices"] == {"shared": 10, "private": 25, "lease": 437.5}
+    mail.prices = {"shared": 10, "private": 25}
+    assert get(api, "postal/addresses")["prices"] == {"shared": 10, "private": 25}
+    post(api, "postal/orders", {"kind": "lease", "state": "CA", "company_name": "Acme Inc"}, key="order-0", expected=422)
     post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, "cara-test", expected=403)
     made = post(api, "postal/orders", {"kind": "shared", "state": "DE", "company_name": "Acme Inc"}, key="order-1")
     assert made["order"]["id"] == "mo_1"

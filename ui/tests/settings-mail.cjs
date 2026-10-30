@@ -1,8 +1,8 @@
 // Settings > Mail (ui/app/settings-mail.js) against a fake server. Guards: addresses list state, kind, the full
 // address only once active, registered agent and Form 1583 status, with open orders as Pending; Get an address shows
-// each kind's price (Tico Gateway's `prices` win, the office lease falls back to $437.50/mo) and line, offers an office lease only in CA, DE and FL, and
-// sends the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the
-// company's email inboxes, and a failed save goes back to the last saved inbox; a failed letter is retried by an owner, and its task is a link. A member reads only.
+// shared and private, each with its price (Tico Gateway's `prices` win) and line, and sends the order once with an
+// Idempotency-Key, after which it shows as Pending; the intake inbox is picked from the company's email inboxes, and a
+// failed save goes back to the last saved inbox; a failed letter is retried by an owner, and its task is a link. A member reads only.
 // Without Tico Gateway the addresses card says so and offers no order. No sideways scroll on a phone.
 // TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
 const {chromium} = require('playwright');
@@ -142,29 +142,25 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       await pane.locator('#settings-mail-intake [data-field-err]').waitFor();
       assert.equal(await intake.inputValue(), 'ib_mail', 'a failed save restores the last saved inbox');
       state.intakeFail = false;
-      // Get an address: prices and lines, lease only where it is sold, then one order.
+      // Get an address: prices and lines, then one order.
       await pane.locator('[data-pm-order]').click();
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
       const kind = k => dialog.locator(`[data-pm-kind="${k}"]`);
       assert.equal(await rowText(kind('shared')), 'Shared $12/mo Mailing address and registered agent', "Tico Gateway's price wins");
       assert.equal(await kind('private').locator('[data-pm-price]').innerText(), '$25/mo', 'a price sent as text reads the same');
-      assert.equal(await rowText(kind('lease')), 'Office lease $437.50/mo For bank accounts, Amazon, Stripe; billed yearly',
-        'no lease price sent: the catalogue price');
+      assert.equal(await dialog.locator('[data-pm-kind]').count(), 2, 'shared and private only');
       assert.equal(await dialog.locator('[name=company_name]').inputValue(), 'Acme Inc');
-      await dialog.locator('[name=state]').selectOption('TX');
-      assert.equal(await kind('lease').locator('input').isDisabled(), true, 'no office lease in Texas');
       await dialog.locator('[name=state]').selectOption('CA');
-      assert.equal(await kind('lease').locator('input').isDisabled(), false);
-      await kind('lease').locator('input').check();
+      await kind('private').locator('input').check();
       if (shots) await dialog.screenshot({path: path.join(shots, 'mail-order-dark.png')});
       await dialog.locator('[data-pm-submit]').click();
       await pane.locator('[data-pm-pending="mo_3"]').waitFor();
       const orders = state.sent.filter(s => s.path === '/api/v2/postal/orders');
       assert.equal(orders.length, 1, 'one order');
-      assert.deepEqual(orders[0].body, {kind: 'lease', state: 'CA', company_name: 'Acme Inc'});
+      assert.deepEqual(orders[0].body, {kind: 'private', state: 'CA', company_name: 'Acme Inc'});
       assert.ok(orders[0].key, 'the order carries an Idempotency-Key');
-      assert.equal(await rowText(pane.locator('[data-pm-pending="mo_3"]')), 'California Office lease — Pending');
+      assert.equal(await rowText(pane.locator('[data-pm-pending="mo_3"]')), 'California Private — Pending');
       await page.locator('.pm-dialog').waitFor({state: 'detached'});   // the dialog closes
       // Retry the failed letter: it is asked for once, and the list redraws with what the server says now.
       await pane.locator('[data-pm-retry="pm_3"]').click();
@@ -199,7 +195,7 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
     }
     {
       // Phone: nothing sideways, the dialog fits. Every price here is Tico Gateway's, in dollars.
-      const {page, errors} = await open(browser, {width: 390, height: 844}, Object.assign(server(), {prices: {shared: 10, private: 25, lease: 437.5}}));
+      const {page, errors} = await open(browser, {width: 390, height: 844}, Object.assign(server(), {prices: {shared: 10, private: 25}}));
       const pane = page.locator('#settings-mail');
       await pane.locator('[data-pm-address="as_1"]').waitFor();
       await pane.locator('[data-pm-letter="pm_2"]').waitFor();
@@ -210,7 +206,7 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       const dialog = page.locator('.pm-dialog');
       await dialog.waitFor();
       assert.ok(await dialog.evaluate(d => d.scrollWidth <= d.clientWidth + 1), 'the order form fits');
-      assert.deepEqual(await dialog.locator('[data-pm-price]').allInnerTexts(), ['$10/mo', '$25/mo', '$437.50/mo']);
+      assert.deepEqual(await dialog.locator('[data-pm-price]').allInnerTexts(), ['$10/mo', '$25/mo']);
       if (shots) await dialog.screenshot({path: path.join(shots, 'mail-order-phone.png')});
       assert.deepEqual(errors, []);
       await page.close();

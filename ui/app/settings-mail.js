@@ -6,12 +6,10 @@
 // letters from this server (GET /v2/postal/items). Ordering, the intake inbox and a retry are an owner's or admin's;
 // everyone else reads.
 const PM_STATES = [['DE', 'Delaware'], ['CA', 'California'], ['TX', 'Texas'], ['FL', 'Florida'], ['NV', 'Nevada']];
-const PM_LEASE_STATES = ['CA', 'DE', 'FL'];
-const PM_KINDS = {shared: 'Shared', private: 'Private', lease: 'Office lease'};
-const PM_KIND_LINES = {shared: 'Mailing address and registered agent', private: 'Own suite number and registered agent',
-  lease: 'For bank accounts, Amazon, Stripe; billed yearly'};
+const PM_KINDS = {shared: 'Shared', private: 'Private'};
+const PM_KIND_LINES = {shared: 'Mailing address and registered agent', private: 'Own suite number and registered agent'};
 // Tico's prices (the plan's catalogue); Tico Gateway's `prices`, when it sends them, win.
-const PM_PRICES = {shared: '$10/mo', private: 'from $25/mo', lease: '$437.50/mo'};
+const PM_PRICES = {shared: '$10/mo', private: 'from $25/mo'};
 const PM_ADDRESS_STATUS = {pending_1583: ['waiting', 'Waiting for Form 1583'], active: ['ok', 'Active'], closed: ['', 'Closed']};
 const PM_LETTER_KINDS = {legal: 'Legal', government_tax: 'Government or tax', bill: 'Bill', check: 'Check', financial: 'Financial',
   junk: 'Junk', other: 'Other'};
@@ -85,19 +83,10 @@ function pmOrderDialog() {
     <div class="pm-kinds" role="radiogroup" aria-label="Kind">${Object.keys(PM_KINDS).map(k => `<label class="pm-kind" data-pm-kind="${k}">
       <input type="radio" name="kind" value="${k}"${k === 'shared' ? ' checked' : ''}>
       <span class="pm-kind-name">${esc(PM_KINDS[k])}</span><span class="pm-kind-price tnum" data-pm-price>${esc(pmPrice(k))}</span>
-      <span class="pm-kind-line">${esc(PM_KIND_LINES[k])}</span><span class="pm-kind-line pm-kind-off" hidden>California, Delaware and Florida only</span></label>`).join('')}</div>
+      <span class="pm-kind-line">${esc(PM_KIND_LINES[k])}</span></label>`).join('')}</div>
     <label>Company name<input name="company_name" type="text" maxlength="200" required autocomplete="organization" value="${esc(name)}"></label>`,
     '<button class="primary" type="submit" data-pm-submit>Order</button>');
   dialog.classList.add('pm-dialog');
-  const form = dialog.querySelector('form'), select = form.elements.state;
-  const fit = () => {
-    const ok = PM_LEASE_STATES.includes(select.value), lease = form.querySelector('input[value=lease]');
-    lease.disabled = !ok;
-    lease.closest('.pm-kind').classList.toggle('is-off', !ok);
-    lease.closest('.pm-kind').querySelector('.pm-kind-off').hidden = ok;
-    if (!ok && lease.checked) form.querySelector('input[value=shared]').checked = true;
-  };
-  select.onchange = fit; fit();
   whSubmit(dialog, async data => {
     const body = {kind: data.get('kind'), state: data.get('state'), company_name: String(data.get('company_name') || '').trim()};
     if (!body.company_name) throw new Error('Enter the company name.');

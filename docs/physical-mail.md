@@ -8,8 +8,8 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 
 ## Where letters come from
 
-- **A Tico Gateway address.** Tico HQ keeps the mailbox (a shared or private street address, or an office lease, in a
-  state). Each new letter arrives on the same Gateway queue as webhooks and Tico Team notices, so a Gateway key is
+- **A Tico Gateway address.** Tico HQ keeps the mailbox (a shared or private mailing address, with a registered agent,
+  in a state). Each new letter arrives on the same Gateway queue as webhooks and Tico Team notices, so a Gateway key is
   all a server needs. The scan is fetched from Tico Gateway.
 - **Your own provider, by email.** An owner or admin names one company email inbox (Email & Phone) as the mail-intake
   address: `PUT /api/v2/postal/intake` with `{"inbox_id": "..."}`, or `null` to stop. Have your mail provider send
@@ -61,8 +61,8 @@ second task.
 ## Settings > Mail
 
 Addresses (state, kind, the full address once active, registered agent, Form 1583 status) with open orders as
-Pending; Get an address (owner or admin: state, kind and price; an office lease only in California, Delaware and
-Florida); Bring your own (the intake inbox); Recent letters, with Retry on a failed one for an owner or admin.
+Pending; Get an address (owner or admin: state, kind and price); Bring your own (the intake inbox); Recent letters,
+with Retry on a failed one for an owner or admin.
 
 ## API, CLI and MCP
 
@@ -72,7 +72,7 @@ Florida); Bring your own (the intake inbox); Recent letters, with Retry on a fai
 | `GET /api/v2/postal/items/{id}` | One letter: summary, kind, sender, deadline, task, file id and scan link, mailbox flags, `contains_checks`. |
 | `POST /api/v2/postal/items/{id}/retry` | Try a failed letter again (owner or admin). |
 | `GET /api/v2/postal/addresses` | The company's addresses at Tico Gateway, its orders, and prices when Tico Gateway sends them. |
-| `POST /api/v2/postal/orders` | Order an address (`kind`: `shared`, `private` or `lease`; `state`; `company_name`), owner or admin, with an `Idempotency-Key`. Tico staff fulfil it. |
+| `POST /api/v2/postal/orders` | Order an address (`kind`: `shared` or `private`; `state`; `company_name`), owner or admin, with an `Idempotency-Key`. Tico staff fulfil it. |
 | `GET` / `PUT /api/v2/postal/intake` | The email-in inbox. |
 
 Bots and people read letters with `hub mail list` and `hub mail read <id>` (MCP `hub_mail_list`, `hub_mail_read`).

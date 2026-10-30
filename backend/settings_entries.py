@@ -326,7 +326,7 @@ ENTRIES = TEAM_RULES + [
     # Usage
     S("mail.address.order", "Get an address", MAIL + " > Addresses", "admin", "confirm", "POST", "postal/orders",
       value="json", card=_card("mail", "settings-mail-addresses"),
-      words="physical mail mailbox postal address registered agent office lease form 1583"),
+      words="physical mail mailbox postal address registered agent form 1583"),
     S("mail.intake", "Mail-intake inbox", MAIL + " > Bring your own", "admin", "direct", "PUT", "postal/intake",
       value="json", card=_card("mail", "settings-mail-intake"), read="postal/intake#intake",
       words="physical mail scans email in postal provider"),
