@@ -34,12 +34,16 @@ pub const SESSION_SWEEP_S: u64 = 600;
 const RULES_CAP: usize = 16 * 1024;
 const MEMORY_FOLDERS: &[&str] = &["memory", "knowledge"];
 /// Problems no wait clears: the bot has no checkout, or one with no upstream for a worktree to share. A task's turn
-/// then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S).
+/// then runs in the main checkout; any other problem is worth waiting out first (WORKTREE_WAIT_S). A private meeting's
+/// copy needs no upstream (ensure), and its turn never falls back to the checkout.
 pub const MISSING: &str = "the bot's checkout is missing";
 pub const NO_UPSTREAM: &str = "the bot's checkout has no upstream to share between tasks";
 /// How long a task turn that is not a person's waits for its worktree, retrying, before it runs in the bot's
 /// checkout: in the checkout it would hold every chat with the bot behind it for its whole turn.
 const WORKTREE_WAIT_S: u64 = 120;
+/// How a private meeting's turn with no copy of its own fails: the server ends that turn and says so in the meeting
+/// (backend/live_meetings.py `meeting.bot_turn_failed`) rather than resuming it, since every retry would fail alike.
+pub const PRIVATE_COPY_FAILED: &str = "A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, and none could be made here";
 const WORKTREE_RETRY_S: u64 = 10;
 
 #[cfg(test)]
@@ -354,7 +358,10 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
         // Only this repository's real .git directory is adopted, never a mirror or an external gitdir.
         crate::isolation::adopt(&[main.join(".git")]);
         let tracked = upstream(main, &env).await?;
-        if tracked.is_empty() {
+        // A private meeting's copy is never pushed, so it needs no upstream: without one it starts from the checkout's
+        // own HEAD (a repository made on this computer with no remote yet).
+        let base = if tracked.is_empty() && private { "HEAD".to_string() } else { tracked.clone() };
+        if base.is_empty() {
             return Ok((String::new(), NO_UPSTREAM.into()));
         }
         if path.join(".git").exists() {
@@ -386,7 +393,7 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
         let args: Vec<&str> = if exists {
             vec!["worktree", "add", "--quiet", &p, &branch]
         } else if private {
-            vec!["worktree", "add", "--quiet", "--no-track", "-b", &branch, &p, &tracked]
+            vec!["worktree", "add", "--quiet", "--no-track", "-b", &branch, &p, &base]
         } else {
             vec!["worktree", "add", "--quiet", "-b", &branch, &p, &tracked]
         };
@@ -1008,7 +1015,7 @@ impl Runner {
             let (mut tracked, mut problem) = self.task_worktree(place, &session, attempt, env).await?;
             if place.private && !problem.is_empty() {
                 // Never in the bot's checkout: what it wrote there would reach its other work.
-                return Err(format!("A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, and none could be made here ({problem})"));
+                return Err(format!("{PRIVATE_COPY_FAILED} ({problem})"));
             }
             if !problem.is_empty() && !place.person && problem != MISSING && problem != NO_UPSTREAM {
                 // In the checkout this turn would hold the bot's chats behind it for the whole turn, so it waits for

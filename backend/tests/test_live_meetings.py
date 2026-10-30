@@ -687,6 +687,11 @@ def test_a_meeting_model_the_runner_cannot_run_falls_back_to_the_bots_model(live
         payload = json.loads(event[0])
         assert payload["fallback"] == "bot_model" and payload["turn_id"] == "t-1"
         assert "not installed" in payload["reason"]
+        # Claimed again (a retry, a resumed run), the turn falls back the same way: the meeting is not told twice.
+        live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1")
+        live_meetings_module.turn_config(c, settings, own, "ops", "m-fallback", "", turn_id="t-1")
+        assert c.execute("SELECT count(*) FROM live_meeting_events WHERE meeting_id='m-fallback' "
+                         "AND type='meeting.model'").fetchone()[0] == 1
 
 
 def test_a_meeting_model_outside_the_catalog_falls_back_and_says_why(live, monkeypatch):
@@ -1151,6 +1156,45 @@ def test_a_runner_without_private_lanes_never_takes_a_private_meetings_turn(live
     assert attempt["lane"] == "private:" + attempt["conversation"]["id"]
     post(live, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Got it.", "last_seq": 0},
          token=machine["token"])
+
+
+def test_a_private_turn_with_no_copy_of_the_repository_ends_and_the_meeting_says_why_once(live):
+    """runner-rs sessions::PRIVATE_COPY_FAILED: a computer that can make no private copy of the bot's repository would
+    fail every retry alike, so the turn ends, the job is not resumed, and the meeting gets one plain notice."""
+    machine = runner(live)
+    assign(live, machine, "ops")
+    ready(live, machine, ["ops"])
+    meeting = post(live, "live-meetings", {"title": "Private", "visibility": "private", "cooldown_seconds": 0})
+    mid = meeting["id"]
+    attach(live, mid, "ops")
+
+    def fails(text):
+        chunk(live, mid, len(get(live, f"live-meetings/{mid}")["router"]["turns"]) + 1, 0, 1000, text)
+        attempt = post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"]
+        error = ("A private meeting's turn runs in a copy of the bot's repository kept for that meeting alone, "
+                 "and none could be made here (could not add the task's worktree: fatal: invalid reference)")
+        post(live, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "diagnostic", "payload": {
+            "runner_error": error, "error_type": "RuntimeError", "code": "private_checkout"}}]}, token=machine["token"])
+        post(live, f"attempts/{attempt['id']}/complete", {"outcome": "interrupted", "text": "", "last_seq": 1},
+             token=machine["token"])
+        return attempt
+
+    first = fails("Ops, the press embargo lifts Nov 17 9am PT. Got it?")
+    with live.app.state.store.transaction() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "cancelled"
+        live.app.state.execution.auto_reconcile(c)
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (first["job_id"],)).fetchone()[0] == "cancelled"
+    assert post(live, "jobs/claim", {"bot": "ops"}, token=machine["token"])["attempt"] is None, "not resumed"
+    turns = get(live, f"live-meetings/{mid}")["router"]["turns"]
+    assert [(t["status"], t["skip_reason"]) for t in turns] == [("skipped", "bot_execution_private_checkout")]
+    second = fails("Ops, and the launch price is $40?")
+    assert second["job_id"] != first["job_id"]
+    with live.app.state.store.read() as c:
+        said = [json.loads(r[0]) for r in c.execute(
+            "SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_failed'", (mid,))]
+    assert [(s["bot"], s["reason"], s["detail"]) for s in said] == [(
+        "ops", "private_checkout",
+        "ops can't answer in this private meeting: Test Mac couldn't make a private copy of its repository")], "said once"
 
 
 def test_the_meeting_view_says_the_model_its_replies_are_set_to_now(live, monkeypatch):

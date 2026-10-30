@@ -473,6 +473,30 @@ async fn a_task_lane_commits_its_memory_stamps_its_run_and_lands_beside_the_othe
 }
 
 #[tokio::test]
+async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
+    // A repository made on this computer with no remote: a task has no upstream to share, a private meeting's copy,
+    // never pushed, starts from the checkout's own HEAD.
+    let tmp = Tmp::new();
+    let projects = tmp.0.join("projects");
+    let main = projects.join("bot-ops");
+    std::fs::create_dir_all(&main).unwrap();
+    sh(&main, &["init", "-q", "-b", "main"]);
+    std::fs::write(main.join("AGENT.md"), "# Ops\n").unwrap();
+    sh(&main, &["add", "-A"]);
+    sh(&main, &["commit", "-qm", "start"]);
+    let env = turn_env(&tmp.0, &[]);
+    let task = sessions::path_for(&projects, "ops", "t1");
+    assert_eq!(sessions::ensure(&main, &task, "t1", &env).await, (String::new(), sessions::NO_UPSTREAM.into()));
+    let name = sessions::private_of("private:c-1");
+    let session = sessions::path_for(&projects, "ops", &name);
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, (String::new(), String::new()));
+    assert_eq!(sh(&session, &["rev-parse", "HEAD"]), sh(&main, &["rev-parse", "HEAD"]));
+    assert!(session.join("AGENT.md").is_file());
+    assert_eq!(sessions::ensure(&main, &session, &name, &env).await, (String::new(), String::new()), "reused");
+    assert!(sessions::remove_private(&main, &session, &name, &env).await);
+}
+
+#[tokio::test]
 async fn a_private_meetings_checkout_tracks_nothing_keeps_its_changes_and_goes_whole_when_the_meeting_ends() {
     let tmp = Tmp::new();
     let (bare, _seed) = remote(&tmp.0, "bot-ops");

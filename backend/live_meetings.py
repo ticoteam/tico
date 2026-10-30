@@ -404,9 +404,15 @@ def turn_config(c, settings, config, bot, rid, runner_id, job_id=None, turn_id=N
         steps.append({"model": model, "reason": why})
     if steps:
         ran = choice["model"] if choice else (config.get("model") or "")
-        _event(c, rid, "meeting.model", {"model": steps[0]["model"], "bot": bot, "turn_id": turn_id,
-                                         "fallback": "openrouter" if choice else "bot_model", "ran": ran,
-                                         "reason": steps[0]["reason"], "steps": steps})
+        said = {"model": steps[0]["model"], "bot": bot, "turn_id": turn_id,
+                "fallback": "openrouter" if choice else "bot_model", "ran": ran, "reason": steps[0]["reason"],
+                "steps": steps}
+        # Each claim of the turn asks again (a retry, a resumed run): the meeting hears a change, not a repeat.
+        last = c.execute("SELECT payload_json FROM live_meeting_events WHERE meeting_id=? AND type='meeting.model' "
+                         "AND json_extract(payload_json,'$.turn_id')=? ORDER BY event_id DESC LIMIT 1",
+                         (rid, turn_id)).fetchone()
+        if not last or json.loads(last["payload_json"]) != said:
+            _event(c, rid, "meeting.model", said)
     ran_on(choice["model"] if choice else None)
     if not choice:
         return config
@@ -594,10 +600,12 @@ def claim_runner_turn(c, rid, turn_id, bot, *, auth=None):
     return {"id": turn_id, "status": "claimed"}
 
 
-def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False, attempt_id=None):
+def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False, attempt_id=None, failure=None,
+                         runner_id=None):
     """Settle a meeting turn from a completed normal bot execution, keeping PASS hidden. The follow-ups the run took in
     while it ran (Execution.inputs: later turns of this bot in this meeting) are settled with it: answered in its reply,
-    or ended as it ended. A requeued run hands them back to the queue, and each keeps its own turn."""
+    or ended as it ended. A requeued run hands them back to the queue, and each keeps its own turn. A `failure` no
+    retry can help (execution.PRIVATE_COPY_FAILURE) is said in the meeting once (`meeting.bot_turn_failed`)."""
     if attempt_id and not requeued:
         for row in c.execute("SELECT m.refs_json FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
                              "WHERE i.attempt_id=? AND m.from_actor=? AND m.to_actor=? "
@@ -633,8 +641,25 @@ def complete_runner_turn(c, rid, turn_id, bot, text, outcome, *, requeued=False,
         else:
             who = Identity("bot:" + bot, "bot")
             _reply(c, rid, who, turn_id, text)
+    elif failure:
+        if _finish_pass(c, rid, turn, "bot_execution_" + failure):
+            _say_failed(c, rid, turn, bot, failure, runner_id)
     elif not requeued:
         _finish_pass(c, rid, turn, "bot_execution_" + str(outcome))
+
+
+def _say_failed(c, rid, turn, bot, failure, runner_id):
+    """One plain notice per meeting, bot and cause that the bot's turn ended without an answer, for the meeting view
+    and the recorder; later turns that fail alike end quietly."""
+    if c.execute("SELECT 1 FROM live_meeting_events WHERE meeting_id=? AND type='meeting.bot_turn_failed' "
+                 "AND json_extract(payload_json,'$.bot')=? AND json_extract(payload_json,'$.reason')=?",
+                 (rid, bot, failure)).fetchone():
+        return
+    name = (c.execute("SELECT display_name FROM bots WHERE slug=?", (bot,)).fetchone() or [None])[0] or bot
+    computer = (c.execute("SELECT label FROM runners WHERE id=?", (runner_id,)).fetchone() or [None])[0] or "its computer"
+    _event(c, rid, "meeting.bot_turn_failed", {
+        "turn_id": turn["id"], "bot": bot, "reason": failure,
+        "detail": f"{name} can't answer in this private meeting: {computer} couldn't make a private copy of its repository"})
 
 
 def _retry_empty(c, rid, turn, bot):

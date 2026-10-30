@@ -140,7 +140,8 @@ See [Task worktrees](worktrees.md) for code worktrees and cleanup.
 
 A private live meeting's bot turns get a worktree of their own the same way, `sessions/bot-<slug>/private-<id>`, but
 nothing in it is ever saved: it is never committed for the bot or pushed, and it is deleted, unsaved changes and all,
-within about 10 minutes of the meeting ending ([Live meetings](live-meetings-api.md)).
+within about 10 minutes of the meeting ending ([Live meetings](live-meetings-api.md)). Unlike a task's, it needs no
+upstream: a checkout with no remote gives it a copy of its own `HEAD`.
 
 ## Linked sessions
 

@@ -1744,7 +1744,9 @@ impl Runner {
                 unavailable = false;
             } else {
                 self.report_failure(&aid, &bot, e, redactor.as_ref(), &vault, &token, "execution interrupted");
-                unavailable = !OWN_INTERRUPT.iter().any(|p| e.text.contains(p));
+                // No fallback for a private meeting with no copy of its own: it would have none either.
+                unavailable = !OWN_INTERRUPT.iter().any(|p| e.text.contains(p))
+                    && !e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED);
             }
         }
         let native_control = truthy(refs.get("command")) || goal.chat_goal.as_ref().is_some_and(|g| g["status"] == "active");
@@ -2507,7 +2509,11 @@ impl Runner {
         let masked = redact::scrub_credentials(&scrub.scrub_text(&e.text), &[]);
         let cause: String = masked.chars().take(300).collect();
         let detail = if cause.is_empty() { String::new() } else { format!(" ({cause})") };
-        let _ = self.state.append(aid, "diagnostic", &json!({"runner_error": cause, "error_type": e.kind}));
+        let mut said = json!({"runner_error": cause, "error_type": e.kind});
+        if e.text.starts_with(crate::sessions::PRIVATE_COPY_FAILED) {
+            said["code"] = json!("private_checkout"); // the server ends the meeting turn: retrying fails the same way
+        }
+        let _ = self.state.append(aid, "diagnostic", &said);
         self.diagnose(aid, &format!("{}: {what}{detail}; inspect local runner", e.kind));
         if !OWN_INTERRUPT.iter().any(|p| e.text.contains(p)) {
             crate::util::diagnostic(&format!("Tico runner: {bot}: turn {aid} stopped: {}{}", e.kind, if cause.is_empty() { String::new() } else { format!(": {cause}") }));

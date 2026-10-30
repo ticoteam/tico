@@ -1124,6 +1124,16 @@ def limit_streak(c, bot):
     return streak
 
 
+# What runner-rs report_failure tags a private meeting's turn with when no copy of the bot's repository could be made
+# for it (sessions::PRIVATE_COPY_FAILED): no retry can help.
+PRIVATE_COPY_FAILURE = "private_checkout"
+
+
+def private_copy_failed(c, attempt_id):
+    return c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind='diagnostic' "
+                     "AND json_extract(payload_json,'$.code')=? LIMIT 1", (attempt_id, PRIVATE_COPY_FAILURE)).fetchone() is not None
+
+
 def limit_errors(c, attempt_id):
     """The runtime's latest error texts on an attempt, newest first."""
     return [str(json.loads(row["payload_json"]).get("error") or "") for row in c.execute(
@@ -4274,7 +4284,12 @@ class Execution:
         # And a turn stopped while it waited for its shared login: older runners report failed, newer ones interrupted.
         # Either settles the Stop. A task done or closed meanwhile (`skipped`) also ends its waiting turn.
         skipped = body.outcome == "interrupted" and not row["stop_requested"] and finished_before_start(c, row)
-        unstarted = (row["state"] == "leased" and body.outcome == "failed"
+        # A private meeting's turn its computer could make no copy of the repository for (runner-rs
+        # sessions::PRIVATE_COPY_FAILED) never started, and would fail alike on every retry: it ends here, and the
+        # meeting says why (live_meetings `meeting.bot_turn_failed`), never handed back to run again.
+        no_copy = body.outcome != "completed" and not row["stop_requested"] and private_copy_failed(c, aid)
+        unstarted = (row["state"] == "leased" and no_copy
+                     or row["state"] == "leased" and body.outcome == "failed"
                      and (any(gateway.run_code(error) == gateway.NOT_ISOLATED for error in limit_errors(c, aid))
                           or body.primary_held and body.limited and not body.fallback)
                      or row["state"] == "leased" and body.outcome in ("failed", "interrupted") and bool(row["stop_requested"])
@@ -4541,9 +4556,12 @@ class Execution:
             requeue = False  # a yield or limit flag cannot turn unknown fallback effects into a safe retry
         if repeated_capacity:
             requeue = False
+        no_copy = no_copy and not stopped    # (above) ended, not queued again nor left for auto_reconcile to resume
+        if no_copy:
+            requeue = False
         c.execute("UPDATE jobs SET state=? WHERE id=?",
                   ("completed" if body.outcome == "completed" else "uncertain" if held_back else "queued" if benched
-                   else "cancelled" if stopped
+                   else "cancelled" if stopped or no_copy
                    else "queued" if requeue else "uncertain", row["job_id"]))
         if tico_code == gateway.NOT_ISOLATED and not requeue:
             # Held as it is: never started, so `auto_reconcile` would resume it onto the same runner each sweep. It
@@ -4555,7 +4573,8 @@ class Execution:
             from .live_meetings import complete_runner_turn
             complete_runner_turn(c, live_ref.get("meeting_id"), live_ref.get("turn_id"), row["bot"],
                                  body.text if body.outcome == "completed" else "", body.outcome,
-                                 requeued=requeue, attempt_id=aid)
+                                 requeued=requeue, attempt_id=aid,
+                                 failure=PRIVATE_COPY_FAILURE if no_copy else None, runner_id=row["runner_id"])
         turn_task = work_task_id(msg, conv)
         for incoming in c.execute("SELECT i.message_id,m.kind FROM attempt_inputs i "
                                   "JOIN messages m ON m.id=i.message_id WHERE i.attempt_id=?", (aid,)).fetchall():
