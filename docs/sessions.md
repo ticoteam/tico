@@ -53,7 +53,7 @@ session other than the first also leaves a line in the run's diagnostics and in 
 session: the old one wasn't on this computer"), and Health names a bot that lost its session more than twice in a day.
 
 A resumed session is sent only what is new: what was said since its last turn, the current message and this turn's
-notices. On a harness that says when it compacts (the `compaction_events` capability, Claude Code), the bot's standing
+notices. On a harness that says when it compacts (the `compaction_events` capability: Claude Code and pi), the bot's standing
 instructions become one line while they, AGENT.md and the model are unchanged, and the assigned task one line while it
 is unchanged, but only while the session's last turn and the whole prompt come to under 60% of its Compact at. If the
 session compacts during a shortened turn anyway, the turn is given the lines it left out at once. The whole prompt goes

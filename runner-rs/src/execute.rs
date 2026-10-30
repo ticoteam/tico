@@ -3753,18 +3753,21 @@ for line in sys.stdin:
     }
 
     #[tokio::test]
-    async fn a_harness_that_does_not_say_when_it_compacts_gets_the_whole_prompt_every_turn() {
-        // Pi: every resumed turn is told everything, as before.
+    async fn a_pi_turn_that_says_when_it_compacts_gets_short_lines_while_its_session_has_room() {
+        // Pi says when it compacts (compaction_events) and its last request was 191 tokens, far under 60% of Compact at:
+        // the first turn is told everything, each resumed turn after it the lines for what is unchanged.
         let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({})), ("m4", json!({}), json!({}))]).await;
         assert!(ran.sessions.iter().all(|s| *s == ran.sessions[0]), "{:?}", ran.sessions);
-        for p in &ran.prompts {
-            assert!(!p.contains(crate::prompt::STANDING_SEEN) && p.contains("Use the hub CLI") && p.contains("Assigned task:"), "{p}");
+        assert!(!ran.prompts[0].contains(crate::prompt::STANDING_SEEN) && ran.prompts[0].contains("Use the hub CLI"), "{}", ran.prompts[0]);
+        for p in &ran.prompts[1..] {
+            assert!(p.contains(crate::prompt::STANDING_SEEN) && !p.contains("Use the hub CLI"), "{p}");
         }
     }
 
     #[tokio::test]
     async fn a_harness_that_cannot_compact_starts_a_new_session_when_asked_to() {
-        // Pi declares no compaction: the saved session is left, the new one is told what the room said since.
+        // Pi compacts by Compact at but has no /compact to run first (Host::compact refuses it): the saved session is left,
+        // the new one is told what the room said since.
         let ran = session_turns(true, true, &[("m1", json!({}), json!({})), ("m4", json!({}), json!({"compact_first": true}))]).await;
         assert_ne!(ran.sessions[0], ran.sessions[1]);
         assert_eq!(session_of(&ran.completions[1]), ("new".to_string(), json!("compact_failed"), json!("this harness cannot compact a session")));
