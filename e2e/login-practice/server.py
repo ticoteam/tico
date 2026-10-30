@@ -38,6 +38,7 @@ from http import cookies
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import totp  # noqa: E402
+import sites  # noqa: E402
 
 PORT = int(os.environ.get("PRACTICE_PORT", "8080"))
 MAIL_URL = os.environ.get("PRACTICE_MAIL_URL", "").rstrip("/")
@@ -55,6 +56,7 @@ STATE = {
     "beacon": None,
     "challenge": {},  # username -> time the press-and-hold check passed
     "challenge_last": {},  # username -> the last pass attempt: {"held_ms": ..., "status": ...}, for diagnosis
+    "challenge_seen": {},  # username -> the pointer events the check page reported (down, up, hold with its ms)
     "phones": {},     # phone number -> {user, code, expires}: a text code still waiting
 }
 HOLD_MS = 3000
@@ -152,6 +154,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
 
     def do_GET(self):
         path = urllib.parse.urlsplit(self.path).path
+        if path.startswith("/sites/"):
+            return sites.get(self, path)
         if path == "/":
             return self.send(200, page("Practice Login", "<p><a href='/login'>Log in</a> · <a href='/signup'>Sign up</a></p>"))
         if path == "/signup":
@@ -193,8 +197,12 @@ class Handler(http.server.BaseHTTPRequestHandler):
                     "<div id=hold style='position:fixed;inset:0;display:flex;align-items:center;justify-content:center;"
                     "background:#eef'>Press and hold anywhere for three seconds</div>"
                     "<script>let t=0;const h=document.getElementById('hold');"
+                    "const seen=(event,ms)=>fetch('/challenge/seen',{method:'POST',headers:{'content-type':'application/json'},"
+                    "body:JSON.stringify({event,ms}),credentials:'include',keepalive:true}).catch(()=>{});"
+                    "document.addEventListener('pointerdown',()=>seen('down',0));"
+                    "document.addEventListener('pointerup',()=>seen('up',0));"
                     "h.onpointerdown=()=>{t=Date.now()};"
-                    "h.onpointerup=()=>{const ms=t?Date.now()-t:0;t=0;if(ms>=3000)fetch('/challenge/pass',{method:'POST',"
+                    "h.onpointerup=()=>{const ms=t?Date.now()-t:0;t=0;seen('hold',ms);if(ms>=3000)fetch('/challenge/pass',{method:'POST',"
                     "headers:{'content-type':'application/json'},body:JSON.stringify({held_ms:ms}),credentials:'include'})"
                     ".then(r=>{h.textContent=r.ok?'Verified':'Try again'})};</script>")
             return self.send(200, page("Check", body))
@@ -205,7 +213,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
             with LOCK:
                 passed = user in STATE["challenge"]
                 last = STATE["challenge_last"].get(user)
-            return self.send(200, json.dumps({"passed": passed, "last": last}), "application/json")
+                seen = list(STATE["challenge_seen"].get(user, []))
+            return self.send(200, json.dumps({"passed": passed, "last": last, "seen": seen[-20:],
+                                              "seen_count": len(seen)}), "application/json")
         if path == "/settings":
             return self.settings()
         if path == "/logout":
@@ -248,6 +258,8 @@ class Handler(http.server.BaseHTTPRequestHandler):
     def do_POST(self):
         path = urllib.parse.urlsplit(self.path).path
         form = self.body()
+        if path.startswith(("/sites/", "/admin/sites/")):
+            return sites.post(self, path, form)
         if path == "/beacon":
             with LOCK:
                 STATE["beacon"] = str(form.get("webdriver"))[:20]
@@ -268,6 +280,14 @@ class Handler(http.server.BaseHTTPRequestHandler):
             return self.verify_phone_code(form)
         if path == "/challenge/pass":
             return self.challenge_pass(form)
+        if path == "/challenge/seen":
+            user = self.session_user()
+            if user:
+                event, ms = str(form.get("event", ""))[:10], int(form.get("ms") or 0)
+                with LOCK:
+                    STATE["challenge_seen"].setdefault(user, []).append({"event": event, "ms": ms})
+                print(f"challenge seen event={event} ms={ms}", file=sys.stderr, flush=True)
+            return self.send(204, "")
         if path == "/logout":
             with LOCK:
                 STATE["sessions"].pop(self.cookie("sid"), None)
@@ -407,6 +427,9 @@ class Handler(http.server.BaseHTTPRequestHandler):
                 return self.send(401, page("Settings", "<p>That code is wrong. Codes change every 30 seconds.</p>"))
             record["totp"], record["pending"] = pending, None
         return self.redirect("/settings")
+
+
+sites.bind(STATE, LOCK, hash_password, same, deliver, page, field)
 
 
 def main():

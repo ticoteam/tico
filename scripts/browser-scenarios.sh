@@ -51,15 +51,6 @@ step_proxy_up() {
 }
 
 # The PID of the bot's Chrome: the profile's lock names it as host-PID, and the process must be running with this profile.
-chrome_pid() {
-  local lock pid
-  lock="$(docker exec "$RUNNER" readlink "/home/runner/browsers/$BOT/profile/SingletonLock" 2>/dev/null)" || return 1
-  pid="${lock##*-}"
-  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
-  docker exec "$RUNNER" sh -c "tr '\\0' ' ' < /proc/$pid/cmdline" | grep -q -- "--user-data-dir=/home/runner/browsers/$BOT/profile" || return 1
-  printf '%s\n' "$pid"
-}
-
 # Diagnostics, read only: the bot's login, its grants, and every event about them, as the server's database has them.
 grant_trail() {  # a label: says what the server recorded about the login's grants at this point
   say "grants ($1):"
@@ -127,10 +118,6 @@ sc_peers() {
 }
 
 # The computer's log: the container's output and the log files the runner writes under its home.
-runner_log() {
-  { docker logs "$RUNNER" 2>&1; docker exec "$RUNNER" sh -c 'find /home/runner -name "*.log" -type f -exec cat {} + 2>/dev/null'; }
-}
-
 # Diagnostics, read only: the website logins the runner's list holds for the bot (runner-login-credentials filters the same
 # way): names and ids, never the values.
 login_names() {
@@ -173,21 +160,6 @@ if session is not None:
 # Scenario 5: Chrome is killed by its exact PID; the runner starts it again with the same profile.
 # The cookies the profile's database holds, in all of them: Chrome writes cookies on a timer, so a kill soon after a sign-in
 # can find none on disk. Read plainly, not immutable, so a commit in progress is seen.
-cookie_rows() {
-  docker exec -i -e BOT="$BOT" "$RUNNER" python3 -I - <<'PY' 2>/dev/null
-import glob, os, sqlite3
-p = os.path.join("/home/runner/browsers", os.environ["BOT"], "profile", "Default")
-n = 0
-for db in glob.glob(os.path.join(p, "**", "Cookies"), recursive=True):
-    try:
-        c = sqlite3.connect(db, timeout=5)
-        n += c.execute("SELECT count(*) FROM cookies").fetchone()[0]
-        c.close()
-    except sqlite3.Error:
-        pass
-print(n)
-PY
-}
 
 sc_crash() {  # the round, for the log
   local pid killed signed gap rows waited=0
@@ -248,7 +220,7 @@ sc_attach() {
 # Scenario 7: the bot signs in and asks for a person at the check page. The person holds the bot's screen (control mode,
 # 390x844), the person marks it done, and the next turn reads the check as passed.
 challenge_log() {  # the practice site's lines for the check: each request to the check and each pass attempt's held_ms
-  dc logs --no-log-prefix practice 2>&1 | grep -E '/challenge|^challenge held_ms' | tail -n 20 | sed 's/^/    /'
+  dc logs --no-log-prefix practice 2>&1 | grep -E '/challenge|^challenge ' | tail -n 30 | sed 's/^/    /'
 }
 
 sc_captcha() {

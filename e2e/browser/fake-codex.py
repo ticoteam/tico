@@ -16,7 +16,8 @@ STEPS = os.environ.get("JOURNEY_BOT_STEPS", os.path.join(os.path.dirname(os.path
 # A value ends at a quote or a comma: a task's body reaches the turn wrapped as JSON (`"...LABEL=Practice-login",`), and the
 # quote and comma are not part of the value.
 RUN = re.compile(r"journey-run (\S+) ([a-z0-9-]+)((?: [A-Za-z_]+=[^\s\",]+)*)")
-ALLOWED = {"PRACTICE", "HOST", "OTHER", "CREDENTIAL", "LABEL", "EXPECT_TZ", "EXPECT_LANG", "PEER_PORT", "PEER_PROFILE"}
+ALLOWED = {"PRACTICE", "HOST", "OTHER", "CREDENTIAL", "LABEL", "EXPECT_TZ", "EXPECT_LANG", "PEER_PORT", "PEER_PROFILE",
+           "VARIANT", "CRED", "CRED_OTHER"}
 
 spec = importlib.util.spec_from_file_location("journey_fake_codex", FAKE)
 fake = importlib.util.module_from_spec(spec)

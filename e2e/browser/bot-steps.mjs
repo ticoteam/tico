@@ -9,6 +9,8 @@
 // Node 22 only: the WebSocket and fetch globals, no packages.
 import {execFileSync} from 'node:child_process';
 import {randomBytes} from 'node:crypto';
+import {existsSync, readFileSync, writeFileSync} from 'node:fs';
+import {dirname, join} from 'node:path';
 
 const phase = process.argv[2] || '';
 const env = process.env;
@@ -153,7 +155,273 @@ async function status(browser) {
     JSON.stringify(r.json ? {running: r.json.running, version: r.json.version, problem: r.json.problem, error: r.json.error} : r.err));
 }
 
+// The login shapes (scripts/browser-sites.sh). One phase, `variant`, runs the shape named by VARIANT. CRED is the card the
+// shell saved for it, and CRED_OTHER a second card where a shape needs one. No card value is printed, and a page
+// secret never leaves the page.
+const fillAs = (name, tab, field, selector) => {
+  const args = ['browser', 'fill', name, field, '--target', tab.targetId];
+  if (selector) args.push('--selector', selector);
+  const r = hub(args);
+  return r.json || {ok: false, error: r.err};
+};
+const sentAs = (name, r) => `${r.error || 'filled'} (card ${JSON.stringify(name)})`;
+const onPath = (tab, path) => tab.waitFor(`location.pathname === ${JSON.stringify(path)}`);
+const clickIn = (tab, selector) => tab.eval(`(() => { const e = document.querySelector(${JSON.stringify(selector)}); if (!e) return false; e.click(); return true; })()`);
+const focusIn = (tab, expression) => tab.eval(`(${expression}).focus(), true`);
+// The next minute boundary at least `ahead` ms away.
+const boundaryAfter = ahead => { const now = Date.now(); let b = Math.ceil(now / 60000) * 60000; while (b - now < ahead) b += 60000; return b; };
+const until = ms => sleep(Math.max(0, ms - Date.now()));
+const appBase = practice.replace('login.practice.test', 'app.practice.test');
+const cred = env.CRED || credential;
+
+async function signInWith(tab, name) {
+  const u = fillAs(name, tab, 'username', 'input[name=username]');
+  const p = fillAs(name, tab, 'password', 'input[name=password]');
+  return {u, p};
+}
+
+const variants = {
+  'two-page': async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/two-page/user');
+    check('two-page: the username is asked on its own page', await tab.waitFor('!!document.querySelector("input[name=username]")'));
+    const u = fillAs(cred, tab, 'username', 'input[name=username]');
+    check('two-page: username filled from Tico', u.ok === true, sentAs(cred, u));
+    await clickIn(tab, 'button[type=submit]');
+    check('two-page: the password is on the next page', await onPath(tab, '/sites/two-page/password'));
+    const p = fillAs(cred, tab, 'password', 'input[name=password]');
+    check('two-page: password filled from Tico', p.ok === true, sentAs(cred, p));
+    await clickIn(tab, 'button[type=submit]');
+    check('two-page: signed in', await onPath(tab, '/me'));
+  },
+
+  react: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/react');
+    check('react: the page is loaded', await tab.waitFor('!!document.getElementById("u")'));
+    const u = fillAs(cred, tab, 'username', '#u');
+    check('react: username filled', u.ok === true, sentAs(cred, u));
+    const p = fillAs(cred, tab, 'password', '#p');
+    check('react: password filled', p.ok === true, sentAs(cred, p));
+    await clickIn(tab, 'button[type=submit]');
+    check('react: the page sent what its state holds and signed in', await onPath(tab, '/me'));
+  },
+
+  frame: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/frame');
+    const inner = 'document.getElementById("frame").contentDocument';
+    check('frame: the login is in an iframe on the same site', await tab.waitFor(`!!${inner}.querySelector("input[name=username]")`));
+    await focusIn(tab, `${inner}.querySelector("input[name=username]")`);
+    const u = fillAs(cred, tab, 'username');
+    check('frame: username filled into the iframe', u.ok === true, sentAs(cred, u));
+    await focusIn(tab, `${inner}.querySelector("input[name=password]")`);
+    const p = fillAs(cred, tab, 'password');
+    check('frame: password filled into the iframe', p.ok === true, sentAs(cred, p));
+    await tab.eval(`${inner}.querySelector("button[type=submit]").click(), true`);
+    check('frame: the iframe signed in', await tab.waitFor(`${inner}.location.pathname === "/me"`));
+  },
+
+  shadow: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/shadow');
+    const root = 'document.querySelector("login-box").shadowRoot';
+    check('shadow: the form is inside an open shadow root', await tab.waitFor(`!!${root}.querySelector("input[name=username]")`));
+    await focusIn(tab, `${root}.querySelector("input[name=username]")`);
+    const u = fillAs(cred, tab, 'username');
+    check('shadow: username filled inside the shadow root', u.ok === true, sentAs(cred, u));
+    await focusIn(tab, `${root}.querySelector("input[name=password]")`);
+    const p = fillAs(cred, tab, 'password');
+    check('shadow: password filled inside the shadow root', p.ok === true, sentAs(cred, p));
+    await tab.eval(`${root}.querySelector("button[type=submit]").click(), true`);
+    check('shadow: signed in', await onPath(tab, '/me'));
+  },
+
+  sso: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(appBase + '/sites/sso/start');
+    check('sso: the app sends the user to the accounts login', await tab.waitFor('location.hostname === "accounts.practice.test"'));
+    await tab.waitFor('!!document.querySelector("input[name=username]")');
+    const other = fillAs(env.CRED_OTHER, tab, 'username', 'input[name=username]');
+    check('sso: a login for app.practice.test only is refused on accounts (site_mismatch)',
+      other.ok === false && other.error === 'site_mismatch', sentAs(env.CRED_OTHER, other));
+    const u = fillAs(cred, tab, 'username', 'input[name=username]');
+    check('sso: the practice.test login fills on accounts.practice.test', u.ok === true, sentAs(cred, u));
+    const p = fillAs(cred, tab, 'password', 'input[name=password]');
+    check('sso: its password fills there too', p.ok === true, sentAs(cred, p));
+    await clickIn(tab, 'button[type=submit]');
+    check('sso: back in the app, signed in',
+      await tab.waitFor('location.hostname === "app.practice.test" && location.pathname === "/sites/sso/app"'));
+  },
+
+  popup: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/popup');
+    await tab.waitFor('!!document.getElementById("open")');
+    await clickIn(tab, '#open');
+    // The sign-in window is a page of its own: the bot finds its target and fills by that target id.
+    let popupId = '';
+    const end = Date.now() + 15000;
+    while (!popupId && Date.now() < end) {
+      const {targetInfos} = await browser.send('Target.getTargets');
+      const hit = targetInfos.find(t => t.type === 'page' && t.url.includes('/sites/popup/login'));
+      if (hit) popupId = hit.targetId; else await sleep(250);
+    }
+    check('popup: the sign-in window opened as a page of its own', Boolean(popupId));
+    if (!popupId) return;
+    const {sessionId} = await browser.send('Target.attachToTarget', {targetId: popupId, flatten: true});
+    await browser.send('Runtime.enable', {}, sessionId);
+    const popup = new Tab(browser, sessionId, popupId);
+    await popup.waitFor('!!document.querySelector("input[name=username]")');
+    const u = fillAs(cred, popup, 'username', 'input[name=username]');
+    check("popup: username filled by the popup's target id", u.ok === true, sentAs(cred, u));
+    const p = fillAs(cred, popup, 'password', 'input[name=password]');
+    check('popup: password filled', p.ok === true, sentAs(cred, p));
+    await clickIn(popup, 'button[type=submit]');
+    check('popup: the window signed in', await onPath(popup, '/me'));
+  },
+
+  magic: async browser => {
+    const inbox = hub(['inbound', 'create-email', 'Magic link']);
+    const id = (inbox.json && inbox.json.inbox_id) || '';
+    const address = (inbox.json && inbox.json.address) || '';
+    check('magic: the inbox for the sign-in was created', Boolean(address));
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/magic');
+    const before = hub(['inbound', 'cursor', '--inbox-id', id]).json;
+    const after = (before && before.cursor) || 0;
+    await tab.type('input[name=email]', address);
+    await clickIn(tab, 'button[type=submit]');
+    check('magic: the site says the link is on its way', await tab.waitFor('document.body.innerText.includes("Check your email")'));
+    const wait = hub(['inbound', 'wait', '--inbox-id', id, '--after', String(after), '--timeout', '90']);
+    const message = wait.json && wait.json.messages && wait.json.messages[0];
+    check('magic: the link email reached the inbox', Boolean(message));
+    const read = message && hub(['inbound', 'read', message.message_id]).json;
+    // The link is found in the message and never printed: a sign-in link is as good as a password.
+    const link = (JSON.stringify(read || {}).match(/https?:\/\/login\.practice\.test:8080\/sites\/magic\/verify\?token=[A-Za-z0-9_-]+/) || [])[0] || '';
+    check('magic: the bot found the link in its inbox', Boolean(link));
+    if (link) {
+      await tab.go(link);
+      check('magic: the bot opened the link and is signed in', await onPath(tab, '/me'));
+    }
+  },
+
+  totp: async browser => {
+    // Two windows hold the same code. The first is asked for 1.5 s before a period starts and submitted 0.5 s into the
+    // next (the site allows one step either side); the second submits that same code and is refused as used; the
+    // next period's code is then accepted.
+    const tabs = [await browser.newTab(), await browser.newTab()];
+    const first = boundaryAfter(8000);
+    for (const tab of tabs) {
+      await tab.go(practice + '/sites/totp/login');
+      await signInWith(tab, cred);
+      await clickIn(tab, 'button[type=submit]');
+      await tab.waitFor('location.pathname === "/sites/totp/code"');
+    }
+    check('totp: the sign-ins finished before the period started', Date.now() < first - 1000);
+    await until(first - 1500);
+    const codes = tabs.map(tab => fillAs(cred, tab, 'totp', 'input[name=code]'));
+    check('totp: the code was asked for before the period started', codes.every(c => c.ok === true),
+      codes.map(c => c.error || 'filled').join(','));
+    await until(first + 500);
+    await clickIn(tabs[0], 'button[type=submit]');
+    check('totp: the code submitted 0.5 s into the next period is accepted', await onPath(tabs[0], '/me'));
+    await clickIn(tabs[1], 'button[type=submit]');
+    check('totp: the same code the second time is refused as used', await tabs[1].waitFor('document.body.innerText.includes("already used")'));
+    const next = first + 60000;
+    await until(next - 1500);
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/totp/login');
+    await signInWith(tab, cred);
+    await clickIn(tab, 'button[type=submit]');
+    await tab.waitFor('location.pathname === "/sites/totp/code"');
+    const fresh = fillAs(cred, tab, 'totp', 'input[name=code]');
+    check("totp: the next period's code was filled", fresh.ok === true, sentAs(cred, fresh));
+    await until(next + 500);
+    await clickIn(tab, 'button[type=submit]');
+    check("totp: the next period's code is accepted", await onPath(tab, '/me'));
+  },
+
+  unicode: async browser => {
+    for (const [name, what] of [[cred, 'unicode, quotes, a backslash and an emoji'], [env.CRED_OTHER, '128 characters']]) {
+      const tab = await browser.newTab();
+      await tab.go(practice + '/logout');
+      await tab.go(practice + '/login');
+      const r = await signInWith(tab, name);
+      check(`unicode: the ${what} password filled exactly`, r.p.ok === true, sentAs(name, r.p));
+      await clickIn(tab, 'button[type=submit]');
+      check(`unicode: signed in with the ${what} password`, await onPath(tab, '/me'));
+    }
+  },
+
+  rotate: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/login');
+    const r = await signInWith(tab, cred);
+    check('rotate: the password on the card filled', r.p.ok === true, sentAs(cred, r.p));
+    await clickIn(tab, 'button[type=submit]');
+    check("rotate: signed in with the card's current password", await onPath(tab, '/me'));
+  },
+
+  refused: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/login');
+    const r = fillAs(cred, tab, 'password', 'input[name=password]');
+    check('refused: the revoked login is not filled (not_granted)', r.ok === false && r.error === 'not_granted', sentAs(cred, r));
+  },
+
+  consent: async browser => {
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/consent');
+    check('consent: the banner is there', await tab.waitFor('!!document.getElementById("consent")'));
+    const covered = await tab.eval(`(() => { const r = document.querySelector("input[name=username]").getBoundingClientRect();
+      const top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return !!(top && top.closest("#consent")); })()`);
+    check('consent: the banner covers the form', covered === true);
+    const at = await tab.eval(`(() => { const r = document.getElementById("accept").getBoundingClientRect();
+      return {x: r.x + r.width / 2, y: r.y + r.height / 2}; })()`);
+    for (const type of ['mousePressed', 'mouseReleased']) {
+      await browser.send('Input.dispatchMouseEvent', {type, x: at.x, y: at.y, button: 'left', clickCount: 1}, tab.sessionId);
+    }
+    check('consent: the bot dismissed the banner with a click', await tab.waitFor('!document.getElementById("consent")'));
+    const r = await signInWith(tab, cred);
+    check('consent: the form filled after the banner', r.p.ok === true, sentAs(cred, r.p));
+    await clickIn(tab, 'button[type=submit]');
+    check('consent: signed in', await onPath(tab, '/me'));
+  },
+
+  files: async browser => {
+    const status = hub(['browser', 'status']).json || {};
+    check("files: the bot's Chrome folder is known", Boolean(status.profile));
+    if (!status.profile) return;
+    const dir = dirname(status.profile);
+    const upload = join(dir, 'upload-check.txt');
+    writeFileSync(upload, 'upload check\n');
+    const tab = await browser.newTab();
+    await tab.go(practice + '/sites/files');
+    await browser.send('DOM.enable', {}, tab.sessionId);
+    const doc = await browser.send('DOM.getDocument', {depth: 0}, tab.sessionId);
+    const {nodeId} = await browser.send('DOM.querySelector', {nodeId: doc.root.nodeId, selector: 'input[type=file]'}, tab.sessionId);
+    await browser.send('DOM.setFileInputFiles', {nodeId, files: [upload]}, tab.sessionId);
+    check('upload: the file was set on the page through CDP',
+      await tab.waitFor('document.getElementById("up").files.length === 1 && document.getElementById("up").files[0].name === "upload-check.txt"'));
+    await tab.eval('document.getElementById("dl").click(), true');
+    const report = join(dir, 'Downloads', 'practice-report.txt');
+    const end = Date.now() + 60000;
+    while (!existsSync(report) && Date.now() < end) await sleep(500);
+    check("download: the report landed in this bot's Downloads folder", existsSync(report), report);
+    if (existsSync(report)) check('download: the report has its text', readFileSync(report, 'utf8') === 'practice report\n');
+  },
+};
+
+async function runVariant(browser) {
+  const run = variants[env.VARIANT || ''];
+  if (!run) { check('known variant', false, env.VARIANT || ''); return; }
+  await run(browser);
+}
+
 const phases = {
+  // One login shape per run (VARIANT): scripts/browser-sites.sh names each one and checks what it did.
+  variant: browser => runVariant(browser),
   async status(browser) { await status(browser); },
 
   // The bot asks the person for the practice login: a card in the chat, saved by the person (the journey, here).

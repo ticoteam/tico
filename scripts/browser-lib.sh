@@ -2,7 +2,7 @@
 # run on its own. The caller sets REPO (the checkout) and KEEP (1 leaves the stack up), then calls browser_init.
 #
 # One throwaway Docker project (tico-browser-<run id>) holds the server built from this checkout with auth none, the
-# practice login site (login.practice.test and other.practice.test), a fake Inbox in the server's network namespace
+# practice login site (login.practice.test, other.practice.test, and app and accounts for single sign-on), a fake Inbox in the server's network namespace
 # (the server takes its inbound service on loopback only), and a runner enrolled with TICO_SCREEN=1. A bot on that
 # computer has Chrome, and its steps run inside its own turns through e2e/browser/fake-codex.py, so no model runs.
 
@@ -237,6 +237,36 @@ browser_phase() {  # a phase that drives Chrome: it runs only once the bot's Chr
   bot_phase "$@"
 }
 
+# Shared by the browser scripts: the Chrome the computer runs for the bot, its runner log and its cookies.
+chrome_pid() {
+  local lock pid
+  lock="$(docker exec "$RUNNER" readlink "/home/runner/browsers/$BOT/profile/SingletonLock" 2>/dev/null)" || return 1
+  pid="${lock##*-}"
+  case "$pid" in ''|*[!0-9]*) return 1 ;; esac
+  docker exec "$RUNNER" sh -c "tr '\\0' ' ' < /proc/$pid/cmdline" | grep -q -- "--user-data-dir=/home/runner/browsers/$BOT/profile" || return 1
+  printf '%s\n' "$pid"
+}
+
+runner_log() {
+  { docker logs "$RUNNER" 2>&1; docker exec "$RUNNER" sh -c 'find /home/runner -name "*.log" -type f -exec cat {} + 2>/dev/null'; }
+}
+
+cookie_rows() {
+  docker exec -i -e BOT="$BOT" "$RUNNER" python3 -I - <<'PY' 2>/dev/null
+import glob, os, sqlite3
+p = os.path.join("/home/runner/browsers", os.environ["BOT"], "profile", "Default")
+n = 0
+for db in glob.glob(os.path.join(p, "**", "Cookies"), recursive=True):
+    try:
+        c = sqlite3.connect(db, timeout=5)
+        n += c.execute("SELECT count(*) FROM cookies").fetchone()[0]
+        c.close()
+    except sqlite3.Error:
+        pass
+print(n)
+PY
+}
+
 expire_sessions() {  # ends every practice session; the admin view must show none left afterwards
   local ended left
   ended="$(padmin POST /admin/expire | pick 'd["expired"]')" || return 1
@@ -302,7 +332,7 @@ services:
     ports: ["127.0.0.1:$PRACTICE_PORT:8080"]
     networks:
       default:
-        aliases: [login.practice.test, other.practice.test]
+        aliases: [login.practice.test, other.practice.test, app.practice.test, accounts.practice.test]
     volumes:
       - "$REPO/e2e/login-practice:/practice:ro"
 EOF
