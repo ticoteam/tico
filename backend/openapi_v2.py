@@ -1582,6 +1582,8 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
                                          'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
                                                   'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
+TAGS['Rules'] = ("Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
+                 "due dates and sources.")
 TAGS['Strategy'] = ("The team's strategy: a draft the owner edits, numbered published versions, and the bets goals "
                     "serve.")
 STABLE.extend([
@@ -1853,6 +1855,24 @@ STABLE.extend([
      'and the KPIs and pages the caller may pick', None),
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
+])
+STABLE.extend([
+    ('/api/v2/rules', 'get', 'Rules', 'listRules', 'The org rules, newest first, paged; mine=true adds the bot\'s settings as sentences', None),
+    ('/api/v2/rules', 'post', 'Rules', 'addRule', 'Add an org rule: a bot\'s is a suggestion; only owners and admins add Everyone', None),
+    ('/api/v2/rules/counts', 'get', 'Rules', 'getRulesCounts', 'Internal and external rules in force, due dates open, suggestions waiting', None),
+    ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
+    ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
+    ('/api/v2/rules/{rule_id}', 'post', 'Rules', 'updateRule', 'Edit a rule against its version; a bot cannot edit', None),
+    ('/api/v2/rules/{rule_id}/accept', 'post', 'Rules', 'acceptRule', 'Accept a suggestion, optionally changing its Who; a person only', None),
+    ('/api/v2/rules/{rule_id}/skip', 'post', 'Rules', 'skipRule', 'Set a suggestion aside', None),
+    ('/api/v2/rules/{rule_id}/retire', 'post', 'Rules', 'retireRule', 'Retire a rule in force; its due dates come back', None),
+    ('/api/v2/rules/{rule_id}/due', 'post', 'Rules', 'addRuleDue', 'Add a due date to a rule: first day, repeat, owner, routine lead time', None),
+    ('/api/v2/rule-due/{due_id}', 'post', 'Rules', 'updateRuleDue', 'Edit a due date; a change to first day or repeat starts a new row', None),
+    ('/api/v2/rule-due/{due_id}/remove', 'post', 'Rules', 'removeRuleDue', 'Remove a due date; its history is kept', None),
+    ('/api/v2/rule-due/{due_id}/satisfied', 'post', 'Rules', 'markRuleDueSatisfied', 'Mark the current occurrence satisfied; due_on when two are open', None),
+    ('/api/v2/rule-sources', 'get', 'Rules', 'listRuleSources', 'Where external rules come from (From), by name', None),
+    ('/api/v2/rule-sources', 'post', 'Rules', 'addRuleSource', 'Add a From; one that exists by name is returned', None),
+    ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, internal rules, external rules', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages']},

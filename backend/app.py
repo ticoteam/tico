@@ -7240,6 +7240,8 @@ def create_app(settings=None):
     from . import audit_log
     audit_log.install(app, store, auth)
     task_caps.install(app, store, auth, mutate)
+    from . import org_rules
+    org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
     release_flow.install(app, store, auth, mutate)

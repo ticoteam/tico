@@ -84,6 +84,9 @@ def _build():
     add("bot.held", "A bot was held: it hit a limit or kept failing.",
         {"bot": "ops", "reason": "budget", "window": "1h", "runs": 40, "budget": 30, "task": _TASK})
     add("bot.released", "A held bot was released.", {"bot": "ops", "reason": "budget", "released_by": "human:ana"})
+    add("org_rule.retired", "A rule was retired and no longer applies to anyone.",
+        {"id": "r1", "kind": "internal", "text": "Send a status note by Friday.", "source_id": None,
+         "retired_by": "human:ana"})
 
     add("release.published", "A Tico release was published.",
         {"release": "v1.4.0", "url": "https://github.com/acme/app/releases/tag/v1.4.0", "tickets": [_TASK]},
