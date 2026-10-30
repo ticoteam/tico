@@ -2990,6 +2990,7 @@ class Execution:
             if (not target or (remote and not claiming(rid, CLAIMED_WAITING_FRESH))
                     or not target['last_seen'] or target['last_seen'] < H.shift(H.now(), seconds=-90)
                     or not self.awake(target['awake_since'], H.now()) or runner_versions.paused(c, rid)
+                    or cloud_machines.held(c, rid)
                     or load_status(c, rid)['overloaded'] or start_places.ready_waiting(c, rid)
                     or sum(turns_here(c, rid).values()) >= start_places.turn_limit(target)):
                 continue

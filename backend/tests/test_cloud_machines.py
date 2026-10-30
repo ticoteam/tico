@@ -922,7 +922,7 @@ def test_a_reservation_whose_server_died_lapses_and_its_work_goes_out(cloud):
     computer = enrolled(cloud)
     going_idle(cloud, "ops", computer, ["ops"])
     with cloud.store.transaction() as c:                        # reserved, then the process died before HQ was asked
-        assert CM.reserve(c, cloud.store.settings, "ops", "stop", cloud.row()["machine_id"], cloud.at[0])
+        assert CM.reserve(c, cloud.store.settings, "ops", "stop", cloud.row()["machine_id"])
     work(cloud)
     assert claim_on(cloud, computer, "ops")["attempt"] is None
     cloud.at[0] += CM.STOP_HOLD
@@ -934,7 +934,7 @@ def test_a_reservation_whose_server_died_lapses_and_its_work_goes_out(cloud):
 def test_hq_refusing_the_stop_lets_the_claim_go_on_at_once_and_backs_off(cloud):
     computer = enrolled(cloud)
     going_idle(cloud, "ops", computer, ["ops"])
-    cloud.hq.fail["stop"] = CM.Refused("unreachable")
+    cloud.hq.fail["stop"] = CM.Refused("forbidden", 403)       # HQ said it did not stop it
     cloud.tick()
     assert cloud.hq.actions() == ["stop"] and cloud.row()["stop_until"] is None
     assert cloud.row()["failures"] == 1 and cloud.row()["next_try"] == cloud.at[0] + CM.BACKOFF
@@ -946,3 +946,58 @@ def test_a_computer_that_is_no_cloud_machine_is_never_held(api):  # noqa: F811
     computer = runner(api)
     with api.app.state.store.read() as c:
         assert CM.held(c, computer["runner_id"]) == ""
+
+
+@pytest.mark.parametrize("refused", [CM.Refused("unreachable"), CM.Refused("bad_answer"), CM.Refused("http_502", 502),
+                                     CM.Refused("sandbox_stopping", 409)])
+def test_a_stop_whose_outcome_is_unknown_keeps_the_fence_until_hqs_list_says(cloud, refused):
+    """A timeout, an answer this server could not read, HQ's own failure or "already stopping" do not say the
+    machine is still up: the reservation holds on from now, and the next look asks HQ's list. Stopping there, the
+    state holds the claim; running there, the reservation lapses and the claim goes on."""
+    computer = enrolled(cloud)
+    going_idle(cloud, "ops", computer, ["ops"])
+    cloud.hq.fail["stop"] = refused
+    stop = cloud.hq.stop
+
+    def slow(machine_id):
+        cloud.at[0] += 30                                       # the call took a while before it gave up
+        return stop(machine_id)
+    cloud.hq.stop = slow
+    cloud.tick()
+    assert cloud.hq.actions() == ["stop"] and cloud.row()["stop_until"] == cloud.at[0] + CM.STOP_HOLD
+    work(cloud)
+    assert claim_on(cloud, computer, "ops")["attempt"] is None
+    assert cloud.manager.synced is None                         # the next look lists first
+    cloud.hq.machines["m1"]["state"] = "stopping"               # HQ did stop it
+    cloud.hq.fail["start"] = CM.Refused("sandbox_stopping", 409)        # as HQ answers a resume meanwhile
+    cloud.hq.calls.clear()
+    cloud.tick(1)
+    assert cloud.hq.calls[0] == ("list",) and cloud.row()["state"] == "stopping"
+    cloud.at[0] += CM.STOP_HOLD
+    assert claim_on(cloud, computer, "ops")["attempt"] is None  # past the reservation, HQ's stopping holds it
+    cloud.hq.machines["m1"]["state"] = "running"                # had it not, its list says running
+    cloud.manager.sync(cloud.hq, cloud.at[0])
+    assert claim_on(cloud, computer, "ops")["attempt"]["bot"] == "ops"
+
+
+def test_a_slow_look_still_reserves_the_stop_for_its_full_hold(cloud, monkeypatch):
+    """The look's clock is read before HQ's list and the other machines' calls: if they take longer than STOP_HOLD,
+    a reservation timed from it would be over before it was written. It is timed from the clock under the lock."""
+    computer = enrolled(cloud)
+    going_idle(cloud, "ops", computer, ["ops"])
+    listed, stop, answers = cloud.hq.list, cloud.hq.stop, []
+
+    def slow_list():
+        cloud.at[0] += CM.STOP_HOLD + 60                        # HQ's list, or the machines before this one, took long
+        return listed()
+
+    def stopping(machine_id):
+        work(cloud, text="Another thing")
+        answers.append(claim_on(cloud, computer, "ops"))
+        assert leased(cloud, computer["runner_id"]) == []
+        return stop(machine_id)
+    monkeypatch.setattr(cloud.hq, "list", slow_list)
+    monkeypatch.setattr(cloud.hq, "stop", stopping)
+    cloud.manager.synced = None
+    cloud.tick()
+    assert cloud.hq.actions() == ["stop"] and answers[0]["attempt"] is None

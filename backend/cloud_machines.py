@@ -67,9 +67,11 @@ machine; a shared machine's facts are its member bots' together:
     fence    `decide` reads a snapshot, and a claim can lease work between it and HQ's stop. So a stop or delete is
              reserved first (`reserve`), in a write transaction, which the claim's own write serializes with: `decide`
              again on the facts read under that lock, and no turn leased or running on the machine's computer, or it
-             is not sent. The reservation (`stop_until`, STOP_HOLD from now) and HQ's stopping or stopped keep the
-             claim from handing that computer work (`held`), every member bot's on the shared one; HQ's refusal lets
-             it go at once, and a server that died mid-stop lets it lapse.
+             is not sent. The reservation (`stop_until`, STOP_HOLD from the clock read under that lock) and HQ's
+             stopping or stopped keep the claim from handing that computer work (`held`), every member bot's on the
+             shared one, and its company-wide waiters too. HQ saying it did not stop lets it go at once; an answer
+             that leaves it open (`stopped_unknown`) keeps it until HQ's next list says, and a server that died
+             mid-stop lets it lapse.
 
 `decide` is the whole policy as a pure function of the row, the facts and the clock, so the tests drive it directly.
 """
@@ -621,12 +623,14 @@ def decide(current, found, at, idle_s):
     return "start", None
 
 
-def reserve(c, settings, key, action, machine_id, at):
+def reserve(c, settings, key, action, machine_id):
     """Hold machine `key` for a stop or delete (`action`) before HQ is asked, in the write transaction a claim also
     takes, so the two serialize: the row as it is now, or None to send nothing. `decide` must still say `action` on
-    the facts read here, and no attempt may be leased or running on its computer, whichever bot's: a claim that came
-    first has its turn out, and one that comes after finds the reservation (`held`) and takes nothing. The reservation
-    lapses STOP_HOLD after `at`."""
+    the facts read here, at the clock read here (a look's own clock may be minutes old by now: HQ's list and other
+    machines' calls come first), and no attempt may be leased or running on its computer, whichever bot's: a claim
+    that came first has its turn out, and one that comes after finds the reservation (`held`) and takes nothing. The
+    reservation lapses STOP_HOLD after this clock."""
+    at = now()
     current = row(c, key)
     if not current or current["machine_id"] != machine_id:
         return None
@@ -647,6 +651,15 @@ def held(c, runner_id):
     if not found or not (found["state"] in GOING or (found["stop_until"] or 0) > now()):
         return ""
     return "This cloud machine is stopping. Its bots' work waits for it to start again."
+
+
+def stopped_unknown(refused):
+    """Whether HQ's answer to a stop or delete leaves open that the machine is going down: no answer or one this
+    server could not read (status 0: a timeout, an oversized or malformed answer), HQ's own failure (5xx), out of
+    credit (402: HQ stops it itself) or already stopping (409 sandbox_stopping). Any other 4xx is HQ saying it did
+    not, and a 404 that it has no such machine."""
+    return (refused.status == 0 or refused.status >= 500 or refused.status == 402
+            or (refused.status == 409 and refused.code == "sandbox_stopping"))
 
 
 # ----------------------------------------------------------------------------- the manager
@@ -785,7 +798,7 @@ class Manager:
         code = None
         if action in ("stop", "delete"):
             with self.store.transaction() as c:
-                current = reserve(c, self.settings, key, action, current["machine_id"], at)
+                current = reserve(c, self.settings, key, action, current["machine_id"])
             if current is None:
                 return                                      # a claim came first, or the facts changed: not now
         if action == "create":
@@ -816,11 +829,6 @@ class Manager:
         except Refused as refused:
             self.refused(current, action, refused, at)
             return
-        except Exception:
-            if action in ("stop", "delete"):                # not sent, or not known to be: the claim may go on
-                with self.store.transaction() as c:
-                    save(c, key, stop_until=None)
-            raise
         if action == "create" and current["state"] == "deleted" and machine["id"] == current["machine_id"]:
             # HQ still has the machine deleted here (until boat confirms): the new one is made once it is gone.
             with self.store.transaction() as c:
@@ -865,7 +873,13 @@ class Manager:
             if action in ("create", "start"):
                 fields.update(problem="hq:" + refused.code, problem_at=H.now())
         if action in ("stop", "delete"):
-            fields["stop_until"] = None                     # HQ did not stop it: its runner may take work again
+            if stopped_unknown(refused):
+                # It may be stopping all the same: the fence holds for STOP_HOLD more, and the next look asks HQ's
+                # list, whose stopping or stopped holds it from then (`held`). Running there, it lapses.
+                fields["stop_until"] = now() + STOP_HOLD
+                self.synced = None
+            else:
+                fields["stop_until"] = None                 # HQ said it did not: its runner may take work again
         with self.store.transaction() as c:
             save(c, key, **fields)
             if refused.status == 402 and current["problem"] != "out_of_credit" or (
