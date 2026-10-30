@@ -21,6 +21,8 @@ from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import urlencode, urlsplit
 
+from .live_blocks import LIVE_ATTRS, fill as fill_live, has_live
+
 # What may show inline, by stored type; anything else, or bigger, is a normal file chip.
 KINDS = {"image/png": "image", "image/jpeg": "image", "image/gif": "image", "image/webp": "image",
          "image/svg+xml": "svg", "text/html": "page",
@@ -139,6 +141,14 @@ class _Cleaner(HTMLParser):
                 self.skip.append(lowered)
             return
         if lowered == "meta" and re.search(r"http-equiv\s*=\s*['\"]?\s*refresh", raw, re.I):
+            return
+        if lowered in LIVE_ATTRS:
+            # A live block keeps only its own attributes; the server fills it in for each viewer when it is shown.
+            body = raw[len(name) + 1:].rstrip()
+            end = "/>" if body.endswith("/>") else ">"
+            kept = "".join(f"{space}{key}{eq}{value}" for space, key, eq, value in ATTR.findall(body[:-len(end)])
+                           if key.lower() in LIVE_ATTRS[lowered])
+            self.out.append("<" + name + kept + end)
             return
         body = raw[len(name) + 1:].rstrip()
         end = "/>" if body.endswith("/>") else ">"
@@ -652,6 +662,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
     if not found:
         return gone
     actor, fid, number, part = found
+    live = None
     with store.read() as c:
         who = token_reader(c, auth, actor)
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
@@ -678,9 +689,14 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
         else:
             blob = {"digest": v["digest"], "size": v["size"], "name": v["name"], "content_type": mime}
+        if kind == "page" and not part:
+            # A page with live blocks is filled in for this reader alone, so it is never the shared hosted copy.
+            text = blobs.get(blob["digest"]).decode("utf-8", errors="replace")
+            if has_live(text):
+                live = fill_live(text, c, who, auth, files).encode("utf-8")
     if kind in ("page", "svg") and not part:
         from .tico_storage import visual_link
-        link = visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
+        link = None if live is not None else visual_link(blobs, blob["digest"], blob["size"], mime, ancestors)
         if link:
             return Response(status_code=302, headers={"Location": link, "Cache-Control": "private, no-store",
                                                       "Referrer-Policy": "no-referrer"})
@@ -688,7 +704,7 @@ def serve(request, store, auth, files, blobs, key, ancestors, token, full=True, 
             return gone
     rule = policy(kind, ancestors)
     if kind in ("page", "svg"):
-        data, _ = clean(blobs.get(blob["digest"]), kind)
+        data, _ = clean(live if live is not None else blobs.get(blob["digest"]), kind)
         if kind == "page":
             data = with_reporter(data)
         response = Response(data if request.method != "HEAD" else b"", media_type=mime,
