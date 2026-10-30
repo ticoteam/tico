@@ -270,32 +270,90 @@ def test_sweep_deltas_drops_a_finished_runs_text_pieces_after_a_day_only(tmp_pat
     assert sweep_deltas(s, now) == 0, "the mark moved past what was swept"
 
 
-def test_sweep_events_drops_only_old_bookkeeping_rows_in_bounded_passes(tmp_path):
-    from backend.store import EVENT_RETENTION_DAYS, EVENT_SWEEP_ACTIONS, H, sweep_events
+def test_sweep_events_drops_noise_after_a_week_and_the_rest_after_thirty_in_bounded_passes(tmp_path):
+    from backend.store import EVENT_NOISE_ACTIONS, EVENT_SWEEP_ACTIONS, H, sweep_events
     s = store(tmp_path)
     now = H.now()
-    old, recent = H.shift(now, days=-EVENT_RETENTION_DAYS - 5), H.shift(now, days=-2)
-    kept_old = ("task.create", "attempt.limited", "attempt.input.moved", "credential.revealed", "turn.outcome")
+    day = lambda n: H.shift(now, days=-n)
+    kept = ("task.create", "attempt.limited", "attempt.input.moved", "credential.revealed", "credential.sent_to_computer",
+            "mail.read", "calendar.read", "judge.spend", "judge.call", "mcp.call", "github.token", "inbound.read",
+            "message.say", "turn.outcome")
+    assert not {*EVENT_NOISE_ACTIONS, *EVENT_SWEEP_ACTIONS} & set(kept)
+    rows = []                                                   # (action, age in days)
+    for action in EVENT_NOISE_ACTIONS:                          # a week old goes; two days old stays
+        rows += [(action, 8), (action, 2)]
+    for action in EVENT_SWEEP_ACTIONS:                          # eight days old stays; thirty-one goes
+        rows += [(action, 31), (action, 8), (action, 2)]
+    for action in kept:                                         # never swept, however old
+        rows += [(action, 40), (action, 2)]
+    rows += [("sql.query", 40)] * 12                            # a backlog of noise that drains over passes
     with s.transaction() as c:
         c.execute("CREATE TABLE events(id TEXT PRIMARY KEY, ts TEXT, actor TEXT, action TEXT, target TEXT, "
                   "detail_json TEXT)")
         c.execute("CREATE INDEX events_ts ON events(ts)")
         c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
-        rows = [(f"{action}-{when}", when, "keeper", action, "t", None)
-                for action in (*EVENT_SWEEP_ACTIONS, *kept_old) for when in (old, recent)]
-        rows += [(f"extra-{i}", old, "keeper", "message.delivered", "m", None) for i in range(12)]
-        c.executemany("INSERT INTO events VALUES(?,?,?,?,?,?)", rows)
-    # 19 old swept rows (7 + 12 extra): the first pass deletes at most `most`, the next one the rest.
-    assert sweep_events(s, now, batch=5, most=10) == 10
-    with s.read() as c:
-        assert c.execute("SELECT count(*) FROM events WHERE ts=? AND action IN (%s)"
-                         % ",".join("?" * len(EVENT_SWEEP_ACTIONS)), (old, *EVENT_SWEEP_ACTIONS)).fetchone()[0] == 9
-    assert sweep_events(s, now, batch=5, most=10) == 9
-    assert sweep_events(s, now) == 0, "the mark moved past what was swept"
+        seen = {}
+        for action, age in rows:
+            n = seen[(action, age)] = seen.get((action, age), 0) + 1
+            ident = f"{action}-{age}" if n == 1 else f"{action}-{age}-{n}"
+            c.execute("INSERT INTO events VALUES(?,?,?,?,?,?)", (ident, day(age), "keeper", action, "t", None))
+    expected = len(EVENT_NOISE_ACTIONS) + 12 + len(EVENT_SWEEP_ACTIONS)
+    passes = []
+    while True:
+        passes.append(sweep_events(s, now, batch=5, most=10))
+        if not passes[-1]:
+            break
+    assert max(passes) <= 10 and sum(passes) == expected, passes
+    assert sweep_events(s, now) == 0, "the marks moved past what was swept"
     with s.read() as c:
         left = {r[0] for r in c.execute("SELECT id FROM events")}
-    assert left == {f"{action}-{when}" for action in kept_old for when in (old, recent)} | \
-        {f"{action}-{recent}" for action in EVENT_SWEEP_ACTIONS}
+    assert left == ({f"{action}-2" for action in (*EVENT_NOISE_ACTIONS, *EVENT_SWEEP_ACTIONS, *kept)}
+                    | {f"{action}-8" for action in EVENT_SWEEP_ACTIONS}
+                    | {f"{action}-40" for action in kept})
+
+
+def test_sweep_tokens_drops_a_finished_runs_token_rows_after_a_week_only(tmp_path):
+    from backend.store import H, sweep_tokens
+    s = store(tmp_path)
+    now = H.now()
+    day = lambda n: H.shift(now, days=-n)
+    # (created, finished, turn row as (finished, input_tokens, usage_reason), job state): what the run's totals are kept on
+    runs = {
+        "a-old": (day(10), day(9), (day(9), 100, None), None),          # finished nine days ago, totals written
+        "b-recent": (day(9), day(3), (day(3), 100, None), None),        # finished three days ago: a week has not passed
+        "c-open": (day(9), None, None, None),                           # still running
+        "d-no-turn": (day(10), day(9), None, None),                     # no turn row: nothing records its totals
+        "e-no-usage": (day(10), day(9), (day(9), None, "no_result"), None),   # a run with no usage still has a turn row
+        "f-uncertain": (day(10), day(9), (day(9), 100, None), "uncertain"),   # held for review: auto_reconcile reads it
+        "g-turn-open": (day(10), day(9), (None, None, None), None),     # the turn was never finished
+    }
+    with s.transaction() as c:
+        c.execute("CREATE TABLE attempts(id TEXT PRIMARY KEY, created TEXT, finished TEXT)")
+        c.execute("CREATE TABLE jobs(id TEXT PRIMARY KEY, attempt_id TEXT, state TEXT)")
+        c.execute("CREATE TABLE turns(id TEXT PRIMARY KEY, finished TEXT, input_tokens INTEGER, usage_reason TEXT)")
+        c.execute("CREATE TABLE attempt_events(id INTEGER PRIMARY KEY, attempt_id TEXT, seq INTEGER, kind TEXT, "
+                  "payload_json TEXT, created TEXT, UNIQUE(attempt_id,seq))")
+        c.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
+        for aid, (created, finished, turn, job) in runs.items():
+            c.execute("INSERT INTO attempts VALUES(?,?,?)", (aid, created, finished))
+            if turn:
+                c.execute("INSERT INTO turns VALUES(?,?,?,?)", (aid, turn[0], turn[1], turn[2]))
+            if job:
+                c.execute("INSERT INTO jobs VALUES(?,?,?)", ("job-" + aid, aid, job))
+            events = [(1, "delta", '{"text":"Hel"}'), (2, "tokens", '{"input":900,"output":12}'),
+                      (3, "message", '{"text":"Hello","final":true}'), (4, "tokens", '{"input":40,"output":0}')]
+            for seq, kind, payload in events:
+                c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+                          (aid, seq, kind, payload, created))
+    with s.read() as c:
+        totals = c.execute("SELECT id,finished,input_tokens,usage_reason FROM turns ORDER BY id").fetchall()
+    assert sweep_tokens(s, now, batch=1) == 4          # a-old and e-no-usage lose their two token rows each
+    with s.read() as c:
+        left = {(r[0], r[1]) for r in c.execute("SELECT attempt_id,seq FROM attempt_events")}
+        assert c.execute("SELECT id,finished,input_tokens,usage_reason FROM turns ORDER BY id").fetchall() == totals
+    everything = {(a, n) for a in runs for n in range(1, 5)}
+    assert left == everything - {("a-old", 2), ("a-old", 4), ("e-no-usage", 2), ("e-no-usage", 4)}
+    assert sweep_tokens(s, now) == 0, "the mark moved past what was swept"
 
 
 def test_hub_connections_cap_the_wal_file_after_a_checkpoint(tmp_path):
