@@ -476,8 +476,9 @@ def test_jev_15_second_windows_replay_thirty_minutes_at_four_x_without_waiting(l
     started = time.monotonic()
     response = live.post("/api/v2/live-meetings/" + mid + "/chunks", json={"chunks": chunks},
                          headers=headers("ana-test", key="synthetic-30m-replay"))
-    elapsed = time.monotonic() - started
     assert response.status_code == 200, response.text
+    assert settle(live)
+    elapsed = time.monotonic() - started
     assert elapsed < 240, f"synthetic 30-minute replay exceeded focused-test budget at {elapsed:.1f}s"
     detail = get(live, f"live-meetings/{mid}")
     assert len(detail["chunks"]) == 120
@@ -488,6 +489,7 @@ def test_jev_15_second_windows_replay_thirty_minutes_at_four_x_without_waiting(l
     replay = live.post("/api/v2/live-meetings/" + mid + "/chunks", json={"chunks": chunks},
                        headers=headers("ana-test", key="synthetic-30m-replay-retry"))
     assert replay.status_code == 200, replay.text
+    assert settle(live)
     repeated = get(live, f"live-meetings/{mid}")
     assert repeated["event_id"] == detail["event_id"]
     assert len(repeated["router"]["windows"]) == 120
