@@ -204,7 +204,10 @@ The server's `updater` service is pinned to the same release as the server (`TIC
 services that need a compose change reach existing installs. `.env` is never replaced (only its `TICO_TAG` line moves).
 The previous files are kept in `.bundle-previous/`. A download or checksum failure refuses the update before anything
 changes; a release that does not turn healthy is rolled back, image and bundle together. Slack and the front door are
-recreated from the new file when it changes them.
+recreated from the new file when it changes them. While the server restarts, the front door holds requests for up to
+30 seconds and then answers them normally ([Update](install.md#update)); with a tunnel that is the `hold` service, which
+an update leaves running. The update that adds `hold` also recreates cloudflared once, after `hold` is up, so it reads
+its new route (`/tunnel/ingress.yml`); one that rolls back leaves cloudflared on its old route straight to the server.
 
 A cell company ([cell mode](cell.md#updates)) has no sidecar: the host's cell updater answers the same contract for it,
 so it has Update now too. It runs the cell's own `update` (no bundle to replace, since the company's `compose.yaml` is
@@ -258,7 +261,8 @@ follow the server.
 
 An install run with its own `compose.override.yaml` can use **Update now**. The override may keep its environment,
 volumes, entrypoint and the `cloudflared` command; it must not set `image:` for `server` or `slack`, or the updater
-refuses every update. Then in `.env`:
+refuses every update. A `cloudflared` command of its own should read `--config /tunnel/ingress.yml`, the route through
+`hold`; the older `/tunnel/cloudflared.yml` goes straight to the server and is no longer rewritten. Then in `.env`:
 
 ```
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
