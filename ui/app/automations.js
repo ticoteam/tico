@@ -199,7 +199,11 @@ async function auLoadList(state) {
     auAllAutomations().catch(e => ({error: e})),
     get('/v2/groups').catch(() => ({groups: []})),
   ]);
-  if (AU !== state) return;
+  // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
+  if (AU !== state) {
+    if (!list.error && !S.lastRead.automations) S.lastRead.automations = {list, groups: Array.isArray(groups) ? groups : groups.groups || []};
+    return;
+  }
   state.groups = Array.isArray(groups) ? groups : groups.groups || [];
   if (list.error) { state.list = []; state.listError = list.error.message; return; }
   state.listError = '';

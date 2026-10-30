@@ -114,8 +114,9 @@ async function pageDashboard(place) {
     $('#dash-grid').innerHTML = `<p class="empty">${esc(e.status === 404 ? 'No such team' : e.status === 403 ? 'This team page is not shared with you' : e.message)}</p>`;
     return;
   }
-  if (DASH !== state) return;
   if (!Array.isArray(view?.pins)) view = {kind: place.split(':')[0], pins: [], can_edit: false, saved: true};
+  // A read that lands after the page was left is kept for the next visit when nothing is kept yet.
+  if (DASH !== state) { S.lastRead.places[place] ||= view; return; }
   // A write made while the read was out already drew its own answer.
   if (state.view !== kept && state.view) return;
   if (kept && sameData(view, kept)) return;

@@ -87,10 +87,21 @@ async function settle(page) {
   await page.waitForTimeout(250);
 }
 
-async function lap(page) {
+// Each page's first read has landed and drawn: the first lap waits for it, so the second lap is a true return visit
+// (on a slow machine a quiet network alone can come before a page has even asked).
+const READ = {
+  '#/overview': () => !!DASH?.view && !!document.querySelector('#dash-grid > :not(.skel):not(.skel-row)'),
+  '#/strategy': () => !!STRAT && !document.querySelector('#strat-body .skel-row'),
+  '#/updates': () => !!document.querySelector('.upd-feed > :not(.upd-skel)'),
+  '#/tasks': () => !!TASKS_ST?.read,
+  '#/automations': () => Array.isArray(AU?.list),
+};
+
+async function lap(page, first = false) {
   for (const hash of [...LAP, LAP[0]]) {
     await go(page, hash);
-    await page.waitForFunction(h => location.hash === h && document.querySelector('#main')?.children.length > 0, hash);
+    await page.waitForFunction(h => location.hash === h && S.route === h && document.querySelector('#main')?.children.length > 0, hash);
+    if (first) await page.waitForFunction(READ[hash], null, {timeout: t(15000), polling: 100});
     await settle(page);
   }
 }
@@ -106,7 +117,7 @@ run('tab-switch-smooth', ['org', 'toured', 'groups', 'automations'], async ({hub
   await settle(page);
 
   await page.evaluate(() => { window.__watch = 1; });
-  await lap(page);
+  await lap(page, true);
   // The team list's rows are marked: a page change toggles which one is current in place and replaces none of them.
   const start = await page.evaluate(() => {
     window.__watch = 2;
@@ -136,6 +147,24 @@ run('tab-switch-smooth', ['org', 'toured', 'groups', 'automations'], async ({hub
   for (const v of visits.filter(v => v.lap === 2))
     assert.ok(v.late.length <= Math.max(2, v.keys / 10), `${tag}: ${v.route} drew ${v.late.length} of ${v.keys} texts after its first frame: ${JSON.stringify(v.late.slice(0, 8))}`);
   assert.ok(rows.length && rows.every(Boolean), `${tag}: no team list row was redrawn by a page change: ${JSON.stringify(rows)}`);
+
+  // Leaving Tasks before its first read answers still keeps that answer: the next visit draws it, no skeleton.
+  let release, held = new Promise(r => { release = r; });
+  await page.route(/\/api\/v2\/tasks\?lane=company&status=/, async route => { await held; route.continue().catch(() => {}); });
+  await page.evaluate(() => { S.lastRead.tasks = null; window.__watch = 3; });
+  await go(page, '#/tasks');
+  await page.waitForFunction(() => S.route === '#/tasks' && !!document.querySelector('#main .skel, #main .skel-row'));
+  await go(page, '#/strategy');
+  await page.waitForFunction(() => S.route === '#/strategy');
+  release();
+  await page.waitForFunction(() => !!S.lastRead.tasks, null, {timeout: t(5000)}).catch(() => {});   // the assert below says why
+  await page.unroute(/\/api\/v2\/tasks\?lane=company&status=/);
+  await page.evaluate(() => { window.__back = window.__skels.length; });
+  await go(page, '#/tasks');
+  await page.waitForFunction(() => S.route === '#/tasks');
+  await page.waitForTimeout(300);
+  const late = await page.evaluate(() => { window.__watch = false; return window.__skels.slice(window.__back).filter(s => s.route === '#/tasks'); });
+  assert.deepEqual(late, [], `${tag}: a read that landed after leaving Tasks is drawn on the next visit, not a skeleton`);
 
   // A press during the cross-fade lands on the new page: 30ms after Updates → Automations, a tap or click on the first
   // automation opens it.

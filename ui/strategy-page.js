@@ -55,8 +55,9 @@ window.pageStrategy = async function pageStrategy() {
     if (load === STRAT_LOAD && !kept && $('#strat-body')) $('#strat-body').innerHTML = `<p class="err">${esc(error.message || 'Could not load the strategy')}</p>`;
     return;
   }
-  if (load !== STRAT_LOAD) return;
   kpis = kpis?.kpis || [];
+  // A read that lands after the page was left is kept for the next visit when that visit has nothing yet.
+  if (load !== STRAT_LOAD) { S.lastRead.strategy ||= {data, kpis}; return; }
   S.lastRead.strategy = {data, kpis};
   if (!STRAT) { open(data, kpis); return; }
   // Something opened for editing meanwhile keeps the page as drawn; the save reads the strategy again.
