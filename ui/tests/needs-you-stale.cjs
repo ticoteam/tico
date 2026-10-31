@@ -121,7 +121,7 @@ async function answered(browser, viewport) {
   // The last answer takes the card away: nothing else waits, so the card says so, and the line leaves the list.
   await page.locator('#need-card .dc-done').waitFor();
   // The card follows v2Refresh; the list redraws after the hub's own refresh (needs-you.js staleDecide), a beat later.
-  await page.waitForFunction(key => !document.querySelector(`[data-need-card="${key}"]`), KEY);
+  await page.waitForFunction(key => !document.querySelector(`[data-need-card="${key}"]`), KEY, {timeout: 10000});
   assert.deepEqual(errors, []);
   await page.close();
 }
