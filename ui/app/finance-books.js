@@ -1,6 +1,7 @@
 /* ui/app/finance-books.js — Finance › Balance sheet, Cards and Transactions (spec §12).
    Balance sheet: assets, liabilities and equity as of a day (and a day to compare with), each line with the accounts
-   that feed it; the totals are the route's. Cards: each card with its holder, budget, limit and spend this period;
+   that feed it; the totals are the route's. "+ Add" enters an invoice, bill or journal entry (finance-docs.js) or leads
+   to Sources to connect one. Cards: each card with its holder, budget, limit and spend this period;
    the rail freezes, unfreezes and sets the limit. Transactions: bank feed rows and entries, searched and filtered,
    paged by cursor; the rail tags a row's lines (categorize) for those who keep the books.
    Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users.
@@ -12,20 +13,19 @@
 const FIN_BS = {asOf: '', compare: '', sel: ''};
 const FIN_BS_SECTIONS = [['assets', 'Assets', 'asset'], ['liabilities', 'Liabilities', 'liability'], ['equity', 'Equity', 'equity']];
 function finBalancePage() {
-  const b = FIN_BS, caps = finCaps();
+  const b = FIN_BS;
   if (!b.asOf) b.asOf = finToday();
   FIN.bs = {data: null, prev: null, load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><span class="muted">As of</span><input type="date" data-fin-asof value="${b.asOf}"></label>
       <label class="fin-inline"><span class="muted">Compare</span><input type="date" data-fin-cmp value="${b.compare}"></label>
-      <span id="fin-balanced"></span><span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button>
-      ${caps.may('finance.admin') ? '<button type="button" class="primary" data-fin-bank>+ Bank account</button>' : ''}</div>`
+      <span id="fin-balanced"></span><span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button>${finAddMenuHtml()}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bs">${skelRows(8, {dot: false})}</div>`, '', 'Selected line');
   const body = $('#fin-body');
   body.querySelector('[data-fin-asof]').onchange = ev => { b.asOf = ev.target.value || finToday(); void finBsLoad(); };
   body.querySelector('[data-fin-cmp]').onchange = ev => { b.compare = ev.target.value; void finBsLoad(); };
   body.onclick = ev => {
+    if (finAddClick(ev)) return;
     if (ev.target.closest('[data-fin-export]')) { finCsv(finTableRows($('#fin-bs table')), `balance-sheet-${b.asOf}.csv`); return; }
-    if (ev.target.closest('[data-fin-bank]')) { finConnectMercury(); return; }
     const tr = ev.target.closest('tr[data-fin-line]');
     if (tr) { b.sel = tr.dataset.finLine; finBsDraw(); finBsRail(); }
   };
