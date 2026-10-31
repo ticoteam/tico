@@ -273,6 +273,17 @@ def held_files(c: sqlite3.Connection, file_ids: Sequence[str]) -> set[str]:
                                                  f"({_marks(file_ids)})", tuple(file_ids))}
 
 
+def raised(c: sqlite3.Connection, name: str, subject: str) -> bool:
+    """Whether a finance event was ever raised for this subject."""
+    return c.execute("SELECT 1 FROM fin_events WHERE name=? AND subject=? LIMIT 1", (name, subject)).fetchone() is not None
+
+
+def categorized_into(c: sqlite3.Connection, entry_id: str) -> bool:
+    """Whether a person's (or bot's) categorize action posted this entry."""
+    return c.execute("SELECT 1 FROM fin_actions WHERE kind='categorize' AND status='committed' AND "
+                     "json_extract(result_json, '$.entry_id')=? LIMIT 1", (entry_id,)).fetchone() is not None
+
+
 def unmatched_files(c: sqlite3.Connection, book_id: str, most: int, by: str = "") -> list[Any]:
     """Receipts uploaded with nothing to attach to yet (subject `unmatched`); with `by`, only that teammate's."""
     return c.execute("SELECT * FROM fin_attachments WHERE book_id=? AND subject_kind='unmatched' AND "

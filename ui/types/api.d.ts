@@ -1399,6 +1399,25 @@ export type FinanceDocumentRow = {
   written_off?: number;
 };
 
+export type FinanceFeedExpected = {
+  amount: number;
+  date: string;
+  expected: Array<{
+  amount: number;
+  contact_id: string;
+  contact_name: string;
+  document_id: string;
+  kind: string;
+  marked_on: string;
+  number: string;
+  settlement_id: string;
+}>;
+  feed_id: string;
+  kind: "bill" | "invoice";
+  more: boolean;
+  view_version: number;
+};
+
 export type FinanceInbox = {
   counts: Record<string, number>;
   currency: string;
@@ -6239,6 +6258,14 @@ export type ListFinanceContactsParams = {
 };
 export type ListFinanceContactsBody = never;
 export type ListFinanceContactsResponse = FinanceContacts;
+
+/** GET /api/v2/finance/feed/{feed_id}/expected */
+export type ListFinanceFeedExpectedParams = {
+  feed_id: string;
+  view_as?: string | null;
+};
+export type ListFinanceFeedExpectedBody = never;
+export type ListFinanceFeedExpectedResponse = FinanceFeedExpected;
 
 /** GET /api/v2/finance/invoices */
 export type ListFinanceInvoicesParams = {
