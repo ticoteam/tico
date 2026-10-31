@@ -502,8 +502,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            report a finding as a Tico bug, one ticket per signature
     hub finance search [--kind entry|feed|bill|invoice|contact|rule] [--q words] [--status S] [--start D] [--end D]
                     [--cursor C] [--limit N]   the books you may see; name a kind to page
-    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by> [--start D]
-                    [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor]
+    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close> [--start D]
+                    [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
     hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
                                            ask for one Finance action; help lists kinds, `help --payload
@@ -3102,13 +3102,14 @@ def parser():
     s.set_defaults(fn="finance search")
     s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")
     s.add_argument("kind", choices=["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging",
-                                    "spend_by"])
+                                    "spend_by", "close"])
     s.add_argument("--start"); s.add_argument("--end")
     s.add_argument("--period", choices=["day", "week", "month", "quarter", "year"])
     s.add_argument("--basis", choices=["cash", "accrual"])
     s.add_argument("--compare", choices=["prior"])
     s.add_argument("--top-n", type=int)
     s.add_argument("--by", choices=["department", "team", "teammate", "bot", "person", "vendor", "account"])
+    s.add_argument("--month", help="close: the month, YYYY-MM")
     s.set_defaults(fn="finance report")
     s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
     s.add_argument("name", choices=["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining",

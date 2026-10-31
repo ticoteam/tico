@@ -5926,7 +5926,7 @@ def mail_read(api,args):
 # `limit` or `top_n`; rows that do not fit fold into one "Other · n" row, and search and inbox carry on by cursor.
 FINANCE_CHARS = 16000            # about 4k tokens
 FINANCE_MAX_CHARS = 64000        # about 16k tokens
-FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
 FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule"]
@@ -6078,15 +6078,20 @@ def finance_search(api, args):
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
-      "ar_aging or spend_by. Rows past top_n fold into \"Other · n\".",
+      "ar_aging, spend_by, or close (a month's close checklist). Rows past top_n fold into \"Other · n\".",
       {"kind": _s("The report", enum=FINANCE_REPORTS), "start": FIN_DAY, "end": FIN_DAY,
        "period": _s("Column size", enum=["day", "week", "month", "quarter", "year"]),
        "basis": _s("cash or accrual (default: the company's)", enum=["cash", "accrual"]),
        "compare": _s("prior adds the window before", enum=["prior"]),
        "top_n": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows before Other (default 20)"},
-       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"])},
+       "by": _s("spend_by: group by", enum=["department", "team", "teammate", "bot", "person", "vendor", "account"]),
+       "month": _s("close: the month, YYYY-MM")},
       ("kind",))
 def finance_report(api, args):
+    if args["kind"] == "close":
+        if not args.get("month"):
+            raise APIError("validation", "close needs month (YYYY-MM)")
+        return api.get("finance/close/" + quote(str(args["month"]), safe=""))
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
     return _fin_fold(result, _fin_budget(args.get("top_n"), 20))

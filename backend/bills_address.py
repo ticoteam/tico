@@ -1,13 +1,18 @@
-"""The bills address (docs/bookkeeper.md): one Email & Phone inbox (backend/inbound.py) whose PDF and image attachments
-become draft bills for the Bookkeeper.
+"""The bills address (docs/bookkeeper.md): the install's one bills email (Finance's own setting, written only through
+`finance.actions.set_bills_email` and read with `finance.reads.bills_email`), and the path that turns a PDF or image
+emailed to it into a file the Bookkeeper enters as a bill.
 
-An owner or admin names the inbox (`PUT /api/v2/finance/bills-address`); with none named there is no bills address and
-uploads still work. Each attachment that reaches it is kept once per (delivery, sha256) inside the inbound ingest
+Mail reaches Tico through an Email & Phone inbox (backend/inbound.py). When the bills email is that inbox's address (or
+the message was sent to it), each PDF or image attachment is kept once per (delivery, sha256) inside the inbound ingest
 transaction, so a re-delivered page never makes a second row. The inbound loop then fetches the bytes from HQ (outside
-any transaction), files them in the Bookkeeper's Library, and asks Finance for a draft bill as the Bookkeeper
-(`bill_create`, origin email, the file attached) under the stable key `bills-email:<row id>`, so a retry lands once.
-Finance raises `finance.bill.received` for the draft. A bill Finance does not take as it came (no vendor or lines yet,
-or bills not live) waits as `needs_entry`, and the Bookkeeper's hourly check lists it with its file to enter by hand."""
+any transaction), files them in the Bookkeeper's Library and hands them to Finance as an unmatched receipt (`attach`,
+subject `unmatched`, as the Bookkeeper, under the stable key `bills-email:<row id>`, so a retry lands once). Finance
+lists it in the Bookkeeper's queue until a bill takes the file (`bill_create` with origin `email` and the file in
+`attachments`, which raises `finance.bill.received` and takes the file out of the unmatched receipts). A bill needs a
+vendor and lines, which only reading the file gives, so the Bookkeeper makes the draft, not this path.
+
+With no bills email set, or one no inbox receives, nothing is kept here and uploads still work. A file Finance did not
+take (`needs_entry`) or bytes that could not be fetched (`failed`) are listed by the Bookkeeper's hourly check."""
 import hashlib
 import re
 import urllib.parse
@@ -21,8 +26,6 @@ from .models import Contract
 from .store import H, Problem
 
 SCHEMA = """
-CREATE TABLE IF NOT EXISTS bills_address(
- singleton INTEGER PRIMARY KEY CHECK(singleton=1), inbox_id TEXT NOT NULL, set_by TEXT NOT NULL, set_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bills_inbound(
  id TEXT PRIMARY KEY, delivery TEXT NOT NULL, received_at TEXT NOT NULL, sender TEXT NOT NULL DEFAULT '',
  subject TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '', mime TEXT NOT NULL, sha256 TEXT NOT NULL,
@@ -36,31 +39,39 @@ SHA256 = re.compile(r"[0-9a-f]{64}")
 PER_MESSAGE = 10            # attachments one email contributes
 PER_DRAIN = 5               # bills one inbound tick fetches
 MAX_TRIES = 5               # a fetch that keeps failing stops at `failed`, listed for the Bookkeeper
-STATES = ("waiting", "entered", "needs_entry", "failed")
+STATES = ("waiting", "filed", "needs_entry", "failed")
 
 
 def _clean(value, limit):
     return re.sub(r"[\x00-\x1f\x7f]", " ", str(value or "")).strip()[:limit]
 
 
-def inbox_id(c):
-    row = c.execute("SELECT inbox_id FROM bills_address WHERE singleton=1").fetchone()
+def bills_email(c):
+    from .finance import reads as FR
+    return FR.bills_email(c)
+
+
+def inbox_for(c, address):
+    """The Email & Phone inbox whose address is the bills email, or None: then mail to it never reaches Tico."""
+    if not address:
+        return None
+    row = c.execute("SELECT inbox_id FROM inbound_inboxes WHERE kind='email' AND lower(address)=? LIMIT 1",
+                    (address,)).fetchone()
     return row["inbox_id"] if row else None
 
 
 def view(c):
-    row = c.execute("SELECT b.*, i.address FROM bills_address b LEFT JOIN inbound_inboxes i ON i.inbox_id=b.inbox_id "
-                    "WHERE b.singleton=1").fetchone()
-    if not row:
-        return {"bills_address": None}
-    return {"bills_address": {"inbox_id": row["inbox_id"], "address": row["address"] or "", "set_by": row["set_by"],
-                              "set_at": row["set_at"]}}
+    address = bills_email(c)
+    return {"bills_email": address, "inbox_id": inbox_for(c, address)}
 
 
 def emailed(c, item):
     """An inbound message, inside its ingest transaction: each PDF or image attached to an email that reached the bills
     address is one row, once. Returns how many rows are new."""
-    if item.get("kind") != "email" or item.get("spam") or not item.get("inbox_id") or item["inbox_id"] != inbox_id(c):
+    if item.get("kind") != "email" or item.get("spam") or not item.get("inbox_id"):
+        return 0
+    address = bills_email(c)
+    if not address or (item["inbox_id"] != inbox_for(c, address) and address not in str(item.get("to") or "").lower()):
         return 0
     attachments = item.get("attachments") if isinstance(item.get("attachments"), list) else []
     received = item.get("received_at")
@@ -98,29 +109,39 @@ def for_bookkeeper(c, limit=50):
                                        "ORDER BY received_at LIMIT ?", (limit,))]
 
 
-def _bill(c, row, file_id):
-    """Ask Finance for the draft bill as the Bookkeeper, under the row's own key: (state, action id, code)."""
+def labels(c, file_ids):
+    """Words for the unmatched receipts that came by the bills address: {file id: "Emailed bill from ...: subject"}."""
+    ids = [f for f in file_ids if f][:200]
+    if not ids:
+        return {}
+    rows = c.execute("SELECT file_id, sender, subject, name FROM bills_inbound WHERE file_id IN (%s)"
+                     % ",".join("?" * len(ids)), ids)
+    return {r["file_id"]: f"Emailed bill from {r['sender'] or 'unknown sender'}: {r['subject'] or r['name']}"[:160]
+            for r in rows}
+
+
+def _hand_over(c, row, file_id):
+    """Hand the file to Finance as an unmatched receipt, as the Bookkeeper, under the row's own key:
+    (state, action id, code)."""
     from .finance import actions as FA
-    payload = {"origin": "email", "attachments": [file_id], "bill_date": row["received_at"][:10],
-               "memo": _clean(f"Emailed by {row['sender']}: {row['subject']}", 200)}
     try:
-        done = FA.act(c, ACTOR, "bill_create", payload, "bills-email:" + row["id"])
+        done = FA.act(c, ACTOR, "attach", {"subject_kind": "unmatched", "file_ids": [file_id]}, "bills-email:" + row["id"])
     except FA.FinanceError as e:
         return "needs_entry", None, e.code
     if done.status == "committed":
-        return "entered", done.action_id, ""
+        return "filed", done.action_id, ""
     return "needs_entry", done.action_id, done.code or done.status
 
 
 def file_bill(c, files, row, blob_id, digest, size):
-    """File fetched bytes in the Bookkeeper's Library and ask for the draft bill, in the caller's transaction."""
+    """File fetched bytes in the Bookkeeper's Library and hand them to Finance, in the caller's transaction."""
     current = c.execute("SELECT state FROM bills_inbound WHERE id=?", (row["id"],)).fetchone()
     if not current or current["state"] != "waiting":
         return None                              # another tick filed it first
     made, _, _ = files.add_version(c, bot="bookkeeper", actor=ACTOR, scope="bot", task=None, conversation=None,
                                    attempt="", identity="bills-email:" + row["id"], title=row["name"], name=row["name"],
                                    mime=row["mime"], blob_id=blob_id, digest=digest, size=size)
-    state, action_id, code = _bill(c, row, made["id"])
+    state, action_id, code = _hand_over(c, row, made["id"])
     c.execute("UPDATE bills_inbound SET state=?, file_id=?, action_id=?, code=?, updated_at=? WHERE id=?",
               (state, made["id"], action_id, code[:80], H.now(), row["id"]))
     H.event(c, H.KEEPER, "bills.received", row["id"], {"state": state, "file": made["id"]})
@@ -157,38 +178,24 @@ def drain(service, store, blobs, files):
 
 
 class BillsAddress(Contract):
-    inbox_id: str | None = Field(default=None, max_length=120)
+    address: str | None = Field(default=None, max_length=200)
 
 
 def install(app, store, auth):
-    def admin(who):
-        if who.role not in ("owner", "human") or auth.company_role(who) not in ("owner", "admin"):
-            raise Problem("forbidden", "Only the owner or an admin sets the bills address", 403)
-
-    @app.get("/api/v2/finance/bills-address")
-    def bills_address_read(request: Request):
-        """The bills address: the Email & Phone inbox whose PDF and image attachments become draft bills, or null."""
-        who = request.state.identity
-        auth.domain(who)
-        with store.read() as c:
-            validate_identity(c, who)
-            return view(c)
-
     @app.put("/api/v2/finance/bills-address")
     def bills_address_set(request: Request, body: BillsAddress):
-        """Name the email inbox vendors send bills to (`inbox_id`), or stop (`null`). Owner or admin."""
+        """Set the bills email vendors send bills to (`address`), or clear it (`null`). Owner or admin. `inbox_id` says
+        which Email & Phone inbox receives it; null means mail to it never reaches Tico, and uploads still work."""
+        from .finance import actions as FA
         who = request.state.identity
         auth.domain(who)
-        admin(who)
+        if who.role not in ("owner", "human") or auth.company_role(who) not in ("owner", "admin"):
+            raise Problem("forbidden", "Only the owner or an admin sets the bills address", 403)
         with store.transaction() as c:
-            if body.inbox_id is None:
-                c.execute("DELETE FROM bills_address")
-            else:
-                found = c.execute("SELECT kind FROM inbound_inboxes WHERE inbox_id=?", (body.inbox_id,)).fetchone()
-                if not found or found["kind"] != "email":
-                    raise Problem("not_found", "No email inbox with that id", 404)
-                c.execute("INSERT OR REPLACE INTO bills_address(singleton,inbox_id,set_by,set_at) VALUES(1,?,?,?)",
-                          (body.inbox_id, who.actor, H.now()))
-            H.event(c, who.actor, "finance.bills_address", body.inbox_id or "", {})
+            validate_identity(c, who)
+            try:
+                FA.set_bills_email(c, body.address, by=who.actor)
+            except FA.FinanceError as e:
+                raise Problem("validation", e.message, 422) from e
+            H.event(c, who.actor, "finance.bills_address", bills_email(c) or "", {})
             return view(c)
-

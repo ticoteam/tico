@@ -194,7 +194,7 @@ JOBS = [
     Job("bookkeeper_check", "Books check",
         "Reads the Bookkeeper's Finance work queue in plain code and opens one task for the Bookkeeper only when it has "
         "something new. Nothing new is a quiet run: no task, no model call.",
-        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper"), department="Finance"),
+        CHECKS, "Hourly", 3600, control=True, then=("check_books", "wake_bookkeeper")),
     Job("engineering_exceptions", "Engineering exceptions",
         "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
         "when the list has an entry the last one did not. Tickets that move on their own are not listed.",

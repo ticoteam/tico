@@ -10,16 +10,36 @@ max_run_minutes: 60
 # It sends nothing outside the team itself; an invoice reminder goes through Finance's own send.
 outbound_send: false
 
-# Most of its work comes from the server's hourly Books check (backend/bookkeeper.py): plain code reads its Finance work
-# queue and opens a task only when the queue has something, so a quiet month wakes no model. The one routine is the
-# monthly report, which is real work every month. The server seeds it once, when the Bookkeeper is built in; from then
-# on Tico's rows are the routines (docs/routines.md). Set the timezone to the team's own.
+# Its work comes two ways. Events that want an answer on the day are routines below, one task per event. Everything
+# that arrives in volume (rows to categorize, receipts, emailed bills) or is a standing state (reconciling) comes from
+# the server's hourly Books check (backend/bookkeeper.py): plain code reads its Finance work queue and opens a task only
+# when the queue has something new, so a quiet month wakes no model. The monthly report is real work every month. The
+# server seeds these once, when the Bookkeeper is built in; from then on Tico's rows are the routines
+# (docs/routines.md). Set the timezone to the team's own.
 routines:
   - id: monthly-report
     title: Monthly finance report
     cron: "0 9 3 * *"
     timezone: America/Los_Angeles
     template: playbooks/monthly-report.md
+    labels: [priority:p2]
+  - id: bill-due
+    title: Bill due soon
+    "on": finance.bill.due_soon         # quoted: YAML reads a bare `on` as true
+    timezone: America/Los_Angeles
+    template: playbooks/bill-due.md
+    labels: [priority:p2]
+  - id: invoice-overdue
+    title: Invoice overdue
+    "on": finance.invoice.overdue
+    timezone: America/Los_Angeles
+    template: playbooks/invoice-overdue.md
+    labels: [priority:p3]
+  - id: close-month
+    title: Month ready to close
+    "on": finance.period.ready
+    timezone: America/Los_Angeles
+    template: playbooks/close-month.md
     labels: [priority:p2]
 
 # It needs no tool or credential of its own: Finance's books, banks and cards are reached through the hub_finance tools.

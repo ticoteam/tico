@@ -3,18 +3,21 @@
 It appears when Finance is set up: a new install builds it with the other required helpers, and an install from
 before it gets it at the next start (`ensure`, after Finance's own setup). It is a helper outside the org chart.
 
-Its defaults are the owner's own Finance actions, each under a stable key so they are asked for once and a later
-revoke sticks: `right_grant` of finance.book, ap, ar, pay and cards. Its view is not granted for it: the owner is asked
-once, with one task, to let it see the books (spec §7.5: the owner grants it Everything; payroll's private lines stay
-private either way).
+Its Finance rights come with the hire, once (`finance.actions.grant_defaults`: finance.book, ap, ar, pay and cards),
+recorded by one `bookkeeper.rights_granted` event so a later revoke sticks. Its view is not granted for it: the owner
+is asked once, with one task, to let it see the books (spec §7.5: the owner grants it Everything; payroll's private
+lines stay private either way).
 
-Its work comes from the system routine `bookkeeper_check` (hourly by default, backend/scheduler.py): plain code reads
-the Bookkeeper's own Finance work queue (`finance.reads.inbox`, cut to its view), the days since money accounts were
-reconciled, and bills from the bills address it must enter by hand (backend/bills_address.py). An item already listed
-in the last day with the same facts is not news. With no news it is a quiet run: no task and no model call. Otherwise
-one private task owned by the Bookkeeper, "Books check (<n>)", carries the whole queue; a still-open one absorbs the
-next check (its body is replaced and the bot woken only when the body changed), so checks never pile up. The wake is
-the routine's: `trigger="schedule"`, `refs.wake="bookkeeper_check"`."""
+Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
+finance.invoice.overdue and finance.period.ready, one task each. Everything that arrives in volume or is a standing
+state comes from the system routine `bookkeeper_check` (hourly by default, backend/scheduler.py): plain code reads
+the Bookkeeper's own Finance work queue (`finance.reads.inbox`, cut to its view: rows to categorize, draft bills,
+receipts and emailed bills to match, failed syncs, budgets near their limit), the days since money accounts were
+reconciled, and emailed bills Finance did not take (backend/bills_address.py). Kinds its event routines answer are left
+out of the check. An item already listed in the last day with the same facts is not news. With no news it is a quiet
+run: no task and no model call. Otherwise one private task owned by the Bookkeeper, "Books check (<n>)", carries the
+whole queue; a still-open one absorbs the next check (its body is replaced and the bot woken only when the body
+changed), so checks never pile up. The wake is the routine's: `trigger="schedule"`, `refs.wake="bookkeeper_check"`."""
 import json
 
 from . import hubdb as H
@@ -30,19 +33,18 @@ KEEP_DAYS = 7               # the ledger forgets an item this long after it was 
 STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month and its arrival is listed
 PER_KIND = 25               # lines one kind contributes to the body; the rest are counted
 BODY_BYTES = 12000          # the body is cut here
-ORDER = ("sync_failed", "bill_to_enter", "bill_email", "bill_due", "invoice_overdue", "uncategorized",
-         "unmatched_receipt", "missing_receipt", "unreconciled", "period_ready", "budget_near_limit")
+ORDER = ("sync_failed", "bill_to_enter", "bill_email", "unmatched_receipt", "uncategorized", "missing_receipt",
+         "unreconciled", "budget_near_limit")
+ON_EVENT = ("bill_due", "invoice_overdue", "period_ready")   # its bot.yaml routines answer these, one task per event
 HINTS = {
     "sync_failed": "a bank or card sync failed: note it for BotOps",
     "bill_to_enter": "a draft bill: check vendor, lines and terms, then bill_update and bill_approve",
-    "bill_email": "an emailed bill Finance did not take as it came: enter it from its file with bill_create",
-    "bill_due": "due within a week: bill_schedule, or payment_create with obligation bill:<id>",
-    "invoice_overdue": "overdue: one reminder per stage; record payments you find with invoice_record_payment",
+    "bill_email": "an emailed bill Finance did not take: attach its file, or enter the bill from it with bill_create",
     "uncategorized": "posting rules first; categorize the rest; propose a rule when a pattern repeats",
-    "unmatched_receipt": "a receipt with nothing to attach to: find its row or bill and attach",
+    "unmatched_receipt": ("a receipt or emailed bill with nothing to attach to: an emailed bill becomes bill_create "
+                          "(origin email, the file in attachments); a receipt is attached to its row"),
     "missing_receipt": "a card charge with no receipt: find it, or ask the card holder once",
     "unreconciled": "a money account not reconciled for over a month: match rows and reconcile its statement",
-    "period_ready": "the month can close: finish the checklist, write the note, ask for close_period",
     "budget_near_limit": "a budget near its limit: tell its owner once",
 }
 SCHEMA = """
@@ -73,22 +75,14 @@ def _owner(c, auth):
     return "human:" + pid if pid else ""
 
 
-def grant_defaults(c, owner):
-    """The Bookkeeper's Finance rights, each the owner's own `right_grant` under a stable key: asked for once, so a
-    retry replays and a later revoke is not undone. Returns the rights asked for now (replays included)."""
+def grant_defaults(c):
+    """The Bookkeeper's Finance rights, once per install: a later revoke is not undone. The rights granted now."""
     from .finance import actions as FA
-    from .finance.core import rights as R
-    if not owner or not built(c):
+    if not built(c) or c.execute("SELECT 1 FROM events WHERE action='bookkeeper.rights_granted' LIMIT 1").fetchone():
         return []
-    done = []
-    for right in R.BOOKKEEPER:
-        try:
-            got = FA.act(c, owner, "right_grant", {"teammate": ACTOR, "right": right}, f"bookkeeper:right:{right}")
-        except FA.FinanceError:
-            continue
-        if got.status == "committed":
-            done.append(right)
-    return done
+    added = FA.grant_defaults(c, ACTOR)
+    H.event(c, H.KEEPER, "bookkeeper.rights_granted", SLUG, {"rights": added})
+    return added
 
 
 def ask_for_view(c, owner):
@@ -112,9 +106,8 @@ def ensure(c, onboarding, auth):
     if not FR.is_set_up(c):
         return None
     made = onboarding.ensure_bookkeeper(c)
-    owner = _owner(c, auth)
-    grant_defaults(c, owner)
-    ask_for_view(c, owner)
+    grant_defaults(c)
+    ask_for_view(c, _owner(c, auth))
     return made
 
 
@@ -134,7 +127,17 @@ def collect(c):
     except FA.FinanceError:
         queue = {"items": [], "counts": {}}
     counts.update(queue.get("counts") or {})
+    for kind in ON_EVENT:
+        counts.pop(kind, None)
+    emailed = bills_address.for_bookkeeper(c)
+    names = bills_address.labels(c, [str(row.get("file_id") or "") for row in queue.get("items") or []
+                                     if row.get("kind") == "unmatched_receipt"])
     for row in queue.get("items") or []:
+        if row["kind"] in ON_EVENT:
+            continue
+        if row["kind"] == "unmatched_receipt":
+            file_id = str(row.get("file_id") or "")
+            row = {**row, "label": f"{names.get(file_id) or row.get('label') or 'Receipt'} (file {file_id})"}
         items.append({"kind": row["kind"], "id": str(row.get("id") or ""), "label": str(row.get("label") or ""),
                       "stamp": _stamp(row)})
     try:
@@ -145,7 +148,6 @@ def collect(c):
         counts["unreconciled"] = 1
         items.append({"kind": "unreconciled", "id": "books", "label": f"{days} days since the books were reconciled",
                       "stamp": str(days // 7)})
-    emailed = bills_address.for_bookkeeper(c)
     counts["bill_email"] = len(emailed)
     for row in emailed:
         label = f"{row['sender'] or 'Unknown sender'}: {row['subject'] or row['name']}"[:160]
@@ -216,7 +218,8 @@ def check(c, auth, at):
     from .finance import reads as FR
     if not FR.is_set_up(c) or not active(c):
         return {"items": 0, "words": "The Bookkeeper is off", "task": None}
-    grant_defaults(c, _owner(c, auth))
+    grant_defaults(c)
+    ask_for_view(c, _owner(c, auth))
     items, counts = collect(c)
     fresh = _fresh(c, items, at)
     task_id, state = None, ""
