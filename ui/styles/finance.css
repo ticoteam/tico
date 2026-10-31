@@ -161,3 +161,28 @@
 .fin-kv select{width:auto;max-width:200px;min-height:0;padding:2px 6px}
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
 .fin-private .fin-chip{white-space:normal}
+
+/* Payables and Receivables (ui/app/finance-docs.js): plain rows, a rail with the document and its decisions. */
+.fin-t tbody tr[data-fin-doc]:hover td{background:var(--surface2)}
+.fin-doc-email:empty{display:none}
+.fin-copy{display:inline-flex;align-items:center;gap:6px;max-width:100%;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fin-copy .nav-icon{font-size:14px;width:14px;height:14px;color:var(--muted)}
+.fin-acts{display:flex;flex-wrap:wrap;justify-content:flex-end;align-items:center;gap:8px;margin-top:14px}
+.fin-ask{margin:0 auto 0 0;color:var(--wait-ink);font-size:var(--t-sm)}
+.fin-files{display:flex;flex-wrap:wrap;gap:10px}
+.fin-void{text-decoration:line-through;color:var(--muted)}
+.fin-pair{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px}
+.fin-jl{display:grid;grid-template-columns:minmax(0,1fr) 84px 84px;gap:6px;align-items:center}
+.fin-jl+.fin-jl{margin-top:6px}
+.fin-jl-head{font-size:var(--t-sm);color:var(--muted);margin-bottom:-4px}
+.fin-form .fin-jl input,.fin-form .fin-jl select{min-width:0}
+.fin-jl-add{align-self:flex-start;height:var(--ctl-sm)}
+.fin-menu{left:auto;right:0;gap:0;min-width:180px;padding:4px}
+.fin-menu>button,.fin-menu>a{display:flex;align-items:center;height:32px;padding:0 10px;border:0;border-radius:var(--r-ctl);background:none;color:var(--ink);font:inherit;text-align:left;text-decoration:none;cursor:pointer}
+.fin-menu>button:hover,.fin-menu>a:hover{background:var(--surface2)}
+.fin-menu hr{width:100%;margin:4px 0;border:0;border-top:1px solid var(--line)}
+@media (max-width:640px){
+  .fin-doc-email{flex-basis:100%;order:9}
+  .fin-menu{left:16px;right:16px}
+  .fin-jl{grid-template-columns:minmax(0,1fr) 72px 72px}
+}
