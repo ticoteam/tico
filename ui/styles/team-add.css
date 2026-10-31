@@ -13,17 +13,8 @@
 #team-add-human label{display:block;margin-bottom:14px}
 #team-add-human input{display:block;width:100%;margin-top:6px}
 #team-add-human p{font-size:var(--t-sm);line-height:var(--lh)}
-/* Recruiting seats on the org chart, and the seat dialog (ui/app/recruit.js). */
+/* Recruiting seats on the org chart (their pages: ui/styles/recruit.css). */
 #tree .node.seat{color:var(--muted)}
+#tree .node.seat:hover,#tree .node.seat.cur{color:var(--ink)}
 #tree .seat-avatar{width:var(--size);height:var(--size);font-size:var(--size);line-height:var(--lh-none);flex:none;color:var(--muted)}
 #tree .tree-recruiting{margin-left:auto;font-size:var(--t-xs,11px);color:var(--muted);border:1px dashed var(--line);border-radius:999px;padding:0 6px;flex:none}
-.recruit-seat .tmodal-head{gap:8px;align-items:center}
-.pill.recruiting{border:1px dashed var(--line);color:var(--muted);background:none}
-.recruit-candidates{display:grid;gap:10px;margin-top:8px}
-.recruit-candidates .cat-card.recommended{border-color:var(--ink)}
-.recruit-candidates h3{display:flex;gap:8px;align-items:center;margin:0 0 6px}
-.recruit-candidates .recruit-reason{margin:0 0 6px}
-.recruit-candidates label{display:block;margin:8px 0}
-.recruit-spin{display:inline-block;width:10px;height:10px;margin-right:6px;border:2px solid var(--line);border-top-color:var(--ink);border-radius:50%;animation:recruit-spin 1s linear infinite;vertical-align:-1px}
-@keyframes recruit-spin{to{transform:rotate(360deg)}}
-@media (prefers-reduced-motion:reduce){.recruit-spin{animation:none}}

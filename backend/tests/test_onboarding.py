@@ -168,10 +168,8 @@ def test_setup_lays_out_each_picked_role_once_as_a_recruiting_seat_and_creates_n
     assert seat["title"] == "Help" and seat["reports_to"] == "human:morgan" 
     assert "Refund up to $40 without asking." in seat["description"] and "Never phone a customer." in seat["description"]
     assert "Answers the support inbox." in seat["description"] and "You answer Acme" not in seat["description"]
-    opened = api.post(f"/api/v2/seats/{seat['id']}/open", json={}, headers=signed_in())
+    opened = api.get(f"/api/v2/seats/{seat['id']}", headers=signed_in())
     assert opened.status_code == 200 and opened.json()["description_by"] == "person"
-    assert opened.json()["draft"]["state"] == "none", (
-        "the Strategy Bot must not replace instructions the owner reviewed in setup")
     assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=signed_in()).json()["tasks"] == []
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM bots WHERE slug='support'").fetchone()

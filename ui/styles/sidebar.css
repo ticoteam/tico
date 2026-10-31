@@ -185,7 +185,7 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 .tree a.node.planned{color:var(--muted)}.tree a.node.planned .av{opacity:.35;filter:saturate(.4)}
 .tree a.node.paused{opacity:.6}
 /* A Recruiting seat: a role with no bot yet (ui/app/sidebar.js renderTree). */
-.tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:default}
+.tree .node.seat{flex:1;display:flex;align-items:center;gap:var(--s2);padding:6px;border-radius:6px;color:var(--muted);font-size:var(--t-base);min-width:0;cursor:pointer;text-decoration:none}
 .tree .node.seat .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tree .node.seat .seat-icon{font-size:16px;width:20px;text-align:center}
 .tree .node.seat .seat-pill{margin-left:auto;font-size:var(--t-xs);padding:1px 6px;flex:none}

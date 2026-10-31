@@ -70,14 +70,15 @@ direct reports' ([Updates](using-tico.md#updates)).
 
 ## Groups
 
-The **+** beside **Team** offers **Recruit a bot**, **Add existing bot**, **Add section** and **Add human**, according to
-your permissions. Each group's **+** offers the same, with **Add group** (a group inside it) and no **Add human**.
-**Add section** and **Add group** open the inline group-name field. **Recruit a bot** asks for a job title and an optional
-job description, makes a Recruiting seat (a role with no bot yet) under the manager you choose and opens it: its job
-description, which the Strategy Bot drafts for the owner, then **Recruit** and the pick
+The **+** beside **Team** offers **Post a job**, **Build a team**, **Cloud agents**, **From scratch**, **Add existing bot**,
+**Add section** and **Add human**, according to your permissions and what this Tico has loaded. Each group's **+** offers the
+same, with **Add group** (a group inside it) and no **Add human**. **Add section** and **Add group** open the inline
+group-name field. **Post a job** asks for a job title (its description is drafted as you leave the title), makes a
+Recruiting seat (a role with no bot yet) under the manager you choose and opens its Applicants page
 ([Recruiting a seat](onboarding.md#recruiting-a-seat)). From a group's **+** the seat is in that group and reports to its
-head by default. **Add existing bot** opens [Connect an external agent](connect-an-agent.md). Open seats show on the chart
-under their manager with a **Recruiting** mark; clicking one opens it.
+head by default. **From scratch** opens the bot editor. **Add existing bot** opens
+[Connect an external agent](connect-an-agent.md). Open seats show on the chart under their manager with a **Recruiting**
+mark, or their applicant count once listed; clicking one opens its Applicants page.
 
 Clicking a group's name opens its page and unfolds it; its arrow folds it.
 

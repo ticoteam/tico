@@ -1697,14 +1697,20 @@ class SeatUpdate(Contract):
 
 
 class SeatDraft(Contract):
-    """The Strategy Bot's draft of a seat's job description (backend/recruiting.py)."""
-    text: Annotated[str, Field(min_length=1, max_length=8000)]
+    """A job description for a seat not posted yet, drafted from its title (backend/recruiting.py `draft`)."""
+    title: Annotated[str, Field(min_length=1, max_length=120)]
+    reports_to: Annotated[str, Field(max_length=200)] = ""
+    team: Annotated[str, Field(max_length=100)] = ""
+    redraft: bool = False                                   # one model rewrite, when the server has a key
 
 
 class SeatHire(Contract):
-    """The candidate picked for a seat: a Tico template, on its suggested model unless `model` names another."""
+    """The candidate picked for a seat: a Tico template, on its suggested model unless `model` names another, named
+    after the seat unless `name` says otherwise, and on `runner_id`'s computer when one is chosen."""
     template: Annotated[str, Field(min_length=1, max_length=80)]
     model: Annotated[str, Field(max_length=200)] = ""
+    name: Annotated[str, Field(max_length=100)] = ""
+    runner_id: ID | None = None
 
 
 class BotArchive(Contract):
