@@ -4,12 +4,19 @@ import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-# Feed kinds that are card charges, credit or debit, even on a bank money account.
-CARD_FEED_KINDS = ("debitCardTransaction", "creditCardTransaction")
-# The SQL test that a feed row (f, with its money account m) is a card charge. The values are constants, not input.
-_CARD_KINDS_SQL = ", ".join(f"'{kind}'" for kind in CARD_FEED_KINDS)
+from ..core.feeds import CARD_KINDS
+
+# The SQL test that a feed row (f, with its money account m) is card money: a card kind from core/feeds (a credit or debit
+# charge, refund or fee, even on a bank money account), a card id, or a card program's row. The values are constants.
+_CARD_KINDS_SQL = ", ".join(f"'{kind}'" for kind in CARD_KINDS)
 _CARD_ROW = (f"CASE WHEN f.card_id IS NOT NULL OR f.kind IN ({_CARD_KINDS_SQL}) "
              "OR COALESCE(m.kind, '') = 'card_program' THEN 1 ELSE 0 END")
+# The feed row an entry came from, found by the entry's source id: a row's first entry has the row's id, and a repost or a
+# reclassification adds a suffix after a colon. So it is found even once the row is unposted. For the entry a line is on,
+# or the entry that line's entry reverses.
+_ORIGIN_FEED = ("SELECT f.id FROM fin_entries oe "
+                "JOIN fin_feed_txns f ON f.id=substr(oe.source_id, 1, instr(oe.source_id || ':', ':') - 1) "
+                "WHERE oe.id=COALESCE(e.reverses_id, e.id) AND oe.source IN ('bank','card')")
 
 
 def _marks(values: Sequence[object]) -> str:
@@ -86,13 +93,14 @@ def bill_lines(c: sqlite3.Connection, bill_ids: Sequence[str]) -> list[Any]:
 
 def settlements(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
     """Money settled against bills of a vendor in the window, with what it came from: the kind, the money account kind (a
-    bank feed row, a payment's account, an expected payment's account) or GL subtype it went through, whether a feed row
-    was a card charge, and the bill it paid."""
+    bank feed row, a payment's account, an expected payment's account) or GL subtype it went through, whether it was card
+    money (a card-source entry, or a feed row that is a card charge), and the bill it paid."""
     return c.execute(
         "SELECT b.vendor_id, s.from_kind, s.amount, COALESCE(m.kind, pm.kind, em.kind, '') AS money_kind, "
         "COALESCE(ga.subtype, '') AS subtype, b.id AS bill_id, "
-        f"CASE WHEN s.from_kind='feed' THEN {_CARD_ROW} ELSE 0 END AS by_card "
+        f"CASE WHEN se.source='card' THEN 1 WHEN s.from_kind='feed' THEN {_CARD_ROW} ELSE 0 END AS by_card "
         "FROM fin_settlements s JOIN fin_bills b ON b.id=s.to_id "
+        "LEFT JOIN fin_entries se ON se.id=s.entry_id "
         "LEFT JOIN fin_feed_txns f ON s.from_kind='feed' AND f.id=s.from_id "
         "LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id "
         "LEFT JOIN fin_payments p ON s.from_kind='payment' AND p.id=s.from_id "
@@ -104,18 +112,18 @@ def settlements(c: sqlite3.Connection, book_id: str, start: str, end: str) -> li
 
 
 def expense_lines(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
-    """Expense lines a vendor is named on, in the window, each with whether it came from a card: the feed row that posted
-    its entry, or the feed row a reclassification beside it settled. A reversal takes its original's row, and an entry from
-    no feed row is a card charge when it posted under the card source. Bank and card rows post straight to an expense (a
-    bill's lines post under the bill, so they are not here); a reversal keeps its source, so the two net."""
-    origin = "COALESCE(e.reverses_id, e.id)"
-    posted = (f"(SELECT {_CARD_ROW} FROM fin_feed_txns f LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id "
-              f"WHERE f.entry_id={origin} LIMIT 1)")
-    reclass = (f"(SELECT {_CARD_ROW} FROM fin_settlements s JOIN fin_feed_txns f ON f.id=s.from_id "
-               "LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id "
-               f"WHERE s.from_kind='feed' AND s.voided_at IS NULL AND s.entry_id={origin} LIMIT 1)")
-    return c.execute("SELECT l.account_id, l.contact_id AS vendor_key, l.amount, "
-                     f"COALESCE({posted}, {reclass}, CASE WHEN e.source='card' THEN 1 ELSE 0 END) AS by_card "
-                     "FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id JOIN fin_accounts a ON a.id=l.account_id "
-                     "WHERE l.book_id=? AND l.entry_date BETWEEN ? AND ? AND e.source IN ('bank','card') "
-                     "AND a.type='expense' AND l.contact_id<>'' ORDER BY l.id", (book_id, start, end)).fetchall()
+    """Expense lines a vendor is named on, dated the day their money moved: the day of the feed row their entry came from.
+    A row posted or reclassified after its month closed posts on a later open day, so its line is dated by the row instead,
+    and so is each reversal of it, which keeps the two netting in one year. Each line says whether it is card money: a
+    card-source entry, or a feed row that is a card charge. Bank and card rows post straight to an expense (a bill's lines
+    post under the bill, so they are not here)."""
+    feed = f"({_ORIGIN_FEED})"
+    paid_on = f"COALESCE((SELECT f.txn_date FROM fin_feed_txns f WHERE f.id={feed}), l.entry_date)"
+    card = (f"CASE WHEN e.source='card' THEN 1 ELSE COALESCE((SELECT {_CARD_ROW} FROM fin_feed_txns f "
+            f"LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id WHERE f.id={feed}), 0) END")
+    return c.execute(
+        "SELECT account_id, vendor_key, amount, by_card FROM (SELECT l.id, l.account_id, l.contact_id AS vendor_key, "
+        f"l.amount, {card} AS by_card, {paid_on} AS paid_on FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+        "JOIN fin_accounts a ON a.id=l.account_id WHERE l.book_id=? AND e.source IN ('bank','card') "
+        "AND a.type='expense' AND l.contact_id<>'') WHERE paid_on BETWEEN ? AND ? ORDER BY id",
+        (book_id, start, end)).fetchall()

@@ -60,10 +60,12 @@ jurisdiction is added with `tax_jurisdiction_add` (`code`, `name`, a vendor cont
   quarter's remittance bills, matched to the quarter they are tagged for. `due_on` is the return's due day in the month
   after the quarter.
 - **1099** (`1099`, columns `year, vendor, tin_on_file, cash_paid, card_paid_excluded, threshold, reportable`): per
-  flagged vendor per calendar year, counting each payment by the day it was paid. Cash paid counts bills settled from a
-  bank or the bank's cash line and expenses a bank row posted to the vendor. Card payments, credit or debit, are left out
-  and reported as `card_paid_excluded`: a card program's charge, a credit card account, a card row, a debit or credit card
-  transaction, any feed row with a card id, and a card expense later matched to a bill. Gateway credit is neither.
+  flagged vendor per calendar year, counting each payment by the day it was paid: the bank or card row's own date, even
+  when the row was posted or matched to a bill after its month closed (the entry itself posts on the first open day). A
+  reversal counts with the row it reverses. Cash paid counts bills settled from a bank or the bank's cash line and
+  expenses a bank row posted to the vendor. Card money is left out and reported as `card_paid_excluded`, and a card
+  refund lowers it: a card program's charge, a credit card account, a card-source entry, any feed row with a card id, a
+  debit or credit card charge, refund or fee, and a card expense later matched to a bill. Gateway credit is neither.
   Vendor lines are matched through the contact and its name aliases, so a payment posted under a name before the contact
   existed counts. The threshold is $2,000 for 2026 and later, $600 before. Only whether a TIN is on file shows; the TIN
   stays in the vault.

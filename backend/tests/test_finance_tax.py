@@ -7,6 +7,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance import tax as FT
 from backend.finance.actions import FinanceError
+from backend.finance.context import load
 from backend.finance.core import tax as T
 from backend.finance.store import banking as SK
 from backend.finance.store import schema
@@ -70,6 +71,14 @@ def _card_charge(c, program, amount, provider_id):
         "money_account_id": program, "provider_id": provider_id, "txn_date": "2026-06-01", "amount": -amount,
         "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
         "status": "posted", "raw_json": "{}"})
+
+
+def _feed(c, money, amount, day="2026-06-01", kind=""):
+    """A bank or card row as the provider sent it, not yet in the books, paid to Acme Consulting."""
+    return SK.insert(c, "fin_feed_txns", {
+        "money_account_id": money, "provider_id": "txn", "txn_date": day, "amount": amount, "currency": "USD",
+        "counterparty": "Acme Consulting", "kind": kind, "created_at": AT, "created_by": "system:finance",
+        "raw_json": "{}"})
 
 
 def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01", code="6100"):
@@ -397,6 +406,85 @@ def test_a_card_row_on_a_bank_account_is_a_card_payment(keeper, kind):
     with keeper.read() as c:
         row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
     assert (row["cash_paid"], row["card_paid_excluded"]) == (10_000, 40_000)
+
+
+def test_a_payment_posted_after_its_month_closed_counts_in_the_year_it_was_paid(keeper):
+    """A December row posts on the first open day after the close, and so does its re-categorization. Both count in 2025
+    with the payment, so a Dec 30 payment is not moved into 2026."""
+    jan = "2026-01-05T12:00:00.000000Z"
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        fid = _feed(c, _bank(c), -60_000, day="2025-12-30")
+        assert act(c, OWNER, "close_period", {"month": "2025-12"}, at=jan).status == "committed"
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")},
+                   at=jan).status == "committed"
+        assert c.execute("SELECT entry_date FROM fin_lines WHERE contact_id=?", (acme,)).fetchone()[0] == "2026-01-05"
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")},
+                   at=jan).status == "committed"
+    with keeper.read() as c:
+        assert _vendor_row(FR.form_1099_report(c, OWNER, 2025, AT), "Acme Consulting")["cash_paid"] == 60_000
+        assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")["cash_paid"] == 0
+
+
+def test_a_payment_matched_to_a_bill_after_its_month_closed_counts_once_in_the_year_paid(keeper):
+    """A November row is posted to the vendor's expense, its month closes, and then the row is matched to the vendor's bill.
+    The match's reclassification posts on a later open day, but it counts in 2025 with the payment: once in 2025, nothing
+    in 2026."""
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        fid = _feed(c, _bank(c), -60_000, day="2025-11-20")
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")},
+                   at="2025-11-25T12:00:00.000000Z").status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2025-11"},
+                   at="2025-12-05T12:00:00.000000Z").status == "committed"
+        made = act(c, OWNER, "bill_create", {"vendor_id": acme, "bill_date": "2025-11-01",
+                                             "lines": [{"account_id": account(c, "6100"), "amount": 60_000}]})
+        assert made.status == "committed", made
+        bill = str(made.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "feed_id": fid},
+                   at="2026-01-05T12:00:00.000000Z").status == "committed"
+        dates = [r[0] for r in c.execute("SELECT entry_date FROM fin_entries WHERE source='bank' ORDER BY entry_date")]
+        assert dates == ["2025-11-20", "2026-01-05"]
+    with keeper.read() as c:
+        assert _vendor_row(FR.form_1099_report(c, OWNER, 2025, AT), "Acme Consulting")["cash_paid"] == 60_000
+        assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")["cash_paid"] == 0
+
+
+@pytest.mark.parametrize("kind, amount, card", [
+    ("debitCardTransaction", -15_000, 15_000), ("creditCardTransaction", -15_000, 15_000),
+    ("debitCardCredit", 15_000, -15_000), ("creditCardCredit", 15_000, -15_000),
+    ("cardInternationalTransactionFee", -15_000, 15_000)])
+def test_every_card_row_on_a_bank_account_is_card_money_and_a_refund_never_lowers_cash(keeper, kind, amount, card):
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        bank = _bank(c)
+        _pay(c, acme, 50_000, {"money_account_id": bank})
+        fid = _feed(c, bank, amount, kind=kind)
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")},
+                   at=AT).status == "committed"
+    with keeper.read() as c:
+        row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
+    assert (row["cash_paid"], row["card_paid_excluded"]) == (50_000, card)
+
+
+def test_only_invoices_that_carry_sales_tax_feed_the_sales_tax_workpaper(keeper):
+    """An invoice with no sales tax line feeds no row, so its income account is not behind the workpaper."""
+    with keeper.transaction() as c:
+        authority = _contact(c, "Testland Revenue")
+        made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority,
+                                                      "due_day": 20})
+        tax_account = str(made.result["account_id"])
+        assert act(c, OWNER, "account_create", {"code": "4100", "name": "Consulting",
+                                                "type": "income"}).status == "committed"
+        customer = _contact(c, "Globex", kind="customer")
+        _invoice(c, customer, "2026-02-10", 20_000, 1_600, tax_account)
+        untaxed = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-03-05",
+                                                   "lines": [{"account_id": account(c, "4100"), "amount": 5_000}]})
+        assert untaxed.status == "committed", untaxed
+        assert act(c, OWNER, "invoice_send", {"invoice_id": untaxed.result["invoice_id"]}).status == "committed"
+        feeding = FT._sales_feeds(load(c, AT), 2026)
+    assert feeding == {account(c, "4000"), tax_account}
 
 
 def test_a_card_expense_matched_to_a_bill_nets_on_the_card(keeper):

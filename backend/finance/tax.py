@@ -207,13 +207,17 @@ def _remit_for(tags_json: str, year: int, period: str | None) -> bool:
 
 
 def _sales_feeds(ctx: Ctx, year: int, period: str | None = None) -> set[str]:
-    """The accounts of the lines behind a year's sales tax rows, or behind one period's remittance: the year's invoice
-    lines, and every line of the remittance bills tagged for it."""
+    """The accounts of the lines behind a year's sales tax rows, or behind one quarter's remittance: the lines of the
+    invoices that carry sales tax (an invoice without one feeds no row), dated in the year or the quarter, and every line
+    of the remittance bills tagged for it."""
     c = ctx.c
     account_ids = [str(j["account_id"]) for j in ST.jurisdictions(c, ctx.book.id)]
     bills = sorted({str(r["bill_id"]) for r in ST.remittance_lines(c, ctx.book.id, account_ids)
                     if _remit_for(str(r["tags_json"]), year, period)})
-    lines = [*ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31"), *ST.bill_lines(c, bills)]
+    invoices = ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31")
+    taxed = {str(r["invoice_id"]) for r in invoices if str(r["subtype"]) == T.SALES_TAX
+             and (period is None or T.quarter_key(str(r["invoice_date"])) == period)}
+    lines = [*(r for r in invoices if str(r["invoice_id"]) in taxed), *ST.bill_lines(c, bills)]
     return {str(r["account_id"]) for r in lines}
 
 
