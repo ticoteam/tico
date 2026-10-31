@@ -3191,11 +3191,13 @@ def create_app(settings=None):
             return json.dumps(slides, sort_keys=True) if slides else ""
         return body.body.strip()
 
-    def update_write(c, who, body, rc=None, replayed=False):
+    def update_write(c, who, body, rc=None, replayed=False, named_day=True):
         """One update, as `POST /api/v2/updates` posts it and Send anyway replays it (`replayed`): a bot's is checked
         against the org rules for the whole company, which reads it. Held, nothing is posted; warned, the line leads
         the update (a week in review's goal, its headline). `body` names its day and kind (update_fixed), so a replay
-        posts the update that was held, or nothing: a day that can no longer be posted is a 409, the hold kept."""
+        posts the update that was held, or nothing: a day that can no longer be posted is a 409, the hold kept. A live
+        post that named no day (`named_day` False) is for the day it is written, since the rule check may have run past
+        midnight; its kind stays as it arrived."""
         # A bot posts its own; a person posts their own, for today, as `human:<id>`. A person's
         # draft is written by the server (updates.write_draft), never posted through here.
         if who.role == "bot":
@@ -3204,6 +3206,8 @@ def create_app(settings=None):
             author = who.actor
         else:
             raise Problem("identity", "A bot or a person posts their own update", 403)
+        if not replayed and not named_day:
+            body = body.model_copy(update={"day": updates.today()})
         slides = body.slides.model_dump(exclude_none=True) if body.slides else None
         try:
             updates.check_day(c, author, body.day)
@@ -3237,7 +3241,7 @@ def create_app(settings=None):
         who = request.state.identity
         fixed = update_fixed(body)
         rc = rule_check(who, "update", update_text(fixed), lambda c: org_rule_check.company(c))
-        return mutate(request, body, lambda c: update_write(c, who, fixed, rc))
+        return mutate(request, body, lambda c: update_write(c, who, fixed, rc, named_day=body.day is not None))
 
     @org_rule_check.replayer("update", audience=lambda c, bot, replay: org_rule_check.company(c))
     def rule_replay_update_post(c, bot, hold, replay, ingest, gate=None):

@@ -1932,6 +1932,52 @@ def test_an_impossible_update_day_is_refused_as_a_day(ruled):
     assert r.status_code == 422 and r.json()["error"]["code"] == "day", r.text
 
 
+def move_day_during_check(api, monkeypatch, before, after):
+    """`updates.today` says `before` until the rule check has run, then `after`: the check ran past midnight."""
+    from backend import updates
+    days = {"today": before}
+    monkeypatch.setattr(updates, "today", lambda at=None: days["today"])
+    judge = api.app.state.judge
+
+    def past_midnight(*args, **kwargs):
+        days["today"] = after
+        return judge(*args, **kwargs)
+    api.app.state.judge = past_midnight
+
+
+def test_a_live_update_naming_no_day_is_for_the_day_it_is_written_and_keeps_its_kind(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    move_day_during_check(api, monkeypatch, "2026-10-29", "2026-10-30")          # a Thursday's daily, written Friday
+    got = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert got["rule_warning"]
+    assert [(r["kind"], r["day"]) for r in sql(api, "SELECT kind, day FROM updates WHERE bot='ops'")] == \
+        [("daily", "2026-10-30")]
+
+
+def test_a_live_update_naming_its_day_is_still_refused_once_the_day_has_moved_on(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    move_day_during_check(api, monkeypatch, "2026-10-29", "2026-10-30")
+    r = api.post("/api/v2/updates", json={"day": "2026-10-29", "body": "- Our favorite color is blue."},
+                 headers=headers("ops-test"))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "day", r.text
+    assert sql(api, "SELECT id FROM updates WHERE bot='ops'") == []
+
+
+def test_a_held_live_update_naming_no_day_is_held_for_the_day_it_is_written(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    move_day_during_check(api, monkeypatch, "2026-10-29", "2026-10-30")
+    held = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"]
+    payload = json.loads(hold_row(api, held)["payload_json"])["replay"]["body"]
+    assert payload["day"] == "2026-10-30" and payload["kind"] == "daily"
+    # The hold keeps the day it was written for, so Send anyway posts that daily.
+    send_anyway(api, held)
+    assert [(r["kind"], r["day"]) for r in sql(api, "SELECT kind, day FROM updates WHERE bot='ops'")] == \
+        [("daily", "2026-10-30")]
+
+
 def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkeypatch):
     from backend import hubdb
     api, _ = ruled
