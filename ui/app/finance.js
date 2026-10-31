@@ -12,7 +12,7 @@
 
 const FIN_ROUTE = '#/finance';
 const FIN_TABS = [['pnl', 'P&L'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
-  ['cards', 'Cards'], ['transactions', 'Transactions'], ['sources', 'Sources'], ['access', 'Access']];
+  ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
 let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE = null;     // the sidebar's one read per visit
@@ -51,7 +51,8 @@ function finCaps() {
   const viewing = who !== me;
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
-const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources
+// Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
+const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
   : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
@@ -84,7 +85,37 @@ async function finProbe() {
   return FIN_ACCESS;
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
-function finProbeOnce() { if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+function finProbeOnce() { finOAuthReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+
+// A QuickBooks or Xero consent comes back here from HQ's broker (spec §3.4), in the address before or after the hash:
+// ?finance=connected&claim=… makes the books connection from the claim (single use, so once); ?finance=error says why
+// it stopped. Either way the address drops them and lands on Sources.
+// Route (not on a branch yet): POST /api/v2/finance/books/claim {provider, claim} -> {connection_id}.
+const FIN_BOOKS = {quickbooks: 'QuickBooks', xero: 'Xero'};
+const FIN_OAUTH_KEYS = ['finance', 'claim', 'provider', 'reason', 'error'];
+let FIN_OAUTH = '';
+function finOAuthReturn() {
+  const [hashPath, hashQ = ''] = location.hash.split('?');
+  const q = new URLSearchParams(location.search), h = new URLSearchParams(hashQ);
+  const src = q.has('finance') ? q : h.has('finance') ? h : null;
+  if (!src || !S.me?.id) return;
+  const state = src.get('finance'), claim = src.get('claim') || '', provider = src.get('provider') || '';
+  const reason = src.get('reason') || src.get('error') || '';
+  FIN_OAUTH_KEYS.forEach(k => { q.delete(k); h.delete(k); });
+  const qs = q.toString(), hs = h.toString();
+  const to = rdUnder(hashPath || '', FIN_ROUTE) ? hashPath + (hs ? '?' + hs : '') : FIN_ROUTE + '/sources';
+  history.replaceState(history.state, '', location.pathname + (qs ? '?' + qs : '') + to);
+  const name = FIN_BOOKS[provider] || 'Books';
+  if (state === 'connected' && claim && FIN_OAUTH !== claim) {
+    FIN_OAUTH = claim;
+    void post('/v2/finance/books/claim', {provider, claim}).then(() => {
+      toast(name + ' connected');
+      if (FIN?.src) void finSrcLoad();
+    }).catch(e => toast(e.message || name + ' not connected', true));
+  } else if (state === 'error') toast(name + ' not connected' + (reason ? ': ' + (FIN_OAUTH_WHY[reason] || reason) : ''), true);
+  setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
+}
+const FIN_OAUTH_WHY = {access_denied: 'access denied', expired: 'the link expired', state_mismatch: 'try again'};
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -237,6 +268,7 @@ function finShow(state) {
   else if (tab === 'receivables') finDocPage('invoice');
   else if (tab === 'cards') finCardsPage();
   else if (tab === 'transactions') finTxPage();
+  else if (tab === 'tax') finTaxPage();
   else if (tab === 'sources') finSourcesPage();
   else if (tab === 'access') finAccessPage();
 }
