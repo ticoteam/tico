@@ -467,6 +467,7 @@ ADDED = (
     ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
     ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_invoice_lines", "taxable", "INTEGER NOT NULL DEFAULT 1"),
     ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
@@ -474,9 +475,22 @@ ADDED = (
 )
 
 
+# Tax (migration 70, spec §11): the sales tax jurisdictions (each one a liability account and its authority contact) and
+# the external-rule seeds made for the outside obligations (the 1099-NEC, each jurisdiction's quarterly return).
+TAX = """
+CREATE TABLE IF NOT EXISTS fin_tax_jurisdictions (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), code TEXT NOT NULL, name TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES fin_accounts(id), authority_id TEXT NOT NULL DEFAULT '',
+  due_day INTEGER NOT NULL CHECK (due_day BETWEEN 1 AND 28), created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  UNIQUE (book_id, code), UNIQUE (account_id));
+
+CREATE TABLE IF NOT EXISTS fin_tax_seeds (
+  key TEXT PRIMARY KEY, rule_id TEXT NOT NULL, created_at TEXT NOT NULL);
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX)
 
 
 def statements(script: str) -> list[str]:
@@ -506,8 +520,9 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for statement in statements(TABLES):
-        c.execute(statement)
+    for script in (TABLES, TAX):
+        for statement in statements(script):
+            c.execute(statement)
     _add_columns(c)
     for script in (INDEXES, TRIGGERS):
         for statement in statements(script):
@@ -581,3 +596,10 @@ def vendor_keys_folded(c: sqlite3.Connection) -> None:
                                  "(SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor)").fetchall():
         if name_key(str(vendor)) != vendor:
             c.execute("UPDATE fin_budgets SET vendor=? WHERE id=?", (name_key(str(vendor)), bid))
+
+
+def tax(c: sqlite3.Connection) -> None:
+    """Cloud migration 70: the sales tax jurisdictions and the due dates seeded for the outside obligations. Idempotent."""
+    for statement in statements(TAX):
+        c.execute(statement)
+    _add_columns(c)

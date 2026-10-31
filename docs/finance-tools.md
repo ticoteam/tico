@@ -41,6 +41,39 @@ rest; a paged list's `next_cursor` carries on from the last row shown. Period co
 big on its own keeps its ids and amounts and has its long text and nested lists cut; a result that still does not fit
 comes back as `{"error": "too_big", "chars", "cap"}`.
 
+## Tax
+
+Sales tax and 1099 workpapers (`/api/v2/finance/tax/`) are filed as a whole, so only someone who sees everything (the owner,
+or an Everything grant) can read them, CSV included. Anyone else is refused rather than shown partial totals. So is an
+Everything viewer when a line behind the workpaper sits on a private account they lack full detail for: a sales tax
+remittance line, or a 1099 vendor's expense or bill line. Payroll that feeds neither workpaper does not block them. The
+Bookkeeper reads the workpapers once it is granted Everything, which the owner is asked to do at setup. A sales tax
+jurisdiction is added with `tax_jurisdiction_add` (`code`, `name`, a vendor contact as
+`authority_id`, `due_day` 1 to 28), and a quarter's tax is remitted with `tax_remit` (`jurisdiction`, `period` such as
+`2026-Q3`, optional `amount`): a bill to that authority, tagged with the quarter, counted as remitted by what is paid on it (partial payments count). Without `amount` the owed figure is read off the workpaper, so that needs full view.
+
+- **Sales tax** (`sales-tax`, columns `period, jurisdiction, taxable_sales, exempt_sales, tax_collected, tax_remitted,
+  due`): by calendar quarter from invoices dated in it. Each invoice line has a `taxable` flag (`lines[].taxable` on
+  `invoice_create`), true by default for income lines on an invoice that carries a sales tax line and false otherwise.
+  Taxable sales are the taxable income lines on invoices carrying that jurisdiction's tax line; exempt sales are the
+  non-taxable income lines on those invoices. Due is collected less remitted, where remitted is what is paid on the
+  quarter's remittance bills, matched to the quarter they are tagged for. `due_on` is the return's due day in the month
+  after the quarter.
+- **1099** (`1099`, columns `year, vendor, tin_on_file, cash_paid, card_paid_excluded, threshold, reportable`): per
+  flagged vendor per calendar year, counting each payment by the day it was paid: the bank or card row's own date, even
+  when the row was posted or matched to a bill after its month closed (the entry itself posts on the first open day). A
+  reversal counts with the row it reverses. Cash paid counts bills settled from a bank or the bank's cash line and
+  expenses a bank row posted to the vendor. Card money is left out and reported as `card_paid_excluded`, and a card
+  refund lowers it: a card program's charge, a credit card account, a card-source entry, any feed row with a card id, a
+  debit or credit card charge, refund or fee, and a card expense later matched to a bill. Gateway credit is neither.
+  Vendor lines are matched through the contact and its name aliases, so a payment posted under a name before the contact
+  existed counts. The threshold is $2,000 for 2026 and later, $600 before. Only whether a TIN is on file shows; the TIN
+  stays in the vault.
+
+Due dates are seeded once, when Finance is set up and the Bookkeeper exists, and again when a jurisdiction is added:
+the 1099-NEC (January 31) and each jurisdiction's quarterly return. Each is an external rule owned by the Bookkeeper,
+with a routine that opens its task 30 days (1099) or 14 days (sales tax) before it.
+
 ## Testing Finance without Mercury
 
 `TICO_MERCURY_BASE` points the bank worker at another Mercury API base, such as the sandbox

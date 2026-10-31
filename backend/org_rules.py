@@ -897,6 +897,31 @@ def add_source(c, who, body):
     return row
 
 
+def seed_external(c, who, text, source_name, source_kind):
+    """An active external rule the system registers once: an outside obligation Finance tracks, such as a tax filing.
+    Everyone sees it and its due dates carry their owners, so no one has to accept it. Found again by its text and its
+    source, so a second seed adds nothing. Returns the rule's id."""
+    source = add_source(c, who, {"name": source_name, "kind": source_kind})
+    found = c.execute("SELECT id FROM org_rules WHERE kind='external' AND text=? AND source_id=?",
+                      (text, source["id"])).fetchone()
+    if found:
+        return str(found["id"])
+    scope = {"everyone": True, "all_bots": False, "groups": [], "bots": [], "people": []}
+    now = H.now()
+    row = {"id": H.new_id(), "kind": "external", "text": text, "description": "", "source_id": source["id"],
+           "cite_json": None, "who_json": _json(scope), "with_json": _json({"groups": [], "bots": [], "people": []}),
+           "if_broken": "warn", "reviewer": None, "status": "active", "suggested_by": who.actor,
+           "decided_by": who.actor, "decided_at": now, "via": _via(who), "version": 1, "created_at": now,
+           "updated_at": now}
+    c.execute("INSERT INTO org_rules (id, kind, text, description, source_id, cite_json, who_json, with_json, if_broken, "
+              "reviewer, status, suggested_by, decided_by, decided_at, via, version, created_at, updated_at) VALUES "
+              "(:id, :kind, :text, :description, :source_id, :cite_json, :who_json, :with_json, :if_broken, :reviewer, "
+              ":status, :suggested_by, :decided_by, :decided_at, :via, :version, :created_at, :updated_at)", row)
+    _audit(c, who.actor, row["id"], None, _core(_get(c, row["id"])), who)
+    _event(c, who.actor, "added", row["id"], {"kind": "external", "status": "active"})
+    return row["id"]
+
+
 def _party(ctx, text):
     """A teammate named in a filter, as the key its scope keeps it under."""
     kind, found = _resolve(ctx, text)

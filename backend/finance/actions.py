@@ -14,7 +14,7 @@ from typing import cast
 
 from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting, runs
 from . import setup as setup_mod
-from . import rights, sync, usage
+from . import rights, sync, tax, usage
 from .context import Ctx, load
 from .core import gates as G
 from .core import kinds as K
@@ -46,7 +46,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
-    **documents.PLANNERS}
+    **documents.PLANNERS, **tax.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")

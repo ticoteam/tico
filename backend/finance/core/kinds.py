@@ -20,7 +20,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match")
+       "feed_match", "tax_jurisdiction_add", "tax_remit")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -35,7 +35,9 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
         "invoice_write_off", "invoice_void", "attach", "feed_match",
         # phase 3: the vendor accounts a card is saved on (bot cards, §8.3)
-        "card_save", "card_unsave")
+        "card_save", "card_unsave",
+        # phase 3: sales tax jurisdictions and remittances (finance/tax.py)
+        "tax_jurisdiction_add", "tax_remit")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -51,7 +53,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
-         "feed_match": (R.AP, R.AR)}
+         "feed_match": (R.AP, R.AR),
+         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -126,6 +129,7 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 # `actions.help` and the hub tools show; the planners accept exactly these fields.
 Field = tuple[str, str, str]
 _LINE = "list[{account_id, amount: minor, description?, tags?: obj}]"
+_INVOICE_LINE = "list[{account_id, amount: minor, description?, tags?: obj, taxable?: bool}]"
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -249,7 +253,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
     "invoice_create": (("customer_id", "str", "a customer contact"), ("number?", "str", ""),
                        ("invoice_date", "day", ""), ("due_date?", "day", "or terms_days"), ("terms_days?", "int", ""),
-                       ("memo?", "str", ""), ("lines", _LINE, "income lines; amounts positive"),
+                       ("memo?", "str", ""),
+                       ("lines", _INVOICE_LINE, "income lines; amounts positive; taxable defaults to true on income "
+                                                "lines of an invoice with a sales tax line"),
                        ("payment_link?", "str", "")),
     "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; returns the document"),),
     "invoice_record_payment": (("invoice_id", "str", ""), ("amount", "minor", "may be part of what is owed"),
@@ -266,6 +272,13 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "feed_match": (("feed_id", "str", "a settled bank row not yet in the books"),
                    ("settlement_ids", "list[str]", "the waiting marked-paid payments it pays (its expected list); "
                     "their amounts add up to the row's")),
+    "tax_jurisdiction_add": (("code", "str", "a short code, such as US-CA"), ("name", "str", "the jurisdiction's name"),
+                             ("authority_id?", "str", "a vendor contact its remittances are paid to"),
+                             ("due_day?", "int", "the day of the month after each quarter its return falls due, 1 to 28")),
+    "tax_remit": (("jurisdiction", "str", "the code of a sales tax jurisdiction"),
+                  ("period", "str", "a quarter, like 2026-Q3"),
+                  ("amount?", "minor", "default: what the quarter still owes"), ("bill_date?", "day", "default today"),
+                  ("due_date?", "day", "the bill's due date"), ("number?", "str", "the authority's reference")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -305,6 +318,8 @@ WORDS: dict[str, str] = {
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
     "attach": "Attach receipts or documents to an entry, a bank or card row, a bill or an invoice.",
     "feed_match": "Link a bank row to the payments marked paid it is the bank side of (the bank moves once).",
+    "tax_jurisdiction_add": "Add a sales tax jurisdiction: its liability account and quarterly due date.",
+    "tax_remit": "Remit a quarter's sales tax: a bill to the tax authority, tagged with the quarter.",
 }
 
 

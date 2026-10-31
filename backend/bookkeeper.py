@@ -103,12 +103,15 @@ def ask_for_view(c, owner):
 
 def ensure(c, onboarding, auth):
     """At start and when a computer enrolls: once Finance is set up, build the Bookkeeper if this install has none,
-    then its default rights and the one view ask. Best effort: a start never fails because of it."""
+    then its default rights, the outside due dates it owns (finance/tax.py seed_dues), and the one view ask. Best
+    effort: a start never fails because of it."""
     from .finance import reads as FR
     if not FR.is_set_up(c):
         return None
     made = onboarding.ensure_bookkeeper(c)
     grant_defaults(c)
+    from .finance import tax as FT
+    FT.seed_dues(c, H.now())
     ask_for_view(c, _owner(c, auth))
     return made
 
