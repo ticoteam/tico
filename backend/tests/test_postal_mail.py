@@ -420,3 +420,21 @@ def test_a_rehearsal_never_orders_a_real_address(api, hq, mail):
                        headers=headers("ana-test", "postal-order-rehearsal"))
     assert refused.status_code == 503 and refused.json()["error"]["code"] == "rehearsal"
     assert mail.orders == [] and not any(path.startswith("/v1/gateway/mail/") for _, path in mail.calls)
+
+
+def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
+    from backend import postal_mail_schema, task_delete
+    letter(api, "441", "bill")
+    deliver(hq, "441")
+    service(api).tick()
+    drain(api)
+    task_id = items(api)["441"]["task_id"]
+    with api.app.state.store.transaction() as c:          # filed public by the build before V2, then deleted
+        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id=?", (task_id,))
+        assert task_delete.delete_tasks(c, [task_id], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
+        c.execute("DELETE FROM mail_private_backfill")
+        H._apply(c, postal_mail_schema.V3)
+    api.app.state.postal_mail.backfill_private()
+    with api.app.state.store.transaction() as c:
+        assert task_delete.restore_tasks(c, [task_id])["restored"] == [task_id]
+    assert (task(api, task_id)["private"], task(api, task_id)["visibility"]) == (1, "private")

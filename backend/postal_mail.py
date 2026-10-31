@@ -500,7 +500,10 @@ class PostalMail:
         with self.store.transaction() as c:
             for (task_id,) in c.execute("SELECT task_id FROM mail_private_backfill").fetchall():
                 row = H.task(c, task_id)
-                if not row:
+                if not row:      # deleted: the trash copy goes private, so a restore brings it back private
+                    c.execute("UPDATE task_trash SET private=1,rows_json=json_set(rows_json,'$.rows.tasks[0].private',"
+                              "1,'$.rows.tasks[0].visibility','private') WHERE task_id=? AND purged_at IS NULL",
+                              (task_id,))
                     continue
                 for each in [row, *H.descendants(c, task_id)]:   # a subtask of a private task is private too
                     if not H.task_private(c, each):
