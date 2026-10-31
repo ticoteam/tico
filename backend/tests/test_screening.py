@@ -356,8 +356,10 @@ def test_an_idea_at_the_hold_line_is_a_persons_task_and_one_under_it_reaches_pro
 # ---------------------------------------------------------------------------------------------- Settings
 def test_owners_and_admins_set_the_modes_and_run_the_test(api):
     view = get(api, "screening")
-    assert view["defaults"] == {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn"}   # observe only
-    assert view["modes"] == {"webhook": "hold", "mail": "warn", "idea": "hold", "watcher": "hold"}     # the fixture's
+    assert view["defaults"] == {"webhook": "warn", "mail": "warn", "idea": "warn", "watcher": "warn",
+                                "document": "warn"}   # observe only
+    assert view["modes"] == {"webhook": "hold", "mail": "warn", "idea": "hold", "watcher": "hold",
+                             "document": "warn"}     # the fixture's
     get(api, "screening", token="cara-test", expected=403)
     assert api.put("/api/v2/screening", json={"webhook": "off"}, headers=headers("cara-test")).status_code == 403
     saved = api.put("/api/v2/screening", json={"webhook": "warn", "mail": "hold"}, headers=headers()).json()

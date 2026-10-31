@@ -685,6 +685,7 @@ class ScreeningModes(Contract):
     mail: Optional[Literal["off", "warn", "hold"]] = None
     idea: Optional[Literal["off", "warn", "hold"]] = None
     watcher: Optional[Literal["off", "warn", "hold"]] = None
+    document: Optional[Literal["off", "warn", "hold"]] = None
     patterns: Optional[bool] = None
     model: Optional[bool] = None
 
