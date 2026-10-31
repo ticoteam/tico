@@ -1471,6 +1471,17 @@ def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
     assert "Our favorite color is teal" in judge.calls[2]["state"]["output"]
 
 
+def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled):
+    from backend.tests.test_org_rules_surfaces import mcp
+    api, _ = ruled
+    made = color_rule(api)
+    error, held = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert not error and held["held"]["outcome"] == "blocked"
+    edit(api, made["id"], {"if_broken": "warn", "version": made["version"]})
+    error, posted = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert not error and posted["rule_warning"] and posted["body"].startswith("Warning:")
+
+
 def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")
