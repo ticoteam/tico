@@ -1510,7 +1510,7 @@ SCHEMAS.update({
                                 "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
                                                                        "none"]},
                                 "grants": items({"type": "object", "additionalProperties": True}),
-                                "rights": items({"type": "string"})})),
+                                "rights": {"type": ["array", "null"], "items": {"type": "string"}}})),
         "private_lines": items(obj({"account_id": "s", "name": "s", "others_see": "s",
                                     "full_detail": {"type": ["array", "null"], "items": {"type": "string"}}})),
         "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
