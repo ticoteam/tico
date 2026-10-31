@@ -434,6 +434,7 @@ async function screens(browser) {
       const overflow = () => page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
       assert.ok(await overflow() <= 0, `${kind} Models: no sideways page scroll`);
       await shot(page, `models-${kind}-${theme}`);
+      if (kind === 'desktop' && theme === 'light') await shot(page, 'limits-desktop-light', page.locator('#settings-limits'));
       await page.evaluate(() => settingsShow('devices'));
       await page.locator('#set-machines [data-subs-pick]').first().waitFor();
       assert.ok(await overflow() <= 0, `${kind} Computers: no sideways page scroll (the table scrolls in its card)`);

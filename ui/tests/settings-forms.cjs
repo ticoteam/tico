@@ -68,8 +68,10 @@ const {unrouted} = require('./support/routes.cjs');
     // Settings: loadSettings and a same-route redraw leave the Add computer and API token fields alone.
     await page.goto('https://tico-ui.test/#/settings/devices');
     const machine = page.locator('#machine-label'), token = page.locator('#settings-token-form input[name=label]');
-    await machine.waitFor(); await token.waitFor();
-    await machine.fill('Build server'); await token.fill('CI script');
+    await token.waitFor();
+    await token.fill('CI script');
+    await page.locator('#machine-add-open').click();
+    await machine.fill('Build server');
     // The same-route redraw starts its own loadSettings; wait for that one to finish too.
     await page.evaluate(async () => {
       await loadSettings();
@@ -80,6 +82,8 @@ const {unrouted} = require('./support/routes.cjs');
     });
     assert.equal(await machine.inputValue(), 'Build server', 'Computer name survives loadSettings');
     assert.equal(await token.inputValue(), 'CI script', 'Token label survives loadSettings');
+    assert.equal(await page.locator('#machine-add-dialog').evaluate(d => d.open), true, 'Add computer stays open through loadSettings');
+    await page.keyboard.press('Escape');
     await page.locator('[data-settings-tab=bots]').click();
     assert.equal(await page.locator('#settings-bots #settings-add-bot').isVisible(), true);
     assert.equal(await page.locator('#settings-devices #settings-add-bot').count(), 0);
@@ -117,25 +121,22 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.evaluate(() => SETTINGS_BOTS_VIEW.selected.size), 0);
     assert.equal(await page.locator('tr[data-settings-bot=helper] .sb-cell-access').getAttribute('aria-label'), 'Access: You: See · Read · Write');
     await page.setViewportSize({width: 1440, height: 900});
-    await page.locator('[data-settings-tab=devices]').click();
+    // Settings > Models > Defaults: the default fallback is on until the owner turns it off; the save says so and
+    // leaves the providers as they are.
+    await page.locator('[data-settings-tab=models]').click();
     await page.locator('#set-prov-save').waitFor();
-    assert.equal(await page.locator('#set-providers [data-model-login]').isVisible(), true);
-    assert.equal(await page.locator('#set-providers a[href="#/credentials"]').isVisible(), true);
-    // The default fallback is on until the owner turns it off; the save says so.
+    assert.equal(await page.locator('#set-prov [data-provider], #set-providers [data-model-login]').count(), 0, 'no provider boxes or sign-in prompts');
     assert.equal(await page.locator('#set-prov [data-provider-fallback]').isChecked(), true);
     await page.locator('#set-prov [data-provider-fallback]').uncheck();
-    await page.locator('#set-prov [data-provider]').uncheck();
+    const saves = () => writes.filter(row => row.p === '/api/v2/providers').length;
     await page.locator('#set-prov-save').click();
-    await page.waitForFunction(() => !S.config.providers_configured);
-    assert.deepEqual(writes.find(row => row.p === '/api/v2/providers').body.enabled, []);
+    for (let i = 0; i < 100 && !saves(); i++) await new Promise(done => setTimeout(done, 50));
     assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
+    assert.equal('preset' in writes.find(row => row.p === '/api/v2/providers').body, false);
     // The check-model order was not edited, so the save leaves it alone instead of re-checking it.
     assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers').body, false);
-    // With nothing ticked it says bots wait for a provider (the models choices above have wording of their own).
-    await page.locator('#set-providers .muted', {hasText: 'Bots wait until you add an AI provider'}).waitFor();
-    assert.match(await page.locator('#set-providers').innerText(), /Bots wait until you add an AI provider/);
     // Edited, the order is sent as typed.
-    const saves = () => writes.filter(row => row.p === '/api/v2/providers').length, before = saves();
+    const before = saves();
     await page.locator('#set-prov [data-provider-check]').fill('grok, codex');
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && saves() === before; i++) await new Promise(done => setTimeout(done, 50));
@@ -144,15 +145,15 @@ const {unrouted} = require('./support/routes.cjs');
     await page.locator('#people-add').waitFor();
     await page.locator('[data-settings-tab=devices]').click();
     await page.locator('#set-machines .machine-name[data-computer-open=computer-1]').click();
-    page.once('dialog', confirm => confirm.accept());
     await page.locator('[data-computer-remove]').click();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
     await page.waitForFunction(() => !!SETTINGS_DATA.machines[0].revoked_at);
     assert.ok(writes.some(row => row.p === '/api/v2/computers/computer-1/revoke'));
     // The presence read can expose revoked_at before the action's remaining Settings reads finish.
-    await page.locator('#machine-enroll-status code', {hasText: 'docker compose'}).waitFor();
-    assert.match(await page.locator('#machine-enroll-status').innerText(), /docker compose/);
+    await page.locator('#machine-note code', {hasText: 'docker compose'}).waitFor();
+    assert.match(await page.locator('#machine-note').innerText(), /docker compose/);
     await page.locator('#set-machines .machine-card').waitFor({state: 'detached'});
-    const showRevoked = page.getByRole('checkbox', {name: 'Show revoked computers (1)', exact: true});
+    const showRevoked = page.getByRole('checkbox', {name: 'Show revoked (1)', exact: true});
     await showRevoked.check();
     assert.match(await page.locator('#set-machines .machine-card').innerText(), /Build server[\s\S]*revoked/);
     await page.evaluate(() => loadSettings());

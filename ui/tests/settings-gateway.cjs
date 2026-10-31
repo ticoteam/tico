@@ -1,4 +1,4 @@
-// Settings > Computers > Models' Tico AI Gateway card against a fake server: the key is typed once, sent once and never
+// Settings > Models > Tico Gateway (its Advanced part) against a fake server: the key is typed once, sent once and never
 // shown again (only its preview); the Tico models appear only while the connection has a key, by their Tico names
 // with what runs underneath; the Gateway's 80% warning, "Gateway cap reached" and a revoked key read plainly to the
 // owner; members see only whether it is connected. An install invited by its install command says it connected
@@ -95,24 +95,25 @@ const {unrouted} = require('./support/routes.cjs');
       return json(unrouted(p));
     });
     const card = page.locator('#set-gateway');
+    // The key, address and state sit behind Advanced; a redraw keeps it open.
     const open = async () => {
       await page.evaluate(() => loadSettings());
-      await page.locator('[data-settings-tab=devices]').click();
+      await page.locator('[data-settings-tab=models]').click();
       await page.evaluate(() => renderSettingsProviders());
-      await card.waitFor();
+      await page.locator('#set-gateway-card [data-gateway-advanced]').evaluate(el => { el.open = true; });
     };
     const modelOptions = () => page.locator('[data-provider-model] option').evaluateAll(
       options => options.map(o => ({value: o.value, text: o.textContent, title: o.title})));
     await page.goto('https://tico-ui.test/#/settings');
     await open();
     // Not connected: no Tico models, and the gateway is never a provider tick box of its own.
-    assert.equal(await card.locator('[data-gateway-state]').getAttribute('data-gateway-state'), 'none');
+    assert.equal(await page.locator('#set-gateway-card [data-gateway-state]').getAttribute('data-gateway-state'), 'none');
     assert.equal(await page.locator('[data-provider][value=tico]').count(), 0, 'the gateway follows its key, not a tick box');
     assert.ok(!(await modelOptions()).some(o => o.value.startsWith('tico-')), 'no Tico models while not connected');
     // Connect: the key goes once in the PUT, the field empties, and the page never shows it again.
     await card.locator('[data-gateway-key]').fill(KEY);
     await card.locator('[data-gateway-save]').click();
-    await page.locator('#set-gateway [data-gateway-state=connected]').waitFor();
+    await page.locator('#set-gateway-card [data-gateway-state=connected]').waitFor();
     const put = sent.find(row => row.method === 'PUT');
     assert.deepEqual(put.body, {url: '', expected_revision: 0, key: KEY}, 'the key is sent once, with the revision shown');
     assert.equal(await card.locator('[data-gateway-key]').inputValue(), '', 'the key field is empty after save');
@@ -160,12 +161,12 @@ const {unrouted} = require('./support/routes.cjs');
     const says = async (state, message, used, pill) => {
       gateway = {...gateway, state, message, used, working: !['revoked', 'unknown'].includes(state)};
       await open();
-      assert.equal(await card.locator('.pill').innerText(), pill, `${state} badge`);
+      assert.equal(await page.locator('#set-gateway-card [data-gateway-line]').innerText(), pill, `${state} status`);
       assert.equal(await card.locator('[data-gateway-message]').innerText(), message, `${state} message`);
     };
     await says('warning', 'This key has used 80% of its monthly Gateway cap. Bots stop at 100% until next month.', 0.8, 'Connected');
-    await says('cap_reached', 'Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap.', 1, 'Gateway cap reached');
-    await says('not_ready', "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait until Tico turns them on.", null, 'Not ready');
+    await says('cap_reached', 'Gateway cap reached: this key has used its monthly cap. Bots on Tico models stop until next month, or until Tico raises the cap.', 1, 'Cap reached');
+    await says('not_ready', "Not ready: the Gateway at this URL doesn't serve Tico models yet. Check the Gateway URL, or wait until Tico turns them on.", null, 'Connected');
     await says('revoked', 'Not working: Tico has revoked this gateway key. Ask Tico for a new key and save it here.', null, 'Not working');
     await card.locator('[data-gateway-check]').click();
     await page.waitForFunction(() => !document.querySelector('#set-gateway [data-gateway-check]')?.disabled);
@@ -181,13 +182,14 @@ const {unrouted} = require('./support/routes.cjs');
     // Clear: the key goes, and so do the Tico models.
     await open();
     await card.locator('[data-gateway-clear]').click();
-    await page.locator('#set-gateway [data-gateway-state=none]').waitFor();
+    await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
+    await page.locator('#set-gateway-card [data-gateway-state=none]').waitFor();
     assert.ok(!(await modelOptions()).some(o => o.value.startsWith('tico-')), 'Tico models go with the key');
     // An automatic key: the card says so, and nobody is asked for a code or a key.
     gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,
       message: 'Connected.', automatic: true};
     await open();
-    assert.equal(await card.locator('[data-gateway-automatic]').innerText(), 'Tico AI Gateway: connected automatically');
+    assert.equal(await card.locator('[data-gateway-automatic]').innerText(), 'Connected automatically');
     assert.ok(!/invite|code/i.test(await card.innerText()), 'no invite code is asked for');
     // Cleared on purpose, it stays off until the owner turns it back on.
     gateway = {connected: false, source: '', revision: gateway.revision + 1, state: 'none', working: false,

@@ -154,48 +154,63 @@ function providersGatewayCardHTML(view, gateway, owner) {
       <label class="models-gw-toggle"><input type="checkbox" class="people-switch" data-gateway-toggle${providersGatewayOn(view) ? ' checked' : ''}${owner ? '' : ' disabled'}>
         <span>Use when a computer has no subscription, or a plan runs out</span></label></div>
     ${gateway ? `<details class="models-adv" data-gateway-advanced><summary>Advanced</summary>
-      <p class="models-gw-line"><span class="dot ${tone === 'ok' ? 'ok' : 'failed'}" aria-hidden="true"></span><span data-gateway-line>${esc(line)}</span>${settingsIsAdmin() ? ' · <a href="#/settings/gateway">Picks and services</a>' : ''}</p>
+      <p class="models-gw-line" data-gateway-state="${esc(gateway.state || (gateway.connected ? 'connected' : 'none'))}"><span class="dot ${tone === 'ok' ? 'ok' : 'failed'}" aria-hidden="true"></span><span data-gateway-line>${esc(line)}</span>${settingsIsAdmin() ? ' · <a href="#/settings/gateway">Picks and services</a>' : ''}</p>
       ${gatewayHTML(gateway, owner)}</details>` : ''}`;
 }
-async function renderSettingsProviders() {
+// The Gateway toggle saves the models preset at once, with the providers and model as they are.
+function providersToggleWire() {
+  const card = $('#set-gateway-card'), toggle = card?.querySelector('[data-gateway-toggle]');
+  if (!toggle) return;
+  toggle.onchange = async () => {
+    const view = SETTINGS_PROVIDERS_VIEW || {};   // the latest record, so a Defaults save in between keeps its revision
+    toggle.disabled = true;
+    try {
+      const saved = await put('/v2/providers', {enabled: view.enabled || [], model: view.default?.model || '', expected_revision: view.revision || 0,
+        preset: providersPresetFor(view, toggle.checked)});
+      SETTINGS_PROVIDERS_VIEW = saved;
+      toast(toggle.checked ? 'Gateway on' : 'Gateway off');
+    } catch (error) { toast(error.message, true); toggle.checked = !toggle.checked; }
+    await renderSettingsProviders(true);
+  };
+}
+// A poll leaves a card alone while someone types in it; `gatewaySaved` redraws the Gateway card after its own save.
+async function renderSettingsProviders(gatewaySaved = false) {
   const el = $('#set-providers'), card = $('#set-gateway-card');
   if (!el || !card) return;
-  if (formBusy(el) || formBusy(card)) return;
+  const drawCard = gatewaySaved || !formBusy(card), drawDefaults = !formBusy(el);
+  if (!drawCard && !drawDefaults) return;
   const owner = S.me?.role === 'owner';
   try {
     const [view, gateway] = await Promise.all([providersViewLoad(), get('/v2/providers/gateway').catch(() => null)]);
     if (!el.isConnected) return;
-    const open = !!card.querySelector('[data-gateway-advanced]')?.open;
-    card.innerHTML = providersGatewayCardHTML(view, gateway, owner);
-    if (open) card.querySelector('[data-gateway-advanced]').open = true;
+    if (drawCard) {
+      const open = !!card.querySelector('[data-gateway-advanced]')?.open;
+      card.innerHTML = providersGatewayCardHTML(view, gateway, owner);
+      if (open) card.querySelector('[data-gateway-advanced]').open = true;
+      if (gateway) gatewayWire(gateway);
+    }
+    settingsReveal('#settings-models');
+    if (drawCard) providersToggleWire();
+    if (!drawDefaults) return;
     el.innerHTML = providersDefaultsHTML(view, owner);
     const form = $('#set-prov');
     providersWire(form, view, SETTINGS_DATA.models);
-    if (gateway) gatewayWire(gateway);
-    settingsReveal('#settings-models');
-    const toggle = card.querySelector('[data-gateway-toggle]');
-    toggle.onchange = async () => {
-      toggle.disabled = true;
-      try {
-        const saved = await put('/v2/providers', {enabled: view.enabled || [], model: view.default?.model || '', expected_revision: view.revision || 0,
-          preset: providersPresetFor(view, toggle.checked)});
-        SETTINGS_PROVIDERS_VIEW = saved;
-        toast(toggle.checked ? 'Gateway on' : 'Gateway off');
-      } catch (error) { toast(error.message, true); toggle.checked = !toggle.checked; }
-      await renderSettingsProviders();
-    };
     if (owner) form.onsubmit = async event => {
       event.preventDefault();
       const save = $('#set-prov-save'), status = $('#set-prov-status');
       // No preset here (the Gateway toggle is its own save), and the providers stay as the company has them.
       const chosen = {...providersCollect(form), enabled: view.enabled || []};
       delete chosen.preset;
+      const sent = [...form.querySelectorAll('input')].map(input => [input, input.value]);
       save.disabled = true; status.textContent = 'Saving…';
       try {
         const saved = await providersSave(view, chosen);
         applyConfig({...S.config, providers_configured: !!saved.enabled?.length, default_runtime: saved.default?.runtime || ''});
         SETTINGS_DATA.enabledProviders = saved.enabled; SETTINGS_DATA.defaultModel = saved.default?.model || '';
-        form.querySelectorAll('input').forEach(input => { input.defaultValue = input.value; });
+        // What was sent is now saved; anything typed while it was sending stays unsaved, and the redraw waits for it.
+        for (const [input, value] of sent) input.defaultValue = value;
+        Object.assign(view, saved); SETTINGS_PROVIDERS_VIEW = view;
+        save.disabled = false; status.textContent = '';
         toast('Saved');
         await renderSettingsProviders();
       } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; save.disabled = false; }
@@ -233,7 +248,7 @@ function gatewayWire(gateway) {
   const status = root.querySelector('[data-gateway-status]');
   const run = async (button, busy, work, done) => {
     button.disabled = true; if (status) status.textContent = busy;
-    try { const shown = await work(); toast(done(shown), shown?.working === false); await loadSettings(); await renderSettingsProviders(); }
+    try { const shown = await work(); toast(done(shown), shown?.working === false); await loadSettings(); await renderSettingsProviders(true); }
     catch (error) { if (status) status.innerHTML = `<span class="err">${esc(error.message)}</span>`; else toast(error.message, true); button.disabled = false; }
   };
   const save = root.querySelector('[data-gateway-save]');
