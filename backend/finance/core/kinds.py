@@ -20,7 +20,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match", "tax_jurisdiction_add", "tax_remit")
+       "feed_match", "tax_jurisdiction_add", "tax_remit", "import_raw_totals")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -37,7 +37,9 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 3: the vendor accounts a card is saved on (bot cards, §8.3)
         "card_save", "card_unsave",
         # phase 3: sales tax jurisdictions and remittances (finance/tax.py)
-        "tax_jurisdiction_add", "tax_remit")
+        "tax_jurisdiction_add", "tax_remit",
+        # history imports: a spreadsheet's totals as raw totals (finance/raw_totals.py)
+        "import_raw_totals")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -54,7 +56,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR),
-         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP}
+         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -108,13 +110,15 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 
 def default_gate(org: Org, actor: str, kind: str) -> Gate:
-    """The defaults that are not editable rules: closing or reopening a period asks the owner (unless the owner asks,
-    §6.4 rule 6), a bot settling a cut-off card creation (card_resolve) asks a finance admin, and so does a bot
-    recording where its card is saved (§8.3: a person saves the card on the vendor's account). The other §6.4
-    defaults are seeded gate rules (gates.DEFAULTS)."""
+    """The defaults that are not editable rules: closing or reopening a period, and importing history, asks the
+    owner (unless the owner asks, §6.4 rule 6), a bot settling a cut-off card creation (card_resolve) asks a
+    finance admin, and so does a bot recording where its card is saved (§8.3: a person saves the card on the
+    vendor's account). The other §6.4 defaults are seeded gate rules (gates.DEFAULTS)."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
+    if kind == "import_raw_totals" and not owner and actor != SYSTEM:
+        return Gate("needs_approval", "owner", "default:raw-import")
     if actor in org.bots and kind == "card_resolve":
         # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
@@ -279,6 +283,11 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                   ("period", "str", "a quarter, like 2026-Q3"),
                   ("amount?", "minor", "default: what the quarter still owes"), ("bill_date?", "day", "default today"),
                   ("due_date?", "day", "the bill's due date"), ("number?", "str", "the authority's reference")),
+    "import_raw_totals": (
+        ("csv", "str", "a CSV with a header: month (YYYY-MM), line, amount (whole cents), and optionally team"),
+        ("basis", "cash|accrual", "the basis the figures were reported on"),
+        ("mapping", "obj", "each sheet line name to an account id or code"),
+        ("source_name?", "str", "what the file was called, for the record")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -320,6 +329,7 @@ WORDS: dict[str, str] = {
     "feed_match": "Link a bank row to the payments marked paid it is the bank side of (the bank moves once).",
     "tax_jurisdiction_add": "Add a sales tax jurisdiction: its liability account and quarterly due date.",
     "tax_remit": "Remit a quarter's sales tax: a bill to the tax authority, tagged with the quarter.",
+    "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
 }
 
 

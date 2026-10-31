@@ -32,6 +32,7 @@ from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import ap as SAP
+from .store import raw_totals as SR
 
 UNATTRIBUTED = "Unattributed"
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
@@ -321,7 +322,8 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                              "state": _column_state(p, q, today)} for p, q in buckets],
                 "rows": rows, "income": totals["income"], "expense": totals["expense"],
                 "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
-                "excluded": sup.excluded, "view_version": s.view.version}
+                "excluded": sup.excluded, "view_version": s.view.version,
+                "imported": tab.imported_months(c, s.ctx, s.view, a.isoformat()[:7], z.isoformat()[:7], basis)}
     if view == "expenses":
         out["teammates"] = _side_panel(s, spent, tops, versions, a, z, f)
     return out
@@ -644,7 +646,9 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     return {"start": a.isoformat(), "end": z.isoformat(), "period": period,
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
                         for p, q in buckets],
-            "budgets": rows, "more": len(seen) > most, "view_version": s.view.version}
+            "budgets": rows, "more": len(seen) > most, "view_version": s.view.version,
+            "imported": tab.imported_months(c, s.ctx, s.view, a.isoformat()[:7], z.isoformat()[:7],
+                                             s.ctx.book.basis)}
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
@@ -1289,6 +1293,21 @@ def _covers(ctx: Ctx, viewer: str, payload: Mapping[str, object]) -> bool | None
         seen.append(sees_scope(ctx, viewer, str(one.get("account_id") or ""), str(tagged.get("team") or ""),
                                str(tagged.get("teammate") or "")))
     return all(seen) if seen else None
+
+
+def raw_imports(c: sqlite3.Connection, viewer: str, *, limit: int = 50, at: str | None = None) -> Row:
+    """The history imports (spec §4.1), newest first: each file's basis, name, months and rows, and how many of its
+    months still stand. Only a viewer who sees everything gets the list: a month's raw totals are company-wide."""
+    s = _open(c, viewer, at)
+    if not s.view.everything:
+        return {"imports": [], "more": False}
+    most = max(1, min(int(limit), 200))
+    found = SR.batches(c, s.ctx.book.id, most + 1)
+    shown = [{"batch_id": str(r["id"]), "basis": str(r["basis"]), "source_name": str(r["source_name"]),
+              "months": int(r["periods"]), "live_months": int(r["live_months"]),
+              "live": int(r["live_months"]) == int(r["periods"]), "rows": int(r["row_count"]),
+              "created_at": str(r["created_at"]), "created_by": str(r["created_by"])} for r in found[:most]]
+    return {"imports": shown, "more": len(found) > most}
 
 
 def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, object] | None:

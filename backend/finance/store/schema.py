@@ -337,6 +337,12 @@ CREATE TABLE IF NOT EXISTS fin_private_lines (
   account_id TEXT PRIMARY KEY REFERENCES fin_accounts(id),
   others_see TEXT NOT NULL DEFAULT 'totals' CHECK (others_see IN ('totals','hidden')),
   full_detail_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_raw_imports (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), content_hash TEXT NOT NULL,
+  basis TEXT NOT NULL CHECK (basis IN ('cash','accrual')), source_name TEXT NOT NULL DEFAULT '',
+  periods INTEGER NOT NULL CHECK (periods > 0), row_count INTEGER NOT NULL, gross BIGINT NOT NULL,
+  action_id TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 """
 
 INDEXES = """
@@ -344,6 +350,7 @@ CREATE INDEX IF NOT EXISTS fin_accounts_book ON fin_accounts(book_id, type);
 CREATE INDEX IF NOT EXISTS fin_entries_date ON fin_entries(book_id, entry_date);
 CREATE INDEX IF NOT EXISTS fin_entries_source ON fin_entries(source, source_id);
 CREATE INDEX IF NOT EXISTS fin_entries_reverses ON fin_entries(reverses_id);
+CREATE INDEX IF NOT EXISTS fin_raw_imports_hash ON fin_raw_imports(book_id, content_hash);
 CREATE INDEX IF NOT EXISTS fin_lines_entry ON fin_lines(entry_id);
 CREATE INDEX IF NOT EXISTS fin_lines_account ON fin_lines(account_id, entry_date);
 CREATE INDEX IF NOT EXISTS fin_lines_contact ON fin_lines(contact_id, entry_date);
@@ -575,6 +582,11 @@ def phase2(c: sqlite3.Connection) -> None:
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def raw_import(c: sqlite3.Connection) -> None:
+    """Cloud migration 71: the history imports' table (spec §4.1). The same statements as `create`."""
+    create(c)
 
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:
