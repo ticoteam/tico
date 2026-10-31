@@ -482,10 +482,16 @@ def read_refused(store, auth, who, path, query):
     return True
 
 
+def _disclaimer(line):
+    """Whether a line of Counsel's reply is only its NOT_ADVICE line (markup and quote marks around it aside)."""
+    return normal(line).strip(" *_>`\"'-") == normal(NOT_ADVICE)
+
+
 def turn_done(c, attempt, outcome, task_id, text):
     """Counsel's turn on a document's read task ended (backend/execution.py complete). A completed turn finishes the
-    read it was allowed to publish from (attempt_read): the task is marked done with the turn's last line, so it never
-    sits in doing after the work. A run that carried another task copies nothing and finishes nothing. A failed,
+    read it was allowed to publish from (attempt_read): the task is marked done with the turn's last line other than
+    NOT_ADVICE, so it never sits in doing after the work. A run that carried another task copies nothing and finishes
+    nothing. A failed,
     stopped or cancelled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
     finished is left as it is."""
     if attempt["bot"] != SLUG or outcome != "completed" or not task_id:
@@ -496,7 +502,7 @@ def turn_done(c, attempt, outcome, task_id, text):
     row = H.task(c, task_id)
     if not row or row["owner"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return
-    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip() and not _disclaimer(line)]
     H.task_update(c, "bot:" + SLUG, task_id, status="done", note=(lines[-1][:500] if lines else None))
 
 
