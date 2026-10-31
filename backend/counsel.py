@@ -1,21 +1,25 @@
 """Counsel: the built-in helper that reads a document someone adds to Rules and suggests the obligations that bind us,
 and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
 
-- Adding a document (`POST /api/v2/rules/read`) reads it first, outside any write: a file's text, or a public link
-  fetched with clients/doc_fetch.py with no credential (`env={}`), either held to DOC_CHARS characters. The text is
-  screened for prompt injection (backend/screening.py, source `document`): at `warn` the task starts with the warning
-  line; at `hold` Counsel is not given the text at all. Then the write saves a link's text as a Files version (so each
-  cite points at a version that later changes never alter), records the version in `rule_reads`, and opens one private
-  task for Counsel with the document fenced as untrusted data. A document cut at DOC_CHARS is marked truncated.
-- Counsel has no credentials and sends nothing. It reads its task and the rules in force, and writes suggestions through
-  `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel cites only the exact (file, version) it was asked
-  to read, and the quote must appear in that version's normalized text. A quote that does not is dropped (the response
-  says so, and `rules.quote_dropped` counts it), never stored. Only Counsel and a person cite; no other bot can.
+- Adding a document (`POST /api/v2/rules/read`) reads it first, outside any write: a file's text (a PDF is read as a
+  link's PDF is: clients/doc_fetch.py `pdf_to_text`), or a public link fetched with clients/doc_fetch.py with no
+  credential (`env={}`), either held to DOC_CHARS characters. The text is screened for prompt injection
+  (backend/screening.py, source `document`): at `warn` the task starts with the warning line; at `hold` Counsel is not
+  given the text at all. Then the write opens one private task for Counsel, its body naming the file and version and
+  holding the document fenced as untrusted data, and records the version in `rule_reads`. A link is saved as a Files
+  version attached to that task, one file per link and requester, so a later change never alters an earlier cite and a
+  teammate who cannot read the task cannot read the text. A document cut at DOC_CHARS is marked truncated.
+- Counsel has no credentials and sends nothing: its tool list is `clients/hubtools.py` COUNSEL_TOOLS. It reads its task and
+  the rules in force, and writes suggestions through `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel
+  cites only the exact (file, version) it was asked to read, named in the cite, and the quote must appear in that
+  version's normalized text. A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts
+  it), never stored. Only Counsel and a person cite; no other bot can.
 - `POST /api/v2/rules/ask` answers "can I...?" with the active rules that share words with the question, at once, and
   opens a private Counsel task for the full answer. Every answer carries the one line that it is not legal advice.
 
 Counsel is a helper (backend/assistant.py `HELPERS`): built in, off the org chart, seeded by onboarding like the
-Librarian (templates/catalog/counsel). Only the owner can turn it on or off.
+Librarian (templates/catalog/counsel). Its tasks are private by default (backend/hubdb.py PRIVATE_BY_TEMPLATE). Only the
+owner can turn it on or off.
 """
 import hashlib
 import re
@@ -104,16 +108,32 @@ def fence(text):
     return f"<<UNTRUSTED DOCUMENT {token}>>\n{text}\n<<END UNTRUSTED DOCUMENT {token}>>"
 
 
+def _version(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
 def document(c, blobs, file_id, number):
-    """One version's text as Counsel reads it: the whole text up to DOC_CHARS, and whether it was cut. (None, False)
-    when the version does not exist or is of a type Tico reads no text from."""
+    """One version's text as Counsel reads it: the whole text up to DOC_CHARS, and whether it was cut. A PDF is read the
+    way a link's PDF is (doc_fetch.pdf_to_text); a PDF that cannot be read is a 422 that says why. (None, False) when the
+    version does not exist or is of a type Tico reads no text from."""
     row = c.execute("SELECT v.mime, b.digest FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id "
                     "WHERE v.file_id=? AND v.version=?", (file_id, number)).fetchone()
     if not row:
         return None, False
     data = blobs.get(row["digest"])
-    text = file_library.extract(row["mime"], data, full=True)
-    if not text:
+    if row["mime"] == "application/pdf":
+        if len(data) > doc_fetch.MAX_BYTES:
+            raise Problem("unreadable", "That PDF is larger than 5 MB; Counsel reads a PDF up to that size", 422)
+        try:
+            text = doc_fetch.pdf_to_text(data)
+        except doc_fetch.FetchError as exc:
+            raise Problem("unreadable", exc.message, 422) from exc
+    else:
+        text = file_library.extract(row["mime"], data, full=True)
+    if not text or not text.strip():
         return None, False
     return text[:DOC_CHARS], len(text) > DOC_CHARS or len(data) > file_library.READ_MAX
 
@@ -122,13 +142,23 @@ def version_text(c, blobs, file_id, number):
     return document(c, blobs, file_id, number)[0]
 
 
+def _words(text):
+    return re.findall(r"[a-z0-9]+", unicodedata.normalize("NFKC", str(text or "")).casefold())
+
+
+def named(source_name, credential_name):
+    """Whether the From's words appear whole and in order in a credential's name: "Meta" names "Meta Ads", never "Metabase"."""
+    want, have = _words(source_name), _words(credential_name)
+    return bool(want) and any(have[i:i + len(want)] == want for i in range(len(have) - len(want) + 1))
+
+
 def suggested_who(c, source_name):
     """The departments of the bots granted a credential whose name carries this From (backend/credentials.py). Empty
-    lists when none is granted: Counsel then leaves Who to the owner."""
-    name = str(source_name or "").strip().lower()
-    if not name:
+    lists when none is granted: Counsel then leaves Who to the owner. A credential has no vendor field, so the match is
+    on the name's words (`named`)."""
+    if not str(source_name or "").strip():
         return {"groups": [], "bots": []}
-    ids = [r["id"] for r in c.execute("SELECT id FROM credentials WHERE instr(lower(name), ?) > 0", (name,))]
+    ids = [r["id"] for r in c.execute("SELECT id, name FROM credentials") if named(source_name, r["name"])]
     if not ids:
         return {"groups": [], "bots": []}
     marks = ",".join("?" * len(ids))
@@ -161,20 +191,39 @@ def _source(c, who, body):
     return O.add_source(c, who, {"name": body.source_id, "kind": body.kind})
 
 
-def _store_fetched(c, blobs, files, url, fetched):
-    """The exact text a link was fetched as, saved as a Files version of Counsel's (the cite's target)."""
-    data = fetched["text"].encode("utf-8")
-    digest = hashlib.sha256(data).hexdigest()
+def _link_plan(c, who, url, text):
+    """Where a link's text is saved, decided before the task is written (the task names the file and version): a new
+    file, the file's next version, or, when the text is what the file already holds, its current version. A link's file
+    is its requester's (one per link and person), so it is readable exactly as the requester's task is."""
+    digest = hashlib.sha256(text.encode("utf-8")).hexdigest()
+    identity = "rule-doc:" + hashlib.sha256(f"{url}\n{who.actor}".encode("utf-8")).hexdigest()[:24]
+    row = c.execute("SELECT * FROM bot_files WHERE bot=? AND identity=?", (SLUG, identity)).fetchone()
+    if not row:
+        return {"identity": identity, "digest": digest, "row": None, "id": F.new_id(), "number": 1, "changed": True}
+    held = c.execute("SELECT COALESCE(v.source_digest, b.digest) AS digest FROM bot_file_versions v "
+                     "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?",
+                     (row["id"], row["current_version"])).fetchone()
+    changed = not held or held["digest"] != digest
+    return {"identity": identity, "digest": digest, "row": row, "id": row["id"],
+            "number": row["current_version"] + (1 if changed else 0), "changed": changed}
+
+
+def _store_link(c, blobs, files, plan, task_id, text, title):
+    """Save a link's text as the planned version: the file starts on the read task, or keeps the task it started on."""
+    if not plan["changed"]:
+        return
+    data = text.encode("utf-8")
     blobs.put(data, "text/plain; charset=utf-8")
-    blob = register(c, Identity("bot:" + SLUG, "bot"), digest, len(data), "document.txt", "text/plain")
-    identity = "rule-doc:" + hashlib.sha256(url.encode("utf-8")).hexdigest()[:24]
-    title = (fetched.get("title") or url)[:300]
-    row, _, _ = files.add_version(c, bot=SLUG, actor="bot:" + SLUG, scope="bot", task=None, conversation=None,
-                                  attempt="", identity=identity, title=title, name="document.txt",
-                                  mime="text/plain", blob_id=blob["id"], digest=digest, size=len(data),
-                                  source_digest=digest)
-    file_library.index(c, row["id"], row["current_version"], row["title"], fetched["text"])
-    return row["id"], row["current_version"], row["title"]
+    blob = register(c, Identity("bot:" + SLUG, "bot"), plan["digest"], len(data), "document.txt", "text/plain")
+    row = plan["row"]
+    scope, task = (row["scope"], row["task_id"]) if row else ("task:" + task_id, task_id)
+    saved, _, _ = files.add_version(c, bot=SLUG, actor="bot:" + SLUG, scope=scope, task=task, conversation=None,
+                                    attempt="", identity=plan["identity"], title=title, name="document.txt",
+                                    mime="text/plain", blob_id=blob["id"], digest=plan["digest"], size=len(data),
+                                    source_digest=plan["digest"], fid=plan["id"])
+    if saved["current_version"] != plan["number"]:
+        raise Problem("conflict", "The document changed while it was added; add it again", 409)
+    file_library.index(c, saved["id"], saved["current_version"], saved["title"], text)
 
 
 def _task(c, who, title, text, labels=()):
@@ -202,8 +251,8 @@ def prepare(store, auth, who, blobs, body):
             number = row["current_version"]
             text, cut = document(c, blobs, row["id"], number)
         if text is None:
-            raise Problem("unreadable", "Counsel reads text, Markdown, HTML and CSV; this file has no text Tico can read",
-                          422)
+            raise Problem("unreadable", "Counsel reads text, Markdown, HTML, CSV and PDF; this file has no text Tico can "
+                          "read", 422)
         found = {"file_id": row["id"], "number": number, "title": row["title"], "text": text, "truncated": cut,
                  "fetched": None}
     else:
@@ -221,8 +270,9 @@ def prepare(store, auth, who, blobs, body):
 
 
 def read(c, auth, who, files, blobs, body, found):
-    """Add a document: a Files version (a link's), its rule_reads row, and one private Counsel task. `found` is what
-    prepare read and screened before this write; a file must still be at the version that was read."""
+    """Add a document: its one private Counsel task, the file version it names (a link's text is saved as one), and its
+    rule_reads row. `found` is what prepare read and screened before this write; a file must still be at the version
+    that was read. The page's own title is untrusted: it goes inside the fence, never on a line of its own."""
     H._writer(c, who.actor)
     if not available(c):
         raise Problem("counsel_off", "The " + NAME + " is off", 409)
@@ -230,16 +280,17 @@ def read(c, auth, who, files, blobs, body, found):
         raise Problem("idempotency", "This document was not read for this request; send it again", 409)
     note = str(body.note or "").strip()
     source = _source(c, who, body)
+    text, cut, verdict, title = found["text"], found["truncated"], found["verdict"], found["title"]
     if found["file_id"]:
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
         if not row or not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
         if row["current_version"] != found["number"]:
             raise Problem("conflict", "The document changed while it was added; add it again", 409)
-        file_id, number, title = found["file_id"], found["number"], found["title"]
+        file_id, number, plan = found["file_id"], found["number"], None
     else:
-        file_id, number, title = _store_fetched(c, blobs, files, body.url, found["fetched"])
-    text, cut, verdict = found["text"], found["truncated"], found["verdict"]
+        plan = _link_plan(c, who, body.url, text)
+        file_id, number = plan["id"], plan["number"]
     who_hint = suggested_who(c, source["name"])
     hint = (f"Departments holding this From's access: {', '.join(who_hint['groups'])}" if who_hint["groups"]
             else "Departments holding this From's access: none granted (leave Who empty)")
@@ -258,13 +309,15 @@ def read(c, auth, who, files, blobs, body, found):
     elif len(text) <= TEXT_INLINE_MAX:
         lines += ["", fence(f"Title: {title}\n\n{text}")]
     else:
-        lines += ["", f"The document is {len(text)} characters, too long for this task. Its title and text are not here.",
-                  "Read the whole of this version with `hub file read " + file_id + " --version " + str(number) + "` and",
-                  "work from that. The title, read from the document, is:", fence(title)]
+        lines += ["", f"The document is {len(text)} characters, too long for this task. Its text is not here.",
+                  f"Read the whole of this version with `hub file read {file_id} --version {number}` and work from that.",
+                  "", fence(f"Title: {title}")]
     if verdict["action"] == "warn":
         lines = [screening.warning_line(verdict), "", *lines]
     labels = [*(["truncated"] if cut else []), *(["held"] if verdict["action"] == "hold" else [])]
-    task = _task(c, who, f"Read: {title}"[:180] + f" (v{number})", "\n".join(lines), labels=labels)
+    task = _task(c, who, f"Read document (file {file_id} v{number})", "\n".join(lines), labels=labels)
+    if plan:
+        _store_link(c, blobs, files, plan, task["id"], text, title)
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
                                                           "task": task["id"], "bot": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
@@ -278,29 +331,24 @@ def read(c, auth, who, files, blobs, body, found):
 
 
 def check_cite(c, auth, who, blobs, cite):
-    """A suggestion's cite, checked. Counsel cites only the exact (file, version) it was asked to read (`rule_reads`); a
-    person cites a file they can read (F.file_visible); any other bot cites nothing. Returns the cite to store, or None
-    when the quote is not in that version's text (the drop is counted as an event and no rule is written)."""
+    """A suggestion's cite, checked. Counsel cites only the (file, version) it was asked to read (`rule_reads`), and it
+    must name that version: a cite with no version, or another one, is a 404 before any quote is checked. A person cites a
+    file they can read (F.file_visible); any other bot cites nothing. Returns the cite to store, or None when the quote is
+    not in that version's text (the drop is counted as an event and no rule is written)."""
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite["file_id"],)).fetchone()
     if who.role == "bot" and H.actor_id(who.actor) == SLUG:
         asked = [r["version"] for r in c.execute(
             "SELECT version FROM rule_reads WHERE file_id=? ORDER BY version", (cite["file_id"],))]
-        if not row or not asked:
-            raise Problem("not_found", "Counsel cites only a document someone asked it to read", 404)
-        number = cite.get("version")
-        if number is None:
-            if len(asked) > 1:
-                raise Problem("validation", "Say the version to cite: the document was read in more than one version", 422)
-            number = asked[0]
-        if int(number) not in asked:
-            raise Problem("not_found", f"Counsel was not asked to read {row['id']} version {number}", 404)
-        number = int(number)
+        number = _version(cite.get("version"))
+        if not row or number not in asked:
+            raise Problem("not_found", "Counsel cites only the version of a document it was asked to read, and names it: "
+                          "use the version its task gives", 404)
     elif who.role == "bot":
         raise Problem("forbidden", "Only Counsel cites a document; a bot's rule is written without a quote", 403)
     else:
         if not row or not F.file_visible(c, auth, who, row, {}):
             raise Problem("not_found", "That file is not one you can read", 404)
-        number = int(cite.get("version") or row["current_version"])
+        number = _version(cite.get("version")) or row["current_version"]
     if not c.execute("SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], number)).fetchone():
         raise Problem("not_found", f"File {row['id']} has no version {number}", 404)
     text = version_text(c, blobs, row["id"], number)

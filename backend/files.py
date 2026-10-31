@@ -276,23 +276,24 @@ class Files:
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (now or H.now(), task))
 
     def open_row(self, c, *, bot, scope, identity, title, kind, mime, locator, url=None, provider=None,
-                 task, conversation, now):
+                 task, conversation, now, fid=None):
         row = self.find(c, bot, scope, identity)
         if row:
             return row, False
-        fid = new_id()
+        fid = fid or new_id()
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
                   "task_id,conversation_id,first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,'ready',?,?,?,?)",
                   (fid, bot, scope, identity, title[:300], kind, mime, locator, url, provider, task, conversation, now, now))
         return c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone(), True
 
     def add_version(self, c, *, bot, actor, scope, task, conversation, attempt, identity, title, name, mime, blob_id,
-                    digest, size, source_digest=None, commit="", repo_path="", explicit_title=False):
-        """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch."""
+                    digest, size, source_digest=None, commit="", repo_path="", explicit_title=False, fid=None):
+        """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
+        file's id (for a caller that writes the file's id somewhere before the file exists)."""
         now = H.now()
         row, created = self.open_row(c, bot=bot, scope=scope, identity=identity, title=title or name,
                                      kind=BF.kind_of(name), mime=mime, locator="tico_blob", task=task,
-                                     conversation=conversation, now=now)
+                                     conversation=conversation, now=now, fid=fid)
         last = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                          (row["id"], row["current_version"])).fetchone()
         changed = created or last is None or (source_digest or digest) != (last["source_digest"] or last["digest"])

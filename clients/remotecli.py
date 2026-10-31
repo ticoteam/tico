@@ -197,9 +197,22 @@ def market_spend(client, args, tool):
     return tool(client, args)
 
 
+def counsel_held(args):
+    """Counsel runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
+    search or fetch, a message, and every other command outside that list are refused before anything is sent."""
+    from clients import hubtools
+    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != "counsel":
+        return
+    fn = getattr(args, "fn", None)
+    entry = hubtools.BY_NAME.get(tool_name(fn)) if fn else None
+    if entry and hubtools.COUNSEL not in hubtools.offered_to(entry):
+        raise SystemExit(f"{fn} is not available to Counsel: it has no credentials and sends nothing")
+
+
 def run(args, who=None):
     if who:
         raise APIError("identity", "Remote identity comes from authentication; --human is unavailable")
+    counsel_held(args)
     # A query may run for 20 s on the server before it is stopped, a decision's providers 25 s; leave room for that.
     client = Client(os.environ["HUB_API_URL"], os.environ.get("HUB_TOKEN", ""), timeout=45 if args.cmd in ("decision", "gateway") else 30 if args.cmd == "sql" else 120 if args.cmd == "listening" or args.fn == "market import" else 130 if args.cmd == "inbound" else 15)
     fn = args.fn

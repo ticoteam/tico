@@ -6205,18 +6205,29 @@ def kind_of(me):
     if role == "human":
         return "member"
     if role == "bot":
-        return "agent" if me.get("agent") else "botops" if actor == "bot:botops" else "bot"
+        return "agent" if me.get("agent") else "botops" if actor == "bot:botops" else \
+            "counsel" if actor == "bot:counsel" else "bot"
     return None
+
+
+# Counsel (backend/counsel.py) has no credentials and sends nothing, so it is offered only the tools it needs: its rules,
+# the document it reads, and its own task. A web search or fetch, a message to anyone, and every other tool are not its
+# to call. The server still decides every call; this keeps those tools out of its list and refuses them if it asks.
+COUNSEL = "counsel"
+COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "hub_file_read", "hub_task_comment",
+                           "hub_task_close"})
 
 
 def offered_to(tool_):
     """The kinds a tool is offered to."""
     name = tool_["name"]
     if name in AUDIENCE:
-        return AUDIENCE[name]
-    if tool_["writes"] and name not in ASSISTANT_WRITES:
-        return NOT_ASSISTANT
-    return KINDS
+        kinds = tuple(AUDIENCE[name])
+    elif tool_["writes"] and name not in ASSISTANT_WRITES:
+        kinds = NOT_ASSISTANT
+    else:
+        kinds = KINDS
+    return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 
 
 def listing(local=False, kind=None):

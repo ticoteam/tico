@@ -5,6 +5,8 @@ reads: []                        # other bot repositories this one may clone rea
 
 # These must agree with the bot's settings on the server, or be left out of this file entirely.
 reasoning_effort: high
+# Counsel's tasks are private (its requester and Counsel only); matches the server's default for this template.
+private_tasks_default: true
 max_run_minutes: 30
 
 # Counsel sends nothing. It answers the person or bot that asked, on its task, and suggests rules.
