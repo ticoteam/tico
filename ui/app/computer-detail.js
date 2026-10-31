@@ -114,22 +114,6 @@ function machineChipHTML(machine, conn) {
     + `${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<span>${esc(conn.tool)}</span>`
     + `${left !== null ? `<meter class="machine-chip-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-hidden="true"></meter><span class="machine-chip-pct">${left}%</span>` : ''}</button>`;
 }
-function machineChipsHTML(machine) {
-  if (machine.revoked_at) return '<span class="muted">—</span>';
-  const waiting = machineWaiting(machine) ? `<span class="machine-chip waiting" data-machine-waiting>Waiting for ${esc(machine.label)}</span>` : '';
-  const conns = machineShown(machine);
-  if (!machineReported(machine)) return conns.length ? `<div class="machine-chips">${conns.map(conn => machineChipHTML(machine, conn)).join('')}${waiting}</div>` : waiting;
-  const chips = conns.map(conn => machineChipHTML(machine, conn)).join('')
-    || `<button type="button" class="machine-chip attention" data-computer-open="${esc(machine.id)}" data-no-connection><span class="machine-chip-dot" aria-hidden="true"></span><span>No AI connection</span></button>`;
-  return `<div class="machine-chips">${chips}${waiting}${machineRowAddHTML(machine)}</div>`;
-}
-// One Add per computer, after its chips: the same Add connection pop-up as in the computer's own.
-function machineRowAddHTML(machine) {
-  if (machine.revoked_at || !machineCanSignIn(machine)) return '';
-  const online = machineOnline(machine);
-  return `<button type="button" class="machine-chip machine-chip-add" data-add-connection="${esc(machine.id)}" aria-label="Add connection to ${esc(machine.label)}"${online ? '' : ' disabled title="Computer is offline"'}>+ Add</button>`;
-}
-
 // ---- the pop-up
 function machineConnectionHTML(machine, conn, online, manage) {
   const kind = conn.shared ? `API key${conn.shared.name ? ` · ${conn.shared.name}` : ''}` : '';
@@ -299,7 +283,9 @@ function machineBotsHTML(machine) {
   const links = new Map((machine.bot_connections || []).map(line => [line.bot, line]));
   const rows = (machine.bots || []).map(bot => {
     const line = links.get(bot);
-    return `<li data-detail-bot="${esc(bot)}"><strong>${esc(settingsBotName(bot))}</strong>${line ? ` <span class="muted">${subsBotLineHTML(line, true)}</span>` : ''}</li>`;
+    // The server's own words when it has them (a runner too old to say).
+    const warn = line?.problem || (line?.signed_in === false ? 'Signed out' : '');
+    return `<li data-detail-bot="${esc(bot)}"><strong>${esc(settingsBotName(bot))}</strong>${warn ? ` <span class="pill fail">${esc(warn)}</span>` : ''}</li>`;
   }).join('');
   return `${rows ? `<ul class="computer-detail-bots">${rows}</ul>` : '<p class="muted">No bots on this computer.</p>'}
     <a href="#/settings" data-computer-bots="${esc(machine.id)}">Assign on the Bots page</a>`;

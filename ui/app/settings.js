@@ -82,12 +82,16 @@ let SETTINGS_TAB = (() => { try { return sessionStorage.getItem(SETTINGS_TAB_KEY
 let SETTINGS_ADDRESS = '';
 // Every tab's address (`#/settings/<tab>`), and the other names people use for one. A known tab this person
 // can't see opens General with a line saying so; an unknown name just opens General.
-const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'repos', 'tasks', 'inbox',
+const SETTINGS_TABS = ['general', 'people', 'bots', 'devices', 'models', 'repos', 'tasks', 'inbox',
   'inbound', 'mail', 'system',
   'webhooks', 'health', 'history', 'gateway', 'billing'];
-// System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab, now the Models card.
+// System was Rules (wake rules, now automations) and before that Routines; chat: the old Chat tab; providers and
+// subscriptions: what is the Models tab now; limits: its turn levels.
 const SETTINGS_ALIAS = {humans: 'people', computers: 'devices', repositories: 'repos', google: 'inbox', 'email-phone': 'inbound',
-  rules: 'system', routines: 'system', recurring: 'system', chat: 'models'};
+  rules: 'system', routines: 'system', recurring: 'system', chat: 'models', providers: 'models', subscriptions: 'models',
+  limits: 'models', 'turn-levels': 'models'};
+// Cards that moved from Computers to Models: an old link to one (the settings catalogue's) opens Models.
+const SETTINGS_MOVED_TO_MODELS = ['#settings-models', '#set-providers', '#set-gateway', '#set-turn-levels'];
 let SETTINGS_DENIED = false;
 let SETTINGS_TRANSITION_TIMER = null;
 // A section a link points into (an old tab's name, settingsShow); it scrolls there once drawn.
@@ -204,6 +208,7 @@ function pageSettings() {
       ${settingsIsAdmin() ? '<button type="button" data-settings-tab="people" role="tab">People</button>' : ''}
       <button type="button" data-settings-tab="bots" role="tab">Bots</button>
       <button type="button" data-settings-tab="devices" role="tab">Computers</button>
+      <button type="button" data-settings-tab="models" role="tab">Models</button>
       <button type="button" data-settings-tab="repos" role="tab">Repositories</button>
       <button type="button" data-settings-tab="tasks" role="tab">Tasks</button>
       <button type="button" data-settings-tab="inbox" role="tab">My Google account</button>
@@ -240,12 +245,16 @@ function pageSettings() {
       <section class="card" id="settings-storage"><header><h2>Storage</h2></header><div id="set-storage">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
     </div>
     <div class="settings-pane" id="settings-devices" role="tabpanel">
-      <section class="card"><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
-      ${settingsIsAdmin() ? '<section class="card"><header><h2>Company turn levels</h2></header><div id="set-turn-levels"></div></section>' : ''}
+      <section class="card" id="settings-computers"><header><h2>Computers</h2><button class="primary settings-head-act" type="button" id="machine-add-open">Add computer</button></header><div id="set-machines">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsIsAdmin() ? '<section class="card" id="settings-hosted" hidden><header><h2>Hosted servers</h2></header><div id="set-hosted"></div></section>' : ''}
       <section class="card" id="settings-sleep" hidden><header><h2>Sleep when idle</h2></header><div id="set-sleep"></div></section>
-      <section class="card" id="settings-models"><header><h2>Models</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
       ${settingsCanMakeTokens() || S.me?.has_tokens ? `<section class="card" id="settings-tokens"><header><h2>API tokens</h2></header><div id="set-tokens">${skelRows(3, {card: true, dot: false})}</div></section>` : ''}
+    </div>
+    <div class="settings-pane" id="settings-models" role="tabpanel" hidden>
+      <section class="card" id="settings-subs"><header><h2>Subscriptions</h2><button class="primary settings-head-act" type="button" id="subs-add" hidden>Add subscription</button></header><div id="set-subs">${skelRows(2, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-gateway-card"><header><h2>Tico Gateway</h2></header><div id="set-gateway-card">${skelRows(1, {card: true, dot: false})}</div></section>
+      <section class="card" id="settings-defaults"><header><h2>Defaults</h2></header><div id="set-providers">${skelRows(3, {card: true, dot: false})}</div></section>
+      ${settingsIsAdmin() ? '<section class="card" id="settings-limits"><header><h2>Limits</h2></header><div id="set-turn-levels"></div></section>' : ''}
     </div>
     <div class="settings-pane" id="settings-bots" role="tabpanel" hidden>
       <section class="card settings-bots-card"><header><h2>Bots</h2>${settingsCanCreateBots() ? '<div class="row"><button class="primary" type="button" id="settings-add-bot" disabled>Add bot</button><button class="ghost" type="button" id="settings-add-catalog" disabled><span class="sb-wide">Add from template</span><span class="sb-narrow">From template</span></button></div>' : ''}</header><div id="set-bots">${skelRows(3, {card: true, dot: false})}</div></section>
@@ -338,8 +347,7 @@ function settingsShow(tab) {
   tab = SETTINGS_ALIAS[tab] || tab;
   if (tab === 'tags' || tab === 'types') tab = 'tasks'; // Saved links keep working.
   if (tab === 'triggers') tab = 'webhooks';             // Settings > Triggers became Webhooks
-  // The company's models choice is a section of Computers; a link to it (or to the old AI providers tab) scrolls there.
-  if (tab === 'models' || tab === 'providers') { tab = 'devices'; SETTINGS_REVEAL = '#settings-models'; }
+  if (tab === 'devices' && SETTINGS_MOVED_TO_MODELS.includes(SETTINGS_REVEAL)) tab = 'models';
   // The Strategy Bot's settings were a tab of their own; they are a helper's card in System now.
   if (tab === 'strategy-bot') { tab = 'system'; SETTINGS_REVEAL = '#set-strategy-bot-card'; }
   if (SETTINGS_GENERAL[tab]) { SETTINGS_REVEAL = SETTINGS_GENERAL[tab]; tab = 'general'; }
@@ -367,13 +375,14 @@ function settingsShow(tab) {
   settingsTags();
   taskTypesSettingsShow(SETTINGS_TAB);
   if (SETTINGS_TAB === 'tasks') { void roadmapSettingsMount(); void askFilterSettingsLoad(); }
-  const devices = $('#settings-devices'), history = $('#settings-history'), bots = $('#settings-bots');
+  const devices = $('#settings-devices'), models = $('#settings-models'), history = $('#settings-history'), bots = $('#settings-bots');
   if (bots) { bots.hidden = SETTINGS_TAB !== 'bots'; if (SETTINGS_TAB === 'bots') void renderTeamBudgets(); }
   if (devices) devices.hidden = SETTINGS_TAB !== 'devices';
+  if (models) models.hidden = SETTINGS_TAB !== 'models';
   settingsMachinesWatch();
   if (settingsMachinesVisible() && SETTINGS_DATA.loaded) void settingsMachinesRefresh();
-  // Before the first load the form has no models or computers to show; loadSettings draws it then.
-  if (SETTINGS_TAB === 'devices' && SETTINGS_DATA.loaded) { void renderSettingsProviders(); void renderSettingsTurnLevels(); }
+  // Before the first load the forms have no models or computers to show; loadSettings draws them then.
+  if (SETTINGS_DATA.loaded) settingsModelsRender();
   if (history) { history.hidden = SETTINGS_TAB !== 'history'; if (SETTINGS_TAB === 'history') settingsHistoryShow(); }
   const general = $('#settings-general');
   if (general) {
@@ -513,6 +522,13 @@ async function renderSettingsPrivacy() {
     try { await post('/v2/system/usage-count/reset'); toast('Saved'); void renderSettingsPrivacy(); } catch (e) { settingsFieldError(button, e.message); }
   };
 }
+// Models draws its cards when shown; Computers reads the subscriptions and the Gateway toggle for its pickers.
+function settingsModelsRender() {
+  if (SETTINGS_TAB === 'models') { void renderSettingsSubs(); void renderSettingsProviders(); void renderSettingsTurnLevels(); }
+  else if (SETTINGS_TAB === 'devices' && S.me?.cloud) {
+    void Promise.all([subsLoad(), providersViewLoad().catch(() => null)]).then(() => { if (settingsMachinesVisible()) renderSettingsMachines(); });
+  }
+}
 async function renderSettingsTurnLevels() {
   const host = $('#set-turn-levels');
   if (!host || !settingsIsAdmin() || formBusy(host) || host.dataset.loading) return;
@@ -520,26 +536,24 @@ async function renderSettingsTurnLevels() {
   try {
     const value = await get('/v2/settings/turn-levels', {fresh: true});
     if (!host.isConnected || !settingsIsAdmin() || formBusy(host)) return;
-    host.innerHTML = `<form id="turn-levels-form">
-      <p>Levels are per person who can sign in, across all company computers. Guests do not count.</p>
-      <label>Warning level per person <input name="warning_per_person" type="number" required min="1" max="10000" value="${value.warning_per_person}"></label>
-      <p class="settings-cell-note">At warning, Tico opens a Health incident. New turns still start.</p>
-      <label>Stop level per person <input name="stop_per_person" type="number" required min="1" max="10000" value="${value.stop_per_person}"></label>
-      <p class="settings-cell-note">At stop, new turns wait. Running turns continue; waiting work starts in order when the count drops.</p>
-      <p>${value.people} ${value.people === 1 ? 'person' : 'people'}: warning at ${value.warning}, stop at ${value.stop}. ${value.in_use} turns in use.</p>
-      <button class="primary" type="submit">Save turn levels</button><p data-turn-levels-status role="status"></p>
+    host.innerHTML = `<form id="turn-levels-form" class="models-form">
+      <div class="models-row"><span class="k"><label for="turn-levels-warn">Warn at</label>${helpBubble('Per person who can sign in, across all company computers. At warn, Tico opens a Health incident; at stop, new runs wait.')}</span>
+        <span class="models-num"><input id="turn-levels-warn" name="warning_per_person" type="number" required min="1" max="10000" value="${value.warning_per_person}"><span class="muted">runs per person</span></span></div>
+      <div class="models-row"><span class="k"><label for="turn-levels-stop">Stop at</label></span>
+        <span class="models-num"><input id="turn-levels-stop" name="stop_per_person" type="number" required min="1" max="10000" value="${value.stop_per_person}"><span class="muted">runs per person</span></span></div>
+      <div class="onb-actions"><button class="primary" type="submit">Save</button><span class="muted" data-turn-levels-status role="status">${value.people} ${value.people === 1 ? 'person' : 'people'} · ${value.in_use} of ${value.stop} in use</span></div>
     </form>`;
     const form = host.querySelector('form');
     form.onsubmit = async event => {
       event.preventDefault();
       const status = form.querySelector('[data-turn-levels-status]'), button = form.querySelector('button');
       const warning = Number(form.elements.warning_per_person.value), stop = Number(form.elements.stop_per_person.value);
-      if (warning > stop) { status.textContent = 'The warning level must not exceed the stop level.'; status.classList.add('err'); return; }
+      if (warning > stop) { status.textContent = 'Warn at must not be above Stop at.'; status.classList.add('err'); return; }
       button.disabled = true; status.textContent = ''; status.classList.remove('err');
       try {
         const saved = await post('/v2/settings/turn-levels', {warning_per_person: warning, stop_per_person: stop});
         toast('Saved');
-        status.textContent = `Warning at ${saved.warning}; stop at ${saved.stop} company turns.`;
+        status.textContent = `Warn at ${saved.warning} · stop at ${saved.stop} company runs`;
       } catch (error) { status.textContent = error.message; status.classList.add('err'); }
       finally { button.disabled = false; }
     };
@@ -558,7 +572,9 @@ async function loadSettings() {
       get('/employees'),
       S.me?.cloud && S.me?.role === 'owner' ? get('/v2/settings/history') : Promise.resolve({changes: [], transitions: []}),
       S.me?.cloud ? get('/v2/usage/limits').catch(() => null) : Promise.resolve(null),
-      loadHarnessRows()
+      loadHarnessRows(),
+      // The Computers table's pickers: the company's subscriptions, and whether the Gateway runs a tool without one.
+      S.me?.cloud ? Promise.all([subsLoad(), providersViewLoad().catch(() => null)]) : null
     ]);
     S.emps = namedRoster(employees);
     setPeople(people);
@@ -577,8 +593,7 @@ async function loadSettings() {
     void renderSettingsTokens();
     void renderSettingsHosted();
     void renderSettingsSleep();
-    void renderSettingsTurnLevels();
-    if (SETTINGS_TAB === 'devices' && !$('#set-prov')) void renderSettingsProviders();
+    if (SETTINGS_TAB === 'models') settingsModelsRender();
     const add = $('#settings-add-bot');
     if (add) { add.onclick = () => void settingsRecruitFlow(); add.disabled = false; }
     const fromCatalog = $('#settings-add-catalog');
