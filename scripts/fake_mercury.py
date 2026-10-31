@@ -157,6 +157,13 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
             events = events[ids.index(after) + 1:] if after in ids else events
         chunk = events[:limit]
         return 200, {"events": chunk, "page": {"nextPage": chunk[-1]["id"]} if len(events) > limit and chunk else {}}
+    if method == "GET" and len(parts) == 3 and parts[0] == "account" and parts[2] == "transactions":
+        mine = [t for t in STATE.txns if str(t.get("accountId")) == parts[1] and in_search(t, one(q, "search"))
+                and in_days(t, one(q, "start"), one(q, "end"))]
+        chunk, nxt = page(mine, "id", after, limit)
+        return 200, {"transactions": chunk, "page": nxt}
+    if method == "POST" and path == "/transfer":
+        return transfer(body)
     if method == "GET" and parts[0] == "account" and parts[-1] == "statements":
         return 200, {"statements": [FIXTURES["bank_statement"]]}
     if method == "GET" and parts[0] == "credit" and parts[-1] == "statements":
@@ -205,6 +212,40 @@ def mercury(method: str, path: str, q: dict, body: dict) -> tuple[int, dict]:
         chunk, nxt = page(mine, "requestId", after, limit)
         return 200, {"requests": chunk, "page": nxt}
     return 404, {"message": f"fake Mercury does not answer {method} {path}"}
+
+
+def in_search(txn: dict, search: str | None) -> bool:
+    """Mercury's search of an account's transactions: the text sits in the note, description or counterparty."""
+    text = (search or "").lower()
+    return not text or any(text in str(txn.get(f) or "").lower() for f in ("note", "bankDescription", "counterpartyName"))
+
+
+def in_days(txn: dict, start: str | None, end: str | None) -> bool:
+    """Whether the transaction was created on a day from `start` through `end` (YYYY-MM-DD; either may be left out)."""
+    day = str(txn.get("createdAt") or "")[:10]
+    return (not start or day >= start) and (not end or day <= end)
+
+
+def transfer(body: dict) -> tuple[int, dict]:
+    """POST /transfer: Mercury moves the money at once and answers with both legs, each a transaction of its own (the
+    debit out of the source, the credit into the destination), each carrying the note it was sent with."""
+    if any(body.get(k) in (None, "") for k in ("sourceAccountId", "destinationAccountId", "amount", "idempotencyKey")):
+        return 400, {"message": "sourceAccountId, destinationAccountId, amount and idempotencyKey are required"}
+    try:
+        amount = abs(float(body["amount"]))
+    except (TypeError, ValueError):
+        return 400, {"message": "amount must be a number"}
+    at = now()
+    legs = []
+    for account, value in ((str(body["sourceAccountId"]), -amount), (str(body["destinationAccountId"]), amount)):
+        leg = {"id": STATE.new("txn-xfer"), "accountId": account, "amount": value, "createdAt": at, "postedAt": None,
+               "status": "pending", "kind": "internalTransfer", "counterpartyName": "Internal transfer",
+               "bankDescription": "Internal transfer", "note": body.get("note"), "externalMemo": None,
+               "requestId": None, "cardId": None}
+        STATE.add_txn(leg)
+        legs.append(leg)
+    debit, credit = legs
+    return 200, {"debitTransaction": debit, "creditTransaction": credit, "status": "pending"}
 
 
 def found(item: dict | None) -> tuple[int, dict]:

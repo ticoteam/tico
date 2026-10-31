@@ -722,14 +722,27 @@ def transfers_unknown(store: Any, provider: Provider, now: str, cid: str) -> lis
     in Mercury's transactions, as payments are found in its requests. Not found, it stays unknown; a finance admin was
     asked when it went unknown, and nothing sends it again."""
     with store.read() as c:
-        due = SK.unknown_transfers(c, cid)
-    if not due:
-        return []
-    txns, _ = _transactions(provider)
-    for t in due:
+        due = [(t, transfers.source_account(c, t)) for t in SK.unknown_transfers(c, cid)]
+    for t, account in due:
+        rows = _unknown_rows(provider, t, account)
         with store.transaction() as c:
-            transfers.found(load(c, now), SK.get(c, "fin_transfers", str(t["id"])), txns)
+            transfers.found(load(c, now), SK.get(c, "fin_transfers", str(t["id"])), rows)
     return []
+
+
+def _unknown_rows(provider: Provider, t: Any, account: str) -> list[dict[str, Any]]:
+    """The transactions an unknown transfer's out-leg may be among. First the source account's transactions that Mercury's
+    search finds by the transfer's note, in the days around its claim (one page). When none of those is the leg, every
+    transaction is read: a note can sit in a memo field the search does not read."""
+    narrow: list[dict[str, Any]] = []
+    if account:
+        start, end = transfers.search_days(t)
+        page = provider.account_transactions(account, transfers.note(t), start, end)
+        narrow = listed(page, "transactions") if page.ok else []
+    if any(transfers.matches(t, account, row) for row in narrow):
+        return narrow
+    rows, _ = _transactions(provider)
+    return rows
 
 
 def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:

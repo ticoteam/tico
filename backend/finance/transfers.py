@@ -257,14 +257,42 @@ def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def sent(ctx: Ctx, payload: Mapping[str, Any], answer: Mapping[str, Any]) -> None:
-    """Mercury took the transfer: its id is kept and the submit day starts the window its legs must post in. Both legs may
-    already be in the feed (they posted before this answer was recorded), in which case it settles now; otherwise the
-    matcher settles it when the second leg posts."""
+    """Mercury took the transfer. Its answer carries both legs, each a transaction with its own id: the out-leg's id is
+    provider_txn_id (the one an unknown transfer is found by, and the leg a settlement prefers) and the in-leg's is kept
+    beside it. The submit day starts the window its legs must post in. Both legs may already be in the feed (they posted
+    before this answer was recorded), in which case it settles now; otherwise the matcher settles it when the second leg
+    posts."""
     tid = str(payload["transfer_id"])
     SK.update(ctx.c, "fin_transfers", tid, {
-        "status": "submitted", "provider_txn_id": str(answer.get("id") or "") or None, "last_error": None,
+        "status": "submitted", "provider_txn_id": _leg_id(answer.get("debitTransaction")),
+        "provider_credit_txn_id": _leg_id(answer.get("creditTransaction")), "last_error": None,
         "submitted_at": ctx.at, "updated_at": ctx.at})
     SK.settle_legs(ctx.c, tid, ctx.at, F.TRANSFER_KINDS)
+
+
+def _leg_id(leg: object) -> str | None:
+    """One leg's id from Mercury's answer: its transaction's id, or None when the answer does not carry one."""
+    if not isinstance(leg, dict):
+        return None
+    return str(cast(dict[str, Any], leg).get("id") or "") or None
+
+
+def note(t: Any) -> str:
+    """The note Mercury holds the transfer's key in (payments.NOTE and the key): what an unknown transfer is searched by."""
+    return f"{payments.NOTE}{t['idempotency_key']}"
+
+
+def search_days(t: Any) -> tuple[str, str]:
+    """The first and last day (YYYY-MM-DD) a search for an unknown transfer's out-leg covers: its claim's day and the day
+    either side of it, since Mercury's created day can fall either side of ours in UTC."""
+    day = datetime.fromisoformat(str(t["submitted_at"]).replace("Z", "+00:00")).date()
+    return (day - timedelta(days=1)).isoformat(), (day + timedelta(days=1)).isoformat()
+
+
+def source_account(c: Any, t: Any) -> str:
+    """The provider's id for the account a transfer leaves ("" when it is not known)."""
+    src = SK.get(c, "fin_money_accounts", str(t["from_money_account_id"]))
+    return str(src["provider_account_id"]) if src is not None else ""
 
 
 def matches(t: Any, account: str, row: Mapping[str, object]) -> bool:
@@ -280,8 +308,7 @@ def found(ctx: Ctx, t: Any, transactions: Sequence[Mapping[str, object]]) -> boo
     the claim time stands. True when it was found."""
     if t is None or str(t["status"]) != "unknown":
         return False
-    src = SK.get(ctx.c, "fin_money_accounts", str(t["from_money_account_id"]))
-    account = str(src["provider_account_id"]) if src is not None else ""
+    account = source_account(ctx.c, t)
     mine = next((x for x in transactions if matches(t, account, x)), None)
     if mine is None:
         return False

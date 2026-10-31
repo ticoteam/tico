@@ -563,3 +563,49 @@ def test_a_transfer_cut_off_mid_call_is_found_by_its_note_key_and_takes_mercurys
     sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
     assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "posted"
     assert len(fake.sent("create_transfer")) == 1
+
+
+def test_a_transfer_keeps_both_of_mercurys_legs_from_its_answer(books):
+    """Mercury answers a transfer with both of its legs, each a transaction with its own id: both are kept."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000)).status == "committed"
+    sync_once(books, fake)
+    assert tuple(_rows(books, "SELECT status, provider_txn_id, provider_credit_txn_id FROM fin_transfers")[0]) == \
+        ("submitted", "xfer-1", "xfer-1-credit")
+
+
+def test_an_unknown_transfer_is_searched_by_its_note_in_its_account_before_all_transactions_are_read(books):
+    """The lookup narrows first: its account's transactions matching its note, within the days around its claim. Its
+    out-leg is found there and takes Mercury's created time."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]          # sent, but no answer came back
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
+    (sent,) = fake.sent("create_transfer")
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": sent["note"],
+                            "createdAt": "2026-10-16T00:04:00Z"}
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    account, searched, start, end = fake.sent("account_transactions")[-1]
+    assert (account, searched, start, end) == (src[1], sent["note"], "2026-10-14", "2026-10-16")
+    assert tuple(_rows(books, "SELECT status, provider_txn_id, submitted_at FROM fin_transfers")[0]) == \
+        ("submitted", "leg-out", "2026-10-16T00:04:00.000000Z")
+
+
+def test_an_unknown_transfer_the_search_misses_is_still_found_in_the_full_list(books):
+    """Its key only in another memo field, which the search does not read: every transaction is read, and it is found."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
+    (sent,) = fake.sent("create_transfer")
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": None,
+                            "externalMemo": sent["note"], "createdAt": "2026-10-16T00:04:00Z"}
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert fake.sent("account_transactions")[-1][1] == sent["note"]          # searched first, and it missed
+    assert tuple(_rows(books, "SELECT status, provider_txn_id FROM fin_transfers")[0]) == ("submitted", "leg-out")
