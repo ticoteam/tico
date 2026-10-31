@@ -302,7 +302,8 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         return {"card_id": card_id, "sync_status": "pending"}
     return Plan(K.default_gate(ctx.org, who, "card_create"), f"Issue a card to {holder} with {amount / 100:.2f} a "
                 f"month from {ctx.budgets()[budget_id].name}", apply,
-                facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": "person"})
+                facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": "person",
+                       "holder.kind": "bot" if holder in ctx.org.bots else "human"})
 
 
 def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:

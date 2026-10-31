@@ -184,7 +184,8 @@ class Scheduler:
     def finance_tick(self, at, failures):
         """Finance's short jobs (backend/finance/jobs.py), each in its own short transaction and none on the network:
         waiting `finance.*` events every tick, run holds past expiry every ten minutes, Gateway usage postings hourly
-        (the Gateway worker fetches the meter), setup when missing and next month's period daily."""
+        (the Gateway worker fetches the meter), bills due, reminders, the cash alert and ready closes hourly, setup
+        when missing and next month's period daily."""
         from .finance import actions as finance, reads as finance_reads
         steps = []
         try:
@@ -206,6 +207,8 @@ class Scheduler:
                 steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
             if self.finance_due("usage", at, timedelta(hours=1)):
                 steps.append(("finance_usage", lambda c: finance.post_usage(c, stamp(at))))
+            if self.finance_due("documents", at, timedelta(hours=1)):
+                steps.append(("finance_documents", lambda c: finance.watch_documents(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):
                 steps.append(("finance_period", lambda c: finance.open_next_period(c, stamp(at))))
         for name, step in steps:

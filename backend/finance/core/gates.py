@@ -328,8 +328,9 @@ def words_for(when: Mapping[str, object], outcome: Mapping[str, object]) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ defaults
-# §6.4 rules 1 and 2, seeded at setup and editable like any rule (rule 4 is the cutoff freeze in jobs.drain; rule 6 is
-# kinds.default_gate). (id, name, words, when, outcome, examples)
+# §6.4 rules 1, 2, 3 and 5, seeded at setup (every start, so existing installs get new ones once) and editable like any
+# rule; a seeded rule a person changed or turned off stays as they left it. Rule 4 is the cutoff freeze in jobs.drain;
+# rule 6 is kinds.default_gate. (id, name, words, when, outcome, examples)
 DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[dict[str, object]]], ...] = (
     ("rule:new-recipient", "New recipient", "Paying a recipient (or changed payment details) for the first time asks "
      "a finance admin.", {"kind": "payment_create", "recipient.known": False},
@@ -340,4 +341,33 @@ DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[
      {"kind": "payment_create", "amount": {"gt": 100000}}, {"outcome": "needs_approval", "who": "owner"},
      [{"input": {"kind": "payment_create", "amount": 100001}, "expect": "needs_approval"},
       {"input": {"kind": "payment_create", "amount": 100000}, "expect": "allow"}]),
+    ("rule:bot-card-standing", "Standing bot cards", "A standing card for a bot asks a finance admin; single-use cards "
+     "up to $200 inside the bot's budget do not.",
+     {"kind": "card_create", "holder.kind": "bot", "card.kind": {"not": "single_use"}},
+     {"outcome": "needs_approval", "who": "finance_admin"},
+     [{"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "person", "amount": 5000},
+       "expect": "needs_approval"},
+      {"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 5000},
+       "expect": "allow"},
+      {"input": {"kind": "card_create", "holder.kind": "human", "card.kind": "person", "amount": 5000},
+       "expect": "allow"}]),
+    ("rule:bot-card-single-use-over-200", "Single-use bot cards over $200", "A single-use card for a bot over $200 "
+     "asks a finance admin.",
+     {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": {"gt": 20000}},
+     {"outcome": "needs_approval", "who": "finance_admin"},
+     [{"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 20001},
+       "expect": "needs_approval"},
+      {"input": {"kind": "card_create", "holder.kind": "bot", "card.kind": "single_use", "amount": 20000},
+       "expect": "allow"}]),
+    ("rule:bot-books-over-5000", "Bot bookkeeping over $5,000", "A bot categorizing or posting more than $5,000 in "
+     "one action asks a finance admin.",
+     {"kind": ["categorize", "journal"], "actor.kind": "bot", "amount": {"gt": 500000}},
+     {"outcome": "needs_approval", "who": "finance_admin"},
+     [{"input": {"kind": "categorize", "actor.kind": "bot", "amount": 500001}, "expect": "needs_approval"},
+      {"input": {"kind": "journal", "actor.kind": "bot", "amount": 500000}, "expect": "allow"},
+      {"input": {"kind": "categorize", "actor.kind": "human", "amount": 900000}, "expect": "allow"}]),
+    ("rule:bot-new-account", "Bot adds an account", "A bot adding a line to the chart of accounts asks a finance "
+     "admin.", {"kind": "account_create", "actor.kind": "bot"}, {"outcome": "needs_approval", "who": "finance_admin"},
+     [{"input": {"kind": "account_create", "actor.kind": "bot"}, "expect": "needs_approval"},
+      {"input": {"kind": "account_create", "actor.kind": "human"}, "expect": "allow"}]),
 )

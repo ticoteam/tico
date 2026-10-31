@@ -127,9 +127,9 @@ def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: s
                  reverses_id: str, by: str, at: str) -> list[str]:
     """The entry, its lines, their tags and the rollups they move. The ids of the lines, in order."""
     c.execute("INSERT INTO fin_entries(id, book_id, entry_date, memo, source, source_id, status, reverses_id, "
-              "period_id, action_id, created_at, created_by) VALUES(?,?,?,?,?,?,'posted',?,?,?,?,?)",
+              "period_id, action_id, basis, created_at, created_by) VALUES(?,?,?,?,?,?,'posted',?,?,?,?,?,?)",
               (entry_id, e.book_id, e.entry_date, e.memo, e.source, e.source_id, reverses_id or None, period_id,
-               action_id or None, at, by))
+               action_id or None, e.basis, at, by))
     ids: list[str] = []
     for n, item in enumerate(e.lines):
         lid = new_id()

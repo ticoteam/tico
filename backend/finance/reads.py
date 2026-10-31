@@ -1063,6 +1063,24 @@ def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | N
     return {**_checklist(s, dates.month(period).isoformat()[:7]), "view_version": s.view.version}
 
 
+def ready_months(c: sqlite3.Connection, at: str | None = None) -> list[str]:
+    """The ended open months whose close checklist is ready, read as the owner (system work: finance.period.ready)."""
+    ctx = load(c, at)
+    if not ctx.org.owner:
+        return []
+    s = _Seen(ctx=ctx, view=ctx.view(ctx.org.owner), private=SA.private_lines(c))
+    return [p for p in _closable(c, ctx) if _checklist(s, p)["ready"]]
+
+
+def company_cash(c: sqlite3.Connection, at: str | None = None) -> int | None:
+    """The books' cash across every cash account (system work: finance.cash.below); None with no cash account."""
+    ctx = load(c, at)
+    if not ctx.org.owner:
+        return None
+    total, per, _ = _cash(_Seen(ctx=ctx, view=ctx.view(ctx.org.owner), private=SA.private_lines(c)))
+    return total if per else None
+
+
 def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (), teammates: Iterable[str] = (),
                  who: str = "both", unattributed: bool = False, at: str | None = None, **kw: Any) -> Row:
     """finance/tab.transactions, cut by the expenses view's org filter as the P&L and a line's detail are: a line
@@ -1100,6 +1118,9 @@ invoices = tab_ap.invoices
 contacts = tab_ap.contacts
 bill = tab_ap.bill
 invoice = tab_ap.invoice
+chart = tab_ap.chart
+pay_from = tab_ap.pay_from
+bills_email = tab_ap.bills_email
 # Finance's webhook triggers (finance/tab_hooks.py).
 hook_admin = tab_hooks.hook_admin
 webhook_deliveries = tab_hooks.webhook_deliveries

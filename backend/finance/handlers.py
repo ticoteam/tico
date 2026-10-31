@@ -158,13 +158,20 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)) or \
                 (moved is not None and moved["reconciliation_id"]):
             raise FinanceError(CONFLICT, "that entry is in a reconciled statement; undo the reconciliation first")
+        if str(row["source"]) in L.DOC_SOURCES and ":paid:" not in str(row["source_id"]):
+            raise FinanceError(CONFLICT, "that entry belongs to a bill or invoice; void the document instead")
         total = sum(x.amount for x in lines if x.amount > 0)
-        return Plan(K.default_gate(ctx.org, who, "journal", total=total), f"Reverse entry {entry_id}",
-                    lambda aid: {"entry_id": posting.reverse(ctx, entry_id, day=when, memo=memo, by=who,
-                                                             action_id=aid), "reverses": entry_id},
+
+        def undo(aid: str) -> Result:
+            from .documents import entry_reversed
+            out: Result = {"entry_id": posting.reverse(ctx, entry_id, day=when, memo=memo, by=who, action_id=aid),
+                           "reverses": entry_id}
+            entry_reversed(ctx, entry_id, who)       # a payment it recorded on a bill or invoice is owed again
+            return out
+        return Plan(K.default_gate(ctx.org, who, "journal"), f"Reverse entry {entry_id}", undo,
                     {"budgets": _budget_impact(ctx, who, [(x, -x.amount) for x in L.reversal(lines)])},
-                    {"date": when})
-    V.only(p, ("date", "memo", "source", "source_id", "lines"))
+                    {"date": when}, {"amount": total})
+    V.only(p, ("date", "memo", "source", "source_id", "lines", "basis"))
     e = L.entry(p, ctx.book)
     e = replace(e, lines=tuple(replace(x, tags=posting.with_team(ctx, x.tags)) for x in e.lines))
     L.check(e, ctx.book, ctx.accounts, SL.closed_on(ctx.c, ctx.book.id, e.entry_date))
@@ -175,9 +182,10 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         entry_id, line_ids = posting.post(ctx, e, by=who, action_id=aid)
         return {"entry_id": entry_id, "line_ids": line_ids}
     total = sum(x.amount for x in e.lines if x.amount > 0)
-    return Plan(K.default_gate(ctx.org, who, "journal", total=total),
+    return Plan(K.default_gate(ctx.org, who, "journal"),
                 f"Post a {total / 100:.2f} {ctx.book.base_currency} entry on {e.entry_date}: {e.memo}"[:200], apply,
-                {"budgets": _budget_impact(ctx, who, [(x, x.amount) for x in e.lines])})
+                {"budgets": _budget_impact(ctx, who, [(x, x.amount) for x in e.lines])},
+                facts={"amount": total, "accounts": sorted({ctx.accounts[x.account_id].code for x in e.lines})})
 
 
 def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -217,8 +225,8 @@ def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             SL.set_line_tags(ctx.c, row, old, new, who, ctx.at)
         posting.touched(ctx, [c for c, _ in charges], who)
         return {"lines": len(changes)}
-    return Plan(K.default_gate(ctx.org, who, "categorize", total=total), f"Tag {len(changes)} line(s)", apply,
-                {"budgets": _budget_impact(ctx, who, charges)})
+    return Plan(K.default_gate(ctx.org, who, "categorize"), f"Tag {len(changes)} line(s)", apply,
+                {"budgets": _budget_impact(ctx, who, charges)}, facts={"amount": total})
 
 
 def account_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -233,7 +241,7 @@ def account_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         SL.insert_account(ctx.c, made, who, ctx.at)
         ctx.changed()
         return {"account_id": made.id}
-    return Plan(K.default_gate(ctx.org, who, "account_create", new_account=True),
+    return Plan(K.default_gate(ctx.org, who, "account_create"),
                 f"Add account {new.code} {new.name} ({new.type})", apply)
 
 

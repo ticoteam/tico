@@ -243,6 +243,21 @@ def install(app, store, auth, mutate):
         return read(lambda c: finance_reads.contacts(c, actor, kind=kind, q=q, active=active, cursor=cursor,
                                                      limit=limit))
 
+    @app.get("/api/v2/finance/chart")
+    def finance_chart(request: Request, for_: Literal["bill", "invoice", "journal"] | None = Query(None, alias="for"),
+                      view_as: str | None = None):
+        """The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for
+        teammates who write to the books."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.chart(c, actor, for_=for_))
+
+    @app.get("/api/v2/finance/pay-from")
+    def finance_pay_from(request: Request, view_as: str | None = None):
+        """The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller
+        sees that account."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.pay_from(c, actor))
+
     @app.get("/api/v2/finance/inbox")
     def finance_inbox(request: Request, cursor: str | None = Query(None, max_length=100),
                       limit: int = Query(50, ge=1, le=200), view_as: str | None = None):

@@ -12,9 +12,9 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import cast
 
-from . import banking, budgeting, cards, gateway_sync, gating, handlers, jobs, payments, posting, runs
+from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting, runs
 from . import setup as setup_mod
-from . import sync, usage
+from . import rights, sync, usage
 from .context import Ctx, load
 from .core import gates as G
 from .core import kinds as K
@@ -39,12 +39,13 @@ budget_for = budgeting.budget_for
 SYSTEM = O.SYSTEM
 Principal = O.Principal
 
-# Every live kind's planner: phase 0's in handlers, then banking, cards, payments and gate rules.
+# Every live kind's planner: phase 0's in handlers, then banking, cards, payments, rules, and payables/receivables.
 PLANNERS: dict[str, handlers.Planner] = {
     **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
-    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS}
+    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
+    **documents.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -252,7 +253,7 @@ def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapp
     """A denial or failure is recorded under its key too, so a retry gets the same answer. Bank details it sealed
     were rolled back with its savepoint, so the stored payload does not name them."""
     status = "denied" if e.code in DENIAL_CODES else "failed"
-    body = {k: v for k, v in body.items() if k != "details_ref"}
+    body = {k: v for k, v in body.items() if k not in payments.REFS}
     if dry_run:
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
@@ -428,6 +429,18 @@ def help(kind: str | None = None) -> dict[str, object]:
 ensure_setup = jobs.ensure_setup
 drain_events = jobs.drain
 open_next_period = jobs.open_next_period
+watch_documents = jobs.watch
+grant_defaults = rights.grant_defaults
+
+
+def set_bills_email(c: sqlite3.Connection, address: str | None, by: str = O.SYSTEM, at: str | None = None) -> None:
+    """Record the install's bills address (reads.bills_email and GET /finance/bills show it); None clears it."""
+    from .store import ledger as SL
+    from .tab_ap import BILLS_EMAIL_KEY
+    value = (address or "").strip().lower()
+    if value and ("@" not in value or len(value) > 200):
+        raise FinanceError(INVALID, "a bills address is an email address")
+    SL.set_setting(c, BILLS_EMAIL_KEY, value or None, by, at or tico.now())
 RunHold = runs.RunHold
 run_hold = runs.hold
 run_ended = runs.ended
