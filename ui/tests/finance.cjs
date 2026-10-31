@@ -109,7 +109,7 @@ function line(id, url) {
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor, description: vendor + ' Team', memo: '', source: 'feed', tags: {}}], more: false};
   return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor: null, total: l[5], excluded: 0, hidden: 0,
     paid_by: [{kind: 'card', name: 'Engineering', amount: 84000, count: 4}], next_month: {month: iso(nm).slice(0, 7), projection: 310000},
-    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'other', label: 'Other · 4', amount: 21000}],
+    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'unattributed', label: 'No vendor', amount: 5000}, {key: 'other', label: 'Other · 4', amount: 21000}],
     by_team: [{key: 'eng', label: 'Engineering', amount: 120000}, {key: 'mkt', label: 'Marketing', amount: 50000}, {key: 'unattributed', label: 'Unattributed', amount: 9000}],
     by_teammate: [{key: 'bot:eng-lead', label: 'Engineering Lead', amount: 64000}, {key: 'bot:writer', label: 'Writer', amount: 30000}, {key: 'human:cara', label: 'Cara Lee', amount: 22000}],
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor: 'GitHub', description: 'GitHub Team', memo: '', source: 'feed', tags: {teammate: 'bot:eng-lead'}},
@@ -273,6 +273,16 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
       await page.waitForTimeout(100);
       assert.equal(actions(writes).length, before, tag + ': blur on an untouched budget posts nothing');
+      const asOf = await page.locator('[data-fin-compare] option').evaluateAll(o => o.map(x => x.value).filter(Boolean)[0]);
+      await page.locator('[data-fin-compare]').selectOption(asOf);
+      await page.waitForFunction(() => FIN.pnl?.compare && !FIN.pnl.busy);
+      assert.ok(reads.some(r => r.startsWith('/api/v2/finance/pnl?') && r.includes('budget_as_of=' + asOf)), tag + ': Compare reads the plan as of that day');
+      await page.locator(`td[data-fin-cell="a-6100|${future}"]`).click();
+      assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': no budget editing while comparing');
+      await page.evaluate(() => { const tr = [...document.querySelectorAll('.fin-ln')].find(r => r.querySelector('a[href*="/line/a-6100"]')), td = tr.children[tr.children.length - 2]; td.dataset.finBudget = 'a-6100'; finPnlEdit(td); });
+      assert.equal(await page.locator('.fin-cell-in').count(), 0, tag + ': the editor refuses while comparing');
+      await page.locator('[data-fin-compare]').selectOption('');
+      await page.waitForFunction(() => FIN.pnl?.data && !FIN.pnl.compare && !FIN.pnl.busy);
       const keys = writes.map(w => w[3]);
       assert.ok(keys.every(Boolean) && new Set(keys).size === keys.length, tag + ': a fresh Idempotency-Key per write');
       await page.locator(`td[data-fin-cell="a-6100|${cols.findIndex(c => c.state === 'current')}"]`).click();
@@ -282,7 +292,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('a[href$="/line/a-6100"]').click();
       await page.locator('[data-fin-key="GitHub"]').waitFor();
       assert.deepEqual(await page.locator('#fin-line thead th').allInnerTexts().then(t => t.slice(0, 2)), ['VENDOR', 'TEAM'].map(s => s), tag + ': vendor rows');
-      assert.equal(await page.locator('#fin-line tbody tr').count(), 4, tag + ': one row per vendor and Other, no totals row');
+      assert.equal(await page.locator('#fin-line tbody tr').count(), 5, tag + ': one row per vendor, No vendor and Other, no totals row');
       assert.equal(await page.locator('input[data-fin-vb]').count(), 0, tag + ': this month\'s vendor budgets are read only');
       const next = cols[future].start.slice(0, 7);
       await page.locator('[data-fin-month]').fill(next);
@@ -293,6 +303,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-github', amount: 95000, effective_from: next + '-01'}},
         tag + ': a vendor budget changes from the month shown');
       assert.equal(await page.locator('input[data-fin-vb="Figma"]').count(), 0, tag + ': a quarterly vendor budget is not edited as a month');
+      assert.equal(await page.locator('input[data-fin-vb="unattributed"], input[data-fin-vb="other"]').count(), 0, tag + ': No vendor and Other take no budget');
       assert.match(await page.locator('[data-fin-key="Figma"]').innerText(), /\b1,350 \/ qtr/, tag + ': it says its period');
       await page.locator('input[data-fin-vb="Notion"]').fill('400');
       await page.locator('input[data-fin-vb="Notion"]').press('Enter');
@@ -354,6 +365,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       assert.deepEqual([lastPnl.getAll('teams'), lastPnl.getAll('teammates'), lastPnl.get('who'), lastPnl.get('unattributed')], [['eng'], ['bot:writer'], 'bots', 'true'],
         tag + ': teams, teammates, who and Unattributed go to the route');
       assert.deepEqual(await page.locator('#fin-filters .fin-chip').allInnerTexts().then(t => t.map(x => x.replace('✕', '').trim())), ['Engineering', 'Writer', 'Unattributed'], tag + ': a chip per pick');
+      assert.match(await page.locator('#fin-head [data-fin-tab="pnl"]').getAttribute('href'), /\/pnl\?view=expenses$/, tag + ': the P&L tab keeps Expenses');
       await page.locator('#fin-filters [data-fin-clear="team:eng"]').click();
       await page.waitForFunction(() => FIN.pnl?.data?.filter?.teams.length === 0);
       await shot(page, 'pnl-expenses-filter-desktop');
@@ -405,6 +417,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForTimeout(100);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {team: 'eng', teammate: 'bot:eng-lead', project: 'Launch'}},
         {line_id: 'l6', tags: {team: 'mkt', project: 'Launch'}}], mode: 'replace'}}, tag + ': a split row changes only the field set; each line keeps its own team');
+      await page.locator('[data-fin-tx="feed:f4"]').click();
+      await page.locator('#fin-rail select[name="team"]').selectOption('');
+      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {teammate: 'bot:eng-lead'}}, {line_id: 'l6', tags: {}}], mode: 'replace'}},
+        tag + ': on a mixed split, — clears the team on every line');
       await go(page, '#/finance/sources', READY.sources);
       await page.locator('[data-fin-group="banks"]').click();
       await page.locator('[data-fin-src="bank:m1"]').click();
