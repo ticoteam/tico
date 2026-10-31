@@ -20,6 +20,7 @@ from clients import hubtools
 from clients.tico import APIError
 
 LATER = "2026-10-15T13:30:00.000000Z"
+NEXT = "2026-11-03T09:00:00.000000Z"
 CARD_NUMBER = re.compile(r"(?<!\d)\d{13,19}(?!\d)")
 
 
@@ -123,19 +124,96 @@ def test_a_bot_sees_and_acts_only_on_its_own_cards(books):
         assert _status(c, coder) == "frozen"
 
 
-def test_a_bot_cards_freeze_at_cutoff_and_unfreezing_waits_for_the_budget_to_have_room(books):
+def _frozen_by(c, card_id):
+    return c.execute("SELECT freeze_by FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0]
+
+
+def test_a_cutoff_freeze_lifts_when_a_raise_leaves_room_and_a_raise_short_of_it_does_not(books):
+    fake = FakeMercury()
+    budget, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "budget"
+        assert act(c, OWNER, "card_unfreeze", {"card_id": coder}).code == "denied"
+    sync_once(books, fake, LATER)
+    assert sorted(fake.sent("card_state")) == [("card-coder", "freeze"), ("card-seller", "freeze")]
+    with books.transaction() as c:
+        # 60.00 still leaves the 50.00 spent and the 40.00 reserved over it: the freezes stay.
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 60_000}).status == "committed"
+        assert _status(c, coder) == "frozen" and _status(c, seller) == "frozen"
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+        assert _frozen_by(c, coder) is None
+        assert act(c, OWNER, "card_unfreeze", {"card_id": coder}).code == "conflict"
+    sync_once(books, fake, LATER)
+    sent = fake.sent("card_state")
+    assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") in sent
+
+
+def test_a_cutoff_freeze_lifts_at_a_new_period_and_a_person_freeze_stays(books):
+    fake = FakeMercury()
+    _, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": seller}).status == "committed"
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "person"
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert FA.watch_documents(c, NEXT) >= 1        # November: the October spend is no longer in the period
+        assert _status(c, coder) == "active" and _status(c, seller) == "frozen"
+        assert _frozen_by(c, seller) == "person"
+        row = next(r for r in FR.cards(c, OWNER)["cards"] if str(r["id"]) == seller)
+        assert row["frozen_by"] == "person"
+    sync_once(books, fake, NEXT)
+    sent = fake.sent("card_state")
+    assert ("card-coder", "unfreeze") in sent and ("card-seller", "unfreeze") not in sent
+
+
+def test_a_person_who_freezes_a_budget_frozen_card_keeps_it_frozen_when_the_budget_has_room(books):
     fake = FakeMercury()
     budget, coder, _ = _world(books, fake)
     with books.transaction() as c:
         spend(c, "6100", 50_000)
         FA.drain_events(c, AT)
-        assert _status(c, coder) == "frozen"
-        assert act(c, OWNER, "card_unfreeze", {"card_id": coder}).code == "denied"
+        assert _frozen_by(c, coder) == "budget"
+        assert act(c, OWNER, "card_freeze", {"card_id": coder}).status == "committed"     # a person claims it
+        assert _frozen_by(c, coder) == "person"
     sync_once(books, fake, LATER)
-    assert sorted(fake.sent("card_state")) == [("card-coder", "freeze"), ("card-seller", "freeze")]
     with books.transaction() as c:
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "person"
         assert act(c, OWNER, "card_unfreeze", {"card_id": coder}).status == "committed"
+    sync_once(books, fake, NEXT)
+    assert fake.sent("card_state").count(("card-coder", "unfreeze")) == 1
+
+
+def test_a_budget_cannot_go_below_its_cards_and_child_budgets(books):
+    fake = FakeMercury()
+    budget, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        refused = act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 45_000})
+        assert refused.code == "invalid"
+        assert "lower these cards first" in refused.reason and "coder" in refused.reason
+        assert "seller" in refused.reason and "reserves 200.00" in refused.reason
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 49_000}).code == "invalid"
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 50_000}).status == "committed"
+
+
+def test_a_card_that_used_more_than_its_allocation_reserves_what_it_used(books):
+    fake = FakeMercury()
+    budget, coder, _ = _world(books, fake)
+    with books.transaction() as c:
+        ctx = load(c, AT)
+        held = budgeting.place(ctx, budget_scope=budget, amount=25_000, currency=ctx.book.base_currency, source="card",
+                               source_id="auth-big", expires_at=None, target=f"card:{coder}")
+        assert held.allowed
+        # Coder reserves its 25.00 used (not its 20.00 allocation) and seller 20.00: 45.00 in all.
+        refused = act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 44_000})
+        assert refused.code == "invalid" and "coder" in refused.reason and "reserves 250.00" in refused.reason
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 45_000}).status == "committed"
 
 
 def test_a_bot_card_purchase_over_a_decline_budget_is_declined_and_one_within_it_is_held(books):

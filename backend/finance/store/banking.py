@@ -393,6 +393,15 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
                      list(budget_ids)).fetchall()
 
 
+def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
+    """Cards a budget's cutoff froze and no person has claimed since, on these budgets (every budget when None)."""
+    if budget_ids is not None and not budget_ids:
+        return []
+    scope = "" if budget_ids is None else f" AND budget_id IN ({_marks(budget_ids)})"
+    sql = "SELECT * FROM fin_cards WHERE status='frozen' AND freeze_by='budget'" + scope
+    return c.execute(sql + " ORDER BY created_at, id", [] if budget_ids is None else list(budget_ids)).fetchall()
+
+
 def card_save_row(c: sqlite3.Connection, card_id: str, vendor_key: str) -> Any:
     """The saved-card record of a card at one vendor, active or removed (one row per card and vendor)."""
     return c.execute("SELECT * FROM fin_card_saves WHERE card_id=? AND vendor_key=?", (card_id, vendor_key)).fetchone()

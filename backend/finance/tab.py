@@ -420,12 +420,18 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
 
 
 # ------------------------------------------------------------------------------------------------ cards
+def _frozen_by(r: Any) -> str | None:
+    """Why a frozen card is frozen: `budget` (its budget's cutoff, lifted once the budget has room) or `person`."""
+    return str(r["freeze_by"]) if str(r["status"]) == "frozen" and r["freeze_by"] else None
+
+
 def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None) -> Row:
     """A card as anyone sees it: last 4 only, never the number or CVC (Tico never has them)."""
     budget = ctx.budgets().get(str(r["budget_id"] or ""))
     return {"id": str(r["id"]), "provider": str(r["provider"]), "holder": str(r["holder"]),
             "nickname": str(r["nickname"] or ""), "last4": r["last4"], "kind": str(r["kind"]),
-            "status": str(r["status"]), "limit": r["limit_amount"], "limit_interval": r["limit_interval"],
+            "status": str(r["status"]), "frozen_by": _frozen_by(r), "limit": r["limit_amount"],
+            "limit_interval": r["limit_interval"],
             "provider_limit": r["provider_limit"], "sync_status": str(r["sync_status"] or ""),
             "currency": str(r["currency"]), "money_account_id": r["money_account_id"],
             "budget": {"id": budget.id, "name": budget.name} if budget else None, "allocation": allocation,

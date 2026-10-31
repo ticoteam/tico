@@ -114,7 +114,8 @@ CASH_STATE = "finance_cash_below_state"  # whether cash was under the floor at t
 def watch(c: sqlite3.Connection, at: str | None = None) -> int:
     """The hourly look (spec §7.3): pay the scheduled bills whose day has come; raise each bill's due-soon and each
     invoice's overdue stage once; finance.cash.below once per crossing under the owner's floor (it re-arms when cash
-    is back over it); finance.period.ready once per month whose close checklist is ready. How many it raised or paid."""
+    is back over it); finance.period.ready once per month whose close checklist is ready; and the cards a budget's cutoff
+    froze lift once their budgets have room again. How many it raised, paid or lifted."""
     if not is_set_up(c):
         return 0
     from . import documents, reads
@@ -139,6 +140,8 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
     for month in reads.ready_months(c, at):
         event(ctx, READY_EVENT, month, {"month": month})
         n += 1
+    from . import cards
+    n += cards.unfreeze_with_room(ctx)      # a new period (or any room again) lifts the cutoff freezes (§8.2)
     return n
 
 

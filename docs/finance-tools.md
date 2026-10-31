@@ -56,6 +56,13 @@ budget line, so a bot sees its own cards and a manager sees its reports' cards. 
 accounts it is `saved_on` (vendor, label, who saved it, when): the first ten, oldest first; the vendor filter finds
 all.
 
+A card's cutoff freeze (its budget reached its decline amount) is recorded as `frozen_by: budget` on the card row. It
+lifts by itself once every budget over the card has room again: a new period, a raise that leaves room, or a hold or
+reserve released (checked at each hourly look and at each raise). A freeze a person made (`frozen_by: person`), or one a
+person claims by freezing the card, stays until a person unfreezes it. A budget can't be set below what its cards
+reserve (each card's allocation, or what it has used if more) plus its child budgets; the refusal names the cards to
+lower first.
+
 `hub finance search --kind card --vendor "Acme Cloud"` answers "which of my cards works at this vendor". `card_unsave`
 records that a card was removed from a vendor's account. Both are gated: a bot's `card_save` or `card_unsave` waits for
 a finance admin.

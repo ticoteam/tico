@@ -447,6 +447,7 @@ ADDED = (
     ("fin_cards", "nickname", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "provider_limit", "BIGINT"),
     ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
     ("fin_cards", "synced_at", "TEXT"),
+    ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),

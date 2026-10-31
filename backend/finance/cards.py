@@ -13,6 +13,7 @@ as it stands then (a freeze made before then follows once it exists); a card lef
 Mercury confirms it (`allocation_due`), so the budget never counts on room the card can still spend."""
 import sqlite3
 from collections.abc import Callable
+from datetime import date
 from typing import Any, cast
 
 from . import handlers
@@ -366,8 +367,11 @@ def _state(kind: str) -> handlers.Planner:
     op, status = STATE_OPS[kind]
 
     def planner(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-        """Freeze, unfreeze or cancel a card (freeze also takes a budget: every active card on it and its children)."""
+        """Freeze, unfreeze or cancel a card (freeze also takes a budget: every active card on it and its children). A
+        freeze records who made it: a budget's cutoff (`budget`) or a person (`person`). A person's freeze of a card a
+        budget froze claims it, so the budget's room never lifts it (§8.2)."""
         V.only(p, ("card_id", "budget_id", "reason") if kind == "card_freeze" else ("card_id", "reason"))
+        bid = ""
         if kind == "card_freeze" and "budget_id" in p:
             from .budgeting import subtree
             bid = V.text(p, "budget_id", 80)
@@ -375,12 +379,18 @@ def _state(kind: str) -> handlers.Planner:
             if b is None or (who != SYSTEM and not handlers.sees_budget(ctx, who, b)):
                 raise FinanceError(NOT_FOUND, "no such budget")
             cards = list(SK.cards_on_budgets(ctx.c, subtree(ctx, bid)))
+            if who != SYSTEM:
+                cards += list(SK.budget_frozen_cards(ctx.c, subtree(ctx, bid)))
             if not cards:
                 raise FinanceError(CONFLICT, "that budget has no active cards")
         else:
             cards = [_card(ctx, who, V.text(p, "card_id", 80))]
+
+        def claims(card: Any) -> bool:
+            return kind == "card_freeze" and who != SYSTEM and str(card["status"]) == "frozen" and \
+                str(card["freeze_by"] or "") == "budget"
         for card in cards:
-            if str(card["status"]) == status:
+            if str(card["status"]) == status and not claims(card):
                 raise FinanceError(CONFLICT, f"that card is already {status}")
             if str(card["status"]) == "cancelled":
                 raise FinanceError(CONFLICT, "that card is cancelled")
@@ -395,22 +405,60 @@ def _state(kind: str) -> handlers.Planner:
 
         def apply(aid: str) -> Result:
             for card in cards:
+                cid = str(card["id"])
+                if claims(card):
+                    SK.update(ctx.c, "fin_cards", cid, {"freeze_by": "person", "freeze_budget_id": None,
+                                                        "updated_at": ctx.at})
+                    continue
                 fields: dict[str, object] = {"status": status, "updated_at": ctx.at}
                 if kind == "card_cancel":
                     fields["allocation_due"] = 0         # its reservation goes when Mercury confirms the cancel
-                SK.update(ctx.c, "fin_cards", str(card["id"]), fields)
+                elif kind == "card_freeze":
+                    fields.update(freeze_by="budget" if who == SYSTEM else "person", freeze_budget_id=bid or None)
+                else:
+                    fields.update(freeze_by=None, freeze_budget_id=None)
+                SK.update(ctx.c, "fin_cards", cid, fields)
                 if kind == "card_cancel" and not card["provider_card_id"] and \
                         str(card["provider_status"] or "") != UNCERTAIN and \
-                        not SK.card_create_waiting(ctx.c, str(card["id"])):
-                    not_issued(ctx, str(card["id"]))       # never issued and not being issued: nothing to undo
+                        not SK.card_create_waiting(ctx.c, cid):
+                    not_issued(ctx, cid)       # never issued and not being issued: nothing to undo
                     continue
-                sync(ctx, str(card["id"]), aid, who)
+                sync(ctx, cid, aid, who)
             return {"cards": [str(card["id"]) for card in cards], "status": status}
         what = f"{op.capitalize()} {len(cards)} card(s)" if len(cards) > 1 else \
             f"{op.capitalize()} card ••{cards[0]['last4'] or '----'}"
         return Plan(K.default_gate(ctx.org, who, kind), what, apply,
                     facts={"holder": [str(card["holder"]) for card in cards], "cards": len(cards)})
     return planner
+
+
+def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
+    """Lift the freezes a budget's cutoff made once every budget over the card has room again: a new period, a raise, or
+    a hold or reserve released (§8.2). A card a person froze is never lifted. With `budget_id`, only cards under that
+    budget are looked at. Each lift goes to Mercury through `sync`, like any change. How many."""
+    from .budgeting import chain_of, subtree
+    from .core import dates
+    budgets = ctx.budgets()
+    scope = subtree(ctx, budget_id) if budget_id else None
+    today = dates.day(ctx.today)
+    lifted = 0
+    for card in SK.budget_frozen_cards(ctx.c, scope):
+        leaf = str(card["budget_id"] or "")
+        if leaf not in budgets or any(_over(ctx, bid, today) for bid in chain_of(ctx, leaf)):
+            continue
+        cid = str(card["id"])
+        SK.update(ctx.c, "fin_cards", cid, {"status": "active", "freeze_by": None, "freeze_budget_id": None,
+                                            "updated_at": ctx.at})
+        sync(ctx, cid, aid, SYSTEM)
+        lifted += 1
+    return lifted
+
+
+def _over(ctx: Ctx, budget_id: str, at: date) -> bool:
+    """Whether a budget is at or past its amount on `at`, counting spend, holds and reserves."""
+    from .budgeting import state
+    left = state(ctx, budget_id, at).remaining
+    return left is not None and left <= 0
 
 
 def check_lower(ctx: Ctx, card: Any, amount: int) -> None:
@@ -428,7 +476,7 @@ def limit_follows(ctx: Ctx, card_id: str, amount: int, aid: str, by: str, lowere
         return
     fields: dict[str, object] = {"updated_at": ctx.at, "allocation_due": amount if lowered else None}
     if amount <= 0:
-        fields["status"] = "frozen"
+        fields.update(status="frozen", freeze_by="person", freeze_budget_id=None)    # a zero allocation is a person's
     else:
         fields["limit_amount"] = amount
     SK.update(ctx.c, "fin_cards", card_id, fields)
