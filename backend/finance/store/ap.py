@@ -208,6 +208,13 @@ def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
     return str(row[0]) if row is not None else key.strip()
 
 
+def renewals_due(c: sqlite3.Connection, book_id: str) -> list[Any]:
+    """Active vendors with a renewal date: the watch raises each one's renewal stages."""
+    return c.execute("SELECT id, renewal_on FROM fin_contacts WHERE book_id=? AND active=1 "
+                     "AND kind IN ('vendor','both') AND renewal_on IS NOT NULL AND renewal_on<>''",
+                     (book_id,)).fetchall()
+
+
 def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
     """The vendor a budget or a charge means: a contact's id stays; a name aliased to a contact (even one no longer
     active: its history still maps) is that contact's id; any other name is its name key."""

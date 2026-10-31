@@ -132,9 +132,33 @@ def run_bookkeeper_check(store, auth, at, failures=None):
         run.did(made["words"], quiet=not made["items"])
 
 
+def run_bookkeeper_watch(store, auth, at, failures=None):
+    # The Bookkeeper's Watch (backend/bookkeeper.py watch): runway, unusual spend, duplicate charges and price increases,
+    # read in plain code. Nothing new is a quiet run; something new opens or updates one "Watch" task for the Bookkeeper.
+    with SR.recording(store, "bookkeeper_watch", failures, "bookkeeper") as run:
+        from . import bookkeeper
+        with store.transaction() as c:
+            made = bookkeeper.watch(c, auth, stamp(at))
+        run.did(made["words"], quiet=not made["items"])
+
+
+def run_bookkeeper_rules_digest(store, auth, at, failures=None):
+    # The weekly digest of posting rules made that week (backend/bookkeeper.py rules_digest). No new rule is a quiet run.
+    with SR.recording(store, "bookkeeper_rules_digest", failures, "bookkeeper") as run:
+        from . import bookkeeper
+        with store.transaction() as c:
+            made = bookkeeper.rules_digest(c, auth, stamp(at))
+        run.did(made["words"], quiet=not made["items"])
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
          "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
+
+# The Bookkeeper's Watch (daily) and rules digest (weekly): their own cadence, not controlled jobs (CONTROLS has the
+# six a person switches). The Bookkeeper's pause is their off switch.
+FIXED = {"bookkeeper_watch": (run_bookkeeper_watch, timedelta(days=1)),
+         "bookkeeper_rules_digest": (run_bookkeeper_rules_digest, timedelta(days=7))}
 
 
 def run_now(store, auth, key, actor):
@@ -531,6 +555,13 @@ class Scheduler:
         for key, run in QUICK.items():
             if cfgs and self.due(key, at, cfgs, last):
                 run(self.store, self.execution.auth, at, failures)
+        # The Bookkeeper's fixed-cadence jobs (FIXED): due one interval after their last start, as controlled jobs are.
+        if cfgs is not None:
+            for key, (run, every) in FIXED.items():
+                mark = max([t for t in (self.marks.get(key), last.get(key)) if t], default=None)
+                if mark is None or at - mark >= every:
+                    self.marks[key] = at
+                    run(self.store, self.execution.auth, at, failures)
         # Production invariants every 15 minutes (backend/invariants.py): plain SQL, no model.
         if self.invariants_checked is None or at - self.invariants_checked >= timedelta(minutes=15):
             self.invariants_checked = at

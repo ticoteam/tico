@@ -3,14 +3,16 @@ reconciliations, cards, recipients, payments, the inbox and outbox, gate rules a
 values; no provider is called from here."""
 import json
 import sqlite3
+from datetime import date, timedelta
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
 from .ledger import new_id
 
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
-                    "fin_cards", "fin_card_auths", "fin_recipients", "fin_payments", "fin_inbox", "fin_outbox",
-                    "fin_rules", "fin_rule_runs"})
+                    "fin_cards", "fin_card_auths", "fin_card_saves", "fin_recipients", "fin_payments", "fin_inbox",
+                    "fin_outbox",
+                    "fin_rules", "fin_rule_runs", "fin_transfers"})
 LIVE_PAYMENT = ("queued", "sending", "awaiting_bank_approval", "submitted", "unknown")
 
 
@@ -392,6 +394,41 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
                      list(budget_ids)).fetchall()
 
 
+def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
+    """Cards a budget's cutoff froze and no person has claimed since, on these budgets (every budget when None)."""
+    if budget_ids is not None and not budget_ids:
+        return []
+    scope = "" if budget_ids is None else f" AND budget_id IN ({_marks(budget_ids)})"
+    sql = "SELECT * FROM fin_cards WHERE status='frozen' AND freeze_by='budget'" + scope
+    return c.execute(sql + " ORDER BY created_at, id", [] if budget_ids is None else list(budget_ids)).fetchall()
+
+
+def card_save_rows(c: sqlite3.Connection, card_id: str, vendor_keys: Sequence[str]) -> list[Any]:
+    """A card's saved-card records at any of a vendor's keys (its contact id and the names it went by), active or
+    removed, oldest first."""
+    if not vendor_keys:
+        return []
+    return c.execute(f"SELECT * FROM fin_card_saves WHERE card_id=? AND vendor_key IN ({_marks(vendor_keys)}) "
+                     "ORDER BY saved_at, id", [card_id, *vendor_keys]).fetchall()
+
+
+def card_saves(c: sqlite3.Connection, card_ids: Sequence[str]) -> list[Any]:
+    """The vendor accounts these cards are saved on now, oldest first."""
+    if not card_ids:
+        return []
+    return c.execute(f"SELECT * FROM fin_card_saves WHERE active=1 AND card_id IN ({_marks(card_ids)}) "
+                     "ORDER BY saved_at, id", list(card_ids)).fetchall()
+
+
+def cards_saved_at(c: sqlite3.Connection, book_id: str, vendor_keys: Sequence[str]) -> set[str]:
+    """The ids of the cards saved now on any of these vendor keys (a vendor's keys: its contact id and names)."""
+    if not vendor_keys:
+        return set()
+    rows = c.execute(f"SELECT card_id FROM fin_card_saves WHERE book_id=? AND active=1 AND vendor_key IN "
+                     f"({_marks(vendor_keys)})", [book_id, *vendor_keys]).fetchall()
+    return {str(r[0]) for r in rows}
+
+
 def cards_unsynced(c: sqlite3.Connection, most: int) -> list[Any]:
     return c.execute("SELECT * FROM fin_cards WHERE sync_status='pending' ORDER BY updated_at LIMIT ?",
                      (most,)).fetchall()
@@ -426,8 +463,100 @@ def payment_by_key(c: sqlite3.Connection, key: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE idempotency_key=?", (key,)).fetchone()
 
 
+def outbox_by_key(c: sqlite3.Connection, key: str) -> Any:
+    """The outbox write under this idempotency key (a transfer's is `transfer-<id>`)."""
+    return c.execute("SELECT * FROM fin_outbox WHERE idempotency_key=?", (key,)).fetchone()
+
+
+TRANSFER_WINDOW_DAYS = 5     # a transfer's two legs post on its submit day or within this many days after it
+
+
+def _window(submitted_at: object) -> tuple[str, str]:
+    """The first and last day a leg of a transfer submitted at `submitted_at` may be dated."""
+    day = date.fromisoformat(str(submitted_at)[:10])
+    return day.isoformat(), (day + timedelta(days=TRANSFER_WINDOW_DAYS)).isoformat()
+
+
+def _leg(c: sqlite3.Connection, feed: str) -> Any:
+    return c.execute("SELECT id, money_account_id, amount, txn_date, provider_id, request_id FROM fin_feed_txns "
+                     "WHERE id=?", (feed,)).fetchone()
+
+
+def settle_pair(c: sqlite3.Connection, out_feed: str, in_feed: str, at: str) -> str | None:
+    """Link the two posted legs of a move to the Finance transfer they are: one between the same accounts for the same
+    amount that still waits on them (submitted, or unknown: its legs may be what made it real), with both legs dated
+    from its submit day through TRANSFER_WINDOW_DAYS on, so an older move between the same accounts never settles it.
+    A transfer whose Mercury id a leg carries wins; else the oldest that fits. Its id, or None (a move made outside
+    Finance)."""
+    out, inn = _leg(c, out_feed), _leg(c, in_feed)
+    if out is None or inn is None or int(out["amount"]) >= 0 or int(inn["amount"]) != -int(out["amount"]):
+        return None
+    ids = {str(x) for x in (out["provider_id"], out["request_id"], inn["provider_id"], inn["request_id"]) if x}
+    best = None
+    for t in c.execute("SELECT id, provider_txn_id, submitted_at FROM fin_transfers WHERE status IN ('submitted',"
+                       "'unknown') AND from_money_account_id=? AND to_money_account_id=? AND amount=? AND "
+                       "submitted_at IS NOT NULL ORDER BY created_at, id",
+                       (str(out["money_account_id"]), str(inn["money_account_id"]), -int(out["amount"]))).fetchall():
+        first, last = _window(t["submitted_at"])
+        if not all(first <= str(leg["txn_date"])[:10] <= last for leg in (out, inn)):
+            continue
+        if t["provider_txn_id"] and str(t["provider_txn_id"]) in ids:
+            best = t
+            break
+        if best is None:
+            best = t
+    if best is None:
+        return None
+    _settle_transfer(c, str(best["id"]), out_feed, in_feed, at)
+    return str(best["id"])
+
+
+def settle_legs(c: sqlite3.Connection, transfer_id: str, at: str, kinds: Sequence[str]) -> bool:
+    """Link a transfer to its legs when both are already posted and not yet linked (the feed came first), with the same
+    dates and preference as settle_pair."""
+    t = c.execute("SELECT from_money_account_id, to_money_account_id, amount, status, submitted_at, provider_txn_id "
+                  "FROM fin_transfers WHERE id=?", (transfer_id,)).fetchone()
+    if t is None or str(t["status"]) not in ("submitted", "unknown") or t["submitted_at"] is None:
+        return False
+    first, last = _window(t["submitted_at"])
+    amount = int(t["amount"])
+    pid = str(t["provider_txn_id"] or "")
+
+    def leg(money: object, value: int) -> str | None:
+        found = c.execute(
+            f"SELECT f.id FROM fin_feed_txns f WHERE f.money_account_id=? AND f.amount=? AND f.kind IN ({_marks(kinds)}) "
+            "AND f.status='posted' AND substr(f.txn_date,1,10)>=? AND substr(f.txn_date,1,10)<=? AND NOT EXISTS "
+            "(SELECT 1 FROM fin_transfers x WHERE x.from_feed_id=f.id OR x.to_feed_id=f.id) "
+            "ORDER BY CASE WHEN f.provider_id=? OR f.request_id=? THEN 0 ELSE 1 END, f.txn_date, f.id LIMIT 1",
+            [str(money), value, *kinds, first, last, pid, pid]).fetchone()
+        return str(found[0]) if found else None
+    out = leg(t["from_money_account_id"], -amount)
+    inn = leg(t["to_money_account_id"], amount)
+    if out is None or inn is None:
+        return False
+    _settle_transfer(c, transfer_id, out, inn, at)
+    return True
+
+
+def unlink_transfers(c: sqlite3.Connection, feed_id: str, at: str) -> None:
+    """A leg went back to waiting (its entry was reversed): a transfer it settled waits for both legs again."""
+    c.execute("UPDATE fin_transfers SET status='submitted', from_feed_id=NULL, to_feed_id=NULL, settled_at=NULL, "
+              "updated_at=? WHERE status='posted' AND (from_feed_id=? OR to_feed_id=?)", (at, feed_id, feed_id))
+
+
+def _settle_transfer(c: sqlite3.Connection, transfer_id: str, out_feed: str, in_feed: str, at: str) -> None:
+    update(c, "fin_transfers", transfer_id, {"status": "posted", "from_feed_id": out_feed, "to_feed_id": in_feed,
+                                             "settled_at": at, "updated_at": at})
+
+
 def payment_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE provider_request_id=?", (request_id,)).fetchone()
+
+
+def direct_payment(c: sqlite3.Connection, transaction_id: str) -> Any:
+    """The direct send whose Mercury transaction is this bank row (a direct send has no approval request)."""
+    return c.execute("SELECT * FROM fin_payments WHERE mode='direct' AND provider_request_id=?",
+                     (transaction_id,)).fetchone()
 
 
 def payments_by_txn(c: sqlite3.Connection, feed_ids: Sequence[str]) -> list[Any]:
@@ -597,6 +726,12 @@ def outbox_stuck(c: sqlite3.Connection, before: str, connection_id: str) -> list
 def rules(c: sqlite3.Connection, kind: str = "gate", active_only: bool = True) -> list[Any]:
     sql = "SELECT * FROM fin_rules WHERE kind=?" + (" AND active=1" if active_only else "")
     return c.execute(sql + " ORDER BY created_at, id", (kind,)).fetchall()
+
+
+def posting_rules_since(c: sqlite3.Connection, since: str) -> list[Any]:
+    """Posting rules made since a time, newest first (the Bookkeeper's weekly digest)."""
+    return c.execute("SELECT * FROM fin_rules WHERE kind='posting' AND created_at>=? ORDER BY created_at DESC, id",
+                     (since,)).fetchall()
 
 
 def rules_for_external(c: sqlite3.Connection, external_rule_id: str) -> list[Any]:

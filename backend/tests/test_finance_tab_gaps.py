@@ -16,6 +16,25 @@ from backend.tests.test_finance_tab import _bank
 OCT = ("2026-10-01", "2026-10-31")
 
 
+def test_a_line_without_a_projection_projects_from_its_posted_history(books):
+    with books.transaction() as c:
+        spend(c, "6100", 800, day="2026-09-05")          # software recurs: September's total is next month's guess
+        spend(c, "6100", 400, day="2026-09-20")
+        spend(c, "5100", 3_100, day="2026-10-10")        # AI services runs at its last 30 days
+        act(c, OWNER, "projection_set", {"account_id": account(c, "5100"), "month": "2026-11", "amount": 9_000})
+        soft = FR.line_detail(c, OWNER, account(c, "6100"), *OCT, at=AT)["next_month"]
+        assert soft == {"month": "2026-11", "projection": 1_200, "projection_method": "recurring"}
+        ai = FR.line_detail(c, OWNER, account(c, "5100"), *OCT, at=AT)["next_month"]
+        assert ai == {"month": "2026-11", "projection": 9_000, "projection_method": "manual"}
+        none = FR.line_detail(c, OWNER, account(c, "6900"), *OCT, at=AT)["next_month"]
+        assert none == {"month": "2026-11", "projection": None, "projection_method": None}
+        rows = {r["code"]: r for r in FR.pnl(c, OWNER, *OCT, at=AT)["rows"]}
+        assert rows["6100"]["projection"] == [1_200] and rows["6100"]["projection_method"] == "recurring"
+        assert rows["5100"]["projection"] == [3_203]            # October's run rate: 3100 x 31 / 30, a stored November
+        assert rows["5100"]["projection_method"] == "run_rate"  # does not change October
+        assert rows["6900"]["projection"] is None and rows["6900"]["projection_method"] is None
+
+
 def test_only_the_owner_edits_view_defaults_and_unbacked_grants_are_suspended(books):
     with books.transaction() as c:
         spend(c, "6100", 1_000, team="web", teammate="human:eve")
@@ -68,7 +87,7 @@ def test_a_line_opens_per_vendor_with_how_it_was_paid_and_next_month(books):
         act(c, OWNER, "projection_set", {"account_id": account(c, "6900"), "month": "2026-11", "amount": 9_000})
         line = account(c, "6900")
         whole = FR.line_detail(c, OWNER, line, *OCT, at=AT)
-        assert whole["next_month"] == {"month": "2026-11", "projection": 9_000}
+        assert whole["next_month"] == {"month": "2026-11", "projection": 9_000, "projection_method": "manual"}
         assert {(p["kind"], p["name"], p["amount"]) for p in whole["paid_by"]} == {
             ("card", "Card ••1111", 1_200), ("card", "Card ••2222", 3_400), ("entry", "usage", 700)}
         tools = FR.line_detail(c, OWNER, line, *OCT, vendor="acme-tools", at=AT)
@@ -209,3 +228,33 @@ def test_chart_lists_unused_lines_and_tells_a_manager_whom_they_may_tag(books):
         line = next(a for a in FR.chart(c, "human:cara")["accounts"] if a["number"] == "6100")
         assert not line["company_wide"] and line["attributable"][0] == {"teammate": "human:cara"}
         assert {"team": "web"} in line["attributable"] and {"teammate": "human:eve"} in line["attributable"]
+
+
+def test_a_team_override_leaves_the_other_teams_defaults_standing(books):
+    with books.transaction() as c:
+        soft = account(c, "6100")
+        spend(c, "6100", 1_000, day="2026-09-10", team="web")
+        spend(c, "6100", 2_000, day="2026-09-10", team="sales")
+        assert FR.line_detail(c, OWNER, soft, at=AT)["next_month"] == {
+            "month": "2026-11", "projection": 3_000, "projection_method": "recurring"}
+        assert act(c, OWNER, "projection_set", {"account_id": soft, "month": "2026-11", "amount": 1_500,
+                                                "team": "web"}).status == "committed"
+        # Web's override replaces Web's default; Sales keeps its own.
+        assert FR.line_detail(c, OWNER, soft, at=AT)["next_month"]["projection"] == 3_500
+
+
+def test_a_trend_default_is_fitted_to_the_line_and_split_only_under_a_stored_projection(books):
+    with books.transaction() as c:
+        revenue = account(c, "4000")
+        for n in range(6):      # April to September: web's revenue rises, sales' falls to nothing, eng holds flat
+            day = f"2026-{4 + n:02d}-10"
+            spend(c, "4000", -100 * (n + 1), day=day, team="web")
+            spend(c, "4000", -100 * (6 - n), day=day, team="sales")
+            spend(c, "4000", -300, day=day, team="eng")
+        # The line is flat at 1,000 a month. Clamping sales' falling trend on its own would give 1,100.
+        assert FR.line_detail(c, OWNER, revenue, at=AT)["next_month"] == {
+            "month": "2026-11", "projection": 1_000, "projection_method": "trend"}
+        assert act(c, OWNER, "projection_set", {"account_id": revenue, "month": "2026-11", "amount": 1_000,
+                                                "team": "web"}).status == "committed"
+        # Web's stored projection stands; sales and eng keep their own defaults, 0 and 300.
+        assert FR.line_detail(c, OWNER, revenue, at=AT)["next_month"]["projection"] == 1_300

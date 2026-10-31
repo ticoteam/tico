@@ -104,7 +104,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     else:
         note = ""
     settings = {"approval_eligible": not note, "payments_enabled": not note, "approval_note": note or None,
-                "approver_email": approver or None, "direct_send": False,
+                "approver_email": approver or None,
                 "egress_ip": V.opt_text(p, "server_ip", 64) or probe.get("egress_ip") or None}
     name = V.opt_text(p, "name", 120) or "Mercury"
 
@@ -295,8 +295,13 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         undo(ctx, row)
         if card is not None and t.status in ("failed", "blocked"):
             event(ctx, DECLINED_EVENT, str(card["id"]), {"card_id": str(card["id"]), "feed_id": fid}, fid)
+        status = "returned" if t.reversed else "failed"
         if t.request_id:
-            payments.feed_failed(ctx, t.request_id, "returned" if t.reversed else "failed")
+            payments.feed_failed(ctx, t.request_id, status)
+        elif t.amount < 0 and SK.direct_payment(ctx.c, t.provider_id) is not None:
+            # A direct send has no request: its Mercury transaction id is its key, so a voided bank row ends it here
+            # (its hold released), as an approval request's voided row does.
+            payments.feed_failed(ctx, t.provider_id, status)
         return
     if t.pending:
         if program and card is not None and t.amount < 0:
@@ -312,7 +317,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     gl = _gl(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
-        pay = _marked(ctx, money, t)
+        pay = SK.direct_payment(ctx.c, t.provider_id) or _marked(ctx, money, t)
     if pay is not None and t.amount < 0:
         tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
         rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
@@ -602,6 +607,7 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
             posting.reverse(ctx, str(e["id"]), day=open_day(ctx, str(e["entry_date"])), memo=memo, by=SYSTEM)
     for r in SK.rows_of_entry(ctx.c, entry_id):
         SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "new", "entry_id": None, "updated_at": ctx.at})
+        SK.unlink_transfers(ctx.c, str(r["id"]), ctx.at)
     # A bill or invoice it paid is owed again.
     documents.feed_gone(ctx, str(row["id"]), [str(e["id"]) for e in [entry, *later] if e is not None])
 
@@ -646,6 +652,8 @@ def _transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
         "memo": f"Transfer: {money['name']} / {other_money['name']}"[:200],
         "lines": [feed_line(here.id, amount), feed_line(there.id, -amount)]}, at=ctx.at)
     mark_posted(ctx, [str(row["id"]), str(other["id"])], str(done["entry_id"]))
+    out_leg, in_leg = (row, other) if amount < 0 else (other, row)
+    SK.settle_pair(ctx.c, str(out_leg["id"]), str(in_leg["id"]), ctx.at)   # a Finance transfer, if one fits
 
 
 # ------------------------------------------------------------------------------------------------ categorize

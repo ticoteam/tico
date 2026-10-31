@@ -23,6 +23,8 @@ AGING = ("current", "1_30", "31_60", "61_90", "over_90")
 # Reminder stages: a bill a week out, a day out and on the day; an invoice a day, a week, a month... late.
 BILL_STAGES = (("due_in_7", 7), ("due_in_1", 1), ("due_today", 0))
 INVOICE_STAGES = (("overdue_1", 1), ("overdue_7", 7), ("overdue_30", 30), ("overdue_60", 60), ("overdue_90", 90))
+# A vendor renewal: a month out, then a week out (the tightest stage reached is the one raised).
+RENEWAL_STAGES = (("renewal_in_30", 30), ("renewal_in_7", 7))
 MAX_TERMS = 365
 SHARE_WHOLE = 10_000          # posting-rule splits are in basis points
 DEFAULT_PRIORITY = 100
@@ -34,20 +36,23 @@ class DocLine:
     amount: int
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: cast(dict[str, str], {}))
+    taxable: bool | None = None         # an invoice line only: whether sales tax applies to it (None: not said)
 
 
-def doc_lines(raw: object) -> list[DocLine]:
+def doc_lines(raw: object, *, invoice: bool = False) -> list[DocLine]:
     """A bill's or invoice's lines: each a positive amount with an account (a bill's may leave it out for the vendor's
-    default or a posting rule to fill), a description and tags."""
+    default or a posting rule to fill), a description and tags. An invoice line may also say whether it is taxable."""
     out: list[DocLine] = []
+    allowed = ("account_id", "amount", "description", "tags", *(("taxable",) if invoice else ()))
     for item in V.items(raw, "lines", L.MAX_LINES):
         q = V.obj(item, "a line")
-        V.only(q, ("account_id", "amount", "description", "tags"))
+        V.only(q, allowed)
         amount = V.amount(q)
         if amount <= 0:
             raise invalid("a document line's amount is more than 0")
+        taxable = V.flag(q, "taxable") if "taxable" in q else None
         out.append(DocLine(V.opt_text(q, "account_id", 80) or "", amount, V.opt_text(q, "description") or "",
-                           L.tags(q.get("tags"))))
+                           L.tags(q.get("tags")), taxable))
     return out
 
 
@@ -81,6 +86,17 @@ def bill_stage(due: str | None, today: date) -> str | None:
         return None
     left = (dates.day(due) - today).days
     reached = [name for name, days in BILL_STAGES if left <= days]
+    return reached[-1] if reached else None
+
+
+def renewal_stage(renewal: str | None, today: date) -> str | None:
+    """The tightest renewal stage a vendor has reached; none without a date or once the date has passed."""
+    if not renewal:
+        return None
+    left = (dates.day(renewal) - today).days
+    if left < 0:
+        return None
+    reached = [name for name, days in RENEWAL_STAGES if left <= days]
     return reached[-1] if reached else None
 
 

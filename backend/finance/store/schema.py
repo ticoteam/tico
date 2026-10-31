@@ -1,13 +1,16 @@
 """Every Finance table (spec §4), created by the core migration chain (backend/store.py: cloud migration 64, and 65
-for phase 1's additions, 66 for phase 2's), including the ones later phases fill, so the schema has one starting point.
+for phase 1's additions, 66 for phase 2's, 67 for phase 3's), including the ones later phases fill, so the schema has one starting point.
 
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
 """
+import json
 import re
 import sqlite3
+from typing import cast
 
 from ..core.ledger import name_key
+from ..core.org import SYSTEM
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS fin_settings (
@@ -197,6 +200,12 @@ CREATE TABLE IF NOT EXISTS fin_card_auths (
   decision TEXT NOT NULL, reasons_json TEXT NOT NULL DEFAULT '[]', hold_id TEXT REFERENCES fin_holds(id),
   commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
+CREATE TABLE IF NOT EXISTS fin_card_saves (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), card_id TEXT NOT NULL REFERENCES fin_cards(id),
+  vendor_key TEXT NOT NULL, vendor_label TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  saved_by TEXT NOT NULL, saved_at TEXT NOT NULL, removed_by TEXT, removed_at TEXT, created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (card_id, vendor_key));
+
 CREATE TABLE IF NOT EXISTS fin_actions (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL,
   on_behalf_of TEXT NOT NULL DEFAULT '', rule_id TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL UNIQUE,
@@ -328,6 +337,30 @@ CREATE TABLE IF NOT EXISTS fin_private_lines (
   account_id TEXT PRIMARY KEY REFERENCES fin_accounts(id),
   others_see TEXT NOT NULL DEFAULT 'totals' CHECK (others_see IN ('totals','hidden')),
   full_detail_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_raw_imports (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), content_hash TEXT NOT NULL,
+  basis TEXT NOT NULL CHECK (basis IN ('cash','accrual')), source_name TEXT NOT NULL DEFAULT '',
+  periods INTEGER NOT NULL CHECK (periods > 0), row_count INTEGER NOT NULL, gross BIGINT NOT NULL,
+  action_id TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS fin_close_snapshots (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  period_id TEXT NOT NULL UNIQUE REFERENCES fin_periods(id), month TEXT NOT NULL,
+  accounts_json TEXT NOT NULL, pnl_json TEXT NOT NULL, balances_json TEXT NOT NULL,
+  restated_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  UNIQUE (book_id, month));
+
+CREATE TABLE IF NOT EXISTS fin_transfers (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
+  from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted','cancelled')),
+  provider_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT, settled_at TEXT, submitted_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  CHECK (from_money_account_id <> to_money_account_id));
 """
 
 INDEXES = """
@@ -335,6 +368,7 @@ CREATE INDEX IF NOT EXISTS fin_accounts_book ON fin_accounts(book_id, type);
 CREATE INDEX IF NOT EXISTS fin_entries_date ON fin_entries(book_id, entry_date);
 CREATE INDEX IF NOT EXISTS fin_entries_source ON fin_entries(source, source_id);
 CREATE INDEX IF NOT EXISTS fin_entries_reverses ON fin_entries(reverses_id);
+CREATE INDEX IF NOT EXISTS fin_raw_imports_hash ON fin_raw_imports(book_id, content_hash);
 CREATE INDEX IF NOT EXISTS fin_lines_entry ON fin_lines(entry_id);
 CREATE INDEX IF NOT EXISTS fin_lines_account ON fin_lines(account_id, entry_date);
 CREATE INDEX IF NOT EXISTS fin_lines_contact ON fin_lines(contact_id, entry_date);
@@ -365,6 +399,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
+CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
 CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
 CREATE INDEX IF NOT EXISTS fin_payments_status ON fin_payments(status, next_try_at);
 CREATE INDEX IF NOT EXISTS fin_payments_obligation ON fin_payments(obligation, created_at);
@@ -441,6 +476,7 @@ ADDED = (
     ("fin_cards", "nickname", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "provider_limit", "BIGINT"),
     ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
     ("fin_cards", "synced_at", "TEXT"),
+    ("fin_cards", "freeze_by", "TEXT"), ("fin_cards", "freeze_budget_id", "TEXT"),
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
@@ -456,16 +492,32 @@ ADDED = (
     ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
     ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_invoice_lines", "taxable", "INTEGER NOT NULL DEFAULT 1"),
     ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
     ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
+    # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
+    ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
 )
 
 
+# Tax (migration 70, spec §11): the sales tax jurisdictions (each one a liability account and its authority contact) and
+# the external-rule seeds made for the outside obligations (the 1099-NEC, each jurisdiction's quarterly return).
+TAX = """
+CREATE TABLE IF NOT EXISTS fin_tax_jurisdictions (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), code TEXT NOT NULL, name TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES fin_accounts(id), authority_id TEXT NOT NULL DEFAULT '',
+  due_day INTEGER NOT NULL CHECK (due_day BETWEEN 1 AND 28), created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  UNIQUE (book_id, code), UNIQUE (account_id));
+
+CREATE TABLE IF NOT EXISTS fin_tax_seeds (
+  key TEXT PRIMARY KEY, rule_id TEXT NOT NULL, created_at TEXT NOT NULL);
+"""
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
-    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES)
+    return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES + TAX)
 
 
 def statements(script: str) -> list[str]:
@@ -495,8 +547,9 @@ def _add_columns(c: sqlite3.Connection) -> None:
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
     commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
-    for statement in statements(TABLES):
-        c.execute(statement)
+    for script in (TABLES, TAX):
+        for statement in statements(script):
+            c.execute(statement)
     _add_columns(c)
     for script in (INDEXES, TRIGGERS):
         for statement in statements(script):
@@ -511,11 +564,61 @@ def phase1(c: sqlite3.Connection) -> None:
     create(c)
 
 
+def phase3(c: sqlite3.Connection) -> None:
+    """Cloud migration 67: phase 3's saved-card record (fin_card_saves: which vendor accounts a card is saved on), and
+    why an earlier cutoff froze its cards (freeze_provenance). The same statements as `create`, which skips whatever
+    exists."""
+    create(c)
+    freeze_provenance(c)
+
+
+def freeze_provenance(c: sqlite3.Connection) -> None:
+    """A card a budget's cutoff froze before `freeze_by` existed has no record of why it is frozen, so it would never
+    lift once its budget has room. The action log says: a system card_freeze for a budget is the cutoff's freeze, and it
+    is the card's latest freeze or unfreeze when the card's last word is that one. Such a card that still has an
+    allocation is marked `budget` with that budget. Every other frozen card keeps NULL (a person's freeze). Only NULL
+    rows are read, so a second run changes nothing."""
+    if not c.execute("SELECT 1 FROM fin_cards WHERE status='frozen' AND freeze_by IS NULL LIMIT 1").fetchone():
+        return
+    last: dict[str, str] = {}     # card id -> the budget its latest freeze or unfreeze was a cutoff of ("" if none)
+    for kind, actor, payload, result in c.execute(
+            "SELECT kind, actor, payload_json, result_json FROM fin_actions WHERE status='committed' AND "
+            "kind IN ('card_freeze','card_unfreeze') ORDER BY created_at, rowid").fetchall():
+        body = cast(dict[str, object], json.loads(str(payload or "{}")))
+        cut = str(body.get("budget_id") or "") if kind == "card_freeze" and actor == SYSTEM else ""
+        outcome = cast(dict[str, object], json.loads(str(result or "{}")))
+        for card in cast(list[object], outcome.get("cards") or []):
+            last[str(card)] = cut
+    for card_id, budget_id in last.items():
+        if budget_id:
+            c.execute("UPDATE fin_cards SET freeze_by='budget', freeze_budget_id=? WHERE id=? AND status='frozen' AND "
+                      "freeze_by IS NULL AND EXISTS (SELECT 1 FROM fin_allocations a "
+                      "WHERE a.budget_id=fin_cards.budget_id AND a.target_kind='card' AND a.target_id=fin_cards.id "
+                      "AND a.amount>0)", (budget_id, card_id))
+
+
 def phase2(c: sqlite3.Connection) -> None:
     """Cloud migration 66: phase 2's settlements, cash view and document columns on an install made before them. The
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def raw_import(c: sqlite3.Connection) -> None:
+    """Cloud migration 71: the history imports' table (spec §4.1). The same statements as `create`."""
+    create(c)
+
+
+def close_snapshots(c: sqlite3.Connection) -> None:
+    """Cloud migration 72: the close snapshot table on an install that closed months before it. Months closed before
+    it have no snapshot and read live. The same statements as `create` again, so it is idempotent."""
+    create(c)
+
+
+def gaps_books(c: sqlite3.Connection) -> None:
+    """Cloud migration 73 (the books gaps): fin_transfers, for an install made before it. The same statements as
+    `create`, which skips whatever exists, so a fresh install gets the table from `create` and this changes nothing."""
+    create(c)
 
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:
@@ -537,3 +640,10 @@ def vendor_keys_folded(c: sqlite3.Connection) -> None:
                                  "(SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor)").fetchall():
         if name_key(str(vendor)) != vendor:
             c.execute("UPDATE fin_budgets SET vendor=? WHERE id=?", (name_key(str(vendor)), bid))
+
+
+def tax(c: sqlite3.Connection) -> None:
+    """Cloud migration 70: the sales tax jurisdictions and the due dates seeded for the outside obligations. Idempotent."""
+    for statement in statements(TAX):
+        c.execute(statement)
+    _add_columns(c)

@@ -1737,6 +1737,35 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase2(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=67").fetchone():
+                    # Finance phase 3 (bot cards): the saved-card record, which vendor accounts a card is saved on.
+                    # Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase3(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(67,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=70").fetchone():
+                    # Finance tax (spec §11): the sales tax jurisdictions and the due dates seeded for the outside
+                    # obligations. Idempotent, like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.tax(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(70,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=71").fetchone():
+                    # Finance history imports (spec §4.1): the fin_raw_imports table. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.raw_import(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(71,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=72").fetchone():
+                    # Finance close snapshots (fin_close_snapshots): a closed month reads the account tree it closed
+                    # with. Idempotent like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.close_snapshots(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(72,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=73").fetchone():
+                    # The books gaps: fin_transfers, internal transfers between our own bank accounts
+                    # (backend/finance/transfers.py). Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.gaps_books(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(73,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

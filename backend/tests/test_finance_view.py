@@ -115,6 +115,23 @@ def test_payroll_shows_only_as_whole_closed_runs(books):
         assert _dept(c, "human:eve", "2026-10-01", "2026-10-31") == {"eng": 9_000}
 
 
+def test_a_window_over_closed_months_counts_each_private_run_once(books):
+    with books.transaction() as c:
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        for day in ("2026-08-31", "2026-09-30"):
+            for mate in ENG:
+                spend(c, "6200", PAY[mate], day=day, teammate=mate)
+        _close(c, "2026-08", "2026-09")
+        run = sum(PAY[m] for m in ENG)
+
+        def total(a, z):
+            return FR.line_detail(c, "human:ben", pay, a, z, at=AT)["total"]
+        assert (total("2026-08-01", "2026-08-31"), total("2026-09-01", "2026-09-30")) == (run, run)
+        assert total("2026-08-01", "2026-09-30") == 2 * run
+
+
 def test_own_lines_never_sit_beside_the_department_cell(books):
     with books.transaction() as c:
         _payroll(c)

@@ -5944,7 +5944,7 @@ FINANCE_MAX_CHARS = 64000        # about 16k tokens
 FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by", "close"]
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
-FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule"]
+FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule", "card"]
 FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
                  "budget_near_limit", "sync_failed", "period_ready"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
@@ -6118,10 +6118,12 @@ def _fin_paged(api, path, query, key, budget):
     return _fin_guard(smaller, budget, key)
 
 
-@tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts and "
-      "rules. Name a kind to page with cursor; without one you get the first few of each kind.",
+@tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts, "
+      "rules and cards (each card with the vendor accounts it is saved on). Name a kind to page with cursor; without "
+      "one you get the first few of each kind.",
       {"kind": _s("What to search", enum=FINANCE_SEARCH), "q": _s("Words to match"),
-       "status": _s("Row or document status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
+       "status": _s("Row, document or card status"), "contact_id": _s("Bills/invoices: this vendor or customer"),
+       "vendor": _s("Cards: saved on this vendor (a contact's id or name): which of your cards works there"),
        "account_id": _s("Entries/rows: this chart-of-accounts line"),
        "money_account_id": _s("Entries/rows: this bank or card account"), "start": FIN_DAY, "end": FIN_DAY,
        "aging": _s("Bills/invoices: aging bucket", enum=["current", "1_30", "31_60", "61_90", "over_90"]),
@@ -6131,8 +6133,8 @@ def _fin_paged(api, path, query, key, budget):
        "cursor": _s("next_cursor from the last page (needs kind)"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Rows per page (default 50)"}})
 def finance_search(api, args):
-    query = _fin_query(args, ("kind", "q", "status", "contact_id", "account_id", "money_account_id", "start", "end",
-                              "aging", "contact_kind", "rule_kind", "cursor", "limit"))
+    query = _fin_query(args, ("kind", "q", "status", "contact_id", "vendor", "account_id", "money_account_id", "start",
+                              "end", "aging", "contact_kind", "rule_kind", "cursor", "limit"))
     if args.get("active") is not None:
         query["active"] = "true" if args["active"] else "false"
     budget = _fin_budget(args.get("limit"), 50)

@@ -51,6 +51,11 @@ Work the items in this order, then mark the task done with one line: what you di
   find in the feed with `invoice_record_payment` instead.
 - **Month ready to close** (playbooks/close-month.md): read the close checklist, finish what it lists, write the
   budget vs actual note, then ask for `close_period`. The owner approves the close.
+- **Sales tax return due** (one per jurisdiction, each quarter) or **1099-NEC due** (January 31): these are outside
+  obligations the company owns. For a sales tax return, `tax_remit` with the jurisdiction and the quarter (`2026-Q3`)
+  makes the bill to the tax authority; check the amount it shows against the quarter's sales tax before approving.
+  For the 1099-NEC, ask the owner to review the flagged vendors before the due date. Closing the task marks the due
+  date Satisfied. Never write a TIN into a task, note or memory.
 
 ## Never
 - Approve your own action, or ask someone to approve something you have not checked.

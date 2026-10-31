@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from .context import load
+from .core import gates as G
 from .core import rights as R
 from .core.errors import denied
 from .store import banking as SK
@@ -144,12 +145,16 @@ def rules(c: sqlite3.Connection, viewer: str, *, external_rule_id: str | None = 
         raise denied("finance rules are for teammates who may write them")
     rows = SK.rules_for_external(c, external_rule_id) if external_rule_id else \
         [*SK.rules(c, "gate", active_only=False), *SK.rules(c, "posting", active_only=False)]
-    return {"rules": [{"id": str(r["id"]), "kind": str(r["kind"]), "priority": int(r["priority"]),
+    floors: list[Row] = [] if external_rule_id else [
+        {"id": fid, "kind": "floor", "priority": 0, "name": name, "words": words, "when": {"where": where},
+         "outcome": {}, "examples": [], "external_rule_id": None, "owner": "", "active": True, "created_at": "",
+         "fixed": True, "runs": []} for fid, name, words, where in G.FLOORS]
+    return {"rules": floors + [{"id": str(r["id"]), "kind": str(r["kind"]), "priority": int(r["priority"]),
                        "name": str(r["name"]), "words": str(r["words"]),
                        "when": SK.loads(r["when_json"]), "outcome": SK.loads(r["outcome_json"]),
                        "examples": SK.loads_list(r["examples_json"]),
                        "external_rule_id": r["external_rule_id"], "owner": str(r["owner"]), "active": bool(r["active"]),
-                       "created_at": str(r["created_at"]),
+                       "created_at": str(r["created_at"]), "fixed": str(r["id"]) in G.FIXED,
                        "runs": [{"action_id": x["action_id"], "outcome": SK.loads(x["outcome_json"]).get("outcome"),
                                  "at": str(x["created_at"])} for x in SK.rule_runs(c, str(r["id"]), 5)]}
                       for r in rows]}

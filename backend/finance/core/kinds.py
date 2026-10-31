@@ -11,7 +11,8 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
        "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
        "payment_create", "payment_cancel", "recipient_add", "card_create", "card_update_limit", "card_freeze",
-       "card_unfreeze", "card_cancel", "card_resolve", "reconcile_undo", "connection_create", "payment_settings",
+       "card_unfreeze", "card_cancel", "card_resolve", "card_save", "card_unsave", "reconcile_undo",
+       "connection_create", "payment_settings",
        "budget_create", "budget_update", "allocation_set", "projection_set",
        "view_grant", "view_revoke", "private_lines_set",
        "rule_create", "rule_update", "rule_disable", "rule_enable", "rule_test", "contact_create", "contact_update",
@@ -19,7 +20,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match")
+       "feed_match", "tax_jurisdiction_add", "tax_remit", "import_raw_totals")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -32,13 +33,20 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
-        "invoice_write_off", "invoice_void", "attach", "feed_match")
+        "invoice_write_off", "invoice_void", "attach", "feed_match",
+        # phase 3: the vendor accounts a card is saved on (bot cards, §8.3)
+        "card_save", "card_unsave",
+        # phase 3: sales tax jurisdictions and remittances (finance/tax.py)
+        "tax_jurisdiction_add", "tax_remit",
+        # history imports: a spreadsheet's totals as raw totals (finance/raw_totals.py)
+        "import_raw_totals")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
          "allocation_set": R.BUDGETS, "projection_set": R.BUDGETS, "reconcile": R.BOOK, "reconcile_undo": R.BOOK,
          "card_create": R.CARDS, "card_update_limit": R.CARDS, "card_freeze": R.CARDS, "card_unfreeze": R.CARDS,
-         "card_cancel": R.CARDS, "card_resolve": R.CARDS, "recipient_add": R.PAY, "payment_create": R.PAY,
+         "card_cancel": R.CARDS, "card_resolve": R.CARDS, "card_save": R.CARDS, "card_unsave": R.CARDS,
+         "recipient_add": R.PAY, "payment_create": R.PAY,
          "payment_cancel": R.PAY,
          "rule_create": R.RULES, "rule_update": R.RULES, "rule_enable": R.RULES, "rule_disable": R.RULES,
          "rule_test": R.RULES,
@@ -47,7 +55,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
-         "feed_match": (R.AP, R.AR)}
+         "feed_match": (R.AP, R.AR),
+         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -66,11 +75,12 @@ def approval_kind(kind: str) -> str:
 
 @dataclass(frozen=True)
 class Gate:
-    """What the default gates say: `allow`, or `needs_approval` from `who` (owner | finance_admin | manager), with the
-    rule that said it."""
+    """What the default gates say: `allow`, or `needs_approval` from `who` (owner | finance_admin | manager |
+    budget_owner), with the rule that said it. `person` is the one `budget_owner` names: the parent budget's owner."""
     outcome: str
     who: str = ""
     rule: str = ""
+    person: str = ""
 
 
 ALLOW = Gate("allow")
@@ -101,15 +111,20 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 
 def default_gate(org: Org, actor: str, kind: str) -> Gate:
-    """The defaults that are not editable rules: closing or reopening a period asks the owner (unless the owner asks,
-    §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a finance admin. The other §6.4
-    defaults are seeded gate rules (gates.DEFAULTS)."""
+    """The code's floor under the defaults (gates.FIXED): closing or reopening a period, and importing history,
+    asks the owner (unless the owner asks, §6.4 rule 6); a bot settling a cut-off card creation (card_resolve) asks a
+    finance admin, and so does a bot recording where its card is saved (§8.3: a person saves the card on the vendor's
+    account). The seeded gate rules (gates.DEFAULTS) say the same for closing, and the others are editable rules."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
+    if kind == "import_raw_totals" and not owner and actor != SYSTEM:
+        return Gate("needs_approval", "owner", "default:raw-import")
     if actor in org.bots and kind == "card_resolve":
         # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
+    if actor in org.bots and kind in ("card_save", "card_unsave"):
+        return Gate("needs_approval", "finance_admin", "default:bot-card-vendor")
     return ALLOW
 
 
@@ -119,6 +134,7 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 # `actions.help` and the hub tools show; the planners accept exactly these fields.
 Field = tuple[str, str, str]
 _LINE = "list[{account_id, amount: minor, description?, tags?: obj}]"
+_INVOICE_LINE = "list[{account_id, amount: minor, description?, tags?: obj, taxable?: bool}]"
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -187,22 +203,32 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                          ("cash_below?", "minor", "finance.cash.below fires when cash drops under this; 0 turns "
                           "it off")),
     "card_create": (("holder", "str", ""), ("budget_id", "str", ""), ("amount", "minor", "monthly limit"),
-                    ("nickname?", "str", ""), ("money_account_id?", "str", ""), ("provider_user_id?", "str", "")),
+                    ("kind?", "standing|person", "standing for a bot (the default for one), person for a teammate; "
+                     "single_use is not on Mercury yet"),
+                    ("nickname?", "str", ""), ("money_account_id?", "str", ""),
+                    ("provider_user_id?", "str", "the Mercury user the card is issued to")),
     "card_update_limit": (("card_id", "str", ""), ("amount", "minor", "")),
     "card_freeze": (("card_id", "str", ""), ("budget_id?", "str", ""), ("reason?", "str", "")),
     "card_unfreeze": (("card_id", "str", ""), ("reason?", "str", "")),
     "card_cancel": (("card_id", "str", ""), ("reason?", "str", "")),
     "card_resolve": (("card_id", "str", ""), ("provider_card_id?", "str", ""), ("none?", "bool", "")),
+    "card_save": (("card_id", "str", ""), ("vendor", "str", "a vendor contact's id, or the name the vendor goes by")),
+    "card_unsave": (("card_id", "str", ""), ("vendor", "str", "the vendor the card was saved on")),
     "recipient_add": (("name", "str", ""), ("method", "ach|wire|check", ""), ("account_type?", "str", ""),
                       ("address?", "obj", ""), ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
                       ("details", "obj", "bank details; sealed, never stored readable")),
-    "payment_create": (("recipient_id", "str", ""), ("amount", "minor", ""), ("money_account_id", "str", ""),
+    "payment_create": (("recipient_id?", "str", "the payee (not for method internal)"), ("amount", "minor", ""),
+                       ("money_account_id?", "str", "the bank to pay from"),
                        ("memo?", "str", ""), ("obligation?", "str", "one live payment per obligation (bill:<id>)"),
-                       ("account_id", "str", ""), ("tags?", "obj", ""),
+                       ("account_id?", "str", "the line it posts to (not for method internal)"), ("tags?", "obj", ""),
                        ("mode?", "approval_queue|direct", "default approval_queue"),
-                       ("purpose?", "obj", "")),
-    "payment_cancel": (("payment_id", "str", ""),),
+                       ("purpose?", "obj", ""),
+                       ("method?", "internal", "a move between our own bank accounts: from_account and to_account"),
+                       ("from_account?", "str", "internal only: the bank account to take from"),
+                       ("to_account?", "str", "internal only: the bank account to move it into, same connection")),
+    "payment_cancel": (("payment_id?", "str", ""),
+                       ("transfer_id?", "str", "an internal transfer not yet sent (instead of payment_id)")),
     "rule_create": _RULE,
     "rule_update": (("rule_id", "str", ""), *((n if n.endswith("?") else n + "?", t, w) for n, t, w in _RULE
                                               if n != "kind?")),
@@ -212,10 +238,13 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "contact_create": (("name", "str", ""), ("kind", "vendor|customer|both", ""), ("emails?", "list[str]", ""),
                        ("default_account_id?", "str", "the line a vendor's bills and rows default to"),
                        ("is_1099?", "bool", ""), ("tax_id?", "str", "sealed; only its last 4 show, to finance admins"),
-                       ("recipient_id?", "str", "the payment details bills to this vendor are paid to")),
+                       ("recipient_id?", "str", "the payment details bills to this vendor are paid to"),
+                       ("seats?", "int", "vendors: seats or licenses"),
+                       ("renewal_on?", "day", "vendors: the next renewal date")),
     "contact_update": (("contact_id", "str", ""), ("name?", "str", ""), ("kind?", "vendor|customer|both", ""),
                        ("emails?", "list[str]", ""), ("default_account_id?", "str", ""), ("is_1099?", "bool", ""),
-                       ("tax_id?", "str", ""), ("recipient_id?", "str", ""), ("active?", "bool", "")),
+                       ("tax_id?", "str", ""), ("recipient_id?", "str", ""), ("active?", "bool", ""),
+                       ("seats?", "int", "vendors"), ("renewal_on?", "day", "vendors: a day, or empty to clear")),
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
@@ -237,7 +266,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
     "invoice_create": (("customer_id", "str", "a customer contact"), ("number?", "str", ""),
                        ("invoice_date", "day", ""), ("due_date?", "day", "or terms_days"), ("terms_days?", "int", ""),
-                       ("memo?", "str", ""), ("lines", _LINE, "income lines; amounts positive"),
+                       ("memo?", "str", ""),
+                       ("lines", _INVOICE_LINE, "income lines; amounts positive; taxable defaults to true on income "
+                                                "lines of an invoice with a sales tax line"),
                        ("payment_link?", "str", "")),
     "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; returns the document"),),
     "invoice_record_payment": (("invoice_id", "str", ""), ("amount", "minor", "may be part of what is owed"),
@@ -254,6 +285,18 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "feed_match": (("feed_id", "str", "a settled bank row not yet in the books"),
                    ("settlement_ids", "list[str]", "the waiting marked-paid payments it pays (its expected list); "
                     "their amounts add up to the row's")),
+    "tax_jurisdiction_add": (("code", "str", "a short code, such as US-CA"), ("name", "str", "the jurisdiction's name"),
+                             ("authority_id?", "str", "a vendor contact its remittances are paid to"),
+                             ("due_day?", "int", "the day of the month after each quarter its return falls due, 1 to 28")),
+    "tax_remit": (("jurisdiction", "str", "the code of a sales tax jurisdiction"),
+                  ("period", "str", "a quarter, like 2026-Q3"),
+                  ("amount?", "minor", "default: what the quarter still owes"), ("bill_date?", "day", "default today"),
+                  ("due_date?", "day", "the bill's due date"), ("number?", "str", "the authority's reference")),
+    "import_raw_totals": (
+        ("csv", "str", "a CSV with a header: month (YYYY-MM), line, amount (whole cents), and optionally team"),
+        ("basis", "cash|accrual", "the basis the figures were reported on"),
+        ("mapping", "obj", "each sheet line name to an account id or code"),
+        ("source_name?", "str", "what the file was called, for the record")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -274,8 +317,10 @@ WORDS: dict[str, str] = {
     "card_create": "Issue a card on a budget.", "card_update_limit": "Change a card's limit.",
     "card_freeze": "Freeze a card.", "card_unfreeze": "Unfreeze a card.", "card_cancel": "Cancel a card.",
     "card_resolve": "Say whether the bank issued a card whose creation was cut off.",
+    "card_save": "Record that a card is saved on a vendor's account, so a bot can buy there with it.",
+    "card_unsave": "Record that a card was removed from a vendor's account.",
     "recipient_add": "Add someone to pay (bank details are sealed).",
-    "payment_create": "Request a payment.", "payment_cancel": "Cancel a queued payment.",
+    "payment_create": "Request a payment, or move money between two of our bank accounts (method internal).", "payment_cancel": "Cancel a queued payment, or an internal transfer not yet sent.",
     "rule_create": "Add a gate or posting rule; its examples must pass.", "rule_update": "Change a rule.",
     "rule_enable": "Turn a rule on.", "rule_disable": "Turn a rule off.",
     "rule_test": "Run a rule over the last 90 days you can see; writes nothing.",
@@ -291,6 +336,9 @@ WORDS: dict[str, str] = {
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
     "attach": "Attach receipts or documents to an entry, a bank or card row, a bill or an invoice.",
     "feed_match": "Link a bank row to the payments marked paid it is the bank side of (the bank moves once).",
+    "tax_jurisdiction_add": "Add a sales tax jurisdiction: its liability account and quarterly due date.",
+    "tax_remit": "Remit a quarter's sales tax: a bill to the tax authority, tagged with the quarter.",
+    "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
 }
 
 

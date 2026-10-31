@@ -9,7 +9,7 @@ the action) reads the rest afresh through the caller's current view: a reason th
 view still covers them."""
 from typing import Annotated, Any, Literal
 
-from fastapi import Query, Request
+from fastapi import Query, Request, Response
 from pydantic import Field
 
 from .finance import actions as finance
@@ -126,11 +126,14 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/cards")
     def finance_cards(request: Request, status: Literal["active", "frozen", "cancelled"] | None = None,
-                      holder: str | None = None, cursor: str | None = Query(None, max_length=600),
+                      holder: str | None = None, vendor: str | None = Query(None, max_length=120),
+                      q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
                       limit: int = Query(100, ge=1, le=200), view_as: str | None = None):
-        """The cards the caller follows, last 4 only, with allocation and spend this period."""
+        """The cards the caller follows, last 4 only, with allocation, spend this period and where each is saved
+        (`saved_on`). `vendor` keeps the cards saved on that vendor; `q` matches nickname, last 4 or holder."""
         actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.cards(c, actor, status=status, holder=holder, cursor=cursor, limit=limit))
+        return read(lambda c: finance_reads.cards(c, actor, status=status, holder=holder, vendor=vendor, q=q,
+                                                  cursor=cursor, limit=limit))
 
     @app.get("/api/v2/finance/sources")
     def finance_sources(request: Request, group: str | None = None, view_as: str | None = None):
@@ -286,9 +289,48 @@ def install(app, store, auth, mutate):
         return read(lambda c: finance_reads.report(c, actor, kind, start=start, end=end, period=period, basis=basis,
                                                    compare=compare, top_n=top_n, by=by))
 
+    @app.get("/api/v2/finance/tax/sales-tax")
+    def finance_sales_tax(request: Request, year: int | None = Query(None, ge=2000, le=2100), view_as: str | None = None):
+        """The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters, with taxable sales,
+        tax collected, tax remitted, what is due and the day the return falls due. Tax workpapers need full view: anyone
+        who does not see everything is refused, CSV included."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.sales_tax_report(c, actor, year))
+
+    @app.get("/api/v2/finance/tax/sales-tax.csv")
+    def finance_sales_tax_csv(request: Request, year: int | None = Query(None, ge=2000, le=2100),
+                              view_as: str | None = None):
+        """The sales tax workpaper as CSV, the same lines as on screen."""
+        actor = as_viewer(request, view_as)
+        body = read(lambda c: finance_reads.sales_tax_csv(c, actor, year))
+        return Response(body, media_type="text/csv; charset=utf-8", headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="sales-tax-%s.csv"' % (year or "this-year")})
+
+    @app.get("/api/v2/finance/tax/1099")
+    def finance_form_1099(request: Request, year: int | None = Query(None, ge=2000, le=2100),
+                          view_as: str | None = None):
+        """The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments
+        left out, the threshold, whether a 1099-NEC is due and the day it falls due. Tax workpapers need full view: anyone
+        who does not see everything is refused, CSV included."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.form_1099_report(c, actor, year))
+
+    @app.get("/api/v2/finance/tax/1099.csv")
+    def finance_form_1099_csv(request: Request, year: int | None = Query(None, ge=2000, le=2100),
+                              view_as: str | None = None):
+        """The 1099 workpaper as CSV, the same lines as on screen."""
+        actor = as_viewer(request, view_as)
+        body = read(lambda c: finance_reads.form_1099_csv(c, actor, year))
+        return Response(body, media_type="text/csv; charset=utf-8", headers={
+            "X-Content-Type-Options": "nosniff",
+            "Content-Disposition": 'attachment; filename="1099-%s.csv"' % (year or "this-year")})
+
     @app.get("/api/v2/finance/search")
-    def finance_search(request: Request, kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule"] | None
-                       = None, q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
+    def finance_search(request: Request,
+                       kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card"] | None = None,
+                       q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
+                       vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),
                        account_id: str | None = Query(None, max_length=80),
                        money_account_id: str | None = Query(None, max_length=80),
@@ -301,7 +343,7 @@ def install(app, store, auth, mutate):
         """Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees. With `kind` it
         pages by `cursor`; without, it returns the first few of each kind."""
         actor = as_viewer(request, view_as)
-        named = {"status": status, "contact_id": contact_id, "account_id": account_id,
+        named = {"status": status, "contact_id": contact_id, "account_id": account_id, "vendor": vendor,
                  "money_account_id": money_account_id, "start": start, "end": end, "aging": aging,
                  "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
                  "active": None if active is None else ("1" if active else "0")}
@@ -405,8 +447,9 @@ def install(app, store, auth, mutate):
             first["result"] = done
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
         receipt = body
-        if any(k in body.payload for k in finance.BANK_FIELDS):
-            # Bank numbers never reach the idempotency receipt, not even hashed: a keyed fingerprint stands in.
+        if any(k in body.payload for k in finance.BANK_FIELDS) or finance.carries_card_number(body.payload):
+            # Bank numbers never reach the idempotency receipt, not even hashed: a keyed fingerprint stands in. A card
+            # number is not kept either: the receipt says it was refused (store.mutate hashes what it is given).
             with store.transaction() as c:
                 receipt = body.model_copy(update={"payload": finance.receipt_payload(c, body.kind, body.payload)})
         saved = mutate(request, receipt, work)
