@@ -617,6 +617,11 @@ def test_card_use_follows_each_entrys_posted_card_line_after_the_card_account_is
         assert [_card_use(c, card_id, m) for m in ("2026-09", "2026-10")] == [10_000, 2_000]
         s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
         assert (s.actual, s.held, s.remaining) == (2_000, 18_000, 80_000)
+        # The card side is recorded on the line itself (kept by the reversal), not found by position or mapping.
+        money = sorted(tuple(r) for r in c.execute(
+            "SELECT a.code, l.amount FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id JOIN fin_accounts a "
+            "ON a.id=l.account_id WHERE e.source='card' AND l.role='money'"))
+        assert money == [("2100", -10_000), ("2100", 10_000), ("2110", -12_000)]
 
 
 def test_a_re_categorized_card_charge_still_uses_the_cards_allocation(books):

@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS fin_lines (
   line_no INTEGER NOT NULL, entry_date TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES fin_accounts(id),
   amount BIGINT NOT NULL, currency TEXT NOT NULL, original_amount BIGINT NOT NULL, fx_rate TEXT NOT NULL DEFAULT '1',
   contact_id TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, role TEXT NOT NULL DEFAULT '');
 
 CREATE TABLE IF NOT EXISTS fin_dimensions (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom')), value TEXT NOT NULL,
@@ -374,6 +374,7 @@ BEGIN SELECT RAISE(ABORT, 'period closed'); END;
 # Columns phase 1 added to tables an install may already have from migration 64 (table, column, definition). Migration
 # 65 (`phase1`) adds whichever is missing, so an upgraded install ends with the same schema as a new one.
 ADDED = (
+    ("fin_lines", "role", "TEXT NOT NULL DEFAULT ''"),
     ("fin_money_accounts", "provider_account_id", "TEXT"), ("fin_money_accounts", "subtype", "TEXT NOT NULL DEFAULT ''"),
     ("fin_money_accounts", "available_balance", "BIGINT"),
     ("fin_money_accounts", "status", "TEXT NOT NULL DEFAULT 'active'"),

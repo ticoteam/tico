@@ -166,3 +166,23 @@ def test_a_fresh_database_gets_the_finance_tables(tmp_path):
     s.initialize(seed_market=False)
     with closing(sqlite3.connect(s.settings.db_path)) as c:
         assert c.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'fin_%' AND type='trigger'").fetchone()[0] >= 5
+
+
+def test_a_lines_role_is_recorded_where_tico_puts_it_kept_by_its_reversal_and_never_taken_from_a_request(books):
+    """A feed row's money line is marked on the line (any position), its reversal keeps the mark, and a journal
+    request cannot set one (card use is read from it)."""
+    from backend.finance import posting
+    from backend.finance.core.ledger import MONEY_ROLE
+    with books.transaction() as c:
+        lines = [{"account_id": account(c, "1000"), "amount": -700}, {"account_id": account(c, "6100"), "amount": 700}]
+        done = posting.post_entry(c, {"date": "2026-10-03", "source": "card", "source_id": "row-1", "lines": lines},
+                                  at=AT, roles={0: MONEY_ROLE})
+        back = act(c, OWNER, "journal", {"reverses": done["entry_id"]})
+        assert back.status == "committed", back
+
+        def roles(entry_id):
+            return [tuple(r) for r in c.execute("SELECT line_no, role FROM fin_lines WHERE entry_id=? ORDER BY line_no",
+                                                (entry_id,))]
+        assert roles(done["entry_id"]) == roles(back.result["entry_id"]) == [(0, "money"), (1, "")]
+        forged = act(c, OWNER, "journal", {"date": "2026-10-04", "lines": [{**lines[0], "role": "money"}, lines[1]]})
+        assert forged.status != "committed" and forged.code == "invalid"

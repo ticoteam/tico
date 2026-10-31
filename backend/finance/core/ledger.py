@@ -46,6 +46,10 @@ class Line:
     contact_id: str = ""
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
+    role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+
+
+MONEY_ROLE = "money"        # a feed row's own line: the money account's side (for a card, the card program's)
 
 
 @dataclass(frozen=True)
@@ -150,10 +154,10 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
 
 
 def reversal(lines: Iterable[Line]) -> tuple[Line, ...]:
-    """The lines that undo `lines`: every amount negated, tags and contacts kept."""
+    """The lines that undo `lines`: every amount negated, tags, contacts and roles kept."""
     return tuple(Line(account_id=x.account_id, amount=-x.amount, currency=x.currency,
                       original_amount=-x.original_amount, fx_rate=x.fx_rate, contact_id=x.contact_id,
-                      description=x.description, tags=dict(x.tags)) for x in lines)
+                      description=x.description, tags=dict(x.tags), role=x.role) for x in lines)
 
 
 PNL_SECTIONS = ("revenue", "cost_of_revenue", "operating", "other")

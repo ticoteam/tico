@@ -103,8 +103,8 @@ def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, en
 def card_used(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, start: str, end: str) -> int:
     """What a card's settled transactions used in the window, straight from the ledger: what every entry ever posted
     for its feed rows (originals, their reversals and replacements, each at its own date) put on the card program's
-    side. That side is the entry's last line, as it was posted (finance/banking.py `_post` always ends with the money
-    account's line), never the account's current GL mapping. So a correction, re-date, cancellation,
+    side. That side is the line posted with the money role (finance/banking.py `_post` records it, reversals keep
+    it), on whatever account it was posted to, never the account's current GL mapping. So a correction, re-date, cancellation,
     re-categorization, reopened month or remapped account counts exactly as the books do. Transfers (paying the card
     bill) are `bank` entries and never count. Only while the card is on one of these budgets."""
     if not budget_ids:
@@ -114,22 +114,20 @@ def card_used(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, st
         f"SELECT COALESCE(-SUM(l.amount), 0) FROM fin_feed_txns f JOIN fin_cards k ON k.id=f.card_id "
         f"JOIN fin_entries e ON e.source='card' AND e.source_id>=f.id AND e.source_id<f.id || ';' "
         f"AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
-        f"JOIN fin_lines l ON l.entry_id=e.id AND l.line_no=(SELECT MAX(x.line_no) FROM fin_lines x "
-        f"WHERE x.entry_id=e.id) "
+        f"JOIN fin_lines l ON l.entry_id=e.id AND l.role='money' "
         f"WHERE f.card_id=? AND k.budget_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?",
         [card_id, *budget_ids, start, end]).fetchone()
     return int(row[0])
 
 
 def card_lines(c: sqlite3.Connection, card_id: str, start: str, end: str) -> list[Any]:
-    """The spend side of a card's entries in the window (every line but the card program's last one): which lines a
+    """The spend side of a card's entries in the window (every line but the card program's money line): which lines a
     card's use is made of, so a read can tell whether the viewer may see it."""
     return c.execute(
         "SELECT l.id AS line_id, l.account_id FROM fin_feed_txns f "
         "JOIN fin_entries e ON e.source='card' AND e.source_id>=f.id AND e.source_id<f.id || ';' "
         "AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
-        "JOIN fin_lines l ON l.entry_id=e.id AND l.line_no<(SELECT MAX(x.line_no) FROM fin_lines x "
-        "WHERE x.entry_id=e.id) "
+        "JOIN fin_lines l ON l.entry_id=e.id AND l.role<>'money' "
         "WHERE f.card_id=? AND l.entry_date>=? AND l.entry_date<=?", (card_id, start, end)).fetchall()
 
 

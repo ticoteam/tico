@@ -447,15 +447,16 @@ def _line(account_id: str, amount: int, tags: Mapping[str, str] | None = None, v
 
 
 def _post(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], gl_id: str, holds: Sequence[str]) -> str:
-    """One entry for a feed row: its other lines, then the money account's own line (`gl_id`, always last: a card's
-    use is read from that line as it was posted, store/budgets.card_used). Every revision gets its own source id
-    (`fresh_source`), so a repost is never deduped onto an earlier, reversed entry."""
+    """One entry for a feed row: its other lines, then the money account's own line (`gl_id`), recorded as such
+    (L.MONEY_ROLE, kept by reversals): a card's use is read from that line as it was posted, whatever account the
+    card program maps to later (store/budgets.card_used). Every revision gets its own source id (`fresh_source`),
+    so a repost is never deduped onto an earlier, reversed entry."""
     source = "card" if t.card else "bank"
     done = posting.post_entry(ctx.c, {"date": open_day(ctx, t.txn_date), "source": source,
                                       "source_id": fresh_source(ctx, source, fid),
                                       "memo": (t.counterparty or t.description)[:200],
                                       "lines": [*lines, _line(gl_id, t.amount)]},
-                              hold_ids=holds, at=ctx.at)
+                              hold_ids=holds, at=ctx.at, roles={len(lines): L.MONEY_ROLE})
     if not done.get("posted"):
         raise FinanceError(CONFLICT, f"feed row {fid} did not post")      # never settle on an older entry
     return str(done["entry_id"])
