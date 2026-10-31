@@ -37,8 +37,8 @@ const closed = async page => {
   assert.ok(!page.url().includes('rule='), 'the address drops the rule');
 };
 // Counsel's suggestion on the terms it was asked to read, citing that version.
-const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v2/rules', {kind: 'external', text, who,
-  source_id: read.source.id, ...(cite ? {cite: {file_id: read.file.id, version: read.file.version, ...cite}} : {})});
+const suggest = (hub, read, text, who, cite) => call(hub, 'tico-counsel', 'POST', '/v2/rules', {kind: 'external', text,
+  who, source_id: read.source.id, ...(cite ? {cite: {file_id: read.file.id, version: read.file.version, ...cite}} : {})});
 
 (async () => {
   const hub = await startHub({seeds: ['org', 'groups', 'toured', 'counsel']});

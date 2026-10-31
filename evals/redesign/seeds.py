@@ -199,9 +199,9 @@ VENDOR_TERMS = ("Northwind Messaging Terms\n\n4. Messaging\n\nCustomer messages 
 
 @seed("counsel")
 def counsel(world):
-    """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "counsel"), and a vendor's terms
-    in Files, uploaded by Dana under the Engineering Lead, for Rules › External › Add document. No model runs: a test
-    writes Counsel's suggestions itself, through the API as Counsel."""
+    """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "tico-counsel"), and a vendor's
+    terms in Files, uploaded by Dana under the Engineering Lead, for Rules › External › Add document. No model runs: a
+    test writes Counsel's suggestions itself, through the API as Counsel."""
     from backend.auth import Identity
     from backend.blobs import register
     from backend.store import H
