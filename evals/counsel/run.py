@@ -10,8 +10,10 @@ text Counsel reads). On demand only: never in CI.
         Score suggestions saved from a run: {"<slug>": [{"text", "quote", "section", "who"}, ...], ...}.
 
     python3 evals/counsel/run.py --url http://127.0.0.1:18300 --owner-token <owner API token> [--only slug,slug]
-        Run the real thing on a running dev install with a Counsel bot (Counsel reads each document as a person's upload
-        through POST /api/v2/rules/read, its suggestions are read back as suggested rules), then score them.
+        Run the real thing on a running dev install with a Counsel bot: each document is attached to a task of the owner's
+        (a person's upload into Files) and added through POST /api/v2/rules/read, as the Add document dialog adds it; each
+        waits for Counsel's run to end (--wait seconds, 900 by default), and its From's suggestions are read back, every
+        page, then scored.
 
 Scoring, per document:
 - a suggestion is "in the document" when its quote is in the text; otherwise it counts as quote-not-in-source;
@@ -29,6 +31,7 @@ import re
 import sys
 import unicodedata
 import urllib.error
+import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
@@ -139,14 +142,23 @@ def table(rows):
     return "\n".join(lines), recall
 
 
-def live(docs, url, token, only):
-    """Upload each document as a person's file, add it to Rules for Counsel, wait for its task, read the suggestions."""
+FINISHED = ("done", "closed", "declined")
+
+
+def live(docs, url, token, only, wait=900):
+    """Each document as a person adds it in the app, then read back as Counsel's suggestions.
+
+    A person puts a document in Files by attaching it to a task (the task's Files +, POST /tasks/{id}/files): one task of
+    the person's own, so no bot is woken by it. The Add document dialog then picks that file from Files and sends it
+    to POST /rules/read, as here. Each read waits for Counsel's run on its task to end (every run finished, and the task
+    done, which Tico sets when the run completes), then reads every page of that From's suggestions."""
+    import time
     base = url.rstrip("/") + "/api/v2/"
 
-    def call(method, path, body=None, raw=None, ctype="application/json"):
-        data = raw if raw is not None else (json.dumps(body).encode() if body is not None else None)
+    def call(method, path, body=None):
+        data = json.dumps(body).encode() if body is not None else None
         req = urllib.request.Request(base + path, data=data, method=method, headers={
-            "Authorization": "Bearer " + token, "Accept": "application/json", "Content-Type": ctype,
+            "Authorization": "Bearer " + token, "Accept": "application/json", "Content-Type": "application/json",
             "Idempotency-Key": str(uuid.uuid4())})
         try:
             with urllib.request.urlopen(req, timeout=120) as response:
@@ -154,26 +166,47 @@ def live(docs, url, token, only):
         except urllib.error.HTTPError as exc:
             raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}")
 
-    import time
+    def run_ended(task_id):
+        """(ended, status, runs, finished): ended once the task is finished and every run on it has finished."""
+        got = call("GET", f"tasks/{task_id}")
+        status = (got.get("task") or got).get("status")
+        runs = got.get("runs") or []
+        finished = sum(1 for r in runs if r.get("finished"))
+        return status in FINISHED and runs and finished == len(runs), status, len(runs), finished
+
+    me = call("GET", "me")["actor"]
+    holder = call("POST", "tasks", {"owner": me, "title": "Documents for the Counsel eval",
+                                    "body": "Each document the Counsel eval adds to Rules, attached here."})
+    holder_id = (holder.get("task") or holder)["id"]
     suggestions = {}
     for slug, doc in docs.items():
         if only and slug not in only:
             continue
         meta = doc["meta"]
-        uploaded = call("POST", f"files/uploads?name={slug}.txt", raw=doc["text"].encode("utf-8"),
-                        ctype="text/plain")
-        file_id = (uploaded.get("file") or uploaded).get("id")
+        attached = call("POST", f"tasks/{holder_id}/files", {"name": f"{slug}.txt", "text": doc["text"]})
+        file_id = attached["file_id"]
         source = call("POST", "rule-sources", {"name": meta["from"]["name"], "kind": meta["from"]["kind"]})
         source_id = source["source"]["id"]
         read = call("POST", "rules/read", {"file_id": file_id, "source_id": source_id})
         task_id = read["task_id"]
-        deadline = time.time() + 900
-        while time.time() < deadline:
-            status = call("GET", f"tasks/{task_id}").get("status") or call("GET", f"tasks/{task_id}").get("task", {}).get("status")
-            if status in ("done", "closed", "completed"):
+        deadline = time.time() + wait
+        while True:
+            ended, status, runs, finished = run_ended(task_id)
+            if ended:
+                break
+            if time.time() >= deadline:
+                print(f"{slug}: Counsel's run on task {task_id} did not end within {wait}s (task {status}, "
+                      f"{finished} of {runs} runs finished); scoring the suggestions it wrote so far", file=sys.stderr)
                 break
             time.sleep(10)
-        listed = call("GET", "rules?status=suggested")["rules"]
+        listed, cursor = [], ""
+        while True:
+            page = call("GET", f"rules?status=suggested&source={urllib.parse.quote(source_id)}&limit=100"
+                        + (f"&cursor={urllib.parse.quote(cursor)}" if cursor else ""))
+            listed += page["rules"]
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
         out = []
         for rule in listed:
             cite = rule.get("cite") or {}
@@ -182,6 +215,7 @@ def live(docs, url, token, only):
             out.append({"text": rule["text"], "quote": cite.get("quote", ""), "section": cite.get("section", ""),
                         "who": rule.get("who")})
         suggestions[slug] = out
+        print(f"{slug}: {len(out)} suggestions, task {status}", file=sys.stderr, flush=True)
     return suggestions
 
 
@@ -192,6 +226,7 @@ def main(argv):
     parser.add_argument("--url", help="a running dev install, for a live run")
     parser.add_argument("--owner-token", help="the owner's API token (Settings > Computers)")
     parser.add_argument("--only", default="", help="comma-separated document slugs")
+    parser.add_argument("--wait", type=int, default=900, help="seconds to wait for Counsel's run on each document")
     parser.add_argument("--no-write", action="store_true", help="print the table without writing results.md")
     args = parser.parse_args(argv)
     docs = load_docs()
@@ -211,7 +246,7 @@ def main(argv):
         suggestions = json.loads(Path(args.suggestions).read_text(encoding="utf-8"))
         command = f"python3 evals/counsel/run.py --suggestions {args.suggestions}"
     elif args.url and args.owner_token:
-        suggestions = live(docs, args.url, args.owner_token, only)
+        suggestions = live(docs, args.url, args.owner_token, only, args.wait)
         command = f"python3 evals/counsel/run.py --url {args.url} --owner-token <owner token>"
     else:
         print("Give --self-check, --suggestions FILE, or --url and --owner-token for a live run.")
