@@ -77,6 +77,7 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
     sums = SK.balances(c, ctx.book.id, day, [a.id for a in shown])
     kinds = SK.sources_by_account(c, ctx.book.id, day, [a.id for a in shown])
     money = [r for r in SK.money_accounts(c, ctx.book.id) if str(r["account_id"] or "") in {a.id for a in shown}]
+    owed = SK.due_out(c, ctx.book.id)
     sections: dict[str, list[Row]] = {"asset": [], "liability": [], "equity": []}
     totals = {"asset": 0, "liability": 0, "equity": 0}
     for a in sorted(shown, key=lambda x: x.code):
@@ -88,7 +89,9 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
             "account_id": a.id, "code": a.code, "name": a.name, "subtype": a.subtype, "parent_id": a.parent_id or None,
             "balance": balance, "entry_sources": sorted(kinds.get(a.id, [])),
             "sources": [{"money_account_id": str(r["id"]), "name": str(r["name"]), "provider": str(r["provider"]),
-                         "last4": r["last4"], "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"]}
+                         "last4": r["last4"], "provider_balance": r["balance"], "balance_as_of": r["balance_as_of"],
+                         "due_out": {"count": owed.get(str(r["id"]), (0, 0))[0],
+                                     "amount": owed.get(str(r["id"]), (0, 0))[1]}}
                         for r in money if str(r["account_id"]) in under]})
     if whole:
         pnl_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES]
@@ -98,7 +101,7 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
         totals["equity"] += earned
     return {"as_of": day, "assets": sections["asset"], "liabilities": sections["liability"],
             "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
-            "view_version": view.version}
+            "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version}
 
 
 # ------------------------------------------------------------------------------------------------ transactions

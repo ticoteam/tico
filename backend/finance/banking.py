@@ -77,7 +77,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("provider", "credential_id", "name", "probe", "approver_email", "token_creator_email", "server_ip"))
     V.choice(p, "provider", ("mercury",))
     cred = V.text(p, "credential_id", 120)
-    if any(str(r["credential_ref"] or "") == cred for r in SK.connections(ctx.c)):
+    if any(str(r["credential_ref"] or "") == cred and str(r["status"]) != "disconnected" for r in SK.connections(ctx.c)):
         raise FinanceError(CONFLICT, "that credential is already connected")
     probe = V.obj(p.get("probe"), "probe")
     accounts = [V.obj(a, "an account") for a in V.items(probe.get("accounts"), "probe.accounts")]
@@ -107,6 +107,8 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         cid = SK.insert(ctx.c, "fin_connections", {
             "provider": "mercury", "purpose": "bank", "credential_ref": cred, "status": "active", "name": name,
             "settings_json": SK.dump(settings), "next_sync_at": ctx.at, "created_at": ctx.at, "created_by": who})
+        if users is not None:
+            SK.set_provider_users(ctx.c, cid, [V.obj(u, "a user") for u in V.items(users, "users")], ctx.at)
         mapped: list[Result] = []
         for a in accounts:
             if str(a.get("status") or "active") not in ("active", "pending"):
@@ -559,5 +561,77 @@ def reconcile_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 f"{money['name']}", apply)
 
 
-__all__ = ["connection_create", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
+# ------------------------------------------------------------------------------------------------ a source's page
+def _connection(ctx: Ctx, p: V.Payload) -> Any:
+    row = SK.get(ctx.c, "fin_connections", V.text(p, "connection_id", 80))
+    if row is None:
+        raise FinanceError(NOT_FOUND, "no such connection")
+    return row
+
+
+def connection_sync(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Sync now (the Sources page): the connection's next sync is due at once; the worker is woken after commit."""
+    V.only(p, ("connection_id",))
+    row = _connection(ctx, p)
+    if str(row["status"]) == "disconnected":
+        raise FinanceError(CONFLICT, "that connection is disconnected; connect it again")
+
+    def apply(aid: str) -> Result:
+        SK.update(ctx.c, "fin_connections", str(row["id"]), {"next_sync_at": ctx.at, "updated_at": ctx.at})
+        return {"connection_id": str(row["id"]), "next_sync_at": ctx.at}
+    return Plan(K.ALLOW, f"Sync {row['name']} now", apply)
+
+
+def connection_disconnect(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Stop syncing a connection. Its money accounts, feed and entries stay in the books (connecting the same Mercury
+    accounts again picks them up). Refused while a payment from it is in flight or a call to it is still owed, since
+    only the connection can finish those. The token stays in Tico's credentials until someone deletes it there."""
+    V.only(p, ("connection_id",))
+    row = _connection(ctx, p)
+    if str(row["status"]) == "disconnected":
+        raise FinanceError(CONFLICT, "that connection is already disconnected")
+    paying, calls = SK.connection_busy(ctx.c, str(row["id"]))
+    if paying or calls:
+        raise FinanceError(CONFLICT, f"{paying} payment(s) and {calls} card or recipient call(s) are still in flight "
+                                     "on this connection; let them finish or cancel them first")
+
+    def apply(aid: str) -> Result:
+        SK.update(ctx.c, "fin_connections", str(row["id"]), {"status": "disconnected", "next_sync_at": None,
+                                                              "updated_at": ctx.at})
+        for m in SK.money_accounts(ctx.c, ctx.book.id):
+            if str(m["connection_id"] or "") == str(row["id"]):
+                SK.update(ctx.c, "fin_money_accounts", str(m["id"]), {"status": "disconnected", "updated_at": ctx.at})
+        return {"connection_id": str(row["id"]), "status": "disconnected"}
+    return Plan(K.ALLOW, f"Disconnect {row['name']}", apply)
+
+
+def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Map a money account to another line of the books (a bank to an asset, a card program to a liability), one
+    money account per line. Postings from now on use the new line; entries already posted stay where they are (move
+    them with a journal entry), so a later reconciliation shows any difference until they are moved."""
+    V.only(p, ("money_account_id", "account_id"))
+    money = SK.get(ctx.c, "fin_money_accounts", V.text(p, "money_account_id", 80))
+    if money is None or str(money["book_id"]) != ctx.book.id:
+        raise FinanceError(NOT_FOUND, "no such money account")
+    gl = ctx.accounts.get(V.text(p, "account_id", 80))
+    if gl is None or not gl.active:
+        raise FinanceError(NOT_FOUND, "no such account")
+    want = "liability" if str(money["kind"]) == "card_program" else "asset"
+    if gl.type != want:
+        raise invalid(f"a {'card program' if want == 'liability' else 'bank account'} maps to an {want} line")
+    if any(str(m["account_id"] or "") == gl.id and str(m["id"]) != str(money["id"])
+           for m in SK.money_accounts(ctx.c, ctx.book.id)):
+        raise FinanceError(CONFLICT, f"{gl.name} already belongs to another money account")
+    old = ctx.accounts.get(str(money["account_id"] or ""))
+    posted = SK.money_posted(ctx.c, str(money["id"]))
+
+    def apply(aid: str) -> Result:
+        SK.update(ctx.c, "fin_money_accounts", str(money["id"]), {"account_id": gl.id, "updated_at": ctx.at})
+        return {"money_account_id": str(money["id"]), "account_id": gl.id, "code": gl.code,
+                "previous_account_id": old.id if old else None, "posted_before": posted}
+    return Plan(K.ALLOW, f"Map {money['name']} to {gl.code} {gl.name}" +
+                (f" ({posted} posted row(s) stay on {old.code} {old.name})" if posted and old else ""), apply)
+
+
+__all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
            "card_line", "undo", "reversal_locked"]

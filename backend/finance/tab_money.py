@@ -22,6 +22,24 @@ def may_connect(c: sqlite3.Connection, viewer: str, at: str | None = None) -> bo
     return R.is_admin(ctx.org, viewer, ctx.rights(viewer))
 
 
+def _masked(email: str) -> str | None:
+    name, at, domain = email.partition("@")
+    return f"{name[:1]}•••@{domain}" if at and name else None
+
+
+def provider_users(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
+    """The Mercury users a card can be issued to (Mercury issues cards only to its own users), as the last sync read
+    them: for teammates who may issue cards. Id and name; a finance admin also sees each email, masked."""
+    ctx = load(c, at)
+    held = ctx.rights(viewer)
+    if not R.has(ctx.org, viewer, R.CARDS, held):
+        raise denied("picking a card holder is for teammates who may issue cards")
+    admin = R.is_admin(ctx.org, viewer, held)
+    return {"users": [{"id": str(r["provider_user_id"]), "name": str(r["name"]), "connection_id": str(r["connection_id"]),
+                       "email": _masked(str(r["email"])) if admin else None, "updated_at": str(r["updated_at"])}
+                      for r in SK.provider_users(c)]}
+
+
 def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, cursor: str | None = None,
              limit: int = 50, at: str | None = None) -> Row:
     """Payments the viewer may see, newest first: those posting to a line their current view covers with its tags,

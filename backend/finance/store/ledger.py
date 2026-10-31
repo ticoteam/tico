@@ -108,6 +108,13 @@ def closed_months(c: sqlite3.Connection, book_id: str) -> frozenset[str]:
                                                        "status='closed'", (book_id,)))
 
 
+def closed_through(c: sqlite3.Connection, book_id: str) -> str | None:
+    """The last day of the latest closed period (a reopened one no longer counts)."""
+    found = c.execute("SELECT max(end_date) FROM fin_periods WHERE book_id=? AND status='closed'",
+                      (book_id,)).fetchone()[0]
+    return str(found) if found else None
+
+
 # ------------------------------------------------------------------------------------------------ entries and lines
 def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: str, action_id: str,
                  reverses_id: str, by: str, at: str) -> list[str]:
@@ -271,12 +278,18 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
 
 
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
-               most: int) -> list[Any]:
-    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries."""
+               most: int, vendor: str | None = None) -> list[Any]:
+    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries (one vendor's when
+    `vendor` is given; "" is lines with none). Each says the card or money account its feed row came through."""
     if not account_ids:
         return []
     marks = ",".join("?" * len(account_ids))
+    cut, args = ("", []) if vendor is None else (" AND l.contact_id=?", [vendor])
     return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
-                     f"l.description, e.memo, e.source FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
-                     f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=? "
-                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?", (book_id, *account_ids, start, end, most)).fetchall()
+                     f"l.description, e.memo, e.source, (SELECT f.card_id FROM fin_feed_txns f WHERE f.entry_id=l.entry_id "
+                     f"AND f.card_id IS NOT NULL LIMIT 1) AS card_id, (SELECT f.money_account_id FROM fin_feed_txns f "
+                     f"WHERE f.entry_id=l.entry_id LIMIT 1) AS money_account_id "
+                     f"FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                     f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?{cut} "
+                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?",
+                     (book_id, *account_ids, start, end, *args, most)).fetchall()

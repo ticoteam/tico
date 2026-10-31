@@ -256,6 +256,13 @@ CREATE TABLE IF NOT EXISTS fin_recipients (
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','replaced')), contact_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
 
+-- The provider's own users (Mercury issues cards only to them), as last read with a connection's token: a card holder
+-- picker. Replaced on every sync.
+CREATE TABLE IF NOT EXISTS fin_provider_users (
+  connection_id TEXT NOT NULL REFERENCES fin_connections(id), provider_user_id TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL, PRIMARY KEY (connection_id, provider_user_id));
+
 CREATE TABLE IF NOT EXISTS fin_payments (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
   idempotency_key TEXT NOT NULL UNIQUE, recipient_id TEXT NOT NULL REFERENCES fin_recipients(id),

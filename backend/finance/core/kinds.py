@@ -15,14 +15,17 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "budget_create", "budget_update", "allocation_set", "projection_set",
        "view_grant", "view_revoke", "private_lines_set",
        "rule_create", "rule_update", "rule_disable", "rule_enable", "rule_test", "contact_create", "contact_update",
-       "account_create", "account_update", "right_grant", "right_revoke")
+       "account_create", "account_update", "right_grant", "right_revoke",
+       # not in §5: the Finance tab's Access and Sources pages (§12)
+       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
         # phase 1: banks, cards, payments, reconciliation and gate rules
         "reconcile", "reconcile_undo", "connection_create", "payment_settings", "card_create", "card_update_limit",
         "card_freeze", "card_unfreeze", "card_cancel", "recipient_add", "payment_create", "payment_cancel",
-        "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test")
+        "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test",
+        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map")
 NEEDS = {"journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
          "allocation_set": R.BUDGETS, "projection_set": R.BUDGETS, "reconcile": R.BOOK, "reconcile_undo": R.BOOK,
@@ -31,9 +34,10 @@ NEEDS = {"journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "acc
          "rule_create": R.RULES, "rule_update": R.RULES, "rule_enable": R.RULES, "rule_disable": R.RULES,
          "rule_test": R.RULES}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
-ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create")
-# Only the owner turns direct send on or off for the company (§9).
-OWNER_ONLY = ("payment_settings",)
+ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
+              "connection_disconnect", "connection_map")
+# Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
+OWNER_ONLY = ("payment_settings", "view_defaults_set")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
 SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)

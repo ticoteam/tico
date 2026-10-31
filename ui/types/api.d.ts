@@ -1089,6 +1089,10 @@ export type FinanceBalanceSheet = {
   parent_id: string | null;
   sources: Array<{
   balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
   last4: string | null;
   money_account_id: string;
   name: string;
@@ -1097,6 +1101,7 @@ export type FinanceBalanceSheet = {
 }>;
   subtype: string;
 }>;
+  closed_through: string | null;
   currency: string;
   equity: Array<{
   account_id: string | null;
@@ -1107,6 +1112,10 @@ export type FinanceBalanceSheet = {
   parent_id: string | null;
   sources: Array<{
   balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
   last4: string | null;
   money_account_id: string;
   name: string;
@@ -1124,6 +1133,10 @@ export type FinanceBalanceSheet = {
   parent_id: string | null;
   sources: Array<{
   balance_as_of: string | null;
+  due_out: {
+  amount: number;
+  count: number;
+};
   last4: string | null;
   money_account_id: string;
   name: string;
@@ -1144,6 +1157,7 @@ export type FinanceBalanceSheet = {
 export type FinanceBudgets = {
   budgets: Array<Record<string, unknown>>;
   more: boolean;
+  on: string;
   view_version: number;
 };
 
@@ -1190,6 +1204,16 @@ export type FinanceConnectionResult = {
   status: string;
 };
 
+export type FinanceMercuryUsers = {
+  users: Array<{
+  connection_id: string;
+  email: string | null;
+  id: string;
+  name: string;
+  updated_at: string;
+}>;
+};
+
 export type FinancePayments = {
   next_cursor: string | null;
   payments: Array<{
@@ -1232,6 +1256,12 @@ export type FinancePnl = {
   end: string;
   excluded: boolean;
   expense: Array<number>;
+  filter?: {
+  teammates: Array<string>;
+  teams: Array<string>;
+  unattributed: boolean;
+  who: "both" | "bots" | "people";
+};
   income: Array<number>;
   net: Array<number>;
   period: string;
@@ -1244,6 +1274,7 @@ export type FinancePnl = {
   parent_id: string;
   private: boolean;
   projection: Array<number> | null;
+  section: "revenue" | "cost_of_revenue" | "operating" | "other";
   total: number | null;
   type: string;
 }>;
@@ -5042,6 +5073,7 @@ export type GetFinanceExpensesParams = {
   team?: string | null;
   teammate?: string | null;
   top_n?: number;
+  view_as?: string | null;
 };
 export type GetFinanceExpensesBody = never;
 export type GetFinanceExpensesResponse = FinanceReport;
@@ -5053,6 +5085,8 @@ export type GetFinanceLineParams = {
   limit?: number;
   start?: string | null;
   top_n?: number;
+  vendor?: string | null;
+  view_as?: string | null;
 };
 export type GetFinanceLineBody = never;
 export type GetFinanceLineResponse = FinanceReport;
@@ -5066,8 +5100,12 @@ export type GetFinancePnlParams = {
   start?: string | null;
   team?: string | null;
   teammate?: string | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  unattributed?: boolean;
   view?: "company" | "expenses";
   view_as?: string | null;
+  who?: "both" | "bots" | "people";
 };
 export type GetFinancePnlBody = never;
 export type GetFinancePnlResponse = FinancePnl;
@@ -5658,8 +5696,10 @@ export type ListFilesResponse = FileLibrary;
 
 /** GET /api/v2/finance/budgets */
 export type ListFinanceBudgetsParams = {
+  at?: string | null;
   include_inactive?: boolean;
   limit?: number;
+  view_as?: string | null;
 };
 export type ListFinanceBudgetsBody = never;
 export type ListFinanceBudgetsResponse = FinanceBudgets;
@@ -5675,11 +5715,16 @@ export type ListFinanceCardsParams = {
 export type ListFinanceCardsBody = never;
 export type ListFinanceCardsResponse = FinanceCards;
 
+/** GET /api/v2/finance/mercury-users */
+export type ListFinanceMercuryUsersParams = Record<string, never>;
+export type ListFinanceMercuryUsersBody = never;
+export type ListFinanceMercuryUsersResponse = FinanceMercuryUsers;
+
 /** GET /api/v2/finance/payments */
 export type ListFinancePaymentsParams = {
   cursor?: string | null;
   limit?: number;
-  status?: "queued" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | null;
+  status?: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | null;
   view_as?: string | null;
 };
 export type ListFinancePaymentsBody = never;

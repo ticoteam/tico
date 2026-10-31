@@ -156,6 +156,25 @@ def reversal(lines: Iterable[Line]) -> tuple[Line, ...]:
                       description=x.description, tags=dict(x.tags)) for x in lines)
 
 
+PNL_SECTIONS = ("revenue", "cost_of_revenue", "operating", "other")
+OTHER_SUBTYPES = ("other_income", "other_expense")
+
+
+def pnl_section(accounts: Mapping[str, Account], account: Account) -> str:
+    """Where a P&L line sits: revenue, cost of revenue (a `cogs` line or one under it), operating expenses, or other
+    income and expense (an `other_income` / `other_expense` line or one under it)."""
+    at: Account | None = account
+    seen: set[str] = set()
+    while at is not None and at.id not in seen:
+        seen.add(at.id)
+        if at.subtype in OTHER_SUBTYPES:
+            return "other"
+        if at.subtype == "cogs" and account.type == "expense":
+            return "cost_of_revenue"
+        at = accounts.get(at.parent_id) if at.parent_id else None
+    return "revenue" if account.type == "income" else "operating"
+
+
 def descendants(accounts: Mapping[str, Account], root: str) -> set[str]:
     """`root` and every account below it in the chart."""
     children: dict[str, list[str]] = {}

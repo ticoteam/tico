@@ -1389,10 +1389,12 @@ TAGS["Finance"] = ("Budgets, the P&L, expenses and one line's detail, as far as 
                    "committed or sent to one person for approval.")
 STABLE.extend([
     ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
-     "The budgets the caller sees, each with where it stands today (amounts in cents)", "FinanceBudgets"),
+     "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
+     "day (the version in effect then); amounts in cents. The owner may pass view_as", "FinanceBudgets"),
     ("/api/v2/finance/pnl", "get", "Finance", "getFinancePnl",
      "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget "
-     "and projection beside each actual; view=expenses filters by team or teammate. The owner may pass view_as",
+     "and projection beside each actual; each row says its section. view=expenses filters by teams and teammates "
+     "(several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
      "FinancePnl"),
     ("/api/v2/finance/balance-sheet", "get", "Finance", "getFinanceBalanceSheet",
      "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
@@ -1415,6 +1417,9 @@ STABLE.extend([
      "finance admin", "FinancePayments"),
     ("/api/v2/finance/recipients", "get", "Finance", "listFinanceRecipients",
      "Current payment recipients, last 4 only, for teammates who may pay", "FinanceRecipients"),
+    ("/api/v2/finance/mercury-users", "get", "Finance", "listFinanceMercuryUsers",
+     "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only "
+     "for a finance admin", "FinanceMercuryUsers"),
     ("/api/v2/finance/reconciliations", "get", "Finance", "listFinanceReconciliations",
      "Reconciliations of the money accounts the caller sees, and how far each is locked", "FinanceReconciliations"),
     ("/api/v2/finance/statements", "get", "Finance", "listFinanceStatements",
@@ -1426,9 +1431,12 @@ STABLE.extend([
      "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
      "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
     ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
-     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line", "FinanceReport"),
+     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
+     "view_as", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
-     "One line's spend by vendor, team and teammate, and its entries, as far as the caller sees", "FinanceReport"),
+     "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
+     "projection, as far as the caller sees; vendor narrows it to one vendor. The owner may pass view_as",
+     "FinanceReport"),
     ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
      "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
      "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
@@ -1441,14 +1449,17 @@ STABLE.extend([
 ])
 SCHEMAS.update({
     "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
-                           "view_version": "i"}),
+                           "on": "s", "view_version": "i"}),
     "FinanceReport": obj({"view_version": "i"}),
     "FinancePnl": obj({
         "start": "s", "end": "s", "period": "s", "basis": "s", "view": "s", "team": "n", "teammate": "n",
         "budget_as_of": "n",
         "columns": items(obj({"start": "s", "end": "s", "label": "s",
                               "state": {"type": "string", "enum": ["past", "current", "future"]}})),
+        "filter": obj({"teams": items({"type": "string"}), "teammates": items({"type": "string"}),
+                       "who": {"type": "string", "enum": ["both", "bots", "people"]}, "unattributed": "b"}),
         "rows": items(obj({"account_id": "s", "code": "s", "name": "s", "type": "s", "parent_id": "s", "private": "b",
+                           "section": {"type": "string", "enum": ["revenue", "cost_of_revenue", "operating", "other"]},
                            "actual": {"type": ["array", "null"], "items": {"type": "integer"}},
                            "total": {"type": ["integer", "null"]},
                            "budget": {"type": ["array", "null"], "items": {"type": ["integer", "null"]}},
@@ -1459,13 +1470,13 @@ SCHEMAS.update({
         required=["start", "end", "period", "basis", "view", "columns", "rows", "income", "expense", "net",
                   "excluded", "view_version"]),
     "FinanceBalanceSheet": obj({
-        "as_of": "s", "currency": "s", "scoped": "b", "view_version": "i",
+        "as_of": "s", "currency": "s", "scoped": "b", "view_version": "i", "closed_through": "n",
         "totals": obj({"asset": "i", "liability": "i", "equity": "i"}),
         **{k: items(obj({"account_id": "n", "code": "s", "name": "s", "subtype": "s", "parent_id": "n", "balance": "i",
                          "entry_sources": items({"type": "string"}),
                          "sources": items(obj({"money_account_id": "s", "name": "s", "provider": "s", "last4": "n",
                                                "provider_balance": {"type": ["integer", "null"]},
-                                               "balance_as_of": "n"}))}))
+                                               "balance_as_of": "n", "due_out": obj({"count": "i", "amount": "i"})}))}))
            for k in ("assets", "liabilities", "equity")}}),
     "FinanceTransactions": obj({
         "rows": items(obj({"kind": {"type": "string", "enum": ["feed", "entry"]}, "id": "s", "date": "s", "amount": "i",
@@ -1537,6 +1548,8 @@ SCHEMAS.update({
         "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
         "active": "b", "created_at": "s",
         "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
+    "FinanceMercuryUsers": obj({"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n",
+                                                    "updated_at": "s"}))}),
     "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",

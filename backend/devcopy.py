@@ -89,7 +89,7 @@ EMPTY = (
     # inbox, cards and their authorizations, payees and payments) and spend holds. Its pending actions and undrained events are trimmed
     # in prune; the books, budgets, views and rules are kept.
     "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
-    "fin_recipients", "fin_payments",
+    "fin_recipients", "fin_payments", "fin_provider_users",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",

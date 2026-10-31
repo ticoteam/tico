@@ -7906,7 +7906,7 @@
     },
     "/api/v2/finance/budgets": {
       "get": {
-        "summary": "The budgets the caller sees, each with where it stands today (amounts in cents)",
+        "summary": "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that day (the version in effect then); amounts in cents. The owner may pass view_as",
         "operationId": "listFinanceBudgets",
         "parameters": [
           {
@@ -7929,6 +7929,39 @@
               "minimum": 1,
               "default": 200,
               "title": "Limit"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "At"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
             }
           }
         ],
@@ -8158,7 +8191,7 @@
     },
     "/api/v2/finance/expenses": {
       "get": {
-        "summary": "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line",
+        "summary": "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass view_as",
         "operationId": "getFinanceExpenses",
         "parameters": [
           {
@@ -8271,6 +8304,22 @@
               "default": 20,
               "title": "Top N"
             }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
           }
         ],
         "responses": {
@@ -8312,7 +8361,7 @@
     },
     "/api/v2/finance/lines/{account_id}": {
       "get": {
-        "summary": "One line's spend by vendor, team and teammate, and its entries, as far as the caller sees",
+        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection, as far as the caller sees; vendor narrows it to one vendor. The owner may pass view_as",
         "operationId": "getFinanceLine",
         "parameters": [
           {
@@ -8379,6 +8428,39 @@
               "default": 10,
               "title": "Top N"
             }
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 200
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vendor"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
           }
         ],
         "responses": {
@@ -8388,6 +8470,47 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceReport"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/mercury-users": {
+      "get": {
+        "summary": "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only for a finance admin",
+        "operationId": "listFinanceMercuryUsers",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceMercuryUsers"
                 }
               }
             }
@@ -8432,6 +8555,7 @@
                 {
                   "enum": [
                     "queued",
+                    "sending",
                     "awaiting_bank_approval",
                     "submitted",
                     "settled",
@@ -8534,7 +8658,7 @@
     },
     "/api/v2/finance/pnl": {
       "get": {
-        "summary": "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget and projection beside each actual; view=expenses filters by team or teammate. The owner may pass view_as",
+        "summary": "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget and projection beside each actual; each row says its section. view=expenses filters by teams and teammates (several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
         "operationId": "getFinancePnl",
         "parameters": [
           {
@@ -8676,6 +8800,69 @@
                 }
               ],
               "title": "View As"
+            }
+          },
+          {
+            "name": "teams",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teams"
+            }
+          },
+          {
+            "name": "teammates",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teammates"
+            }
+          },
+          {
+            "name": "who",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "both",
+                "bots",
+                "people"
+              ],
+              "type": "string",
+              "default": "both",
+              "title": "Who"
+            }
+          },
+          {
+            "name": "unattributed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Unattributed"
             }
           }
         ],
@@ -32636,6 +32823,12 @@
           "view_version": {
             "type": "integer"
           },
+          "closed_through": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "totals": {
             "type": "object",
             "properties": {
@@ -32722,10 +32915,27 @@
                           "string",
                           "null"
                         ]
+                      },
+                      "due_out": {
+                        "type": "object",
+                        "properties": {
+                          "count": {
+                            "type": "integer"
+                          },
+                          "amount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "count"
+                        ],
+                        "additionalProperties": true
                       }
                     },
                     "required": [
                       "balance_as_of",
+                      "due_out",
                       "last4",
                       "money_account_id",
                       "name",
@@ -32815,10 +33025,27 @@
                           "string",
                           "null"
                         ]
+                      },
+                      "due_out": {
+                        "type": "object",
+                        "properties": {
+                          "count": {
+                            "type": "integer"
+                          },
+                          "amount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "count"
+                        ],
+                        "additionalProperties": true
                       }
                     },
                     "required": [
                       "balance_as_of",
+                      "due_out",
                       "last4",
                       "money_account_id",
                       "name",
@@ -32908,10 +33135,27 @@
                           "string",
                           "null"
                         ]
+                      },
+                      "due_out": {
+                        "type": "object",
+                        "properties": {
+                          "count": {
+                            "type": "integer"
+                          },
+                          "amount": {
+                            "type": "integer"
+                          }
+                        },
+                        "required": [
+                          "amount",
+                          "count"
+                        ],
+                        "additionalProperties": true
                       }
                     },
                     "required": [
                       "balance_as_of",
+                      "due_out",
                       "last4",
                       "money_account_id",
                       "name",
@@ -32939,6 +33183,7 @@
         "required": [
           "as_of",
           "assets",
+          "closed_through",
           "currency",
           "equity",
           "liabilities",
@@ -32961,6 +33206,9 @@
           "more": {
             "type": "boolean"
           },
+          "on": {
+            "type": "string"
+          },
           "view_version": {
             "type": "integer"
           }
@@ -32968,6 +33216,7 @@
         "required": [
           "budgets",
           "more",
+          "on",
           "view_version"
         ],
         "additionalProperties": true
@@ -33204,6 +33453,49 @@
         ],
         "additionalProperties": true
       },
+      "FinanceMercuryUsers": {
+        "type": "object",
+        "properties": {
+          "users": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "connection_id": {
+                  "type": "string"
+                },
+                "email": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "updated_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "connection_id",
+                "email",
+                "id",
+                "name",
+                "updated_at"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "users"
+        ],
+        "additionalProperties": true
+      },
       "FinancePayments": {
         "type": "object",
         "properties": {
@@ -33405,6 +33697,41 @@
               "additionalProperties": true
             }
           },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "teams": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "teammates": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "who": {
+                "type": "string",
+                "enum": [
+                  "both",
+                  "bots",
+                  "people"
+                ]
+              },
+              "unattributed": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "teammates",
+              "teams",
+              "unattributed",
+              "who"
+            ],
+            "additionalProperties": true
+          },
           "rows": {
             "type": "array",
             "items": {
@@ -33427,6 +33754,15 @@
                 },
                 "private": {
                   "type": "boolean"
+                },
+                "section": {
+                  "type": "string",
+                  "enum": [
+                    "revenue",
+                    "cost_of_revenue",
+                    "operating",
+                    "other"
+                  ]
                 },
                 "actual": {
                   "type": [
@@ -33474,6 +33810,7 @@
                 "parent_id",
                 "private",
                 "projection",
+                "section",
                 "total",
                 "type"
               ],

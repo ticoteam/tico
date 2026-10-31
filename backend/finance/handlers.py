@@ -578,6 +578,30 @@ def private_lines_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 f"{'Make' if private else 'Stop making'} {account.name} private", apply)
 
 
+def view_defaults_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """What each role sees by default (spec §7.5, the Access page's "Edit defaults"): managers, everyone else, and
+    whether managers see their department's payroll total. Owner-only; grants a manager made that the new defaults no
+    longer back are suspended."""
+    V.only(p, ("manager", "member", "manager_payroll"))
+    picks = {"manager": VW.MANAGER_POLICIES, "member": VW.MEMBER_POLICIES, "manager_payroll": VW.PAYROLL_POLICIES}
+    wanted = {role: V.choice(p, role, options) for role, options in picks.items() if role in p}
+    if not wanted:
+        raise invalid("name at least one of manager, member, manager_payroll")
+    old = SA.defaults(ctx.c)
+
+    def apply(aid: str) -> Result:
+        for role, policy in wanted.items():
+            SA.set_default(ctx.c, role, policy, who, ctx.at)
+        version = SA.bump_view(ctx.c, "defaults", ctx.at)
+        ctx.changed()
+        suspended = suspend_unstanding(ctx)
+        now = SA.defaults(ctx.c)
+        return {"defaults": {"manager": now.manager, "member": now.member, "manager_payroll": now.manager_payroll},
+                "suspended_grants": suspended, "view_version": version}
+    changes = ", ".join(f"{role} {getattr(old, role)} to {policy}" for role, policy in wanted.items())
+    return Plan(K.ALLOW, f"Change Finance view defaults: {changes}", apply)
+
+
 def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("teammate", "right", "expires_at"))
     mate, right = V.text(p, "teammate", 120), V.choice(p, "right", R.RIGHTS)
@@ -629,6 +653,7 @@ PLANNERS: dict[str, Planner] = {
     "close_period": close_period, "reopen_period": reopen_period, "budget_create": budget_create,
     "budget_update": budget_update, "allocation_set": allocation_set, "projection_set": projection_set,
     "view_grant": view_grant, "view_revoke": view_revoke, "private_lines_set": private_lines_set,
+    "view_defaults_set": view_defaults_set,
     "right_grant": right_grant, "right_revoke": right_revoke}
 assert set(PLANNERS) <= set(K.LIVE)          # the rest live in banking, cards, payments and gating (actions.py)
 

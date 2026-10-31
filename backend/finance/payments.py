@@ -164,7 +164,8 @@ def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def _connection(ctx: Ctx, money_id: str | None) -> str | None:
-    banks = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if str(m["kind"]) == "bank" and m["connection_id"]]
+    banks = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if str(m["kind"]) == "bank" and m["connection_id"]
+             and str(m["status"] or "active") == "active"]
     if money_id:
         banks = [m for m in banks if str(m["id"]) == money_id]
     return str(banks[0]["connection_id"]) if banks else None

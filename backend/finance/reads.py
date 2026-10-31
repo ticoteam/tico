@@ -4,10 +4,10 @@ every derived number (totals, percents, "Other") is built from what the viewer m
 read fin_* only through here."""
 import json
 import sqlite3
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
-from datetime import date
-from typing import cast
+from datetime import date, timedelta
+from typing import Any, cast
 
 from . import budgeting, limits, tab, tab_hooks, tab_money, usage
 from . import context as _context
@@ -16,11 +16,12 @@ from .context import Ctx, load
 from .core import budgets as B
 from .core import dates, money
 from .core import view as VW
-from .core.errors import FinanceError, NOT_FOUND, invalid
-from .core.ledger import PNL_TYPES, descendants
+from .core.errors import FinanceError, NOT_FOUND, denied, invalid
+from .core.ledger import PNL_TYPES, descendants, pnl_section
 from .handlers import private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA
+from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 
@@ -109,14 +110,62 @@ def _top_budgets(s: _Seen) -> list[B.Budget]:
 PNL_VIEWS = ("company", "expenses")
 
 
-def _filter_budgets(s: _Seen, team: str | None, teammate: str | None) -> list[B.Budget]:
-    """The budgets a team or teammate filter shows: theirs, one per scope, never a parent and its child both."""
-    if not team and not teammate:
+WHO = ("both", "bots", "people")
+
+
+@dataclass(frozen=True)
+class _Filter:
+    """The expenses view's org-chart filter: teams (with the teams under them) and teammates picked together, bots,
+    people or both, and Unattributed (lines with no team or teammate)."""
+    teams: tuple[str, ...] = ()
+    teammates: tuple[str, ...] = ()
+    who: str = "both"
+    unattributed: bool = False
+    below: frozenset[str] | None = None
+
+    @property
+    def any(self) -> bool:
+        return bool(self.teams or self.teammates or self.unattributed or self.who != "both")
+
+    def _kind(self, mate: str) -> bool:
+        return self.who == "both" or mate.startswith("bot:" if self.who == "bots" else "human:")
+
+    def keeps(self, team: str, mate: str) -> bool:
+        if not team and not mate and self.unattributed:
+            return True
+        picked = bool(self.teams or self.teammates or self.unattributed)
+        hit = not picked or mate in self.teammates or (self.below is not None and team in self.below)
+        return hit and (self.who == "both" or (bool(mate) and self._kind(mate)))
+
+    def keeps_budget(self, b: B.Budget) -> bool:
+        in_teams = self.below is not None and b.team in self.below
+        if b.teammate:
+            picked = bool(self.teams or self.teammates or self.unattributed)
+            return self._kind(b.teammate) and (not picked or b.teammate in self.teammates or in_teams)
+        return self.who == "both" and in_teams
+
+
+def _org_filter(s: _Seen, teams: Iterable[str], teammates: Iterable[str], who: str, unattributed: bool) -> _Filter:
+    picked_teams = tuple(dict.fromkeys(t for t in teams if t))
+    picked_mates = tuple(dict.fromkeys(m for m in teammates if m))
+    if who not in WHO:
+        raise invalid(f"who is {'|'.join(WHO)}")
+    for t in picked_teams:
+        if t not in s.ctx.org.teams:
+            raise FinanceError(NOT_FOUND, "no such team")
+    if unattributed and not s.view.company_expenses():
+        raise denied("Unattributed is for viewers who see company-wide expenses")
+    below = frozenset[str]().union(*(s.ctx.org.below(t) for t in picked_teams)) if picked_teams else None
+    return _Filter(picked_teams, picked_mates, who, unattributed, below)
+
+
+def _filter_budgets(s: _Seen, f: _Filter) -> list[B.Budget]:
+    """The budgets the filter shows: theirs, one per scope, never a parent and its child both."""
+    if not f.any:
         return _top_budgets(s)
-    below = s.ctx.org.below(team) if team else frozenset[str]()
     budgets = s.ctx.budgets()
     picked = {b.id for b in budgets.values() if b.active and not b.catch_all and sees_budget(s.ctx, s.view.viewer, b)
-              and ((teammate and b.teammate == teammate) or (not teammate and team and b.team in below))}
+              and f.keeps_budget(b)}
     return [budgets[i] for i in picked if budgets[i].parent_id not in picked]
 
 
@@ -126,12 +175,16 @@ def _column_state(p: date, q: date, today: date) -> str:
 
 def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None, period: str = "month",
         basis: str = "cash", at: str | None = None, *, view: str = "company", team: str | None = None,
-        teammate: str | None = None, budget_as_of: str | None = None) -> Row:
+        teammate: str | None = None, budget_as_of: str | None = None, teams: Iterable[str] = (),
+        teammates: Iterable[str] = (), who: str = "both", unattributed: bool = False) -> Row:
     """Income and expense lines by period, with budget and projection beside each actual. Income is posted as credits
     (negative); it shows as positive revenue, so net = income - expense. `view=expenses` keeps cost of revenue and
     operating expenses only, filtered to a team (and the teams under it) or a teammate, hides lines with no spend in
     the filter, and lists the filter's teammates with spent vs budget. Columns say whether they are past, current or
-    projected; `budget_as_of` compares to the budgets as they stood then. Every posting so far is recognized when cash
+    projected; `budget_as_of` compares to the budgets as they stood then. `teams` and `teammates` pick several at once
+    (with `team` and `teammate`), `who` keeps bots, people or both, and `unattributed` adds lines with no team or
+    teammate (for viewers who see company-wide expenses). Each row says its section (revenue, cost of revenue,
+    operating, other). Every posting so far is recognized when cash
     moves (card spend counts when charged), so both bases read the same rows until bills and invoices arrive."""
     s = _open(c, viewer, at)
     if basis not in ("cash", "accrual"):
@@ -140,10 +193,10 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
         raise invalid(f"period is {'|'.join(dates.BUCKETS)}")
     if view not in PNL_VIEWS:
         raise invalid(f"view is {'|'.join(PNL_VIEWS)}")
-    if (team or teammate) and view != "expenses":
+    f = _org_filter(s, [*([team] if team else []), *teams], [*([teammate] if teammate else []), *teammates], who,
+                    unattributed)
+    if f.any and view != "expenses":
         raise invalid("a team or teammate filter is for the expenses view")
-    if team and team not in s.ctx.org.teams:
-        raise FinanceError(NOT_FOUND, "no such team")
     made_by = ""
     if budget_as_of:
         made_by = budget_as_of if "T" in budget_as_of else dates.day(budget_as_of).isoformat() + "T23:59:59.999999Z"
@@ -154,12 +207,9 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
     types = ("expense",) if view == "expenses" else PNL_TYPES
     pnl_ids = [x.id for x in s.ctx.accounts.values() if x.type in types and s.view.sees_account(x)]
     cells = _cells(s, a, z, pnl_ids)
-    below = s.ctx.org.below(team) if team else None
-    if below is not None:
-        cells = [x for x in cells if x.team in below]
-    if teammate:
-        cells = [x for x in cells if x.teammate == teammate]
-    narrow = bool(teammate) or bool(team) and s.ctx.org.department(team or "") != team
+    if f.any:
+        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+    narrow = bool(f.teammates) or f.who != "both" or any(s.ctx.org.department(t) != t for t in f.teams)
     sup = _suppress(s, cells, narrow, a, z)
     actual: dict[str, list[int]] = {i: [0] * len(buckets) for i in pnl_ids}
     spent: dict[str, int] = {}
@@ -173,7 +223,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             if cell.teammate:
                 spent[cell.teammate] = spent.get(cell.teammate, 0) + cell.amount
     budget: dict[str, list[int | None]] = {}
-    tops = _filter_budgets(s, team, teammate)
+    tops = _filter_budgets(s, f)
     versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
@@ -186,7 +236,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             if account is None or account.id not in actual or \
                     (account.id in s.private and account.id not in s.view.full_detail) or \
                     not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
-                    (below is not None and r["team"] not in below) or (teammate and r["teammate"] != teammate):
+                    (f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
                 continue
             first = dates.month(r["month"])
             span = (first, dates.month_end(first))
@@ -204,7 +254,8 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             for n, v in enumerate(actual[account_id]):
                 totals[x.type][n] += v
         rows.append({"account_id": x.id, "code": x.code, "name": VW.PRIVATE_LABEL if hidden else x.name,
-                     "type": x.type, "parent_id": x.parent_id, "private": hidden,
+                     "type": x.type, "section": pnl_section(s.ctx.accounts, x), "parent_id": x.parent_id,
+                     "private": hidden,
                      "actual": None if hidden else actual[account_id],
                      "total": None if hidden else sum(actual[account_id]),
                      "budget": budget.get(account_id), "projection": None if hidden else projection.get(account_id)})
@@ -212,13 +263,15 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
         rows = _with_spend(s, rows)
     out: Row = {"start": a.isoformat(), "end": z.isoformat(), "period": period, "basis": basis, "view": view,
                 "team": team, "teammate": teammate, "budget_as_of": budget_as_of,
+                "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
+                           "unattributed": f.unattributed},
                 "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period),
                              "state": _column_state(p, q, today)} for p, q in buckets],
                 "rows": rows, "income": totals["income"], "expense": totals["expense"],
                 "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
                 "excluded": sup.excluded, "view_version": s.view.version}
     if view == "expenses":
-        out["teammates"] = _side_panel(s, spent, tops, versions, a, z, team, teammate)
+        out["teammates"] = _side_panel(s, spent, tops, versions, a, z, f)
     return out
 
 
@@ -236,7 +289,7 @@ def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
 
 
 def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versions: Mapping[str, list[B.Version]],
-                a: date, z: date, team: str | None, teammate: str | None) -> list[Row]:
+                a: date, z: date, f: _Filter) -> list[Row]:
     """The filter's teammates with what they spent and the sum of their own line budgets in the window."""
     fy = s.ctx.book.fiscal_year_start
     budgets: dict[str, int] = {}
@@ -245,11 +298,10 @@ def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versio
             amount = B.in_window(b, versions.get(b.id, []), (a, z), fy)
             if amount is not None:
                 budgets[b.teammate] = budgets.get(b.teammate, 0) + amount
-    people = set(spent) | set(budgets)
-    if teammate:
-        people = {teammate}
-    elif team:
-        people |= {m for m in s.ctx.org.members(s.ctx.org.below(team))}
+    people = set(spent) | set(budgets) | set(f.teammates)
+    if f.below is not None:
+        people |= {m for m in s.ctx.org.members(f.below)}
+    people = {m for m in people if m in spent or m in f.teammates or f.keeps(s.ctx.org.team_of.get(m, ""), m)}
     rows: list[Row] = [{"teammate": m, "kind": "bot" if m in s.ctx.org.bots else "person", "spent": spent.get(m, 0),
                         "budget": budgets.get(m)} for m in sorted(people)]
     return rows[:MAX_TOP]
@@ -337,9 +389,56 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 
 
 # ------------------------------------------------------------------------------------------------ one line
+def _next_month(s: _Seen, ids: Sequence[str]) -> Row:
+    """The line's projection for the month after this one, as far as the viewer sees it (projections are by line, team
+    and teammate; there are none by vendor). None on a private line without its detail."""
+    nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
+    month = nxt.isoformat()[:7]
+    if any(i in s.private and i not in s.view.full_detail for i in ids):
+        return {"month": month, "projection": None}
+    total, found = 0, False
+    for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
+        account = s.ctx.accounts.get(r["account_id"])
+        if account is None or account.id not in ids or \
+                not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
+            continue
+        total, found = total + int(r["amount"]), True
+    return {"month": month, "projection": total if found else None}
+
+
+def _paid_by(s: _Seen, rows: Sequence[Row]) -> list[Row]:
+    """How the shown lines were paid: by card (its nickname, last 4 only), from a bank account, or by an entry with no
+    feed row (a journal, an import, Tico's own usage)."""
+    cards: dict[str, Any] = {}
+    money: dict[str, Any] = {}
+    sums: dict[tuple[str, str], list[int]] = {}
+    for r in rows:
+        card_id, money_id = str(r.get("card_id") or ""), str(r.get("money_account_id") or "")
+        if card_id:
+            card = cards.get(card_id) or SK.get(s.ctx.c, "fin_cards", card_id)
+            cards[card_id] = card
+            label = (str(card["nickname"]) or f"Card ••{card['last4'] or ''}") if card is not None else "Card"
+            key = ("card", label)
+        elif money_id:
+            m = money.get(money_id) or SK.get(s.ctx.c, "fin_money_accounts", money_id)
+            money[money_id] = m
+            key = ("bank", f"{m['name']}{' ••' + str(m['last4']) if m is not None and m['last4'] else ''}"
+                   if m is not None else "Bank")
+        else:
+            key = ("entry", str(r.get("source") or "entry"))
+        acc = sums.setdefault(key, [0, 0])
+        acc[0] += int(str(r["amount"]))
+        acc[1] += 1
+    out: list[Row] = [{"kind": k, "name": n, "amount": v[0], "count": v[1]} for (k, n), v in sums.items()]
+    out.sort(key=lambda r: (-abs(int(str(r["amount"]))), str(r["name"])))
+    return out
+
+
 def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str | None = None,
-                end: str | None = None, *, limit: int = 50, top_n: int = 10, at: str | None = None) -> Row:
-    """One line's spend by vendor, team and teammate, and its entries (there are no bank transactions to show yet)."""
+                end: str | None = None, *, limit: int = 50, top_n: int = 10, at: str | None = None,
+                vendor: str | None = None) -> Row:
+    """One line's spend by vendor, team and teammate, and its entries. With `vendor` ("" for lines with none) every
+    breakdown, the entries and how they were paid are that vendor's. `next_month` is the line's projection."""
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     account = s.ctx.accounts.get(account_id)
@@ -347,12 +446,15 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         raise FinanceError(NOT_FOUND, "no such account")
     ids = sorted(descendants(s.ctx.accounts, account_id))
     cells = _cells(s, a, z, ids)
+    if vendor is not None:
+        cells = [x for x in cells if x.vendor == vendor]
     whole = _suppress(s, cells, False, a, z)
     split = _suppress(s, cells, True, a, z)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole.hidden else sum(x.amount for x in whole.cells),
-                "excluded": split.excluded, "hidden": _hidden_labels(s, split.hidden | whole.hidden)}
+                "excluded": split.excluded, "hidden": _hidden_labels(s, split.hidden | whole.hidden),
+                "vendor": vendor, "next_month": _next_month(s, ids)}
     for by in ("vendor", "team", "teammate"):
         sums: dict[str, int] = {}
         for cell in split.cells:
@@ -367,20 +469,26 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     private = any(i in s.private and i not in s.view.full_detail for i in ids)
     if not private:
         most = max(1, min(int(limit), 500))
-        rows = SL.entries_on(c, s.ctx.book.id, ids, a.isoformat(), z.isoformat(), most * 4 + 1)
+        rows = SL.entries_on(c, s.ctx.book.id, ids, a.isoformat(), z.isoformat(), most * 4 + 1, vendor)
         tags = SL.line_tags(c, [r["line_id"] for r in rows])
+        seen: list[Row] = []
         for r in rows:
             line_account = s.ctx.accounts[r["account_id"]]
             if not s.view.sees(line_account, tags.get(r["line_id"], {})):
                 continue
+            seen.append({"amount": int(r["amount"]), "card_id": r["card_id"], "money_account_id": r["money_account_id"],
+                         "source": r["source"]})
             if len(entries) == most:
                 more = True
-                break
+                continue
             entries.append({"line_id": r["line_id"], "entry_id": r["entry_id"], "date": r["entry_date"],
                             "account_id": r["account_id"], "amount": int(r["amount"]), "vendor": r["contact_id"],
                             "description": r["description"], "memo": r["memo"], "source": r["source"],
                             "tags": tags.get(r["line_id"], {})})
         more = more or len(rows) > most * 4
+        out["paid_by"] = _paid_by(s, seen)
+    else:
+        out["paid_by"] = None
     out["entries"] = entries
     out["more"] = more
     return out
@@ -413,14 +521,15 @@ def _visible(s: _Seen, include_inactive: bool) -> list[B.Budget]:
 
 
 def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = False, limit: int = 200,
-            at: str | None = None) -> Row:
-    """Every budget the viewer sees, with where it stands today."""
+            at: str | None = None, on: str | None = None) -> Row:
+    """Every budget the viewer sees, with where it stands today, or in the period holding the day `on` (past or
+    future): the amount of the version in effect then, and that period's spend and holds."""
     s = _open(c, viewer, at)
-    today = dates.day(s.ctx.today)
+    day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
     most = max(1, min(int(limit), 500))
-    rows = [{**_budget_row(b), "state": _state_row(s, b, budgeting.state(s.ctx, b.id, today))} for b in seen[:most]]
-    return {"budgets": rows, "more": len(seen) > most, "view_version": s.view.version}
+    rows = [{**_budget_row(b), "state": _state_row(s, b, budgeting.state(s.ctx, b.id, day))} for b in seen[:most]]
+    return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version}
 
 
 def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None,
@@ -495,6 +604,7 @@ reconciliations = tab_money.reconciliations
 statements = tab_money.statements
 rules = tab_money.rules
 may_connect = tab_money.may_connect
+provider_users = tab_money.provider_users
 # Finance's webhook triggers (finance/tab_hooks.py).
 hook_admin = tab_hooks.hook_admin
 webhook_deliveries = tab_hooks.webhook_deliveries

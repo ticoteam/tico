@@ -78,6 +78,46 @@ def connections_due(c: sqlite3.Connection, at: str) -> list[Any]:
                      "(next_sync_at IS NULL OR next_sync_at<=?) ORDER BY next_sync_at", (at,)).fetchall()
 
 
+def connection_busy(c: sqlite3.Connection, connection_id: str) -> tuple[int, int]:
+    """Payments still in flight from this connection's accounts, and outbox calls not yet made or confirmed."""
+    paying = c.execute(f"SELECT count(*) FROM fin_payments WHERE status IN ({_marks(LIVE_PAYMENT)}) AND money_account_id "
+                       "IN (SELECT id FROM fin_money_accounts WHERE connection_id=?)",
+                       (*LIVE_PAYMENT, connection_id)).fetchone()[0]
+    calls = c.execute("SELECT count(*) FROM fin_outbox WHERE connection_id=? AND status='pending'",
+                      (connection_id,)).fetchone()[0]
+    return int(paying), int(calls)
+
+
+def money_posted(c: sqlite3.Connection, money_id: str) -> int:
+    """Feed rows of a money account already in the books."""
+    return int(c.execute("SELECT count(*) FROM fin_feed_txns WHERE money_account_id=? AND entry_id IS NOT NULL",
+                         (money_id,)).fetchone()[0])
+
+
+def due_out(c: sqlite3.Connection, book_id: str) -> dict[str, tuple[int, int]]:
+    """Payments still on their way out, by the money account they leave: (count, total)."""
+    return {str(r[0]): (int(r[1]), int(r[2])) for r in c.execute(
+        f"SELECT money_account_id, count(*), coalesce(sum(amount), 0) FROM fin_payments WHERE book_id=? AND status IN "
+        f"({_marks(LIVE_PAYMENT)}) GROUP BY money_account_id", (book_id, *LIVE_PAYMENT))}
+
+
+def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequence[Mapping[str, object]],
+                       at: str) -> None:
+    """The provider's users as just read with this connection's token, replacing the last read."""
+    c.execute("DELETE FROM fin_provider_users WHERE connection_id=?", (connection_id,))
+    for u in users:
+        c.execute("INSERT OR REPLACE INTO fin_provider_users(connection_id, provider_user_id, name, email, role, "
+                  "updated_at) VALUES(?,?,?,?,?,?)", (connection_id, str(u.get("id") or ""), str(u.get("name") or ""),
+                                                      str(u.get("email") or ""), str(u.get("role") or ""), at))
+
+
+def provider_users(c: sqlite3.Connection) -> list[Any]:
+    """Users of every connected (not disconnected) provider account, by name."""
+    return c.execute("SELECT u.* FROM fin_provider_users u JOIN fin_connections k ON k.id=u.connection_id "
+                     "WHERE k.status<>'disconnected' AND u.provider_user_id<>'' ORDER BY u.name, u.provider_user_id"
+                     ).fetchall()
+
+
 # ------------------------------------------------------------------------------------------------ money accounts
 def money_accounts(c: sqlite3.Connection, book_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_money_accounts WHERE book_id=? ORDER BY kind, name, id", (book_id,)).fetchall()

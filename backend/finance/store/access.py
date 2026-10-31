@@ -38,6 +38,12 @@ def defaults(c: sqlite3.Connection) -> Defaults:
                     manager_payroll=stored.get("manager_payroll", base.manager_payroll))
 
 
+def set_default(c: sqlite3.Connection, role: str, policy: str, by: str, at: str) -> None:
+    c.execute("INSERT INTO fin_view_defaults(role, policy, created_at, created_by, updated_at) VALUES(?,?,?,?,?) "
+              "ON CONFLICT(role) DO UPDATE SET policy=excluded.policy, updated_at=excluded.updated_at",
+              (role, policy, at, by, at))
+
+
 def seed_defaults(c: sqlite3.Connection, by: str, at: str) -> None:
     base = Defaults()
     for role, policy in (("owner", "everything"), ("manager", base.manager), ("member", base.member),

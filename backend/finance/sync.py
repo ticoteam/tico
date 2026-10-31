@@ -73,8 +73,23 @@ def probe(provider: Provider) -> tuple[dict[str, object], str]:
         {"id": str(a.get("id")), "status": str(a.get("status") or "active"), "current": _cents(a.get("currentBalance")),
          "available": _cents(a.get("availableBalance"))} for a in listed(credit, "accounts")] if credit.ok else []}
     if users.ok:
-        found["users"] = [{"email": str(u.get("email") or "").lower()} for u in listed(users, "users")]
+        found["users"] = user_rows(users)
     return found, ""
+
+
+def user_rows(users: Answer) -> list[dict[str, object]]:
+    """Mercury's users as Finance keeps them: id, name, email (lowercased) and role."""
+    return [{"id": str(u.get("id") or ""), "email": str(u.get("email") or "").lower(), "role": str(u.get("role") or ""),
+             "name": " ".join(str(u.get(k) or "").strip() for k in ("firstName", "lastName")).strip()[:120]}
+            for u in listed(users, "users")]
+
+
+def provider_users(store: Any, provider: Provider, cid: str, now: str) -> None:
+    """Refresh the card holder picker. A failed read keeps the last one and is not a sync failure."""
+    users = provider.users()
+    if users.ok:
+        with store.transaction() as c:
+            SK.set_provider_users(c, cid, user_rows(users), now)
 
 
 def probe_credential(store: Any, vault: Any, credential_id: str, make: Make | None = None
@@ -148,7 +163,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         inbox = len(SK.inbox_waiting(c, 1, cid, now)) > 0
         owed = len(SK.outbox_due(c, now, 1, cid)) > 0 or len(SK.payments_due(c, now, 1, cid)) > 0 or \
             len(SK.outbox_stuck(c, _after(now, -CLAIM_MINUTES * 60), cid)) > 0
-    if row is None:
+    if row is None or str(row["status"]) == "disconnected":
         return "gone"
     if rehearsal:
         with store.transaction() as c:
@@ -165,6 +180,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     problems: list[str] = []
     if due:
         problems += balances(store, provider, cid, now)
+        provider_users(store, provider, cid, now)
         problems += backfill(store, provider, cid, now)
         problems += events(store, provider, cid, now)
     problems += process_inbox(store, provider, cid, now)
