@@ -233,13 +233,13 @@ const CHART = [...[['a-1010', '1010', 'Checking', 'asset', 'bank'], ['a-1020', '
 const chartFor = use => CHART.filter(a => use === 'bill' ? ['expense', 'asset'].includes(a.type) && !['payable', 'receivable'].includes(a.subtype)
   : use === 'invoice' ? a.type === 'income' : true);
 
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false, apRights = []} = {}) {
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false, apRights = [], budgetsExcl = false} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
   // hub.ask: dry runs need this approver; hub.hold: dry runs wait for it; hub.apply: a categorize that moves a bank row
   // to a line shows in the next transactions read (this page's own copy of TX); hub.noChart: the chart read fails.
-  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false, noChart: false}, tx = structuredClone(TX);
+  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false, noChart: false, impact: null}, tx = structuredClone(TX);
   let billsEmail = 'bills@acme.example';
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
@@ -296,7 +296,8 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
     }
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
-    if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
+    // budgetsExcl: a viewer whose budget figures leave payroll out (the read and each row say excluded).
+    if (p === '/api/v2/finance/budgets') return json(budgetsExcl ? {budgets: BUDGETS.map(b => ({...b, state: {...b.state, excluded: true}})), more: false, excluded: true} : {budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
     if (p === '/api/v2/finance/mercury-users') return json({users: [{id: 'mu-1', name: 'Ana Silva', connection_id: 'c1', email: 'a•••@acme.example', updated_at: '2026-10-30T10:00:00Z'},
       {id: 'mu-2', name: 'Ops Card User', connection_id: 'c1', email: 'o•••@acme.example', updated_at: '2026-10-30T10:00:00Z'}]});
@@ -315,7 +316,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/tax/1099') return viewer === 'ana' ? json(F1099) : denied();
     if (p === '/api/v2/triggers' && method === 'GET') return json({triggers: []});
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.hold) await hub.hold;
-    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: {}});
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: hub.impact || {}});
     const moved = body?.kind === 'categorize' && !body.dry_run && hub.apply && tx.find(r => r.id === body.payload?.feed_id);
     if (moved) moved.lines = [{line_id: 'l-' + moved.id, account_id: body.payload.account_id, account: CHART.find(a => a.id === body.payload.account_id)?.name,
       amount: -moved.amount, vendor: moved.counterparty, tags: body.payload.tags}];
@@ -1045,6 +1046,35 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForFunction(() => location.hash === '#/finance/sources');
       await page.locator(READY.sources).first().waitFor();
       assert.match(await page.locator('.toast').first().innerText(), /Reconnect books/, tag + ': says to reconnect');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // Budget figures without payroll say so wherever they show, as the P&L's totals do: the budget column, the line
+    // page's budget column and rail, and what an approval would leave in a budget.
+    {
+      const tag = 'budgets excl. payroll';
+      const {page, errors, hub} = await open(browser, {budgetsExcl: true});
+      await page.locator('.fin-pl').waitFor();
+      assert.match(await page.locator('.fin-pl thead th.fin-b', {hasText: 'budget'}).first().textContent(), /budget excl\. payroll$/, tag + ': the budget column');
+      await page.locator('a[href$="/line/a-6100"]').click();
+      await page.locator('[data-fin-key="GitHub"]').waitFor();
+      assert.ok((await page.locator('#fin-line thead th').allTextContents()).includes('Budget / mo excl. payroll'), tag + ': the line page\'s budget column');
+      await page.locator('[data-fin-key="GitHub"]').click();
+      await page.locator('#fin-rail .fin-bars').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Budget excl\. payroll\s+\$900/, tag + ': the line rail');
+      await go(page, '#/finance/balance', READY.balance);
+      await page.locator('[data-fin-add]').click();
+      await page.locator('[data-fin-add-item="journal"]').click();
+      const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
+      await jl.nth(0).locator('select').selectOption('a-6100');
+      await jl.nth(0).locator('[name=dr]').fill('100');
+      await jl.nth(1).locator('select').selectOption('a-1010');
+      await jl.nth(1).locator('[name=cr]').fill('100');
+      hub.ask = 'human:ana';
+      hub.impact = {budgets: [{budget_id: 'b-software', name: 'Software', remaining: 60000, remaining_after: 50000, excluded: true}]};
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg .fin-ask:not([hidden])').waitFor();
+      assert.match(await page.locator('dialog.fin-dlg [data-impact]').innerText(), /Software left excl\. payroll\s+\$600\s+→\s+\$500/, tag + ': approval impact');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

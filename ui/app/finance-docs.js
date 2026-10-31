@@ -63,24 +63,28 @@ async function finDecide(kind, payload, sig = '') {
   const now = JSON.stringify([kind, payload]);
   if (sig !== now) {
     const dry = await post('/v2/finance/actions', {kind, payload, dry_run: true});
-    if (dry?.status === 'needs_approval') return {ask: dry.approver || '', sig: now};
+    if (dry?.status === 'needs_approval') return {ask: dry.approver || '', sig: now, impact: dry.impact};
     if (dry?.status !== 'committed') throw new Error(dry?.reason || 'Not done');
   }
   return finAct(kind, payload);
 }
+// What a decision waiting for approval would leave in each budget it charges (the dry run's impact.budgets).
+const finImpactHtml = impact => (impact?.budgets || []).filter(b => b.remaining != null)
+  .map(b => finKv(`${b.name} left${finExcl(b)}`, `${finUsd(b.remaining)} → ${finUsd(b.remaining_after)}`)).join('');
 const finAskText = who => who ? `Approval from ${finWho(who)}` : 'Needs approval';
 
 // A dialog whose Save is a decision: the first Save is the dry run; when the rules ask for approval the dialog names
 // the approver and the button becomes Send. Changing the form asks again. `build(form)` returns [kind, payload].
 function finDecideDialog(title, body, label, build, done) {
   let sig = '';
-  const dlg = finDialog(title, body + '<p class="fin-ask" data-ask hidden></p>', label, async form => {
+  const dlg = finDialog(title, body + '<p class="fin-ask" data-ask hidden></p><div data-impact hidden></div>', label, async form => {
     const [kind, payload] = await build(form);
     const r = await finDecide(kind, payload, sig);
     if (r.ask != null) {
       sig = r.sig;
       const ask = form.querySelector('[data-ask]');
       ask.textContent = finAskText(r.ask); ask.hidden = false;
+      const hit = form.querySelector('[data-impact]'); hit.innerHTML = finImpactHtml(r.impact); hit.hidden = !hit.innerHTML;
       form.querySelector('[type=submit]').textContent = 'Send';
       return false;
     }
@@ -93,7 +97,8 @@ function finDecideDialog(title, body, label, build, done) {
   const form = dlg.querySelector('form');
   form.addEventListener('input', () => {
     if (!sig) return;
-    sig = ''; form.querySelector('[data-ask]').hidden = true; form.querySelector('[type=submit]').textContent = label;
+    sig = ''; form.querySelector('[data-ask]').hidden = true; form.querySelector('[data-impact]').hidden = true;
+    form.querySelector('[type=submit]').textContent = label;
   });
   return dlg;
 }

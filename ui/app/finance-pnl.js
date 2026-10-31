@@ -143,6 +143,7 @@ async function finPnlLoad() {
   state.data = p.last = pnl.value;
   state.snap = snap; state.compare = compare;
   state.budgets = budgets.status === 'fulfilled' ? budgets.value?.budgets || [] : [];
+  state.budgetsRead = budgets.status === 'fulfilled' ? budgets.value : null;
   state.model = finPnlModel(state.data);
   const cols = state.data.columns || [];
   if (!(p.budgetCol >= 0 && p.budgetCol < cols.length)) {
@@ -210,7 +211,7 @@ function finPnlDraw() {
   const sign = r => r.type === 'income' ? 1 : -1;
   const fq = finFilterQs(state.snap).toString(), lineQs = fq ? '?' + fq : '';
   // A narrow viewer's totals leave payroll out (§7.5): they say so.
-  const excl = data.excluded ? ' excl. payroll' : '', hasPrivate = rows => rows.some(r => r.private);
+  const excl = finExcl(data), hasPrivate = rows => rows.some(r => r.private);
   // Compare shows the plan as it stood on a past day: not the live budget, so not editable.
   const comparing = state.view === 'company' && !!state.compare;
   const editable = (r) => !caps.viewing && !comparing && caps.may('finance.budgets') && p.period === 'month' && bcol?.state === 'future'
@@ -271,7 +272,7 @@ function finPnlDraw() {
     const spent = cols.map((c, i) => c.state === 'future' ? finSum(allLines, r => r.private ? null : finVal(r, cols, i)) : data.expense?.[i] ?? null);
     out.push(`<tr class="fin-tot"><td>Total expenses${excl}</td>${nums(spent, finSum(allLines, finBudgetOf(bi)), spent[bi], -1)}</tr>`);
   }
-  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget</th><th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>`;
+  box.innerHTML = `<table class="fin-pl"><thead><tr><th class="fin-first"></th>${head}<th class="fin-b">${esc(bcol ? finColLabel(bcol, years) : '')} budget${finExcl(state.budgetsRead)}</th><th>vs budget</th></tr>${sub}</thead><tbody>${out.join('')}</tbody></table>`;
 }
 // The budgets a P&L cell sums, the way the route picks them (backend/finance/reads.py _top_budgets, _filter_budgets):
 // unfiltered, the top budgets the viewer sees; filtered to a team, those of that team and the teams under it; to a
@@ -385,7 +386,7 @@ async function finPnlRail() {
     const nextAt = cols.findIndex((c, k) => k > i && c.state === 'future');
     html += `${sec && sec.top.account_id !== row.account_id ? `<div class="muted fin-sup">${esc(sec.top.name)}</div>` : ''}
       <h2>${esc(row.name)} · ${esc(finColLong(col))}</h2>
-      ${finKv(future ? 'Projected' : 'Actual', finUsd(v) + (future ? finProjTag(row.projection_method) : ''))}${finKv('Budget', finUsd(budget))}
+      ${finKv(future ? 'Projected' : 'Actual', finUsd(v) + (future ? finProjTag(row.projection_method) : ''))}${finKv('Budget' + finExcl(finBudgetFor(row.account_id)?.state), finUsd(budget))}
       ${over == null ? '' : over > 0 ? finKv(row.type === 'income' ? 'Under' : 'Over', finUsd(over), 'fin-bad') : finKv(row.type === 'income' ? 'Over' : 'Left', finUsd(-over))}
       ${nextAt >= 0 ? finKv(finColLabel(cols[nextAt], false) + ' projected', finUsd(row.projection?.[nextAt] ?? null) + finProjTag(row.projection_method)) : ''}
       <div id="fin-by"></div>`;
@@ -528,6 +529,7 @@ async function finLineLoad() {
   if (cur.status === 'rejected') { $('#fin-line').innerHTML = finFail(cur.reason); finRail(''); return; }
   state.cur = cur.value; state.prev = prev.status === 'fulfilled' ? prev.value : null;
   state.budgets = budgets.status === 'fulfilled' ? budgets.value?.budgets || [] : [];
+  state.budgetsRead = budgets.status === 'fulfilled' ? budgets.value : null;
   state.vendors = {};
   const name = $('#fin-line-name'); if (name && !name.textContent) name.textContent = state.cur.account?.name || '';
   finLineDraw(); finLineRail();
@@ -560,7 +562,7 @@ function finLineDraw() {
     : finLineBudget(state.id, state.budgets) ? '' : '<button type="button" class="primary" data-fin-line-add>+ Line budget</button>';
   if (!L.sel || !rows.some(r => r.key === L.sel)) L.sel = rows[0]?.key || '';
   const [cm, pm] = [finDate(L.month + '-01').getMonth(), finDate(finPrevMonth(L.month) + '-01').getMonth()];
-  const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${vendor ? '<th class="fin-n fin-b">Budget / mo</th><th>At limit</th>' : ''}</tr>`;
+  const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${vendor ? `<th class="fin-n fin-b">Budget / mo${finExcl(state.budgetsRead)}</th><th>At limit</th>` : ''}</tr>`;
   const body = rows.map(r => {
     const b = vendor && finIsVendor(r.key) ? finVendorBudget(r.key) : null;
     const amount = b?.state?.amount ?? null;
@@ -592,7 +594,7 @@ function finLineRail() {
   const paidLabel = r => r.kind === 'card' ? 'Card · ' + r.name : r.kind === 'bank' ? r.name : r.name === 'manual' ? 'Journal' : r.name;
   finRail(`<div class="fin-rail-title"><h2>${esc(name)}</h2><span class="fin-big">${finUsd(row.cur)}${vendor ? ' / mo' : ''}</span></div>
     ${pct == null ? '' : `<div class="fin-bar-m${pct >= 100 ? ' bad' : b && pct >= b.warn_pct ? ' warn' : ''}" aria-hidden="true"><i style="width:${pct}%"></i></div><div class="muted fin-small">${finUsd(spent)} of ${finUsd(amount)} · ${month}</div>`}
-    ${b ? finKv('Budget', `${finUsd(amount)} <span class="muted">/ ${{month: 'month', quarter: 'quarter', year: 'year'}[b.period] || b.period}</span>`) + finKv('Warn at', b.warn_pct + '%') + finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit) + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : ''))) : ''}
+    ${b ? finKv('Budget' + finExcl(b.state), `${finUsd(amount)} <span class="muted">/ ${{month: 'month', quarter: 'quarter', year: 'year'}[b.period] || b.period}</span>`) + finKv('Warn at', b.warn_pct + '%') + finKv('At limit', esc((FIN_AT_LIMIT[b.at_limit] || b.at_limit) + (b.at_limit === 'ask' && b.owner ? ' ' + finWho(b.owner) : ''))) : ''}
     ${nm && nm.projection != null ? finKv(`${lineName} · ${nmLabel} projected`, finUsd(nm.projection) + finProjTag(nm.projection_method)) : ''}
     ${one && d?.seats != null ? finKv('Seats', esc(Number(d.seats).toLocaleString('en-US'))) : ''}${one && d?.renewal_on ? finKv('Renews', esc(finDayLabel(d.renewal_on))) : ''}
     ${paid.length ? `<h3 class="fin-h">Paid by</h3>${paid.map(r => finKv(paidLabel(r), finUsd(r.amount))).join('')}` : ''}
