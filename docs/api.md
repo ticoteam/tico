@@ -51,6 +51,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Events | The catalog of named events ([guide](routines.md)). |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
 | Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |
+| Rules | Org rules: what teammates follow (internal) and what someone outside requires (external), with their due dates and sources. |
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |
 | Inbound | Shared company inbound email and SMS for people and agents; reads never consume messages. |
 | Triggers | Webhook triggers: an address any sender can post to, how its calls are verified, kept and run again. |
