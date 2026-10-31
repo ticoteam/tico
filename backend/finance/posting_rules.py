@@ -1,8 +1,8 @@
-"""Posting rules (spec §6.1–6.3): on a new feed row, and on a bill line with no account, the first active rule by
-priority whose conditions hold says where it posts (an account or a split, with tags and a contact) or that a person
-decides (`ask`). A row no rule covers, or one a rule asks about, raises finance.feed.needs_category: a debit still
-posts to Other expenses so the books stay whole; a credit waits. Rules are written through gating's rule actions with
-`kind: posting`; their examples must pass before they are saved."""
+"""Posting rules (spec §6.1–6.3): on a new feed row (a Tico card's too) and on a bill line with no account, the first
+active rule by priority whose conditions hold says where it posts (an account or a split, with tags and a contact) or
+that a person decides (`ask`). A row no rule covers, or one a rule asks about, raises finance.feed.needs_category: a
+debit still posts to Other expenses (a Tico card's charge to its budget line) so the books stay whole; a credit waits.
+Rules are written through gating's rule actions with `kind: posting`; their examples must pass before they are saved."""
 from collections.abc import Mapping
 from typing import Any, cast
 
@@ -52,14 +52,31 @@ def usable(ctx: Ctx, then: AP.Posting) -> bool:
                for i in ids)
 
 
-def lines_for(ctx: Ctx, row: Any, rule: AP.PostingRule) -> list[dict[str, object]]:
-    """The non-money lines a rule gives a feed row (feed_line shape), signed against the row."""
+def lines_for(ctx: Ctx, row: Any, rule: AP.PostingRule, base: Mapping[str, str] | None = None,
+              keep: Mapping[str, str] | None = None) -> list[dict[str, object]]:
+    """The non-money lines a rule gives a feed row (feed_line shape), signed against the row: the rule's tags over
+    `base`, with `keep` (a card holder's teammate tag) over both."""
     from . import posting
     from .banking import feed_line
     amount = int(row["amount"])
     contact = rule.then.contact_id or str(row["counterparty"] or "")
-    return [feed_line(account, -amount // abs(amount) * part, posting.with_team(ctx, tags), contact)
+    return [feed_line(account, -amount // abs(amount) * part,
+                      posting.with_team(ctx, {**(base or {}), **tags, **(keep or {})}), contact)
             for account, part, tags in AP.split_amounts(abs(amount), rule.then)]
+
+
+def card_lines(ctx: Ctx, row: Any, money: Any, account_id: str,
+               tags: Mapping[str, str]) -> tuple[list[dict[str, object]], bool]:
+    """The spend lines of a charge or refund on a card Tico issued, and whether a person should look. The first
+    matching posting rule sets the account, tags and vendor; the holder's teammate tag stays, and the money line (the
+    card liability, which card use is read from) is the caller's, so a rule never moves the charge off the card.
+    No rule, or an `ask`, keeps the card's budget line; an `ask` also asks."""
+    from .banking import feed_line
+    rule = first_for(ctx, feed_facts(row, money))
+    if rule is not None and rule.then.outcome == "post" and usable(ctx, rule.then):
+        keep = {"teammate": tags["teammate"]} if tags.get("teammate") else {}
+        return lines_for(ctx, row, rule, tags, keep), False
+    return [feed_line(account_id, -int(row["amount"]), tags, str(row["counterparty"] or ""))], rule is not None
 
 
 def post_feed(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gl_id: str) -> bool:
@@ -154,4 +171,4 @@ def need_kind(row: Any, kind: str) -> None:
         raise FinanceError(CONFLICT, f"that is a {row['kind']} rule")
 
 
-__all__ = ["rules", "rule_of", "first_for", "feed_facts", "post_feed", "checked", "test", "lines_for"]
+__all__ = ["rules", "rule_of", "first_for", "feed_facts", "post_feed", "card_lines", "checked", "test", "lines_for"]
