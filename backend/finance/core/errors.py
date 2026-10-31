@@ -23,6 +23,7 @@ class Named:
     fallback: str
     numbers: bool = False
     cards: tuple[str, ...] = ()
+    plain: str = ""     # the same sentence without amounts, for a reader who may see the names but not the figures
 
 
 class FinanceError(Exception):

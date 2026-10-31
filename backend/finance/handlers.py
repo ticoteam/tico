@@ -122,6 +122,14 @@ def named_visible(ctx: Ctx, who: str, budgets: Sequence[B.Budget], numbers: bool
     return all(shows_numbers(ctx, who, b) if numbers else sees_budget(ctx, who, b) for b in budgets)
 
 
+def _figures_agree(ctx: Ctx, who: str, b: B.Budget) -> bool:
+    """Whether `who`'s own figure for a budget is the true one now. Only then may a sentence show the figure: no private
+    spend shows as a difference (the rule an allocation refusal was written under)."""
+    day = dates.day(ctx.today)
+    true = budgeting.state(ctx, b.id, day).remaining
+    return budgeting.state(ctx, b.id, day, read=budgeting.Netted(ctx.view(who))).remaining == true
+
+
 def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], decider: bool = False) -> str:
     """The reason a refusal shows `who`. A refusal that named budgets keeps its sentence in the record with the budget
     ids; the names (and amounts, where it has them) come back only while `who` may see each budget. A `decider` (the
@@ -140,7 +148,12 @@ def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], d
     if not decider and not (named_visible(ctx, who, shown, bool(recorded["numbers"]))
                             and all(sees_card(ctx, who, card) for card in cards)):
         return fallback
-    return str(recorded["template"]).format(*[b.name for b in shown], *[_card_label(card) for card in cards])
+    names = [b.name for b in shown]
+    if recorded["numbers"] and not decider and not all(_figures_agree(ctx, who, b) for b in shown):
+        # The reader's own figure is not the true one now: the sentence names the budget and carries no amount.
+        plain = str(recorded.get("plain") or "")
+        return plain.format(*names) if plain else fallback
+    return str(recorded["template"]).format(*names, *[_card_label(card) for card in cards])
 
 
 def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> list[Result]:
@@ -787,14 +800,15 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             s = budgeting.state(ctx, one.id, at)
             if s.remaining is not None and grow > s.remaining:
                 numbers = shows_numbers(ctx, who, one)
-                # Enforcement decides on the true figure; the sentence names it only when the viewer's own figure is the
-                # same one, so no private spend shows as a difference.
+                # The record keeps the true figure, and each reader sees it only where their own figure is that one now
+                # (named_reason). The sentence for this refusal names the figure only when the viewer's figure is the same.
                 seen = (budgeting.state(ctx, one.id, at, read=budgeting.Netted(ctx.view(who))).remaining
                         if numbers else None)
-                exact = numbers and seen == s.remaining
-                named = Named((one.id,), f"it does not fit: {{0}} has {s.remaining} left" if exact
-                              else "it does not fit in {0}", "it does not fit: not enough left", numbers=exact)
-                raise named_refusal(INVALID, named, [one.name], numbers)
+                named = Named((one.id,), f"it does not fit: {{0}} has {s.remaining} left",
+                              "it does not fit: not enough left", numbers=True, plain="it does not fit in {0}")
+                if numbers and seen == s.remaining:
+                    raise FinanceError(INVALID, named.template.format(one.name), named)
+                raise FinanceError(INVALID, named.plain.format(one.name) if numbers else named.fallback, named)
     lowered = kind == "card" and grow < 0
 
     def apply(aid: str) -> Result:

@@ -309,7 +309,7 @@ def _recorded(named: Named | None) -> dict[str, object]:
     if named is None:
         return {}
     return {"named": {"budgets": list(named.budgets), "cards": list(named.cards), "template": named.template,
-                      "numbers": named.numbers}}
+                      "numbers": named.numbers, "plain": named.plain}}
 
 
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,

@@ -592,6 +592,9 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
                 if cut and not _card_spend_seen(cut, SB.card_lines(c, str(r["id"]), st.period_start,
                                                                    st.period_end)):
                     spent = None
+                elif cut:       # the settled private part comes out, as the P&L's and the budgets' do
+                    spent -= budgeting.settled_used(ctx, budgeting.Netted(view), budgeting.subtree(ctx, bid),
+                                                    st.period_start, st.period_end, f"card:{r['id']}", absorbed=True)
             out.append(card_row(ctx, r, spent, alloc))
             if len(out) > most:
                 break

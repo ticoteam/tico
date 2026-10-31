@@ -139,7 +139,7 @@ def _hold_origin(r: Any) -> str:
     return tab.feed_origin({"source": r["source"], "source_id": r["source_id"]})
 
 
-def _settled_used(ctx: Ctx, read: Netted, budget_ids: Sequence[str], start: str, end: str, target: str,
+def settled_used(ctx: Ctx, read: Netted, budget_ids: Sequence[str], start: str, end: str, target: str,
                   absorbed: bool) -> int:
     """The private part of what a target used on these budgets in the window (SB.target_used), which a read takes out.
     A card's use is its money lines of private feed rows (SB.card_used) plus its settled holds no entry took in. Any
@@ -212,7 +212,7 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
                 tree = subtree(ctx, bid)
                 total = SB.target_used(ctx.c, tree, start, end, target, absorbed=kind != "teammate")
                 if read is not None:
-                    total -= _settled_used(ctx, read, tree, start, end, target, absorbed=kind != "teammate")
+                    total -= settled_used(ctx, read, tree, start, end, target, absorbed=kind != "teammate")
                 used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid, read=read)
                                      if kind == "teammate" else 0)
             return used[bid]
