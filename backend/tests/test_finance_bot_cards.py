@@ -833,6 +833,37 @@ def test_a_routed_raise_is_checked_at_the_raised_amount_with_the_parents_cards(b
         assert amounts == {budget: 92_000, eng: 52_000}      # 520.00 children + 400.00 cards = 920.00
 
 
+def test_a_routed_raise_must_fit_every_ancestor_with_its_cards_not_only_its_parent(books):
+    """Codex P2: a routed raise raises the parent and checks the parent's cards, but not the first unchanged ancestor
+    above it. Company 1,000.00 with 600.00 of cards; Software 300.00 under it; Engineering 300.00 under Software. Raising
+    Engineering to 500.00 raises Software to 500.00, and Company would then reserve 1,100.00: refused, not routed. Once
+    Company is 1,200.00 the same raise fits, and goes to Software's owner."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        company = _budget(c, name="Company", amount=100_000)
+        assert _bot_card(c, company, "bot:coder", amount=30_000).status == "committed"
+        assert _bot_card(c, company, "bot:seller", amount=30_000, user="user-dan").status == "committed"
+        software = _budget(c, name="Software", amount=30_000, team="eng", parent_id=company)
+        eng = _budget(c, name="Engineering", amount=30_000, team="eng", vendor="Acme Cloud", parent_id=software)
+        assert act(c, OWNER, "budget_update", {"budget_id": software, "owner": "human:dan"}).status == "committed"
+        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="grand-refused")
+        assert (refused.status, refused.code) == ("failed", "invalid"), (refused.status, refused.code, refused.reason)
+        assert "Company" in refused.reason, refused.reason
+        amounts = {bid: max(SB.versions(c, [bid])[bid], key=lambda v: (v.effective_from, v.version)).amount
+                   for bid in (company, software, eng)}
+        assert amounts == {company: 100_000, software: 30_000, eng: 30_000}
+        assert act(c, OWNER, "budget_update", {"budget_id": company, "amount": 120_000}).status == "committed"
+        asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="grand-fits")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
+        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done is not None and done.status == "committed", (done and done.reason)
+        amounts = {bid: max(SB.versions(c, [bid])[bid], key=lambda v: (v.effective_from, v.version)).amount
+                   for bid in (company, software, eng)}
+        assert amounts == {company: 120_000, software: 50_000, eng: 50_000}
+
+
 def test_a_cards_refusal_names_the_cards_only_while_the_asker_can_see_them(books):
     fake = FakeMercury()
     budget, _, _ = _world(books, fake)               # Tools: 50.00; coder reserves 200.00 and seller 200.00 of it

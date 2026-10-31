@@ -425,7 +425,8 @@ def _fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int, route: bo
 def _route(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], effective: str, near: list[B.Budget],
            e: FinanceError) -> _Route:
     """Route a change that passes its parent to the parent's owner, with the parent raised to fit. The raised parent
-    must fit under its own parent: approvals never chain, so that is refused."""
+    must fit under its own parent, cards and children together. That parent is unchanged and must fit under its parent
+    the same way: approvals never chain, so a raise that would need it raised too is refused."""
     raise_to = _raise_to(ctx, b, mine, effective)
     if raise_to is None:
         raise _refusal(ctx, who, near, e) from None
@@ -434,6 +435,11 @@ def _route(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], effective: st
               B.Version(budget_id=parent.id, version=10**9, effective_from=effective, amount=raise_to)]
     try:
         _under_parent(ctx, parent, raised, effective)
+        if parent.parent_id:
+            above = ctx.budgets()[parent.parent_id]
+            kids = {k: vs for k, vs in _kid_versions(ctx, above.id).items() if k != parent.id}
+            kids[parent.id] = raised
+            _reserve_fit(ctx, who, above, SB.versions(ctx.c, [above.id])[above.id], kids, effective)
     except FinanceError:
         above = ctx.budgets()[parent.parent_id]
         raise _refusal(ctx, who, [*near, above], invalid(f"raise {above.name} first")) from None
