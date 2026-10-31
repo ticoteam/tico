@@ -189,7 +189,7 @@ const {unrouted} = require('./support/routes.cjs');
     gateway = {connected: true, source: 'settings', revision: gateway.revision + 1, state: 'connected', working: true,
       message: 'Connected.', automatic: true};
     await open();
-    assert.equal(await card.locator('[data-gateway-automatic]').innerText(), 'Connected automatically');
+    assert.equal(await card.locator('[data-gateway-automatic]').innerText(), 'Tico AI Gateway: connected automatically');
     assert.ok(!/invite|code/i.test(await card.innerText()), 'no invite code is asked for');
     // Cleared on purpose, it stays off until the owner turns it back on.
     gateway = {connected: false, source: '', revision: gateway.revision + 1, state: 'none', working: false,

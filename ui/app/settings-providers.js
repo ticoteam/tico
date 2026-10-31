@@ -226,7 +226,7 @@ function gatewayHTML(gateway, owner) {
   const state = gateway.state || (gateway.connected ? 'connected' : 'none');
   const message = gateway.message ? `<p class="${gateway.working === false || state === 'cap_reached' ? 'err' : 'muted'}" data-gateway-message>${esc(gateway.message)}</p>` : '';
   // An install the install command invited gets its own key from Tico: nothing to paste, and a pasted key still wins.
-  const automatic = gateway.automatic ? '<p class="muted" data-gateway-automatic>Connected automatically</p>'
+  const automatic = gateway.automatic ? '<p data-gateway-automatic>Tico AI Gateway: connected automatically</p>'
     : gateway.auto_off ? '<div class="onb-actions"><button class="ghost" type="button" data-gateway-automatic-on>Connect automatically</button></div>' : '';
   if (!gateway.editable) {
     return `<div class="prov-gateway" id="set-gateway">
