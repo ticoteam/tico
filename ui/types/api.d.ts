@@ -5084,9 +5084,13 @@ export type GetFinanceLineParams = {
   end?: string | null;
   limit?: number;
   start?: string | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
   top_n?: number;
+  unattributed?: boolean;
   vendor?: string | null;
   view_as?: string | null;
+  who?: "both" | "bots" | "people";
 };
 export type GetFinanceLineBody = never;
 export type GetFinanceLineResponse = FinanceReport;

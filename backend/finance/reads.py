@@ -137,6 +137,11 @@ class _Filter:
         hit = not picked or mate in self.teammates or (self.below is not None and team in self.below)
         return hit and (self.who == "both" or (bool(mate) and self._kind(mate)))
 
+    def narrow(self, org: Any) -> bool:
+        """Whether the filter is narrower than whole departments (a teammate, bots or people, a team below a
+        department): private payroll shows none of its cells then (§7.5)."""
+        return bool(self.teammates) or self.who != "both" or any(org.department(t) != t for t in self.teams)
+
     def keeps_budget(self, b: B.Budget) -> bool:
         in_teams = self.below is not None and b.team in self.below
         if b.teammate:
@@ -209,8 +214,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
     cells = _cells(s, a, z, pnl_ids)
     if f.any:
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
-    narrow = bool(f.teammates) or f.who != "both" or any(s.ctx.org.department(t) != t for t in f.teams)
-    sup = _suppress(s, cells, narrow, a, z)
+    sup = _suppress(s, cells, f.narrow(s.ctx.org), a, z)
     actual: dict[str, list[int]] = {i: [0] * len(buckets) for i in pnl_ids}
     spent: dict[str, int] = {}
     for cell in sup.cells:
@@ -258,7 +262,10 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      "private": hidden,
                      "actual": None if hidden else actual[account_id],
                      "total": None if hidden else sum(actual[account_id]),
-                     "budget": budget.get(account_id), "projection": None if hidden else projection.get(account_id)})
+                     # "Payroll (private)" with no amount (§7.5): its budget is withheld too, since a narrow
+                     # filter's payroll budget can be one person's planned pay.
+                     "budget": None if hidden else budget.get(account_id),
+                     "projection": None if hidden else projection.get(account_id)})
     if view == "expenses":
         rows = _with_spend(s, rows)
     out: Row = {"start": a.isoformat(), "end": z.isoformat(), "period": period, "basis": basis, "view": view,
@@ -389,9 +396,10 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 
 
 # ------------------------------------------------------------------------------------------------ one line
-def _next_month(s: _Seen, ids: Sequence[str]) -> Row:
-    """The line's projection for the month after this one, as far as the viewer sees it (projections are by line, team
-    and teammate; there are none by vendor). None on a private line without its detail."""
+def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
+    """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
+    (projections are by line, team and teammate; there are none by vendor). None on a private line without its
+    detail."""
     nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
     month = nxt.isoformat()[:7]
     if any(i in s.private and i not in s.view.full_detail for i in ids):
@@ -400,7 +408,8 @@ def _next_month(s: _Seen, ids: Sequence[str]) -> Row:
     for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
         account = s.ctx.accounts.get(r["account_id"])
         if account is None or account.id not in ids or \
-                not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
+                not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
+                (f is not None and f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
             continue
         total, found = total + int(r["amount"]), True
     return {"month": month, "projection": total if found else None}
@@ -436,25 +445,35 @@ def _paid_by(s: _Seen, rows: Sequence[Row]) -> list[Row]:
 
 def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str | None = None,
                 end: str | None = None, *, limit: int = 50, top_n: int = 10, at: str | None = None,
-                vendor: str | None = None) -> Row:
+                vendor: str | None = None, teams: Iterable[str] = (), teammates: Iterable[str] = (),
+                who: str = "both", unattributed: bool = False) -> Row:
     """One line's spend by vendor, team and teammate, and its entries. With `vendor` ("" for lines with none) every
-    breakdown, the entries and how they were paid are that vendor's. `next_month` is the line's projection."""
+    breakdown, the entries and how they were paid are that vendor's; `teams`, `teammates`, `who` and `unattributed`
+    filter it as the P&L's expenses view does. `next_month` is the line's projection (within the org filter).
+
+    Private totals come only from whole cohorts: a vendor filter is always narrow (so a payroll cell is never rebuilt
+    from a caller-picked subset and recovered by subtraction), and an org filter is narrow as the P&L's is."""
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     account = s.ctx.accounts.get(account_id)
     if account is None or not s.view.sees_account(account):
         raise FinanceError(NOT_FOUND, "no such account")
+    f = _org_filter(s, teams, teammates, who, unattributed)
     ids = sorted(descendants(s.ctx.accounts, account_id))
     cells = _cells(s, a, z, ids)
     if vendor is not None:
         cells = [x for x in cells if x.vendor == vendor]
-    whole = _suppress(s, cells, False, a, z)
+    if f.any:
+        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+    whole = _suppress(s, cells, vendor is not None or f.narrow(s.ctx.org), a, z)
     split = _suppress(s, cells, True, a, z)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole.hidden else sum(x.amount for x in whole.cells),
                 "excluded": split.excluded, "hidden": _hidden_labels(s, split.hidden | whole.hidden),
-                "vendor": vendor, "next_month": _next_month(s, ids)}
+                "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
+                                             "unattributed": f.unattributed},
+                "next_month": _next_month(s, ids, f)}
     for by in ("vendor", "team", "teammate"):
         sums: dict[str, int] = {}
         for cell in split.cells:
@@ -474,7 +493,9 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         seen: list[Row] = []
         for r in rows:
             line_account = s.ctx.accounts[r["account_id"]]
-            if not s.view.sees(line_account, tags.get(r["line_id"], {})):
+            mark = tags.get(r["line_id"], {})
+            if not s.view.sees(line_account, mark) or \
+                    (f.any and not f.keeps(str(mark.get("team") or ""), str(mark.get("teammate") or ""))):
                 continue
             seen.append({"amount": int(r["amount"]), "card_id": r["card_id"], "money_account_id": r["money_account_id"],
                          "source": r["source"]})

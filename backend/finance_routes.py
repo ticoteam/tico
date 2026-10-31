@@ -221,12 +221,17 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/lines/{account_id}")
     def finance_line(request: Request, account_id: str, start: str | None = None, end: str | None = None,
                      limit: int = Query(50, ge=1, le=200), top_n: int = Query(10, ge=1, le=200),
-                     vendor: str | None = Query(None, max_length=200), view_as: str | None = None):
+                     vendor: str | None = Query(None, max_length=200), view_as: str | None = None,
+                     teams: Annotated[list[str] | None, Query()] = None,
+                     teammates: Annotated[list[str] | None, Query()] = None,
+                     who: Literal["both", "bots", "people"] = "both", unattributed: bool = False):
         """One line's spend by vendor, team and teammate, its entries and how they were paid, and its projection for
-        next month, as far as the caller sees; `vendor` ("" for none) narrows all of it to one vendor."""
+        next month, as far as the caller sees; `vendor` ("" for none) narrows all of it to one vendor, and teams,
+        teammates, who and unattributed filter it as the P&L's expenses view does."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.line_detail(c, actor, account_id, start, end, limit=limit, top_n=top_n,
-                                                        vendor=vendor))
+                                                        vendor=vendor, teams=teams or (), teammates=teammates or (),
+                                                        who=who, unattributed=unattributed))
 
     @app.post("/api/v2/finance/actions")
     def finance_act(request: Request, body: FinanceActionRequest):

@@ -1,6 +1,6 @@
 """The Finance tab's money reads keep private lines private and follow the current view: a payroll feed row never
 shows its amount or payee to a teammate who sees the bank line but not payroll detail, a payment to a private line is
-left out, and a payer whose grant was revoked sees only that their payment exists and its status."""
+left out (of lists and of the balance sheet's due-out totals), and a payer whose grant was revoked sees only that their payment exists and its status."""
 from backend.finance import reads as FR
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
@@ -81,6 +81,16 @@ def test_payments_hide_private_lines_and_a_revoked_payer_keeps_only_the_status(b
         assert sorted(p["amount"] for p in payments(OWNER)) == [9_000, 812_345]
         assert [p["amount"] for p in payments("human:cara")] == []          # leads Web, but no payroll detail
         assert [p["amount"] for p in payments("human:ben")] == [9_000]
+
+        def due_out(who):                                   # N4: the balance sheet's due-out follows the same cut
+            sheet = FR.balance_sheet(c, who, at=AT)
+            return [s["due_out"] for a in sheet["assets"] for s in a["sources"] if s["money_account_id"] ==
+                    _checking(c)][0]
+        act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "bs_lines", "account_ids": [account(c, "1000")]})
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"})
+        assert due_out(OWNER) == {"count": 2, "amount": 821_345}
+        assert due_out("human:dan") == {"count": 1, "amount": 9_000}       # everything but payroll detail
+        assert due_out("human:cara") == {"count": 0, "amount": 0}          # the bank line only
         act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
         (left,) = payments("human:ben")
         assert left["status"] == "queued" and left["created_by"] == "human:ben"

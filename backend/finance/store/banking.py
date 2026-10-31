@@ -94,11 +94,10 @@ def money_posted(c: sqlite3.Connection, money_id: str) -> int:
                          (money_id,)).fetchone()[0])
 
 
-def due_out(c: sqlite3.Connection, book_id: str) -> dict[str, tuple[int, int]]:
-    """Payments still on their way out, by the money account they leave: (count, total)."""
-    return {str(r[0]): (int(r[1]), int(r[2])) for r in c.execute(
-        f"SELECT money_account_id, count(*), coalesce(sum(amount), 0) FROM fin_payments WHERE book_id=? AND status IN "
-        f"({_marks(LIVE_PAYMENT)}) GROUP BY money_account_id", (book_id, *LIVE_PAYMENT))}
+def live_payments(c: sqlite3.Connection, book_id: str) -> list[Any]:
+    """Payments still on their way out (what a viewer's due-out totals are summed from, after their view)."""
+    return c.execute(f"SELECT id, money_account_id, account_id, tags_json, amount FROM fin_payments WHERE book_id=? AND "
+                     f"status IN ({_marks(LIVE_PAYMENT)})", (book_id, *LIVE_PAYMENT)).fetchall()
 
 
 def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequence[Mapping[str, object]],

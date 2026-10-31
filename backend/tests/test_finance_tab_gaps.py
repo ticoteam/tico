@@ -76,6 +76,11 @@ def test_a_line_opens_per_vendor_with_how_it_was_paid_and_next_month(books):
         assert [(r["label"], r["amount"]) for r in tools["by_team"]] == [("Web", 700)]
         mine = FR.line_detail(c, "human:gus", line, *OCT, at=AT)
         assert [(p["kind"], p["name"]) for p in mine["paid_by"]] == [("card", "Card ••2222")]
+        web = FR.line_detail(c, OWNER, line, *OCT, teams=["web"], at=AT)          # the Expenses rail's filter
+        assert web["filter"]["teams"] == ["web"] and web["total"] == 1_200 + 700
+        assert {e["amount"] for e in web["entries"]} == {1_200, 700}
+        assert FR.line_detail(c, OWNER, line, *OCT, teammates=["human:gus"], at=AT)["total"] == 3_400
+        assert FR.line_detail(c, OWNER, line, *OCT, who="bots", at=AT)["total"] == 0
 
 
 def test_sources_actions_are_a_finance_admins_and_mercury_users_are_cut_to_the_viewer(books):
@@ -102,7 +107,18 @@ def test_sources_actions_are_a_finance_admins_and_mercury_users_are_cut_to_the_v
                                                 "account_id": ids["cards_gl"]}).code == "invalid"
         assert act(c, OWNER, "connection_map", {"money_account_id": ids["bank"],
                                                 "account_id": account(c, "1000")}).status == "committed"
-        moved = act(c, OWNER, "connection_map", {"money_account_id": ids["bank"], "account_id": asset})
+        # N7: a finance admin acts only on sources they see (finance.admin grants no view).
+        act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.admin"})
+        to_savings = {"money_account_id": ids["bank"], "account_id": asset}
+        assert act(c, "human:dan", "connection_map", to_savings).code == "denied"           # no sources view
+        assert act(c, "human:dan", "connection_sync", {"connection_id": cid}).code == "denied"
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "sources"})
+        assert act(c, "human:dan", "connection_map", to_savings).code == "not_found"        # nor the bank line
+        assert act(c, "human:dan", "connection_disconnect", {"connection_id": cid}).code == "not_found"
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "bs_lines", "account_ids": [account(c, "1000")]})
+        assert act(c, "human:dan", "connection_map", to_savings).code == "not_found"        # nor the savings line
+        assert act(c, "human:dan", "connection_sync", {"connection_id": cid}).status == "committed"
+        moved = act(c, OWNER, "connection_map", to_savings)
         assert moved.status == "committed" and moved.result["account_id"] == asset
         SK.insert(c, "fin_outbox", {"connection_id": cid, "op": "card_sync", "idempotency_key": "o1",
                                     "created_at": AT, "created_by": OWNER})
@@ -141,5 +157,7 @@ def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
     assert get(api, "finance/budgets?at=2026-12-15")["on"] == "2026-12-15"
     picked = get(api, "finance/pnl?view=expenses&teammates=human:ben&teammates=human:ana&who=people")["filter"]
     assert picked["teammates"] == ["human:ben", "human:ana"] and picked["who"] == "people"
+    lined = get(api, f"finance/lines/{line}?teammates=human:ben&teammates=human:ana&who=people")["filter"]
+    assert lined == {"teams": [], "teammates": ["human:ben", "human:ana"], "who": "people", "unattributed": False}
     get(api, "finance/mercury-users", token="ben-test", expected=403)
     assert get(api, "finance/mercury-users")["users"] == []

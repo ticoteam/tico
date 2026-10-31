@@ -1435,7 +1435,9 @@ STABLE.extend([
      "view_as", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
      "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
-     "projection, as far as the caller sees; vendor narrows it to one vendor. The owner may pass view_as",
+     "projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
+     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may "
+     "pass view_as",
      "FinanceReport"),
     ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
      "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "

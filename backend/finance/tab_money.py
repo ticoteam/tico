@@ -10,7 +10,7 @@ from .context import load
 from .core import rights as R
 from .core.errors import denied
 from .store import banking as SK
-from .tab import Row, page_size, private_cut, sees_money_account
+from .tab import Row, page_size, payment_seen, private_cut, sees_money_account
 
 PAYMENT_STATUSES = ("queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
                     "unknown")
@@ -64,9 +64,7 @@ def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, c
             before = str(r["created_at"])
             account = ctx.accounts.get(str(r["account_id"]))
             mine = str(r["created_by"]) == viewer
-            private = str(r["account_id"]) in cut
-            seen = not private and (view.everything or (account is not None and
-                                                        view.sees(account, SK.loads(r["tags_json"]))))
+            seen = payment_seen(ctx, view, cut, r)
             if not (seen or mine):
                 continue
             rid = str(r["recipient_id"])

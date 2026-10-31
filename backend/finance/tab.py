@@ -77,7 +77,12 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
     sums = SK.balances(c, ctx.book.id, day, [a.id for a in shown])
     kinds = SK.sources_by_account(c, ctx.book.id, day, [a.id for a in shown])
     money = [r for r in SK.money_accounts(c, ctx.book.id) if str(r["account_id"] or "") in {a.id for a in shown}]
-    owed = SK.due_out(c, ctx.book.id)
+    owed: dict[str, tuple[int, int]] = {}
+    cut = set(private_cut(ctx, view))
+    for r in SK.live_payments(c, ctx.book.id):          # what is on its way out, as far as this viewer sees payments
+        if payment_seen(ctx, view, cut, r):
+            n, total = owed.get(str(r["money_account_id"]), (0, 0))
+            owed[str(r["money_account_id"])] = (n + 1, total + int(r["amount"]))
     sections: dict[str, list[Row]] = {"asset": [], "liability": [], "equity": []}
     totals = {"asset": 0, "liability": 0, "equity": 0}
     for a in sorted(shown, key=lambda x: x.code):
@@ -142,6 +147,15 @@ def private_cut(ctx: Ctx, view: VW.View) -> list[str]:
     row that carries such a line's amount or payee (a bank feed row, a payment): it is left out whole, as phase 0's
     line reads do, so a salary can't be read off a feed amount or worked out by subtraction (spec §7.5)."""
     return sorted(a for a in ctx.private() if a not in view.full_detail)
+
+
+def payment_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], r: Any) -> bool:
+    """Whether a payment row shows to this viewer in full: not on a private line they lack full detail for, and on a
+    line their current view covers with its tags. Every read of payment amounts (a list, a total) goes through it."""
+    account = ctx.accounts.get(str(r["account_id"]))
+    if str(r["account_id"]) in cut:
+        return False
+    return view.everything or (account is not None and view.sees(account, SK.loads(r["tags_json"])))
 
 
 def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:

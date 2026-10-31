@@ -8361,7 +8361,7 @@
     },
     "/api/v2/finance/lines/{account_id}": {
       "get": {
-        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection, as far as the caller sees; vendor narrows it to one vendor. The owner may pass view_as",
+        "summary": "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may pass view_as",
         "operationId": "getFinanceLine",
         "parameters": [
           {
@@ -8460,6 +8460,69 @@
                 }
               ],
               "title": "View As"
+            }
+          },
+          {
+            "name": "teams",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teams"
+            }
+          },
+          {
+            "name": "teammates",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teammates"
+            }
+          },
+          {
+            "name": "who",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "both",
+                "bots",
+                "people"
+              ],
+              "type": "string",
+              "default": "both",
+              "title": "Who"
+            }
+          },
+          {
+            "name": "unattributed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Unattributed"
             }
           }
         ],

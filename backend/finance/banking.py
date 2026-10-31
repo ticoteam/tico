@@ -574,17 +574,33 @@ def reconcile_undo(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 # ------------------------------------------------------------------------------------------------ a source's page
-def _connection(ctx: Ctx, p: V.Payload) -> Any:
+def _in_view(ctx: Ctx, who: str, money: Sequence[Any], lines: Sequence[L.Account] = ()) -> None:
+    """Sources actions act on what the actor sees (finance.admin grants no view, §7.5): the sources view, every money
+    account they touch (with its balance sheet line) and every line they map onto."""
+    from .tab import sees_money_account
+    if who == SYSTEM:
+        return
+    view = ctx.view(who)
+    if not (view.everything or view.sources):
+        raise denied("sources are the owner's unless granted")
+    if not all(sees_money_account(ctx, view, m) for m in money) or \
+            not all(view.everything or view.sees_account(a) for a in lines):
+        raise FinanceError(NOT_FOUND, "no such money account")
+
+
+def _connection(ctx: Ctx, who: str, p: V.Payload) -> Any:
     row = SK.get(ctx.c, "fin_connections", V.text(p, "connection_id", 80))
     if row is None:
         raise FinanceError(NOT_FOUND, "no such connection")
+    _in_view(ctx, who, [m for m in SK.money_accounts(ctx.c, ctx.book.id)
+                        if str(m["connection_id"] or "") == str(row["id"])])
     return row
 
 
 def connection_sync(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Sync now (the Sources page): the connection's next sync is due at once; the worker is woken after commit."""
     V.only(p, ("connection_id",))
-    row = _connection(ctx, p)
+    row = _connection(ctx, who, p)
     if str(row["status"]) == "disconnected":
         raise FinanceError(CONFLICT, "that connection is disconnected; connect it again")
 
@@ -599,7 +615,7 @@ def connection_disconnect(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     accounts again picks them up). Refused while a payment from it is in flight or a call to it is still owed, since
     only the connection can finish those. The token stays in Tico's credentials until someone deletes it there."""
     V.only(p, ("connection_id",))
-    row = _connection(ctx, p)
+    row = _connection(ctx, who, p)
     if str(row["status"]) == "disconnected":
         raise FinanceError(CONFLICT, "that connection is already disconnected")
     paying, calls = SK.connection_busy(ctx.c, str(row["id"]))
@@ -628,6 +644,7 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     gl = ctx.accounts.get(V.text(p, "account_id", 80))
     if gl is None or not gl.active:
         raise FinanceError(NOT_FOUND, "no such account")
+    _in_view(ctx, who, [money], [gl])
     want = "liability" if str(money["kind"]) == "card_program" else "asset"
     if gl.type != want:
         raise invalid(f"a {'card program' if want == 'liability' else 'bank account'} maps to an {want} line")
