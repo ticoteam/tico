@@ -141,14 +141,26 @@ def withhold(store: Any, *, now: str) -> int:
         return SX.withhold_writes(c, book.mirror_connection_id, REHEARSAL_WHY, now)
 
 
+def _reading(store: Any) -> bool:
+    """Whether this install's mirrored books are still being read in full: then the next page is read at once."""
+    with store.read() as c:
+        book = SL.book(c)
+        if book is None or book.mode != "mirror" or not book.mirror_connection_id:
+            return False
+        return mirror.reading(c, book.mirror_connection_id)
+
+
 def _loop(store: Any, vault: object, settings: Any, rehearsal: bool, halt: threading.Event) -> None:
     while not halt.is_set():
         seen = BELL.rung
+        more = False
         try:
             if rehearsal:
                 withhold(store, now=tico.now())
             else:
-                pass_once(store, vault, settings, now=tico.now())
+                problems = pass_once(store, vault, settings, now=tico.now())
+                more = not problems and _reading(store)
         except Exception:
             log.exception("Finance books sync failed")
-        BELL.wait(seen, SWEEP)
+        if not more:
+            BELL.wait(seen, SWEEP)

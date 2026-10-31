@@ -240,6 +240,12 @@ def books_status(c: sqlite3.Connection, cid: str) -> str:
     return str(row[0]) if row else ""
 
 
+def pending_writes(c: sqlite3.Connection, cid: str) -> list[Any]:
+    """This connection's writes not yet answered, oldest first: one of them may already be at the provider."""
+    return c.execute("SELECT * FROM fin_outbox WHERE connection_id=? AND status='pending' ORDER BY created_at, id",
+                     (cid,)).fetchall()
+
+
 def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:
     """A rehearsal copy's writes to the provider wait as `withheld`: visible in the outbox, never sent. Returns how many."""
     cur = c.execute("UPDATE fin_outbox SET status='withheld', last_error=?, updated_at=? "

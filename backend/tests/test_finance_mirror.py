@@ -6,9 +6,12 @@ from collections import defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from backend.finance import mirror
+from backend.finance import books_sync, mirror
+from backend.finance.context import load
 from backend.finance.core import mirror as M
 from backend.finance.core.errors import CONFLICT, NOT_AVAILABLE
+from backend.finance.store import ap as SAP
+from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -28,6 +31,7 @@ class FakeBooks:
     sent: list[tuple[str, dict[str, Any], str]] = field(default_factory=list)
     found: dict[str, mirror.Sent] = field(default_factory=dict)      # by idempotency key: what the provider holds
     lookups: list[str] = field(default_factory=list)
+    through: str = ""                                  # where a read the provider cut short is complete to
 
     def find(self, op: str, body: Any, key: str) -> mirror.Sent | None:
         self.lookups.append(key)
@@ -41,7 +45,7 @@ class FakeBooks:
 
     def changed(self, since: str) -> mirror.Read:
         out, self.changes = tuple(self.changes), []
-        return mirror.Read(True, out)
+        return mirror.Read(True, out, through=self.through)
 
     def send(self, op: str, body: Any, key: str) -> mirror.Sent:
         self.sent.append((op, dict(body), key))
@@ -49,7 +53,8 @@ class FakeBooks:
             return self.replies.pop(0)
         kind = {"account.create": "Account", "party.create": "Vendor", "bill.create": "Bill", "bill.void": "Bill",
                 "invoice.create": "Invoice", "invoice.void": "Invoice", "payment.bill": "BillPayment",
-                "payment.invoice": "Payment"}.get(op, "JournalEntry")
+                "payment.invoice": "Payment", "writeoff.create": "CreditMemo", "credit.apply": "Payment"}.get(
+                    op, "JournalEntry")
         return mirror.Sent(True, kind=kind, external_id=str(900 + len(self.sent)), revision="1")
 
 
@@ -414,13 +419,16 @@ def test_a_payment_received_here_settles_the_invoice_once_the_provider_confirms(
         assert [tuple(row) for row in settled] == [("account", "invoice", 2000)]
 
 
-def test_a_credit_memo_applied_to_an_invoice_settles_it_and_deleting_it_puts_the_invoice_back_owing(books):
+def test_a_credit_applied_by_a_payment_of_nothing_settles_the_invoice_and_deleting_it_puts_the_invoice_back_owing(books):
     fake = FakeBooks()
     _chart(fake)
     _customer(fake)
     credit = M.Document(M.Ext("CreditMemo", "20", "1"), party="Customer:4", number="CM-20", day="2026-10-10", due="",
-                        total=500, lines=(M.EntryLine("Account:3", 500),), links=(("Invoice:12", 500),))
+                        total=500, lines=(M.EntryLine("Account:3", 500),))
+    applied = M.Settlement(M.Ext("Payment", "30", "1"), day="2026-10-11", memo="credit applied", party="Customer:4",
+                           bank="", total=0, links=(("Invoice:12", 500),), credits=(("CreditMemo:20", 500),))
     fake.records["documents"] = [_invoice(12, 1, 2000), credit]
+    fake.records["payments"] = [applied]
     cid = _connection(books)
     _mirror(books, cid)
     assert _drain(books, fake, cid) == []
@@ -431,7 +439,7 @@ def test_a_credit_memo_applied_to_an_invoice_settles_it_and_deleting_it_puts_the
         assert [tuple(r) for r in c.execute("SELECT from_kind FROM fin_settlements WHERE to_id=? AND voided_at IS NULL",
                                             (inv,)).fetchall()] == [("credit",)]
         assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
-    fake.changes = [M.Ext("CreditMemo", "20", "2", True)]
+    fake.changes = [M.Ext("Payment", "30", "2", True)]
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
         assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
@@ -472,10 +480,11 @@ def test_a_record_held_for_later_reads_back_as_the_record_it_was():
     for r in held:
         assert M.decode(json.loads(json.dumps(M.encode(r)))) == r
     assert M.decide(("2", "deleted"), M.Ext("Invoice", "901", "2")) == M.SAME    # our own void, echoed back
-    assert M.decide(("2", "deleted"), M.Ext("Invoice", "901", "3")) == M.CREATE
+    # A deleted record stays deleted under a later revision: QuickBooks does not bring back an Id it deleted.
+    assert M.decide(("2", "deleted"), M.Ext("Invoice", "901", "3")) == M.SAME
 
 
-def test_a_write_off_goes_out_as_a_credit_memo_that_closes_the_invoice_and_its_echo_adds_nothing(books):
+def test_a_write_off_is_a_credit_memo_then_a_payment_of_nothing_that_applies_it_to_the_invoice(books):
     fake = FakeBooks()
     _chart(fake)
     _customer(fake)
@@ -488,11 +497,14 @@ def test_a_write_off_goes_out_as_a_credit_memo_that_closes_the_invoice_and_its_e
         made = act(c, OWNER, "invoice_write_off", {"invoice_id": inv, "account_id": account(c, "6100"),
                                                    "date": "2026-10-12", "memo": "Uncollectible"})
         assert made.status == "committed", made
-    fake.replies.append(mirror.Sent(True, kind="CreditMemo", external_id="901", revision="1"))
+    fake.replies += [mirror.Sent(True, kind="CreditMemo", external_id="901", revision="1"),
+                     mirror.Sent(True, kind="Payment", external_id="902", revision="1")]
     assert _drain(books, fake, cid, now=LATER) == []
     assert _sent(fake, "writeoff.create") == {"party": "Customer:4", "account": "Account:2", "day": "2026-10-12",
-                                              "memo": "Uncollectible", "total": 2000,
-                                              "links": [["Invoice:12", 2000]]}
+                                              "memo": "Uncollectible", "total": 2000, "invoice": "Invoice:12"}
+    assert _sent(fake, "credit.apply") == {"invoice": "Invoice:12", "credit": "CreditMemo:901", "party": "Customer:4",
+                                           "invoice_id": inv, "amount": 2000, "day": "2026-10-12",
+                                           "memo": "Uncollectible"}
     with books.read() as c:
         assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
             "paid", 2000)
@@ -501,10 +513,12 @@ def test_a_write_off_goes_out_as_a_credit_memo_that_closes_the_invoice_and_its_e
         assert [tuple(row) for row in settled] == [("credit", "invoice", 2000)]
         assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "6100"),)).fetchone()[0] == 2000
         assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='CreditMemo:901'").fetchone()[0] == "active"
-    # The provider's echo of the credit memo it was sent: the same revision, so nothing is booked or settled again.
+    # The echoes carry the revisions the writes were sent with, so nothing is booked or settled again.
     fake.changes = [M.Document(M.Ext("CreditMemo", "901", "1"), party="Customer:4", number="", day="2026-10-12",
-                               due="", total=2000, lines=(M.EntryLine("Account:2", 2000),), memo="Uncollectible",
-                               links=(("Invoice:12", 2000),))]
+                               due="", total=2000, lines=(M.EntryLine("Account:2", 2000),), memo="Uncollectible"),
+                    M.Settlement(M.Ext("Payment", "902", "1"), day="2026-10-12", memo="Uncollectible",
+                                 party="Customer:4", bank="", total=0, links=(("Invoice:12", 2000),),
+                                 credits=(("CreditMemo:901", 2000),))]
     assert _drain(books, fake, cid, now="2026-10-15T17:00:00.000000Z") == []
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_settlements WHERE to_id=? AND voided_at IS NULL", (inv,)
@@ -602,3 +616,152 @@ def test_a_void_of_a_closed_month_bill_at_the_provider_is_flagged_as_a_restateme
             ("deleted", "2026-09-10")]
         assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "void"
         assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def test_a_bill_the_provider_took_before_its_answer_was_kept_is_adopted_from_the_change_feed_and_not_sent_again(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    key = "bill.create:adopt-1"
+    with books.transaction() as c:
+        body = {"party": _local(c, "Vendor:9", "fin_contacts"), "number": "B-77", "day": "2026-10-05",
+                "due": "2026-11-05", "memo": "", "lines": [{"account_id": _local(c, "Account:2", "fin_accounts"),
+                                                            "amount": 1500, "description": "seats", "tags": {}}]}
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=body, key=key, by=OWNER, at=AT)
+    # The provider took the bill, but the answer was cut off: its note carries the reference, and the feed brings it.
+    fake.changes = [M.Document(M.Ext("Bill", "77", "0", reference=M.reference(key)), party="Vendor:9", number="B-77",
+                               day="2026-10-05", due="2026-11-05", total=1500,
+                               lines=(M.EntryLine("Account:2", 1500, description="seats"),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert not [op for op, _, _ in fake.sent if op == "bill.create"]
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_bills WHERE number='B-77'").fetchone()[0] == 1
+        assert c.execute("SELECT status FROM fin_outbox WHERE idempotency_key=?", (key,)).fetchone()[0] == "sent"
+
+
+def test_a_taxed_invoice_posts_its_tax_to_the_sales_tax_account_and_balances(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _customer(fake)
+    fake.records["accounts"].append(M.ChartAccount(M.Ext("Account", "9", "1"), "2300", "Sales tax payable", "liability",
+                                                   subtype=M.SALES_TAX))
+    fake.records["documents"] = [M.Document(M.Ext("Invoice", "12", "1"), party="Customer:4", number="I-12",
+                                            day="2026-10-05", due="2026-11-05", total=2100,
+                                            lines=(M.EntryLine("Account:3", 2000, description="consulting"),), tax=100)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        tax = c.execute("SELECT id FROM fin_accounts WHERE subtype=?", (M.SALES_TAX,)).fetchone()[0]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (tax,)).fetchone()[0] == -100
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+
+
+def test_a_bill_made_here_keeps_its_line_tags_and_a_newer_revision_carries_them(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "number": "B-77", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05", "lines": [{"account_id": account(c, "6100"), "amount": 1500,
+                                                 "description": "seats", "tags": {"team": "eng"}}]})
+        assert made.status == "committed", made
+    assert _drain(books, fake, cid, now=LATER) == []
+    fake.changes = [M.Document(M.Ext("Bill", "901", "2"), party="Vendor:9", number="B-77", day="2026-10-05",
+                               due="2026-11-05", total=1500,
+                               lines=(M.EntryLine("Account:2", 1500, description="seats"),))]
+    assert _drain(books, fake, cid, now="2026-10-15T14:00:00.000000Z") == []
+    with books.read() as c:
+        bill = _local(c, "Bill:901", "fin_bills")
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Bill:901'").fetchone()[0] == "2"
+        tags = [json.loads(row[0]) for row in c.execute("SELECT tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,))]
+        assert tags == [{"team": "eng"}]
+
+
+def test_a_bank_row_written_out_waits_until_the_provider_books_are_read_in_full(books):
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        _, fid = _bank_row(c, -1500, "2026-10-05")
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}}
+                   ).status == "committed"
+    mirror.sync_once(books, fake, cid, AT)                  # one page of one entity: the books are still being read
+    assert fake.sent == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_outbox WHERE op='journal.create'").fetchone()[0] == "pending"
+    assert _drain(books, fake, cid, now=LATER) == []        # the books finish reading; the write waits its retry
+    assert fake.sent == []
+    assert _drain(books, fake, cid, now="2026-10-15T13:02:00.000000Z") == []
+    assert [op for op, _, _ in fake.sent] == ["journal.create"]
+
+
+def test_a_payment_of_part_of_a_bank_row_leaves_the_row_open_until_the_rest_is_paid(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [_bill(12, 1, 1500)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        _, fid = _bank_row(c, -1500, "2026-10-05")
+        ctx = load(c, AT)
+        part = M.Settlement(M.Ext("BillPayment", "31", "1"), day="2026-10-12", memo="Acme part", party="Vendor:9",
+                            bank="Account:1", total=1000, links=(("Bill:12", 1000),))
+        mirror._settlement(c, ctx, cid, part, AT, feed=fid)      # the bank row's own payment, as the write-out takes it
+        assert c.execute("SELECT status FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0] == "new"
+        assert SAP.settled_from(c, "feed", fid) == 1000
+        rest = M.Settlement(M.Ext("BillPayment", "32", "1"), day="2026-10-12", memo="Acme rest", party="Vendor:9",
+                            bank="Account:1", total=500, links=(("Bill:12", 500),))
+        mirror._settlement(c, ctx, cid, rest, AT, feed=fid)
+        assert c.execute("SELECT status FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0] == "posted"
+
+
+def test_a_change_read_the_provider_cut_short_resumes_from_where_it_is_complete(books):
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    fake.through = "2026-10-15T13:30:00.000000Z"
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert SX.mirror_state(c, cid)["changed_at"] == "2026-10-15T13:30:00.000000Z"
+
+
+def test_a_bank_row_matched_while_its_entry_was_out_withdraws_the_entry_at_the_provider(books):
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    with books.transaction() as c:
+        _, fid = _bank_row(c, -1500, "2026-10-05")
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {}}
+                   ).status == "committed"
+        c.execute("UPDATE fin_feed_txns SET status='ignored' WHERE id=?", (fid,))
+        local = SK.loads(c.execute("SELECT payload_json FROM fin_outbox WHERE op='journal.create'").fetchone()[0])
+        mirror._confirm_entry(c, cid, local, M.Ext("JournalEntry", "77", "1"), AT)
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='JournalEntry:77'").fetchone()[0] \
+            == "deleted"
+        payload = SK.loads(c.execute("SELECT payload_json FROM fin_outbox WHERE op='journal.delete'").fetchone()[0])
+        assert (payload["ext"], payload["revision"]) == ("JournalEntry:77", "1")
+
+
+def test_the_books_loop_reads_on_while_the_provider_books_are_not_yet_read_in_full(books):
+    fake = FakeBooks()
+    _chart(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert books_sync._reading(books)
+    assert _drain(books, fake, cid) == []
+    assert not books_sync._reading(books)

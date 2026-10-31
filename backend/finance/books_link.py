@@ -12,10 +12,13 @@ HQ contract (the paths sit under the Gateway's API root, so `<root>/finance/oaut
 
 A refresh runs outside transactions, one at a time per connection, and the rotated pair is saved before the new access
 token is used (QuickBooks rotates refresh tokens). Tokens are never logged or returned by repr."""
+import json
 import logging
+import re
+import secrets
 import threading
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Mapping, cast
 
 from ..hook_relay import Failed, Link, Stop
 from .core import mirror as M
@@ -27,6 +30,10 @@ log = logging.getLogger(__name__)
 AREA = "finance"                      # HQ's finance routes: <root>/finance/oauth/<provider>/<action>
 EARLY = 60                            # seconds before expiry a token is refreshed rather than used
 VAULT_TRIES = 2                       # the claimed pair is written to the vault this many times before reconnecting
+FLOWS = "finance-books-flows"         # the consents this install started, by flow id, until HQ sends the browser back
+FLOW_S = 1800                         # seconds a started consent may wait for its return
+LABEL = {"quickbooks": "QuickBooks", "xero": "Xero"}
+REASON = re.compile(r"[a-z_]{1,40}")  # HQ's reason, kept only when it is a plain code
 _locks: dict[str, threading.Lock] = {}
 _guard = threading.Lock()
 
@@ -46,6 +53,18 @@ class ReconnectRequired(BrokerFailed):
 class NotConnected(BrokerFailed):
     """HQ holds no grant for the refresh token posted (404 not_connected): the token is not the company's current one,
     or the company is not connected at HQ. The caller reads the vault again before it decides which."""
+
+
+class ConsentFailed(BrokerFailed):
+    """The browser came back without a finished consent (or its claim made no connection). `code` is HQ's reason."""
+
+
+class NotStarted(Exception):
+    """The return names no consent this person started, or one that has already ended."""
+
+
+class UnknownConnection(Exception):
+    """No books connection that is not disconnected has the id."""
 
 
 @dataclass(frozen=True, repr=False)
@@ -189,10 +208,30 @@ def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str, s
         raise ReconnectRequired("not_connected") from None
 
 
+def _keep_rotated(store: Any, cid: str, fresh: Tokens, provider: str, now: str) -> None:
+    """The pair a refresh rotated, into the vault. QuickBooks has already retired the old refresh token, so the new pair
+    is held here while the write is tried VAULT_TRIES times; when every try fails the connection asks for a reconnect
+    and ReconnectRequired is raised, as connect_claim does."""
+    for attempt in range(1, VAULT_TRIES + 1):
+        try:
+            with store.transaction() as c:
+                save(c, cid, fresh, by=SYSTEM, at=now)
+            return
+        except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the rotated pair must not be lost
+            log.warning("Books connection %s: vault write try %d of %d failed after a refresh", cid, attempt, VAULT_TRIES,
+                        exc_info=True)
+    with store.transaction() as c:
+        SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
+        tico.needs_you(c, SX.connection_owner(c, cid), f"Connect {provider} again",
+                       "Tico could not keep the grant for this books connection. Connect it again in Finance.")
+    raise ReconnectRequired("vault_write_failed")
+
+
 def access_token(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str,
                  force: bool = False) -> str:
     """A usable access token for a books connection: refreshed through HQ when near expiry or when `force` (after a
-    401). One refresh at a time per connection; a 409 marks the connection for reconnecting and raises."""
+    401). One refresh at a time per connection; a 409 marks the connection for reconnecting and raises, and so does a
+    rotated pair the vault will not keep (see _keep_rotated)."""
     with store.read() as c:
         state = _state(c, vault, cid)
     if not force and state.access and not _due(state.expires_at, now):
@@ -213,8 +252,7 @@ def access_token(store: Any, vault: object, link: Link, cid: str, provider: str,
                                "The grant for this books connection no longer works. Connect it again in Finance; "
                                "the mirror waits until then.")
             raise
-        with store.transaction() as c:
-            save(c, cid, fresh, by=SYSTEM, at=now)
+        _keep_rotated(store, cid, fresh, provider, now)
         return fresh.access_token
 
 
@@ -267,10 +305,13 @@ def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, sta
 
 def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
     """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call keeps everything, so it
-    can be run again."""
+    can be run again. HQ answering reconnect_required means its grant is already gone, so only the local rows go."""
     state = _current(store, vault, cid)
     if state.refresh_token:
-        _revoked(store, vault, link, cid, provider, state)
+        try:
+            _revoked(store, vault, link, cid, provider, state)
+        except ReconnectRequired:
+            pass
     with store.transaction() as c:
         books = SX.books_settings(c, cid)
         for key in ("access", "refresh"):
@@ -278,4 +319,90 @@ def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: 
                 tico.drop_credential(c, str(books[key]))
         SX.set_books_settings(c, cid, {"access": "", "refresh": "", "expires_at": ""})
         SX.disconnect(c, cid, now)
+
+
+# ------------------------------------------------------------------------------------------------ the routes' calls
+def _map(value: object) -> dict[str, Any]:
+    """A stored value as a dict, or an empty one when it is not (a damaged row)."""
+    return cast(dict[str, Any], value) if isinstance(value, dict) else {}
+
+
+def _flows(c: Any) -> dict[str, Any]:
+    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (FLOWS,)).fetchone()
+    try:
+        return _map(json.loads(row[0]) if row else {})
+    except ValueError:
+        return {}
+
+
+def _keep_flows(c: Any, flows: Mapping[str, Any]) -> None:
+    c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
+              "value_json=excluded.value_json", (FLOWS, json.dumps(flows, sort_keys=True)))
+
+
+def _fresh(started: object, now: str) -> bool:
+    at = _map(started).get("at")
+    return isinstance(at, str) and M.parse(now).timestamp() - M.parse(at).timestamp() <= FLOW_S
+
+
+def _open_flow(c: Any, *, user: str, provider: str, company_id: str, now: str) -> str:
+    """A flow id for one consent, kept with who started it. Consents that have run out are dropped here."""
+    flows = {k: v for k, v in _flows(c).items() if _fresh(v, now)}
+    flow = secrets.token_urlsafe(24)
+    flows[flow] = {"user": user, "provider": provider, "company": company_id, "at": now}
+    _keep_flows(c, flows)
+    return flow
+
+
+def _spend_flow(c: Any, flow: str, *, user: str, now: str) -> dict[str, str] | None:
+    """The consent a flow id names, spent. None unless `user` started it and it has not run out; someone else's flow
+    is left as it is."""
+    flows = _flows(c)
+    started = _map(flows.get(flow))
+    if not started or started.get("user") != user or not _fresh(started, now):
+        return None
+    del flows[flow]
+    _keep_flows(c, flows)
+    return {str(k): str(v) for k, v in started.items()}
+
+
+def start(store: Any, link: Link, *, provider: str, company_id: str, user: str, return_base: str) -> tuple[str, int]:
+    """HQ's consent page for the provider, and how long that link lives. The return route carries a flow id this install
+    keeps for `user`, so only the person who started the consent can claim what HQ sends back."""
+    with store.transaction() as c:
+        flow = _open_flow(c, user=user, provider=provider, company_id=company_id, now=tico.now())
+    return connect(link, provider, company_id, user, f"{return_base.rstrip('/')}/{flow}")
+
+
+def finish(store: Any, vault: object, link: Link, *, flow: str, user: str, outcome: str, reason: str,
+           claim_id: str) -> str:
+    """The browser came back from HQ for a consent: the flow is spent, then the pair is claimed once and kept, and the
+    books connection made. Returns its id. Raises NotStarted, ConsentFailed (HQ did not finish the consent) or the
+    BrokerFailed of the claim or the vault."""
+    now = tico.now()
+    with store.transaction() as c:
+        started = _spend_flow(c, flow, user=user, now=now)
+    if started is None:
+        raise NotStarted()
+    if outcome != "connected" or not claim_id:
+        raise ConsentFailed(reason if REASON.fullmatch(reason) else "unknown")
+    provider = started["provider"]
+    cid = connect_claim(store, vault, link, provider=provider, company_id=started["company"], claim_id=claim_id,
+                        name=LABEL.get(provider, provider), by=user, now=now)
+    with store.transaction() as c:
+        tico.audit(c, user, "finance.books.connected", cid, {"provider": provider})
+    return cid
+
+
+def drop(store: Any, vault: object, link: Link, cid: str, *, by: str) -> None:
+    """Disconnect a books connection: HQ's grant, then its vault rows (disconnect_books). Raises UnknownConnection when
+    no books connection that is not disconnected has the id."""
+    with store.read() as c:
+        held = [row for row in SX.books_connections(c) if row[0] == cid]
+    if not held:
+        raise UnknownConnection()
+    provider = held[0][1]
+    disconnect_books(store, vault, link, cid, provider, now=tico.now())
+    with store.transaction() as c:
+        tico.audit(c, by, "finance.books.disconnected", cid, {"provider": provider})
 

@@ -37,6 +37,7 @@ from .store import ledger as SL
 
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
 OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
+BOOKS_PROVIDERS = ("quickbooks", "xero")
 MATCH_DAYS = 5                     # a transfer's two sides post within this many days of each other
 AUTH_DAYS = 30                     # an authorization's hold lasts this long without its settlement
 
@@ -79,6 +80,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     and savings are bank assets, IO is a credit card liability. Payments through Mercury's approval queue turn on
     only when someone other than the token's creator can approve in Mercury; Finance never falls back to direct
     send."""
+    if str(p.get("provider") or "") in BOOKS_PROVIDERS:
+        # A books connection is made only by its claim (books_link.finish), never as a bank connection.
+        raise invalid("QuickBooks and Xero connect through POST /api/v2/finance/books/connect, not here")
     V.only(p, ("provider", "credential_id", "name", "probe", "approver_email", "token_creator_email", "server_ip"))
     V.choice(p, "provider", ("mercury",))
     cred = V.text(p, "credential_id", 120)
