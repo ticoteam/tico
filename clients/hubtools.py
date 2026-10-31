@@ -5000,7 +5000,10 @@ def update_post(api, args):
     if isinstance(slides, str):
         slides = json.loads(slides)
     fields = (("body", args.get("body")), ("slides", slides), ("kind", args.get("kind")), ("day", args.get("day")))
-    return api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))["update"]
+    out = api.post("updates", {k: v for k, v in fields if v is not None}, key=_key(args))
+    if "update" not in out:
+        return out                  # held by an org rule: the hold, and whom to appeal to
+    return {**out["update"], **({"rule_warning": out["rule_warning"]} if out.get("rule_warning") else {})}
 
 
 @tool("hub_update_redo", "Ask the bots again for a past day's update in the current shape, such as last "

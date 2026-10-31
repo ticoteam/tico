@@ -1351,7 +1351,8 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
                (made.get("task", made)["id"],))[0]
     assert made["public_title"] == "Our favorite color is red" and made["title"] == "Ship the palette"
     assert made["body"].startswith("Warning:") and made["body"].endswith("Internal draft.")
-    assert not made["public_summary"]
+    # Published with no summary, the public roadmap shows the line as its summary, the title kept whole.
+    assert made["public_summary"].startswith("Warning:")
 
 
 def test_a_warned_hand_off_puts_its_line_before_the_note_already_there(ruled):
@@ -1488,3 +1489,469 @@ def test_send_anyway_of_a_held_answer_resolves_its_pick_before_a_new_warning(rul
     send_anyway(api, hold)
     got = answered(api)
     assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
+
+
+# ---- chat, updates and task questions; the author of a replay; public task text; the fast path ----------------------
+
+def chat(api, text, to="finance", token="ops-test"):
+    r = api.post(f"/api/v2/chat/{to}", json={"text": text}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def ask(api, question, token="ops-test", **more):
+    r = api.post("/api/v2/task-questions", json={"on": "human:ana", "question": question, **more},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
+    api, judge = ruled
+    color_rule(api)
+    assert chat(api, "Our favorite color is blue.")["held"]
+    assert post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]
+    weekly = {"goal": "Ship the palette", "done": ["Our favorite color is teal"], "focus": ["Launch"],
+              "blockers": ["None"]}
+    assert post(api, "updates", {"slides": weekly}, token="ops-test")["held"]
+    got = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.", topic="palette")
+    assert got["held"] and set(got) == {"held"}
+    assert sql(api, "SELECT id FROM messages WHERE from_actor='bot:ops'") == []
+    assert sql(api, "SELECT id FROM updates WHERE bot='ops'") == []
+    assert sql(api, "SELECT id FROM tasks WHERE title='Palette' OR owner='bot:ops'") == []
+    held = sql(api, "SELECT operation FROM org_rule_holds ORDER BY created")
+    assert [h["operation"] for h in held] == ["message", "update", "update", "task_question"]
+    # An update is judged for the whole company, which reads it; a question for the person asked.
+    assert "Cara" in judge.calls[1]["state"]["to"] and judge.calls[3]["state"]["to"] == ["Ana"]
+    assert "Our favorite color is teal" in judge.calls[2]["state"]["output"]
+
+
+def test_the_update_tool_answers_with_the_hold_or_the_warning(ruled):
+    from backend.tests.test_org_rules_surfaces import mcp
+    api, _ = ruled
+    made = color_rule(api)
+    error, held = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert not error and held["held"]["outcome"] == "blocked"
+    edit(api, made["id"], {"if_broken": "warn", "version": made["version"]})
+    error, posted = mcp(api, "hub_update_create", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert not error and posted["rule_warning"] and posted["body"].startswith("Warning:")
+
+
+def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    got = chat(api, "Our favorite color is blue.")
+    assert got["rule_warning"] and got["message"]["body"].startswith("Warning:")
+    update = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert update["rule_warning"] and update["update"]["body"].startswith("Warning:")
+    asked = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")
+    assert asked["rule_warning"] and asked["question"]["body"].startswith("Warning:")
+    row = sql(api, "SELECT body, note, waiting_on FROM tasks WHERE id=?", (asked["task"]["id"],))[0]
+    assert row["body"].startswith("Warning:") and row["body"].count("Warning:") == 1
+    assert row["note"].startswith("Warning:") and row["waiting_on"] == "human:ana"
+
+
+def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    holds = [chat(api, "Our favorite color is blue.")["held"]["id"],
+             post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
+             ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")["held"]["id"]]
+    for hold_id in holds:
+        assert send_anyway(api, hold_id)["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is blue")) == 1           # the chat message
+    assert [r["body"] for r in sql(api, "SELECT body FROM updates WHERE bot='ops'")] == \
+        ["- Our favorite color is blue."]
+    [task] = sql(api, "SELECT id, waiting_on FROM tasks WHERE title='Palette'")
+    assert task["waiting_on"] == "human:ana"
+    assert len([call for call in judge.calls if call["label"].startswith("rule-check")]) == 3
+
+
+def test_send_anyway_refuses_an_automation_whose_actor_changed(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    step = {"id": "t", "type": "action", "do": "create_task",
+            "args": {"owner": "ana", "title": "Palette", "body": "Our favorite color is red."}}
+    aid = post(api, "automations", {"name": "File", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [step]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    [hold] = sql(api, "SELECT id FROM org_rule_holds WHERE operation='automation'")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET owner='bot:finance', flow_json=json_set(flow_json,'$.owner','bot:finance') "
+                  "WHERE id=?", (aid,))
+    assert send_anyway(api, hold["id"], expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, hold["id"])["state"] == "held"
+    assert sql(api, "SELECT id FROM tasks WHERE title='Palette'") == []
+
+
+def test_public_task_text_is_checked_for_the_whole_company(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "with": {"people": ["cara"]}})
+    task = task_for_ops(api)
+    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "public_summary": "Our favorite color is red."},
+               token="ops-test")
+    assert got["held"], got
+    assert "Cara" in judge.calls[-1]["state"]["to"]
+    # Making a task public alone publishes the public text written before: that text is judged.
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": "Our favorite color is red."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    assert got["held"], got
+    assert "favorite color is red" in judge.calls[-1]["state"]["output"]
+    assert sql(api, "SELECT visibility FROM tasks WHERE id=?", (drafted["id"],))[0]["visibility"] == "private"
+
+
+def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}}, token="ops-test")    # suggested only
+    resolved = []
+    monkeypatch.setattr(K, "company", lambda c: resolved.append("company") or [])
+    monkeypatch.setattr(K, "mail_recipients", lambda c, addresses: resolved.append("mail") or [])
+    monkeypatch.setattr(H, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
+    task = task_for_ops(api)
+    post(api, f"tasks/{task['id']}/comments", {"text": "Ask @ana or ben@acme.example about it."}, token="ops-test")
+    assert "held" not in post(api, "updates", {"body": "- Shipped the launch note."}, token="ops-test")
+    aid = post(api, "automations", {"name": "Post", "owner": "bot:finance", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [{"id": "p", "type": "action", "do": "post_update",
+                                               "args": {"text": "- Closed the books."}}]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    assert sql(api, "SELECT body FROM updates WHERE bot='finance'")[0]["body"] == "- Closed the books."
+    assert post(api, "bots/ops/mail-check", {"to": ["ben@acme.example"], "body": "Hi Ben."},
+                token="ops-test")["outcome"] == "pass"
+    assert resolved == [] and judge.calls == []
+
+
+# ---- a warning on the copy its reader reads: the question card, the public roadmap, a daily with slides --------------
+
+def question_card(api, task_id):
+    """Ana's Needs you card for the question on `task_id`."""
+    items = api.get("/api/v2/needs-you", headers=headers("ana-test")).json()["items"]
+    return next(it for it in items if it.get("id") == task_id and it["kind"] == "question")
+
+
+def test_a_warned_question_leads_the_card_new_and_folded(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    # Only the why line breaks the rule: the card shows the question and why, so the line leads the question there.
+    asked = ask(api, "Ship it?", why="Our favorite color is blue.", topic="palette")
+    q = asked["question"]["refs"]["questions"][0]
+    assert q["question"].startswith("Warning:") and q["question"].endswith("Ship it?")
+    assert asked["task"]["title"] == "Ship it?"
+    card = question_card(api, asked["task"]["id"])
+    assert card["ask"]["refs"]["questions"][0]["question"] == q["question"]
+    assert card["why"] == "Our favorite color is blue."
+    # Asked again on the topic, the folded card's question carries the line too.
+    folded = ask(api, "Ship it on Monday?", body="Our favorite color is blue.", topic="palette")
+    assert folded["folded"] and folded["rule_warning"]
+    q = folded["question"]["refs"]["questions"][0]
+    assert q["question"].startswith("Warning:") and q["question"].endswith("Ship it on Monday?")
+    card = question_card(api, asked["task"]["id"])
+    assert card["ask"]["refs"]["questions"][0]["question"] == q["question"] and card["why"] != q["question"]
+
+
+def test_a_question_sent_anyway_under_a_new_warn_rule_leads_its_card_with_the_line(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    hold = ask(api, "Ship the palette?", title="Palette", body="Our favorite color is red; launch is Tuesday.")
+    rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
+    judge.needles[LAUNCH] = "launch is"
+    send_anyway(api, hold["held"]["id"])
+    [task] = sql(api, "SELECT id FROM tasks WHERE title='Palette'")
+    [refs] = [json.loads(r["refs_json"]) for r in sql(api, "SELECT refs_json FROM messages WHERE kind='ask' AND "
+                                                         "json_extract(refs_json,'$.task')=?", (task["id"],))]
+    assert refs["questions"][0]["question"].startswith("Warning:")
+    assert refs["questions"][0]["question"].endswith("Ship the palette?")
+
+
+def public_output(api, task_id):
+    from backend import public_roadmaps
+    with api.app.state.store.read() as c:
+        return public_roadmaps.output(c, H.task(c, task_id))
+
+
+def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": "Our favorite color is red."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    assert got["rule_warning"]
+    shown = public_output(api, drafted["id"])
+    assert shown["title"] == "New palette"
+    assert shown["summary"].startswith("Warning:") and shown["summary"].endswith("Our favorite color is red.")
+    # A new public title on a public task with no summary: the line alone is the summary, the title kept whole.
+    bare = post(api, "tasks", {"owner": "ops", "title": "Logo", "body": "Draft it.", "visibility": "public",
+                               "public_title": "New logo"})
+    got = post(api, f"tasks/{bare['id']}", {"version": bare["version"], "public_title": "Our favorite color is red"},
+               token="ops-test")
+    assert got["rule_warning"]
+    shown = public_output(api, bare["id"])
+    assert shown["title"] == "Our favorite color is red" and shown["summary"].startswith("Warning:")
+
+
+def approved_publish(api, task_id, changes):
+    """Ops' publish approval for `changes` to a task, approved by Ana: its id."""
+    preview = post(api, f"tasks/{task_id}/publication-preview", changes, token="ops-test")
+    approval = post(api, "approvals", {"kind": "publish", "task_id": task_id, "payload": preview["payload"]},
+                    token="ops-test")
+    post(api, f"approvals/{approval['id']}", {"decision": "approved"})
+    return approval["id"]
+
+
+def test_a_warned_publish_a_person_approved_goes_out_exactly_as_approved(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": "Our favorite color is red."})
+    approval = approved_publish(api, drafted["id"], {"visibility": "public"})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public",
+                                               "approval_id": approval}, token="ops-test")
+    assert got["rule_warning"], got
+    assert public_output(api, drafted["id"])["summary"] == "Our favorite color is red."
+    assert sql(api, "SELECT note FROM tasks WHERE id=?", (drafted["id"],))[0]["note"].startswith("Warning:")
+    # A public summary the bot writes itself, approved, is kept exactly too; the line goes on the note.
+    task = get(api, f"tasks/{drafted['id']}")
+    task = task.get("task", task)
+    approval = approved_publish(api, drafted["id"], {"public_summary": "Our favorite color is teal."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": task["version"], "approval_id": approval,
+                                               "public_summary": "Our favorite color is teal."}, token="ops-test")
+    assert got["rule_warning"], got
+    assert public_output(api, drafted["id"])["summary"] == "Our favorite color is teal."
+    assert sql(api, "SELECT note FROM tasks WHERE id=?", (drafted["id"],))[0]["note"].startswith("Warning:")
+
+
+def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled):
+    api, judge = ruled
+    color_rule(api)
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "Safe title", "public_summary": "Our favorite color is red."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public",
+                                               "public_summary": ""}, token="ops-test")
+    assert "held" not in got, got
+    assert "favorite color" not in judge.calls[-1]["state"]["output"]
+    shown = public_output(api, drafted["id"])
+    assert shown["title"] == "Safe title" and not shown["summary"]
+
+
+def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    weekly = {"goal": "Ship the palette", "done": ["Launched"], "focus": ["Launch"], "blockers": ["None"]}
+    got = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue.", "slides": weekly},
+               token="ops-test")
+    assert got["rule_warning"]
+    [row] = sql(api, "SELECT kind, body FROM updates WHERE bot='ops'")
+    assert row["kind"] == "daily"
+    assert row["body"].startswith("Warning:") and row["body"].endswith("- Our favorite color is blue.")
+    # The slides a daily drops are not judged.
+    assert "Ship the palette" not in judge.calls[-1]["state"]["output"]
+
+
+def test_a_task_questions_options_and_card_lines_are_judged_with_it(ruled):
+    api, judge = ruled
+    color_rule(api)
+    options = [{"label": "Ship", "description": "Our favorite color is blue.", "then": "Ops ships it today"},
+               {"label": "Wait", "then": "Ops waits a week"}]
+    got = ask(api, "Ship it?", options=options, if_no_answer={"do": "Ops waits a week", "kind": "reversible"})
+    assert got["held"] and set(got) == {"held"}
+    said = judge.calls[-1]["state"]["output"]
+    assert "Ops ships it today" in said and "Ops waits a week" in said
+    assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+    [hold] = sql(api, "SELECT payload_json FROM org_rule_holds WHERE operation='task_question'")
+    assert "Our favorite color is blue." in hold["payload_json"]
+
+
+def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": summary})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    assert got["rule_warning"], got
+    shown = public_output(api, drafted["id"])
+    assert shown["summary"].startswith("Warning:") and shown["summary"].endswith(summary)
+
+
+def test_a_new_task_public_by_its_types_default_carries_the_line_on_its_summary(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    changelog = post(api, "task-types", {"name": "Changelog", "default_visibility": "public",
+                                         "steps": [{"name": "Drafted", "status": "open"}]})["type"]
+    made = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "type": changelog["id"],
+                               "public_title": "Our favorite color is blue"}, token="ops-test")
+    made = made.get("task", made)
+    assert made["visibility"] == "public"
+    shown = public_output(api, made["id"])
+    assert shown["title"] == "Our favorite color is blue" and shown["summary"].startswith("Warning:")
+
+
+def test_send_anyway_posts_the_held_days_update_or_nothing(ruled, monkeypatch):
+    from backend import updates
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-29")             # a Thursday
+    thursday = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"]
+    payload = json.loads(hold_row(api, thursday)["payload_json"])["replay"]["body"]
+    assert payload["day"] == "2026-10-29" and payload["kind"] == "daily"
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-30")             # Friday: a week in review's day
+    got = send_anyway(api, thursday, expected=409)
+    assert got["error"]["code"] == "changed"
+    assert hold_row(api, thursday)["state"] == "held" and sql(api, "SELECT id FROM updates WHERE bot='ops'") == []
+    # Sent the day it was held, it is that day's daily.
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-29")
+    send_anyway(api, thursday)
+    assert [(r["kind"], r["day"]) for r in sql(api, "SELECT kind, day FROM updates WHERE bot='ops'")] == \
+        [("daily", "2026-10-29")]
+
+
+def upload(api, name, text="# Draft", token="ops-test"):
+    r = api.post("/api/v2/files/uploads", json={"name": name, "text": text, "scope": "bot"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()["file"]
+
+
+def test_a_pick_questions_file_titles_and_the_picks_they_make_are_judged(ruled):
+    api, judge = ruled
+    color_rule(api)
+    files = [upload(api, "Our favorite color is blue.md"), upload(api, "Wait.md")]
+    got = ask(api, "Which cut should ship?", pick=True, review=[{"file": f["id"]} for f in files])
+    assert got["held"] and set(got) == {"held"}
+    said = judge.calls[-1]["state"]["output"]
+    assert "Option: Our favorite color is blue" in said and "This one is approved" in said
+    assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+    [hold] = sql(api, "SELECT payload_json FROM org_rule_holds WHERE operation='task_question'")
+    assert "Option: Our favorite color is blue" in hold["payload_json"]
+
+
+def test_send_anyway_refuses_a_review_question_whose_files_changed_since_the_check(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    files = [upload(api, "Cut one.md"), upload(api, "Cut two.md")]
+    hold = ask(api, "Which cut should ship?", body="Our favorite color is blue.", pick=True,
+               review=[{"file": f["id"]} for f in files])["held"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET title='Our favorite color is green' WHERE id=?", (files[0]["id"],))
+    assert send_anyway(api, hold, expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, hold)["state"] == "held" and sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+
+
+def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": summary})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    task = got.get("task", got)
+    got = post(api, f"tasks/{drafted['id']}", {"version": task["version"], "public_title": "Our favorite color is blue"},
+               token="ops-test")
+    assert got["rule_warning"], got
+    shown = public_output(api, drafted["id"])
+    assert shown["title"] == "Our favorite color is blue"
+    assert shown["summary"].count("Warning:") == 1 and shown["summary"].startswith("Warning:")
+    assert shown["summary"].endswith("\n\n" + summary)
+
+
+def test_send_anyway_refuses_a_review_question_once_its_file_has_a_new_version_under_the_same_name(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    kept, moved = upload(api, "Cut one.md", "# One"), upload(api, "Cut two.md", "# Two")
+    held = [ask(api, "Is this cut ready?", body="Our favorite color is blue.", review=[{"file": f["id"]}])["held"]["id"]
+            for f in (kept, moved)]
+    assert send_anyway(api, held[0])["hold"]["state"] == "sent"
+    v2 = upload(api, "Cut two.md", "# Two, reworked")
+    assert v2["id"] == moved["id"] and v2["version"] == moved["version"] + 1
+    assert send_anyway(api, held[1], expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, held[1])["state"] == "held"
+
+
+def test_send_anyway_refuses_a_held_review_question_with_no_seal_of_its_files(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    cut = upload(api, "Cut one.md")
+    hold = ask(api, "Is this cut ready?", body="Our favorite color is blue.", review=[{"file": cut["id"]}])["held"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_holds SET payload_json=json_remove(payload_json, '$.replay.review') WHERE id=?",
+                  (hold,))
+    assert send_anyway(api, hold, expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, hold)["state"] == "held" and sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+
+
+def test_a_review_file_the_check_could_not_read_is_refused_once_it_resolves_in_the_write(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    cut = upload(api, "Our favorite color is blue.md")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET archived=1 WHERE id=?", (cut["id"],))
+
+    def restored(*args, **kwargs):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (cut["id"],))
+        return judge(*args, **kwargs)
+    api.app.state.judge = restored
+    r = api.post("/api/v2/task-questions", json={"on": "human:ana", "question": "Is this cut ready?",
+                                                  "review": [{"file": cut["id"]}]}, headers=headers("ops-test"))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "changed", r.text
+    [checked] = [call["state"]["output"] for call in judge.calls if "output" in call["state"]]
+    assert "Our favorite color is blue" not in checked
+    assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+
+
+def test_a_warned_update_passes_refusing_writing_checks_and_keeps_its_line(ruled, monkeypatch):
+    from backend import hubdb, updates
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
+    daily = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
+    assert daily["rule_warning"] and daily["update"]["body"].startswith("Warning:")
+    assert daily["update"]["body"].endswith("\n\n- Our favorite color is blue.")
+    # The hub's start-up sweep lints the update's own words, so the line does not get it deleted.
+    with api.app.state.store.transaction() as c:
+        assert updates.purge_rejected(c) == []
+    weekly = {"goal": "Our favorite color is blue", "done": ["Launched"], "focus": ["Launch"], "blockers": ["None"]}
+    got = post(api, "updates", {"kind": "weekly", "slides": weekly}, token="ops-test")
+    assert got["rule_warning"] and got["update"]["slides"]["goal"].startswith("Warning:")
+    assert sql(api, "SELECT count(*) AS n FROM updates WHERE bot='ops'")[0]["n"] == 2
+
+
+def test_an_impossible_update_day_is_refused_as_a_day(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    r = api.post("/api/v2/updates", json={"day": "2026-02-30", "body": "- x"}, headers=headers("ops-test"))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "day", r.text
+
+
+def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkeypatch):
+    from backend import hubdb
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
+    aid = post(api, "automations", {"name": "Post", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [{"id": "p", "type": "action", "do": "post_update",
+                                               "args": {"text": "- Our favorite color is blue."}}]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    body = sql(api, "SELECT body FROM updates WHERE bot='ops'")[0]["body"]
+    assert body.startswith("Warning:") and body.endswith("\n\n- Our favorite color is blue."), body
+
+
+def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch):
+    from backend import automation_actions as AA, hubdb
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
+    daily = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
+    line = daily["update"]["body"].split("\n\n")[0]
+    with api.app.state.store.transaction() as c:
+        pointed = AA._pointer(c, "ops", "Northwind moved")
+    assert pointed.startswith(line + "\n\n- Our favorite color is blue.\n- Market briefing:"), pointed

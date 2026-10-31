@@ -230,3 +230,29 @@ def test_reads_that_keep_failing_take_turns_with_the_other_holds(api, monkeypatc
     assert get(api, 'tasks/' + first['id'])['task']['step']['name'] == 'In Progress'
     broken.clear()          # GitHub answers again: the failed hold is read on the next pass and clears
     assert task_blocked.fresh(service, force=True) == [first['id']]
+
+
+def test_a_held_review_question_sent_anyway_reads_github_afresh_and_is_filed(api, monkeypatch):
+    """Send anyway on a held Review 2 question is the same gate as a new one: all-green hosted checks at the current
+    head count from a fresh read, with no receipt at that head."""
+    from backend.tests.test_org_rule_check import COLOR, Judge
+    task = ticket(api, STALE)
+    token = bot_token(api)
+    api.app.state.judge = Judge(api.app.state.store)
+    post(api, 'rules', {'kind': 'internal', 'text': COLOR, 'who': {'bots': ['cpo']}, 'if_broken': 'escalate',
+                        'reviewer': 'ana'})
+    reads = github(api, monkeypatch, GREEN)
+    r = api.post('/api/v2/task-questions', headers={'Authorization': 'Bearer ' + token,
+                                                     'Idempotency-Key': str(uuid.uuid4())},
+                 json={'on': 'ana', 'parent': task['id'], 'title': 'Review 2: PR #412 is ready for its second review',
+                       'question': 'Should Review 2 start on the current head?',
+                       'body': 'Our favorite color is blue.'})
+    assert r.status_code == 200 and r.json().get('held'), r.text
+    hold = r.json()['held']['id']
+    reads.clear()
+    view = get(api, 'rule-holds/' + hold)
+    sent = post(api, 'rule-holds/' + hold + '/send', {'nonce': view['nonce']})
+    assert sent['hold']['state'] == 'sent', sent
+    assert any('/commits/' + HEAD + '/check-runs' in p for p in reads), 'Send anyway read GitHub afresh'
+    question = sent['result']['task']
+    assert question['status'] == 'waiting' and question['waiting_on'] == 'human:ana'

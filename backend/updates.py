@@ -122,6 +122,12 @@ def kind_for(day):
     return "weekly" if datetime.fromisoformat(day).weekday() == 4 else "daily"
 
 
+def effective_kind(kind, slides, day=None):
+    """The kind `post` stores: the one asked for, else a week in review when it has slides, else the day's own. A daily
+    keeps its bullets and drops any slides; a week in review is its slides alone."""
+    return kind or ("weekly" if slides else kind_for(day or today()))
+
+
 def settings(c, bot):
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
@@ -986,7 +992,7 @@ def check_day(c, bot, day):
 
 
 def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
-         meetings=False, reader=True, source=None):
+         meetings=False, reader=True, source=None, warning=""):
     """Store an update by `bot` (a bot slug or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
@@ -995,9 +1001,11 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     written from meeting summaries (`draft_facts`); an edit keeps the draft's flag, their own words clear it.
     `reader` is whether the person posting is a meeting reader (`meeting_reader`): one who is not was never shown a
     flagged draft, so what they post over it is their own words, and their reply links no flagged input. `source` is
-    the automation run posting it ({automation, run, task}); any other post clears it."""
+    the automation run posting it ({automation, run, task}); any other post clears it. `warning` is an org rule's warn
+    line (org_rule_check), put before the update once its own words pass the writing checks: a week in review's goal,
+    a daily's bullets, never linted itself."""
     day = day or today()
-    kind = kind or ("weekly" if slides else kind_for(day))
+    kind = effective_kind(kind, slides, day)
     if kind not in KINDS:
         raise Problem("kind", "An update is daily or weekly", 422)
     stored = None
@@ -1009,6 +1017,8 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         if missing:
             raise H.Refused("lint", _slides_message(missing + style), "normal")
         problem = _style(_slides_message(style))
+        if warning:
+            slides = {**slides, "goal": warning + "\n\n" + slides["goal"]}
         stored = json.dumps({**slides, "tracked": kpi_snapshot(c, bot)})
         body = slides_body(slides)
         headline = slides["goal"][:200]
@@ -1017,6 +1027,8 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         if not body:
             raise H.Refused("lint", lint(body, kind), "normal")
         problem = _style(lint(body, kind))
+        if warning:
+            body = warning + "\n\n" + body
         first = body.splitlines()[0]
         headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
     now = H.now()
@@ -1074,11 +1086,12 @@ def purge_rejected(c):
     """Delete stored updates the linter would refuse now and ask their bots again (rejected updates are
     deleted and redone). Runs when the hub
     starts; the linter refuses new ones at the door. Each bot goes to the back of its day's queue."""
+    from . import org_rule_check
     removed = []
     # A week in review with slides was checked as slides; an older bullet one keeps the bullet rules.
     # Only when the shape is refused: a post accepted with a warning stays.
     for row in c.execute("SELECT * FROM updates WHERE slides_json IS NULL").fetchall() if H.STYLE_LINT == "refuse" else ():
-        if not lint(row["body"], row["kind"]):
+        if not lint(org_rule_check.unwarned(row["body"]), row["kind"]):
             continue
         c.execute("DELETE FROM update_reads WHERE update_id=?", (row["id"],))
         c.execute("DELETE FROM update_archive_overrides WHERE update_id=?", (row["id"],))
