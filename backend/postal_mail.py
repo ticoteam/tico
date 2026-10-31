@@ -515,10 +515,13 @@ class PostalMail:
                 todo += [r[0] for r in c.execute(
                     "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?", (task_id,))]
                 # A deleted task keeps its parent links (either end) in its trash copy; older copies on the task row.
+                # A link whose child has a parent again could not go back (one parent a task): not followed.
                 todo += [r[0] for r in c.execute(
                     "SELECT json_extract(r.value,'$.from_task') FROM task_trash t, "
                     "json_each(t.rows_json,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
                     "AND json_extract(r.value,'$.kind')='parent' AND json_extract(r.value,'$.to_task')=? "
+                    "AND NOT EXISTS (SELECT 1 FROM task_relations p WHERE p.kind='parent' "
+                    "AND p.from_task=json_extract(r.value,'$.from_task')) "
                     "UNION SELECT task_id FROM task_trash WHERE purged_at IS NULL "
                     "AND json_extract(rows_json,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)) if r[0]]
             c.execute("DELETE FROM mail_private_backfill")
