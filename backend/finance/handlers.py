@@ -855,16 +855,21 @@ HIDDEN_GATE = K.Gate("needs_approval", "owner", "default:figures-hidden")
 def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None, effective: str = "") -> str:
     """How an amount the actor asks for on a budget (a set-aside, a card, a budget change) is decided: the one gate every
     action that runs a budget or card fit calls first. Where their figure is the true one on every period the fit reads,
-    "" (decided here, as before). Where it is not, the amount must not tell them the difference, so every amount gets one
-    outcome: "hidden" (an approver decides on the true figures) or "request" (they lack finance.budgets, so the gate sends
-    it to their manager). The fit reads the budget, its parents and their children from `effective` on (today when none),
-    on each day a version of one of them takes effect (`_fit_days`). A card's own spend counts too."""
-    b = ctx.budgets().get(budget_id)
+    and every budget the fit reads is in their view (§7.5), "" (decided here, as before). Otherwise the amount must not
+    tell them the difference, so every amount gets one outcome: "hidden" (an approver decides on the true figures) or
+    "request" (they lack finance.budgets, so the gate sends it to their manager). The fit reads the budget, its parents
+    and their children from `effective` on (today when none), on each day a version of one of them takes effect
+    (`_fit_days`). A card's own spend counts too. A budget outside the actor's view hides the fit whatever its figure:
+    whether a fit passes or refuses it is a figure in itself (a parent's remaining shows as the boundary of an amount)."""
+    budgets = ctx.budgets()
+    b = budgets.get(budget_id)
     if b is None or ctx.deciding:
         return ""
     from .cards import figure_hidden
     days = _fit_days(ctx, b, effective)
-    hidden = any(_figure_differs(ctx, who, bid, day) for bid in _figure_ids(ctx, b) for day in days) or \
+    ids = _figure_ids(ctx, b)
+    unseen = any(not sees_budget(ctx, who, budgets[bid]) for bid in ids)
+    hidden = unseen or any(_figure_differs(ctx, who, bid, day) for bid in ids for day in days) or \
         (card is not None and any(figure_hidden(ctx, who, card, on=day.isoformat()) for day in days))
     if not hidden:
         return ""
@@ -933,6 +938,12 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
         raise invalid("no such teammate")
     row = SB.allocation(ctx.c, b.id, kind, target)
     grow = amount - (int(row["amount"]) if row else 0)
+    if grow > 0 and not b.active:
+        # An ended budget takes no new set-asides or card limits: reserves skip inactive budgets (_reserve), so one would
+        # reserve nothing against its parent. Lowering or ending an allocation stays allowed.
+        named = Named((b.id,), "{0} has ended: it takes no new set-asides or card limits",
+                      "that budget has ended: it takes no new set-asides or card limits")
+        raise named_refusal(INVALID, named, [b.name], sees_budget(ctx, who, b))
     at = dates.day(ctx.today)
     if grow > 0 and route not in ("hidden", "request"):
         for one in B.chain(ctx.budgets(), b.id):

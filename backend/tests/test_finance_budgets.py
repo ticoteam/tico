@@ -34,6 +34,13 @@ def _tree(c, parent_amount=10_000, kids=(("web", 6_000), ("sales", 4_000)), unde
     return pid, out
 
 
+def _sees_parent(c, who: str) -> None:
+    """Give `who` the company's expenses, so the parent budget's figures are true for them. A change that passes the
+    parent then asks the parent's owner (§4.4). Without the view, figure_route hides the fit and the install owner
+    decides every amount."""
+    assert act(c, OWNER, "view_grant", {"subject": who, "what": "expenses", "whose": "company"}).status == "committed"
+
+
 def test_children_never_pass_the_parent_and_siblings_never_overlap(books):
     with books.transaction() as c:
         pid, kids = _tree(c)
@@ -103,6 +110,7 @@ def test_a_parent_raise_asks_the_parent_owner_over_the_asker_s_manager(books):
     # Cara lacks finance.budgets, so her manager (Ben) would decide the change; the raise it needs is Dan's to approve.
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
@@ -116,6 +124,7 @@ def test_a_requester_who_owns_the_parent_is_asked_their_manager_not_themselves(b
     # Cara owns Software and lacks finance.budgets: she cannot approve her own raise, so Ben (her manager) decides it.
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
@@ -173,6 +182,7 @@ def test_a_raise_asked_for_one_total_is_judged_again_when_the_total_has_moved(bo
 def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_parent_owner(books):
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (grow.status, grow.approver) == ("needs_approval", "human:dan")
@@ -190,6 +200,7 @@ def test_a_raise_that_no_longer_fits_is_asked_again_of_the_manager_not_the_paren
 def test_a_raise_that_grows_while_it_waits_is_asked_again_for_the_larger_raise(books):
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:dan"}).status == "committed"
         web = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert (web.status, web.approver) == ("needs_approval", "human:dan")
@@ -225,10 +236,31 @@ def test_a_grandparent_refusal_names_no_budget_a_scoped_asker_cannot_see(books):
         company = act(c, OWNER, "budget_create", {"name": "Company", "account_id": account(c, "6000"),
                                                   "amount": 10_000, "at_limit": "decline"})
         pid, kids = _tree(c, under=str(company.result["budget_id"]))
-        refused = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
-        assert refused.status == "failed" and "Company" not in refused.reason
+        # Company is outside Cara's view, so her change gets the one outcome for any amount (no refusal that names it).
+        asked = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert asked.status == "needs_approval" and "Company" not in repr(asked)
         owner = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert owner.status == "failed" and "raise Company first" in owner.reason
+
+
+def test_a_manager_gets_one_outcome_for_every_set_aside_under_a_parent_they_cannot_see(books):
+    """Web (100.00) is Cara's under Software (100.00), which covers Sales too and which she cannot see. Sales has spent
+    40.00 on Software's line, so Software has 60.00 left for the owner. Her set-asides of 60.00 and 60.01 used to differ:
+    the first fit and the second was refused, which gave Software's 60.00 away. Now both wait for an approver with no
+    amount, and the owner still sees the refusal of 60.01."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, parent_amount=10_000, kids=(("web", 10_000),))
+        spend(c, "6100", 4_000, team="sales")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.budgets"}).status == "committed"
+        ask = {"budget_id": kids["web"], "target_kind": "gateway_key", "target_id": "gw-1"}
+        six = act(c, "human:cara", "allocation_set", {**ask, "amount": 6_000}, "dry-6000", dry_run=True)
+        seven = act(c, "human:cara", "allocation_set", {**ask, "amount": 6_001}, "dry-6001", dry_run=True)
+        owner_six = act(c, OWNER, "allocation_set", {**ask, "amount": 6_000}, "owner-6000", dry_run=True)
+        owner_seven = act(c, OWNER, "allocation_set", {**ask, "amount": 6_001}, "owner-6001", dry_run=True)
+    assert (six.status, seven.status) == ("needs_approval", "needs_approval"), (six, seven)
+    assert (six.approver, seven.approver) == (OWNER, OWNER)
+    assert owner_six.status == "committed"
+    assert (owner_seven.code, owner_seven.reason) == ("invalid", "it does not fit: Software has 6000 left")
 
 
 def test_a_grandparent_hidden_by_private_lines_is_not_named_when_the_rest_is_visible(books):
@@ -395,9 +427,10 @@ def test_impacts_and_errors_show_only_numbers_the_actor_may_see(books):
             {"account_id": account(c, "6100"), "amount": 100, "tags": {"team": "web"}},
             {"account_id": account(c, "1000"), "amount": -100}]}, dry_run=True)
         assert [b["budget_id"] for b in dry.impact["budgets"]] == [kids["eng"]]       # not company-wide Software
+        # Software is outside Ben's view, so his set-aside over what Software has left is asked, with no amount.
         over = act(c, "human:ben", "allocation_set", {"budget_id": kids["eng"], "target_kind": "teammate",
                                                       "target_id": "bot:coder", "amount": 5_500})
-        assert over.code == "invalid" and not any(ch.isdigit() for ch in over.reason)
+        assert over.status == "needs_approval" and over.approver == OWNER
         assert "5000" in act(c, OWNER, "allocation_set", {"budget_id": kids["eng"], "target_kind": "teammate",
                                                          "target_id": "bot:coder", "amount": 5_500}).reason
 
@@ -511,6 +544,7 @@ def test_a_rule_that_names_the_finance_approver_never_lets_them_approve_their_ow
     # goes to the owner, the finance admin who is not the requester, and nothing moves until the owner decides.
     with books.transaction() as c:
         pid, kids = _tree(c)
+        _sees_parent(c, "human:cara")
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
         FA.setup(c, OWNER, AT, finance_approver="human:cara")
         rule = act(c, OWNER, "rule_create", {"name": "Budget changes", "when": {"kind": "budget_update"},

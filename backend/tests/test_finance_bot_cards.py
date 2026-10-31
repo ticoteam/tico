@@ -665,6 +665,23 @@ def test_a_child_with_no_amount_today_that_comes_back_active_fits_its_later_vers
         assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": True}).status == "committed"
 
 
+def test_a_card_on_an_ended_child_budget_is_refused_and_nothing_is_queued(books):
+    """Eng tools (100.00) ends under Tools (100.00). A 200.00 card on it reserves nothing against Tools, since an ended
+    budget reserves nothing, so it used to pass and queue Mercury at 200.00 while Tools stayed at 100.00 free. Now it is
+    refused and nothing is queued or reserved."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=10_000)                                 # Tools: 100.00 a month, decline
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=line)
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        refused = _bot_card(c, eng, "bot:coder", amount=20_000)
+        assert refused.code == "invalid" and "has ended" in refused.reason, refused
+        assert c.execute("SELECT COUNT(*) FROM fin_cards WHERE holder='bot:coder'").fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='card_create'").fetchone()[0] == 0
+        assert FA.budget_state(c, line, AT).remaining == 10_000
+
+
 def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
     fake = FakeMercury()
     budget, _, _ = _world(books, fake)
