@@ -158,7 +158,7 @@ def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
     """The one person the gate sends this to now, or "" when it needs nobody (it allows, or its approver asked)."""
     if gate.outcome != "needs_approval":
         return ""
-    approver = O.approver(ctx.org, gate.who, who, ctx.approver_setting())
+    approver = O.approver(ctx.org, gate.who, who, ctx.approver_setting(), gate.person)
     if not approver:
         raise FinanceError(DENIED, "nobody can approve this: the install has no owner")
     return "" if approver == who else approver

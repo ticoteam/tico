@@ -108,11 +108,14 @@ def manager_of(org: Org, actor: str) -> str:
     return ""
 
 
-def approver(org: Org, who: str, requester: str, finance_approver: str = "") -> str:
+def approver(org: Org, who: str, requester: str, finance_approver: str = "", budget_owner: str = "") -> str:
     """The one person who decides: `owner` is the install owner; `finance_admin` the named finance approver when that
-    is a person, else the owner; `manager` the nearest person above the requester, else the owner."""
+    is a person, else the owner; `manager` the nearest person above the requester, else the owner; `budget_owner` the
+    parent budget's owner when that is a person, else the owner."""
     if who == "finance_admin" and finance_approver and org.is_person(finance_approver):
         return finance_approver
     if who == "manager":
         return manager_of(org, requester) or org.owner
+    if who == "budget_owner" and org.is_person(budget_owner):
+        return budget_owner
     return org.owner

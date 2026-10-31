@@ -66,11 +66,12 @@ def approval_kind(kind: str) -> str:
 
 @dataclass(frozen=True)
 class Gate:
-    """What the default gates say: `allow`, or `needs_approval` from `who` (owner | finance_admin | manager), with the
-    rule that said it."""
+    """What the default gates say: `allow`, or `needs_approval` from `who` (owner | finance_admin | manager |
+    budget_owner), with the rule that said it. `person` is the one `budget_owner` names: the parent budget's owner."""
     outcome: str
     who: str = ""
     rule: str = ""
+    person: str = ""
 
 
 ALLOW = Gate("allow")

@@ -4,8 +4,10 @@ the last dollars."""
 import random
 import threading
 
+from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance.store import budgets as SB
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
@@ -35,14 +37,25 @@ def test_children_never_pass_the_parent_and_siblings_never_overlap(books):
         assert "overlaps" in over.reason or "total" in over.reason
         lower = act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 9_999})
         assert lower.code == "invalid" and "children" in lower.reason
-        grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001})
-        assert grow.code == "invalid"
         assert act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 5_000}).status == "committed"
         assert act(c, OWNER, "budget_update", {"budget_id": pid, "amount": 9_000}).status == "committed"
         assert FA.budget_for(c, account_id=soft, teammate="human:eve", at=AT) == kids["web"]
         assert FA.budget_for(c, account_id=soft, team="eng", at=AT) == pid
         assert FA.budget_for(c, account_id=account(c, "6900"), at=AT) == budget(c, "Other expenses")
         assert FA.budget_for(c, account_id=account(c, "1000"), at=AT) is None
+
+
+def test_a_child_that_would_pass_its_parent_asks_the_parent_owner(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
+        grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001})
+        assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
+        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        done = FA.approval_decided(c, grow.approval_id, AT)
+        assert done is not None and done.status == "committed"
+        web = SB.versions(c, [kids["web"]])[kids["web"]]
+        assert max(web, key=lambda v: v.version).amount == 6_001
 
 
 def test_random_holds_never_let_children_pass_the_parent(books):

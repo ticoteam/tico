@@ -330,38 +330,63 @@ def _effective(ctx: Ctx, b: B.Budget, raw: str | None) -> str:
     return B.period_of(b, at, ctx.book.fiscal_year_start, [])[0].isoformat()
 
 
-def _fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int) -> None:
-    """With `b` at `amount` from `effective`, children never pass their parent. The reason names amounts only when
-    `who` may see every budget it sums."""
+def _fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int, route: bool = False) -> str | None:
+    """With `b` at `amount` from `effective`, its children never pass it. It never passes its parent either, unless
+    `route`: then a change that would is the parent's owner's to decide (§4.4), so this returns that owner ("" when the
+    parent has none) and the caller asks them. None when it fits. The reason names amounts only when `who` may see
+    every budget it sums."""
     budgets = ctx.budgets()
     near = [x for x in budgets.values() if x.active and x.id != b.id and
             (bool(b.id) and x.parent_id == b.id or bool(b.parent_id) and b.parent_id in (x.id, x.parent_id))]
+    mine = _mine(ctx, b, effective, amount)
     try:
-        _fits(ctx, b, effective, amount)
-    except FinanceError:
-        if all(shows_numbers(ctx, who, x) for x in near):
-            raise
-        raise invalid("it does not fit: not enough left") from None
+        _over_children(ctx, b, mine, effective)
+    except FinanceError as e:
+        raise _refusal(ctx, who, near, e) from None
+    try:
+        _under_parent(ctx, b, mine, effective)
+    except FinanceError as e:
+        if route:
+            return budgets[b.parent_id].owner
+        raise _refusal(ctx, who, near, e) from None
+    return None
 
 
-def _fits(ctx: Ctx, b: B.Budget, effective: str, amount: int) -> None:
-    """b among its siblings under its parent, and b over its own children."""
-    budgets = ctx.budgets()
+def _mine(ctx: Ctx, b: B.Budget, effective: str, amount: int) -> list[B.Version]:
+    """b's stored versions with the one being set."""
     mine = SB.versions(ctx.c, [b.id])[b.id] if b.id else []
     mine.append(B.Version(budget_id=b.id or "new", version=10**9, effective_from=effective, amount=amount))
-    if b.parent_id:
-        parent = budgets[b.parent_id]
-        sibling_ids = [x.id for x in budgets.values() if x.parent_id == parent.id and x.active and x.id != b.id]
-        found = SB.versions(ctx.c, [parent.id, *sibling_ids])
-        children: dict[str, list[B.Version]] = {sid: found[sid] for sid in sibling_ids}
-        children[b.id or "new"] = mine
-        every = [v for vs in children.values() for v in vs] + found[parent.id]
-        B.check_fit(parent, found[parent.id], children, B.fit_points(dates.day(effective), every))
-    kids = [x.id for x in budgets.values() if x.parent_id == b.id and x.active and b.id]
+    return mine
+
+
+def _refusal(ctx: Ctx, who: str, near: list[B.Budget], e: FinanceError) -> FinanceError:
+    """The fit error itself when `who` may see every budget it sums, else one that names no amounts."""
+    if all(shows_numbers(ctx, who, x) for x in near):
+        return e
+    return invalid("it does not fit: not enough left")
+
+
+def _over_children(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> None:
+    """b over its own children: they never pass it."""
+    kids = [x.id for x in ctx.budgets().values() if b.id and x.parent_id == b.id and x.active]
     if kids:
         found = SB.versions(ctx.c, kids)
         every = [v for vs in found.values() for v in vs] + mine
         B.check_fit(b, mine, found, B.fit_points(dates.day(effective), every))
+
+
+def _under_parent(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> None:
+    """b among its siblings under its parent: together they never pass the parent."""
+    if not b.parent_id:
+        return
+    budgets = ctx.budgets()
+    parent = budgets[b.parent_id]
+    sibling_ids = [x.id for x in budgets.values() if x.parent_id == parent.id and x.active and x.id != b.id]
+    found = SB.versions(ctx.c, [parent.id, *sibling_ids])
+    children: dict[str, list[B.Version]] = {sid: found[sid] for sid in sibling_ids}
+    children[b.id or "new"] = mine
+    every = [v for vs in children.values() for v in vs] + found[parent.id]
+    B.check_fit(parent, found[parent.id], children, B.fit_points(dates.day(effective), every))
 
 
 def _need_budget_view(ctx: Ctx, who: str, b: B.Budget) -> None:
@@ -431,8 +456,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and amount < 0:
         raise invalid("a budget amount is 0 or more")
     effective = _effective(ctx, old, V.opt_day(p, "effective_from"))
-    if amount is not None:
-        _fit(ctx, who, old, effective, amount)
+    decider = _fit(ctx, who, old, effective, amount, route=True) if amount is not None else None
 
     def apply(aid: str) -> Result:
         SB.update_budget(ctx.c, new, ctx.at)
@@ -440,7 +464,9 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if amount is not None else None
         ctx.changed()
         return {"budget_id": old.id, "version": version}
-    return Plan(K.default_gate(ctx.org, who, "budget_update"), f"Change budget {old.name}" +
+    gate = K.default_gate(ctx.org, who, "budget_update") if decider is None else \
+        K.Gate("needs_approval", "budget_owner", "default:budget-parent", person=decider)
+    return Plan(gate, f"Change budget {old.name}" +
                 (f" to {amount / 100:.2f} {ctx.book.base_currency} from {effective}" if amount is not None else ""),
                 apply, {"effective_from": effective}, {"effective_from": effective} if amount is not None else {})
 
