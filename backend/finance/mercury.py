@@ -4,6 +4,7 @@ connect probe. Every call returns (status, JSON); it never raises for an HTTP an
 few times; 401/403 on a write means the token's IP allowlist lacks this server. The Vault host (full card numbers)
 is never called."""
 import json
+import logging
 import os
 import time
 import urllib.error
@@ -17,6 +18,9 @@ from typing import Any, Protocol, cast
 BASE = "https://api.mercury.com/api/v1"
 SANDBOX = "https://api-sandbox.mercury.com/api/v1"
 BASE_ENV = "TICO_MERCURY_BASE"          # a developer's override: the sandbox, or a local fake (scripts/fake_mercury.py)
+OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "api-sandbox.mercury.com"})  # the only hosts it may name
+log = logging.getLogger(__name__)
+_warned = [False]
 TIMEOUT = 15
 MAX_WAIT = 30.0                       # seconds one 429 may make us wait
 TRIES_429 = 3
@@ -68,8 +72,19 @@ class Provider(Protocol):
 
 
 def base_url() -> str:
-    """The API base the bank worker calls: TICO_MERCURY_BASE when set, else Mercury's own."""
-    return os.environ.get(BASE_ENV, "").strip() or BASE
+    """The API base the bank worker calls: TICO_MERCURY_BASE when it names a local or sandbox host, else Mercury's own.
+    A stray value naming any other host is ignored (one warning per process): the real token never goes elsewhere."""
+    raw = os.environ.get(BASE_ENV, "").strip()
+    if not raw:
+        return BASE
+    host = urllib.parse.urlsplit(raw).hostname or ""
+    if host in OVERRIDE_HOSTS:
+        return raw
+    if not _warned[0]:
+        _warned[0] = True
+        log.warning("%s ignored: %r is not 127.0.0.1, localhost, ::1 or api-sandbox.mercury.com; using Mercury's API",
+                    BASE_ENV, host or raw)
+    return BASE
 
 
 def dollars(cents: int) -> Decimal:

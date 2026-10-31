@@ -130,9 +130,11 @@ async def keep_alive(store, stop, vault=None):
     online, the scheduler looks alive, and a message to a bot is answered (once) that this is a demo."""
     # The demo's scheduler is off, so Finance's bank worker would never sync. With TICO_MERCURY_BASE set (a local
     # fake Mercury: scripts/finance_e2e.sh), the worker runs and reads only that base. Without it, nothing starts.
-    if vault is not None and os.environ.get("TICO_MERCURY_BASE", "").strip():
+    if vault is not None:
         from .finance import actions as finance
-        finance.banking_start(store, vault)
+        from .finance import mercury
+        if mercury.base_url() != mercury.BASE:
+            finance.banking_start(store, vault)
     while not stop.is_set():
         try:
             await asyncio.to_thread(tick, store)

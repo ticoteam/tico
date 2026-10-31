@@ -404,3 +404,18 @@ def test_the_bank_worker_calls_the_base_it_is_pointed_at(store, monkeypatch):
     assert sync._provider(store, object(), "cred-mercury", None)._base == "http://127.0.0.1:18790/api/v1"
     monkeypatch.delenv("TICO_MERCURY_BASE")
     assert sync._provider(store, object(), "cred-mercury", None)._base == BASE
+
+
+def test_a_stray_base_naming_another_host_is_ignored_with_one_warning(monkeypatch, caplog):
+    """TICO_MERCURY_BASE only counts for a local or sandbox host. Any other host is ignored: the real token must never
+    be sent elsewhere. The warning is logged once per process."""
+    import logging
+    from backend.finance import mercury
+    monkeypatch.setattr(mercury, "_warned", [False])
+    caplog.set_level(logging.WARNING, logger="backend.finance.mercury")
+    monkeypatch.setenv("TICO_MERCURY_BASE", "https://evil.example.com/api/v1")
+    assert mercury.base_url() == mercury.BASE
+    assert mercury.base_url() == mercury.BASE
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    monkeypatch.setenv("TICO_MERCURY_BASE", "https://api-sandbox.mercury.com/api/v1")
+    assert mercury.base_url() == "https://api-sandbox.mercury.com/api/v1"
