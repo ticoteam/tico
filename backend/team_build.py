@@ -67,8 +67,10 @@ def _group(c, auth, who, team):
     """The team as this caller sees it: its row in the sidebar (backend/groups.py `rows`, filtered as GET /v2/groups
     filters it), so a bot they cannot see is neither named nor counted as filling its role."""
     access = auth.bot_accesses(c, who)
-    row = next((g for g in Groups.rows(Groups._roster(c), Groups._configs(c), Groups._archived(c),
-                                        lambda slug: access.get(slug, auth.FULL)["see"])
+
+    def seen(slug):
+        return bool(access.get(slug, {}).get("see"))      # a bot the permissions do not name is hidden, not open
+    row = next((g for g in Groups.rows(Groups._roster(c), Groups._configs(c), Groups._archived(c), seen)
                 if g["id"] == team), None)
     if not row:
         raise Problem("not_found", "Team not found", 404)
@@ -241,7 +243,8 @@ def install(app, store, auth, mutate, onboarding):
         """The roles a team needs for a briefing, from the local recommender: no outside service."""
         who = request.state.identity
         auth.domain(who)
-        with store.read() as c:
+        # One snapshot: the team's membership and the caller's access to its bots are read as they stood together.
+        with store.read_transaction() as c:
             return suggest(auth, onboarding, c, who, body.team, body.briefing)
 
     @app.post("/api/v2/team-build/hire")
