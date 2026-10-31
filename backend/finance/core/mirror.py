@@ -21,6 +21,11 @@ DELETE = "delete"       # deleted at the provider: an entry is reversed; an acco
 SAME = "same"           # the revision the books hold
 OLDER = "older"         # a revision older than the books hold arrived late: nothing changes
 GONE = "gone"           # deleted at the provider and never in the books: nothing to do
+BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
+    "quickbooks": ("accounts", "parties", "documents", "payments", "entries"),
+    "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
+              "bank_transactions"),
+}
 
 
 @dataclass(frozen=True)
@@ -88,6 +93,7 @@ class Document:
     total: int          # minor units, positive
     lines: tuple[EntryLine, ...]
     memo: str = ""
+    currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
     links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
 
 
@@ -102,6 +108,7 @@ class Settlement:
     bank: str           # the provider's key for the money account, "" when the provider names none
     total: int          # minor units, positive
     links: tuple[tuple[str, int], ...] = ()
+    currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
 
 
 def revision_order(a: str, b: str) -> int:

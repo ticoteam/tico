@@ -45,10 +45,12 @@ REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
 Record = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Ext
 DOC_TABLES = {"Bill": "fin_bills", "Invoice": "fin_invoices"}   # a document kind with a row of its own
 TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMemo": "fin_entries",
-            "BillPayment": "fin_entries", "Payment": "fin_entries", "Bill": "fin_bills", "Invoice": "fin_invoices"}
+            "BillPayment": "fin_entries", "Payment": "fin_entries", "Bill": "fin_bills", "Invoice": "fin_invoices",
+            "ManualJournal": "fin_entries", "BankTransaction": "fin_entries"}
 GROUP_OF = {"Account": "accounts", "Vendor": "parties", "Customer": "parties", "Bill": "documents",
             "Invoice": "documents", "CreditMemo": "documents", "BillPayment": "payments", "Payment": "payments",
-            "JournalEntry": "entries"}
+            "JournalEntry": "entries",
+            "ManualJournal": "entries", "BankTransaction": "entries"}
 
 
 @dataclass(frozen=True)
@@ -289,7 +291,7 @@ def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: s
 def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str) -> None:
     """Undo the settlements a payment's entry made, before the entry is reversed: each document owes its money again."""
     for s in SX.settlements_of(c, entry_id):
-        documents.unsettle(ctx, s)
+        documents.unsettle(ctx, s, cash=str(s["from_kind"]) != "credit")
 
 
 def _book(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, verdict: str, old: str, day: str,
@@ -399,6 +401,13 @@ def _doc_entry(ctx: Ctx, *, control_kind: str, sign: int, source: str, source_id
                    lines=tuple(lines))
 
 
+def _currency(ctx: Ctx, code: str) -> None:
+    """A provider document or payment in another currency than the books' cannot be taken in: the books hold no rates
+    for it yet, so it waits as unmapped."""
+    if code and code != ctx.book.base_currency:
+        raise FinanceError(NOT_AVAILABLE, f"it is in {code}, and the books hold {ctx.book.base_currency}")
+
+
 def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
     """A bill or invoice (its own row, its lines and its entry) or a credit memo (its entry only). A newer revision
     replaces the entry and the lines; the document keeps its id, so the payments that settled it still point at it."""
@@ -417,6 +426,7 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
             _void(c, ctx, cid, table, local, d.ext.key, at)
             _bind(c, cid, table, local, d.ext, at, status="deleted")
         return
+    _currency(ctx, d.currency)
     contact = _mapped(c, cid, "fin_contacts", d.party)
     rows = _doc_lines(c, cid, d)
     _write_document(c, ctx, cid, d, verdict, row, contact, rows, at)
@@ -460,6 +470,7 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
     verdict = M.decide(_have(row), d.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
+    _currency(ctx, d.currency)
     contact = _mapped(c, cid, "fin_contacts", d.party)
     rows = _doc_lines(c, cid, d)
     applied = sum(amount for _, amount in d.links)
@@ -476,7 +487,7 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
         if kind != "invoice":
             raise FinanceError(NOT_AVAILABLE, "a credit memo applies to invoices")
         documents.settle(ctx, "invoice", invoice, amount=amount, day=d.day, from_kind="credit", from_id=new_id,
-                         entry_id=new_id, by=SYSTEM)
+                         entry_id=new_id, by=SYSTEM, cash=False)
 
 
 def _doc_label(d: M.Document) -> str:
@@ -522,6 +533,18 @@ def _settle_target(c: sqlite3.Connection, cid: str, key: str) -> tuple[str, str]
     return ("bill" if name == "Bill" else "invoice"), _mapped(c, cid, DOC_TABLES[name], key)
 
 
+def _target_party(c: sqlite3.Connection, targets: Sequence[tuple[str, str, int]]) -> str:
+    """The local contact of the first document a payment settles, for a payment that names no party."""
+    if not targets:
+        raise FinanceError(NOT_AVAILABLE, "the payment names no party")
+    kind, doc_id, _ = targets[0]
+    table, _, _, _, contact_col = SAP.DOCS[kind]
+    doc = SAP.get(c, table, doc_id)
+    if doc is None or not doc[contact_col]:
+        raise FinanceError(NOT_AVAILABLE, "the payment names no party")
+    return str(doc[contact_col])
+
+
 def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: str, feed: str = "") -> None:
     """A bill payment (Dr payables, Cr bank) or a received payment (Dr bank, Cr receivables), and the bills or invoices
     it settles: each link is a settlement, so the document's paid amount and status move with the money. A payment sent
@@ -530,16 +553,15 @@ def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: 
     verdict = M.decide(_have(row), s.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
-    if not s.party:
-        raise FinanceError(NOT_AVAILABLE, "the payment names no party")
+    _currency(ctx, s.currency)
     if not s.bank:
         raise FinanceError(NOT_AVAILABLE, "the payment names no bank account the books hold")
     if sum(amount for _, amount in s.links) > s.total:
         raise FinanceError(NOT_AVAILABLE, "the payment settles more than its total")
     bill = s.ext.kind == "BillPayment"
-    contact = _mapped(c, cid, "fin_contacts", s.party)
-    bank = _mapped(c, cid, "fin_accounts", s.bank)
     targets = [(*_settle_target(c, cid, key), amount) for key, amount in s.links]
+    contact = _mapped(c, cid, "fin_contacts", s.party) if s.party else _target_party(c, targets)
+    bank = _mapped(c, cid, "fin_accounts", s.bank)
     control = documents.control(ctx, "bill" if bill else "invoice").id
     base = ctx.book.base_currency
 
@@ -1013,7 +1035,7 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
         st = SX.mirror_state(c, cid)
     raw = st.get("changed_at")
     since = raw if isinstance(raw, str) else None
-    if not M.backfill_done(_backfill_state(st), ENTITIES) or not (waiting or M.cdc_due(since, now)):
+    if not M.backfill_done(_backfill_state(st), books.entities) or not (waiting or M.cdc_due(since, now)):
         return ""
     read = books.changed(M.cdc_since(since, now))
     if not read.ok:
@@ -1122,7 +1144,9 @@ def mirror_stop(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     if SX.writes_waiting(ctx.c, cid):
         raise FinanceError(CONFLICT, "writes to the provider are still waiting to go out")
     state = _backfill_state(SX.mirror_state(ctx.c, cid))
-    if not M.backfill_done(state, ENTITIES):
+    row = SK.get(ctx.c, "fin_connections", cid)
+    entities = M.BOOK_ENTITIES.get(str(row["provider"]), ()) if row is not None else ()
+    if not M.backfill_done(state, entities):
         raise FinanceError(CONFLICT, "the provider's books are not all read yet")
     last = SX.last_ok(ctx.c, cid)
     if last is None or M.parse(ctx.at) - M.parse(last) > timedelta(days=1):
