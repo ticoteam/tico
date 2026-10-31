@@ -647,7 +647,8 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
     most = max(1, min(int(limit), 500))
-    rows = [{**_budget_row(b), "state": _state_row(s, b, budgeting.state(s.ctx, b.id, day))} for b in seen[:most]]
+    rows = [{**_budget_row(b), "state": _state_row(s, b, budgeting.state(s.ctx, b.id, day, view=s.view))}
+            for b in seen[:most]]
     return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version}
 
 
@@ -668,7 +669,7 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
         cut = _private_scope(s, b)
         rows.append({**_budget_row(b),
                      "budget": [B.in_window(b, versions[b.id], q, s.ctx.book.fiscal_year_start) for q in buckets],
-                     "actual": None if cut else [budgeting.actual(s.ctx, b, p.isoformat(), q.isoformat())
+                     "actual": None if cut else [budgeting.actual(s.ctx, b, p.isoformat(), q.isoformat(), view=s.view)
                                                  for p, q in buckets]})
     return {"start": a.isoformat(), "end": z.isoformat(), "period": period,
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
@@ -746,7 +747,7 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         b = s.ctx.budgets().get(budget_id or "")
         if b is None or not sees_budget(s.ctx, viewer, b):
             raise FinanceError(NOT_FOUND, "no such budget")
-        row = _state_row(s, b, budgeting.state(s.ctx, b.id, today))
+        row = _state_row(s, b, budgeting.state(s.ctx, b.id, today, view=s.view))
         if name == "budget_remaining":
             return {**base, "value": row["remaining"], "unit": "minor", "currency": currency}
         return {**base, "value": row["pct"], "unit": "percent"}
@@ -1124,7 +1125,7 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
     if kind == "budget_near_limit":
         near: list[Row] = []
         for b in _visible(s, False):
-            st = _state_row(s, b, budgeting.state(ctx, b.id, today))
+            st = _state_row(s, b, budgeting.state(ctx, b.id, today, view=view))
             if st["crossed_warn"]:
                 near.append({"id": b.id, "budget_id": b.id, "amount": st["remaining"], "pct": st["pct"],
                              "label": f"{b.name} · {st['pct'] or '?'}% used"})

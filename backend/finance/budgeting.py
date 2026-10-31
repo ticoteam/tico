@@ -10,6 +10,7 @@ from .context import Ctx, is_set_up, load
 from .core import budgets as B
 from .core import dates, money
 from .core import validate as V
+from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, invalid
 from .core.ledger import descendants, vendor_text
 from .core.org import SYSTEM
@@ -58,12 +59,41 @@ def scope_accounts(ctx: Ctx, b: B.Budget) -> list[str]:
     return sorted(descendants(ctx.accounts, b.account_id))
 
 
-def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "") -> int:
+def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "", view: VW.View | None = None) -> int:
     """Posted spend in the budget's scope in the window: its line and the lines under it, cut to its team (and the teams
-    under it), teammate and vendor."""
+    under it), teammate and vendor. A read for a viewer passes `view`, and the settled private payroll lines in that
+    scope come out of it, as they do from the P&L (tab.settled_lines). Enforcement passes no view: it reads the true
+    spend."""
     teams = sorted(ctx.org.below(b.team)) if b.team else None
-    return SL.rollup_sum(ctx.c, ctx.book.id, start, end, scope_accounts(ctx, b), teams=teams,
-                         teammate=teammate or b.teammate, vendors=SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor))
+    accounts = scope_accounts(ctx, b)
+    teammate = teammate or b.teammate
+    vendors = SAP.vendor_keys(ctx.c, ctx.book.id, b.vendor)
+    total = SL.rollup_sum(ctx.c, ctx.book.id, start, end, accounts, teams=teams, teammate=teammate, vendors=vendors)
+    if view is None:
+        return total
+    return total - _settled_in(ctx, view, start, end, accounts, teams, teammate, vendors)
+
+
+def _settled_in(ctx: Ctx, view: VW.View, start: str, end: str, accounts: Sequence[str], teams: Sequence[str] | None,
+                teammate: str, vendors: Sequence[str]) -> int:
+    """What the settled private payroll lines in a rollup's scope add up to: the lines tab.settled_lines finds, cut to
+    the rollup's own filters (team, teammate, vendor), so a read takes out exactly what the rollup counted."""
+    from . import tab       # tab reads budgets too (card rows), so it is imported here rather than at the top
+    if teams is not None and not teams:
+        return 0
+    lines = tab.settled_lines(ctx, view, dates.day(start), dates.day(end), accounts, "accrual")
+    tags = SL.line_tags(ctx.c, [str(r["id"]) for r in lines])
+    total = 0
+    for r in lines:
+        mine = tags.get(str(r["id"]), {})
+        if teams is not None and mine.get("team", "") not in teams:
+            continue
+        if teammate and mine.get("teammate", "") != teammate:
+            continue
+        if vendors and str(r["contact_id"] or "") not in vendors:
+            continue
+        total += int(r["amount"])
+    return total
 
 
 def period_window(ctx: Ctx, budget_id: str) -> tuple[str, str]:
@@ -77,7 +107,8 @@ def _period(ctx: Ctx, b: B.Budget, at: date, versions: Sequence[B.Version]) -> t
     return B.period_of(b, at, ctx.book.fiscal_year_start, versions)
 
 
-def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[date, date], at: date) -> int | None:
+def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[date, date], at: date,
+            view: VW.View | None = None) -> int | None:
     """The amount for the period: the version in force at its start (on `at` for a once budget), plus what an `unused`
     rollover carries in from every earlier period since the budget's first version."""
     base = B.amount_at(versions, at if b.period == "once" else period[0])
@@ -90,12 +121,13 @@ def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[
     tree = subtree(ctx, b.id)
     while start < period[0]:
         a, z = start.isoformat(), end.isoformat()
-        history.append((B.amount_at(versions, start), actual(ctx, b, a, z) + SB.held(ctx.c, tree, a, z)))
+        history.append((B.amount_at(versions, start), actual(ctx, b, a, z, view=view) + SB.held(ctx.c, tree, a, z)))
         start, end = B.period_of(b, end.fromordinal(end.toordinal() + 1), fy, versions)
     return base + B.carry(history)
 
 
-def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> list[tuple[str, str, int]]:
+def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, view: VW.View | None = None
+             ) -> list[tuple[str, str, int]]:
     """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
     target used under it, never below zero. A target's use (its holds, settled holds, for a teammate their posted
     lines, for a card its entries in the ledger) draws down only the nearest allocation for that target above it,
@@ -115,7 +147,8 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> list[
         def usage(bid: str, used: dict[str, int] = used, target: str = target, kind: str = kind, tid: str = tid) -> int:
             if bid not in used:
                 total = SB.target_used(ctx.c, subtree(ctx, bid), start, end, target, absorbed=kind != "teammate")
-                used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid) if kind == "teammate" else 0)
+                used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid, view=view)
+                                     if kind == "teammate" else 0)
             return used[bid]
         for bid, amount in rows:
             under = [x for x in subtree(ctx, bid)[1:] if x in on]
@@ -124,10 +157,13 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> list[
     return out
 
 
-def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = ()) -> B.State:
+def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = (),
+          view: VW.View | None = None) -> B.State:
     """A budget now: amount, actual, held (holds and allocations' reserves in its whole subtree), remaining, percent.
     With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
-    counted against it (it may spend what was set aside for it there); its allocations on other branches still are."""
+    counted against it (it may spend what was set aside for it there); its allocations on other branches still are.
+    A read passes its `view`, and then the actual and what depends on it (rollover, reserves) leave out the settled
+    private payroll the viewer can't see; enforcement passes none."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -136,9 +172,10 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     start, end = period[0].isoformat(), period[1].isoformat()
     tree = subtree(ctx, b.id)
     mine = set(path)
-    reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end) if not (target and t == target and bid in mine))
+    reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end, view)
+                  if not (target and t == target and bid in mine))
     held = SB.held(ctx.c, tree, start, end) + reserve
-    return B.state(b, period, _amount(ctx, b, versions, period, at), actual(ctx, b, start, end), held)
+    return B.state(b, period, _amount(ctx, b, versions, period, at, view), actual(ctx, b, start, end, view=view), held)
 
 
 def leaf(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: str = "") -> B.Budget | None:

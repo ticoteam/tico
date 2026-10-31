@@ -1,7 +1,9 @@
 """The Finance tab's money reads keep private lines private and follow the current view: a payroll feed row never
 shows its amount or payee to a teammate who sees the bank line but not payroll detail, a payment to a private line is
 left out (of lists and of the balance sheet's due-out totals), and a payer whose grant was revoked sees only that their payment exists and its status."""
+from backend.finance import budgeting
 from backend.finance import reads as FR
+from backend.finance.context import load
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
 
@@ -196,3 +198,50 @@ def test_reversing_the_pays_bill_entry_never_re_exposes_the_amount(books):
         assert [r["amount"] for r in rows if abs(r["amount"]) == 4_000] == []
         mine = FR.line_detail(c, OWNER, other, "2026-10-01", "2026-11-30", at=NOV)
         assert sorted(e["amount"] for e in mine["entries"]) == [-4_000, 4_000, 4_000]
+
+
+def _other_budget(c) -> str:
+    made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
+                                           "amount": 10_000}, at=NOV)
+    assert made.status == "committed", made
+    return str(made.result["budget_id"])
+
+
+def test_a_budget_on_other_expenses_never_shows_a_payroll_payment_to_a_viewer_without_detail(books):
+    """A budget on Other expenses counts the October debit and November's reclass of it to a private payroll bill. A
+    holder without payroll detail sees neither in the actual, the owner sees both, and enforcement reads the true
+    actual (only the read is suppressed)."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        budget_id = _other_budget(c)
+    with books.read() as c:
+        for who, months in ((OWNER, [4_000, -4_000]), ("human:gus", [0, 0])):
+            (row,) = [r for r in FR.budget_vs_actual(c, who, "2026-10-01", "2026-11-30", "month", at=NOV)["budgets"]
+                      if r["id"] == budget_id]
+            assert row["actual"] == months, who
+            (state,) = [r for r in FR.budgets(c, who, at=NOV)["budgets"] if r["id"] == budget_id]
+            assert state["state"]["actual"] == months[1], who
+        ctx = load(c, NOV)
+        b = ctx.budgets()[budget_id]
+        assert budgeting.actual(ctx, b, "2026-10-01", "2026-10-31") == 4_000
+        assert budgeting.actual(ctx, b, "2026-11-01", "2026-11-30") == -4_000
+
+
+def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll_line(books):
+    """The bank total is true for a balance-sheet grantee. Nothing isolates the payroll payment: it sits in the same
+    net as the owner's, and the report has no line naming payroll or its payee."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "balance_sheet"},
+                   at=NOV).status == "committed"
+    with books.read() as c:
+        window = {"start": "2026-10-01", "end": "2026-11-30", "period": "month", "at": NOV}
+        mine = FR.report(c, "human:gus", "cash_flow", **window)
+        theirs = FR.report(c, OWNER, "cash_flow", **window)
+        assert theirs["net"] == [-4_000, 0]
+        assert (mine["opening"], mine["net"], mine["closing"]) == (theirs["opening"], theirs["net"], theirs["closing"])
+        assert mine["accounts"] == theirs["accounts"]
+        assert set(mine) == set(theirs)
+        assert "Payroll" not in repr(mine) and "Acme Payroll" not in repr(mine) and "PR-7" not in repr(mine)
