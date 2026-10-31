@@ -480,6 +480,7 @@ def _sealed_rows(c) -> int:
 
 def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
     store = api.app.state.store
+    FA.use_vault(api.app.state.vault)                    # this app's vault: the api fixture starts no bank worker
     FA.banking_stop()                                    # this test drives the worker itself, with a fake Mercury
     fake = FakeMercury()
     with store.transaction() as c:
@@ -514,6 +515,7 @@ def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
 
 def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api):
     store = api.app.state.store
+    FA.use_vault(api.app.state.vault)
     FA.banking_stop()
     fake = FakeMercury()
     with store.transaction() as c:
