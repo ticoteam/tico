@@ -11,11 +11,11 @@ from backend.finance.store import budgets as SB
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
-def _tree(c, parent_amount=10_000, kids=(("web", 6_000), ("sales", 4_000))):
-    """A Software budget with a child per team; the ids (parent, {team: child})."""
+def _tree(c, parent_amount=10_000, kids=(("web", 6_000), ("sales", 4_000)), under=None):
+    """A Software budget with a child per team, under `under` if given; the ids (parent, {team: child})."""
     soft = account(c, "6100")
     root = act(c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": parent_amount,
-                                           "at_limit": "decline"})
+                                           "at_limit": "decline", "parent_id": under})
     assert root.status == "committed", root
     pid = str(root.result["budget_id"])
     out = {}
@@ -56,6 +56,85 @@ def test_a_child_that_would_pass_its_parent_asks_the_parent_owner(books):
         assert done is not None and done.status == "committed"
         web = SB.versions(c, [kids["web"]])[kids["web"]]
         assert max(web, key=lambda v: v.version).amount == 6_001
+
+
+def _latest(c, budget_id):
+    """The version in force last: the highest (effective day, version)."""
+    return max(SB.versions(c, [budget_id])[budget_id], key=lambda v: (v.effective_from, v.version))
+
+
+def test_approving_a_child_that_passes_its_parent_raises_the_parent_by_the_excess(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
+        change = {"budget_id": kids["web"], "amount": 6_500}          # 500 over the parent's 10,000 with sales at 4,000
+        preview = act(c, OWNER, "budget_update", change, dry_run=True)
+        assert (preview.status, preview.approver) == ("needs_approval", "human:ben")
+        summary = str(preview.impact["summary"])
+        assert "Software web" in summary and "raise Software" in summary
+        grow = act(c, OWNER, "budget_update", change)
+        assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
+        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        done = FA.approval_decided(c, grow.approval_id, AT)
+        assert done is not None and done.status == "committed"
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
+        assert _latest(c, pid).effective_from == _latest(c, kids["web"]).effective_from
+
+
+def test_a_declined_raise_changes_neither_budget(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
+        grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        H.approval_decide(c, "human:ben", grow.approval_id, "declined")
+        done = FA.approval_decided(c, grow.approval_id, AT)
+        assert done is not None and done.status == "denied"
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_000, 10_000)
+
+
+def test_a_raise_that_would_pass_the_grandparent_waits_for_that_raise(books):
+    with books.transaction() as c:
+        company = act(c, OWNER, "budget_create", {"name": "Company", "account_id": account(c, "6000"),
+                                                  "amount": 10_000, "at_limit": "decline"})
+        assert company.status == "committed"
+        cid = str(company.result["budget_id"])
+        pid, kids = _tree(c, under=cid)
+        refused = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001})
+        assert refused.status == "failed" and "raise Company first" in refused.reason
+        assert _latest(c, kids["web"]).amount == 6_000 and _latest(c, pid).amount == 10_000
+        assert act(c, OWNER, "budget_update", {"budget_id": cid, "amount": 10_001}).status == "committed"
+        # Software's owner is OWNER, so the change is theirs to make and it commits with the raise.
+        assert act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001}).status == "committed"
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_001, 10_001)
+
+
+def test_a_new_child_that_passes_its_parent_asks_the_parent_owner_and_raises_it(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c, kids=(("web", 6_000),))
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
+        body = {"name": "Software sales", "account_id": account(c, "6100"), "team": "sales", "parent_id": pid,
+                "amount": 4_500}
+        ask = act(c, OWNER, "budget_create", body)
+        assert (ask.status, ask.approver) == ("needs_approval", "human:ben")
+        H.approval_decide(c, "human:ben", ask.approval_id, "approved")
+        done = FA.approval_decided(c, ask.approval_id, AT)
+        assert done is not None and done.status == "committed"
+        sales = str(done.result["budget_id"])
+        assert _latest(c, sales).amount == 4_500 and _latest(c, pid).amount == 10_500
+
+
+def test_a_raise_asked_for_one_total_is_asked_again_when_the_total_has_moved(books):
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
+        grow = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert grow.status == "needs_approval"
+        # Sales come down while the approval waits, so web at 6,500 fits without a raise and the one asked for is void.
+        assert act(c, OWNER, "budget_update", {"budget_id": kids["sales"], "amount": 3_000}).status == "committed"
+        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        done = FA.approval_decided(c, grow.approval_id, AT)
+        assert done is not None and done.status == "needs_approval"
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_000, 10_000)
 
 
 def test_random_holds_never_let_children_pass_the_parent(books):
