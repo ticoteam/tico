@@ -3627,7 +3627,7 @@ class _Requester:
     def call(self, method, path, body=None, key=None, query=None):
         return self.api.call(method, path, body, key, query, delegate=self.ref or True)
 
-    def get(self, path, **query):
+    def get(self, path, /, **query):  # positional, as Client.get
         return self.call("GET", path, query=query)
 
     def post(self, path, body=None, key=None):

@@ -2,7 +2,7 @@
 // Records a scripted browser session to MP4 with a visible cursor.
 // Usage: node record.mjs <shots.json> --out out.mp4 [--size 1920x1080] [--headed | --headless] [--keep-webm] [--as-bot]
 // Steps are described in README.md. Headed is the default on Linux when DISPLAY is set.
-// --as-bot records your company's Tico as this bot (during a bot turn only); paths starting with / go to your Tico.
+// --as-bot checks that the Tico web app opens for this bot before it records. Its pages need a person, so it stops there.
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -105,6 +105,22 @@ export function botHeaders(url, hub, headers) {
   }
   if (origin !== hub.origin) return null;
   return { ...headers, authorization: `Bearer ${hub.token}` };
+}
+
+const APP_NEEDS_A_PERSON = 'the Tico web app needs a person, so a bot cannot record it: record the demo workspace '
+  + 'instead, without --as-bot (playbooks/screen-demo.md)';
+
+// Stops before any browser starts when this bot cannot open the web app. Its startup calls need a person
+// (backend/views.py human_only), so every page would say the server is not running.
+export async function checkBotCanOpenApp(hub, fetchImpl = fetch) {
+  let res;
+  try {
+    res = await fetchImpl(new URL('/api/me', hub.origin), { headers: { authorization: `Bearer ${hub.token}` } });
+  } catch (e) {
+    throw new Error(`cannot reach the Tico server at ${hub.origin}: ${e.cause?.message || e.message}`);
+  }
+  if (res.status === 403) throw new Error(APP_NEEDS_A_PERSON);
+  if (!res.ok) throw new Error(`the Tico server answered ${res.status} to /api/me: check HUB_API_URL and HUB_TOKEN`);
 }
 
 // Where a goto step points. With a Tico origin (--as-bot), "/path" is on the Tico server.
@@ -210,6 +226,7 @@ async function main() {
   if (args['as-bot']) {
     try {
       hub = hubAuth(process.env);
+      await checkBotCanOpenApp(hub);
     } catch (e) {
       fail(e.message, 2);
     }
