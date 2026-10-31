@@ -5,9 +5,11 @@ the transaction. Tico shows the last 4 only and never has the number or CVC.
 
 The card row holds the desired state (status, limit_amount) and what Mercury last confirmed (provider_status,
 provider_limit). One `card_sync` write per card at a time carries no values: the worker reads the latest desired state
-when it sends, so a superseded change is never sent, and a card's creation reads it too (a freeze, cancel or limit
-made before Mercury issued the card applies once it does). A lower limit or a cancel keeps the old reservation until
+when it sends, so a superseded change is never sent, and a card's creation reads it too: it is issued at its allocation
+as it stands then (a freeze made before then follows once it exists); a card left with no allocation is not issued
+(`WAITING` until it has one), and a cancelled one never is. A lower limit or a cancel keeps the old reservation until
 Mercury confirms it (`allocation_due`), so the budget never counts on room the card can still spend."""
+import sqlite3
 from typing import Any, cast
 
 from . import handlers
@@ -69,11 +71,33 @@ def queue(ctx: Ctx, card: Any, op: str, body: dict[str, object], key: str, aid: 
 
 def sync(ctx: Ctx, card_id: str, aid: str, by: str, after: str = "") -> None:
     """Bring Mercury to this card's desired state (once the card exists there). `after` names the write whose answer
-    left the card out of step (its own key, so it never folds into that write's)."""
+    left the card out of step (its own key, so it never folds into that write's). A card whose creation was held back
+    (`WAITING`: no allocation) is issued once it has a positive allocation."""
     card = SK.get(ctx.c, "fin_cards", card_id)
-    if card is not None and card["provider_card_id"]:
+    if card is None:
+        return
+    if card["provider_card_id"]:
         key = f"card-sync-{card_id}-after-{after}" if after else f"card-sync-{card_id}-{aid or ctx.at}"
         queue(ctx, card, "card_sync", {}, key, aid, by)
+        return
+    limit = issue_limit(ctx.c, card)
+    if str(card["sync_status"]) == WAITING and limit > 0 and not SK.card_create_waiting(ctx.c, card_id):
+        asked = SK.card_create_payload(ctx.c, card_id)
+        queue(ctx, card, "card_create", {"user_id": str(asked.get("user_id") or ""),
+                                         "nickname": str(asked.get("nickname") or card["nickname"] or ""),
+                                         "monthly": limit}, f"card-create-{card_id}-{aid or ctx.at}", aid, by)
+
+
+def issue_limit(c: sqlite3.Connection, card: Any) -> int:
+    """The limit a card is issued with: its allocation as it stands now (or a lower limit not yet confirmed), and 0
+    when it is cancelled or has no allocation, so it is not issued at all. (A frozen card with an allocation is issued
+    and then frozen, as any change made before Mercury has the card follows once it does.)"""
+    if str(card["status"]) == "cancelled" or not card["budget_id"]:
+        return 0
+    alloc = SB.allocation(c, str(card["budget_id"]), "card", str(card["id"]))
+    have = int(alloc["amount"]) if alloc is not None else 0
+    want = int(card["limit_amount"] or 0)
+    return max(0, min(have, want) if want > 0 else have)
 
 
 def used(ctx: Ctx, card: Any) -> int:
@@ -135,6 +159,7 @@ def created(ctx: Ctx, card_id: str, aid: str, outbox_id: str = "") -> None:
     confirmed(ctx, card_id, {}, aid, follow=outbox_id or f"create-{aid or ctx.at}")
 
 
+WAITING = "waiting"         # sync_status of a card whose creation was held back: no allocation yet
 UNCERTAIN = "uncertain"     # provider_status of a card whose creation was cut off: Mercury may or may not have it
 
 
@@ -392,5 +417,5 @@ PLANNERS: dict[str, handlers.Planner] = {
     "card_create": card_create, "card_update_limit": card_update_limit, "card_freeze": _state("card_freeze"),
     "card_unfreeze": _state("card_unfreeze"), "card_cancel": _state("card_cancel"), "card_resolve": card_resolve}
 
-__all__ = ["PLANNERS", "UNCERTAIN", "adopt", "candidates", "check_lower", "confirmed", "created", "limit_follows",
-           "not_issued", "queue", "sync", "uncertain", "used"]
+__all__ = ["PLANNERS", "UNCERTAIN", "WAITING", "adopt", "candidates", "check_lower", "confirmed", "created",
+           "issue_limit", "limit_follows", "not_issued", "queue", "sync", "uncertain", "used"]

@@ -488,7 +488,10 @@ def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> A
         if op == "card_create":
             if str(card["status"]) == "cancelled":
                 return Answer(200, {"skipped": "cancelled before it was issued"})
-            limit = int(card["limit_amount"] or body["monthly"])
+            with store.read() as c:
+                limit = cards.issue_limit(c, card)          # its allocation now, never a stale limit
+            if limit <= 0:
+                return Answer(200, {"skipped": "held back: the card has no allocation", "waiting": True})
             got = provider.create_card(str(body.get("user_id")), str(body.get("nickname")), limit)
             return Answer(got.status, {**got.body, "sent_limit": limit}) if got.ok else got
         return _sync_card(provider, card)
@@ -564,6 +567,10 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
                 "provider_recipient_id": str(answer.body.get("id") or ""), "updated_at": now})
             kept = {"recipient_id": body["recipient_id"]}
             SK.update(c, "fin_outbox", str(o["id"]), {"payload_json": SK.dump(kept)})
+        elif op == "card_create" and answer.body.get("waiting"):
+            # Not issued and not cancelled: it is issued once it has an allocation again (cards.sync).
+            SK.update(c, "fin_cards", card_id, {"sync_status": cards.WAITING, "updated_at": now,
+                                                "sync_error": "Not issued until it has an allocation"})
         elif op == "card_create" and not answer.body.get("skipped"):
             limit = int(answer.body.get("sent_limit") or body["monthly"])     # what was asked for, not a later edit
             SK.update(c, "fin_cards", card_id, {
@@ -621,16 +628,20 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         if status in ("awaiting_bank_approval", "submitted", "unknown") and p["provider_request_id"]:
             answer = provider.send_request(str(p["provider_request_id"]))
             with store.transaction() as c:
-                payments.polled(load(c, now), SK.get(c, "fin_payments", pid), answer)
+                ctx = load(c, now)
+                payments.polled(ctx, SK.get(c, "fin_payments", pid), answer)
                 if status == "unknown" and answer.ok:
                     SK.update(c, "fin_payments", pid, {"unknown_since": None})
+                banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))
             continue
         if status == "unknown":
             requests, complete = _requests(provider, account)
             with store.transaction() as c:
                 ctx = load(c, now)
                 row = SK.get(c, "fin_payments", pid)
-                if not payments.found(ctx, row, requests) and complete:
+                if payments.found(ctx, row, requests):
+                    banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))   # a debit taken in before it
+                elif complete:
                     payments.not_found(ctx, row)
             continue
         if status != "queued":
@@ -648,7 +659,9 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             claimed = SK.get(c, "fin_payments", pid)
         answer = provider.request_send_money(account, payments.request_body(claimed, rec))
         with store.transaction() as c:
-            payments.sent(load(c, now), SK.get(c, "fin_payments", pid), answer)
+            ctx = load(c, now)
+            payments.sent(ctx, SK.get(c, "fin_payments", pid), answer)
+            banking.payment_linked(ctx, SK.get(c, "fin_payments", pid))
     return []
 
 

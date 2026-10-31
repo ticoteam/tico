@@ -584,6 +584,8 @@ def sent(ctx: Ctx, pay: Any, answer: Answer) -> None:
 def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
     """A request's status from Mercury. Rejected or cancelled in Mercury ends it and releases its hold; approved
     becomes `submitted` until its bank transaction posts (finance/banking.py settles it)."""
+    if str(pay["status"]) in ("settled", "failed", "cancelled", "returned"):
+        return                      # its debit already settled it (or it ended) in this sweep: nothing to move back
     if not answer.ok:
         SK.update(ctx.c, "fin_payments", str(pay["id"]), {"next_try_at": _later(ctx, int(pay["attempts"]) + 1),
                                                           "attempts": int(pay["attempts"]) + 1, "updated_at": ctx.at})

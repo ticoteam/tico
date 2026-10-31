@@ -412,6 +412,18 @@ def payment_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE provider_request_id=?", (request_id,)).fetchone()
 
 
+def payment_debit(c: sqlite3.Connection, money_account_id: str, request_id: str) -> Any:
+    """The settled debit a payment request became, if a sync already took it in."""
+    return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND request_id=? AND pending=0 AND amount<0 "
+                     "ORDER BY created_at LIMIT 1", (money_account_id, request_id)).fetchone()
+
+
+def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int) -> list[Any]:
+    """Live payments from this account for this amount whose Mercury request is not known yet (a lost send answer)."""
+    return c.execute("SELECT * FROM fin_payments WHERE money_account_id=? AND amount=? AND COALESCE(provider_request_id, '')='' "
+                     "AND status IN ('unknown','sending') ORDER BY created_at", (money_account_id, amount)).fetchall()
+
+
 def payments_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | None = None) -> list[Any]:
     """Payments the worker owes a call: to send (queued), to resolve (unknown, or `sending` left by a crash), or to
     poll (waiting on the bank); with `connection_id`, only those paid from that connection's accounts."""

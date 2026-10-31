@@ -68,6 +68,34 @@ def test_changes_before_the_card_exists_apply_once_mercury_issues_it(books):
         assert _state(c, card_id) == ("frozen", "frozen", 15_000, 15_000, 15_000)
 
 
+def test_a_card_whose_allocation_goes_to_zero_before_it_is_issued_is_not_issued_until_it_has_one(books):
+    """PR review P1-b: allocation_set(0) before Mercury has the card froze it and freed its slice at once, yet the
+    create still issued a 200.00 card. Now nothing is issued while it has no allocation; a new allocation issues it
+    at that amount (and the freeze follows, as any change made before it existed)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card(books)
+    with books.transaction() as c:
+        zero = act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
+                                                "amount": 0})
+        assert zero.status == "committed", zero
+        assert _state(c, card_id)[0] == "frozen" and _state(c, card_id)[4] in (0, None)
+    sync_once(books, fake, HOURS[0])
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("create_card") == []                                       # no card with nothing reserved
+    with books.transaction() as c:
+        assert c.execute("SELECT sync_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "waiting"
+        again = act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
+                                                 "amount": 12_000})
+        assert again.status == "committed", again
+    sync_once(books, fake, HOURS[2])
+    sync_once(books, fake, HOURS[3])
+    assert fake.sent("create_card") == [("user-eve", 12_000)]
+    assert fake.sent("card_state") == [("card-eve", "freeze")]
+    with books.read() as c:
+        assert _state(c, card_id) == ("frozen", "frozen", 12_000, 12_000, 12_000)
+
+
 def test_a_card_cancelled_before_it_is_issued_is_never_created(books):
     fake = FakeMercury()
     connect(books, fake)

@@ -306,6 +306,8 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         return
     gl = _gl(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
+    if pay is None and t.amount < 0:
+        pay = _marked(ctx, money, t)
     if pay is not None and t.amount < 0:
         tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
         rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
@@ -343,6 +345,46 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         _posted(ctx, [fid], entry)
         return
     event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+
+
+def _marked(ctx: Ctx, money: Any, t: F.FeedTxn) -> Any:
+    """A payment whose send answer was lost, recognized by the `tico:<key>` its request carried, when the debit shows
+    it (in `note` or `externalMemo`) at the same amount on the same account: tied to the debit's request from now."""
+    shown = f"{t.note} {t.raw.get('externalMemo') or ''}"
+    for pay in SK.payments_unlinked(ctx.c, str(money["id"]), -t.amount):
+        if f"{payments.NOTE}{pay['idempotency_key']}" in shown:
+            if t.request_id:
+                SK.update(ctx.c, "fin_payments", str(pay["id"]), {"provider_request_id": t.request_id,
+                                                                  "updated_at": ctx.at})
+            return SK.get(ctx.c, "fin_payments", str(pay["id"]))
+    return None
+
+
+def payment_linked(ctx: Ctx, pay: Any) -> None:
+    """A payment just tied to its Mercury request (found again after a lost send answer). A debit for that request a
+    sync already took in posted as an unknown spend: it posts again as the payment (its line, tags and vendor),
+    settling it and taking in its hold, once."""
+    rid = str(pay["provider_request_id"] or "")
+    if not rid or str(pay["status"]) in ("settled", "failed", "cancelled", "returned"):
+        return
+    row = SK.payment_debit(ctx.c, str(pay["money_account_id"]), rid)
+    if row is None or str(row["status"]) == "ignored" or str(row["provider_status"] or "") in (*F.VOID, F.REVERSED):
+        return
+    if row["reconciliation_id"]:
+        event(ctx, CATEGORY_EVENT, str(row["id"]), {"feed_id": str(row["id"]),
+                                                    "why": "its payment was found after it was reconciled"},
+              f"pay:{pay['id']}")
+        return
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    if money is None:
+        return
+    if row["entry_id"]:
+        _unpost(ctx, row, "its payment was found")
+        row = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
+    t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
+                  txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
+                  counterparty=str(row["counterparty"]), description=str(row["description"]), request_id=rid)
+    _settle(ctx, row, money, None, t)
 
 
 def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:

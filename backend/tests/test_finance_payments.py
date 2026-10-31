@@ -597,3 +597,70 @@ def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_i
         assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
         assert counted(c) == (0, 0)
         assert c.execute("SELECT counted_json FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "[]"
+
+
+def _lines(c, source="bank"):
+    return sorted(tuple(r) for r in c.execute(
+        "SELECT a.code, l.amount FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id JOIN fin_entries e "
+        "ON e.id=l.entry_id WHERE e.source=?", (source,)))
+
+
+def _lost_send(books, fake, at=HOURS[1]):
+    """A 500.00 payment on 6100 whose send Mercury accepted but whose answer never came back: unknown."""
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
+                                                "tags": {"team": "eng"}, "money_account_id": _checking(c)})
+        pid = str(made.result["payment_id"])
+    fake.queue["request_send_money"] = [Answer(None, {})]
+    sync_once(books, fake, at)
+    with books.read() as c:
+        key = c.execute("SELECT idempotency_key FROM fin_payments WHERE id=?", (pid,)).fetchone()[0]
+    return pid, key
+
+
+def _debit(fake, txn_id, request_id, event_id, **extra):
+    fake.txns[txn_id] = {**MERCURY["txn_bank_fee"], "id": txn_id, "amount": -500.0, "kind": "outgoingPayment",
+                         "counterpartyName": "Acme Supplies", "requestId": request_id,
+                         "postedAt": "2026-10-16T10:00:00Z", **extra}
+    fake.events_list.append({"id": event_id, "resourceType": "transaction", "resourceId": txn_id,
+                             "operationType": "create", "resourceVersion": 1})
+
+
+def test_a_lost_send_whose_debit_posts_before_it_is_found_settles_on_its_line_once(books):
+    """PR review P1-a: an accepted send whose answer was lost, its request approved and its debit posted before the
+    recovery found it. The debit first posts as an unknown spend (6900); once found, it posts again as the payment
+    (6100, Acme Supplies), the payment settles and its hold is taken in, once."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _lost_send(books, fake)
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
+    _debit(fake, "txn-lost", "req-9", "evt-lost")                                # no note: only its request id
+    for at in HOURS[2:5]:
+        sync_once(books, fake, at)
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
+            == ("settled", "req-9")
+        assert _holds(c) == [(50_000, "settled")]
+        # The 6900 posting is reversed; net, the debit sits on the payment's line.
+        net: dict[str, int] = {}
+        for code, amount in _lines(c):
+            net[code] = net.get(code, 0) + amount
+        assert {k: v for k, v in net.items() if v} == {"1000": -50_000, "6100": 50_000}
+        tagged = c.execute("SELECT t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id JOIN fin_accounts a "
+                           "ON a.id=l.account_id WHERE a.code='6100' AND t.kind='team'").fetchall()
+        assert [r[0] for r in tagged] == ["eng"]
+
+
+def test_a_debit_carrying_a_lost_sends_key_is_the_payment_when_it_arrives(books):
+    """PR review P1-a (the marker): a debit whose note carries the payment's tico:<key> is that payment as it
+    arrives, before any request is found: it posts once on the payment's line."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _lost_send(books, fake)
+    _debit(fake, "txn-marked", "req-10", "evt-marked", note=f"tico:{key}")
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
+            == ("settled", "req-10")
+        assert _holds(c) == [(50_000, "settled")] and _lines(c) == [("1000", -50_000), ("6100", 50_000)]
