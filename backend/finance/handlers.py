@@ -434,7 +434,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and amount < 0:
         raise invalid("a budget amount is 0 or more")
     effective = _effective(ctx, old, V.opt_day(p, "effective_from"))
-    if amount is not None:
+    route = figure_route(ctx, who, old.id) if amount is not None else ""
+    if amount is not None and not route:
         _fit(ctx, who, old, effective, amount)
 
     def apply(aid: str) -> Result:
@@ -443,7 +444,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             if amount is not None else None
         ctx.changed()
         return {"budget_id": old.id, "version": version}
-    return Plan(K.default_gate(ctx.org, who, "budget_update"), f"Change budget {old.name}" +
+    return Plan(HIDDEN_GATE if route else K.default_gate(ctx.org, who, "budget_update"), f"Change budget {old.name}" +
                 (f" to {amount / 100:.2f} {ctx.book.base_currency} from {effective}" if amount is not None else ""),
                 apply, {"effective_from": effective}, {"effective_from": effective} if amount is not None else {})
 
@@ -465,11 +466,16 @@ def fit_reason(ctx: Ctx, who: str, budget_id: str, approver: bool = False) -> st
     return f"it does not fit: {b.name} has {true} left"
 
 
-def _route(ctx: Ctx, who: str, budget_id: str, card: Any = None) -> str:
-    """How an allocation the actor asks for is decided. Where their figure for the budget or a parent (or, for a card,
-    its own spend) is the true one, "" (decided here, as before). Where it is not, the amount must not tell them the
-    difference, so every amount gets one outcome: "hidden" (an approver decides on the true figures) or "request" (they
-    lack finance.budgets, so the gate sends it to their manager)."""
+# The gate for an amount whose outcome must not depend on a figure the actor cannot check (see figure_route): an owner
+# decides it on the true figures at approval.
+HIDDEN_GATE = K.Gate("needs_approval", "owner", "default:figures-hidden")
+
+
+def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None) -> str:
+    """How an amount the actor asks for on a budget (a set-aside, a card, a budget change) is decided. Where their figure
+    for the budget or a parent (or, for a card, its own spend) is the true one, "" (decided here, as before). Where it is
+    not, the amount must not tell them the difference, so every amount gets one outcome: "hidden" (an approver decides
+    on the true figures) or "request" (they lack finance.budgets, so the gate sends it to their manager)."""
     b = ctx.budgets().get(budget_id)
     if b is None or ctx.deciding:
         return ""
@@ -500,7 +506,7 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             raise invalid("a card's allocation is on its own budget")
         if str(card["status"]) == "cancelled":
             raise FinanceError(CONFLICT, "that card is cancelled")
-    route = _route(ctx, who, str(p.get("budget_id") or ""), card)
+    route = figure_route(ctx, who, str(p.get("budget_id") or ""), card)
     if card is not None and not route:
         from .cards import check_lower
         check_lower(ctx, card, V.amount(p), who)
@@ -537,8 +543,12 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
             from .cards import limit_follows          # a card's provider limit is its allocation (§8.2)
             limit_follows(ctx, target, amount, aid, who, lowered)
         return {"allocation_id": made}
-    gate = K.Gate("needs_approval", "owner", "default:figures-hidden") if route == "hidden" else \
-        K.default_gate(ctx.org, who, "allocation_set")
+    if route == "hidden":
+        gate = HIDDEN_GATE
+    elif route == "request":
+        gate = K.Gate("needs_approval", "manager", "default:budget-request")
+    else:
+        gate = K.default_gate(ctx.org, who, "allocation_set")
     return Plan(gate, f"Set aside {amount / 100:.2f} of {b.name} for {kind} {target}", apply)
 
 

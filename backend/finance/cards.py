@@ -299,9 +299,10 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount <= 0:
         raise invalid("a card's monthly limit is more than 0")
     card_id = SL.new_id()
-    alloc = handlers.allocation_plan(ctx, who, {"budget_id": V.text(p, "budget_id", 80), "target_kind": "card",
-                                                "target_id": card_id, "amount": amount})
     budget_id = V.text(p, "budget_id", 80)
+    route = handlers.figure_route(ctx, who, budget_id)
+    alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
+                                                "amount": amount}, route)
     nickname = V.opt_text(p, "nickname", 50) or holder.split(":", 1)[-1]
     user = V.text(p, "provider_user_id", 120)
 
@@ -315,7 +316,8 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         queue(ctx, SK.get(ctx.c, "fin_cards", card_id), "card_create",
               {"user_id": user, "nickname": nickname, "monthly": amount}, f"card-create-{card_id}", aid, who)
         return {"card_id": card_id, "sync_status": "pending"}
-    return Plan(K.default_gate(ctx.org, who, "card_create"), f"Issue a card to {holder} with {amount / 100:.2f} a "
+    gate = alloc.gate if route else K.default_gate(ctx.org, who, "card_create")
+    return Plan(gate, f"Issue a card to {holder} with {amount / 100:.2f} a "
                 f"month from {ctx.budgets()[budget_id].name}", apply,
                 facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": "person",
                        "holder.kind": "bot" if holder in ctx.org.bots else "human"})
@@ -330,14 +332,18 @@ def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     amount = V.amount(p)
     if amount <= 0:
         raise invalid("a card's monthly limit is more than 0; freeze or cancel it instead")
-    check_lower(ctx, card, amount, who)
-    alloc = handlers.allocation_plan(ctx, who, {"budget_id": str(card["budget_id"]), "target_kind": "card",
-                                                "target_id": str(card["id"]), "amount": amount})
+    budget_id = str(card["budget_id"] or "")
+    route = handlers.figure_route(ctx, who, budget_id, card)
+    if not route:
+        check_lower(ctx, card, amount, who)
+    alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card",
+                                                "target_id": str(card["id"]), "amount": amount}, route)
 
     def apply(aid: str) -> Result:
         alloc.apply(aid)                            # the limit follows the allocation (`limit_follows`)
         return {"card_id": str(card["id"]), "limit": amount}
-    return Plan(K.default_gate(ctx.org, who, "card_update_limit"), f"Set card ••{card['last4'] or '----'}'s limit to "
+    gate = handlers.HIDDEN_GATE if route else K.default_gate(ctx.org, who, "card_update_limit")
+    return Plan(gate, f"Set card ••{card['last4'] or '----'}'s limit to "
                 f"{amount / 100:.2f} a month", apply,
                 facts={"amount": amount, "holder": str(card["holder"]), "budget_id": str(card["budget_id"] or "")})
 
