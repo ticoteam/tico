@@ -228,6 +228,14 @@ def attach(c: sqlite3.Connection, book_id: str, kind: str, subject_id: str, file
             for f in file_ids if f not in have]
 
 
+def held_files(c: sqlite3.Connection, file_ids: Sequence[str]) -> set[str]:
+    """Which of these files are attached anywhere in the books, unmatched receipts included."""
+    if not file_ids:
+        return set()
+    return {str(r["file_id"]) for r in c.execute(f"SELECT DISTINCT file_id FROM fin_attachments WHERE file_id IN "
+                                                 f"({_marks(file_ids)})", tuple(file_ids))}
+
+
 def unmatched_files(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
     """Receipts uploaded with nothing to attach to yet (subject `unmatched`)."""
     return c.execute("SELECT * FROM fin_attachments WHERE book_id=? AND subject_kind='unmatched' "

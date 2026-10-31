@@ -12,10 +12,13 @@ lists it in the Bookkeeper's queue until a bill takes the file (`bill_create` wi
 vendor and lines, which only reading the file gives, so the Bookkeeper makes the draft, not this path.
 
 With no bills email set, or one no inbox receives, nothing is kept here and uploads still work. A file Finance did not
-take (`needs_entry`) or bytes that could not be fetched (`failed`) are listed by the Bookkeeper's hourly check."""
+take (`needs_entry`) is listed by the Bookkeeper's hourly check until Finance holds it (`reconcile`: attached anywhere,
+or kept as an unmatched receipt, makes it `filed`). A fetch that fails is tried again with backoff; after MAX_TRIES it
+is `failed`, listed in one check, then `reported`: never listed or woken on again."""
 import hashlib
 import re
 import urllib.parse
+from email.utils import getaddresses
 from types import SimpleNamespace
 
 from fastapi import Request
@@ -38,8 +41,9 @@ READABLE = ("application/pdf", "image/png", "image/jpeg", "image/webp", "image/h
 SHA256 = re.compile(r"[0-9a-f]{64}")
 PER_MESSAGE = 10            # attachments one email contributes
 PER_DRAIN = 5               # bills one inbound tick fetches
-MAX_TRIES = 5               # a fetch that keeps failing stops at `failed`, listed for the Bookkeeper
-STATES = ("waiting", "filed", "needs_entry", "failed")
+MAX_TRIES = 5               # a fetch that keeps failing stops at `failed`, listed for the Bookkeeper once
+BACKOFF_MINUTES = (1, 10, 60, 360)   # the wait after the 1st, 2nd, ... failed fetch before the next try
+STATES = ("waiting", "filed", "needs_entry", "failed", "reported")
 
 
 def _clean(value, limit):
@@ -65,13 +69,21 @@ def view(c):
     return {"bills_email": address, "inbox_id": inbox_for(c, address)}
 
 
+def recipients(to):
+    """The addresses a message was sent to, lower-cased, parsed from its To header (a string or a list of them):
+    display names and comments are dropped, so only a real recipient address can match."""
+    fields = [str(x) for x in to] if isinstance(to, (list, tuple)) else [str(to or "")]
+    return {addr.strip().lower() for _, addr in getaddresses(fields) if addr.strip()}
+
+
 def emailed(c, item):
     """An inbound message, inside its ingest transaction: each PDF or image attached to an email that reached the bills
-    address is one row, once. Returns how many rows are new."""
+    address (its inbox, or the exact address among the parsed recipients) is one row, once. Returns how many rows are
+    new."""
     if item.get("kind") != "email" or item.get("spam") or not item.get("inbox_id"):
         return 0
     address = bills_email(c)
-    if not address or (item["inbox_id"] != inbox_for(c, address) and address not in str(item.get("to") or "").lower()):
+    if not address or (item["inbox_id"] != inbox_for(c, address) and address not in recipients(item.get("to"))):
         return 0
     attachments = item.get("attachments") if isinstance(item.get("attachments"), list) else []
     received = item.get("received_at")
@@ -96,17 +108,44 @@ def emailed(c, item):
     return made
 
 
-def waiting(c, limit=PER_DRAIN):
-    return [dict(r) for r in c.execute("SELECT * FROM bills_inbound WHERE state='waiting' AND tries<? "
-                                       "ORDER BY updated_at LIMIT ?", (MAX_TRIES, limit))]
+def waiting(c, limit=PER_DRAIN, at=None):
+    """Waiting bills whose next fetch is due: a row that failed n times waits BACKOFF_MINUTES[n-1] since its last try."""
+    at = at or H.now()
+    due = " ".join(f"WHEN {n} THEN ?" for n in range(1, len(BACKOFF_MINUTES) + 1))
+    cutoffs = [H.shift(at, minutes=-m) for m in BACKOFF_MINUTES]
+    return [dict(r) for r in c.execute(f"SELECT * FROM bills_inbound WHERE state='waiting' AND tries<? AND "
+                                       f"updated_at <= CASE tries WHEN 0 THEN ? {due} ELSE ? END "
+                                       "ORDER BY updated_at LIMIT ?", (MAX_TRIES, at, *cutoffs, cutoffs[-1], limit))]
+
+
+def reconcile(c):
+    """Close intake work Finance has since taken: a `needs_entry` bill whose file is now attached anywhere in the
+    books (or kept as an unmatched receipt, which Finance's own queue lists) becomes `filed`. How many closed."""
+    from .finance import reads as FR
+    rows = {r["file_id"]: r["id"] for r in c.execute("SELECT id, file_id FROM bills_inbound WHERE state='needs_entry' "
+                                                     "AND file_id IS NOT NULL ORDER BY updated_at LIMIT 500")}
+    held = FR.files_in_books(c, list(rows))
+    for file_id in held:
+        c.execute("UPDATE bills_inbound SET state='filed', code='', updated_at=? WHERE id=?", (H.now(), rows[file_id]))
+    return len(held)
 
 
 def for_bookkeeper(c, limit=50):
     """Bills from the address the Bookkeeper enters by hand: Finance did not take them as they came, or their bytes
-    could not be fetched."""
+    could not be fetched (listed once, see `listed`)."""
     return [dict(r) for r in c.execute("SELECT id, received_at, sender, subject, name, file_id, code, state "
                                        "FROM bills_inbound WHERE state IN ('needs_entry','failed') "
                                        "ORDER BY received_at LIMIT ?", (limit,))]
+
+
+def listed(c, ids):
+    """Rows a delivered Books check listed: a `failed` one is `reported` now, so it is not listed or woken on again.
+    How many."""
+    ids = [i for i in ids if i][:200]
+    if not ids:
+        return 0
+    return c.execute("UPDATE bills_inbound SET state='reported', updated_at=? WHERE state='failed' AND id IN (%s)"
+                     % ",".join("?" * len(ids)), (H.now(), *ids)).rowcount
 
 
 def labels(c, file_ids):
@@ -149,8 +188,9 @@ def file_bill(c, files, row, blob_id, digest, size):
 
 
 def drain(service, store, blobs, files):
-    """Fetch and file waiting bills (the inbound loop, after its sync). Network first, then one short transaction per
-    bill; a fetch that fails counts a try and stops at `failed` after MAX_TRIES."""
+    """Fetch and file waiting bills that are due (the inbound loop, after its sync). Network first, then one short
+    transaction per bill; a fetch that fails counts a try, waits out its backoff and stops at `failed` after
+    MAX_TRIES."""
     from .postal_mail import Unavailable, _get_bytes
     if blobs is None or files is None or getattr(service, "off", True):
         return 0

@@ -37,7 +37,9 @@ hub finance action fa_123
 
 A result is kept to about 4,000 tokens. `limit` (search, inbox) or `top_n` (reports) raises that to about 16,000. A
 longer list keeps its first rows and ends with one row labelled "Other · n" that counts, and for reports adds up, the
-rest; a paged list's `next_cursor` carries on from the last row shown.
+rest; a paged list's `next_cursor` carries on from the last row shown. Period columns are never folded. A row too
+big on its own keeps its ids and amounts and has its long text and nested lists cut; a result that still does not fit
+comes back as `{"error": "too_big", "chars", "cap"}`.
 
 ## Card fill
 

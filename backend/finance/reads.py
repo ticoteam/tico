@@ -1135,6 +1135,12 @@ usage_reconcile = usage.reconcile
 is_set_up = _context.is_set_up
 
 
+def files_in_books(c: sqlite3.Connection, file_ids: Sequence[str]) -> set[str]:
+    """Which of these Library files Finance holds: attached to a bill, invoice, row or entry, or kept as an unmatched
+    receipt. Keeper code uses it to close intake work whose file has since been filed."""
+    return SAP.held_files(c, [str(f) for f in file_ids if f][:500])
+
+
 def events_waiting(c: sqlite3.Connection) -> bool:
     """Whether a `finance.*` event waits to be handed to rules and automations."""
     return bool(SU.undrained(c, 1))
