@@ -20,7 +20,12 @@ MAX_WAIT = 30.0                       # seconds one 429 may make us wait
 TRIES_429 = 3
 PAGE = 500
 IP_HINT = "Mercury refused the write: add this server's IP address to the token's allowlist in Mercury"
-Opener = Callable[[urllib.request.Request, float], Any]
+
+
+class Opener(Protocol):
+    """urlopen's shape: the request, then the timeout by keyword (never positionally: urlopen's 2nd arg is data)."""
+
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -75,7 +80,7 @@ class Mercury:
         query = urllib.parse.urlencode([(k, str(v)) for k, v in (params or {}).items() if v not in (None, "")],
                                        doseq=True)
         url = self._base + path + (f"?{query}" if query else "")
-        data = json.dumps(body, default=str).encode() if body is not None else None
+        data = json.dumps(body, default=_json_default).encode() if body is not None else None
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -83,7 +88,7 @@ class Mercury:
             request = urllib.request.Request(url, data=data, method=method, headers=headers)
             send = self._opener or cast(Opener, urllib.request.urlopen)
             try:
-                with send(request, TIMEOUT) as response:
+                with send(request, timeout=TIMEOUT) as response:
                     return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < TRIES_429:
@@ -159,6 +164,11 @@ class Mercury:
 
     def request_send_money(self, account_id: str, body: Mapping[str, object]) -> Answer:
         return self._call("POST", f"/account/{urllib.parse.quote(account_id)}/request-send-money", body=body)
+
+
+def _json_default(value: object) -> object:
+    """Decimal amounts go out as JSON numbers (Mercury takes 0.01 steps); anything else as its text."""
+    return float(value) if isinstance(value, Decimal) else str(value)
 
 
 def _parse(raw: bytes) -> dict[str, Any]:
