@@ -1159,7 +1159,11 @@ def clearing(ctx: Ctx, who: str) -> L.Account:
 
 
 def feed_paid(ctx: Ctx, row: Any, kind: str, doc: Any, entry_id: str) -> None:
-    """A feed row the books posted straight to AP or AR (match_feed) settles its document."""
+    """A feed row the books posted straight to AP or AR (match_feed) settles its document. A Stripe row never gets
+    here: its sale settles on its gross through stripe_post, so one that did is refused, not settled at its net."""
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    if money is not None and str(money["kind"]) == "stripe":
+        raise invalid("a Stripe sale settles through its own posting, on its gross")
     settle(ctx, kind, str(doc["id"]), amount=abs(int(row["amount"])), day=str(row["txn_date"]), from_kind="feed",
            from_id=str(row["id"]), entry_id=entry_id)
 

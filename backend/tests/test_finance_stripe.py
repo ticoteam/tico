@@ -12,10 +12,11 @@ import pytest
 
 from backend import trigger_presets as P
 from backend.finance import actions as FA
-from backend.finance import banking, stripe_sync, sync
+from backend.finance import banking, documents, stripe_sync, sync
 from backend.finance.context import load
 from backend.finance.store import banking as store_banking
 from backend.finance.core import feeds as F
+from backend.finance.core.errors import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_api import api, get, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -635,6 +636,34 @@ def test_a_refund_of_an_invoice_paid_sale_takes_its_share_off_what_the_invoice_h
     with books.read() as c:
         assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050")) == (4_000, -10_000, 320, 5_680)
     assert _invoice_row(books, iid) == (6_000, "partial")
+
+
+def test_a_stripe_sale_never_settles_an_invoice_at_its_net_because_bank_matching_does_not_see_it(books):
+    """A $100 sale with a $3 fee and an open invoice of its net, $97, from the customer the charge names. A Stripe sale
+    matches its gross only, so no invoice of the net is paid and the invoice stays owed."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 9_700)
+    stripe.add("charge", 10_000, 300, "Acme Retail")
+    stripe_pass(books, stripe)
+    assert _invoice_row(books, iid) == (0, "sent")
+    with books.read() as c:
+        assert _every_entry_balances(c)
+
+
+def test_feed_paid_refuses_a_stripe_row_rather_than_settling_it_at_its_net(books):
+    """feed_paid is the bank-row path. A Stripe row handed to it is refused before anything settles."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    stripe.add("charge", 10_000, 300, "Acme Retail")
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        row = _feed(c, "txn_0001")
+        with pytest.raises(FinanceError) as refused:
+            documents.feed_paid(load(c, AT), row, "invoice", {"id": "inv_none", "customer_id": ""}, "entry_none")
+        assert refused.value.code == "invalid"
+    with books.read() as c:
+        assert _sum(c, "1200") == 0
 
 
 def test_a_held_sale_applied_in_full_by_hand_cannot_be_categorized_again(books):
