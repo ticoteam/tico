@@ -1,0 +1,35 @@
+/* ui/styles/org-rule-holds.css — Org rule checks (ui/app/org-rule-holds.js): a review task's held outputs, the held
+   note in a chat, and the checks line in the Rules header. Colours are the theme's tokens, so light and dark follow. */
+.rule-holds{display:flex;flex-direction:column;gap:12px;margin:0 0 16px}
+.rh-card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px;display:flex;
+  flex-direction:column;gap:12px;min-width:0}
+.rh-card header{display:flex;align-items:center;gap:10px;min-width:0}
+.rh-to{font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rh-pill{font-size:var(--t-xs);font-weight:500;padding:2px 9px;border-radius:999px;flex:none}
+.rh-blk{background:var(--fail-bg);color:var(--fail)}
+.rh-esc{background:var(--wait-bg);color:var(--wait-ink)}
+.rh-lbl{font-size:var(--t-label);letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);
+  font-weight:600;margin-bottom:6px}
+.rh-msg{background:var(--bg);border:1px solid var(--line);border-radius:10px;padding:10px 12px;font-size:var(--t-base);
+  line-height:var(--lh-read);white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto}
+.rh-rule{border-left:2px solid var(--accent);padding:2px 0 2px 12px;font-size:var(--t-base);line-height:var(--lh)}
+.rh-rule+.rh-rule{margin-top:6px}
+.rh-why{font-size:var(--t-base);line-height:var(--lh);white-space:pre-wrap;overflow-wrap:anywhere}
+.rh-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.rh-acts .spacer{flex:1}
+.rh-btn{text-decoration:none;display:inline-flex;align-items:center}
+.rh-done{margin:0;font-size:var(--t-sm)}
+.rh-err{margin:0;font-size:var(--t-sm);color:var(--fail)}
+@media (max-width:760px){
+  .rh-card{padding:14px}
+  .rh-acts{gap:6px}
+  .rh-acts .primary{flex:1 1 100%;order:3}
+}
+/* A held reply in a chat: one quiet line with a dot, never the text. */
+.rh-note{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.rh-note-dot{width:7px;height:7px;border-radius:50%;background:var(--fail);flex:none;align-self:center}
+.rh-note .chat-meta{margin-left:auto}
+/* The Rules header line. */
+.ru-checks{font-size:var(--t-sm);margin-left:12px;white-space:nowrap}
+.ru-checks.warn{color:var(--wait-ink)}
+@media (max-width:760px){.ru-checks{display:block;margin:4px 0 0;white-space:normal}}

@@ -205,6 +205,7 @@ function taskPropFocus(d) {
 function taskModalBind(d, task, full = false) {
   tfAdopt(d, task);
   taskPagesAdopt(d, task);      // the task's pages, as cards at its top (ui/app/pages.js)
+  ruleHoldsAdopt(d, task);      // a rule review's held outputs and their actions (ui/app/org-rule-holds.js)
   d.dataset.version = String(task.version ?? '');
   if (!d.liveTask || String(d.liveTask.id) !== String(task.id) || Number(task.version) >= Number(d.liveTask.version)) d.liveTask = task;
   if (d.taskRail?.id !== String(task.id)) d.taskRail = {id: String(task.id), open: new Set()};
@@ -1061,6 +1062,7 @@ function hubModalHTML(t, it, opts = {}) {
     <div class="tmodal-body task-layout">
       <div class="tmodal-main">
       <section class="task-pages" data-task-pages aria-label="Pages" hidden></section>
+      <section class="rule-holds" data-rule-holds aria-label="Held by a rule" hidden></section>
       ${askToYou && qcardItem(t) ? qcardBoxHTML(t) : waitLabel && waitText ? (askToYou ? `<div class="task-ask"${taskQcardWait(t)}><div class="lbl">${esc(waitLabel)}</div><div class="task-ask-body">${esc(waitText)}</div></div>`
         : `<p class="task-wait"><span class="lbl">${esc(waitLabel)}</span> ${esc(waitText)}</p>`) : ''}
       ${taskDeferredHTML(t)}
