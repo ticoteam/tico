@@ -396,6 +396,19 @@ def _cards_fit_child(ctx: Ctx, who: str, child_id: str, parent: B.Budget, effect
     _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
 
 
+def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget) -> None:
+    """A budget that comes back active adds its current amount from today on, so it must fit as a version of today
+    would: among its siblings (`_fit`), over its own cards and children, and within its parent's cards and children."""
+    today = dates.day(ctx.today)
+    current = B.amount_at(SB.versions(ctx.c, [b.id])[b.id], today)
+    if not current:
+        return
+    _fit(ctx, who, b, today.isoformat(), current)
+    _cards_fit(ctx, who, b, today.isoformat(), current)
+    if b.parent_id:
+        _cards_fit_child(ctx, who, b.id, ctx.budgets()[b.parent_id], today.isoformat(), current)
+
+
 def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
                  effective: str) -> None:
     """On every day from `effective` that a version of `b` or of a child takes effect, `b`'s cards and its children's
@@ -509,11 +522,16 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     effective = _effective(ctx, old, V.opt_day(p, "effective_from"))
     if amount == 0 and dates.day(effective) > dates.day(ctx.today):
         raise invalid("a pause takes effect now: leave effective_from out")
+    reactivates = new.active and not old.active
     if amount is not None:
+        if reactivates and dates.day(effective) > dates.day(ctx.today):
+            raise invalid("a budget that comes back active takes its amount from today: leave effective_from out")
         _fit(ctx, who, old, effective, amount)
         _cards_fit(ctx, who, old, effective, amount)
         if old.parent_id:
             _cards_fit_child(ctx, who, old.id, ctx.budgets()[old.parent_id], effective, amount)
+    elif reactivates:
+        _reactivate_fit(ctx, who, old)
 
     def apply(aid: str) -> Result:
         SB.update_budget(ctx.c, new, ctx.at)

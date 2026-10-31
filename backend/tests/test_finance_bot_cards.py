@@ -559,6 +559,42 @@ def test_a_child_budget_cannot_push_its_parents_cards_past_the_parent(books):
         assert ok.status == "committed"                                                 # 400 + 100
 
 
+def test_a_child_that_comes_back_active_must_fit_its_parents_cards(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools 500.00, decline; coder and seller cards 200.00 each
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        eng = str(act(c, OWNER, "budget_create", {"name": "Eng tools", "account_id": account(c, "6100"), "team": "eng",
+                                                  "parent_id": budget, "amount": 20_000}).result["budget_id"])
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        # 400.00 of cards on Tools; nothing active under it
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 50_000}).status == "committed"
+        back = act(c, OWNER, "budget_update", {"budget_id": eng, "active": True})     # 400 + 200
+        assert (back.status, back.code) == ("failed", "invalid") and "reserve 600.00" in back.reason
+        # Its amount from a later day cannot come with the change: the days before it would go unchecked.
+        later = act(c, OWNER, "budget_update", {"budget_id": eng, "active": True, "amount": 10_000,
+                                                "effective_from": "2026-11-01"})
+        assert (later.status, later.code) == ("failed", "invalid") and "takes its amount from today" in later.reason
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": True}).status == "committed"
+
+
+def test_a_child_that_comes_back_active_must_fit_among_its_siblings(books):
+    with books.transaction() as c:
+        budget = _budget(c, amount=50_000)           # Tools 500.00, decline, no cards
+        eng = str(act(c, OWNER, "budget_create", {"name": "Acme tools", "account_id": account(c, "6100"),
+                                                  "vendor": "Acme Cloud", "parent_id": budget,
+                                                  "amount": 20_000}).result["budget_id"])
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        ops = act(c, OWNER, "budget_create", {"name": "Globex tools", "account_id": account(c, "6100"),
+                                              "vendor": "Globex", "parent_id": budget, "amount": 35_000})
+        assert ops.status == "committed"             # Acme tools is inactive, so Globex tools fits beside it: 350.00
+        back = act(c, OWNER, "budget_update", {"budget_id": eng, "active": True})                    # 350 + 200
+        assert (back.status, back.code) == ("failed", "invalid") and "overlaps" not in back.reason
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 10_000}).status == "committed"  # 350 + 100
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": True}).status == "committed"
+
+
 def test_a_card_number_entered_as_a_tax_id_is_refused_before_it_is_sealed(books):
     with books.transaction() as c:
         before = c.execute("SELECT count(*) FROM fin_contacts").fetchone()[0]
