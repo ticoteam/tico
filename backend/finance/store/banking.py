@@ -460,6 +460,15 @@ def payments_due(c: sqlite3.Connection, at: str, most: int, connection_id: str |
                      "created_at LIMIT ?", (at, *([connection_id] if connection_id else []), most)).fetchall()
 
 
+def payments_poll_now(c: sqlite3.Connection, connection_id: str, at: str) -> int:
+    """Make this connection's payments waiting on the bank due for a poll now (Sync now): a decision made in Mercury
+    lands on the sync, not on the next poll. How many."""
+    return c.execute("UPDATE fin_payments SET next_try_at=? WHERE status IN ('awaiting_bank_approval','submitted') AND "
+                     "provider_request_id IS NOT NULL AND provider_request_id<>'' AND (next_try_at IS NULL OR "
+                     "next_try_at>?) AND money_account_id IN (SELECT id FROM fin_money_accounts WHERE connection_id=?)",
+                     (at, at, connection_id)).rowcount
+
+
 def payment_claim(c: sqlite3.Connection, payment_id: str, at: str, stuck_at: str) -> bool:
     """Take a queued payment for one send: only one worker wins, and a cancel can no longer take it back. If nothing
     records an answer by `stuck_at`, the worker finds it again as cut off."""

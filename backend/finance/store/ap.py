@@ -292,6 +292,19 @@ def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
                      (entry_id,)).fetchall()
 
 
+def documents_paid_by(c: sqlite3.Connection, entry_ids: Sequence[str]) -> dict[str, list[Any]]:
+    """The live settlements each entry made, with the document's kind, id and number: what a "Pays bill" entry pays."""
+    if not entry_ids:
+        return {}
+    out: dict[str, list[Any]] = {}
+    for r in c.execute(f"SELECT s.entry_id, s.to_kind, s.to_id, COALESCE(b.number, i.number, '') AS number "
+                       f"FROM fin_settlements s LEFT JOIN fin_bills b ON s.to_kind='bill' AND b.id=s.to_id "
+                       f"LEFT JOIN fin_invoices i ON s.to_kind='invoice' AND i.id=s.to_id WHERE s.entry_id IN "
+                       f"({_marks(entry_ids)}) AND s.voided_at IS NULL ORDER BY s.created_at, s.id", list(entry_ids)):
+        out.setdefault(str(r["entry_id"]), []).append(r)
+    return out
+
+
 def settled(c: sqlite3.Connection, kind: str, doc_id: str) -> int:
     row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_settlements WHERE to_kind=? AND to_id=? AND "
                     "voided_at IS NULL", (kind, doc_id)).fetchone()

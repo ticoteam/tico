@@ -224,10 +224,11 @@ function finDocRail(d, full) {
 function finDocActs(d) {
   const kind = FIN.doc.kind;
   if (!finCaps()?.may(FIN_DOC[kind].right)) return [];
-  // Scheduling sends money, so it also needs finance.pay.
-  const pay = finCaps().may('finance.pay') ? [['schedule', 'Schedule']] : [];
+  // Scheduling sends money, so it also needs finance.pay. A scheduled bill moves to another day until its payment is live.
+  const may = finCaps().may('finance.pay'), pay = may ? [['schedule', 'Schedule']] : [];
+  const again = may && !FIN_PAY_LIVE.has(d.payment?.status) ? [['schedule', 'Reschedule']] : [];
   if (kind === 'bill') return {draft: [['void', 'Void'], ['approve', 'Approve']], open: [['void', 'Void'], ['paid', 'Mark paid'], ...pay],
-    scheduled: [['void', 'Void'], ['paid', 'Mark paid']]}[d.status] || [];
+    scheduled: [['void', 'Void'], ['paid', 'Mark paid'], ...again]}[d.status] || [];
   return {draft: [['send', 'Send']], sent: [['writeoff', 'Write off'], ['paid', 'Mark paid']], partial: [['writeoff', 'Write off'], ['paid', 'Mark paid']]}[d.status] || [];
 }
 const finDocActsHtml = d => {
@@ -302,14 +303,15 @@ const finAttrTags = v => { const i = v.indexOf(':'); return i > 0 ? {[v.slice(0,
 async function finBillSchedule(d) {
   let banks;
   try { banks = await finPayFrom(); } catch (e) { toast(e.message, true); return; }
-  const today = finToday(), on = d.due_date && d.due_date > today ? d.due_date : today;
-  finDecideDialog('Schedule', `<label>Pay on<input type="date" name="on" required value="${on}" min="${today}"></label>
-    <label>From<select name="from" required>${finOpts(banks)}</select></label>`, 'Schedule', form => {
+  const today = finToday(), again = d.status === 'scheduled', want = again && d.pay_on ? d.pay_on : d.due_date;
+  const on = want && want > today ? want : today, word = again ? 'Reschedule' : 'Schedule';
+  finDecideDialog(word, `<label>Pay on<input type="date" name="on" required value="${on}" min="${today}"></label>
+    <label>From<select name="from" required>${finOpts(banks)}</select></label>`, word, form => {
     const pay_on = form.elements.on.value, from = form.elements.from.value;
     if (!pay_on) throw new Error('Pick a day');
     if (!from) throw new Error('No bank account to pay from');
     return ['bill_schedule', {bill_id: d.id, pay_on, money_account_id: from}];
-  }, 'Scheduled');
+  }, again ? 'Rescheduled' : 'Scheduled');
 }
 // Marked paid from (or to) a connected bank account, whose bank row links when it arrives, or "Elsewhere": no account,
 // so the payment waits in clearing. Viewers without finance.pay see only "Elsewhere".

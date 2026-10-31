@@ -745,3 +745,54 @@ def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settle
         assert name_key(long) in keys and "acme supplies" in keys
         assert c.execute("SELECT label FROM fin_vendor_labels WHERE name_key=?", (name_key(long),)).fetchone()[0] \
             == long
+
+
+def test_a_bill_paid_by_a_bank_row_already_on_other_expenses_counts_once_on_its_own_line_in_both_bases(books):
+    """E2E re-test: a 30.00 Software bill, approved, marked paid from checking after its bank row posted to Other
+    expenses. The row's "Pays bill" entry moves the 30.00 off Other expenses into AP, so the P&L counts the bill once,
+    on Software, accrual or cash; Other expenses nets to nothing."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        vendor = _vendor(c, "Acme Cloud")
+        fid = _ingest(c, _txn("txn-ac105", -30.0, who="ACME CLOUD", day="2026-10-14"))
+        assert _balance(c, "6900") == 3_000                                  # the automatic default, until linked
+        bid = _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 3_000}], number="AC-105")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)})
+        assert (paid.result["from"], paid.result["feed_id"], paid.result["status"]) == ("feed", fid, "paid"), paid
+        for basis in ("accrual", "cash"):
+            got = _pnl(c, basis)
+            assert (got.get("6100"), got.get("6900")) == (3_000, None), (basis, got)
+        assert (_balance(c, "2000"), _balance(c, "6900"), _balance(c, "1000")) == (0, 0, -3_000)
+        rows = FR.transactions(c, OWNER, start="2026-10-01", end="2026-10-31", source="entry")["rows"]
+        moved = [(r["account"], r["amount"]) for r in rows if r["memo"] == "Pays bill AC-105"]
+        assert moved == [("Bill AC-105", -3_000)]                          # labelled with the bill it pays
+
+
+def test_sync_now_polls_payments_waiting_on_the_bank_so_a_rejection_lands_at_once(books):
+    """E2E re-test: Sync now on a connection also makes its payments waiting in Mercury's approval queue due for a
+    poll, so a rejection there cancels the payment on that sync, not on the poll cadence."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 7_000, "account_id": account(c, "6100"),
+                                                "money_account_id": _checking(c)})
+        pid = str(made.result["payment_id"])
+    sync_once(books, fake, HOURS[1])
+
+    def status(c):
+        return str(c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0])
+    with books.read() as c:
+        assert status(c) == "awaiting_bank_approval"
+        request = str(c.execute("SELECT provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()[0])
+    fake.requests[request] = {**fake.requests[request], "status": "rejected"}
+    soon = "2026-10-15T14:31:00.000000Z"
+    sync_once(books, fake, soon)
+    with books.transaction() as c:
+        assert status(c) == "awaiting_bank_approval"                      # not yet due on its own cadence
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        assert act(c, OWNER, "connection_sync", {"connection_id": cid}, at=soon).status == "committed"
+    sync_once(books, fake, soon)
+    with books.read() as c:
+        assert status(c) == "cancelled"

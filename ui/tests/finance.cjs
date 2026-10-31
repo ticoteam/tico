@@ -184,7 +184,9 @@ const BILLS = [
     payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
   // Its scheduled payment's approval was declined before any payment existed: open, and says so.
   doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
-    payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}})];
+    payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}}),
+  // Scheduled for a later day, no payment yet: it can move to another day.
+  doc('bill', 'bill-6', 'NW-9', {id: 'v-northwind', name: 'Northwind Design'}, 'scheduled', 40000, '2026-12-20', {pay_on: '2099-12-18'})];
 const INVOICES = [
   doc('invoice', 'inv-1', '#1047', {id: 'c-bright', name: 'Brightline Studio'}, 'sent', 400000, '2026-11-14'),
   doc('invoice', 'inv-2', '#1033', {id: 'c-pine', name: 'Pine & Co'}, 'sent', 150000, '2026-09-20', {aging: '31_60', days_late: 41}),
@@ -810,6 +812,18 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': a scheduled bill is paid or voided, not scheduled again');
       assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Bank approval/, tag + ': the rail shows the payment\'s state');
+      await page.locator('tr[data-fin-doc="bill-6"]').click();
+      await page.locator('#fin-rail [data-fin-do="schedule"]').waitFor();
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid', 'Reschedule'], tag + ': a scheduled bill with no payment yet moves');
+      await page.locator('#fin-rail [data-fin-do="schedule"]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      assert.equal(await page.locator('dialog.fin-dlg input[name="on"]').inputValue(), '2099-12-18', tag + ': Reschedule starts at its day');
+      await page.locator('dialog.fin-dlg input[name="on"]').fill('2099-12-20');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg [data-ask]:not([hidden])').waitFor();
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_schedule', payload: {bill_id: 'bill-6', pay_on: '2099-12-20', money_account_id: 'm1'}}, tag + ': Reschedule is bill_schedule');
       // + Bill naming an existing vendor in another case picks that vendor; no second contact is made.
       await page.locator('[data-fin-doc-add]').click();
       await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');

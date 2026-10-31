@@ -376,6 +376,7 @@ CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, crea
 CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
 CREATE INDEX IF NOT EXISTS fin_settlements_to ON fin_settlements(to_kind, to_id);
 CREATE INDEX IF NOT EXISTS fin_settlements_from ON fin_settlements(from_kind, from_id);
+CREATE INDEX IF NOT EXISTS fin_settlements_entry ON fin_settlements(entry_id);
 CREATE INDEX IF NOT EXISTS fin_attachments_subject ON fin_attachments(subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_bills_pay_on ON fin_bills(status, pay_on);

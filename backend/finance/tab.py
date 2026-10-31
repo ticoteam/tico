@@ -232,6 +232,21 @@ def _feed_origin(r: Any) -> str:
     return str(r["source_id"]).split(":")[0] if str(r["source"]) in ("bank", "card") else ""
 
 
+def _pays_labels(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, str]:
+    """What a bank or card row's "Pays bill" entry shows as its line: the documents it pays ("Bill AC-105"), not the
+    line it moves the spend off (that spend now counts on the bill's own lines), to a viewer who sees those documents."""
+    from .tab_ap import sees_side
+    cut = set(private_cut(ctx, view))
+    out: dict[str, str] = {}
+    for eid, docs in SAP.documents_paid_by(ctx.c, sorted(set(entry_ids))).items():
+        kind = str(docs[0]["to_kind"])
+        if any(str(d["to_kind"]) != kind for d in docs) or not sees_side(ctx, view, kind) or \
+                (kind == "bill" and hidden_bills(ctx, cut, [str(d["to_id"]) for d in docs])):
+            continue
+        out[eid] = f"{kind.capitalize()} " + ", ".join(str(d["number"] or d["to_id"])[:40] for d in docs)
+    return out
+
+
 def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, list[Row]]:
     """The P&L lines of these entries the viewer sees (private lines without full detail never show), each vendor
     with the name it shows as (tab_ap.vendor_labels)."""
@@ -371,6 +386,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
         cut = private_feed(ctx, view, [*stands.values(), *history.values()])
         names = vendor_labels(ctx, view, [str(r["contact_id"]) for r in batch])
+        pays = _pays_labels(ctx, view, [str(r["entry_id"]) for r in batch if origins[str(r["line_id"])]])
         out: list[tuple[tuple[str, str], Row]] = []
         for r in batch:
             account = ctx.accounts[str(r["account_id"])]
@@ -383,7 +399,8 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
                 continue
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
                                      "amount": int(r["amount"]), "currency": ctx.book.base_currency,
-                                     "entry_id": str(r["entry_id"]), "account_id": account.id, "account": account.name,
+                                     "entry_id": str(r["entry_id"]), "account_id": account.id,
+                                     "account": pays.get(str(r["entry_id"]), account.name),
                                      "vendor": str(r["contact_id"]),
                                      "vendor_name": names.get(str(r["contact_id"]), ""),
                                      "description": str(r["description"]),
