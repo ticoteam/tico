@@ -249,7 +249,7 @@ function finPnlDraw() {
       const gpB = finLess(finSide(income, finBudgetOf(bi)), finSide(cogs, finBudgetOf(bi)));
       const gv = cols.map((c, i) => gp(i));
       out.push(`<tr class="fin-subt"><td>Gross profit${hasPrivate([...income, ...cogs]) ? excl : ''}</td>${nums(gv, gpB, gv[bi], 1)}</tr>`);
-      const pct = i => { const rev = finSum(income, r => r.private ? null : finVal(r, cols, i)); return rev ? Math.round(gv[i] / rev * 100) : null; };
+      const pct = i => { if (gv[i] == null) return null; const rev = finSum(income, r => r.private ? null : finVal(r, cols, i)); return rev ? Math.round(gv[i] / rev * 100) : null; };
       const pctB = (() => { const rev = finSum(income, finBudgetOf(bi)); return rev && gpB != null ? Math.round(gpB / rev * 100) : null; })();
       const pd = pctB == null || pct(bi) == null ? null : pct(bi) - pctB;
       out.push(`<tr class="fin-pct"><td>Gross margin</td>${cols.map((c, i) => `<td class="${c.state === 'future' ? 'fin-p' : ''}${i === past && c.state === 'future' ? ' fin-b' : ''}">${pct(i) == null ? '' : pct(i) + '%'}</td>`).join('')}<td class="fin-b">${pctB == null ? '' : pctB + '%'}</td><td class="${pd == null ? '' : pd > 0 ? 'fin-good' : pd < 0 ? 'fin-bad' : 'muted'}">${pd == null ? '' : pd ? (pd > 0 ? '+' : '−') + Math.abs(pd) + ' pts' : '—'}</td></tr>`);
@@ -573,7 +573,7 @@ function finLineRail() {
     ${paid.length ? `<h3 class="fin-h">Paid by</h3>${paid.map(r => finKv(paidLabel(r), finUsd(r.amount))).join('')}` : ''}
     ${teams.length ? `<h3 class="fin-h">By team · ${month}</h3>${finBars(teams.map(r => ({label: r.key === 'unattributed' ? 'Unattributed' : r.key === 'other' ? r.label : finTeamName(r.key) || r.label, amount: r.amount})))}` : ''}
     ${entries.length ? `<h3 class="fin-h">Transactions</h3>${entries.map(e => finKv(finDayLabel(e.date), finCents(e.amount))).join('')}` : ''}
-    ${row.key !== 'other' ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}">All ${esc(name)} transactions</a>` : ''}`);
+    ${row.key !== 'other' ? `<a class="fin-more" href="${FIN_ROUTE}/transactions?${q}${state.fq ? '&' + state.fq : ''}">All ${esc(name)} transactions</a>` : ''}`);
   if (!one || got) return;
   const ask = state.vendors[row.key] = {data: null}, [a, z] = finMonthBounds(L.month);
   const v = row.key === 'unattributed' ? '' : row.key;

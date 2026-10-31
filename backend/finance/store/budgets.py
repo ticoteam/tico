@@ -133,11 +133,11 @@ def set_settled_amount(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
     return c.execute("UPDATE fin_holds SET settled_amount=? WHERE id=? AND status='settled'", (amount, hold_id)).rowcount
 
 
-def relink(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str) -> int:
-    """A settled hold now stands for a new entry at a new amount (a card charge the bank adjusted): one record per
-    charge, never a second."""
-    return c.execute("UPDATE fin_holds SET settled_amount=?, entry_id=? WHERE id=? AND status='settled'",
-                     (amount, entry_id, hold_id)).rowcount
+def relink(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str, held_on: str) -> int:
+    """A settled hold now stands for a new entry at a new amount and day (a card charge the bank adjusted or re-dated):
+    one record per charge, never a second, counted in the period its entry is in."""
+    return c.execute("UPDATE fin_holds SET settled_amount=?, entry_id=?, held_on=? WHERE id=? AND status='settled'",
+                     (amount, entry_id, held_on, hold_id)).rowcount
 
 
 def void_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:

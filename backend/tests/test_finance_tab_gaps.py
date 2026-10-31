@@ -82,6 +82,14 @@ def test_a_line_opens_per_vendor_with_how_it_was_paid_and_next_month(books):
         assert FR.line_detail(c, OWNER, line, *OCT, teammates=["human:gus"], at=AT)["total"] == 3_400
         assert FR.line_detail(c, OWNER, line, *OCT, who="bots", at=AT)["total"] == 0
 
+        def tx(**kw):
+            return sorted(abs(int(r["amount"])) for r in FR.transactions(c, OWNER, account_id=line, at=AT, **kw)["rows"])
+        assert tx() == [700, 1_200, 3_400]
+        assert tx(teams=["web"]) == [700, 1_200]                # "All transactions" from a filtered line, cut the same
+        assert tx(teammates=["human:gus"]) == [3_400] and tx(who="bots") == []
+        with pytest.raises(FinanceError, match="company-wide"):
+            FR.transactions(c, "human:cara", unattributed=True, at=AT)
+
 
 def test_sources_actions_are_a_finance_admins_and_mercury_users_are_cut_to_the_viewer(books):
     with books.transaction() as c:
@@ -159,5 +167,8 @@ def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
     assert picked["teammates"] == ["human:ben", "human:ana"] and picked["who"] == "people"
     lined = get(api, f"finance/lines/{line}?teammates=human:ben&teammates=human:ana&who=people")["filter"]
     assert lined == {"teams": [], "teammates": ["human:ben", "human:ana"], "who": "people", "unattributed": False}
+    assert "rows" in get(api, "finance/transactions?teammates=human:ben&who=people")
+    get(api, "finance/transactions?teams=nope", expected=404)
+    get(api, "finance/transactions?who=nobody", expected=422)
     get(api, "finance/mercury-users", token="ben-test", expected=403)
     assert get(api, "finance/mercury-users")["users"] == []

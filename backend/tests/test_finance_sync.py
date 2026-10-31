@@ -251,9 +251,10 @@ def test_a_cards_writes_go_one_at_a_time_and_an_out_of_step_answer_requeues(book
         assert c.execute("SELECT sync_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "ok"
 
 
-def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_mercury_says(books):
-    """N2: a creation cut off mid-call is uncertain; a cancel then keeps the reservation; Mercury's card list decides:
-    a matching card is adopted and cancelled there, none frees the reservation."""
+def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_a_person_confirms(books):
+    """N2, round 3 #1: a creation cut off mid-call is uncertain; a cancel keeps the reservation. Mercury's whole card
+    list (every page) only gives candidates: no match, a same-nickname card or an empty list decides nothing. A
+    person confirms the Mercury card (read from Mercury, adopted, cancelled there) or that there is none (freed)."""
     fake = FakeMercury()
     connect(books, fake)
     budget_id, card_id = _card(books)
@@ -269,21 +270,68 @@ def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_mercury_s
         assert act(c, OWNER, "card_cancel", {"card_id": card_id}).status == "committed"
         assert act(c, OWNER, "card_cancel", {"card_id": other_id}).status == "committed"
         assert _state(c, card_id)[4] == 20_000 and _state(c, other_id)[4] == 5_000      # nothing freed yet
-    sync_once(books, fake, HOURS[2])                                       # the list fails: still uncertain
-    with books.read() as c:
-        assert _state(c, card_id)[4] == 20_000
-    with books.read() as c:
         name = str(SK.card_create_payload(c, card_id)["nickname"])
-    fake.cards_list.append({"id": "card-found", "userId": "user-eve", "nickname": name, "lastFour": "4242",
-                            "status": "active", "createdAt": AT, "spendLimit": {"amountCents": 20_000}})
-    sync_once(books, fake, HOURS[4])                                       # fay has no card at Mercury
-    sync_once(books, fake, HOURS[5])
+    sync_once(books, fake, HOURS[1])                                       # the list fails: nothing changes
+    with books.read() as c:
+        assert _state(c, card_id)[1:] == ("uncertain", 20_000, None, 20_000)
+    # Eve's list runs over two pages: an older card first, then one with the nickname made that day.
+    fake.card_page = 1
+    fake.cards_list += [{"id": "card-old", "userId": "user-eve", "nickname": "old", "lastFour": "1111",
+                         "status": "active", "createdAt": "2026-01-01T00:00:00Z"},
+                        {"id": "card-found", "userId": "user-eve", "nickname": name, "lastFour": "4242",
+                         "status": "active", "createdAt": AT, "spendLimit": {"amountCents": 20_000}}]
+    sync_once(books, fake, HOURS[2])                                       # fay's list is empty
+    assert [arg for arg in fake.sent("cards") if arg[0] == "user-eve"][-2:] == [("user-eve", None),
+                                                                                ("user-eve", "card-old")]
+    with books.transaction() as c:
+        for k in (card_id, other_id):                                      # neither decided by a list
+            assert _state(c, k)[1] == "uncertain" and _state(c, k)[4] in (20_000, 5_000)
+        error = c.execute("SELECT sync_error FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0]
+        assert "card-found" in error and "card-old" not in error
+        assert c.execute("SELECT provider_card_id FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] is None
+        asks = [r[0] for r in c.execute("SELECT title FROM tasks WHERE title LIKE 'Confirm a Mercury card%'")]
+        assert len(asks) == 2, asks
+        assert act(c, OWNER, "card_resolve", {"card_id": card_id}).code == "invalid"
+        assert act(c, OWNER, "card_resolve", {"card_id": card_id, "provider_card_id": "card-found"}
+                   ).status == "committed"
+        assert act(c, OWNER, "card_resolve", {"card_id": other_id, "none": True}).status == "committed"
+        assert _state(c, other_id)[1] == "cancelled" and _state(c, other_id)[4] == 0     # never issued: freed
+        assert act(c, OWNER, "card_resolve", {"card_id": other_id, "none": True}).code == "conflict"
+    sync_once(books, fake, HOURS[3])                                       # read from Mercury, adopted, cancelled
+    sync_once(books, fake, HOURS[4])
+    assert fake.sent("card") == ["card-found"]
     assert fake.sent("card_state") == [("card-found", "cancel")]
     assert fake.sent("create_card") == []
     with books.read() as c:
         assert _state(c, card_id) == ("cancelled", "cancelled", 20_000, 20_000, 0)
-        assert c.execute("SELECT provider_card_id FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "card-found"
-        assert _state(c, other_id)[1] == "cancelled" and _state(c, other_id)[4] == 0
+        assert c.execute("SELECT provider_card_id, last4 FROM fin_cards WHERE id=?", (card_id,)).fetchone()[:] == \
+            ("card-found", "4242")
+
+
+def test_a_person_can_not_adopt_another_users_card_and_none_on_an_active_card_issues_it_again(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card(books)
+    with books.transaction() as c:
+        for oid, in c.execute("SELECT id FROM fin_outbox WHERE op='card_create'").fetchall():
+            assert SK.outbox_claim(c, str(oid), AT)
+    sync_once(books, fake, HOURS[0])
+    fake.cards_list.append({"id": "card-fay", "userId": "user-fay", "nickname": "x", "lastFour": "9999",
+                            "status": "active", "createdAt": AT})
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_resolve", {"card_id": card_id, "provider_card_id": "card-fay"}).status == \
+            "committed"
+    sync_once(books, fake, HOURS[1])
+    with books.transaction() as c:
+        row = c.execute("SELECT provider_status, provider_card_id, sync_error FROM fin_cards WHERE id=?",
+                        (card_id,)).fetchone()
+        assert (row[0], row[1]) == ("uncertain", None) and "another user" in row[2]
+        assert act(c, OWNER, "card_resolve", {"card_id": card_id, "none": True}).status == "committed"
+        assert _state(c, card_id)[4] == 20_000                                  # still reserved: issued again
+    sync_once(books, fake, HOURS[2])
+    assert len(fake.sent("create_card")) == 1
+    with books.read() as c:
+        assert _state(c, card_id)[:2] == ("active", "active")
 
 
 def test_an_unowned_event_no_connection_can_read_yet_is_retried_for_a_day(books):

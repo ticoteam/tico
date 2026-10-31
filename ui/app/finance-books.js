@@ -204,16 +204,20 @@ async function finCardAdd() {
 }
 
 // ----------------------------------------------------------------- transactions
-const FIN_TX = {q: '', source: 'all', status: '', account: ''};
+const FIN_TX = {q: '', source: 'all', status: '', account: '', org: null};
 const FIN_TX_STATUS = [['', 'Any status'], ['new', 'New'], ['matched', 'Matched'], ['posted', 'Posted'], ['pending', 'Pending'], ['ignored', 'Ignored']];
 function finTxPage() {
   const t = FIN_TX;
-  if (FIN.q.has('q') || FIN.q.has('account_id')) { t.q = FIN.q.get('q') || ''; t.account = FIN.q.get('account_id') || ''; t.source = 'all'; t.status = ''; }
+  if (FIN.q.has('q') || FIN.q.has('account_id')) {
+    t.q = FIN.q.get('q') || ''; t.account = FIN.q.get('account_id') || ''; t.source = 'all'; t.status = '';
+    const org = finFilterFrom(FIN.q); t.org = finFilterAny(org) ? org : null;
+  }
   FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: []};
+  const orgChip = t.org ? `<span class="fin-chip">${esc([...finPicked(t.org).map(finPickName), ...(t.org.who !== 'both' ? [t.org.who === 'bots' ? 'Bots' : 'People'] : [])].join(', '))}<button type="button" data-fin-org-clear aria-label="Clear filter">✕</button></span>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><span class="sr-only">Search</span><input type="search" data-fin-q value="${esc(t.q)}" placeholder="Search" aria-label="Search"></label>
       ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries']], t.source)}
       <select data-fin-status aria-label="Status">${FIN_TX_STATUS.map(([v, l]) => `<option value="${v}"${v === t.status ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      <select data-fin-account aria-label="Line"><option value="">All lines</option>${t.account ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}</select></div>`
+      <select data-fin-account aria-label="Line"><option value="">All lines</option>${t.account ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}</select>${orgChip}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-tx">${skelRows(8, {dot: false})}</div>`, '', 'Selected transaction');
   const body = $('#fin-body');
   let timer = 0;
@@ -224,6 +228,8 @@ function finTxPage() {
     const seg = ev.target.closest('[data-fin-seg] button');
     if (seg) { if (seg.dataset.v !== t.source) { t.source = seg.dataset.v; finSegSet(seg); void finTxLoad(false); } return; }
     if (ev.target.closest('[data-fin-more]')) { void finTxLoad(true); return; }
+    const clear = ev.target.closest('[data-fin-org-clear]');
+    if (clear) { t.org = null; clear.closest('.fin-chip').remove(); void finTxLoad(false); return; }
     const tr = ev.target.closest('tr[data-fin-tx]');
     if (tr) { FIN.tx.sel = tr.dataset.finTx; finTxDraw(); finTxRail(); }
   };
@@ -253,6 +259,7 @@ async function finTxLoad(more) {
   if (t.q) qs.set('q', t.q.slice(0, 100));
   if (t.status) qs.set('status', t.status);
   if (t.account) qs.set('account_id', t.account);
+  for (const [k, v] of finFilterQs(t.org)) qs.append(k, v);
   if (more && state.next) qs.set('cursor', state.next);
   let d;
   try { d = await get('/v2/finance/transactions?' + qs + finAs(), {fresh: true}); }

@@ -502,3 +502,43 @@ def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_wit
         assert [r[0] for r in rev] == ["2026-10-15"]
         sheet = FR.balance_sheet(c, OWNER, at=LATER)
         assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050
+
+
+def test_a_closed_month_correction_reconciles_that_month_at_the_new_amount(books):
+    """Round 3 #2: Sept posts 100.00, Sept closes, Mercury corrects it to 120.00 (reversal and repost land in
+    October): reconciling Sept to 120.00 is done, the original still in Sept's rollup notwithstanding."""
+    fake = FakeMercury()
+    fake.balances["acct-chk"] = -100.0                 # the charge is the account's whole history
+    connect(books, fake)
+    raw = _txn("txn-sep", "acct-chk", -100.0, "wireFee", day="2026-09-20")
+    _arrives(fake, raw, 1, "evt-sep-1")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    _arrives(fake, {**raw, "amount": -120.0}, 2, "evt-sep-2")
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-09-30",
+                                           "statement_balance": -12_000})
+        assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
+
+
+def test_a_re_dated_settled_card_charge_moves_its_use_to_the_new_month(books):
+    """Round 3 #3: a charge first seen settled in October that Mercury re-dates into November counts against the
+    card's allocation in November, not October."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    raw = _txn("txn-c7", "credit-io", -80.0, "creditCardTransaction", day="2026-10-31", cardId="card-eve")
+    _arrives(fake, raw, 1, "evt-c7-1")
+    sync_once(books, fake, LATER)
+    _arrives(fake, {**raw, "createdAt": "2026-11-02T10:00:00Z", "postedAt": "2026-11-02T10:00:00Z"}, 2, "evt-c7-2")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        rows = c.execute("SELECT held_on, settled_amount FROM fin_holds WHERE target=? AND status='settled'",
+                         (f"card:{card_id}",)).fetchall()
+        assert [tuple(r) for r in rows] == [("2026-11-02", 8_000)]
+        assert FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z").held == 20_000      # October: all free
+        assert FA.budget_state(c, budget_id, "2026-11-20T12:00:00.000000Z").held == 20_000 - 8_000

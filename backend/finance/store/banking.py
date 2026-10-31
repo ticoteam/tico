@@ -243,14 +243,20 @@ def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> l
                      (money_account_id, through)).fetchall()
 
 
-def booked_uncleared(c: sqlite3.Connection, money_account_id: str, gl_account_id: str) -> list[Any]:
-    """This money account's rows no done reconciliation cleared whose entries are posted: each row's id, its entry's
-    date and what that entry moved on the account's GL line (what a reconciliation adjusts the GL balance by)."""
-    return c.execute("SELECT f.id, e.entry_date, COALESCE(SUM(l.amount), 0) AS amount FROM fin_feed_txns f "
-                     "JOIN fin_entries e ON e.id=f.entry_id AND e.status='posted' "
-                     "JOIN fin_lines l ON l.entry_id=e.id AND l.account_id=? "
-                     "WHERE f.money_account_id=? AND f.reconciliation_id IS NULL GROUP BY f.id, e.entry_date",
-                     (gl_account_id, money_account_id)).fetchall()
+def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_account_id: str,
+                through: str) -> list[Any]:
+    """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
+    line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
+    dated through that day; `live`, its current posted entry, whatever its date."""
+    return c.execute(
+        "SELECT f.id, COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
+        "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
+        "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
+        "AND instr(e.source_id, f.id)>0))), 0) AS through_amount, "
+        "COALESCE((SELECT SUM(l.amount) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id AND e.status='posted' "
+        "WHERE l.entry_id=f.entry_id AND l.account_id=:gl), 0) AS live_amount "
+        "FROM fin_feed_txns f WHERE f.money_account_id=:money AND f.reconciliation_id IS NULL",
+        {"gl": gl_account_id, "book": book_id, "through": through, "money": money_account_id}).fetchall()
 
 
 def settled_total(c: sqlite3.Connection, money_account_id: str) -> tuple[int, str]:
@@ -519,11 +525,12 @@ def card_create_waiting(c: sqlite3.Connection, card_id: str) -> bool:
                      "json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
 
 
-def cards_uncertain(c: sqlite3.Connection, connection_id: str) -> list[Any]:
-    """Cards whose creation was cut off at Mercury (it may or may not have issued them), on this connection."""
+def cards_uncertain(c: sqlite3.Connection, connection_id: str, looked_before: str) -> list[Any]:
+    """Cards whose creation was cut off at Mercury (it may or may not have issued them), on this connection, that no
+    one has looked for in Mercury's card list since `looked_before`."""
     return c.execute("SELECT k.* FROM fin_cards k JOIN fin_money_accounts m ON m.id=k.money_account_id WHERE "
-                     "k.provider_status='uncertain' AND m.connection_id=? ORDER BY k.created_at",
-                     (connection_id,)).fetchall()
+                     "k.provider_status='uncertain' AND m.connection_id=? AND (k.synced_at IS NULL OR "
+                     "k.synced_at<?) ORDER BY k.created_at", (connection_id, looked_before)).fetchall()
 
 
 def card_create_payload(c: sqlite3.Connection, card_id: str) -> dict[str, Any]:
@@ -562,6 +569,12 @@ def count(c: sqlite3.Connection, rule_id: str, period_key: str, subject: str, am
               "VALUES(?,?,?,?,1,?) ON CONFLICT(rule_id, period_key, subject) DO UPDATE SET "
               "amount=amount+excluded.amount, count=count+1, updated_at=excluded.updated_at",
               (rule_id, period_key, subject, amount, at))
+
+
+def uncount(c: sqlite3.Connection, rule_id: str, period_key: str, subject: str, amount: int, at: str) -> None:
+    """Take back one use `count` added (a payment that reserved it never went), never below 0."""
+    c.execute("UPDATE fin_rule_counters SET amount=MAX(0, amount-?), count=MAX(0, count-1), updated_at=? WHERE "
+              "rule_id=? AND period_key=? AND subject=?", (amount, at, rule_id, period_key, subject))
 
 
 def rule_run(c: sqlite3.Connection, *, rule_id: str, action_id: str | None, subject: str,

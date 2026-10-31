@@ -565,3 +565,35 @@ def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books
         status = dict(c.execute("SELECT id, status || ':' || coalesce(last_error, '') FROM fin_payments"))
         assert sorted(status.values())[0].startswith("awaiting_bank_approval")
         assert sorted(status.values())[1].startswith("cancelled:Monthly cap"), status
+
+
+def test_a_limit_reserved_at_send_is_given_back_once_when_the_payment_fails_or_is_cancelled(books):
+    """Round 3 #4: what a payment reserved at its send claim comes off the counter when Mercury refuses it or a person
+    cancels it after a retry, once (its record empties)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+        assert act(c, OWNER, "payment_create", {**body, "amount": 10_000, "memo": "retried"}).status == "committed"
+        assert act(c, OWNER, "payment_create", {**body, "amount": 20_000, "memo": "refused"}).status == "committed"
+        rule_id = str(_rule(c, OWNER, "Monthly cap", {"kind": "payment_create"},
+                            {"outcome": "limit", "limit": 50_000, "per": "month"},
+                            [{"input": {"kind": "payment_create", "amount": 10}, "expect": "limit"}]
+                            ).result["rule_id"])
+
+    def counted(c):
+        return tuple(c.execute("SELECT coalesce(sum(amount), 0), coalesce(sum(count), 0) FROM fin_rule_counters "
+                               "WHERE rule_id=?", (rule_id,)).fetchone())
+    fake.queue["request_send_money"] = [Answer(429, {}), Answer(400, {"errors": {"message": "account closed"}})]
+    sync_once(books, fake, HOURS[1])
+    with books.transaction() as c:
+        state = {m: (st, cj) for m, st, cj in c.execute("SELECT memo, status, counted_json FROM fin_payments")}
+        assert state["refused"] == ("failed", "[]")                         # refused: its reservation came back
+        assert state["retried"][0] == "queued" and state["retried"][1] != "[]"
+        assert counted(c) == (10_000, 1)                                    # only the retried one's
+        pid = str(c.execute("SELECT id FROM fin_payments WHERE memo='retried'").fetchone()[0])
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).status == "committed"
+        assert counted(c) == (0, 0)
+        assert c.execute("SELECT counted_json FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "[]"

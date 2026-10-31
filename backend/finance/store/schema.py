@@ -395,6 +395,7 @@ ADDED = (
     ("fin_outbox", "claimed_at", "TEXT"), ("fin_cards", "provider_status", "TEXT"), ("fin_cards", "allocation_due", "INTEGER"),
     ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
     ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("fin_payments", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
 

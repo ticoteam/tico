@@ -11,7 +11,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
        "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
        "payment_create", "payment_cancel", "recipient_add", "card_create", "card_update_limit", "card_freeze",
-       "card_unfreeze", "card_cancel", "reconcile_undo", "connection_create", "payment_settings",
+       "card_unfreeze", "card_cancel", "card_resolve", "reconcile_undo", "connection_create", "payment_settings",
        "budget_create", "budget_update", "allocation_set", "projection_set",
        "view_grant", "view_revoke", "private_lines_set",
        "rule_create", "rule_update", "rule_disable", "rule_enable", "rule_test", "contact_create", "contact_update",
@@ -23,14 +23,16 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "reopen_period", "right_grant", "right_revoke",
         # phase 1: banks, cards, payments, reconciliation and gate rules
         "reconcile", "reconcile_undo", "connection_create", "payment_settings", "card_create", "card_update_limit",
-        "card_freeze", "card_unfreeze", "card_cancel", "recipient_add", "payment_create", "payment_cancel",
+        "card_freeze", "card_unfreeze", "card_cancel", "card_resolve", "recipient_add", "payment_create",
+        "payment_cancel",
         "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test",
         "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map")
 NEEDS = {"journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
          "allocation_set": R.BUDGETS, "projection_set": R.BUDGETS, "reconcile": R.BOOK, "reconcile_undo": R.BOOK,
          "card_create": R.CARDS, "card_update_limit": R.CARDS, "card_freeze": R.CARDS, "card_unfreeze": R.CARDS,
-         "card_cancel": R.CARDS, "recipient_add": R.PAY, "payment_create": R.PAY, "payment_cancel": R.PAY,
+         "card_cancel": R.CARDS, "card_resolve": R.CARDS, "recipient_add": R.PAY, "payment_create": R.PAY,
+         "payment_cancel": R.PAY,
          "rule_create": R.RULES, "rule_update": R.RULES, "rule_enable": R.RULES, "rule_disable": R.RULES,
          "rule_test": R.RULES}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.

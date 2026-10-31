@@ -605,6 +605,17 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
             "end": z.isoformat(), "excluded": found["excluded"], "view_version": s.view.version}
 
 
+def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (), teammates: Iterable[str] = (),
+                 who: str = "both", unattributed: bool = False, at: str | None = None, **kw: Any) -> Row:
+    """finance/tab.transactions, cut by the expenses view's org filter as the P&L and a line's detail are: a line
+    shows when its team and teammate pass, a feed row when a line of its entry it shows does (one with no entry has
+    no team or teammate). A private line without full detail never shows a row at all, so no private total is built
+    from the filtered set."""
+    s = _open(c, viewer, at)
+    f = _org_filter(s, teams, teammates, who, unattributed)
+    return tab.transactions(c, viewer, at=at, org=f.keeps if f.any else None, **kw)
+
+
 def view_version(c: sqlite3.Connection) -> int:
     """The counter a cache of any read keys on: it moves on every grant, revoke and privacy change."""
     return SA.view_version(c)
@@ -613,7 +624,6 @@ def view_version(c: sqlite3.Connection) -> int:
 
 # The Finance tab's other reads (finance/tab.py).
 balance_sheet = tab.balance_sheet
-transactions = tab.transactions
 cards = tab.cards
 sources = tab.sources
 access = tab.access

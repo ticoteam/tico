@@ -69,7 +69,7 @@ function columns(start, end) {
   }
   return out;
 }
-function pnl(url, me, noRevenue = false) {
+function pnl(url, me, noRevenue = false, noCogsProjection = false) {
   const q = url.searchParams, cols = columns(q.get('start'), q.get('end')), view = q.get('view') || 'company';
   const lines = LINES.filter(l => (view === 'company' && !noRevenue) || l[3] === 'expense');
   const wave = (v, i) => v ? Math.round(v * (1 + ((i * 7) % 5 - 2) / 40) / 100) * 100 : 0;
@@ -80,7 +80,8 @@ function pnl(url, me, noRevenue = false) {
     ? {account_id, code, name: 'Payroll (private)', type, section: section(code), parent_id, private: true, actual: null, total: null, budget: budget == null ? null : cols.map(() => budget), projection: null}
     : ({account_id, code, name: base0, type, section: section(code), parent_id, private: false,
     actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
-    total: 0, budget: budget == null ? null : cols.map(() => budget), projection: cols.map((c, i) => c.state === 'future' ? wave(base, i + 1) : null)}));
+    total: 0, budget: budget == null ? null : cols.map(() => budget),
+    projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null)}));
   const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
   const income = sum('income'), expense = sum('expense');
   return {columns: cols, rows, income, expense, net: income.map((v, i) => v - expense[i]), excluded: rows.some(r => r.private), start: q.get('start'), end: q.get('end'), view_version: 'v1',
@@ -159,7 +160,7 @@ const SOURCES = {groups: [
   {group: 'manual', name: 'Manual', count: 1, rows: [{id: 'manual', kind: 'entries', name: 'Journal entries and imports', manual: 4, import: 0}]}]};
 
 // ----------------------------------------------------------------- the fake hub
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false} = {}) {
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
@@ -188,7 +189,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/conversations') return json({conversations: []});
     const denied = () => json({error: {code: 'denied', detail: 'Not in your view'}}, 403);
     if (p === '/api/v2/finance/access') return json(access(viewer));
-    if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue));
+    if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
     if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
     if (p === '/api/v2/finance/mercury-users') return json({users: [{id: 'mu-1', name: 'Ana Silva', connection_id: 'c1', email: 'a•••@acme.example', updated_at: '2026-10-30T10:00:00Z'},
@@ -369,6 +370,20 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('#fin-filters [data-fin-clear="team:eng"]').click();
       await page.waitForFunction(() => FIN.pnl?.data?.filter?.teams.length === 0);
       await shot(page, 'pnl-expenses-filter-desktop');
+      // A filtered line's "All <vendor> transactions" keeps the filter; the transactions read takes it until cleared.
+      await go(page, '#/finance/line/a-6100?teams=eng', '[data-fin-key="GitHub"]');
+      await page.locator('[data-fin-key="GitHub"]').click();
+      await page.locator('#fin-rail .fin-more').waitFor();
+      const allTx = await page.locator('#fin-rail .fin-more').getAttribute('href');
+      assert.match(allTx, /#\/finance\/transactions\?account_id=a-6100&q=GitHub&teams=eng$/, tag + ': All GitHub transactions keeps the filter');
+      await go(page, allTx.slice(allTx.indexOf('#')), READY.transactions);
+      const txRead = () => reads.filter(r => r.startsWith('/api/v2/finance/transactions?')).at(-1) || '';
+      assert.match(txRead(), /q=GitHub.*teams=eng|teams=eng.*q=GitHub/, tag + ': the transactions read is filtered');
+      assert.match(await page.locator('#fin-body .fin-bar .fin-chip').innerText(), /Engineering/, tag + ': the filter shows');
+      await page.locator('[data-fin-org-clear]').click();
+      await page.waitForFunction(() => !document.querySelector('[data-fin-org-clear]'));
+      await page.waitForTimeout(100);
+      assert.ok(!txRead().includes('teams='), tag + ': cleared, the read is not filtered');
       // Balance sheet, cards (freeze), transactions, sources, access.
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
@@ -476,6 +491,21 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       assert.equal(net[0], 'Net income', tag + ': the bottom line');
       assert.ok(future.length && future.every(v => /^\(?−?[\d,]+\)?$/.test(v) && v !== '0'), tag + ': projected net income has figures: ' + future.join(' '));
       assert.ok(net[cols.length + 1] !== '', tag + ': the net budget has a figure');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // Revenue projected, cost of revenue not: gross profit is blank and so is gross margin (never 0%).
+    {
+      const tag = 'no cogs projection';
+      const {page, errors} = await open(browser, {noCogsProjection: true});
+      await page.locator('.fin-pl').waitFor();
+      const cols = await page.evaluate(() => FIN.pnl.data.columns);
+      const row = async name => page.locator('.fin-pl tbody tr', {has: page.locator('td:first-child', {hasText: new RegExp('^' + name)})}).first().locator('td').allInnerTexts();
+      const gp = await row('Gross profit'), gm = await row('Gross margin');
+      const futures = cols.map((c, i) => c.state === 'future' ? i + 1 : -1).filter(i => i > 0);
+      assert.ok(futures.length, tag + ': there are projected columns');
+      for (const i of futures) assert.deepEqual([gp[i], gm[i]], ['', ''], `${tag}: column ${i} has no gross profit and no margin`);
+      assert.ok(gm.slice(1, futures[0]).some(v => /%$/.test(v)), tag + ': past months still show a margin');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

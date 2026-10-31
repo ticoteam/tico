@@ -220,6 +220,18 @@ def _stream(fetch: Fetch, visible: Visible, mark: tuple[str, str] | None, most: 
     return out[:most], at, False
 
 
+def _org_keeps(org: Callable[[str, str], bool], lines: Sequence[Row]) -> bool:
+    """A feed row passes an org filter when a line of its entry the viewer sees does; with none, as an unattributed
+    line would."""
+    if not lines:
+        return org("", "")
+    for x in lines:
+        tags = cast(Mapping[str, str], x.get("tags") or {})
+        if org(str(tags.get("team") or ""), str(tags.get("teammate") or "")):
+            return True
+    return False
+
+
 def _key_of(r: Any) -> tuple[str, str]:
     return (str(r["txn_date"]), str(r["id"])) if "txn_date" in r.keys() else (str(r["entry_date"]), str(r["line_id"]))
 
@@ -227,12 +239,12 @@ def _key_of(r: Any) -> tuple[str, str]:
 def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", money_account_id: str | None = None,
                  status: str | None = None, account_id: str | None = None, start: str | None = None,
                  end: str | None = None, q: str | None = None, cursor: str | None = None, limit: int = 50,
-                 at: str | None = None) -> Row:
+                 at: str | None = None, org: Callable[[str, str], bool] | None = None) -> Row:
     """Feed rows and entries as plain rows, newest first. A feed row shows to whoever sees its money account or
     follows its card (with the lines of its posted entry they see); an entry shows as the P&L lines the viewer sees,
     unless a feed row they see stands for it. A feed row standing for a private line the viewer has no full detail for
-    is left out whole (`private_feed`). Filter by money account, status (feed rows), line, dates and a search;
-    `next` is the cursor for the following page."""
+    is left out whole (`private_feed`). Filter by money account, status (feed rows), line, dates, a search and `org`
+    (keeps a line's team and teammate); `next` is the cursor for the following page."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
@@ -275,7 +287,10 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         lines = _visible_lines(ctx, view, [str(r["entry_id"]) for r in rows if r["entry_id"]])
         out: list[tuple[tuple[str, str], Row]] = []
         for r in rows:
-            if wanted and not any(x["account_id"] in wanted for x in lines.get(str(r["entry_id"] or ""), [])):
+            mine = lines.get(str(r["entry_id"] or ""), [])
+            if wanted and not any(x["account_id"] in wanted for x in mine):
+                continue
+            if org is not None and not _org_keeps(org, mine):
                 continue
             out.append((_key_of(r), _feed_row(ctx, r, money, lines)))
         return out
@@ -301,7 +316,8 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
             fed = stands.get(str(r["entry_id"]))
             shown = fed is not None and feed_seen(fed) and str(fed["id"]) not in cut
             if not view.sees(account, tagged) or shown or origins[str(r["line_id"])] in cut or \
-                    (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id)):
+                    (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id)) or \
+                    (org is not None and not org(tagged.get("team", ""), tagged.get("teammate", ""))):
                 continue
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
                                      "amount": int(r["amount"]), "currency": ctx.book.base_currency,

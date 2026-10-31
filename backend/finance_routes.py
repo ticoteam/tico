@@ -106,12 +106,18 @@ def install(app, store, auth, mutate):
                              status: Literal["new", "matched", "posted", "ignored", "pending"] | None = None,
                              account_id: str | None = None, start: str | None = None, end: str | None = None,
                              q: str | None = Query(None, max_length=100), cursor: str | None = Query(None, max_length=600),
-                             limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
-        """Feed rows and entries the caller sees, newest first, with filters, search and a cursor."""
+                             limit: int = Query(50, ge=1, le=200), view_as: str | None = None,
+                             teams: Annotated[list[str] | None, Query()] = None,
+                             teammates: Annotated[list[str] | None, Query()] = None,
+                             who: Literal["both", "bots", "people"] = "both", unattributed: bool = False):
+        """Feed rows and entries the caller sees, newest first, with filters, search and a cursor; teams, teammates,
+        who and unattributed cut it as the P&L's expenses view does."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.transactions(c, actor, source=source, money_account_id=money_account_id,
                                                          status=status, account_id=account_id, start=start, end=end,
-                                                         q=q, cursor=cursor, limit=limit))
+                                                         q=q, cursor=cursor, limit=limit, teams=teams or (),
+                                                         teammates=teammates or (), who=who,
+                                                         unattributed=unattributed))
 
     @app.get("/api/v2/finance/cards")
     def finance_cards(request: Request, status: Literal["active", "frozen", "cancelled"] | None = None,

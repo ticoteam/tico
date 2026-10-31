@@ -205,22 +205,50 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     return "failed" if problems else "ok"
 
 
+CARD_PAGES = 20                   # Mercury card-list pages read for one user before giving up (500 a page)
+LOOK_HOURS = 24                   # an uncertain card's candidates are looked up again after this long
+
+
+def _user_cards(provider: Provider, user: str) -> tuple[list[dict[str, Any]], str]:
+    """Every card Mercury lists for a user, page after page; a problem when the list could not be read to its end."""
+    out: list[dict[str, Any]] = []
+    after: str | None = None
+    for _ in range(CARD_PAGES):
+        got = provider.cards(user, after)
+        if not got.ok:
+            return out, error_text(got)
+        out += listed(got, "cards")
+        after = next_page(got)
+        if not after:
+            return out, ""
+    return out, "Mercury lists more cards for this user than Finance reads"
+
+
 def uncertain_cards(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
-    """Cards whose creation was cut off: Mercury's cards for each one's user say whether it was issued."""
+    """Cards whose creation was cut off: Mercury's whole card list for each one's user gives a person candidates to
+    confirm (card_resolve). Nothing is decided here: Mercury echoes nothing unique Finance set (a nickname is a
+    person's to change), so neither a match nor an empty list proves anything; the reservation stays meanwhile."""
     with store.read() as c:
         waiting = [(str(k["id"]), str(SK.card_create_payload(c, str(k["id"])).get("user_id") or ""))
-                   for k in SK.cards_uncertain(c, cid)]
+                   for k in SK.cards_uncertain(c, cid, _after(now, -LOOK_HOURS * 3600))]
     problems: list[str] = []
     for card_id, user in waiting:
-        got = provider.cards(user) if user else None
-        if got is None or not got.ok:
-            if got is not None:
-                problems.append(error_text(got))
+        if not user:
+            continue
+        found, problem = _user_cards(provider, user)
+        if problem:
+            problems.append(problem)
             continue
         with store.transaction() as c:
             card = SK.get(c, "fin_cards", card_id)
-            if card is not None and str(card["provider_status"] or "") == cards.UNCERTAIN:
-                cards.resolve(load(c, now), card, listed(got, "cards"))
+            if card is None or str(card["provider_status"] or "") != cards.UNCERTAIN:
+                continue
+            ctx = load(c, now)
+            why = cards.candidates(ctx, card, found)
+            tico.needs_you(c, payments.admin_person(ctx), f"Confirm a Mercury card for {card['holder']}",
+                           f"{why} Card {card_id}: confirm its Mercury card (card_resolve with provider_card_id), or "
+                           "confirm Mercury never issued it (card_resolve with none). Its reservation stays until "
+                           "then.")
     return problems
 
 
@@ -442,13 +470,16 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
     what = "a card" if op == "card_create" else f"recipient {body.get('name') or ''}".strip()
     tico.needs_you(c, payments.admin_person(ctx), f"Check Mercury for {what}",
                    f"Finance was creating {what} in Mercury when it stopped, so it may or may not exist there. "
-                   f"Check Mercury; Finance will not create it again on its own (outbox {o['id']}).")
+                   f"Check Mercury; Finance will not create it again on its own (outbox {o['id']}). For a card, "
+                   "confirm its Mercury card or that there is none on the card (card_resolve).")
 
 
 def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> Answer:
     """One outbox write, read against the card's latest desired state at send time."""
     if op == "recipient_create":
         return _send_recipient(store, provider, body)
+    if op == "card_adopt":
+        return provider.card(str(body.get("provider_card_id") or ""))
     if op in ("card_create", "card_sync", "card_limit", "card_state"):
         with store.read() as c:
             card = SK.get(c, "fin_cards", str(body.get("card_id")))
@@ -542,6 +573,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
             cards.created(load(c, now), card_id, str(o["action_id"] or ""), str(o["id"]))
         elif op == "card_create":
             cards.not_issued(load(c, now), card_id)
+        elif op == "card_adopt" and card_id:
+            cards.adopt(load(c, now), card_id, answer.body, str(body.get("user_id") or ""), str(o["id"]))
         elif op in ("card_sync", "card_limit", "card_state") and card_id:
             cards.confirmed(load(c, now), card_id, cast(dict[str, Any], answer.body.get("confirmed") or {}),
                             str(o["action_id"] or ""), follow=str(o["id"]))

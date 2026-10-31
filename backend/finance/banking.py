@@ -363,18 +363,20 @@ def _card_used(ctx: Ctx, row: Any, card: Any, amount: int, entry_id: str) -> Non
     authorization hold settles at that amount, or, with none (first seen settled, as in a backfill), a settled hold
     records it, so the allocation never stays reserved beside the actual."""
     hold = SB.hold(ctx.c, str(row["hold_id"])) if row["hold_id"] else None
+    entry = SL.entry_row(ctx.c, entry_id)
+    day = str(entry["entry_date"]) if entry is not None else str(row["txn_date"])
     if hold is not None and str(hold["status"]) in ("held", "settled"):
-        # One record per charge: an adjustment moves its amount and entry, never adds a second.
+        # One record per charge: an adjustment moves its amount, entry and day (the period its use counts in), never
+        # adds a second.
         if str(hold["status"]) == "held":
             SB.settle(ctx.c, str(hold["id"]), amount, entry_id, ctx.at)
-        else:
-            SB.relink(ctx.c, str(hold["id"]), amount, entry_id)
+        SB.relink(ctx.c, str(hold["id"]), amount, entry_id, day)
         return
     b = ctx.budgets().get(str(card["budget_id"] or ""))
     if b is None or not b.active:
         return
     hid = SB.insert_hold(ctx.c, budget_id=b.id, amount=abs(amount), currency=ctx.book.base_currency, source="card",
-                         source_id=f"{row['id']}:settled", target=f"card:{card['id']}", held_on=str(row["txn_date"]),
+                         source_id=f"{row['id']}:settled", target=f"card:{card['id']}", held_on=day,
                          expires_at=None, by=SYSTEM, at=ctx.at)
     SB.settle(ctx.c, hid, amount, entry_id, ctx.at)
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": hid})
@@ -566,19 +568,18 @@ def _signed(money: Any, shown: int) -> int:
 
 def _book_gap(ctx: Ctx, money: Any, end: str, cleared: set[str], statement: int) -> int:
     """How far the books are from the statement: the money account's whole GL balance through `end` (every entry on
-    that line: feed postings, journals, an opening balance), less what the books have that the statement doesn't yet
-    (posted rows not being cleared, dated through `end`), plus what the statement has that the books date later (a
-    cleared row posted on an open day after `end`). 0 when the GL line is the statement. With no GL line, 0."""
+    that line: feed postings, journals, an opening balance), with each uncleared row's own entries through `end`
+    (an original a later correction reversed on an open day still counts there) swapped for what the statement holds
+    of it: its live entry when it is being cleared, else nothing. 0 when the GL line is the statement. With no GL
+    line, 0."""
     gl = str(money["account_id"] or "")
     if not gl:
         return 0
     balance = SK.balances(ctx.c, ctx.book.id, end, [gl]).get(gl, 0)
-    for r in SK.booked_uncleared(ctx.c, str(money["id"]), gl):
-        on_books = str(r["entry_date"]) <= end
-        if str(r["id"]) in cleared and not on_books:
-            balance += int(r["amount"])
-        elif str(r["id"]) not in cleared and on_books:
-            balance -= int(r["amount"])
+    for r in SK.row_effects(ctx.c, ctx.book.id, str(money["id"]), gl, end):
+        balance -= int(r["through_amount"])
+        if str(r["id"]) in cleared:
+            balance += int(r["live_amount"])
     return statement - balance
 
 

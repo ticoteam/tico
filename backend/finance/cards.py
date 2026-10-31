@@ -140,9 +140,9 @@ UNCERTAIN = "uncertain"     # provider_status of a card whose creation was cut o
 
 def uncertain(ctx: Ctx, card_id: str, why: str) -> None:
     """The card's creation may have gone through at Mercury: its reservation stays (a cancel keeps it too) until a
-    look at Mercury's cards (`resolve`) says whether the card exists."""
+    person confirms its Mercury card or that there is none (card_resolve)."""
     SK.update(ctx.c, "fin_cards", card_id, {"provider_status": UNCERTAIN, "sync_status": "failed", "sync_error": why,
-                                            "updated_at": ctx.at})
+                                            "synced_at": None, "updated_at": ctx.at})
 
 
 def _mercury_status(raw: object) -> str:
@@ -155,38 +155,84 @@ def _limit_cents(raw: object) -> int | None:
     return int(cast(Any, value)) if isinstance(value, int) else None
 
 
-def resolve(ctx: Ctx, card: Any, found: list[dict[str, Any]]) -> str:
-    """Settle a cut-off creation from Mercury's cards for its user: exactly one card with its nickname, made since,
-    and not already some other card's, is that card (adopted, then brought to the desired state); none means Mercury
-    never issued it (a cancelled one lets its reservation go; else it stays failed for a person to cancel or issue
-    again); more than one stays uncertain for a person. Returns what it decided."""
+def candidates(ctx: Ctx, card: Any, found: list[dict[str, Any]]) -> str:
+    """What a person needs to settle a cut-off creation, from Mercury's whole card list for its user: the cards with
+    its nickname made since and not already another card's. Never decides: the card stays uncertain, its reservation
+    kept, until card_resolve. The text (also the card's sync_error)."""
     card_id = str(card["id"])
     asked = SK.card_create_payload(ctx.c, card_id)
     nickname = str(asked.get("nickname") or card["nickname"] or "")[:50]
     since = str(card["created_at"])[:10]
     matches = [f for f in found if str(f.get("nickname") or "") == nickname and str(f.get("createdAt") or "")[:10]
                >= since and f.get("id") and SK.card_by_provider(ctx.c, str(card["provider"]), str(f["id"])) is None]
-    if len(matches) > 1:
-        SK.update(ctx.c, "fin_cards", card_id, {"sync_error": f"{len(matches)} Mercury cards could be this one; "
-                                                              "check Mercury", "updated_at": ctx.at})
-        return "several"
-    if not matches:
+    shown = ", ".join(f"{f['id']} (••{str(f.get('lastFour') or '')[-4:]}, {str(f.get('createdAt') or '')[:16]})"
+                      for f in matches[:5])
+    why = (f"Mercury may have issued this card; it lists {len(matches)} possible: {shown}." if matches else
+           f"Mercury lists no card named {nickname!r} made since {since}; it may still have issued it.")
+    SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "failed", "sync_error": why[:300], "synced_at": ctx.at,
+                                            "updated_at": ctx.at})
+    return why
+
+
+def adopt(ctx: Ctx, card_id: str, found: dict[str, Any], user: str, outbox_id: str) -> str:
+    """The Mercury card a person confirmed for a cut-off creation, as Mercury describes it: adopted (then brought to
+    the desired state, a cancel included) when it is that user's and no other card's; else the card stays uncertain
+    with why. Returns what it decided."""
+    card = SK.get(ctx.c, "fin_cards", card_id)
+    if card is None or str(card["provider_status"] or "") != UNCERTAIN:
+        return "settled"
+    pid = str(found.get("id") or "")
+    owner = str(found.get("userId") or "")
+    why = "" if pid else "Mercury did not describe that card"
+    if pid and user and owner and owner != user:
+        why = "that Mercury card is another user's"
+    elif pid and SK.card_by_provider(ctx.c, str(card["provider"]), pid) is not None:
+        why = "that Mercury card is already another card's"
+    if why:
+        SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "failed", "sync_error": why, "updated_at": ctx.at})
+        return "refused"
+    limit = _limit_cents(found.get("spendLimit"))
+    SK.update(ctx.c, "fin_cards", card_id, {
+        "provider_card_id": pid, "last4": str(found.get("lastFour") or "")[-4:] or None,
+        "provider_status": _mercury_status(found.get("status")), "provider_limit": limit,
+        "sync_status": "ok", "sync_error": None, "synced_at": ctx.at, "updated_at": ctx.at})
+    created(ctx, card_id, "", f"adopt-{outbox_id}")
+    return "adopted"
+
+
+def card_resolve(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """A person settles a cut-off creation: `provider_card_id` names the Mercury card it made (read from Mercury, then
+    adopted), or `none` says Mercury never issued it (a cancelled card's reservation goes; an active one is issued
+    again)."""
+    V.only(p, ("card_id", "provider_card_id", "none"))
+    card = _card(ctx, who, V.text(p, "card_id", 80))
+    card_id = str(card["id"])
+    if str(card["provider_status"] or "") != UNCERTAIN:
+        raise FinanceError(CONFLICT, "that card's creation is not in doubt")
+    pid = V.opt_text(p, "provider_card_id", 120) or ""
+    none = V.flag(p, "none")
+    if bool(pid) == none:
+        raise invalid("name the Mercury card (provider_card_id) or confirm there is none")
+    if pid and SK.card_by_provider(ctx.c, str(card["provider"]), pid) is not None:
+        raise FinanceError(CONFLICT, "that Mercury card is already another card's")
+    asked = SK.card_create_payload(ctx.c, card_id)
+
+    def apply(aid: str) -> Result:
+        if pid:
+            queue(ctx, card, "card_adopt", {"provider_card_id": pid, "user_id": str(asked.get("user_id") or "")},
+                  f"card-adopt-{card_id}-{aid}", aid, who)
+            return {"card_id": card_id, "sync_status": "pending"}
+        SK.update(ctx.c, "fin_cards", card_id, {"provider_status": None, "sync_error": None, "updated_at": ctx.at})
         if str(card["status"]) == "cancelled":
             not_issued(ctx, card_id)
-            return "not_issued"
-        SK.update(ctx.c, "fin_cards", card_id, {"provider_status": None, "sync_status": "failed", "sync_error":
-                                                "Mercury never issued this card; cancel it and issue a new one",
-                                                "updated_at": ctx.at})
-        return "missing"
-    f = matches[0]
-    limit = _limit_cents(f.get("spendLimit"))
-    SK.update(ctx.c, "fin_cards", card_id, {
-        "provider_card_id": str(f["id"]), "last4": str(f.get("lastFour") or "")[-4:] or None,
-        "provider_status": _mercury_status(f.get("status")),
-        "provider_limit": limit if limit is not None else int(asked.get("monthly") or 0) or None,
-        "sync_status": "ok", "sync_error": None, "synced_at": ctx.at, "updated_at": ctx.at})
-    created(ctx, card_id, "", f"found-{card_id}")
-    return "found"
+            return {"card_id": card_id, "status": "cancelled"}
+        queue(ctx, card, "card_create", {"user_id": str(asked.get("user_id") or ""),
+                                         "nickname": str(asked.get("nickname") or card["nickname"] or ""),
+                                         "monthly": int(card["limit_amount"] or asked.get("monthly") or 0)},
+              f"card-create-{card_id}-again-{aid}", aid, who)
+        return {"card_id": card_id, "sync_status": "pending"}
+    what = f"Use Mercury card {pid} for this card" if pid else "Mercury never issued this card"
+    return Plan(K.default_gate(ctx.org, who, "card_resolve"), what, apply, facts={"holder": str(card["holder"])})
 
 
 def not_issued(ctx: Ctx, card_id: str) -> None:
@@ -344,7 +390,7 @@ def confirmed_now(ctx: Ctx, card_id: str, amount: int) -> None:
 
 PLANNERS: dict[str, handlers.Planner] = {
     "card_create": card_create, "card_update_limit": card_update_limit, "card_freeze": _state("card_freeze"),
-    "card_unfreeze": _state("card_unfreeze"), "card_cancel": _state("card_cancel")}
+    "card_unfreeze": _state("card_unfreeze"), "card_cancel": _state("card_cancel"), "card_resolve": card_resolve}
 
-__all__ = ["PLANNERS", "UNCERTAIN", "check_lower", "confirmed", "created", "limit_follows", "not_issued", "queue",
-           "resolve", "sync", "uncertain", "used"]
+__all__ = ["PLANNERS", "UNCERTAIN", "adopt", "candidates", "check_lower", "confirmed", "created", "limit_follows",
+           "not_issued", "queue", "sync", "uncertain", "used"]

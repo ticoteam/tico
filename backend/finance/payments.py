@@ -331,6 +331,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             raise FinanceError(CONFLICT, "the payment moved on; check its status")
         if pay["hold_id"]:
             budgeting.release(ctx, str(pay["hold_id"]))
+        unreserve(ctx, pay)
         return {"payment_id": str(pay["id"]), "status": "cancelled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"), f"Cancel the {int(pay['amount']) / 100:.2f} payment",
                 apply)
@@ -362,6 +363,8 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
                                                       "next_try_at": None, "updated_at": ctx.at})
     if pay["hold_id"]:
         budgeting.release(ctx, str(pay["hold_id"]))
+    if status in ("failed", "cancelled"):
+        unreserve(ctx, pay)
     _event(ctx, FAILED, pay, why or status)
     if status == "failed":
         maker = str(pay["created_by"])
@@ -404,6 +407,19 @@ def _own_counts(ctx: Ctx, pay: Any) -> set[tuple[str, str, str]]:
         if h.get("outcome") == "limit" and h.get("period_key"):
             out.add((str(h.get("rule")), str(h.get("period_key")), str(h.get("subject") or "")))
     return out
+
+
+def unreserve(ctx: Ctx, pay: Any) -> None:
+    """A payment that failed or was cancelled gives back the counters it reserved when it was claimed to send (only
+    those: its action's own count stays, as any refused action's does), once: the record empties."""
+    owned = SK.loads_list(pay["counted_json"])
+    if not owned:
+        return
+    for raw in owned:
+        if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
+            rule, key, subject = cast(list[Any], raw)
+            SK.uncount(ctx.c, str(rule), str(key), str(subject), int(pay["amount"]), ctx.at)
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": "[]"})
 
 
 def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:

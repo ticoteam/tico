@@ -124,6 +124,7 @@ class FakeMercury:
         self.calls: list[tuple[str, object]] = []
         self.cards_list: list[dict[str, object]] = []
         self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
+        self.card_page = 500
 
     def _answer(self, name: str, arg: object, default: object):
         self.calls.append((name, arg))
@@ -168,8 +169,19 @@ class FakeMercury:
     def credit_statements(self, account_id):
         return self._answer("credit_statements", account_id, {"statements": [MERCURY["credit_statement_new"]]})
 
-    def cards(self, user_id):
-        return self._answer("cards", user_id, {"cards": [k for k in self.cards_list if k.get("userId") == user_id]})
+    def cards(self, user_id, start_after=None):
+        """One page of `card_page` cards (nextPage names the last card when more follow)."""
+        mine = [k for k in self.cards_list if k.get("userId") == user_id]
+        ids = [str(k["id"]) for k in mine]
+        start = ids.index(start_after) + 1 if start_after in ids else 0
+        page = mine[start:start + self.card_page]
+        more = start + self.card_page < len(mine)
+        return self._answer("cards", (user_id, start_after),
+                            {"cards": page, "page": {"nextPage": str(page[-1]["id"]) if more and page else None}})
+
+    def card(self, card_id):
+        found = next((k for k in self.cards_list if k.get("id") == card_id), None)
+        return self._answer("card", card_id, found if found is not None else self.Answer(404, {}))
 
     def create_card(self, user_id, nickname, monthly_cents):
         return self._answer("create_card", (user_id, monthly_cents), MERCURY["card_created"])

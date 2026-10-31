@@ -5783,7 +5783,11 @@ export type ListFinanceTransactionsParams = {
   source?: "all" | "feed" | "entry";
   start?: string | null;
   status?: "new" | "matched" | "posted" | "ignored" | "pending" | null;
+  teammates?: Array<string> | null;
+  teams?: Array<string> | null;
+  unattributed?: boolean;
   view_as?: string | null;
+  who?: "both" | "bots" | "people";
 };
 export type ListFinanceTransactionsBody = never;
 export type ListFinanceTransactionsResponse = FinanceTransactions;

@@ -9484,6 +9484,69 @@
               ],
               "title": "View As"
             }
+          },
+          {
+            "name": "teams",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teams"
+            }
+          },
+          {
+            "name": "teammates",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teammates"
+            }
+          },
+          {
+            "name": "who",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "both",
+                "bots",
+                "people"
+              ],
+              "type": "string",
+              "default": "both",
+              "title": "Who"
+            }
+          },
+          {
+            "name": "unattributed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Unattributed"
+            }
           }
         ],
         "responses": {
