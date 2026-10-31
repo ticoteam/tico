@@ -8,7 +8,7 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-**What's new** in the sidebar and **Changelog** in the account menu show product changes you
+**What's new** in the sidebar (above Ask Tico, only while something is unread) and **Changelog** in the account menu show product changes you
 have not acknowledged. **Since last look** includes every unread release and team announcement;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
 Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
@@ -220,6 +220,9 @@ release on `/healthz`; otherwise the update counts as unhealthy and is rolled ba
 
 `GET /api/v2/system/update` also says which release the server is `running`, the one it ran `previous`ly and a short
 `history`. The server writes these itself at startup, so they stay right after an update done outside the updater.
+
+A server update never waits for running bot turns. The turns it cuts are flagged as it starts and resume on their own
+after it, with no Needs you item ([how](how-it-works.md)).
 
 Before it switches the server image, the updater takes a consistent SQLite snapshot (`sqlite3` backup API, run in the
 server container) into `/data/snapshots/pre-update-<version>-<time>.sqlite` and keeps the last three. A new version can

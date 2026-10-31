@@ -1,63 +1,55 @@
-/* Ask (ui/app/ask-panel.js): "Ask Tico", a pill at the bottom left of the page, opens the person's chat bot in a panel
-   above it; on a phone the Liquid Dot sits in the centre of the tab bar and opens it as a sheet over the page, above
-   the tab bar. Its mark is the Liquid Dot (liquid-dot.css) on a plain face: the dot is jade, so the face is not. While
-   the panel is open the dot sits beside its name (ldotFly carries it there and back): the pill scales away, and the
-   phone's tab shows a close mark in the dot's place. */
-.ask-fab{position:fixed;left:calc(var(--rail-left) + 16px);bottom:16px;z-index:25;height:40px;padding:0 14px 0 10px;gap:8px;border-radius:999px;
-  border:1px solid var(--line);background:var(--ask-face);color:var(--ink);display:inline-flex;align-items:center;
-  font:600 var(--t-sm)/1 var(--sans);white-space:nowrap;cursor:pointer;box-shadow:0 6px 18px -6px rgba(0,0,0,.35)}
-.ask-fab[hidden]{display:none}
-.ask-fab:hover{background:var(--surface2)}
-/* Open: the pill is gone (askPill scales it away and pops it back, transform and opacity only). */
-.ask-fab.ask-gone{visibility:hidden;pointer-events:none}
+/* Ask (ui/app/ask-panel.js): on a computer "Ask Tico" is the sidebar's bottom row, above the account, and opens the
+   person's chat bot in a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot sits in the
+   centre of the tab bar and opens it as a sheet over the page, above the tab bar. Its mark is the Liquid Dot
+   (liquid-dot.css). While the panel is open the dot sits beside its name (ldotFly carries it there and back) and a
+   close mark holds its place in the row (or the tab). Nothing floats over the page while it is closed. */
+.side-ask{display:flex;align-items:center;gap:2px;min-width:0}
+.ask-row{flex:1;min-width:0;display:flex;align-items:center;gap:var(--s2);padding:7px 10px;border:0;border-radius:6px;background:none;
+  color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;white-space:nowrap;cursor:pointer}
+.ask-row[hidden]{display:none}
+.ask-row:hover,.ask-row[aria-expanded="true"]{background:var(--surface2)}
 .ask-glyph{display:inline-grid;place-items:center;width:20px;height:20px;flex:none}
 .ask-glyph>*{grid-area:1/1}
 .ask-glyph .ask-x{width:20px;height:20px;font-size:20px;color:var(--muted);opacity:0}
 [aria-expanded="true"] .ask-glyph .ldot{opacity:0}
 [aria-expanded="true"] .ask-glyph .ask-x{opacity:1}
 @media (prefers-reduced-motion:no-preference){.ask-glyph .ask-x{transition:opacity var(--dur) var(--ease)}}
-/* What it floats over keeps its footprint clear at the end of the scroll, so no last row hides under it. */
-@media (min-width:761px){
-  #main{padding-bottom:var(--fab-room)}
-  .tasks-pane,#main.upd-chat-layout>.upd-col,.au-rail,.lc-scroll,.dash-grid{padding-bottom:var(--fab-room)}
-  /* a bot's message box sits at the bottom too: it starts --s3 clear of the pill (16px + --ask-pill in from the rail,
-     less the page's 28px gutter) */
-  body:has(#ask-fab:not([hidden])) #main.bot-chat-layout #chat-composer{padding-left:calc(16px + var(--ask-pill) + var(--s3) - 28px)}
-}
-/* With reduced motion the dot holds still, so a working or replying Assistant says so in a word beside the pill. */
-.ask-word{display:none;position:absolute;left:calc(100% + 8px);top:50%;translate:0 -50%;padding:2px 8px;border:1px solid var(--line);
-  border-radius:999px;background:var(--ask-face);color:var(--muted);font-size:var(--t-xs);font-weight:400;white-space:nowrap;pointer-events:none}
+/* With reduced motion the dot holds still, so a working or replying Assistant says so in a word at the row's end. */
+.ask-word{display:none;margin-left:auto;min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--muted);font-size:var(--t-xs)}
 @media (prefers-reduced-motion:reduce){.ask-word:not(:empty){display:block}}
 
-/* A peek: a few words beside the dot, Tico saying something waits on the person (askPeek). It rises in; one at a time. */
-.ask-peek{position:fixed;z-index:24;left:calc(var(--rail-left) + 16px + var(--ask-pill) + 8px);bottom:16px;height:40px;
-  max-width:min(300px,calc(100vw - var(--rail-left) - var(--ask-pill) - 48px));display:flex;align-items:center;border:1px solid var(--line);
+/* A peek: a few words beside the dot, Tico saying something waits on the person (askPeek). On a computer it comes out
+   of the rail level with the Ask row (askPeekPlace); on a phone it rises over the tab bar. One at a time. */
+.ask-peek{position:fixed;z-index:24;left:calc(var(--rail-left) + 8px);bottom:calc(var(--ask-row-y,64px) - 20px);height:40px;
+  max-width:min(300px,calc(100vw - var(--rail-left) - 24px));display:flex;align-items:center;border:1px solid var(--line);
   border-radius:999px;background:var(--ask-face);color:var(--ink);box-shadow:0 6px 18px -6px rgba(0,0,0,.35);font-size:var(--t-sm)}
-.ask-peek[hidden]{display:none}
+.ask-peek:not(.ask-on){display:none}   /* a class, not `hidden` (askOn) */
 .ask-peek-go{flex:1;min-width:0;height:100%;display:flex;align-items:center;padding:0 2px 0 14px;border:0;border-radius:999px 0 0 999px;
   background:transparent;color:inherit;font:inherit;cursor:pointer;text-align:left}
 .ask-peek-text{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ask-peek-x{flex:none;width:32px;height:32px;margin-right:4px;border:0;border-radius:50%;background:transparent;color:var(--muted);cursor:pointer;font-size:12px}
 .ask-peek-x:hover{color:var(--ink)}
 @media (prefers-reduced-motion:no-preference){
-  .ask-peek:not([hidden]){animation:ask-rise .32s cubic-bezier(.2,0,0,1)}
+  .ask-peek.ask-on{animation:ask-out .32s cubic-bezier(.2,0,0,1)}
 }
+@keyframes ask-out{from{opacity:0;transform:translateX(-8px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes ask-rise{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
 
-.ask-panel{position:fixed;left:calc(var(--rail-left) + 16px);bottom:72px;z-index:41;   /* over a "things need you" sheet (settings.css) */
-  width:min(400px,calc(100vw - var(--rail-left) - 32px));
-  height:min(560px,calc(100vh - 100px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
+/* Beside the rail, its foot level with the account row's, so the Ask row it came from stays in view. */
+.ask-panel{position:fixed;left:calc(var(--rail-left) + 12px);bottom:12px;z-index:41;   /* over a "things need you" sheet (settings.css) */
+  width:min(400px,calc(100vw - var(--rail-left) - 24px));
+  height:min(560px,calc(100vh - 24px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
   border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
 /* Closed (askSync): the panel keeps its box, never display:none (shown again from that, it lays out cold), but draws
    none of it, takes no press (what is under it is pressable at once) and, inert, no focus. */
 .ask-panel:not(.ask-shown){visibility:hidden;content-visibility:hidden;pointer-events:none}
-.ask-panel:not(.ask-shown) .ldot{opacity:0}   /* closing: the dot is already on its way back to the pill */
+.ask-panel:not(.ask-shown) .ldot{opacity:0}   /* closing: the dot is already on its way back to the row */
 .ask-head{display:flex;align-items:center;gap:6px;padding:8px 6px 8px 12px;border-bottom:1px solid var(--line);min-width:0}
 .ask-head h2{min-width:0;margin:0;font-size:var(--t-md);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .ask-mark{margin:0 2px}
 .ask-sees{display:inline-flex;align-items:center;gap:4px;min-width:0;max-width:140px;padding:1px 8px;border-radius:999px;
-  font-size:var(--t-xs);color:var(--accent);background:color-mix(in srgb,var(--accent) 12%,transparent)}
-.ask-sees[hidden]{display:none}
+  font-size:var(--t-xs);color:var(--muted);background:color-mix(in srgb,var(--ink) 7%,transparent)}
+.ask-sees:not(.ask-on){display:none}
 .ask-sees [data-ask-sees-name]{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* Who else is in the chat: Tico Support's chip, with its × (askPeople). It takes the place of the page the panel sees. */
 .ask-people{display:flex;align-items:center;min-width:0;margin-right:auto}
@@ -73,9 +65,9 @@
 .ask-sav .nav-icon{font-size:14px;width:14px;height:14px;color:inherit;font-variation-settings:"FILL" 1,"wght" 400,"GRAD" 0,"opsz" 20}
 .ask-sav.ask-fly,.ask-sup-chip.ask-fly{position:fixed;z-index:70;margin:0;will-change:transform;pointer-events:none}
 /* "Loop in Support": a plain link at the top right while support is out of the chat (askFlip). */
-.ask-loop{flex:none;padding:4px;border:0;background:transparent;font:inherit;font-size:var(--t-sm);white-space:nowrap;color:var(--accent-quiet);cursor:pointer}
-.ask-loop[hidden]{display:none}
-.ask-loop:hover{color:var(--accent)}
+.ask-loop{flex:none;padding:4px;border:0;background:transparent;font:inherit;font-size:var(--t-sm);white-space:nowrap;color:var(--link-quiet);cursor:pointer}
+.ask-loop:not(.ask-on){display:none}
+.ask-loop:hover{color:var(--link)}
 .ask-loop:disabled{opacity:.6;cursor:default}
 .ask-ib{width:32px;height:32px;flex:0 0 32px;border:0;border-radius:8px;background:transparent;color:var(--muted);display:inline-flex;
   align-items:center;justify-content:center;cursor:pointer;font:inherit;font-size:15px;line-height:var(--lh-none)}
@@ -119,7 +111,7 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
 .mobile-ask{display:none}
 .mobile-ask[hidden]{display:none!important}
 @media (max-width:760px){
-  .ask-fab{display:none}
+  .side-ask{display:none}   /* the tab bar's dot is Ask, and Search has its own tab */
   .mobile-ask{display:flex}
   /* The dot, live, in the centre of the tab bar: the two tabs on its left share the width the three on its right do. */
   #mobile-nav:has(.mobile-ask:not([hidden])){grid-template-columns:repeat(2,minmax(0,1.5fr)) minmax(64px,1.2fr) repeat(3,minmax(0,1fr))}
@@ -128,6 +120,7 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
   .mobile-ask .ask-glyph .ask-x{width:24px;height:24px;font-size:24px}
   /* a few words: centred over the dot, as wide as they are */
   .ask-peek{left:50%;translate:-50% 0;max-width:calc(100vw - 24px);bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px)}
+  .ask-peek.ask-on{animation-name:ask-rise}
   .ask-panel{left:0;right:0;width:auto;top:max(48px,env(safe-area-inset-top));height:auto;
     bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));border-radius:16px 16px 0 0;border-width:1px 0 0}
   body.mobile-composer-focus .ask-panel{bottom:0}   /* typing: the tab bar makes way for the keyboard (layout.css) */

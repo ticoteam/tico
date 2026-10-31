@@ -43,7 +43,7 @@ img.av-photo{object-fit:cover;background:var(--surface2)}
 .av.morph .av-shape{animation:av-breathe 3.6s ease-in-out infinite;will-change:transform}
 .node.cur{background:linear-gradient(90deg,var(--surface2),transparent)}
 .chip{display:inline-flex;align-items:center;gap:6px;color:var(--ink);white-space:nowrap}
-.chip:hover{text-decoration:none;color:var(--accent)}
+.chip:hover{text-decoration:none;color:var(--ink)}
 @media (prefers-reduced-motion:reduce){.av::after,.av,.av-shape{animation:none!important}}
 
 .proj{color:var(--muted);font-size:.85em;margin-right:5px}
