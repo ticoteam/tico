@@ -696,11 +696,6 @@ def _requests(provider: Provider, account: str) -> tuple[list[dict[str, Any]], b
     return _every_page(lambda after: provider.send_requests(account, after), "requests")
 
 
-def _transactions(provider: Provider) -> tuple[list[dict[str, Any]], bool]:
-    """Mercury's transactions, every page (up to REQUEST_PAGES): where an unknown transfer's out-leg is looked for."""
-    return _every_page(provider.transactions, "transactions")
-
-
 def _every_page(read: Callable[[str | None], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:
     """One of Mercury's lists read to the end, every page (up to REQUEST_PAGES). The flag says the whole list was
     read (a failed or cut-short read never counts as "not there")."""
@@ -720,30 +715,54 @@ def _every_page(read: Callable[[str | None], Answer], rows_key: str) -> tuple[li
 def transfers_unknown(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
     """Transfers left unknown (a call that may have landed) from this connection's accounts: each is found by its key
     in Mercury's transactions, as payments are found in its requests. Not found, it stays unknown; a finance admin was
-    asked when it went unknown, and nothing sends it again."""
+    asked when it went unknown, and nothing sends it again. Mercury's full list is read a poll at a time, from the place
+    the transfer's last poll stopped (its find_after), so a leg far down the list is found by a later poll."""
     with store.read() as c:
         due = [(t, transfers.source_account(c, t)) for t in SK.unknown_transfers(c, cid)]
     for t, account in due:
-        rows = _unknown_rows(provider, t, account)
+        tid = str(t["id"])
+        narrow = _searched(provider, t, account)
+        if any(transfers.matches(t, account, row) for row in narrow):
+            rows, after = narrow, None
+        else:
+            rows, after = _read_from(provider, str(t["find_after"] or "") or None)
         with store.transaction() as c:
-            transfers.found(load(c, now), SK.get(c, "fin_transfers", str(t["id"])), rows)
+            if not transfers.found(load(c, now), SK.get(c, "fin_transfers", tid), rows) and after:
+                SK.update(c, "fin_transfers", tid, {"find_after": after})
     return []
 
 
-def _unknown_rows(provider: Provider, t: Any, account: str) -> list[dict[str, Any]]:
-    """The transactions an unknown transfer's out-leg may be among. First the source account's transactions that Mercury's
-    search finds by the transfer's note, in the days around its claim (one page). When none of those is the leg, every
-    transaction is read: a note can sit in a memo field the search does not read."""
-    narrow: list[dict[str, Any]] = []
-    if account:
-        start, end = transfers.search_days(t)
-        page = provider.account_transactions(account, transfers.note(t), start, end)
-        narrow = listed(page, "transactions") if page.ok else []
-    if any(transfers.matches(t, account, row) for row in narrow):
-        return narrow
-    rows, _ = _transactions(provider)
-    return rows
+def _searched(provider: Provider, t: Any, account: str) -> list[dict[str, Any]]:
+    """The source account's transactions that Mercury's search finds by the transfer's note, in the days around its
+    claim (one page). Mercury's search reads a transaction's note and description, so a key held only in a memo is
+    found by the paged read instead."""
+    if not account:
+        return []
+    start, end = transfers.search_days(t)
+    page = provider.account_transactions(account, transfers.note(t), start, end)
+    return listed(page, "transactions") if page.ok else []
 
+
+def _read_from(provider: Provider, after: str | None) -> tuple[list[dict[str, Any]], str | None]:
+    """Mercury's transactions from `after` on, up to REQUEST_PAGES pages: the rows read, and the cursor the next read
+    continues from (the last page's next page, or the last row once the list has ended). A failed read keeps its
+    place."""
+    rows: list[dict[str, Any]] = []
+    cursor = after
+    for _ in range(REQUEST_PAGES):
+        page = provider.transactions(cursor)
+        if not page.ok:
+            break
+        got = listed(page, "transactions")
+        rows += got
+        nxt = next_page(page)
+        if nxt:
+            cursor = nxt
+            continue
+        if got:
+            cursor = str(got[-1].get("id") or "") or cursor
+        break
+    return rows, cursor
 
 def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
     """Statements for reconciliation, once a day: IO credit statements (what is owed, sign normalized once) and the

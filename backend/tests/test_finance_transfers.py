@@ -262,6 +262,111 @@ def test_migration_73_adds_fin_transfers_to_an_install_made_before_it_and_runnin
         assert found[0] == 1
 
 
+# fin_transfers as migration 73 first wrote it: before the columns added since, and the posted and cancelled statuses
+FIRST_FIN_TRANSFERS = """CREATE TABLE IF NOT EXISTS fin_transfers (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
+  from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed')),
+  provider_txn_id TEXT, last_error TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  CHECK (from_money_account_id <> to_money_account_id));"""
+
+
+def test_migration_73_adds_every_fin_transfers_column_added_since_it_was_first_written(books):
+    """An install that ran migration 73 as first written gets the columns added since, idempotently."""
+    with books.transaction() as c:
+        c.execute("DROP TABLE fin_transfers")
+        c.execute(FIRST_FIN_TRANSFERS)
+        schema.gaps_books(c)
+        schema.gaps_books(c)
+        have = {str(r[1]) for r in c.execute("PRAGMA table_info(fin_transfers)").fetchall()}
+    assert {"from_feed_id", "to_feed_id", "settled_at", "submitted_at", "counted_json", "provider_credit_txn_id",
+            "find_after"} <= have, have
+
+
+def _limit_per_month(books, rule_id_out: list[str] | None = None) -> str:
+    with books.transaction() as c:
+        rule_id = str(act(c, OWNER, "rule_create", {
+            "name": "Moves per month", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "limit", "limit": 50_000, "per": "month"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal", "amount": 10}, "expect": "limit"}]}
+        ).result["rule_id"])
+    return rule_id
+
+
+def _reserved(books, rule_id: str) -> tuple[int, int]:
+    with books.read() as c:
+        return tuple(c.execute("SELECT coalesce(sum(amount),0), coalesce(sum(count),0) FROM fin_rule_counters "
+                               "WHERE rule_id=?", (rule_id,)).fetchone())
+
+
+def test_a_transfer_cancelled_after_a_429_gives_back_the_limit_its_claim_reserved(books):
+    """Mercury answered 429 after the send claim reserved a monthly limit, so the transfer stays queued to go again.
+    Cancelling it takes the limit back: the counter holds only what went."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "held")).status == "committed"
+    rule_id = _limit_per_month(books)
+    fake.queue["create_transfer"] = [Answer(429, {"message": "slow down"})]
+    sync_once(books, fake)
+    assert _reserved(books, rule_id) == (10_000, 1)
+    with books.transaction() as c:
+        tid = str(c.execute("SELECT id FROM fin_transfers").fetchone()[0])
+        assert act(c, OWNER, "payment_cancel", {"transfer_id": tid}).status == "committed"
+    assert _reserved(books, rule_id) == (0, 0)
+    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+
+
+def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_claim_reserved(books):
+    """A rule that now refuses a transfer that reserved a limit and was then answered 429: the refusal cancels it,
+    and the limit it reserved comes back."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "held")).status == "committed"
+    rule_id = _limit_per_month(books)
+    fake.queue["create_transfer"] = [Answer(429, {"message": "slow down"})]
+    sync_once(books, fake)
+    assert _reserved(books, rule_id) == (10_000, 1)
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {
+            "name": "No bank moves", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "deny"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal"}, "expect": "deny"}]})
+        assert made.status == "committed", made
+    sync_once(books, fake, LATEST)
+    assert len(fake.sent("create_transfer")) == 1
+    assert _reserved(books, rule_id) == (0, 0)
+    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+
+
+def test_an_unknown_transfers_out_leg_past_five_thousand_transactions_is_found_by_a_later_poll(books):
+    """The fallback reads REQUEST_PAGES pages of Mercury's transactions a poll, then keeps its place on the transfer,
+    so a later poll reads on from there. The leg sits past the first 5,000 and has its key in externalMemo only, so the
+    search misses it and the paged read finds it."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")        # sent, no answer: unknown; the feed backfills here
+    (sent,) = fake.sent("create_transfer")
+    for i in range(5_000):
+        fake.txns[f"pad-{i}"] = {**_leg(f"pad-{i}", "acct-elsewhere", -1.0, "2026-10-16"), "note": None}
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": None,
+                            "externalMemo": sent["note"], "createdAt": "2026-10-16T00:04:00Z"}
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert tuple(_rows(books, "SELECT status FROM fin_transfers")[0]) == ("unknown",)
+    before = len(fake.sent("transactions"))
+    sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
+    assert tuple(_rows(books, "SELECT status, provider_txn_id FROM fin_transfers")[0]) == ("submitted", "leg-out")
+    # the next poll reads on from where the last one stopped
+    assert fake.sent("transactions")[before:][0] == list(fake.txns)[4_999]
+
+
 def test_a_transfer_needs_both_accounts_in_the_requesters_view_and_names_neither_otherwise(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
