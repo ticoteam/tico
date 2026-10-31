@@ -50,6 +50,23 @@ class Sending(Writing):
         row = db.get_send(self.conn(), compose.send_key("influencer", "42", did))
         self.assertEqual(row["status"], "sent")
 
+    def test_a_warned_mail_goes_with_the_warning_line_on_its_body(self):
+        # The org rule check answers warn (backend/org_rule_check.py): the recipient reads the line above the mail.
+        did = self.make()
+        line = "Warning: Influencer's message may break the rule 'Offers need a review.'"
+        pl.HUB_POST = lambda path, body: {"outcome": "warn", "warning_line": line,
+                                          "rule_warning": {"text": "delivered with a warning"}}
+        rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(p["sent"])
+        payload = self.service.store[self.service.sent[-1]["id"]]["payload"]
+        parts = payload.get("parts") or [payload]
+        data = next(x["body"]["data"] for x in parts if x["mimeType"] == "text/plain")
+        import base64
+        text = base64.urlsafe_b64decode(data + "=" * (-len(data) % 4)).decode()
+        self.assertTrue(text.startswith(line), text[:200])
+        self.assertIn(GOOD_BODY.strip().splitlines()[0], text)
+
     def test_the_idempotency_row_is_written_before_the_api_call(self):
         did = self.make()
         self.service.send_fails = True

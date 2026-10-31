@@ -2510,11 +2510,10 @@ def install_views(app, store, auth, mutate, task_view):
             attempt = c.execute("SELECT * FROM attempts WHERE id=?", (run_id,)).fetchone()
             events = c.execute("SELECT seq,kind,payload_json,created FROM attempt_events "
                                "WHERE attempt_id=? ORDER BY seq", (run_id,)).fetchall()
-            if attempt and attempt["state"] in ("leased", "running"):
-                # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
-                from .org_rule_check import watched
-                if watched(c, turn["bot"]):
-                    events = [e for e in events if e["kind"] not in ("delta", "message")]
+            # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
+            from .org_rule_check import hides_run
+            if hides_run(c, attempt):
+                events = [e for e in events if e["kind"] not in ("delta", "message")]
             lines = [store.settings.app_name + " cloud run " + run_id, "Bot: " + turn["bot"],
                      "Started: " + str(turn["started"]), "Finished: " + str(turn["finished"]),
                      "Outcome: " + str(turn["exit"])]
