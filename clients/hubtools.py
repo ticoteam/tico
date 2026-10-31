@@ -5933,6 +5933,11 @@ FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
 # Whole-number fields an "Other · n" row does not add up: they describe one row, not an amount.
 _FIN_NOT_ADDED = {"pct", "days_late", "priority", "depth", "level", "version", "revision", "view_version"}
+# Lists that are the report's calendar (one item per period column), not entity rows: every row's amounts line up
+# with them, so they are never folded or cut.
+_FIN_COLUMNS = {"columns", "periods", "buckets"}
+# The last guard's steps: text cut to n characters, nested lists of rows or words cut to m items.
+_FIN_SHRINK = ((400, 20), (120, 5), (60, 1))
 
 
 def _fin_budget(asked, default):
@@ -5949,7 +5954,8 @@ def _fin_size(value):
 
 
 def _fin_fit(result, key, budget):
-    """How many of `result[key]`'s rows fit within `budget` beside the rest of the result (at least one)."""
+    """How many of `result[key]`'s rows fit within `budget` beside the rest of the result (at least one: a row too
+    big alone has its detail cut by `_fin_guard`)."""
     rows = result.get(key) or []
     room = budget - _fin_size({**result, key: []}) - 120      # 120: the "Other · n" row
     n, used = 0, 0
@@ -5978,10 +5984,13 @@ def _fin_other(rows, **more):
 
 
 def _fin_longest(value, path=()):
-    """The path to the longest list of rows (dicts) anywhere in `value`, and its length."""
+    """The path to the longest list of entity rows (dicts) anywhere in `value`, and its length. Period columns are
+    not rows: folding them would leave every row's amounts out of line with the calendar."""
     best = (None, 0)
     if isinstance(value, dict):
         for k, v in value.items():
+            if k in _FIN_COLUMNS:
+                continue
             found = _fin_longest(v, path + (k,))
             if found[1] > best[1]:
                 best = found
@@ -6023,6 +6032,55 @@ def _fin_fold(result, budget):
     return result
 
 
+def _fin_numbers(value):
+    return all(x is None or (isinstance(x, (int, float)) and not isinstance(x, bool)) for x in value)
+
+
+def _fin_shrink(value, text, items):
+    """A copy of `value` with strings past `text` characters cut and nested lists past `items` cut: rows fold into
+    "Other · n", words into "+n more". Lists of numbers (amounts per column) and period columns stay whole."""
+    if isinstance(value, str):
+        return value if len(value) <= text else value[:text] + "…"
+    if isinstance(value, dict):
+        return {k: ([_fin_shrink(x, text, items) for x in v] if k in _FIN_COLUMNS and isinstance(v, list)
+                    else _fin_shrink(v, text, items)) for k, v in value.items()}
+    if isinstance(value, list):
+        if _fin_numbers(value):
+            return value
+        if len(value) <= items:
+            return [_fin_shrink(x, text, items) for x in value]
+        kept = [_fin_shrink(x, text, items) for x in value[:items]]
+        rest = value[items:]
+        if all(isinstance(x, dict) for x in rest):
+            count = sum(int(x.get("count") or 1) if x.get("key") == "other" else 1 for x in rest)
+            other = _fin_other([{k: v for k, v in x.items() if k not in ("key", "label", "count")} for x in rest])
+            other.update(label=f"Other · {count}", count=count)
+            return kept + [_fin_shrink(other, text, items)]
+        return kept + [f"+{len(rest)} more"]
+    return value
+
+
+def _fin_guard(result, budget, key=None):
+    """The last check on a Finance result: never over `budget`. Past it, long text and nested detail are cut step by
+    step (the rows of `key`, the page, keep their number: only what is inside them is cut, so paging stays exact).
+    If even that does not fit, an error says so instead of a result over the cap."""
+    size = _fin_size(result)
+    if size <= budget or not isinstance(result, dict):
+        return result
+    for text, items in _FIN_SHRINK:
+        out = {k: ([_fin_shrink(r, text, items) for r in v] if k == key and isinstance(v, list)
+                   else _fin_shrink(v, text, items)) for k, v in result.items()}
+        if _fin_size(out) <= budget:
+            return out
+    marker = {"error": "too_big", "chars": size, "cap": budget,
+              "message": "This result is over the size cap even with its detail cut: ask for fewer rows, a narrower "
+                         "window or a kind"}
+    if result.get("next_cursor"):
+        marker["next_cursor"] = result["next_cursor"]
+        marker["message"] += "; next_cursor skips past these rows"
+    return marker
+
+
 def _fin_query(args, names):
     return {k: args[k] for k in names if args.get(k) is not None and args.get(k) != ""}
 
@@ -6032,15 +6090,15 @@ def _fin_paged(api, path, query, key, budget):
     carries on right after them, and one "Other · n" row says how many moved to the next page."""
     result = api.get(path, **query)
     if _fin_size(result) <= budget or not result.get(key):
-        return result
+        return _fin_guard(result, budget, key)
     n = _fin_fit(result, key, budget)
     asked = len(result[key])
     if n >= asked:
-        return result
+        return _fin_guard(result, budget, key)
     smaller = api.get(path, **{**query, "limit": n})
     smaller[key] = list(smaller.get(key) or []) + [{"key": "other", "label": f"Other · {asked - n}", "count": asked - n,
                                                     "next": "page on with next_cursor"}]
-    return smaller
+    return _fin_guard(smaller, budget, key)
 
 
 @tool("hub_finance_search", "Search the books you may see: entries, bank and card rows, bills, invoices, contacts and "
@@ -6074,7 +6132,7 @@ def finance_search(api, args):
             kinds[name] = kinds.get(name, 0) + 1
         result["results"] = rows[:n] + [{"key": "other", "label": f"Other · {len(rest)}", "count": len(rest),
                                          "kinds": kinds, "next": "name a kind to page through it"}]
-    return result
+    return _fin_guard(result, budget, "results")
 
 
 @tool("hub_finance_report", "One report cut to your view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, "
@@ -6091,10 +6149,11 @@ def finance_report(api, args):
     if args["kind"] == "close":
         if not args.get("month"):
             raise APIError("validation", "close needs month (YYYY-MM)")
-        return api.get("finance/close/" + quote(str(args["month"]), safe=""))
+        return _fin_guard(api.get("finance/close/" + quote(str(args["month"]), safe="")), FINANCE_CHARS)
     query = _fin_query(args, ("start", "end", "period", "basis", "compare", "top_n", "by"))
     result = api.get("finance/reports/" + quote(str(args["kind"]), safe=""), **query)
-    return _fin_fold(result, _fin_budget(args.get("top_n"), 20))
+    budget = _fin_budget(args.get("top_n"), 20)
+    return _fin_guard(_fin_fold(result, budget), budget)
 
 
 @tool("hub_finance_metric", "One number you may see, with when it was worked out: cash, burn, runway_months, revenue, "
@@ -6129,7 +6188,7 @@ def finance_act(api, args):
 @tool("hub_finance_action", "A Finance action's status and result (yours, one you decide, or one your view covers).",
       {"action_id": _s("The action id from hub_finance_act")}, ("action_id",))
 def finance_action(api, args):
-    return api.get("finance/actions/" + quote(str(args["action_id"]), safe=""))
+    return _fin_guard(api.get("finance/actions/" + quote(str(args["action_id"]), safe="")), FINANCE_CHARS)
 
 
 @tool("hub_finance_inbox", "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "

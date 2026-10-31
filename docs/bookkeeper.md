@@ -47,11 +47,16 @@ PUT /api/v2/finance/bills-address   {"address": "bills@acme.example"}    # null 
 
 `GET /api/v2/finance/bills` returns it as `bills_email`.
 
-Mail reaches Tico through an Email & Phone inbox. When the bills address is one of those inboxes, each PDF or image
+Mail reaches Tico through an Email & Phone inbox. When the bills address is one of those inboxes (or is exactly one of
+an email's recipient addresses; a display name or a look-alike address does not count), each PDF or image
 attached to an email that reaches it is filed once in the Bookkeeper's Library and handed to Finance as an unmatched
 receipt. The next Books check lists it with the sender and subject. The Bookkeeper reads the file, finds or adds the
 vendor, and enters the bill with `bill_create` (origin `email`, the file attached). Finance raises
 `finance.bill.received` and the file leaves the unmatched receipts. A re-delivered email adds nothing.
+
+A file Finance did not take is listed in each Books check until Finance holds it (attached anywhere, or kept as an
+unmatched receipt). A file Tico could not fetch is tried again after 1 minute, 10 minutes, 1 hour and 6 hours; after
+five failed tries it is listed in one Books check and not again.
 
 When `inbox_id` is null, no inbox receives the address and mail to it never reaches Tico. Uploading a bill still
 works either way.

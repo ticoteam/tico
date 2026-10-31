@@ -11,8 +11,6 @@ from backend import bookkeeper as BK
 from backend import groups, postal_mail
 from backend.finance import actions as FA
 from backend.finance import reads as FR
-from backend.finance.core import rights as R
-from backend.finance.store import access as SA
 from backend.onboarding import helper_templates
 from backend.store import H
 from backend.tests.test_goal_manager import BASE
@@ -20,6 +18,7 @@ from backend.tests.test_onboarding import draft, environment, machine, signed_in
 
 TEMPLATE = Path(__file__).resolve().parents[2] / "templates" / "catalog" / "bookkeeper"
 DIGEST = "a" * 64
+DEFAULT_RIGHTS = {"finance.book", "finance.ap", "finance.ar", "finance.pay", "finance.cards"}
 PDF = b"%PDF-1.4 Acme invoice 1042"
 
 
@@ -49,13 +48,18 @@ def checks(api):
         return [dict(r) for r in c.execute("SELECT id,title,body,status,private FROM tasks WHERE owner=?", (BK.ACTOR,))]
 
 
+def rights(c):
+    (row,) = [t for t in FR.access(c, BK.ACTOR)["teammates"] if t["teammate"] == BK.ACTOR]
+    return set(row["rights"])
+
+
 def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(environment):
     api = built(environment)
     ensure(api)
     ensure(api)
     with api.app.state.store.read() as c:
         assert H.bot(c, BK.SLUG)["state"] == "active" and BK.built(c)
-        assert SA.rights_of(c, BK.ACTOR, H.now()) == frozenset(R.BOOKKEEPER)
+        assert rights(c) == DEFAULT_RIGHTS
         assert c.execute("SELECT count(*) FROM events WHERE action='bookkeeper.view_asked'").fetchone()[0] == 1
         asks = c.execute("SELECT owner FROM tasks WHERE title=?", (BK.VIEW_TITLE,)).fetchall()
         assert len(asks) == 1 and asks[0]["owner"].startswith("human:")
@@ -64,11 +68,11 @@ def test_it_is_built_once_outside_the_org_chart_with_exactly_its_default_rights(
     store = api.app.state.store
     with store.transaction() as c:                  # a revoke sticks: the next start does not grant it again
         owner = "human:" + api.app.state.auth.owner_id(c)
-        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": R.PAY}, "revoke-pay").status == "committed"
+        assert FA.act(c, owner, "right_revoke", {"teammate": BK.ACTOR, "right": "finance.pay"}, "revoke-pay").status == "committed"
     ensure(api)
     check(api)
     with store.read() as c:
-        assert R.PAY not in SA.rights_of(c, BK.ACTOR, H.now())
+        assert "finance.pay" not in rights(c)
 
 
 def test_an_empty_queue_is_a_quiet_check_and_news_opens_one_private_task_once(environment):
@@ -148,3 +152,82 @@ def test_the_retired_bookkeeping_template_is_offered_nowhere_but_a_bot_built_fro
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(slug,display_name,state) VALUES('bookkeeping','Acme Books','active')")
         assert "bookkeeping" in {card["template"] for card in onboarding.catalog(c)}
+
+
+def _addressed(api):
+    named = api.put("/api/v2/finance/bills-address", json={"address": "bills@acme.example"}, headers=signed_in())
+    assert named.status_code == 200, named.text
+    return api.app.state.store
+
+
+def test_only_the_exact_bills_address_among_the_recipients_counts(environment):
+    api = built(environment)
+    ensure(api)
+    store = _addressed(api)
+    spoofs = ["bills+x@evil.example", '"bills@acme.example" <x@evil.example>', "x@evil.example (bills@acme.example)",
+              "evilbills@acme.example", ["ap@acme.example", "bills@acme.example.evil.example"]]
+    with store.transaction() as c:
+        for n, to in enumerate(spoofs):
+            assert BA.emailed(c, {**_email("ibx_other"), "delivery_id": f"dlv_s{n}", "to": to}) == 0, to
+        assert BA.emailed(c, {**_email("ibx_other"), "to": "Acme AP <a@acme.example>, Bills <BILLS@acme.example>"}) == 1
+
+
+def test_a_check_reads_every_page_of_the_queue(environment, monkeypatch):
+    api = built(environment)
+    ensure(api)
+    rows = [{"kind": "uncategorized", "id": f"fd_{i}", "label": f"Row {i}"} for i in range(200)]
+    rows += [{"kind": "bill_to_enter", "id": "bil_late", "label": "Acme Supplies 7"}]
+
+    def pages(c, viewer, limit=50, cursor=None, at=None):
+        start = int(cursor or 0)
+        nxt = str(start + limit) if start + limit < len(rows) else None
+        return {"items": rows[start:start + limit], "counts": {"uncategorized": 200, "bill_to_enter": 1},
+                "next_cursor": nxt}
+    monkeypatch.setattr(FR, "inbox", pages)
+    assert check(api)["items"] == 201
+    (task,) = checks(api)
+    assert "bil_late" in task["body"]
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT 1 FROM bookkeeper_seen WHERE key='bill_to_enter:bil_late'").fetchone()
+
+
+def test_a_failing_fetch_backs_off_then_is_listed_once_and_filed_work_closes(environment, monkeypatch):
+    api = built(environment)
+    ensure(api)
+    store = _addressed(api)
+    with store.transaction() as c:
+        c.execute("INSERT INTO inbound_inboxes(inbox_id,kind,name,address,state,created_by) "
+                  "VALUES('ibx_1','email','Bills','bills@acme.example','active','human:test')")
+        assert BA.emailed(c, _email("ibx_1")) == 1
+    tries = []
+
+    def down(url, headers):
+        tries.append(url)
+        raise postal_mail.Unavailable("hq_down")
+    monkeypatch.setattr(postal_mail, "_get_bytes", down)
+    service = SimpleNamespace(off=False, url="https://hq.example", key="k")
+    blobs, files = api.app.state.blobs, api.app.state.files
+    BA.drain(service, store, blobs, files)
+    BA.drain(service, store, blobs, files)                           # still inside its backoff: not fetched again
+    assert len(tries) == 1
+    with store.transaction() as c:
+        c.execute("UPDATE bills_inbound SET tries=?, updated_at=?", (BA.MAX_TRIES - 1, H.shift(H.now(), days=-1)))
+    BA.drain(service, store, blobs, files)
+    assert len(tries) == 2
+    with store.read() as c:
+        assert c.execute("SELECT state FROM bills_inbound").fetchone()["state"] == "failed"
+    assert check(api)["items"] == 1 and "Invoice 1042" in checks(api)[0]["body"]
+    with store.transaction() as c:
+        assert c.execute("SELECT state FROM bills_inbound").fetchone()["state"] == "reported"
+        later = BK.check(c, api.app.state.auth, H.shift(H.now(), hours=BK.REPEAT_HOURS + 1))
+    assert later["words"] == "Nothing new"
+
+    monkeypatch.setattr(postal_mail, "_get_bytes", lambda url, headers: (PDF, "application/pdf"))
+    with store.transaction() as c:                                   # a hand-over Finance refused, later filed by hand
+        assert BA.emailed(c, {**_email("ibx_1"), "delivery_id": "dlv_2"}) == 1
+    BA.drain(service, store, blobs, files)
+    with store.transaction() as c:
+        c.execute("UPDATE bills_inbound SET state='needs_entry', code='denied' WHERE delivery='dlv_2'")
+        assert BA.reconcile(c) == 1
+        assert c.execute("SELECT state FROM bills_inbound WHERE delivery='dlv_2'").fetchone()["state"] == "filed"
+        assert BA.for_bookkeeper(c) == []

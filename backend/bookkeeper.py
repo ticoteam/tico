@@ -11,9 +11,10 @@ lines stay private either way).
 Its work comes two ways. Events that need an answer on the day are routines in its bot.yaml: finance.bill.due_soon,
 finance.invoice.overdue and finance.period.ready, one task each. Everything that arrives in volume or is a standing
 state comes from the system routine `bookkeeper_check` (hourly by default, backend/scheduler.py): plain code reads
-the Bookkeeper's own Finance work queue (`finance.reads.inbox`, cut to its view: rows to categorize, draft bills,
-receipts and emailed bills to match, failed syncs, budgets near their limit), the days since money accounts were
-reconciled, and emailed bills Finance did not take (backend/bills_address.py). Kinds its event routines answer are left
+the Bookkeeper's own Finance work queue (`finance.reads.inbox`, every page, cut to its view: rows to categorize, draft
+bills, receipts and emailed bills to match, failed syncs, budgets near their limit), the days since money accounts were
+reconciled, and emailed bills Finance did not take (backend/bills_address.py; one Finance has since filed drops out,
+and a bill whose fetch failed for good is listed in one check only). Kinds its event routines answer are left
 out of the check. An item already listed in the last day with the same facts is not news. With no news it is a quiet
 run: no task and no model call. Otherwise one private task owned by the Bookkeeper, "Books check (<n>)", carries the
 whole queue; a still-open one absorbs the next check (its body is replaced and the bot woken only when the body
@@ -33,6 +34,7 @@ KEEP_DAYS = 7               # the ledger forgets an item this long after it was 
 STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month and its arrival is listed
 PER_KIND = 25               # lines one kind contributes to the body; the rest are counted
 BODY_BYTES = 12000          # the body is cut here
+INBOX_PAGES = 10            # pages of 200 read from the Finance queue per check: past every kind's 200-item cap
 ORDER = ("sync_failed", "bill_to_enter", "bill_email", "unmatched_receipt", "uncategorized", "missing_receipt",
          "unreconciled", "budget_near_limit")
 ON_EVENT = ("bill_due", "invoice_overdue", "period_ready")   # its bot.yaml routines answer these, one task per event
@@ -121,18 +123,24 @@ def collect(c):
     from .finance import actions as FA
     from .finance import reads as FR
     from . import bills_address
-    items, counts = [], {}
-    try:
-        queue = FR.inbox(c, ACTOR, limit=200)
-    except FA.FinanceError:
-        queue = {"items": [], "counts": {}}
-    counts.update(queue.get("counts") or {})
+    items, counts, queue, cursor = [], {}, [], None
+    for _ in range(INBOX_PAGES):
+        try:
+            page = FR.inbox(c, ACTOR, limit=200, cursor=cursor)
+        except FA.FinanceError:
+            break
+        if cursor is None:
+            counts.update(page.get("counts") or {})
+        queue.extend(page.get("items") or [])
+        cursor = page.get("next_cursor")
+        if not cursor:
+            break
     for kind in ON_EVENT:
         counts.pop(kind, None)
     emailed = bills_address.for_bookkeeper(c)
-    names = bills_address.labels(c, [str(row.get("file_id") or "") for row in queue.get("items") or []
+    names = bills_address.labels(c, [str(row.get("file_id") or "") for row in queue
                                      if row.get("kind") == "unmatched_receipt"])
-    for row in queue.get("items") or []:
+    for row in queue:
         if row["kind"] in ON_EVENT:
             continue
         if row["kind"] == "unmatched_receipt":
@@ -218,13 +226,16 @@ def check(c, auth, at):
     from .finance import reads as FR
     if not FR.is_set_up(c) or not active(c):
         return {"items": 0, "words": "The Bookkeeper is off", "task": None}
+    from . import bills_address
     grant_defaults(c)
     ask_for_view(c, _owner(c, auth))
+    bills_address.reconcile(c)
     items, counts = collect(c)
     fresh = _fresh(c, items, at)
     task_id, state = None, ""
     if fresh:
         task_id, state = deliver(c, render(items, counts), sum(counts.values()))
+        bills_address.listed(c, [item["id"] for item in items if item["kind"] == "bill_email"])
         for item in fresh:
             c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
                       "stamp=excluded.stamp, seen=excluded.seen", (item["key"], item["stamp"], at))

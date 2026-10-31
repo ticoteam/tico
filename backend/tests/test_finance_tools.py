@@ -101,3 +101,33 @@ def test_a_big_report_folds_its_tail_into_one_other_row_that_adds_up():
     assert other["count"] == 1000 - len(kept) and other["label"] == f"Other · {other['count']}"
     assert other["amount"] + sum(r["amount"] for r in kept) == sum(r["amount"] for r in rows)
     assert other["columns"][1] == 2 * other["amount"]
+
+
+def test_a_report_folds_entity_rows_and_keeps_every_period_column():
+    columns = [{"start": f"2026-{1 + d // 28:02}-{1 + d % 28:02}", "end": "", "label": f"Day {d}"} for d in range(150)]
+    rows = [{"account_id": f"a{i}", "label": f"Account {i}", "actual": [i] * 150} for i in range(100)]
+
+    class Reports:
+        def get(self, path, **query):
+            return {"kind": "pnl", "columns": [dict(x) for x in columns], "rows": [dict(r) for r in rows]}
+    out = hubtools.finance_report(Reports(), {"kind": "pnl", "period": "day"})
+    assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
+    assert out["columns"] == columns
+    assert out["rows"][-1]["key"] == "other" and len(out["rows"]) < len(rows)
+    assert all(len(r["actual"]) == 150 for r in out["rows"])
+
+
+def test_one_huge_row_is_cut_inside_and_a_result_that_cannot_fit_says_so():
+    huge = {"id": "itm_1", "kind": "bill_to_enter", "label": "z" * 100_000,
+            "lines": [{"id": f"ln_{i}", "memo": "w" * 200, "amount": i} for i in range(500)]}
+    out = hubtools.finance_inbox(_Api([huge, _row(2)], key="items"), {})
+    assert len(json.dumps(out)) <= hubtools.FINANCE_CHARS
+    first = out["items"][0]
+    assert first["id"] == "itm_1" and first["lines"][-1]["key"] == "other"
+    assert first["lines"][-1]["amount"] + sum(x["amount"] for x in first["lines"][:-1]) == sum(range(500))
+
+    class Actions:
+        def get(self, path, **query):
+            return {"action_id": "act_1", "result": {"amounts": list(range(20_000))}}
+    marker = hubtools.finance_action(Actions(), {"action_id": "act_1"})
+    assert marker["error"] == "too_big" and marker["cap"] == hubtools.FINANCE_CHARS
