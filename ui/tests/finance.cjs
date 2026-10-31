@@ -173,8 +173,11 @@ const doc = (kind, id, number, contact, status, total, due, extra = {}) => ({id,
 const BILLS = [
   doc('bill', 'bill-1', 'INV-2291', {id: 'v-figma', name: 'Figma'}, 'draft', 180000, '2026-11-03', {attachments: 1}),
   doc('bill', 'bill-2', '#118', {id: 'v-northwind', name: 'Northwind Design'}, 'open', 250000, '2026-11-05', {approved_by: 'human:ana'}),
-  doc('bill', 'bill-3', 'Oct-2026', {id: 'v-vercel', name: 'Vercel'}, 'scheduled', 124000, '2026-11-12', {pay_on: '2026-11-11'}),
-  doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16})];
+  doc('bill', 'bill-3', 'Oct-2026', {id: 'v-vercel', name: 'Vercel'}, 'scheduled', 124000, '2026-11-12', {pay_on: '2026-11-11',
+    payment: {id: 'pay-3', status: 'awaiting_bank_approval', amount: 124000, on: '2026-11-11', error: null}}),
+  // Its last payment was rejected in Mercury: the bill is open again and says so.
+  doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16,
+    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}})];
 const INVOICES = [
   doc('invoice', 'inv-1', '#1047', {id: 'c-bright', name: 'Brightline Studio'}, 'sent', 400000, '2026-11-14'),
   doc('invoice', 'inv-2', '#1033', {id: 'c-pine', name: 'Pine & Co'}, 'sent', 150000, '2026-09-20', {aging: '31_60', days_late: 41}),
@@ -606,6 +609,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator(READY.payables).waitFor();
       assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AGING', 'AMOUNT', 'STATUS', 'PAYS'], tag + ': the bill columns');
       assert.equal(await page.locator('.fin-doc-t tbody tr').count(), BILLS.length, tag + ': one row per bill, no totals row');
+      const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(6)`).innerText()).replace(/\s+/g, ' ').trim();
+      assert.equal(await statusOf('bill-3'), 'Bank approval', tag + ': a bill paying now shows its payment\'s state');
+      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled', tag + ': a rejected payment shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
       assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
       // The owner sets the address: an inbox address saves; any other saves but says it is not an inbox's; empty clears it.
@@ -653,6 +659,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(sent(writes).at(-1), {kind: 'bill_schedule', payload: {bill_id: 'bill-2', pay_on: payOn, money_account_id: 'm1'}}, tag + ': bill_schedule from the bank picked');
       assert.equal(actions(writes).filter(a => a.kind === 'bill_schedule' && a.dry_run).length, 1, tag + ': one dry run');
       await page.locator('tr[data-fin-doc="bill-4"]').click();
+      await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay cancelled rejected in Mercury/, tag + ': the rail says why it was not paid');
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
@@ -663,6 +671,18 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-doc="bill-3"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': a scheduled bill is paid or voided, not scheduled again');
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Bank approval/, tag + ': the rail shows the payment\'s state');
+      // + Bill naming an existing vendor in another case picks that vendor; no second contact is made.
+      await page.locator('[data-fin-doc-add]').click();
+      await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');
+      await page.locator('dialog.fin-dlg input[name="name"]').fill('figma');
+      await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
+      await page.locator('dialog.fin-dlg input[name="amount"]').fill('12');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_create', payload: {vendor_id: 'v-figma', bill_date: today, lines: [{account_id: 'a-6100', amount: 1200}], origin: 'manual'}},
+        tag + ': an existing name picks its contact');
+      assert.equal(sent(writes).filter(a => a.kind === 'contact_create').length, 0, tag + ': no contact_create for a name that exists');
       // + Bill for a new vendor: the vendor first, then the bill under its id.
       await page.locator('[data-fin-doc-add]').click();
       await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');

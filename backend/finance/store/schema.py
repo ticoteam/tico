@@ -345,6 +345,7 @@ CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(con
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
 CREATE INDEX IF NOT EXISTS fin_payments_status ON fin_payments(status, next_try_at);
+CREATE INDEX IF NOT EXISTS fin_payments_obligation ON fin_payments(obligation, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS fin_payments_live ON fin_payments(obligation) WHERE obligation <> '' AND
   status IN ('queued','sending','awaiting_bank_approval','submitted','unknown');
 CREATE INDEX IF NOT EXISTS fin_inbox_status ON fin_inbox(status, created_at);

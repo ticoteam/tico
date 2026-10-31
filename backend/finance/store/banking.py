@@ -411,6 +411,17 @@ def live_payment(c: sqlite3.Connection, obligation: str) -> Any:
                      (obligation, *LIVE_PAYMENT)).fetchone()
 
 
+def last_payments(c: sqlite3.Connection, obligations: Sequence[str]) -> dict[str, Any]:
+    """Each obligation's latest payment, live or ended (what a bill shows of its payment)."""
+    if not obligations:
+        return {}
+    out: dict[str, Any] = {}
+    for r in c.execute("SELECT obligation, id, status, amount, last_error, created_at FROM fin_payments "
+                       f"WHERE obligation IN ({_marks(obligations)}) ORDER BY created_at, id", list(obligations)):
+        out[str(r["obligation"])] = r
+    return out
+
+
 def payment_by_key(c: sqlite3.Connection, key: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE idempotency_key=?", (key,)).fetchone()
 

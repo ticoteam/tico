@@ -117,13 +117,24 @@ def _audit(c: sqlite3.Connection, p: O.Principal, action_id: str, kind: str, sta
                {"status": status, "code": code, "on_behalf_of": p.for_actor, "rule": p.rule, **(extra or {})})
 
 
-def _savepoint(c: sqlite3.Connection, name: str) -> None:
+def _hooks(c: sqlite3.Connection) -> list[object] | None:
+    return cast(list[object] | None, getattr(c, "after_commit", None))
+
+
+def _savepoint(c: sqlite3.Connection, name: str) -> int:
+    """Open the savepoint; returns how many after-commit callbacks were queued before it."""
     c.execute(f"SAVEPOINT {name}")
+    hooks = _hooks(c)
+    return len(hooks) if hooks is not None else 0
 
 
-def _rollback(c: sqlite3.Connection, name: str) -> None:
+def _rollback(c: sqlite3.Connection, name: str, mark: int) -> None:
+    """Undo to the savepoint, with the after-commit callbacks queued since (a ring for an undone card change)."""
     c.execute(f"ROLLBACK TO SAVEPOINT {name}")
     c.execute(f"RELEASE SAVEPOINT {name}")
+    hooks = _hooks(c)
+    if hooks is not None:
+        del hooks[mark:]
 
 
 def _release(c: sqlite3.Connection, name: str) -> None:
@@ -201,7 +212,7 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         return _finish_refused(c, p, kind, body, key, action_id, e, dry_run, at)
     if not dry_run:
         handlers.suspend_unstanding(ctx)
-    _savepoint(c, "fin_act")
+    mark = _savepoint(c, "fin_act")
     try:
         if sealed and not dry_run:
             body = payments.seal_details(c, body, sealed, p.actor, ctx.at)
@@ -210,7 +221,7 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         body = {**body, **plan.resolved}
         would = "needs_approval" if approver else "committed"
         if dry_run:
-            _rollback(c, "fin_act")
+            _rollback(c, "fin_act", mark)
             return ActionResult(status=would, kind=kind, approver=approver or None, rule=gate.rule, dry_run=True,
                                 impact={**plan.impact, "summary": plan.summary})
         if approver:
@@ -233,15 +244,15 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         return ActionResult(status="committed", kind=kind, action_id=action_id, result=result, rule=gate.rule,
                             impact=plan.impact)
     except FinanceError as e:
-        _rollback(c, "fin_act")
+        _rollback(c, "fin_act", mark)
         if isinstance(e, gating.Denied) and not dry_run:
             gating.logged_denial(ctx, e, action_id)
         return _finish_refused(c, p, kind, body, key, action_id, e, dry_run, at)
     except (sqlite3.IntegrityError, tico.Refused) as e:
-        _rollback(c, "fin_act")
+        _rollback(c, "fin_act", mark)
         return _finish_refused(c, p, kind, body, key, action_id, FinanceError("failed", str(e)[:300]), dry_run, at)
     except BaseException:
-        _rollback(c, "fin_act")
+        _rollback(c, "fin_act", mark)
         raise
 
 
@@ -345,13 +356,13 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         return _reask(ctx, row, p, kind, body)
     if problem:
         return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
-    _savepoint(c, "fin_decide")
+    mark = _savepoint(c, "fin_decide")
     try:
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _approver(ctx, gate, p.who)
         if now_to and now_to != row["approval_to"]:
             # The person who decides this changed since it was asked (a new manager, a finance approver named).
-            _rollback(c, "fin_decide")
+            _rollback(c, "fin_decide", mark)
             return _reask(ctx, row, p, kind, body)
         tico.approval_consume(c, str(row["approval_by"]), approval_id)
         result = plan.apply(str(row["id"]))
@@ -360,15 +371,15 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         _release(c, "fin_decide")
         return _stored(SX.by_id(c, str(row["id"])), full=True)
     except FinanceError as e:
-        _rollback(c, "fin_decide")
+        _rollback(c, "fin_decide", mark)
         if isinstance(e, gating.Denied):
             gating.logged_denial(ctx, e, str(row["id"]))
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
     except (sqlite3.IntegrityError, tico.Refused) as e:
-        _rollback(c, "fin_decide")
+        _rollback(c, "fin_decide", mark)
         return _close(ctx, row, "failed", "failed", str(e)[:300])
     except BaseException:
-        _rollback(c, "fin_decide")
+        _rollback(c, "fin_decide", mark)
         raise
 
 

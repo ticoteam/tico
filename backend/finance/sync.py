@@ -567,6 +567,9 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
                 "provider_recipient_id": str(answer.body.get("id") or ""), "updated_at": now})
             kept = {"recipient_id": body["recipient_id"]}
             SK.update(c, "fin_outbox", str(o["id"]), {"payload_json": SK.dump(kept)})
+            # A payment waiting on this recipient goes in this pass (pay runs after outbox); the ring covers one paid
+            # from another connection's account, whose pass may already be done.
+            tico.after_commit(c, ring)
         elif op == "card_create" and answer.body.get("waiting"):
             # Not issued and not cancelled: it is issued once it has an allocation again (cards.sync).
             SK.update(c, "fin_cards", card_id, {"sync_status": cards.WAITING, "updated_at": now,

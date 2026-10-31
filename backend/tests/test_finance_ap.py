@@ -1,10 +1,13 @@
 """Finance phase 2: bills, invoices, contacts, settlements and the cash view, posting rules, the remaining defaults,
 the new events, the close, and the reads that show them (search, report, metric, inbox) cut to each viewer."""
 import random
+import time
 
 import pytest
 
+from backend.credentials import Vault
 from backend.finance import actions as FA
+from backend.finance import sync
 from backend.finance import reads as FR
 from backend.finance.core import feeds as F
 from backend.finance.store import ledger as SL
@@ -116,6 +119,109 @@ def test_a_bill_holds_budget_posts_ap_once_and_its_scheduled_payment_clears_ap_w
         assert (bill["status"], bill["remaining"]) == ("paid", 0)
         assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "6900")) == (50_000, 0, 0)
         assert _pnl(c, "cash").get("6100") == _pnl(c, "accrual").get("6100") == 50_000
+
+
+def _scheduled_today(c) -> str:
+    """Acme Supplies by ACH (not at Mercury yet), a 500.00 bill from them entered and scheduled for today."""
+    assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
+    added = act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
+                                            "account_number": "000099998888", "routing_number": "000000000"})
+    assert added.status == "committed", added
+    bid = _bill(c, _vendor(c, recipient_id=str(added.result["recipient_id"])),
+                [{"account_id": account(c, "6100"), "amount": 50_000}], due_date="2026-10-20")
+    assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+    assert act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": AT[:10],
+                                           "money_account_id": _checking(c)}).status == "committed"
+    return bid
+
+
+def test_a_scheduled_bills_payment_reaches_mercury_on_commit_without_waiting_for_a_sweep(books):
+    """B: the hourly job's payment and its new recipient ring the bank worker after the commit (never before: the
+    worker would find nothing and sleep until its sweep), and the payment waiting on its recipient goes out in the pass
+    that creates the recipient at Mercury."""
+    fake = FakeMercury()
+    connect(books, fake)
+    sync.start(books, Vault(books), make=lambda _token: fake)
+    try:
+        time.sleep(0.5)                                               # the worker's first pass, then its doorbell
+        rung = sync.BELL.rung
+        with books.transaction() as c:
+            bid = _scheduled_today(c)
+            FA.watch_documents(c, AT)
+            assert sync.BELL.rung == rung                             # not before the commit
+        assert sync.BELL.rung > rung
+        deadline = time.monotonic() + 15
+        while time.monotonic() < deadline and not fake.sent("request_send_money"):
+            time.sleep(0.05)
+        assert len(fake.sent("create_recipient")) == 1 and len(fake.sent("request_send_money")) == 1
+        deadline = time.monotonic() + 5
+        while time.monotonic() < deadline:
+            with books.read() as c:
+                bill = FR.bill(c, OWNER, bid)
+            if bill["payment"]["status"] == "awaiting_bank_approval":
+                break
+            time.sleep(0.05)
+        assert (bill["status"], bill["pay_on"], bill["payment"]["status"]) == \
+            ("scheduled", AT[:10], "awaiting_bank_approval")
+    finally:
+        sync.stop()
+
+
+def test_a_payment_rejected_in_mercury_leaves_the_bill_unpaid_and_says_so(books):
+    """The bill shows its payment's state at each step and keeps its pay day; rejected in Mercury, the bill is open
+    and owes it all, shows the rejection, and can be scheduled again."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        bid = _scheduled_today(c)
+        FA.watch_documents(c, AT)
+        FA.watch_documents(c, AT)
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 1     # asked once per schedule
+        bill = FR.bill(c, OWNER, bid)
+        assert (bill["status"], bill["pay_on"], bill["payment"]["status"]) == ("scheduled", AT[:10], "queued")
+        listed = FR.bills(c, OWNER)["bills"][0]
+        assert (listed["pay_on"], listed["payment"]["status"]) == (AT[:10], "queued")
+    sync_once(books, fake, HOURS[1])                                  # recipient, then its payment, in one pass
+    assert len(fake.sent("create_recipient")) == 1 and len(fake.sent("request_send_money")) == 1
+    with books.read() as c:
+        assert FR.bill(c, OWNER, bid)["payment"]["status"] == "awaiting_bank_approval"
+    fake.requests["req-1"]["status"] = "rejected"
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        bill = FR.bill(c, OWNER, bid)
+        assert (bill["status"], bill["remaining"], bill["pay_on"]) == ("open", 50_000, None)
+        assert (bill["payment"]["status"], bill["payment"]["error"]) == ("cancelled", "rejected in Mercury")
+        assert _balance(c, "2000") == -50_000
+        assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchall() == []
+        again = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-10-16", "money_account_id": _checking(c)})
+        assert again.status == "committed", again
+
+
+def test_vendor_labels_are_contact_names_and_never_ids(books):
+    """F: lines a bill, an invoice write-off or any document posts carry the contact's id as their vendor key; the
+    drill-down, spend-by and transactions show the contact's name, a plain vendor name as itself, and an id with no
+    contact behind it as nothing."""
+    from backend.tests.test_finance_fixtures import spend
+    stray = "0b6a4a52-5d0e-4c1a-9a43-2f2f3f6d1e10"
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        iid = str(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-01", "lines": [
+            {"account_id": account(c, "4000"), "amount": 30_000}]}).result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
+        assert act(c, OWNER, "invoice_write_off", {"invoice_id": iid, "amount": 10_000}).status == "committed"
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6900"), "amount": 20_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        spend(c, "6900", 5_000, vendor="Northwind")
+        spend(c, "6900", 1_000, vendor=stray)
+        detail = FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31")
+        want = {"Acme Retail": 10_000, "Acme Supplies": 20_000, "Northwind": 5_000, "": 1_000}
+        assert {r["label"]: r["amount"] for r in detail["by_vendor"]} == want
+        assert {e["vendor_name"] for e in detail["entries"]} == set(want)
+        by = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31")
+        assert {r["label"] for r in by["rows"]} >= {"Acme Retail", "Acme Supplies", "Northwind", ""}
+        rows = FR.transactions(c, OWNER, start="2026-10-01", end="2026-10-31")["rows"]
+        assert not any(customer in str(r.get("vendor_name")) or stray in str(r.get("vendor_name")) for r in rows)
+        assert "Acme Retail" in {r.get("vendor_name") for r in rows}
 
 
 def test_a_feed_row_pays_bills_in_parts_and_together_and_never_posts_expense_twice(books):

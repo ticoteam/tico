@@ -4,7 +4,8 @@ for doing, never seeing), invoices and customers to whoever sees receivables; a 
 account the viewer has no full detail for is left out whole, from lists, totals and contacts' owed amounts alike.
 Nested lists are capped, with a count and `more`. Re-exported by finance/reads, the only door."""
 import sqlite3
-from collections.abc import Sequence
+import uuid
+from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any
 
@@ -48,6 +49,29 @@ def sees_contact_kind(ctx: Ctx, view: VW.View, kind: str) -> bool:
     return sees_side(ctx, view, "bill") or sees_side(ctx, view, "invoice")
 
 
+def vendor_labels(ctx: Ctx, view: VW.View, keys: Iterable[str]) -> dict[str, str]:
+    """What each vendor key on a line shows as. A bill's or invoice's lines (and their payments, write-offs and
+    settlements) carry the contact's id: its name, to a viewer who sees that kind of contact, else "". A bank or card
+    row's vendor is its own name. A key that is an id with no contact behind it shows "": never an id."""
+    wanted = sorted({k for k in keys if k})
+    found = SAP.contacts(ctx.c, wanted)
+    out: dict[str, str] = {}
+    for k in wanted:
+        row = found.get(k)
+        if row is not None:
+            out[k] = str(row["name"]) if sees_contact_kind(ctx, view, str(row["kind"])) else ""
+        else:
+            out[k] = "" if _is_id(k) else k
+    return out
+
+
+def _is_id(key: str) -> bool:
+    try:
+        return len(key) == 36 and str(uuid.UUID(key)) == key.lower()
+    except ValueError:
+        return False
+
+
 def account_ref(ctx: Ctx, account_id: object) -> Row | None:
     a = ctx.accounts.get(str(account_id or ""))
     return {"id": a.id, "code": a.code, "name": a.name} if a else None
@@ -65,8 +89,17 @@ def remaining(kind: str, r: Any) -> int:
     return int(r["total"]) - paid_of(kind, r)
 
 
-def doc_row(kind: str, r: Any, today: date, attached: int = 0) -> Row:
-    """One bill or invoice as a list row."""
+def payment_of(pay: Any) -> Row | None:
+    """A bill's latest payment as its row shows it: the state (queued, awaiting_bank_approval, submitted, settled, or
+    how it ended), the day it was asked for and, once it ended without settling, why."""
+    if pay is None:
+        return None
+    return {"id": str(pay["id"]), "status": str(pay["status"]), "amount": int(pay["amount"]),
+            "on": str(pay["created_at"])[:10], "error": str(pay["last_error"] or "") or None}
+
+
+def doc_row(kind: str, r: Any, today: date, attached: int = 0, pay: Any = None) -> Row:
+    """One bill or invoice as a list row; a bill carries its latest payment (`pay`, from SK.last_payments)."""
     left = remaining(kind, r)
     due = r["due_date"]
     contact = CONTACT_OF[kind]
@@ -79,7 +112,7 @@ def doc_row(kind: str, r: Any, today: date, attached: int = 0) -> Row:
                 "created_by": str(r["created_by"]), "created_at": str(r["created_at"])}
     if kind == "bill":
         out.update({"origin": str(r["origin"]), "approved_by": r["approved_by"], "approved_at": r["approved_at"],
-                    "pay_on": r["pay_on"]})
+                    "pay_on": r["pay_on"], "payment": payment_of(pay)})
     else:
         out.update({"sent_at": r["sent_at"], "written_off": int(r["written_off"]), "payment_link": r["payment_link"]})
     return out
@@ -152,11 +185,12 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
         kept, _ = keep_docs(c, kind, batch, cut)
         keep = {str(r["id"]) for r in kept}
         files = SAP.attachment_counts(c, kind, sorted(keep))
+        pays = SK.last_payments(c, [f"bill:{i}" for i in sorted(keep)]) if kind == "bill" else {}
         for r in batch:
             before = (str(r[f"{kind}_date"]), str(r["id"]))
             if str(r["id"]) not in keep:
                 continue
-            row = doc_row(kind, r, today, files.get(str(r["id"]), 0))
+            row = doc_row(kind, r, today, files.get(str(r["id"]), 0), pays.get(f"bill:{r['id']}"))
             if aging is not None and row["aging"] != aging:
                 continue
             out.append(row)
@@ -189,7 +223,8 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
         raise FinanceError(NOT_FOUND, f"no such {kind} in your view")
     attached = SAP.attachment_counts(c, kind, [doc_id]).get(doc_id, 0)
     settled = SAP.settlement_count(c, kind, doc_id)
-    out = doc_row(kind, r, dates.day(ctx.today), attached)
+    pay = SK.last_payments(c, [f"bill:{doc_id}"]).get(f"bill:{doc_id}") if kind == "bill" else None
+    out = doc_row(kind, r, dates.day(ctx.today), attached, pay)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
                      "description": str(x["description"]), "tags": SK.loads(x["tags_json"])}
                     for x in found[doc_id]]

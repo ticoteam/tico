@@ -366,6 +366,12 @@ def _key(s: _Seen, cell: VW.Cell, by: str) -> str | None:
     return cell.account_id
 
 
+def _labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
+    """Each group's label; a vendor group's from tab_ap.vendor_labels (a contact's name, never its id)."""
+    names = tab_ap.vendor_labels(s.ctx, s.view, keys) if by == "vendor" else {}
+    return {k: names.get(k, k) if by == "vendor" and k else _label(s, k, by) for k in keys}
+
+
 def _label(s: _Seen, key: str, by: str) -> str:
     if not key:
         return UNATTRIBUTED if by != "vendor" else "No vendor"
@@ -405,7 +411,8 @@ def _grouped(s: _Seen, a: date, z: date, by: str, account_id: str | None, team: 
                            not s.view.company_expenses()):
             continue
         sums[key] = sums.get(key, 0) + cell.amount
-    rows: list[Row] = [{"key": k or "unattributed", "label": _label(s, k, by), "amount": v} for k, v in sums.items()]
+    labels = _labels(s, sums, by)
+    rows: list[Row] = [{"key": k or "unattributed", "label": labels[k], "amount": v} for k, v in sums.items()]
     return {"by": by, "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
             "total": sum(sums.values()), "excluded": sup.excluded, "hidden": _hidden_labels(s, sup.hidden),
             "view_version": s.view.version}
@@ -515,7 +522,8 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
             if key == "" and by != "vendor" and not s.view.company_wide(account):
                 continue
             sums[key] = sums.get(key, 0) + cell.amount
-        out["by_" + by] = _cap([{"key": k or "unattributed", "label": _label(s, k, by), "amount": v}
+        labels = _labels(s, sums, by)
+        out["by_" + by] = _cap([{"key": k or "unattributed", "label": labels[k], "amount": v}
                                 for k, v in sums.items()], top_n)
     entries: list[Row] = []
     more = False
@@ -541,6 +549,9 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                             "description": r["description"], "memo": r["memo"], "source": r["source"],
                             "tags": tags.get(r["line_id"], {})})
         more = more or len(rows) > most * 4
+        names = tab_ap.vendor_labels(s.ctx, s.view, [str(e["vendor"] or "") for e in entries])
+        for e in entries:
+            e["vendor_name"] = names.get(str(e["vendor"] or ""), "")
         out["paid_by"] = _paid_by(s, seen)
     else:
         out["paid_by"] = None

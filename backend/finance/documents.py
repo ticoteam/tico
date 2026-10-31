@@ -1365,8 +1365,10 @@ def pay_due(ctx: Ctx) -> int:
             "memo": str(sched.get("memo") or f"Bill {bill['number']}".strip())[:140]},
             f"bill-pay-{bill['id']}-{sched.get('n') or 1}", at=ctx.at)
         done = res.status in ("committed", "needs_approval")
+        # Asked for: the day stays on the bill (it shows when it pays) and the action id keeps it from being asked
+        # again; refused, the bill is open again.
         SAP.update(ctx.c, "fin_bills", str(bill["id"]), {
-            "pay_on": None, "status": "scheduled" if done else "open", "updated_at": ctx.at,
+            "pay_on": bill["pay_on"] if done else None, "status": "scheduled" if done else "open", "updated_at": ctx.at,
             "schedule_json": SK.dump({**sched, "action_id": res.action_id, "result": res.status})})
         if not done:
             person = who if who in ctx.org.humans else admin_person(ctx)

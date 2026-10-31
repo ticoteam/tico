@@ -190,6 +190,7 @@ def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                                    or "businessChecking"}
         SK.outbox_add(ctx.c, connection_id=connection, action_id=aid, op="recipient_create", payload=body,
                       key=f"recipient-{rid}", by=who, at=ctx.at)
+        tico.after_commit(ctx.c, ring)
         return {"recipient_id": rid, "last4": last4 or None}
     return Plan(K.default_gate(ctx.org, who, "recipient_add"),
                 f"{'Change' if old is not None else 'Add'} recipient {name} ({method}"
@@ -288,7 +289,7 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "hold_id": hold.hold_id if hold is not None else None,
             "purpose_json": SK.dump(purpose),
             "next_try_at": ctx.at, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
-        ring()
+        tico.after_commit(ctx.c, ring)
         return {"payment_id": pid, "status": "queued"}
     return Plan(gate,
                 f"Pay {amount / 100:.2f} {ctx.book.base_currency} to {rec['name']} by {method}"
@@ -344,6 +345,8 @@ def vendor_of(rec: Any) -> str:
 
 
 def ring() -> None:
+    """Wake the bank worker. Queued with `tico.after_commit`, so it reads the rows this transaction wrote (rung before
+    the commit, it finds nothing and sleeps until its next sweep), and an undone action drops it."""
     from . import sync
     sync.ring()
 
@@ -374,6 +377,8 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if pay["hold_id"]:
             budgeting.release(ctx, str(pay["hold_id"]))
         unreserve(ctx, pay)
+        from .documents import payment_ended
+        payment_ended(ctx, pay)                    # a bill it was paying is open again
         return {"payment_id": str(pay["id"]), "status": "cancelled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"), f"Cancel the {int(pay['amount']) / 100:.2f} payment",
                 apply)

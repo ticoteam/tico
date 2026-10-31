@@ -1411,6 +1411,13 @@ export type FinanceDocumentRow = {
   origin?: string;
   paid: number;
   pay_on?: string | null;
+  payment?: {
+  amount: number;
+  error: string | null;
+  id: string;
+  on: string;
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
+} | null;
   payment_link?: string | null;
   remaining: number;
   sent_at?: string | null;
@@ -1710,6 +1717,7 @@ export type FinanceTransactions = {
   status?: string;
   tags?: Record<string, unknown>;
   vendor?: string;
+  vendor_name?: string;
 }>;
   view_version: number;
 };

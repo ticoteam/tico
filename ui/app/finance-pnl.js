@@ -525,6 +525,8 @@ function finLineLabel(key, label) {
   if (key === 'other') return label;
   if (FIN_LINE.by === 'teammate') return finWho(key);
   if (FIN_LINE.by === 'team') return key === 'unattributed' ? 'Unattributed' : finTeamName(key) || label;
+  // A vendor's label is a contact's name or "" (a contact the viewer can't see), never the key: a bill's key is an id.
+  if (FIN_LINE.by === 'vendor') return label || '—';
   return label || key;
 }
 function finLineDraw() {

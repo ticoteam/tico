@@ -33,9 +33,25 @@ const FIN_ACT_WORD = {bill_create: 'Enter', bill_update: 'Change', bill_approve:
 const FIN_ACT_STATUS = {needs_approval: ['waiting', 'Waiting'], committed: ['ok', 'Done'], denied: ['fail', 'Denied'],
   failed: ['fail', 'Failed'], withdrawn: ['', 'Withdrawn']};
 const FIN_PAID_FROM = {payment: 'Payment', feed: 'Bank row', credit: 'Credit', account: 'Recorded', expected: 'Expected'};
+const FIN_PAY_STATUS = {queued: ['waiting', 'Queued'], sending: ['waiting', 'Sending'], awaiting_bank_approval: ['waiting', 'Bank approval'],
+  submitted: ['ready', 'Submitted'], settled: ['ok', 'Settled'], unknown: ['waiting', 'Checking'], failed: ['fail', 'Pay failed'],
+  returned: ['fail', 'Returned'], cancelled: ['fail', 'Pay cancelled']};
+const FIN_PAY_LIVE = new Set(['queued', 'sending', 'awaiting_bank_approval', 'submitted', 'unknown']);
 
 const finPill = ([cls, label]) => `<span class="pill ${cls}">${esc(label)}</span>`;
 const finDocStatus = d => finPill(FIN_DOC_STATUS[d.status] || ['', d.status]);
+// An unpaid bill's payment worth showing: one on its way, or one that ended without paying an open bill.
+const finBillPay = d => {
+  const p = d.payment;
+  if (!p || d.status === 'paid' || d.status === 'void') return null;
+  return FIN_PAY_LIVE.has(p.status) || d.status === 'open' ? p : null;
+};
+const finPayPill = p => finPill(FIN_PAY_STATUS[p.status] || ['', p.status]);
+// A row's status: a live payment stands in for Scheduled; an ended one sits beside Open.
+const finRowStatus = d => {
+  const p = finBillPay(d);
+  return !p ? finDocStatus(d) : FIN_PAY_LIVE.has(p.status) ? finPayPill(p) : `${finDocStatus(d)} ${finPayPill(p)}`;
+};
 const finAgingPill = d => d.aging ? finPill(FIN_AGING[d.aging] || ['', d.aging]) : '';
 // Cents as a form value: 1800, 45.5.
 const finCentsValue = c => c == null ? '' : (c / 100).toFixed(2).replace(/\.00$/, '');
@@ -154,7 +170,7 @@ function finDocDraw() {
   box.innerHTML = `<table class="fin-t fin-doc-t"><thead><tr><th>${k.who}</th><th>${k.label}</th><th>Due</th><th>Aging</th><th class="fin-n">Amount</th><th>Status</th>${bill ? '<th>Pays</th>' : ''}</tr></thead><tbody>${state.rows.map(r =>
     `<tr data-fin-doc="${esc(r.id)}"${state.sel === r.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(r[k.contact]?.name || '—')}</button></td>
       <td class="muted">${esc(r.number || '')}</td><td class="fin-nowrap">${esc(finDayLabel(r.due_date))}</td><td>${finAgingPill(r)}</td>
-      <td class="fin-n">${finCents(r.total)}</td><td>${finDocStatus(r)}</td>${bill ? `<td class="fin-nowrap">${r.pay_on ? esc(finDayLabel(r.pay_on)) : ''}</td>` : ''}</tr>`).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
+      <td class="fin-n">${finCents(r.total)}</td><td>${finRowStatus(r)}</td>${bill ? `<td class="fin-nowrap">${r.pay_on ? esc(finDayLabel(r.pay_on)) : ''}</td>` : ''}</tr>`).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
 }
 // The selected document: drawn from its row at once, then whole (lines, files, payments, approvals, decisions).
 async function finDocOne() {
@@ -178,6 +194,8 @@ function finDocRail(d, full) {
   rows.push(finKv('Due', day(d.due_date)), finKv('Status', finDocStatus(d)));
   if (d.aging) rows.push(finKv('Aging', finAgingPill(d)));
   if (bill && d.pay_on) rows.push(finKv('Pays', day(d.pay_on)));
+  const pay = bill ? finBillPay(d) : null;
+  if (pay) rows.push(finKv('Payment', `${finPayPill(pay)}${pay.error && !FIN_PAY_LIVE.has(pay.status) ? ' ' + esc(pay.error) : ''}`));
   if (bill && d.approved_by) rows.push(finKv('Approved by', esc(finWho(d.approved_by))));
   if (d.paid) rows.push(finKv('Paid', finUsd(d.paid)));
   if (d.remaining && d.remaining !== d.total) rows.push(finKv('Left', finUsd(d.remaining)));
@@ -336,8 +354,15 @@ async function finDocAdd(kind) {
     if (contact === '+') {
       const name = el.name.value.trim();
       if (!name) throw new Error('Name the ' + k.who.toLowerCase());
-      if (made?.name !== name) made = {name, id: await finContactCreate(name, k.contactKind)};
-      contact = made.id;
+      // A name already taken (any case) picks that contact; only a new name makes one.
+      const same = made?.name === name ? null : await finContactNamed(contacts, name, k.contactKind);
+      if (same) {
+        if (!contacts.some(c => c.id === same.id)) { contacts.push(same); el.contact.insertAdjacentHTML('afterbegin', finOpts([same])); }
+        el.contact.value = contact = same.id; sync();
+      } else {
+        if (made?.name !== name) made = {name, id: await finContactCreate(name, k.contactKind)};
+        contact = made.id;
+      }
     }
     if (!contact) throw new Error('Pick a ' + k.who.toLowerCase());
     const payload = {[bill ? 'vendor_id' : 'customer_id']: contact, [bill ? 'bill_date' : 'invoice_date']: el.date.value,
@@ -363,6 +388,18 @@ function finForSync(form, chosen) {
   const sets = scoped.map(l => finAttribution(l)), opts = sets[0].filter(o => sets.every(s => s.some(x => x.id === o.id)));
   const keep = sel.value;
   sel.innerHTML = finOpts(opts, opts.some(o => o.id === keep) ? keep : opts[0]?.id || '');
+}
+// The contact with this name (names are unique, ignoring case): from the picker's list, else by search, since the
+// list holds 200 and only this kind. One of the other kind is refused: a vendor can't be a customer's namesake.
+async function finContactNamed(contacts, name, kind) {
+  const key = name.toLowerCase(), hit = c => (c.name || '').trim().toLowerCase() === key;
+  const listed = contacts.find(hit);
+  if (listed) return listed;
+  let found = [];
+  try { found = (await get(`/v2/finance/contacts?q=${encodeURIComponent(name.slice(0, 100))}&limit=50${finAs()}`, {fresh: true}))?.contacts || []; } catch { return null; }
+  const same = found.find(hit);
+  if (same && same.kind !== kind && same.kind !== 'both') throw new Error(`${same.name} is a ${same.kind}`);
+  return same || null;
 }
 // A new vendor or customer; its id is the action's result.
 async function finContactCreate(name, kind) {

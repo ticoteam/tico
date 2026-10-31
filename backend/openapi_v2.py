@@ -1389,6 +1389,10 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
 # Finance (backend/finance_routes.py): every read is cut to the caller's own view.
 DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
                                                           "name": {"type": ["string", "null"]}}}
+DOC_PAYMENT = {"anyOf": [obj({"id": "s", "status": {"type": "string", "enum": [
+    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+    "unknown"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
+    "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did"}
 TAGS["Finance"] = ("Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
                    "caller sees; Finance actions, committed or sent to one person for approval.")
 STABLE.extend([
@@ -1541,7 +1545,8 @@ SCHEMAS.update({
                            "currency": "s", "counterparty": "s", "description": "s", "status": "s", "pending": "b",
                            "card_id": "n", "entry_id": "n", "reconciled": "b", "money_account": {"type": ["object", "null"]},
                            "lines": items({"type": "object", "additionalProperties": True}),
-                           "account_id": "s", "account": "s", "vendor": "s", "memo": "s", "source": "s",
+                           "account_id": "s", "account": "s", "vendor": "s", "vendor_name": "s", "memo": "s",
+                           "source": "s",
                            "reversed": "b", "tags": "o"}, required=["kind", "id", "date", "amount", "currency"])),
         "next": "n", "currency": "s", "view_version": "i"}),
     "FinanceCards": obj({
@@ -1640,7 +1645,8 @@ SCHEMAS.update({
         "vendor": DOC_CONTACT, "customer": DOC_CONTACT, "date": "s", "due_date": "n", "status": "s", "currency": "s",
         "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
         "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
-        "approved_at": "n", "pay_on": "n", "sent_at": "n", "written_off": "i", "payment_link": "n"},
+        "approved_at": "n", "pay_on": "n", "payment": DOC_PAYMENT, "sent_at": "n", "written_off": "i",
+        "payment_link": "n"},
         required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
     "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
         "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},

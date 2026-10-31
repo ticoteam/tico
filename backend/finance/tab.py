@@ -232,7 +232,9 @@ def _feed_origin(r: Any) -> str:
 
 
 def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, list[Row]]:
-    """The P&L lines of these entries the viewer sees (private lines without full detail never show)."""
+    """The P&L lines of these entries the viewer sees (private lines without full detail never show), each vendor
+    with the name it shows as (tab_ap.vendor_labels)."""
+    from .tab_ap import vendor_labels
     out: dict[str, list[Row]] = {}
     cut = set(private_cut(ctx, view))
     for eid in entry_ids:
@@ -246,6 +248,10 @@ def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[st
                 out.setdefault(eid, []).append({"line_id": str(r["id"]), "account_id": account.id,
                                                 "account": account.name, "amount": line.amount,
                                                 "vendor": line.contact_id, "tags": dict(line.tags)})
+    names = vendor_labels(ctx, view, [str(x["vendor"]) for xs in out.values() for x in xs])
+    for xs in out.values():
+        for x in xs:
+            x["vendor_name"] = names.get(str(x["vendor"]), "")
     return out
 
 
@@ -297,6 +303,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     is left out whole (`private_feed`). Filter by money account, status (feed rows), line, dates, a search and `org`
     (keeps a line's team and teammate); `next` is the cursor for the following page."""
     ctx = load(c, at)
+    from .tab_ap import vendor_labels
     view = ctx.view(viewer)
     if source not in ("all", "feed", "entry"):
         raise invalid("source is all|feed|entry")
@@ -362,6 +369,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         origins = {str(r["line_id"]): _feed_origin(r) for r in batch}
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
         cut = private_feed(ctx, view, [*stands.values(), *history.values()])
+        names = vendor_labels(ctx, view, [str(r["contact_id"]) for r in batch])
         out: list[tuple[tuple[str, str], Row]] = []
         for r in batch:
             account = ctx.accounts[str(r["account_id"])]
@@ -375,7 +383,9 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
                                      "amount": int(r["amount"]), "currency": ctx.book.base_currency,
                                      "entry_id": str(r["entry_id"]), "account_id": account.id, "account": account.name,
-                                     "vendor": str(r["contact_id"]), "description": str(r["description"]),
+                                     "vendor": str(r["contact_id"]),
+                                     "vendor_name": names.get(str(r["contact_id"]), ""),
+                                     "description": str(r["description"]),
                                      "memo": str(r["memo"]), "source": str(r["source"]),
                                      "reversed": str(r["entry_status"]) == "reversed", "tags": tagged}))
         return out

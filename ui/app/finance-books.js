@@ -282,7 +282,8 @@ async function finTxLoad(more) {
 }
 const finTxKey = r => `${r.kind}:${r.id}`;
 // A row's teammate and vendor: an entry's own tags, a feed row's first line's.
-const finTxTags = r => r.kind === 'entry' ? {tags: r.tags || {}, vendor: r.vendor} : {tags: r.lines?.[0]?.tags || {}, vendor: r.lines?.[0]?.vendor};
+// The vendor shown is its name (a bill's or invoice's vendor key is the contact's id).
+const finTxTags = r => { const l = r.kind === 'entry' ? r : r.lines?.[0]; return {tags: (r.kind === 'entry' ? r.tags : l?.tags) || {}, vendor: l ? l.vendor_name ?? l.vendor : ''}; };
 function finTxDraw() {
   const state = FIN.tx, box = $('#fin-tx'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No transactions.'); return; }

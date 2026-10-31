@@ -38567,6 +38567,56 @@
               "null"
             ]
           },
+          "payment": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "id": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "queued",
+                      "sending",
+                      "awaiting_bank_approval",
+                      "submitted",
+                      "settled",
+                      "returned",
+                      "failed",
+                      "cancelled",
+                      "unknown"
+                    ]
+                  },
+                  "amount": {
+                    "type": "integer"
+                  },
+                  "on": {
+                    "type": "string"
+                  },
+                  "error": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "amount",
+                  "error",
+                  "id",
+                  "on",
+                  "status"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did"
+          },
           "sent_at": {
             "type": [
               "string",
@@ -39893,6 +39943,9 @@
                   "type": "string"
                 },
                 "vendor": {
+                  "type": "string"
+                },
+                "vendor_name": {
                   "type": "string"
                 },
                 "memo": {
