@@ -223,7 +223,12 @@ def install(app, store, auth, mutate):
             done = finance.act(c, who.actor, body.kind, body.payload, key)
             first["result"] = done
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
-        saved = mutate(request, body, work)
+        receipt = body
+        if any(k in body.payload for k in finance.BANK_FIELDS):
+            # Bank numbers never reach the idempotency receipt, not even hashed: a keyed fingerprint stands in.
+            with store.transaction() as c:
+                receipt = body.model_copy(update={"payload": finance.receipt_payload(c, body.kind, body.payload)})
+        saved = mutate(request, receipt, work)
         done = first.get("result")
         if done is not None and not done.replayed and done.action_id == saved.get("action_id"):
             return {**saved, "code": done.code, "reason": done.reason, "approval_id": done.approval_id,

@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from backend import hubdb as H
+from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.store import Store
 from backend.tests.test_api import api_settings
@@ -54,6 +55,7 @@ def store(tmp_path: Path, finance_template: Path) -> Store:
     s = Store(api_settings(tmp_path))
     with closing(sqlite3.connect(finance_template)) as source, closing(sqlite3.connect(s.settings.db_path)) as target:
         source.backup(target)
+    FA.use_vault(Vault(s))                 # a local data key beside this test's database
     return s
 
 

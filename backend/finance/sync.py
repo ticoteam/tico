@@ -304,7 +304,7 @@ def outbox(store: Any, provider: Provider, now: str) -> list[str]:
         body = SK.loads(o["payload_json"])
         op = str(o["op"])
         if op == "recipient_create":
-            answer = provider.create_recipient(_recipient_body(body))
+            answer = _send_recipient(store, provider, body)
         elif op == "card_create":
             answer = provider.create_card(str(body.get("user_id")), str(body.get("nickname")), int(body["monthly"]))
         elif op == "card_limit":
@@ -326,6 +326,22 @@ def outbox(store: Any, provider: Provider, now: str) -> list[str]:
         if problem:
             problems.append(problem)
     return problems
+
+
+def _send_recipient(store: Any, provider: Provider, body: Mapping[str, Any]) -> Answer:
+    """Create the recipient at Mercury with its bank details read from the vault just now (held in memory for the
+    one call, never written back)."""
+    if body.get("method") == "check":
+        return provider.create_recipient(_recipient_body(body))
+    with store.read() as c:
+        try:
+            details = payments.open_details(c, str(body.get("details_ref") or ""))
+        except Exception:                    # no vault, or the row will not open: never a crash, never plaintext
+            log.exception("Finance could not open a recipient's sealed bank details")
+            details = {}
+    if not details.get("accountNumber") or not details.get("routingNumber"):
+        return Answer(400, {"message": "the recipient's bank details are not in the credential vault; add them again"})
+    return provider.create_recipient(_recipient_body({**body, **details}))
 
 
 def _recipient_body(body: Mapping[str, Any]) -> dict[str, object]:
@@ -465,7 +481,9 @@ def ring() -> None:
 
 
 def start(store: Any, vault: Any, *, rehearsal: bool = False, make: Make | None = None) -> None:
-    """Start the thread (or restart it if it died). Safe to call again on every scheduler tick."""
+    """Start the thread (or restart it if it died). Safe to call again on every scheduler tick. Registers the
+    credential vault for sealing and reading payees' bank details, even when rehearsal withholds the worker."""
+    tico.use_vault(vault)
     with _worker["lock"]:
         _worker["args"] = (store, vault, rehearsal, make)
         thread = cast(threading.Thread | None, _worker["thread"])

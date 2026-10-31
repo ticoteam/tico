@@ -131,7 +131,7 @@ def _same_request(prior: Mapping[str, object], body: Mapping[str, object]) -> bo
     if prior == body:
         return True
     extra = set(prior) - set(body)
-    return extra <= RESOLVED_KEYS and all(prior.get(k) == v for k, v in body.items())
+    return extra <= RESOLVED_KEYS | {"details_ref"} and all(prior.get(k) == v for k, v in body.items())
 
 
 def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
@@ -168,9 +168,11 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     if not key or len(key) > MAX_KEY:
         return ActionResult(status="failed", kind=kind, code=INVALID, reason=f"an idempotency key is 1-{MAX_KEY} chars")
     try:
-        body = _canonical(payload)
+        body, sealed = payments.strip_details(c, kind, _canonical(payload))
     except FinanceError as e:
         return ActionResult(status="failed", kind=kind, code=e.code, reason=e.message)
+    except tico.Refused as e:
+        return ActionResult(status="failed", kind=kind, code=NOT_AVAILABLE, reason=str(e)[:300])
     if not dry_run:
         prior = SX.by_key(c, key)
         if prior is not None:
@@ -192,6 +194,8 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         handlers.suspend_unstanding(ctx)
     _savepoint(c, "fin_act")
     try:
+        if sealed and not dry_run:
+            body = payments.seal_details(c, body, sealed, p.actor, ctx.at)
         gate, plan = _plan(ctx, p, kind, body, action_id)
         approver = _approver(ctx, gate, p.who)
         body = {**body, **plan.resolved}
@@ -232,10 +236,21 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         raise
 
 
+def receipt_payload(c: sqlite3.Connection, kind: str, payload: Mapping[str, object]) -> dict[str, object]:
+    """The payload as a route's idempotency receipt may hash it: bank account and routing numbers become a keyed
+    fingerprint and the last 4, so no receipt holds (or a plain hash of) the numbers."""
+    try:
+        return payments.strip_details(c, kind, _canonical(payload))[0]
+    except (FinanceError, tico.Refused):
+        return {k: v for k, v in payload.items() if k not in payments.BANK_FIELDS}
+
+
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,
                     action_id: str, e: FinanceError, dry_run: bool, at: str | None) -> ActionResult:
-    """A denial or failure is recorded under its key too, so a retry gets the same answer."""
+    """A denial or failure is recorded under its key too, so a retry gets the same answer. Bank details it sealed
+    were rolled back with its savepoint, so the stored payload does not name them."""
     status = "denied" if e.code in DENIAL_CODES else "failed"
+    body = {k: v for k, v in body.items() if k != "details_ref"}
     if dry_run:
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
@@ -282,6 +297,7 @@ def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: 
     key)."""
     action_id = str(row["id"])
     budgeting.release_for(ctx, "action", action_id)
+    payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
     SX.finish(ctx.c, action_id, status=status, result={}, code=code, reason=reason, at=ctx.at)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
@@ -400,6 +416,8 @@ gateway_start = gateway_sync.start
 gateway_ensure = gateway_sync.ensure
 gateway_stop = gateway_sync.stop
 banking_start = sync.start
+use_vault = tico.use_vault
+BANK_FIELDS = payments.BANK_FIELDS
 banking_ensure = sync.ensure
 banking_stop = sync.stop
 banking_ring = sync.ring

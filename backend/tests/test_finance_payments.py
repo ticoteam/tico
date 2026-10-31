@@ -4,10 +4,13 @@ the rule's maker); a payment that times out is `unknown`, keeps its hold, blocks
 and is found again by its one key; rejected in Mercury releases the hold; settled posts once. Gate rules: strictest
 wins, examples must pass, a bot's rule needs a finance admin, limit counters hold under concurrency, stale data asks.
 The new reads, as a manager, a plain bot and a bot with grants."""
+import json
+import sqlite3
 import threading
 
 import pytest
 
+from backend import hubdb as H
 from backend import rules as TR
 from backend.finance import actions as FA
 from backend.finance import reads as FR
@@ -15,6 +18,7 @@ from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+from backend.tests.test_api import api, get, post  # noqa: F401
 
 HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
 
@@ -306,3 +310,86 @@ def test_money_reads_cut_to_the_viewer_and_a_revoked_grant_is_gone(books):
         assert FR.recipients(c, OWNER, at=AT)["recipients"][0]["last4"] == "8888"
         assert FR.reconciliations(c, "human:cara", at=AT)["reconciliations"] == []
         assert FR.may_connect(c, OWNER, at=AT) and not FR.may_connect(c, "human:cara", at=AT)
+
+
+# ------------------------------------------------------------------------------------------------ sealed bank details
+ACCOUNT, ROUTING = "000077776666", "987654329"           # fictional (the routing number fails the ABA checksum)
+PAYEE = {"name": "Acme Parts", "method": "ach", "account_number": ACCOUNT, "routing_number": ROUTING}
+
+
+def _plaintext_anywhere(c) -> list[str]:
+    """Every table and column holding the full account or routing number as text (encrypted blobs excluded)."""
+    found = []
+    for (table,) in c.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall():
+        try:
+            rows = c.execute(f'SELECT * FROM "{table}"').fetchall()
+        except sqlite3.OperationalError:
+            continue
+        for row in rows:
+            for col, value in zip(row.keys(), tuple(row)):
+                if isinstance(value, str) and (ACCOUNT in value or ROUTING in value):
+                    found.append(f"{table}.{col}")
+    return found
+
+
+def _sealed_rows(c) -> int:
+    return c.execute("SELECT count(*) FROM credentials WHERE source='finance' AND ciphertext IS NOT NULL").fetchone()[0]
+
+
+def test_bank_numbers_live_only_in_the_vault_through_create_approve_send(api):
+    store = api.app.state.store
+    FA.banking_stop()                                    # this test drives the worker itself, with a fake Mercury
+    fake = FakeMercury()
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    connect(store, fake)
+    with store.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        assert _rule(c, OWNER, "Payees ask", {"kind": "recipient_add"}, {"outcome": "needs_approval", "who": "owner"},
+                     [{"input": {"kind": "recipient_add"}, "expect": "needs_approval"}]).status == "committed"
+    answers = []
+    dry = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE, "dry_run": True}, token="ben-test")
+    asked = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="ben-test", key="payee-1")
+    again = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="ben-test", key="payee-1")
+    answers += [dry, asked, again]
+    assert dry["status"] == asked["status"] == "needs_approval" and again["action_id"] == asked["action_id"]
+    with store.transaction() as c:
+        assert _sealed_rows(c) == 1
+        H.approval_decide(c, OWNER, asked["approval_id"], "approved")
+        assert FA.approval_decided(c, asked["approval_id"], AT).status == "committed"
+    sync_once(store, fake)
+    sent = fake.sent("create_recipient")[0]["electronicRoutingInfo"]
+    assert (sent["accountNumber"], sent["routingNumber"]) == (ACCOUNT, ROUTING)   # read from the vault at send time
+    answers += [get(api, "finance/recipients"), get(api, f"finance/actions/{asked['action_id']}", token="ben-test"),
+                get(api, "finance/payments"), get(api, "finance/rules"), get(api, f"approvals/{asked['approval_id']}")]
+    with store.read() as c:
+        assert _plaintext_anywhere(c) == [] and _sealed_rows(c) == 1
+        recipient = c.execute("SELECT last4, details_ref FROM fin_recipients").fetchone()
+        assert recipient["last4"] == "6666" and recipient["details_ref"]
+    assert ACCOUNT not in json.dumps(answers) and ROUTING not in json.dumps(answers)
+    assert get(api, "finance/recipients")["recipients"][0]["last4"] == "6666"
+
+
+def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api):
+    store = api.app.state.store
+    FA.banking_stop()
+    fake = FakeMercury()
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    connect(store, fake)
+    denied = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="cara-test")
+    assert denied["status"] == "denied"
+    forged = post(api, "finance/actions", {"kind": "recipient_add", "payload": {**PAYEE, "details_ref": "cred-mercury"}})
+    assert forged["status"] == "failed"                  # a caller never names a vault row
+    with store.transaction() as c:
+        assert _plaintext_anywhere(c) == [] and _sealed_rows(c) == 0
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        _rule(c, OWNER, "Payees ask", {"kind": "recipient_add"}, {"outcome": "needs_approval", "who": "owner"},
+              [{"input": {"kind": "recipient_add"}, "expect": "needs_approval"}])
+    asked = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE}, token="ben-test")
+    with store.transaction() as c:
+        assert _sealed_rows(c) == 1
+        H.approval_decide(c, OWNER, asked["approval_id"], "declined")
+        assert FA.approval_decided(c, asked["approval_id"], AT).status == "denied"
+        assert _sealed_rows(c) == 0 and _plaintext_anywhere(c) == []
+    assert fake.sent("create_recipient") == []

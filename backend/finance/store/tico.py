@@ -305,6 +305,57 @@ def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) 
     return str(cast(Any, vault).cipher.decrypt(c, row) or "")
 
 
+# The credential vault (backend/credentials.py `Vault`), registered once at startup (finance/actions `use_vault`). A
+# payee's bank details are sealed into a vault row the moment they are asked for; Finance keeps only the row's id.
+_VAULT: list[Any] = []
+SEALED_KIND, SEALED_SOURCE = "password", "finance"
+
+
+def use_vault(vault: object | None) -> None:
+    _VAULT[:] = [vault] if vault is not None else []
+
+
+def _cipher() -> Any:
+    if not _VAULT or not getattr(_VAULT[0], "configured", False):
+        raise Refused("the credential vault is not set up, so bank details cannot be kept")
+    return _VAULT[0].cipher
+
+
+def fingerprint(c: sqlite3.Connection, context: str, value: str) -> str:
+    """A keyed fingerprint (HMAC-SHA256 with the vault's data key) of `value`: compares bank details without keeping
+    them, and cannot be guessed offline from the database alone."""
+    import hashlib
+    import hmac
+    key = cast(bytes, _cipher().key(c))
+    return hmac.new(key, f"tico-finance:{context}:".encode() + value.encode(), hashlib.sha256).hexdigest()
+
+
+def seal_credential(c: sqlite3.Connection, name: str, value: str, preview: str, by: str, at: str) -> str:
+    """`value` sealed into a new vault row (Tools > Credentials, source finance); its id."""
+    cipher = _cipher()
+    cid = new_id()
+    ciphertext, nonce = cipher.encrypt(c, cid, value)
+    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created,updated,updated_by,"
+              "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+              (cid, name[:150], SEALED_KIND, preview, ciphertext, nonce, SEALED_SOURCE, at, at, by, by))
+    return cid
+
+
+def open_credential(c: sqlite3.Connection, credential_id: str) -> str:
+    """A sealed value, read at send time ("" when it is gone). Never logged or kept."""
+    row = c.execute("SELECT * FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE)).fetchone()
+    if row is None or row["ciphertext"] is None:
+        return ""
+    return str(_cipher().decrypt(c, row) or "")
+
+
+def drop_credential(c: sqlite3.Connection, credential_id: str) -> None:
+    """Delete a vault row Finance sealed (an action that never ran: declined, withdrawn, expired or failed)."""
+    c.execute("DELETE FROM credential_grants WHERE credential_id=? AND credential_id IN "
+              "(SELECT id FROM credentials WHERE source=?)", (credential_id, SEALED_SOURCE))
+    c.execute("DELETE FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE))
+
+
 def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:
     return c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)
                      ).fetchone() is not None

@@ -6,9 +6,10 @@ payment keeps its hold until it settles or ends. Direct send is not built: only 
 
 The planners run inside `act`; the worker steps (`due`, `precheck`, `sent`, `polled`) are what finance/sync.py runs
 around its provider calls, each in its own short transaction."""
+import json
 from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from . import budgeting, posting
 from .context import Ctx
@@ -22,6 +23,7 @@ from .handlers import Plan, Result, may_write
 from .mercury import IP_HINT, Answer, dollars, error_text
 from .store import banking as SK
 from .store import ledger as SL
+from .store import tico
 
 DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2); v1 sends nothing directly either way
 METHODS = ("ach", "wire", "check")
@@ -42,19 +44,81 @@ def settings(c: Any, connection_id: str) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------------------------ recipients
+SEALED_KINDS = ("recipient_add",)
+BANK_FIELDS = ("account_number", "routing_number")
+SEALED_FIELDS = ("details_ref", "details_fp", "last4")     # what Finance keeps in their place; never sent by a caller
+
+
+def _bank_details(p: Mapping[str, object]) -> tuple[str, dict[str, Any]]:
+    method = V.choice(p, "method", METHODS)
+    if method == "check":
+        return method, {"address": V.obj(p.get("address") or {}, "address")}
+    account, routing = V.text(p, "account_number", 34), V.text(p, "routing_number", 9)
+    if not account.isdigit() or not routing.isdigit() or len(routing) != 9:
+        raise invalid("an account number is digits and a routing number is 9 digits")
+    return method, {"accountNumber": account, "routingNumber": routing}
+
+
+def strip_details(c: Any, kind: str, body: Mapping[str, object]) -> tuple[dict[str, object], str]:
+    """A recipient request with its account and routing numbers taken out, before anything is written or hashed: the
+    payload keeps a keyed fingerprint and the last 4 only. The second value is the numbers as JSON, to seal ("" for a
+    check, a dry run's caller drops it). Other kinds pass through unchanged."""
+    out = dict(body)
+    if kind not in SEALED_KINDS:
+        return out, ""
+    if any(k in body for k in SEALED_FIELDS):
+        raise invalid("send account_number and routing_number; Finance keeps them in the credential vault")
+    method, info = _bank_details(body)
+    for k in BANK_FIELDS:
+        out.pop(k, None)
+    out["details_fp"] = tico.fingerprint(c, "payee", F.details_hash(method, info))
+    if method == "check":
+        return out, ""
+    out["last4"] = F.last4(info["accountNumber"])
+    return out, json.dumps(info, sort_keys=True)
+
+
+def seal_details(c: Any, body: Mapping[str, object], plain: str, by: str, at: str) -> dict[str, object]:
+    """Seal stripped bank details into the vault (inside the action's savepoint, so a refusal rolls it back too)."""
+    if not plain:
+        return dict(body)
+    last4 = str(body.get("last4") or "")
+    ref = tico.seal_credential(c, f"Finance payee {str(body.get('name') or '')[:100]} ••{last4}", plain,
+                               f"••{last4}", by, at)
+    return {**body, "details_ref": ref}
+
+
+def drop_details(c: Any, body: Mapping[str, object]) -> None:
+    """An action that will never run deletes the bank details it sealed."""
+    ref = body.get("details_ref")
+    if isinstance(ref, str) and ref:
+        tico.drop_credential(c, ref)
+
+
+def open_details(c: Any, ref: str) -> dict[str, Any]:
+    """The sealed account and routing numbers, at send time ({} when they are gone)."""
+    raw = tico.open_credential(c, ref) if ref else ""
+    try:
+        got: object = json.loads(raw) if raw else {}
+    except ValueError:
+        return {}
+    return cast(dict[str, Any], got) if isinstance(got, dict) else {}
+
+
 def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A payee and where their money goes. Changed details are a new recipient version (`replaces` the old one), so a
-    changed invoice can never quietly redirect a known payee's money: the new version is unknown to the rules."""
-    V.only(p, ("name", "method", "account_number", "routing_number", "account_type", "address", "email",
-               "contact_id", "replaces", "money_account_id"))
+    changed invoice can never quietly redirect a known payee's money: the new version is unknown to the rules. The
+    account and routing numbers were sealed into the vault before this runs (`strip_details`, `seal_details`): the
+    payload holds their vault ref, a keyed fingerprint and the last 4."""
+    V.only(p, ("name", "method", "account_type", "address", "email", "contact_id", "replaces", "money_account_id",
+               *SEALED_FIELDS))
     name = V.text(p, "name", 120)
     method = V.choice(p, "method", METHODS)
     address = V.obj(p.get("address") or {}, "address")
     if method == "check" and not address:
         raise invalid("a check needs a mailing address")
-    info: dict[str, Any] = {"address": address} if method == "check" else \
-        {"accountNumber": V.text(p, "account_number", 34), "routingNumber": V.text(p, "routing_number", 9)}
-    digest = F.details_hash(method, info)
+    digest = V.text(p, "details_fp", 128)
+    last4 = V.opt_text(p, "last4", 4) or "" if method != "check" else ""
     old = None
     if "replaces" in p:
         old = SK.get(ctx.c, "fin_recipients", V.text(p, "replaces", 80))
@@ -65,20 +129,24 @@ def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     elif any(str(r["details_hash"]) == digest for r in SK.recipients(ctx.c, 5000)):
         raise FinanceError(CONFLICT, "a recipient with those details exists")
     connection = _connection(ctx, V.opt_text(p, "money_account_id", 80))
-    last4 = F.last4(info.get("accountNumber")) if method != "check" else ""
 
     def apply(aid: str) -> Result:
+        ref = V.opt_text(p, "details_ref", 80) or ""
+        if method != "check" and not ref:
+            raise invalid("the bank details were not sealed")
         rid = SK.insert(ctx.c, "fin_recipients", {
             "connection_id": connection, "name": name, "method": method, "last4": last4 or None,
-            "details_hash": digest, "version": int(old["version"]) + 1 if old is not None else 1,
+            "details_hash": digest, "details_ref": ref or None,
+            "version": int(old["version"]) + 1 if old is not None else 1,
             "replaces_id": str(old["id"]) if old is not None else None, "status": "active",
             "contact_id": V.opt_text(p, "contact_id", 80) or name, "created_at": ctx.at, "created_by": who,
             "updated_at": ctx.at})
         if old is not None:
             SK.update(ctx.c, "fin_recipients", str(old["id"]), {"status": "replaced", "updated_at": ctx.at})
         body: dict[str, object] = {"recipient_id": rid, "name": name, "method": method,
-                                   "email": V.opt_text(p, "email", 200) or "", "address": address, **info,
-                                   "account_type": V.opt_text(p, "account_type", 20) or "businessChecking"}
+                                   "email": V.opt_text(p, "email", 200) or "", "address": address,
+                                   "details_ref": ref, "account_type": V.opt_text(p, "account_type", 20)
+                                   or "businessChecking"}
         SK.outbox_add(ctx.c, connection_id=connection, action_id=aid, op="recipient_create", payload=body,
                       key=f"recipient-{rid}", by=who, at=ctx.at)
         return {"recipient_id": rid, "last4": last4 or None}

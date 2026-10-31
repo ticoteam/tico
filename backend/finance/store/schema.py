@@ -251,7 +251,8 @@ CREATE TABLE IF NOT EXISTS fin_view_grants (
 CREATE TABLE IF NOT EXISTS fin_recipients (
   id TEXT PRIMARY KEY, connection_id TEXT REFERENCES fin_connections(id), provider_recipient_id TEXT,
   name TEXT NOT NULL, method TEXT NOT NULL CHECK (method IN ('ach','wire','check','rtp')), last4 TEXT,
-  details_hash TEXT NOT NULL, version INTEGER NOT NULL DEFAULT 1, replaces_id TEXT REFERENCES fin_recipients(id),
+  details_hash TEXT NOT NULL, details_ref TEXT, version INTEGER NOT NULL DEFAULT 1,
+  replaces_id TEXT REFERENCES fin_recipients(id),
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','replaced')), contact_id TEXT NOT NULL DEFAULT '',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
 
