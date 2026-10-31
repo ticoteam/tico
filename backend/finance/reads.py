@@ -86,7 +86,40 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
                 continue
             out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
                                vendor=_vendor(s, vendors, str(r["vendor"])), amount=int(r["amount"])))
-    return out
+    return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
+
+
+def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], lines: list[Any]) -> list[VW.Cell]:
+    """Takes the lines of settled private payroll entries out of the cells they sit in, before any total or breakdown is
+    built, so their amounts reach no read: not the total, a by-vendor row, the P&L or a spend report. A cell that nets
+    to nothing is dropped by suppression, and the cells marked linked make the totals say "excl. payroll"."""
+    if not lines:
+        return cells
+    tags = SL.line_tags(s.ctx.c, [str(r["id"]) for r in lines])
+    removed: dict[tuple[str, str, str, str, str], int] = {}
+    for r in lines:
+        account = s.ctx.accounts.get(r["account_id"])
+        mine = tags.get(str(r["id"]), {})
+        team, teammate = mine.get("team", ""), mine.get("teammate", "")
+        if account is None or not s.view.sees(account, {"team": team, "teammate": teammate}):
+            continue
+        key = (str(r["account_id"]), str(r["entry_date"]), team, teammate,
+               _vendor(s, vendors, str(r["contact_id"] or "")))
+        removed[key] = removed.get(key, 0) + int(r["amount"])
+    if not removed:
+        return cells
+    kept: list[VW.Cell] = []
+    left: dict[tuple[str, str, str, str, str], int] = {}
+    for cell in cells:
+        key = (cell.account_id, cell.day, cell.team, cell.teammate, cell.vendor)
+        if key in removed:
+            left[key] = left.get(key, 0) + cell.amount
+        else:
+            kept.append(cell)
+    for (account_id, day, team, teammate, vendor), amount in removed.items():
+        kept.append(VW.Cell(account_id=account_id, day=day, team=team, teammate=teammate, vendor=vendor,
+                            amount=left.get((account_id, day, team, teammate, vendor), 0) - amount, linked=True))
+    return kept
 
 
 def _vendor(s: _Seen, seen: dict[str, str], key: str) -> str:
@@ -376,14 +409,18 @@ def _segments(a: date, z: date) -> list[tuple[date, date]]:
     return out
 
 
-def _spent(trees: Sequence[tuple[date, date, Ctx]], b: B.Budget, p: date, q: date) -> int:
-    """A budget's spend over [p, q], each month of it counted on the account tree that month reads with."""
+def _spent(trees: Sequence[tuple[date, date, _Seen]], b: B.Budget, p: date, q: date) -> tuple[int, bool]:
+    """A budget's spend over [p, q], each month of it counted on the account tree that month reads with and netted as
+    that month's viewer reads it. Also whether a settled private line came out of the sum."""
     total = 0
-    for sa, sz, ctx in trees:
+    excluded = False
+    for sa, sz, seen in trees:
         lo, hi = max(sa, p), min(sz, q)
         if lo <= hi:
-            total += budgeting.actual(ctx, b, lo.isoformat(), hi.isoformat())
-    return total
+            read = budgeting.Netted(seen.view)
+            total += budgeting.actual(seen.ctx, b, lo.isoformat(), hi.isoformat(), read=read)
+            excluded = excluded or read.excluded
+    return total, excluded
 
 
 def _covered(scopes: Sequence[tuple[str, str]], team: str, teammate: str) -> bool:
@@ -781,7 +818,8 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
     return {"amount": st.amount, "actual": None if cut else st.actual, "held": None if cut else st.held,
             "remaining": None if cut else st.remaining, "pct": None if cut or st.pct is None else str(st.pct),
             "crossed_warn": None if cut else st.crossed_warn, "at_limit": None if cut else st.at_limit,
-            "period_start": st.period_start, "period_end": st.period_end}
+            "period_start": st.period_start, "period_end": st.period_end,
+            "excluded": st.excluded and not cut}
 
 
 def _budget_row(b: B.Budget) -> Row:
@@ -804,8 +842,15 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     day = dates.day(on) if on else dates.day(s.ctx.today)
     seen = _visible(s, include_inactive)
     most = max(1, min(int(limit), 500))
-    rows = [{**_budget_row(b), "state": _state_row(s, b, budgeting.state(s.ctx, b.id, day))} for b in seen[:most]]
-    return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version}
+    rows: list[Row] = []
+    netted = False
+    for b in seen[:most]:
+        st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view))
+        state_row = _state_row(s, b, st)
+        netted = netted or bool(state_row["excluded"])
+        rows.append({**_budget_row(b), "state": state_row})
+    return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version,
+            "excluded": netted}
 
 
 def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None,
@@ -822,18 +867,21 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     seen = _visible(s, False)
     most = max(1, min(int(limit), 500))
     versions = SB.versions(c, [b.id for b in seen[:most]])
-    trees = [(sa, sz, _closed(base, viewer, sa, sz)[0].ctx) for sa, sz in _segments(a, z)]
+    trees = [(sa, sz, _closed(base, viewer, sa, sz)[0]) for sa, sz in _segments(a, z)]
     rows: list[Row] = []
     for b in seen[:most]:
         # Judged on each month's own tree: a private line can sit under this budget in a closed month and not now.
-        cut = any(private_scope(ctx, viewer, b) for _, _, ctx in trees)
+        cut = any(private_scope(x.ctx, viewer, b) for _, _, x in trees)
+        spent = None if cut else [_spent(trees, b, p, q) for p, q in buckets]
         rows.append({**_budget_row(b),
                      "budget": [B.in_window(b, versions[b.id], q, s.ctx.book.fiscal_year_start) for q in buckets],
-                     "actual": None if cut else [_spent(trees, b, p, q) for p, q in buckets]})
+                     "actual": None if spent is None else [amt for amt, _ in spent],
+                     "excluded": spent is not None and any(out for _, out in spent)})
     return {"start": a.isoformat(), "end": z.isoformat(), "period": period,
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
                         for p, q in buckets],
             "budgets": rows, "more": len(seen) > most, "view_version": s.view.version,
+            "excluded": any(r["excluded"] for r in rows),
             "imported": tab.imported_months(c, s.ctx, s.view, a.isoformat()[:7], z.isoformat()[:7],
                                              s.ctx.book.basis),
             "snapshot": snap}
@@ -909,10 +957,11 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         b = s.ctx.budgets().get(budget_id or "")
         if b is None or not sees_budget(s.ctx, viewer, b):
             raise FinanceError(NOT_FOUND, "no such budget")
-        row = _state_row(s, b, budgeting.state(s.ctx, b.id, today))
+        row = _state_row(s, b, budgeting.state(s.ctx, b.id, today, read=budgeting.Netted(s.view)))
         if name == "budget_remaining":
-            return {**base, "value": row["remaining"], "unit": "minor", "currency": currency}
-        return {**base, "value": row["pct"], "unit": "percent"}
+            return {**base, "value": row["remaining"], "unit": "minor", "currency": currency,
+                    "excluded": row["excluded"]}
+        return {**base, "value": row["pct"], "unit": "percent", "excluded": row["excluded"]}
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")
@@ -1294,10 +1343,10 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
     if kind == "budget_near_limit":
         near: list[Row] = []
         for b in _visible(s, False):
-            st = _state_row(s, b, budgeting.state(ctx, b.id, today))
+            st = _state_row(s, b, budgeting.state(ctx, b.id, today, read=budgeting.Netted(view)))
             if st["crossed_warn"]:
                 near.append({"id": b.id, "budget_id": b.id, "amount": st["remaining"], "pct": st["pct"],
-                             "label": f"{b.name} · {st['pct'] or '?'}% used"})
+                             "excluded": st["excluded"], "label": f"{b.name} · {st['pct'] or '?'}% used"})
         return near[skip:skip + n], len(near) > skip + n
     if kind == "sync_failed":
         if not (view.everything or view.sources or R.is_admin(ctx.org, s.view.viewer, held)):

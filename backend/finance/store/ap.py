@@ -276,8 +276,10 @@ def settlement_count(c: sqlite3.Connection, kind: str, doc_id: str) -> int:
                          ).fetchone()[0])
 
 
-def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any]:
-    return c.execute("SELECT * FROM fin_settlements WHERE from_kind=? AND from_id=? AND voided_at IS NULL "
+def settlements_from(c: sqlite3.Connection, kind: str, from_id: str, *, voided: bool = False) -> list[Any]:
+    """What a feed row or payment settled. `voided` keeps the ones since reversed: a privacy link must outlive them."""
+    live = "" if voided else " AND voided_at IS NULL"
+    return c.execute(f"SELECT * FROM fin_settlements WHERE from_kind=? AND from_id=?{live} "
                      "ORDER BY created_at", (kind, from_id)).fetchall()
 
 
@@ -294,8 +296,9 @@ def expected(c: sqlite3.Connection, kind: str, money_account_id: str, amount: in
                      (kind, money_account_id, amount, amount, start, end, *ids, most)).fetchall()
 
 
-def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
-    return c.execute("SELECT * FROM fin_settlements WHERE entry_id=? AND voided_at IS NULL ORDER BY created_at",
+def settlements_by_entry(c: sqlite3.Connection, entry_id: str, *, voided: bool = False) -> list[Any]:
+    live = "" if voided else " AND voided_at IS NULL"
+    return c.execute(f"SELECT * FROM fin_settlements WHERE entry_id=?{live} ORDER BY created_at",
                      (entry_id,)).fetchall()
 
 

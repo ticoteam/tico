@@ -223,6 +223,18 @@ def entry_lines(c: sqlite3.Connection, entry_id: str) -> list[tuple[Any, Line]]:
     return [(r, _line(r, tags.get(r["id"], {}))) for r in rows]
 
 
+def bank_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str]) -> list[Any]:
+    """The lines in a window on these accounts of bank and card entries, reversals included (they are all in the
+    rollups), with the entry's source and source id (the feed row it was posted for) and its basis."""
+    if not account_ids:
+        return []
+    accounts = ",".join("?" * len(account_ids))
+    return c.execute("SELECT l.id, l.account_id, l.entry_date, l.contact_id, l.amount, e.source, e.source_id, "
+                     "e.basis FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id WHERE l.book_id=? AND "
+                     "l.entry_date>=? AND l.entry_date<=? AND e.source IN ('bank','card') AND "
+                     f"l.account_id IN ({accounts})", (book_id, start, end, *account_ids)).fetchall()
+
+
 def entries_touching(c: sqlite3.Connection, entry_ids: Sequence[str], account_ids: Sequence[str]) -> set[str]:
     """Which of these entries have a line on any of these accounts."""
     if not entry_ids or not account_ids:

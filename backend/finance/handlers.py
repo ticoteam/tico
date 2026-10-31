@@ -134,11 +134,13 @@ def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> lis
         if not sees_budget(ctx, who, b):
             continue
         if private_scope(ctx, who, b):
-            out.append({"budget_id": bid, "name": b.name, "remaining": None, "remaining_after": None})
+            out.append({"budget_id": bid, "name": b.name, "remaining": None, "remaining_after": None,
+                        "excluded": False})
             continue
-        s = budgeting.state(ctx, bid, at)
+        s = budgeting.state(ctx, bid, at, read=budgeting.Netted(ctx.view(who)))
         out.append({"budget_id": bid, "name": b.name, "remaining": s.remaining,
-                    "remaining_after": None if s.remaining is None else s.remaining - amount})
+                    "remaining_after": None if s.remaining is None else s.remaining - amount,
+                    "excluded": s.excluded})
     return out
 
 
@@ -710,7 +712,12 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             s = budgeting.state(ctx, one.id, at)
             if s.remaining is not None and grow > s.remaining:
                 if shows_numbers(ctx, who, one):
-                    raise invalid(f"it does not fit: {one.name} has {s.remaining} left")
+                    # Enforcement decides on the true figure; the reason names it only when the viewer's own figure
+                    # is the same one, so no private spend shows as a difference.
+                    seen = budgeting.state(ctx, one.id, at, read=budgeting.Netted(ctx.view(who))).remaining
+                    if seen == s.remaining:
+                        raise invalid(f"it does not fit: {one.name} has {s.remaining} left")
+                    raise invalid(f"it does not fit in {one.name}")
                 raise invalid("it does not fit: not enough left")
     lowered = kind == "card" and grow < 0
 
