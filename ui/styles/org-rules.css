@@ -43,8 +43,7 @@ a.ru-row:hover *{text-decoration:none}
 .ru-duet .ru-row{grid-template-columns:96px minmax(0,1fr) 84px 90px 140px 92px}
 /* with a panel open the list narrows; its columns give the rule the room */
 .ru.ru-open .ru-int .ru-row,.ru.ru-open .ru-ext .ru-row{grid-template-columns:minmax(0,1fr) 120px 110px 84px}
-.ru.ru-open .ru-duet .ru-row{grid-template-columns:96px minmax(0,1fr) 110px 84px}
-.ru.ru-open .ru-duet .ru-row>:nth-child(3),.ru.ru-open .ru-duet .ru-row>:nth-child(4){display:none}
+.ru.ru-open .ru-duet .ru-row{grid-template-columns:88px minmax(0,1fr) 64px 72px 100px 84px}
 .ru-txt{min-width:0;overflow-wrap:anywhere;font-size:var(--t-md)}
 .ru-c{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
 .ru-none{color:var(--muted)}
@@ -99,8 +98,10 @@ a.ru-row:hover *{text-decoration:none}
 .ru-form select.ru-addsel{width:auto;min-width:0;max-width:200px;height:26px;padding:0 6px;border-style:dashed;color:var(--muted);font-size:var(--t-sm)}
 .ru-reviewer{display:flex;flex-direction:column;gap:6px;margin-top:8px}
 .ru-reviewer[hidden]{display:none}
-.ru-duebox{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);font-size:var(--t-sm)}
-.ru-duebox a{color:var(--muted)}
+.ru-duebox{display:flex;align-items:center;gap:8px;padding:8px 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);font-size:var(--t-sm);text-decoration:none}
+.ru-duebox:hover{background:var(--surface2)}
+.ru-duebox+.ru-duebox{margin-top:6px}
+.ru-plus{margin-left:6px;color:var(--muted);font-size:var(--t-sm)}
 .ru-adddue{align-self:flex-start;font-size:var(--t-sm)}
 .ru-quote{margin:0;padding:8px 12px;border-left:2px solid var(--line);color:var(--muted);font-size:var(--t-sm)}
 .ru-quote b{color:var(--ink);font-weight:600}

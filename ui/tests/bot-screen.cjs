@@ -81,7 +81,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     const admin = await visit({id: 'ana', name: 'Ana', role: 'owner'});
     await admin.open('ready');
     assert.equal(await admin.page.locator('#bot-top #bot-screen').count(), 1);
-    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Instructions', 'History', 'Rules', 'Settings']);
+    assert.deepEqual(await admin.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Rules', 'Instructions', 'History', 'Settings']);
     assert.equal(await admin.page.locator('#sess-card').count(), 0);
     await admin.page.locator('[data-bot-detail-tab=settings]').click();
     await admin.page.locator('#bot-editor form').waitFor();
@@ -145,7 +145,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await member.page.locator('#bot-editor form').waitFor();
     assert.equal(await member.page.locator('[data-screen-toggle]').count(), 0);
     await member.open('seen');
-    assert.deepEqual(await member.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info']);
+    assert.deepEqual(await member.page.locator('[data-bot-detail-tab]').allTextContents(), ['Info', 'Rules']);
     assert.equal(await member.page.locator('#bot-editor').count(), 0);
     assert.equal(await member.page.locator('[data-screen-toggle]').count(), 0);
     assert.deepEqual(member.writes, []);

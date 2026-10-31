@@ -927,8 +927,12 @@ def due_show(c, auth, who, due_id):
     if not row:
         raise Problem("not_found", f"There is no due date {due_id}", 404)
     rule = _get(c, row["rule_id"])
+    # The same check as the Due list's rows; a row that ended (edited or removed) or a retired rule is read only.
+    live = rule["status"] == "active" and not row["retired_at"] and not row["ended_on"]
+    manage = live and may_manage(c, auth, who, rule["who"])
     return {**D.detail(c, row), "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
-                                         "status": rule["status"]}}
+                                         "status": rule["status"]},
+            "can_edit": manage, "can_satisfy": manage or (live and who.actor == row["owner"])}
 
 
 def counts(c, auth, who):

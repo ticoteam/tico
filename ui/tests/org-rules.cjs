@@ -1,7 +1,8 @@
 // The Rules page (ui/app/org-rules.js) on a real hub seeded with the scenario org and its groups: Dana adds an internal
 // rule with a Who and a With and sees it listed, edits it in the side panel, a stale save is refused and the panel
-// reloads, the Engineering Lead's Rules tab shows the rule and its settings, a due date is added and marked
-// satisfied, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also saves each
+// reloads, a due date is added, marked satisfied and its repeat changed, a second date shows beside it, the Engineering
+// Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule without Save or
+// Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also saves each
 // screen at 1440 and 390, light and dark, into that directory.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -108,10 +109,52 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(due.status, 'upcoming', 'a yearly due date moves on to next year');
     assert.equal(due.history[0].satisfied_by, 'human:dana');
 
-    // The Engineering Lead's Rules tab: the rule, then its settings as sentences.
+    // A change to Repeats starts again from the date shown (next year's), not the first date ever set, so the
+    // satisfied one stays behind instead of coming back overdue.
+    await page.waitForFunction(d => document.querySelector('#ru-side input[name=due]')?.value === d, due.due_on, {timeout: t(10000)});
+    await side.locator('select[name=repeats]').selectOption('once');
+    await side.locator('button[type=submit]').click();
+    await page.waitForFunction(id => { const q = new URLSearchParams(location.hash.split('?')[1]); return q.get('due') && q.get('due') !== id; },
+      dueId, {timeout: t(10000)});
+    const liveId = new URLSearchParams((await page.evaluate(() => location.hash)).split('?')[1]).get('due');
+    const live = await ok(page, 'GET', '/v2/rule-due/' + liveId);
+    assert.equal(live.due_on, due.due_on);
+    assert.equal(live.repeats, 'once');
+    assert.equal(live.status, 'upcoming');
+    assert.equal(live.replaces, dueId);
+    // The ended row's address opens the live one.
+    await go(page, `#/rules/due?due=${dueId}`);
+    await page.waitForFunction(id => location.hash.includes('due=' + id), liveId, {timeout: t(10000)});
+
+    // A second, earlier date on the same rule (the hub's clock decides overdue or due soon): the list shows the most
+    // urgent one and +1, the panel lists both.
+    const sooner = await ok(page, 'POST', `/v2/rules/${ruleId}/due`, {first_due: day(-3), repeats: 'once', owner: 'human:dana'});
+    await go(page, `#/rules?rule=${ruleId}`);
+    await page.waitForFunction(() => document.querySelectorAll('#ru-side .ru-duebox').length === 2, null, {timeout: t(10000)});
+    assert.equal(await side.locator('.ru-duebox').first().getAttribute('data-due'), sooner.id);
+    assert.equal(await page.locator(`.ru-int a.ru-row[data-rule="${ruleId}"] .ru-plus`).textContent(), '+1');
+    assert.equal(await side.locator('.ru-adddue[href*="due=new"]').count(), 1, 'more dates can still be added');
+
+    // The Engineering Lead's Rules tab: the rule, then its settings as sentences, each opening its own editor; the
+    // hub's fixed limits have none.
     await go(page, '#/bot/engineering-lead/rules');
     await page.locator(`#bot-rules .ru-row[data-rule="${ruleId}"]`).waitFor({timeout: t(15000)});
     assert.ok(await page.locator('#bot-rules .ru-setting').count() > 0, 'its settings are listed');
+    assert.equal(await page.locator('#bot-rules [data-ru-setting="mail"]').getAttribute('href'), '#/bot/engineering-lead/settings');
+    assert.ok(await page.locator('#bot-rules .ru-setting > .ru-c:last-child > .ru-none').count() > 0, 'a fixed limit has no link');
+
+    // Priya manages nothing about the Engineering Lead: the panel is read only, and the bot's Rules tab opens by link.
+    const priya = await pageAs(browser, hub, 'priya');
+    await ready(priya);
+    await go(priya, `#/rules?rule=${ruleId}`);
+    await priya.locator(`#ru-side form[data-rule="${ruleId}"]`).waitFor({timeout: t(10000)});
+    assert.equal(await priya.locator('#ru-side button[type=submit]').count(), 0);
+    assert.equal(await priya.locator('#ru-side [data-ru-retire]').count(), 0);
+    assert.equal(await priya.locator('#ru-side .ru-duebox').count(), 2);
+    await go(priya, '#/bot/engineering-lead/rules');
+    await priya.locator(`#bot-rules .ru-row[data-rule="${ruleId}"]`).waitFor({timeout: t(15000)});
+    assert.equal(await priya.locator('[data-bot-detail-tab=rules]').getAttribute('aria-selected'), 'true');
+    await priya.context().close();
 
     // Suggested: add all three at once.
     await go(page, '#/rules/suggested');
@@ -123,7 +166,7 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     assert.equal(counts.external, 3);
     await page.context().close();
 
-    if (process.env.RULES_SHOTS) await shots(browser, hub, bot, {ruleId, dueId});
+    if (process.env.RULES_SHOTS) await shots(browser, hub, bot, {ruleId, dueId: liveId});
     await bot.context().close();
     console.log('org-rules: ok');
   } finally {
