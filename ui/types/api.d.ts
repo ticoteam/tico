@@ -901,6 +901,12 @@ export type DocsSetup = {
   sources?: Array<string>;
 };
 
+export type DraftCheck = {
+  as?: "message" | "comment" | "task" | "assign";
+  text: string;
+  to: string;
+};
+
 export type DueAdd = {
   first_due: string;
   owner: string;
@@ -1489,6 +1495,16 @@ export type Health = {
 
 export type HeldAction = {
   action: string;
+};
+
+export type HoldAppeal = {
+  why?: string;
+};
+
+export type HoldEmpty = Record<string, unknown>;
+
+export type HoldSend = {
+  nonce: string;
 };
 
 export type IfNoAnswer = {
@@ -4080,6 +4096,14 @@ export type AnswerTaskQuestionParams = {
 export type AnswerTaskQuestionBody = TaskAnswer;
 export type AnswerTaskQuestionResponse = TaskAnswerResult;
 
+/** POST /api/v2/rule-holds/{hold_id}/appeal */
+export type AppealRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type AppealRuleHoldBody = HoldAppeal;
+export type AppealRuleHoldResponse = unknown;
+
 /** POST /api/v2/kpis/{kid}/archive */
 export type ArchiveKpiParams = {
   "Idempotency-Key": string;
@@ -4168,6 +4192,13 @@ export type ChatWithBotParams = {
 };
 export type ChatWithBotBody = ChatCreate;
 export type ChatWithBotResponse = ChatResult;
+
+/** POST /api/v2/rules/check */
+export type CheckRuleDraftParams = {
+  "Idempotency-Key": string;
+};
+export type CheckRuleDraftBody = DraftCheck;
+export type CheckRuleDraftResponse = unknown;
 
 /** POST /api/v2/tasks/dry-run */
 export type CheckTaskParams = {
@@ -5023,12 +5054,24 @@ export type GetRuleParams = {
 export type GetRuleBody = never;
 export type GetRuleResponse = unknown;
 
+/** GET /api/v2/rules/stats */
+export type GetRuleCheckStatsParams = Record<string, never>;
+export type GetRuleCheckStatsBody = never;
+export type GetRuleCheckStatsResponse = unknown;
+
 /** GET /api/v2/rule-due/{due_id} */
 export type GetRuleDueParams = {
   due_id: string;
 };
 export type GetRuleDueBody = never;
 export type GetRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds/{hold_id} */
+export type GetRuleHoldParams = {
+  hold_id: string;
+};
+export type GetRuleHoldBody = never;
+export type GetRuleHoldResponse = unknown;
 
 /** GET /api/v2/rules/counts */
 export type GetRulesCountsParams = Record<string, never>;
@@ -5243,6 +5286,14 @@ export type ImportMeetingBody = {
   transcript?: string | Array<Record<string, unknown>>;
 };
 export type ImportMeetingResponse = unknown;
+
+/** POST /api/v2/rule-holds/{hold_id}/keep */
+export type KeepRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type KeepRuleHoldBody = HoldEmpty;
+export type KeepRuleHoldResponse = unknown;
 
 /** POST /api/v2/goals/{gid}/kpis */
 export type LinkGoalKpiParams = {
@@ -5641,6 +5692,15 @@ export type ListRuleDueParams = {
 };
 export type ListRuleDueBody = never;
 export type ListRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds */
+export type ListRuleHoldsParams = {
+  cursor?: string | null;
+  limit?: number;
+  task: string;
+};
+export type ListRuleHoldsBody = never;
+export type ListRuleHoldsResponse = unknown;
 
 /** GET /api/v2/rule-sources */
 export type ListRuleSourcesParams = {
@@ -6492,6 +6552,14 @@ export type SendMessageParams = {
 };
 export type SendMessageBody = MessageCreate;
 export type SendMessageResponse = Message;
+
+/** POST /api/v2/rule-holds/{hold_id}/send */
+export type SendRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type SendRuleHoldBody = HoldSend;
+export type SendRuleHoldResponse = unknown;
 
 /** POST /api/v2/webhooks/{hook_id}/send */
 export type SendWebhookParams = {
