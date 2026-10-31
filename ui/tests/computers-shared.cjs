@@ -1,8 +1,8 @@
 // Shared connections on Settings > Computers, end to end against a real server (ui/tests/support/computers_server.py)
 // with two fake computers that check keys as a runner does. Spec tests (Head of Product's numbering):
-// 16 Add connection > Claude Code > API key > paste > This computer: a Claude Code chip, its line says "API key", the
+// 16 Add connection > Claude Code > API key > paste > This computer: a Claude Code line that says "API key", the
 //    key reaches the computer and is never shown again in full;
-// 19 a key shared with two computers: a chip on both, its line says Shared and lists both; one that has not used it
+// 19 a key shared with two computers: both lines say Shared and list both; one that has not used it
 //    yet, and has reported nothing for that tool, shows it too, with no reading it has not taken;
 // 20 editing it from one computer warns that it changes every listed computer, and both take the new key;
 // 36 Clear key from one asks "this computer only" or "all listed computers", naming both; this computer only leaves
@@ -99,9 +99,11 @@ function start() {
       await keyDialog.locator('[name=env]').selectOption('ANTHROPIC_API_KEY');   // Claude Code also takes an OAuth token
     };
 
-    // 16: Claude Code > API key > paste > This computer.
+    // 16: Claude Code > API key > paste > This computer. The row's Claude Code column is for subscriptions; a computer's
+    // own or shared key shows on its pop-up's Claude Code line.
     await row(team).waitFor();
-    assert.equal(await row(team).locator('[data-chip="own:claude"]').count(), 0, 'no Claude Code chip before a connection');
+    await openDetail(team);
+    assert.equal(await line.count(), 0, 'no Claude Code line before a connection');
     await addKey(team);
     assert.equal(await keyDialog.locator('[name=key-share][value=this]').isChecked(), true, 'This computer is the default');
     await keyDialog.locator('[name=secret]').fill(OWN);
@@ -110,11 +112,8 @@ function start() {
     assert.match(await keyDialog.locator('[data-status]').innerText(), /Added\. Claude Code on Team box now uses sk-…789/);
     assert.equal(await keyDialog.locator('[name=secret]').inputValue(), '', 'the field is emptied once sent');
     await keyDialog.locator('[data-close]').last().click();
-    await row(team).locator('[data-chip="own:claude"]').waitFor({timeout: 20000});
+    await lineShows(team, '.computer-conn-signin', 'API key');
     assert.deepEqual(received(), [OWN], 'the key reached Team box');
-    await openDetail(team);
-    await line.waitFor();
-    assert.match(await line.locator('.computer-conn-signin').innerText(), /API key/);
     assert.match(await line.innerText(), /this computer's key sk-…789/);
     await neverShown(OWN);
 
@@ -143,17 +142,14 @@ function start() {
       assert.equal(await line.locator('[data-shared-with]').innerText(), 'Shared with Lab box, Spare box, Team box');
       assert.equal(await line.locator('[data-shared]').innerText(), 'Shared');
       assert.match(await line.locator('.computer-conn-head').innerText(), /API key · ANTHROPIC_API_KEY shared from Lab box/);
-      assert.equal(await row(id).locator('[data-chip="own:claude"]').count(), 1);
-      assert.match(await row(id).locator('[data-chip="own:claude"]').getAttribute('title'), /Shared with Lab box, Spare box, Team box/);
     }
     assert.ok(received().includes(SHARED), 'the shared key reached the computers');
     // Spare box has not fetched it and reports no Claude Code at all: Shared and listed, but no reading, no red dot,
     // and the line says it is unchecked.
     await lineShows(spare, '[data-shared-with]', 'Shared with Lab box, Spare box, Team box');
     assert.match(await line.locator('[data-shared-waiting]').innerText(), /Not checked on Spare box yet/);
-    const spareChip = row(spare).locator('[data-chip="own:claude"]');
-    assert.equal(await spareChip.locator('meter').count(), 0, 'no usage bar it has not read');
-    assert.equal(await spareChip.evaluate(el => el.classList.contains('attention')), false);
+    assert.equal(await line.locator('meter').count(), 0, 'no usage bar it has not read');
+    assert.equal(await line.evaluate(el => el.classList.contains('attention')), false);
     await neverShown(SHARED);
 
     // Hold the runner after its cleared heartbeat, before it fetches the shared key. The dialog must use vault
