@@ -796,3 +796,33 @@ def test_sync_now_polls_payments_waiting_on_the_bank_so_a_rejection_lands_at_onc
     sync_once(books, fake, soon)
     with books.read() as c:
         assert status(c) == "cancelled"
+
+
+def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_never_pays(books):
+    """Codex fix check: a scheduled bill's payment waits on dan's approval; the bill is rescheduled to Nov 15. The
+    waiting payment_create is withdrawn with its approval, so approving it later runs nothing, the bill stays
+    scheduled for its new day, and that day asks afresh. A live payment still refuses a reschedule."""
+    from backend import hubdb as H
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        bid = _scheduled_today(c, ask=True)
+        FA.watch_documents(c, AT)
+        old = FA.action(c, str(FR.bill(c, OWNER, bid)["schedule"]["action_id"]))
+        assert old.status == "needs_approval", old
+        moved = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-11-15", "money_account_id": _checking(c)})
+        assert moved.status == "committed", moved
+        assert FA.action(c, old.action_id).status == "withdrawn"
+        assert H.approval(c, str(old.approval_id))["decision"] == "withdrawn"
+        assert FA.approval_decided(c, str(old.approval_id), AT).status == "withdrawn"     # approving runs nothing
+        bill = FR.bill(c, OWNER, bid)
+        assert (bill["status"], bill["pay_on"], bill["payment"]) == ("scheduled", "2026-11-15", None)
+        FA.watch_documents(c, AT)
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+        FA.watch_documents(c, "2026-11-15T12:00:00.000000Z")
+        again = FA.action(c, str(FR.bill(c, OWNER, bid)["schedule"]["action_id"]))
+        assert again.action_id != old.action_id and again.status == "needs_approval"
+        H.approval_decide(c, str(again.approver), str(again.approval_id), "approved")
+        assert FA.approval_decided(c, str(again.approval_id), "2026-11-15T12:00:00.000000Z").status == "committed"
+        refused = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-11-20", "money_account_id": _checking(c)},
+                      at="2026-11-15T12:00:00.000000Z")
+        assert (refused.status, refused.code) == ("failed", "conflict"), refused

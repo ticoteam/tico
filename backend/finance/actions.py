@@ -326,6 +326,23 @@ def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: 
     return _stored(SX.by_id(ctx.c, action_id))
 
 
+def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]:
+    """End every waiting ask to pay this bill (its scheduled payment's payment_create, an earlier bill_schedule)
+    other than `keep`: its approval is withdrawn and it can never run. The ids ended."""
+    out: list[str] = []
+    for row in SX.waiting(ctx.c, ("payment_create", "bill_schedule")):
+        body = json.loads(str(row["payload_json"] or "{}"))
+        mine = body.get("obligation") == f"bill:{bill_id}" if row["kind"] == "payment_create" else \
+            body.get("bill_id") == bill_id
+        if not mine or str(row["id"]) == keep:
+            continue
+        if row["approval_id"]:
+            tico.approval_withdraw(ctx.c, str(row["approval_id"]), why)
+        _close(ctx, row, "withdrawn", "withdrawn", why)
+        out.append(str(row["id"]))
+    return out
+
+
 def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = None) -> ActionResult | None:
     """Act on a decision about a Finance approval, in the caller's transaction: approve commits once (re-checked),
     decline denies, a withdrawal or expiry ends the action. None when the approval is not Finance's. Safe to call

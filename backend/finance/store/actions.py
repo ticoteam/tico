@@ -17,6 +17,13 @@ def by_approval(c: sqlite3.Connection, approval_id: str) -> Any:
     return c.execute("SELECT * FROM fin_actions WHERE approval_id=?", (approval_id,)).fetchone()
 
 
+def waiting(c: sqlite3.Connection, kinds: Sequence[str]) -> list[Any]:
+    """Actions of these kinds still waiting on an approval."""
+    marks = ",".join("?" * len(kinds))
+    return c.execute(f"SELECT * FROM fin_actions WHERE status='needs_approval' AND kind IN ({marks}) "
+                     "ORDER BY created_at, id", list(kinds)).fetchall()
+
+
 def insert(c: sqlite3.Connection, *, action_id: str, kind: str, payload: Mapping[str, object], actor: str,
            on_behalf_of: str, rule_id: str, key: str, rules: Sequence[Mapping[str, object]], status: str,
            result: Mapping[str, object], code: str, reason: str, by: str, at: str) -> None:

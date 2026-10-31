@@ -492,8 +492,12 @@ def bill_schedule(ctx: Ctx, who: str, p: V.Payload) -> Plan:
              "memo": V.opt_text(p, "memo", 140) or "", "by": who}
 
     def apply(aid: str) -> Result:
+        from .actions import withdraw_bill_asks
         SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "scheduled", "pay_on": pay_on,
                                                          "schedule_json": SK.dump(sched), "updated_at": ctx.at})
+        # A rescheduled bill pays only on its new day: an earlier ask to pay it (waiting on approval) is withdrawn,
+        # after the new schedule is written so its end does not reopen the bill.
+        withdraw_bill_asks(ctx, str(bill["id"]), aid, "the bill was rescheduled")
         return {"bill_id": str(bill["id"]), "status": "scheduled", "pay_on": pay_on}
     return Plan(K.default_gate(ctx.org, who, "bill_schedule"),
                 f"Pay the {_money(_left('bill', bill))} bill from {vendor['name']} on {pay_on}", apply,
