@@ -67,6 +67,7 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
     fy = s.ctx.book.fiscal_year_start
     wide = (dates.fiscal_bounds(a, 3, fy)[0], dates.fiscal_bounds(z, 3, fy)[1])
     out: list[VW.Cell] = []
+    vendors: dict[str, str] = {}                     # a name a contact took counts as that contact (fin_vendor_aliases)
     for ids_, (p, q) in ((plain, (a, z)), (hidden, wide)):
         rows = SL.rollup_rows(s.ctx.c, s.ctx.book.id, p.isoformat(), q.isoformat(), ids_)
         if basis == "cash":
@@ -76,8 +77,14 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
             if account is None or not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
                 continue
             out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
-                               vendor=r["vendor"], amount=int(r["amount"])))
+                               vendor=_vendor(s, vendors, str(r["vendor"])), amount=int(r["amount"])))
     return out
+
+
+def _vendor(s: _Seen, seen: dict[str, str], key: str) -> str:
+    if key not in seen:
+        seen[key] = SAP.vendor_resolved(s.ctx.c, s.ctx.book.id, key)
+    return seen[key]
 
 
 def _suppress(s: _Seen, cells: list[VW.Cell], narrow: bool, a: date, z: date) -> VW.Suppressed:
@@ -503,6 +510,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     ids = sorted(descendants(s.ctx.accounts, account_id))
     cells = _cells(s, a, z, ids)
     if vendor is not None:
+        vendor = SAP.vendor_resolved(c, s.ctx.book.id, vendor)
         cells = [x for x in cells if x.vendor == vendor]
     if f.any:
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
@@ -530,7 +538,8 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     private = any(i in s.private and i not in s.view.full_detail for i in ids)
     if not private:
         most = max(1, min(int(limit), 500))
-        rows = SL.entries_on(c, s.ctx.book.id, ids, a.isoformat(), z.isoformat(), most * 4 + 1, vendor)
+        rows = SL.entries_on(c, s.ctx.book.id, ids, a.isoformat(), z.isoformat(), most * 4 + 1,
+                             None if vendor is None else SAP.vendor_keys(c, s.ctx.book.id, vendor) or [""])
         tags = SL.line_tags(c, [r["line_id"] for r in rows])
         seen: list[Row] = []
         for r in rows:

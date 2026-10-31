@@ -274,7 +274,7 @@ def rollup_rows(c: sqlite3.Connection, book_id: str, start: str, end: str,
 def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str], *,
                teams: Sequence[str] | None = None, teammate: str = "", vendors: Sequence[str] = ()) -> int:
     """The posted total on `account_ids` in the window, cut to `teams` (None: any), a teammate and a vendor (any of
-    the keys its lines carry, store/ap.vendor_keys, in any case: a counterparty's name finds its contact that way)."""
+    the keys its lines carry, store/ap.vendor_keys, compared exactly)."""
     if not account_ids or teams is not None and not teams:
         return 0
     sql = (f"SELECT COALESCE(SUM(amount), 0) FROM fin_rollups WHERE book_id=? AND day>=? AND day<=? "
@@ -287,19 +287,21 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
         sql += " AND teammate=?"
         args.append(teammate)
     if vendors:
-        sql += f" AND lower(vendor) IN ({','.join('?' * len(vendors))})"
-        args += [v.lower() for v in vendors]
+        sql += f" AND vendor IN ({','.join('?' * len(vendors))})"
+        args += list(vendors)
     return int(c.execute(sql, args).fetchone()[0])
 
 
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
-               most: int, vendor: str | None = None) -> list[Any]:
+               most: int, vendors: Sequence[str] | None = None) -> list[Any]:
     """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries (one vendor's when
-    `vendor` is given; "" is lines with none). Each says the card or money account its feed row came through."""
+    `vendors`, its keys, is given; [""] is lines with none). Each says the card or money account its feed row came
+    through."""
     if not account_ids:
         return []
     marks = ",".join("?" * len(account_ids))
-    cut, args = ("", []) if vendor is None else (" AND l.contact_id=?", [vendor])
+    cut, args = ("", []) if vendors is None else (f" AND l.contact_id IN ({','.join('?' * len(vendors))})",
+                                                  list(vendors))
     return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
                      f"l.description, e.memo, e.source, e.status AS entry_status, e.reverses_id, "
                      f"(SELECT f.card_id FROM fin_feed_txns f WHERE f.entry_id=l.entry_id "

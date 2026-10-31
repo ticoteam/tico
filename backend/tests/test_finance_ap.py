@@ -251,7 +251,7 @@ def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_sa
 
 def test_vendor_labels_are_contact_names_and_never_ids(books):
     """F: lines a bill, an invoice write-off or any document posts carry the contact's id as their vendor key; the
-    drill-down, spend-by and transactions show the contact's name, a plain vendor name as itself, and an id with no
+    drill-down, spend-by and transactions show the contact's name, a plain vendor name as its folded key, and an id with no
     contact behind it as nothing."""
     from backend.tests.test_finance_fixtures import spend
     stray = "0b6a4a52-5d0e-4c1a-9a43-2f2f3f6d1e10"
@@ -266,11 +266,11 @@ def test_vendor_labels_are_contact_names_and_never_ids(books):
         spend(c, "6900", 5_000, vendor="Northwind")
         spend(c, "6900", 1_000, vendor=stray)
         detail = FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31")
-        want = {"Acme Retail": 10_000, "Acme Supplies": 20_000, "Northwind": 5_000, "": 1_000}
+        want = {"Acme Retail": 10_000, "Acme Supplies": 20_000, "northwind": 5_000, "": 1_000}
         assert {r["label"]: r["amount"] for r in detail["by_vendor"]} == want
         assert {e["vendor_name"] for e in detail["entries"]} == set(want)
         by = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31")
-        assert {r["label"] for r in by["rows"]} >= {"Acme Retail", "Acme Supplies", "Northwind", ""}
+        assert {r["label"] for r in by["rows"]} >= {"Acme Retail", "Acme Supplies", "northwind", ""}
         rows = FR.transactions(c, OWNER, start="2026-10-01", end="2026-10-31")["rows"]
         assert not any(customer in str(r.get("vendor_name")) or stray in str(r.get("vendor_name")) for r in rows)
         assert "Acme Retail" in {r.get("vendor_name") for r in rows}
@@ -604,33 +604,59 @@ def test_a_vendor_has_one_key_across_its_bills_and_card_rows(books):
         assert [(r["key"], r["label"], r["amount"]) for r in rows] == [(vendor, "Acme Cloud", 24_500)]
 
 
-def test_vendor_budgets_match_names_in_any_case_and_a_contact_never_makes_two_count_one_spend(books):
-    """A vendor budget made on a plain name keeps what was posted under that name (any case) once a contact with the
-    name takes it over; sibling budgets on one name in two cases overlap; and a contact whose name would make two
-    sibling budgets count the same spend is refused."""
+def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_capture_nothing_new(books):
+    """Spec §3, §4.4 through fin_vendor_aliases: a plain name is keyed folded (ÉCOLE is école); a budget on a name keeps
+    its actual as a contact takes the name and is renamed (the old name stays an alias); a budget on a contact's name
+    stores its id; siblings on one vendor are refused, and so is a rename that would make two count the same spend;
+    an inactive contact's name captures no new bank row."""
     from backend.finance import budgeting
     from backend.tests.test_finance_fixtures import spend
+    connect(books, FakeMercury())
+
+    def stored(c, bid):
+        return c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0]
+
+    def actual(c, bid):
+        return budgeting.budget_state(c, bid, AT).actual
+
     with books.transaction() as c:
         line = account(c, "6100")
         root = str(act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": line, "amount": 100_000}
                        ).result["budget_id"])
-        plain = act(c, OWNER, "budget_create", {"name": "Acme", "account_id": line, "vendor": "acme cloud",
-                                                "parent_id": root, "amount": 50_000})
-        assert plain.status == "committed", plain
-        twin = act(c, OWNER, "budget_create", {"name": "Twin", "account_id": line, "vendor": "Acme Cloud",
-                                               "parent_id": root, "amount": 10_000})
-        assert (twin.status, twin.reason) == ("failed", "it overlaps budget Acme")
-        spend(c, "6100", 10_000, vendor="ACME CLOUD")
-        bid = str(plain.result["budget_id"])
-        assert budgeting.budget_state(c, bid, AT).actual == 10_000
-        north = _vendor(c, "Northwind")
-        on_north = act(c, OWNER, "budget_create", {"name": "North", "account_id": line, "vendor": "northwind",
+
+        def budget(name, vendor):
+            return act(c, OWNER, "budget_create", {"name": name, "account_id": line, "vendor": vendor,
                                                    "parent_id": root, "amount": 10_000})
-        assert on_north.status == "committed"
-        assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (on_north.result["budget_id"],)).fetchone()[0] \
-            == north                                                     # stored as the contact's id
-        renamed = act(c, OWNER, "contact_update", {"contact_id": north, "name": "Acme Cloud"})
-        assert (renamed.status, renamed.code) == ("failed", "conflict") and "Acme and North" in renamed.reason
+
+        ecole = str(budget("Ecole", "école").result["budget_id"])
+        spend(c, "6100", 3_000, vendor="ÉCOLE ")
+        assert (stored(c, ecole), actual(c, ecole)) == ("école", 3_000)
+        acme = budget("Acme", "acme cloud")
+        assert acme.status == "committed", acme
+        twin = budget("Twin", "Acme Cloud")
+        assert (twin.status, twin.reason) == ("failed", "it overlaps budget Acme")
+        bid = str(acme.result["budget_id"])
+        spend(c, "6100", 10_000, vendor="ACME CLOUD")
+        assert actual(c, bid) == 10_000
         vendor = _vendor(c, "Acme Cloud")
-        assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0] == vendor
-        assert budgeting.budget_state(c, bid, AT).actual == 10_000       # what was posted under the name still counts
+        assert actual(c, bid) == 10_000                                  # the contact takes the name, and its history
+        assert act(c, OWNER, "contact_update", {"contact_id": vendor, "name": "Acme Hosting"}).status == "committed"
+        assert actual(c, bid) == 10_000                                  # renamed: the old name still maps
+        assert act(c, OWNER, "contact_create", {"name": "acme cloud", "kind": "vendor"}).code == "conflict"
+        north = _vendor(c, "Northwind")
+        on_north = budget("North", "NORTHWIND")
+        assert on_north.status == "committed" and stored(c, on_north.result["budget_id"]) == north
+        clash = act(c, OWNER, "contact_update", {"contact_id": north, "name": "École"})
+        assert (clash.status, clash.code) == ("failed", "conflict") and "Ecole and North" in clash.reason
+        gone = _vendor(c, "Globex")
+        assert act(c, OWNER, "contact_update", {"contact_id": gone, "active": False}).status == "committed"
+        for who in ("GLOBEX", "northwind"):
+            rule = {"kind": "posting", "name": who, "when": {"counterparty": {"matches": who}},
+                    "outcome": {"outcome": "post", "account_id": line},
+                    "examples": [{"input": {"counterparty": who}, "expect": "post"}]}
+            assert act(c, OWNER, "rule_create", rule).status == "committed"
+        _ingest(c, _txn("txn-globex", -20.0, who="GLOBEX", kind="debitCardTransaction"))
+        _ingest(c, _txn("txn-north", -30.0, who="northwind ", kind="debitCardTransaction"))
+        keys = {str(r[0]) for r in c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_entries e ON "
+                                             "e.id=l.entry_id WHERE e.source IN ('bank', 'card') AND l.contact_id<>''")}
+        assert keys == {"globex", north}                                 # inactive: its name only; active: its id

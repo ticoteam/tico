@@ -148,22 +148,26 @@ def _contact_fields(ctx: Ctx, p: V.Payload, old: Any = None) -> dict[str, object
     return out
 
 
-def _vendor_budgets(ctx: Ctx, name: str, kind: str, contact_id: str) -> list[str]:
-    """The vendor budgets made on this vendor contact's name (any case), which go by its id from now on (spec §4.4: one
-    key per vendor). Refused when that would leave two sibling budgets counting the same spend."""
+def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
+    """The name key a vendor contact's name adds to fin_vendor_aliases (spec §3: one key per vendor), or "" when it
+    adds none (not a vendor, or a name it already went by). Refused when another contact went by that name, or when
+    a budget on the name would then count the same spend as a sibling budget."""
     if kind not in ("vendor", "both"):
-        return []
+        return ""
+    nk = L.name_key(name)
+    owner = SAP.alias_of(ctx.c, ctx.book.id, nk)
+    if owner == contact_id and owner:
+        return ""
+    if owner:
+        raise FinanceError(CONFLICT, f"another vendor went by {name}")
     budgets = ctx.budgets()
-    moved = {b.id: replace(b, vendor=contact_id or "contact:new") for b in budgets.values()
-             if b.vendor and b.vendor != contact_id and B.same_vendor(b.vendor, name)}
-    if not moved:
-        return []
-    both = B.clash({**budgets, **moved}, ctx.accounts, ctx.org)
+    moved = {b.id: replace(b, vendor=contact_id or "contact:new") for b in budgets.values() if b.vendor == nk}
+    both = B.clash({**budgets, **moved}, ctx.accounts, ctx.org) if moved else None
     if both is not None and (both[0].id in moved or both[1].id in moved):
         one, other = sorted((both[0].name, both[1].name))
         raise FinanceError(CONFLICT, f"budgets {one} and {other} would both count {name}'s spend; end or change one "
                                      "first")
-    return sorted(moved)
+    return nk
 
 
 def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -175,14 +179,14 @@ def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if "tax_id_last4" in p and not f.get("tax_id_ref") and f.get("tax_id_last4"):
         raise invalid("the tax id was not sealed")
 
-    claimed = _vendor_budgets(ctx, str(f["name"]), str(f["kind"]), "")
+    alias = _vendor_alias(ctx, str(f["name"]), str(f["kind"]), "")
 
     def apply(aid: str) -> Result:
         cid = SAP.insert(ctx.c, "fin_contacts", {"book_id": ctx.book.id, "created_at": ctx.at, "created_by": who,
                                                  "updated_at": ctx.at, **f})
-        if claimed:
-            SB.move_vendor(ctx.c, claimed, cid, ctx.at)
-            ctx.changed()
+        if alias:
+            SAP.alias_add(ctx.c, ctx.book.id, alias, cid, ctx.at)
+            ctx.changed()                       # budgets on the name go by the contact now
         return {"contact_id": cid}
     return Plan(K.default_gate(ctx.org, who, "contact_create"), f"Add {f['kind']} {f['name']}", apply,
                 facts={"contact.kind": str(f["kind"]), "counterparty": str(f["name"])})
@@ -199,14 +203,15 @@ def contact_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         _need_contact_rights(ctx, who, str(f["kind"]))
     if not f:
         raise invalid("say what changes")
-    claimed = _vendor_budgets(ctx, str(f.get("name") or old["name"]), str(f.get("kind") or old["kind"]), str(old["id"]))
+    # Renamed or made a vendor: the name it now goes by is added; the names it went by stay (history still maps).
+    alias = _vendor_alias(ctx, str(f.get("name") or old["name"]), str(f.get("kind") or old["kind"]), str(old["id"]))
 
     def apply(aid: str) -> Result:
         if "tax_id_last4" in f and old["tax_id_ref"]:
             tico.drop_credential(ctx.c, str(old["tax_id_ref"]))     # the old number goes with its replacement
         SAP.update(ctx.c, "fin_contacts", str(old["id"]), {**f, "updated_at": ctx.at})
-        if claimed:
-            SB.move_vendor(ctx.c, claimed, str(old["id"]), ctx.at)
+        if alias:
+            SAP.alias_add(ctx.c, ctx.book.id, alias, str(old["id"]), ctx.at)
             ctx.changed()
         return {"contact_id": str(old["id"])}
     return Plan(K.default_gate(ctx.org, who, "contact_update"), f"Change contact {old['name']}", apply,

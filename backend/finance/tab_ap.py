@@ -52,12 +52,14 @@ def sees_contact_kind(ctx: Ctx, view: VW.View, kind: str) -> bool:
 def vendor_labels(ctx: Ctx, view: VW.View, keys: Iterable[str]) -> dict[str, str]:
     """What each vendor key on a line shows as. A bill's or invoice's lines (and their payments, write-offs and
     settlements) carry the contact's id: its name, to a viewer who sees that kind of contact, else "". A bank or card
-    row's vendor is its own name. A key that is an id with no contact behind it shows "": never an id."""
+    row with no vendor contact is keyed by its folded name: the name of the contact that later took it
+    (fin_vendor_aliases), else the key itself. A key that is an id with no contact behind it shows "": never an id."""
     wanted = sorted({k for k in keys if k})
-    found = SAP.contacts(ctx.c, wanted)
+    named = {k: SAP.vendor_resolved(ctx.c, ctx.book.id, k) for k in wanted if not _is_id(k)}
+    found = SAP.contacts(ctx.c, sorted(set(wanted) | set(named.values())))
     out: dict[str, str] = {}
     for k in wanted:
-        row = found.get(k)
+        row = found.get(named.get(k, k))
         if row is not None:
             out[k] = str(row["name"]) if sees_contact_kind(ctx, view, str(row["kind"])) else ""
         else:

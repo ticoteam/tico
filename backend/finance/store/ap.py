@@ -6,9 +6,10 @@ from collections.abc import Mapping, Sequence
 from typing import Any
 
 from .banking import LIVE_PAYMENT, like
+from ..core.ledger import name_key
 from .ledger import new_id, tagset
 
-TABLES = frozenset({"fin_contacts", "fin_bills", "fin_bill_lines", "fin_invoices", "fin_invoice_lines",
+TABLES = frozenset({"fin_contacts", "fin_vendor_aliases", "fin_bills", "fin_bill_lines", "fin_invoices", "fin_invoice_lines",
                     "fin_attachments", "fin_settlements"})
 DOCS = {"bill": ("fin_bills", "fin_bill_lines", "bill_id", "bill_date", "vendor_id"),
         "invoice": ("fin_invoices", "fin_invoice_lines", "invoice_id", "invoice_date", "customer_id")}
@@ -173,26 +174,53 @@ def contact_named(c: sqlite3.Connection, book_id: str, name: str) -> Any:
                      (book_id, name)).fetchone()
 
 
-VENDOR_NAMED = ("SELECT id FROM fin_contacts WHERE book_id=? AND lower(name)=lower(?) AND active=1 AND "
-                "kind IN ('vendor','both') ORDER BY created_at, id LIMIT 1")
+def is_contact(c: sqlite3.Connection, key: str) -> bool:
+    return bool(key) and c.execute("SELECT 1 FROM fin_contacts WHERE id=?", (key,)).fetchone() is not None
+
+
+def alias_of(c: sqlite3.Connection, book_id: str, name_key: str) -> str:
+    """The contact a vendor name key belongs to (any contact, active or not), or ""."""
+    row = c.execute("SELECT contact_id FROM fin_vendor_aliases WHERE book_id=? AND name_key=?",
+                    (book_id, name_key)).fetchone()
+    return str(row[0]) if row is not None else ""
+
+
+def aliases_of(c: sqlite3.Connection, contact_id: str) -> list[str]:
+    return [str(r[0]) for r in c.execute("SELECT name_key FROM fin_vendor_aliases WHERE contact_id=? ORDER BY name_key",
+                                         (contact_id,))]
+
+
+def alias_add(c: sqlite3.Connection, book_id: str, name_key: str, contact_id: str, at: str) -> None:
+    c.execute("INSERT INTO fin_vendor_aliases(book_id, name_key, contact_id, created_at) VALUES(?,?,?,?) "
+              "ON CONFLICT(book_id, name_key) DO NOTHING", (book_id, name_key, contact_id, at))
 
 
 def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
-    """The one key a vendor goes by on lines and budgets (spec §3, §4.4): a contact's id stays; a name that is an
-    active vendor contact's (any case) becomes its id; anything else (a merchant with no contact) stays as written."""
-    if not key or c.execute("SELECT 1 FROM fin_contacts WHERE id=?", (key,)).fetchone() is not None:
+    """The key a new line's vendor posts under (spec §3: one key per vendor): a contact's id stays; a name that is an
+    active vendor contact's alias becomes its id; any other name is its name key (L.name_key)."""
+    if not key or is_contact(c, key):
         return key
-    row = c.execute(VENDOR_NAMED, (book_id, key)).fetchone()
-    return str(row[0]) if row is not None else key
+    nk = name_key(key)
+    row = c.execute("SELECT a.contact_id FROM fin_vendor_aliases a JOIN fin_contacts k ON k.id=a.contact_id WHERE "
+                    "a.book_id=? AND a.name_key=? AND k.active=1 AND k.kind IN ('vendor','both')",
+                    (book_id, nk)).fetchone()
+    return str(row[0]) if row is not None else nk
 
 
-def vendor_keys(c: sqlite3.Connection, key: str) -> list[str]:
-    """Every key a vendor's lines carry: its own, and for a contact its name too (a line posted before the contact
-    existed keeps the name it had, in whatever case; lines never change). Compared in any case (SL.rollup_sum)."""
-    if not key:
-        return []
-    row = c.execute("SELECT name FROM fin_contacts WHERE id=?", (key,)).fetchone()
-    return [key, str(row[0])] if row is not None and str(row[0]) != key else [key]
+def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
+    """The vendor a budget or a charge means: a contact's id stays; a name aliased to a contact (even one no longer
+    active: its history still maps) is that contact's id; any other name is its name key."""
+    if not key or is_contact(c, key):
+        return key
+    nk = name_key(key)
+    return alias_of(c, book_id, nk) or nk
+
+
+def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
+    """Every key a vendor's lines carry: a contact's id and each name it went by (lines posted under a name before it
+    was the contact's still count, and a rename never loses them); a plain name's own key."""
+    vendor = vendor_resolved(c, book_id, key)
+    return [vendor, *aliases_of(c, vendor)] if is_contact(c, vendor) else [vendor] if vendor else []
 
 
 def owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str]) -> dict[str, int]:

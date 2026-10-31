@@ -70,6 +70,14 @@ CREATE TABLE IF NOT EXISTS fin_contacts (
   payment_ref TEXT, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT);
 
+-- Every name a vendor contact has gone by (spec §3: one key per vendor), as L.name_key: a bank or card row under one
+-- posts under the contact's id, and lines posted under one before count for it. Never deleted; a name maps to one
+-- contact.
+CREATE TABLE IF NOT EXISTS fin_vendor_aliases (
+  book_id TEXT NOT NULL REFERENCES fin_books(id), name_key TEXT NOT NULL,
+  contact_id TEXT NOT NULL REFERENCES fin_contacts(id), created_at TEXT NOT NULL,
+  PRIMARY KEY (book_id, name_key));
+
 CREATE TABLE IF NOT EXISTS fin_bills (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT REFERENCES fin_contacts(id),
   number TEXT NOT NULL DEFAULT '', bill_date TEXT NOT NULL, due_date TEXT,
@@ -363,6 +371,7 @@ CREATE INDEX IF NOT EXISTS fin_invoices_status ON fin_invoices(status, due_date)
 CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_date, id);
 CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
 CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
+CREATE INDEX IF NOT EXISTS fin_vendor_aliases_contact ON fin_vendor_aliases(contact_id);
 CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
 """
 

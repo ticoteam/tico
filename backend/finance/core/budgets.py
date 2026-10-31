@@ -187,7 +187,7 @@ def matches(budget: Budget, charge: Charge, accounts: Mapping[str, Account], org
     return budget.account_id in ancestors(accounts, charge.account_id) and \
         (not budget.team or charge.team in org.below(budget.team)) and \
         (not budget.teammate or charge.teammate == budget.teammate) and \
-        (not budget.vendor or same_vendor(charge.vendor, budget.vendor))
+        (not budget.vendor or charge.vendor == budget.vendor)
 
 
 def covered(budgets: Mapping[str, Budget], accounts: Mapping[str, Account]) -> set[str]:
@@ -239,13 +239,7 @@ def overlaps(a: Budget, b: Budget, accounts: Mapping[str, Account], org: Org) ->
         if one.teammate and not one.team and other.team and not other.teammate and \
                 org.team_of.get(one.teammate, "") not in org.below(other.team):
             return False
-    return not (a.vendor and b.vendor and not same_vendor(a.vendor, b.vendor))
-
-
-def same_vendor(a: str, b: str) -> bool:
-    """One vendor: the same contact id, or the same plain name in any case (how a line's counterparty finds its
-    contact)."""
-    return a.lower() == b.lower()
+    return not (a.vendor and b.vendor and a.vendor != b.vendor)
 
 
 def clash(budgets: Mapping[str, Budget], accounts: Mapping[str, Account], org: Org) -> tuple[Budget, Budget] | None:
@@ -302,12 +296,12 @@ def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Acc
             raise invalid("a child budget is inside its parent's team")
         if parent.teammate and new.teammate != parent.teammate:
             raise invalid("a child budget is inside its parent's teammate")
-        if parent.vendor and not same_vendor(new.vendor, parent.vendor):
+        if parent.vendor and new.vendor != parent.vendor:
             raise invalid("a child budget is inside its parent's vendor")
         if parent.vendor and (new.team != parent.team or new.teammate != parent.teammate):
             raise invalid("split by team or teammate before vendor")
-        if (new.account_id, new.team, new.teammate, new.vendor.lower()) == \
-                (parent.account_id, parent.team, parent.teammate, parent.vendor.lower()):
+        if (new.account_id, new.team, new.teammate, new.vendor) == \
+                (parent.account_id, parent.team, parent.teammate, parent.vendor):
             raise invalid("a child budget is narrower than its parent")
     for sibling in others.values():
         if sibling.parent_id == new.parent_id and not sibling.catch_all and sibling.book_id == new.book_id and \

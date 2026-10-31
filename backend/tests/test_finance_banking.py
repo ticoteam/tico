@@ -414,7 +414,7 @@ def test_a_payment_settles_on_its_payees_contact_so_the_vendor_hold_and_actual_m
     with books.read() as c:
         vendor = c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_feed_txns f ON f.entry_id=l.entry_id "
                            "WHERE f.provider_id='txn-pay' AND l.amount>0").fetchone()[0]
-        assert vendor == "Acme Supplies"
+        assert vendor == "acme supplies"                               # the payee's name, keyed folded
         assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchone()[0] == "settled"
 
 
