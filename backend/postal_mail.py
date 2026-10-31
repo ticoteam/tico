@@ -373,6 +373,19 @@ def classify(reading, decided, thresholds, checks=False):
     return "other" if hint == "junk" else hint
 
 
+def parent_now(c, task_id):
+    """A task's parent: its live link, or for a deleted task the one its trash copy would put back."""
+    live = c.execute("SELECT to_task FROM task_relations WHERE kind='parent' AND from_task=?", (task_id,)).fetchone()
+    if live:
+        return live[0]
+    kept = c.execute("SELECT rows_json FROM task_trash WHERE task_id=? AND purged_at IS NULL", (task_id,)).fetchone()
+    rows = json.loads(kept[0]).get("rows", {}) if kept else {}
+    for r in rows.get("task_relations", []):
+        if r.get("kind") == "parent" and r.get("from_task") == task_id:
+            return r["to_task"]
+    return (rows.get("tasks") or [{}])[0].get("parent_id")
+
+
 # ----------------------------------------------------------------------------- the service
 class PostalMail:
     def __init__(self, store, settings, app, auth=None):
@@ -477,18 +490,53 @@ class PostalMail:
             return self.fail(row, "file_failed:" + type(error).__name__)
 
     def over_cap(self, row):
-        """Whether `READS_PER_DAY` letters were read in the last 24 hours. Over it the letter waits an hour, with no
-        attempt counted, so a flood never files real mail unread. Under it the read is stamped first, so a reader that
-        fails still counts."""
+        """Whether `READS_PER_DAY` reads happened in the last 24 hours. Over it the letter waits an hour, with no
+        attempt counted, so a flood never files real mail unread. Under it the read is recorded first, one row per
+        try, so a reader that fails, and each retry of it, still counts."""
         now = H.now()
+        since = H.shift(now, days=-1)
         with self.store.transaction() as c:
-            read = c.execute("SELECT count(*) FROM mail_items WHERE read_at>?", (H.shift(now, days=-1),)).fetchone()[0]
+            c.execute("DELETE FROM mail_reads WHERE at<=?", (since,))
+            read = c.execute("SELECT count(*) FROM mail_reads WHERE at>?", (since,)).fetchone()[0]
             if read >= READS_PER_DAY:
                 c.execute("UPDATE mail_items SET next_try=?,error='daily_cap',updated_at=? WHERE id=?",
                           (H.shift(now, hours=1), now, row["id"]))
                 return True
+            c.execute("INSERT INTO mail_reads VALUES(?,?)", (row["id"], now))
             c.execute("UPDATE mail_items SET read_at=? WHERE id=?", (now, row["id"]))
         return False
+
+    def backfill_private(self):
+        """Bill, financial and tax letters filed before their tasks were private (listed once by the V3 migration):
+        those tasks and every subtask below them go private now, a deleted one in its trash copy, so a restore brings
+        it back private. The app runs it at start, after the migrations; the list empties, so a task made public
+        later stays public."""
+        with self.store.transaction() as c:
+            todo, seen = [r[0] for r in c.execute("SELECT task_id FROM mail_private_backfill")], set()
+            while todo:
+                task_id = todo.pop()
+                if task_id in seen:
+                    continue
+                seen.add(task_id)
+                row = H.task(c, task_id)
+                if row and not H.task_private(c, row):
+                    H._made_private(c, H.KEEPER, task_id)
+                elif not row:
+                    c.execute("UPDATE task_trash SET private=1,rows_json=json_set(rows_json,'$.rows.tasks[0].private',"
+                              "1,'$.rows.tasks[0].visibility','private') WHERE task_id=? AND purged_at IS NULL",
+                              (task_id,))
+                todo += [r[0] for r in c.execute(
+                    "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?", (task_id,))]
+                # A deleted task keeps its parent links (either end) in its trash copy; older copies on the task row.
+                # One whose child has another parent now (live, or in the child's own trash copy) is not followed.
+                linked = c.execute(
+                    "SELECT json_extract(r.value,'$.from_task') FROM task_trash t, "
+                    "json_each(t.rows_json,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
+                    "AND json_extract(r.value,'$.kind')='parent' AND json_extract(r.value,'$.to_task')=? "
+                    "UNION SELECT task_id FROM task_trash WHERE purged_at IS NULL "
+                    "AND json_extract(rows_json,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)).fetchall()
+                todo += [r[0] for r in linked if r[0] and parent_now(c, r[0]) in (None, task_id)]
+            c.execute("DELETE FROM mail_private_backfill")
 
     def fail(self, row, code):
         attempts = row["attempts"] + 1
