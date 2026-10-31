@@ -45,13 +45,22 @@ payroll run, a renewal or a board report gets its task in time:
 - A task a run opens (a `create_task` step, or a bot turn) is due at the end of its due day in `tz` (its `due` argument
   overrides it), and it carries the occurrence: `tasks.occurrence` is `<automation id>:<due day>`, and the task's
   notice carries `due_on`, and `rule_due_id` when one is set. Its due is a deadline, not a wake date, and the asks
-  sweep never expires it.
+  sweep never expires it. It reads as its due day in `tz`, whatever the viewer's zone. A step that sets its own
+  `due` keeps that instant.
+- One task per occurrence and step: a retry of a run that already made it reuses that task, so nothing is filed twice.
+  An occurrence's task is not parked until its due day, even while its bot is idle (its bot works it through the lead
+  time); an explicit snooze still parks it.
 - Each occurrence runs once, however often the scheduler passes. A missed day (the server was down) catches up on the
   next pass. An overdue occurrence stays open and never holds back the next one.
 - While the company's routines are paused (out of credit or locked) or the routine's bot is not active, its days wait
   and nothing is dropped: they run in order after the pause, and one `automation.deferred` event records why.
-- A find step runs one at a time, so a day waits while the run before it is unfinished. A day whose run failed is run
-  again at most hourly, until it makes its task.
+- A find step runs one at a time, so a day waits while the run before it is unfinished. A day whose run fails is run
+  again at most an hour after the failure. After three failed runs of a day it is given up: one
+  `automation.due_gave_up` event records its due day and the error, and the routine goes on. Each failed day keeps its
+  own tries, so days that failed together retry separately. Changing the trigger's dates or repeat stops the retries of
+  runs made under the old trigger.
+- Run by hand with no input (Run now), a due routine starts its next due day as its scheduler would, so the task it
+  makes carries that day's due and occurrence.
 - The Automations list shows the next due day (`next_due`) and when its run starts (`next_run`). Changing the trigger
   restarts the count from the next due day on; a rename or cap change does not.
 

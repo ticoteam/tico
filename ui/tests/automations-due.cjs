@@ -153,6 +153,20 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
     return taskDueInfo(body.task || body)?.words;
   })), [opened[0].id, opened[1].id, plainId]);
   assert.deepEqual(chips.map(w => w.split(' ')[0]), ['Overdue', 'Due', 'Wakes'], `${tag}: ${chips}`);
+
+  // A no-input run starts the next due day, as the scheduler would: its task is due at the end of Mar 1 in New York,
+  // which is Mar 2 in UTC. A viewer whose zone is UTC still reads the task's due day as Mar 1.
+  const manual = await ok(page, 'POST', `automations/${made.id}/run`, {});
+  assert.equal(manual.run.status, 'ok', `${tag}: the no-input run (${JSON.stringify(manual.run).slice(0, 300)})`);
+  const ny = ((await ok(page, 'GET', 'tasks?limit=200')).tasks || []).find(x => x.occurrence === `${made.id}:2027-03-01`);
+  assert.ok(ny, `${tag}: the no-input run made the Mar 1 task`);
+  assert.equal(ny.due, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
+  const utc = await open(browser, hub, 'dana', {phone, hash: '#/task/' + encodeURIComponent(ny.id), time: HUB_NOW,
+    timezone: 'UTC'});
+  const utcDue = utc.locator('[data-prop-row="due"] .prop-txt:visible').first();
+  await utcDue.waitFor({timeout: t(10000)});
+  assert.match((await utcDue.innerText()).trim(), /Mar 1$/, `${tag}: a UTC viewer reads the occurrence's day`);
+  await utc.context().close();
   assert.deepEqual(page.errors, [], `${tag}: no page errors`);
   await page.context().close();
 });

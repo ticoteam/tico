@@ -13,8 +13,8 @@ const launch = () => chromium.launch({headless: true,
 
 // A page as `who`, once the app has drawn its shell; page errors are kept in page.errors. `time` starts the page's clock
 // there (it runs on from it), such as the hub's frozen one, so "in 3d" and "Overdue" read as they would on the hub.
-async function open(browser, hub, who, {phone = false, hash = '', time = null} = {}) {
-  const page = await pageAs(browser, hub, who, {phone});
+async function open(browser, hub, who, {phone = false, hash = '', time = null, timezone = ''} = {}) {
+  const page = await pageAs(browser, hub, who, {phone, timezone});
   if (time) await page.clock.install({time});
   // The simulated runner reports version "test", which the hub calls out of date: that card is the harness's, not
   // the journey's, so it stays snoozed and the screenshots show the page.

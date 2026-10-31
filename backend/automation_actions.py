@@ -64,12 +64,15 @@ def _fail(detail):
     return {"ok": False, "detail": str(detail)[:300]}
 
 
-def run(c, auto, run_id, do, args, values):
+def run(c, auto, run_id, do, args, values, step=None):
     """Carry out one action for the automation `auto` ({id, flow}). Wrapped in a savepoint: a refused action writes
-    nothing but its refusal."""
+    nothing but its refusal. `step` is the producing step's id (a create_task's occurrence task is per step)."""
     c.execute("SAVEPOINT automation_action")
     try:
-        result = ACTIONS[do](c, auto, run_id, args or {}, values or {})
+        if do == "create_task":
+            result = _create_task(c, auto, run_id, args or {}, values or {}, step=step)
+        else:
+            result = ACTIONS[do](c, auto, run_id, args or {}, values or {})
         c.execute("RELEASE automation_action")
         return result
     except (H.Refused, Problem, ValueError, KeyError) as exc:
@@ -192,7 +195,7 @@ def _actor(c, auto):
     return actor
 
 
-def _create_task(c, auto, run_id, args, values):
+def _create_task(c, auto, run_id, args, values, step=None):
     title = " ".join(_text(args, "title").split())[:300]
     if not title:
         return _fail("create_task needs a title")
@@ -204,7 +207,8 @@ def _create_task(c, auto, run_id, args, values):
         owner = "human:" + owner[7:]
     due, marker, refs = _occurrence(auto, args, values)
     row = H.task_create(c, actor, title, _text(args, "body") or title, owner, due=due, lint=False,
-                        deduplicate=False, wake_refs={**refs, **_chain_refs(auto)}, occurrence=marker)
+                        deduplicate=False, wake_refs={**refs, **_chain_refs(auto)}, occurrence=marker,
+                        occurrence_step=str(step) if marker and step else None)
     return {"ok": True, "detail": f"task {row['id']}", "task": row["id"]}
 
 
@@ -422,6 +426,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
     due, marker, occ_refs = _occurrence(auto, {}, {"due": occurrence} if occurrence else {})
     task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
                          routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
+                         occurrence_step=str(step_id) if marker else None,
                          wake_refs={**occ_refs, "automation_run": run_id, "automation_step": step_id,
                                     "automation_key": str(key), **_chain_refs(auto)})
     if run_model:

@@ -1316,6 +1316,10 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "tasks", "resume_json", "TEXT")
     # The due-date routine occurrence a task is for, "<automation_id>:<due_on>" (backend/automation_actions.py).
     add_column(conn, "tasks", "occurrence", "TEXT")
+    # The step of the routine that opened it: one task per occurrence per producing step (task_create).
+    add_column(conn, "tasks", "occurrence_step", "TEXT")
+    conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS tasks_occurrence_step ON tasks(occurrence, occurrence_step) "
+                 "WHERE occurrence IS NOT NULL")
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
         # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
@@ -5819,7 +5823,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 requester_actor=None, own_room=True, visibility=None, public_title=None, public_summary=None,
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
-                quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None):
+                quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None,
+                occurrence_step=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5838,7 +5843,9 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     `routine` is an automation's own run (a routine's, before the move): a Monitor or Reviewer takes it as its own work.
     `occurrence` is the marker of a due-date routine's occurrence, "<automation_id>:<due_on>": each day's task is its
     own, so an open one with the same title (an overdue day's) does not count as a duplicate of it, and it is stored
-    on the task (`tasks.occurrence`) for the sweeps and the app.
+    on the task (`tasks.occurrence`) for the sweeps and the app. With `occurrence_step` too, the task is one per
+    occurrence per producing step: a retry of a run whose step already opened it gets that task back
+    (`_reuse_occurrence`), never a second one.
     """
     _writer(conn, actor)
     # Public text is only ever what someone wrote as public text; the internal title and body never stand in.
@@ -5852,6 +5859,11 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     target = _reach(conn, actor, owner, allow_planned=allow_planned)
     _takes_tasks(conn, actor, target, title, parent_id, routine)
     _learning(conn, actor, target)
+    if occurrence and occurrence_step:
+        again = _one(conn, "SELECT id FROM tasks WHERE occurrence=? AND occurrence_step=? LIMIT 1",
+                     (occurrence, occurrence_step))
+        if again:
+            return _reuse_occurrence(conn, actor, target, again["id"], title, wake_refs, trigger, trigger_source)
     parent = _task_parent(conn, actor, None, parent_id) if parent_id else None
     from . import review_gate
     if parent and review_gate.is_review(conn, parent, title):
@@ -5973,13 +5985,13 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
            "created": ts, "updated": ts, "done_at": None, "closed_at": None, "closed_by": None,
            "note": "", "lane": lane, "rank": _queue_end(conn, target, top),
            "goal_id": goal_id or None, "next_run": 1 if next_run else 0, "number": number, "private": int(private),
-           "occurrence": occurrence or None}
+           "occurrence": occurrence or None, "occurrence_step": occurrence_step or None}
     conn.execute("INSERT INTO tasks (id, title, body, requester, owner, due, "
                  "conversation_id, created, updated, done_at, closed_at, closed_by, note, lane, rank, "
-                 "goal_id, next_run, number, private, occurrence) VALUES "
+                 "goal_id, next_run, number, private, occurrence, occurrence_step) VALUES "
                  "(:id, :title, :body, :requester, :owner, :due, "
                  ":conversation_id, :created, :updated, :done_at, :closed_at, :closed_by, :note, "
-                 ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence)", row)
+                 ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence, :occurrence_step)", row)
     _building(conn, row["id"])     # its first status and step are part of task.created, not changes (_task_changed)
     if parent:
         # Filed under its parent as it is made: _task_parent above checked the parent.
@@ -6097,6 +6109,18 @@ def _same_title(conn, sql, args, title, keep=None):
 
 
 AUTOMATION_TURN = ("automation_run", "automation_step", "automation_key")   # what names an automation's turn
+
+
+def _reuse_occurrence(conn, actor, target, task_id, title, wake_refs, trigger, trigger_source):
+    """The task an occurrence's step opened before (a retry whose step had already committed): returned as it is. A
+    bot turn wakes its bot again for the new run, since the turn is the run's; a task that is already finished takes
+    no turn, so that step is refused and the run fails rather than wait for a turn that never comes."""
+    row = task(conn, task_id)
+    if _turn_identity(wake_refs):
+        if row["status"] not in ACTIVE_STATUSES:
+            refuse(conn, actor, "duplicate", f"that occurrence's task {task_id} is already finished")
+        _wake(conn, row, target, f"Again: {title}", wake_refs, trigger=trigger, source=trigger_source)
+    return row
 
 
 def _turn_identity(wake_refs):
@@ -7660,7 +7684,10 @@ def not_yet_due(row, at):
 
 
 def due_later(row, at):
-    """Whether this task's due date is still ahead of `at`."""
+    """Whether this task's due date is still ahead of `at`. An occurrence's due is its deadline, not a wake date: its
+    bot works it through the lead time, so it is never parked until then (explicit snoozes still park)."""
+    if row.get("occurrence"):
+        return False
     due = parse_ts(row.get("due")) if row.get("due") else None
     if due and due.tzinfo is None:
         from zoneinfo import ZoneInfo

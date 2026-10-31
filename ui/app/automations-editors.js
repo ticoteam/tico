@@ -479,7 +479,13 @@ function auDiff(before, after) {
 }
 // Test run: the trigger's output as JSON (CONTRACT §2 Feeding input), or nothing. A sample the trigger's filters drop
 // makes no run; a run opens expanded in Runs.
-function auSample(t = {}) {
+// A due routine's sample is the object its scheduler starts a run with (automations.py `due_input`) for its next due day.
+function auSample(t = {}, nextDue = '') {
+  if (t.type === 'due') {
+    const due = {due_on: nextDue || t.first_due || '', first_due: t.first_due || '', repeats: t.repeats || 'once',
+      open_days: t.open_days ?? 14, ...(t.tz ? {tz: t.tz} : {}), ...(t.rule_due_id ? {rule_due_id: t.rule_due_id} : {})};
+    return JSON.stringify({due}, null, 2);
+  }
   const sample = {message: {message: {from: 'sam@acme.example', subject: '', body: ''}}, task_received: {task: {title: '', body: ''}},
     listening: {item: {title: '', source: ''}}, event: {event: {name: t.name || ''}}, webhook: {body: {}}}[t.type];
   return sample ? JSON.stringify(sample, null, 2) : '';
