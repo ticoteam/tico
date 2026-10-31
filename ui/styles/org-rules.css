@@ -46,6 +46,7 @@ a.ru-row:hover *{text-decoration:none}
 .ru.ru-open .ru-duet .ru-row{grid-template-columns:88px minmax(0,1fr) 64px 72px 100px 84px}
 .ru-txt{min-width:0;overflow-wrap:anywhere;font-size:var(--t-md)}
 .ru-c{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--ink)}
+.ru-duet .ru-c[data-l=Routine]{white-space:normal}   /* "10 days before" wraps rather than cut */
 .ru-none{color:var(--muted)}
 .ru-day{font-variant-numeric:tabular-nums}
 .ru-due .muted{font-size:var(--t-xs)}
