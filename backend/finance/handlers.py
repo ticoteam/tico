@@ -746,8 +746,8 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     effective = _effective(ctx, new, V.opt_day(p, "effective_from"))
     # The fit reads the parent's figures from `effective` on: a reader whose figure is not the true one gets the owner's
     # decision and no amount, before any fit runs (figure_route).
-    hidden = amount is not None and bool(new.parent_id) and \
-        bool(figure_route(ctx, who, new.parent_id, effective=effective))
+    hide = figure_route(ctx, who, new.parent_id, effective=effective) if amount is not None and new.parent_id else ""
+    hidden = bool(hide)
     route = _fit(ctx, who, new, effective, amount, route=True) if amount is not None and not hidden else None
     words, impact = _raise_note(ctx, route, effective) if route is not None else ("", {})
     raise_to = route.raise_to if route is not None else None
@@ -764,7 +764,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         ctx.changed()
         return {"budget_id": made.id, "effective_from": effective if amount is not None else None}
     if hidden:
-        gate = HIDDEN_GATE
+        gate = HIDDEN_GATE if hide == "hidden" else REQUEST_GATE
     else:
         gate = K.default_gate(ctx.org, who, "budget_create") if route is None else _budget_owner_gate(route)
     head = f"Create budget {new.name}" + \
@@ -804,7 +804,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     # A figure the actor cannot check must not tell them anything about the amount: every amount gets one outcome, an
     # owner decides it on the true figures at approval (figure_route). So nothing is checked up front for them. A
     # reactivation reads the same figures with or without an amount.
-    hidden = bool(figure_route(ctx, who, old.id, effective=fit_from)) if amount is not None or reactivates else False
+    hide = figure_route(ctx, who, old.id, effective=fit_from) if amount is not None or reactivates else ""
+    hidden = bool(hide)
     if hidden:
         route = None
     elif reactivates:
@@ -834,7 +835,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             unfreeze_with_room(ctx, old.id, aid)
         return {"budget_id": old.id, "version": version}
     if hidden:
-        gate = HIDDEN_GATE
+        gate = HIDDEN_GATE if hide == "hidden" else REQUEST_GATE
     elif route is None:
         gate = K.default_gate(ctx.org, who, "budget_update")
     else:
@@ -850,6 +851,9 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 # The gate for an amount whose outcome must not depend on a figure the actor cannot check (see figure_route): an owner
 # decides it on the true figures at approval.
 HIDDEN_GATE = K.Gate("needs_approval", "owner", "default:figures-hidden")
+# A request by someone without finance.budgets (figure_route "request") goes to their manager, as every budget request does
+# (kinds.authority; spec 4.4). Its outcome is the same for every amount, so the manager's decision does not reveal one.
+REQUEST_GATE = K.Gate("needs_approval", "manager", "default:budget-request")
 
 
 def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None, effective: str = "") -> str:
@@ -978,7 +982,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     if route == "hidden":
         gate = HIDDEN_GATE
     elif route == "request":
-        gate = K.Gate("needs_approval", "manager", "default:budget-request")
+        gate = REQUEST_GATE
     else:
         gate = K.default_gate(ctx.org, who, "allocation_set")
     return Plan(gate, f"Set aside {amount / 100:.2f} of {b.name} for {kind} {target}", apply)
