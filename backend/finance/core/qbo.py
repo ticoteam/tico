@@ -140,7 +140,7 @@ def journal_record(row: dict[str, Any]) -> M.Journal:
             if kind in ("Vendor", "Customer"):
                 party = f"{kind}:{_id(entity_ref.get('value'))}"
         lines.append(M.EntryLine(account=f"Account:{_id(ref.get('value'))}", amount=units, party=party,
-                                 description=_id(line.get("Description"))))
+                                 description=_id(line.get("Description")), key=_id(line.get("Id"))))
     return M.Journal(ext, _id(row.get("TxnDate")), _memo(row), "sync", tuple(lines))
 
 
@@ -340,7 +340,7 @@ def change_records(answer: Mapping[str, Any], items: Mapping[str, Mapping[str, s
 
 
 def _scaled(lines: Sequence[M.EntryLine], sign: int) -> list[M.EntryLine]:
-    return [M.EntryLine(x.account, sign * x.amount, x.party, x.description) for x in lines]
+    return [replace(x, amount=sign * x.amount) for x in lines]
 
 
 def _deposit_lines(row: Mapping[str, Any]) -> list[M.EntryLine]:
