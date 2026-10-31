@@ -157,3 +157,5 @@
   .fin-pl td:first-child,.fin-pl th:first-child{min-width:140px}
   .fin-pop{position:fixed;left:16px;right:16px;top:auto;min-width:0}
 }
+.fin-chips{display:contents}
+.fin-kv select{width:auto;max-width:200px;min-height:0;padding:2px 6px}

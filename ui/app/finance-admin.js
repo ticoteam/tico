@@ -1,11 +1,13 @@
 /* ui/app/finance-admin.js — Finance › Sources and Access (spec §12, §7.5).
    Sources: every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
-   manual), collapsed by default; a source opens its account mapping, sync and who sees it. "+ Source" connects
-   Mercury: the token is stored in the credential vault and the connection made from it (the token never comes back).
+   manual), collapsed by default; a source opens its account mapping, sync and who sees it, and a finance admin syncs
+   it now, maps its accounts to lines and disconnects it. "+ Source" connects Mercury: the token is stored in the
+   credential vault and the connection made from it (the token never comes back).
    Access: who sees what in Finance, on the org chart (each teammate's default and grants), private lines, the owner's
    "View as", Edit defaults, and a teammate's "Grant more".
-   Reads: GET /api/v2/finance/sources, /finance/access. Writes: POST /api/v2/credentials, /finance/connections;
-   view_grant, view_revoke (and the defaults) through POST /api/v2/finance/actions.
+   Reads: GET /api/v2/finance/sources, /finance/access, /finance/balance-sheet (the lines an account maps to). Writes:
+   POST /api/v2/credentials, /finance/connections; connection_sync, connection_disconnect, connection_map, view_grant,
+   view_revoke and view_defaults_set through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -13,7 +15,7 @@
 const FIN_SRC = {open: new Set(), q: '', sel: ''};
 function finSourcesPage() {
   const caps = finCaps(), s = FIN_SRC;
-  FIN.src = {groups: [], load: 0};
+  FIN.src = {groups: [], lines: [], load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label>
       <button type="button" class="ghost" data-fin-collapse>Collapse all</button><span class="spacer"></span>
       ${caps.may('finance.admin') ? '<button type="button" class="primary" data-fin-connect>+ Source</button>' : ''}</div>`
@@ -31,12 +33,16 @@ function finSourcesPage() {
   void finSrcLoad();
 }
 async function finSrcLoad() {
-  const state = FIN.src, load = ++state.load;
-  let d;
-  try { d = await get('/v2/finance/sources' + finAs('?'), {fresh: true}); }
-  catch (e) { if (FIN?.src === state && $('#fin-src')) $('#fin-src').innerHTML = finFail(e); return; }
+  const state = FIN.src, load = ++state.load, admin = finCaps().may('finance.admin');
+  const [src, bs] = await Promise.allSettled([get('/v2/finance/sources' + finAs('?'), {fresh: true}),
+    admin ? get('/v2/finance/balance-sheet', {fresh: true}) : Promise.resolve(null)]);
   if (FIN?.src !== state || state.load !== load || !$('#fin-src')) return;
-  state.groups = (d.groups || []).filter(g => g.count > 0);
+  if (src.status === 'rejected') { $('#fin-src').innerHTML = finFail(src.reason); return; }
+  state.groups = (src.value.groups || []).filter(g => g.count > 0);
+  // The asset and liability lines a money account can map to.
+  const sheet = bs.status === 'fulfilled' ? bs.value : null;
+  state.lines = sheet ? [...(sheet.assets || []).map(r => ({...r, type: 'asset'})), ...(sheet.liabilities || []).map(r => ({...r, type: 'liability'}))]
+    .filter(r => r.account_id).sort((a, b) => String(a.code).localeCompare(String(b.code))) : [];
   finSrcDraw(); finSrcRail();
 }
 const finSrcKey = r => `${r.kind}:${r.id}`;
@@ -57,7 +63,8 @@ function finSrcCols(r) {
     how = sync ? 'Live' : r.kind === 'connection' ? '' : 'By hand';
     const at = sync?.last_ok_at || sync?.last_sync_at || r.balance_as_of;
     last = at ? ago(at) : '';
-    status = err ? ['fail', 'Error'] : !sync ? ['idle', '—'] : sync.status === 'new' ? ['waiting', 'Starting'] : ['ok', 'OK'];
+    status = sync?.status === 'disconnected' ? ['idle', 'Disconnected'] : err ? ['fail', 'Error'] : !sync ? ['idle', '—']
+      : sync.status === 'new' ? ['waiting', 'Starting'] : ['ok', 'OK'];
   }
   return {has, feeds, how, last, status};
 }
@@ -86,16 +93,57 @@ function finSrcRail() {
   const r = state.groups.flatMap(g => g.rows).find(x => finSrcKey(x) === s.sel);
   if (!r) { finRail(''); return; }
   const c = finSrcCols(r), sync = r.sync, feed = Object.entries(r.feed || {}), cards = Object.entries(r.cards || {});
-  const access = r.access || [];
+  const access = r.access || [], admin = finCaps().may('finance.admin');
+  const conn = r.kind === 'connection' ? r.id : sync?.connection_id || '', live = !!conn && sync?.status !== 'disconnected';
+  const money = finSrcMoney(r), mine = r.kind === 'connection' ? state.groups.flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id) : [];
   finRail(`<div class="fin-rail-title"><h2>${esc(r.name || r.provider || '')}</h2>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</div>
     ${r.provider ? finKv('Provider', esc(r.provider)) : ''}${r.last4 ? finKv('Account', '••' + esc(r.last4)) : ''}
     ${r.kind !== 'connection' && 'balance' in r ? finKv('Balance', finUsd(r.balance) + (r.balance_as_of ? ` <span class="muted">${esc(finDayLabel(r.balance_as_of))}</span>` : '')) : ''}
-    ${'account' in r ? finKv('Books as', r.account ? esc(r.account.name) : '<span class="muted">Not mapped</span>') : ''}
+    ${money ? finKv('Books as', finMapCell(r, admin)) : ''}
+    ${mine.length ? `<h3 class="fin-h">Accounts</h3>${mine.map(x => finKv((x.name || '') + (x.last4 ? ' ••' + x.last4 : ''), finMapCell(x, admin))).join('')}` : ''}
     ${sync?.last_ok_at ? finKv('Last sync', esc(ago(sync.last_ok_at))) : ''}${sync?.last_error ? finKv('Error', esc(sync.last_error), 'fin-bad') : ''}
     ${feed.length ? `<h3 class="fin-h">Feed</h3>${feed.map(([k, v]) => finKv(k, String(v))).join('')}` : ''}
     ${cards.length ? `<h3 class="fin-h">Cards</h3>${cards.map(([k, v]) => finKv(k, String(v))).join('')}` : ''}
     ${r.payments ? `<h3 class="fin-h">Payments</h3>${finKv('Approval queue', r.payments.eligible ? 'Eligible' : 'Not eligible')}${finKv('Payments', r.payments.enabled ? 'On' : 'Off')}${r.payments.why_not ? finKv('Note', esc(r.payments.why_not)) : ''}` : ''}
-    ${access.length ? `<h3 class="fin-h">Access</h3>${access.map(a => finKv(finWho(a.who), esc(a.via === 'default' ? 'Default' : a.via || ''))).join('')}` : ''}`);
+    ${access.length ? `<h3 class="fin-h">Access</h3>${access.map(a => finKv(finWho(a.who), esc(a.via === 'default' ? 'Default' : a.via || ''))).join('')}` : ''}
+    ${admin && live ? `<div class="fin-foot">${r.kind === 'connection' ? '<button type="button" class="ghost" data-fin-disconnect>Disconnect</button>' : ''}<button type="button" class="primary" data-fin-sync>Sync now</button></div>` : ''}`);
+  const rail = $('#fin-rail'); if (!rail) return;
+  rail.querySelectorAll('select[data-fin-map]').forEach(sel => { sel.onchange = () => void finSrcMap(sel); });
+  rail.querySelector('[data-fin-sync]')?.addEventListener('click', async ev => {
+    const btn = ev.currentTarget; btn.disabled = true;
+    try { const res = await finAct('connection_sync', {connection_id: conn}); if (res.status === 'committed') toast('Syncing'); void finSrcLoad(); }
+    catch (e) { toast(e.message, true); btn.disabled = false; }
+  });
+  rail.querySelector('[data-fin-disconnect]')?.addEventListener('click', () => {
+    finDialog('Disconnect ' + (r.name || r.provider || ''), '', 'Disconnect', async () => {
+      const res = await finAct('connection_disconnect', {connection_id: conn});
+      if (res.status === 'committed') toast('Disconnected');
+      void finSrcLoad();
+    });
+  });
+}
+// A money account (a bank, a card program, a payments balance): it books to one line, which a finance admin can change.
+const finSrcMoney = r => 'account' in r && !['connection', 'usage', 'documents', 'entries'].includes(r.kind);
+// Its line, or a select of the lines it may map to (backend/finance/banking.py connection_map: a card program to a
+// liability, anything else to an asset; one money account per line).
+function finMapCell(r, admin) {
+  const lines = FIN.src.lines;
+  if (!admin || !lines.length) return r.account ? esc(r.account.name) : '<span class="muted">Not mapped</span>';
+  const want = r.kind === 'card_program' ? 'liability' : 'asset';
+  const taken = new Set(FIN.src.groups.flatMap(g => g.rows).filter(x => x.id !== r.id && finSrcMoney(x) && x.account).map(x => x.account.id));
+  const opts = lines.filter(l => l.type === want && (!taken.has(l.account_id) || l.account_id === r.account?.id));
+  return `<select data-fin-map="${esc(r.id)}" aria-label="${esc(r.name || '')} books as">${r.account ? '' : '<option value="" selected>Not mapped</option>'}${opts.map(l =>
+    `<option value="${esc(l.account_id)}"${l.account_id === r.account?.id ? ' selected' : ''}>${esc(l.name)}</option>`).join('')}</select>`;
+}
+async function finSrcMap(sel) {
+  const r = FIN.src.groups.flatMap(g => g.rows).find(x => x.id === sel.dataset.finMap && finSrcMoney(x));
+  if (!r || !sel.value || sel.value === r.account?.id) return;
+  sel.disabled = true;
+  try {
+    const res = await finAct('connection_map', {money_account_id: r.id, account_id: sel.value});
+    if (res.status === 'committed') toast('Saved');
+    void finSrcLoad();
+  } catch (e) { toast(e.message, true); sel.disabled = false; sel.value = r.account?.id || ''; }
 }
 // Connect Mercury: the token goes into the credential vault, then the connection is made from the stored credential
 // (POST /api/v2/finance/connections tests it and maps the accounts). The token is never read back. A retry after a
@@ -270,10 +318,13 @@ function finViewAsPick() {
 function finDefaultsEdit() {
   const d = FIN.acc.defaults || {}, opt = (v, l, cur) => `<option value="${v}"${v === cur ? ' selected' : ''}>${l}</option>`;
   finDialog('Edit defaults', `<label>Owners<select disabled><option>Everything</option></select></label>
-    <label>Managers<select name="manager">${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}${opt('none', 'Nothing', d.manager)}</select></label>
+    <label>Managers<select name="manager">${opt('team_expenses', 'Expenses of what they manage', d.manager)}${opt('own_expenses', 'Own expenses', d.manager)}</select></label>
+    <label>Managers' payroll<select name="manager_payroll">${opt('totals', 'Totals', d.manager_payroll)}${opt('hidden', 'Hidden', d.manager_payroll)}</select></label>
     <label>Everyone else<select name="member">${opt('own_expenses', 'Own expenses', d.member)}${opt('none', 'Nothing', d.member)}</select></label>
     <label>Revenue, balance sheet, payables, receivables<select disabled><option>Owners only</option></select></label>`, 'Save', async form => {
-    const r = await finAct('view_defaults_set', {manager: form.elements.manager.value, member: form.elements.member.value});
+    const pick = Object.fromEntries(['manager', 'member', 'manager_payroll'].map(k => [k, form.elements[k].value]).filter(([k, v]) => v && v !== d[k]));
+    if (!Object.keys(pick).length) return;
+    const r = await finAct('view_defaults_set', pick);
     if (r.status === 'committed') toast('Saved');
     await finAccReload();
   });

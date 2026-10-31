@@ -31,6 +31,8 @@ function finCapsOf(acc, who) {
   return {row, owner, all, rights,
     any: all || row.default !== 'none' || live.length > 0,
     company: all || what.has('pnl') || what.has('pnl_lines'),
+    // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
+    companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
     balance: all || what.has('balance_sheet') || what.has('bs_lines'),
     sources: all || what.has('sources'),
     may: right => owner || rights.has(right) || rights.has('finance.admin')};

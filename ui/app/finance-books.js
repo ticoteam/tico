@@ -3,7 +3,7 @@
    that feed it; the totals are the route's. Cards: each card with its holder, budget, limit and spend this period;
    the rail freezes, unfreezes and sets the limit. Transactions: bank feed rows and entries, searched and filtered,
    paged by cursor; the rail tags a row's lines (categorize) for those who keep the books.
-   Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets.
+   Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users.
    Writes (POST /api/v2/finance/actions): card_create, card_freeze, card_unfreeze, card_update_limit, categorize.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -88,13 +88,24 @@ function finBsRail() {
   const state = FIN.bs, b = FIN_BS; if (!state?.data) return;
   let row = null, label = '';
   for (const [sec, name] of FIN_BS_SECTIONS) { const r = finBsTree(state.data[sec] || []).find(x => finBsKey(x) === b.sel); if (r) { row = r; label = name; break; } }
-  if (!row) { finRail(''); return; }
+  const tail = finBsTail();
+  if (!row) { finRail(tail); return; }
   const srcs = row.sources || [];
   finRail(`<div class="muted fin-sup">${esc(label)}</div><h2>${esc(row.name)}</h2>
     ${finKv('Balance', finUsd(row.sum))}${row.kids ? finKv('This line', finUsd(row.balance)) : ''}
     ${srcs.length ? `<h3 class="fin-h">Accounts</h3>${srcs.map(s => finKv(`${s.name || s.provider}${s.last4 ? ' ••' + s.last4 : ''}`,
       `${finUsd(s.provider_balance)}${s.balance_as_of ? ` <span class="muted">${esc(finDayLabel(s.balance_as_of))}</span>` : ''}`)).join('')}` : ''}
-    ${(row.entry_sources || []).length ? `<h3 class="fin-h">From</h3>${row.entry_sources.map(s => `<span class="fin-src">${esc(s)}</span>`).join('')}` : ''}`);
+    ${(row.entry_sources || []).length ? `<h3 class="fin-h">From</h3>${row.entry_sources.map(s => `<span class="fin-src">${esc(s)}</span>`).join('')}` : ''}${tail}`);
+}
+// Under any line: payments still on their way out of each money account, and how far the books are closed.
+function finBsTail() {
+  const d = FIN.bs.data, seen = new Set(), due = [];
+  for (const [sec] of FIN_BS_SECTIONS) for (const r of d[sec] || []) for (const s of r.sources || []) {
+    if (seen.has(s.money_account_id) || !s.due_out?.count) continue;
+    seen.add(s.money_account_id); due.push(s);
+  }
+  return `${due.length ? `<div class="fin-rail-sec"><h3 class="fin-h">Due out</h3>${due.map(s => finKv(`${s.name || s.provider || ''}${s.last4 ? ' ••' + s.last4 : ''} · ${s.due_out.count}`, finUsd(s.due_out.amount))).join('')}</div>` : ''}
+    ${d.closed_through ? `<div class="fin-rail-sec"><h3 class="fin-h">Close</h3>${finKv('Closed through', esc(finDayLabel(d.closed_through)))}</div>` : ''}`;
 }
 
 // ----------------------------------------------------------------- cards
@@ -169,21 +180,21 @@ function finCardRail() {
   };
 }
 async function finCardAdd() {
-  let budgets = [];
-  try { budgets = (await get('/v2/finance/budgets', {fresh: true}))?.budgets || []; } catch { /* a card can go without one */ }
+  const [b, u] = await Promise.allSettled([get('/v2/finance/budgets', {fresh: true}), get('/v2/finance/mercury-users', {fresh: true})]);
+  const budgets = b.status === 'fulfilled' ? b.value?.budgets || [] : [], users = u.status === 'fulfilled' ? u.value?.users || [] : [];
   const people = (FIN.acc?.teammates || []);
   finDialog('Card', `<label>Holder<select name="holder" required>${people.map(t => `<option value="${esc(t.teammate)}">${esc(finWho(t.teammate))}</option>`).join('')}</select></label>
     <label>Budget<select name="budget" required>${budgets.filter(b => b.active && !b.catch_all).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}</select></label>
     <label>Limit / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>
     <label>Name<input name="nickname" maxlength="50" autocomplete="off"></label>
-    <label>Mercury user ID<input name="user" required maxlength="120" autocomplete="off" spellcheck="false"></label>`, 'Create', async form => {
+    <label>Mercury user<select name="user" required>${users.map(x => `<option value="${esc(x.id)}">${esc(x.name)}${x.email ? ' · ' + esc(x.email) : ''}</option>`).join('')}</select></label>`, 'Create', async form => {
     // backend/finance/cards.py card_create: a budget the card's monthly limit comes out of, and the Mercury user it is
     // issued to (Mercury issues cards to its own users).
     const cents = finParseCents(form.elements.amount.value);
     if (cents == null || cents <= 0) throw new Error('A dollar amount, like 500');
     if (!form.elements.budget.value) throw new Error('Pick a budget');
-    const user = form.elements.user.value.trim();
-    if (!user) throw new Error('Add the Mercury user ID');
+    const user = form.elements.user.value;
+    if (!user) throw new Error('No Mercury users yet');
     const payload = {holder: form.elements.holder.value, budget_id: form.elements.budget.value, amount: cents, provider_user_id: user};
     if (form.elements.nickname.value.trim()) payload.nickname = form.elements.nickname.value.trim();
     const r = await finAct('card_create', payload);

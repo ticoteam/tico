@@ -75,14 +75,16 @@ function pnl(url, me) {
   const wave = (v, i) => v ? Math.round(v * (1 + ((i * 7) % 5 - 2) / 40) / 100) * 100 : 0;
   // A private line is hidden from all but the owner (backend/finance/reads.py pnl): renamed, no actuals or projections.
   const viewer = url.searchParams.get('view_as') || 'human:' + me;
+  const section = code => code.startsWith('4') ? 'revenue' : code.startsWith('5') ? 'cost_of_revenue' : 'operating';
   const rows = lines.map(([account_id, code, base0, type, parent_id, base, budget, priv]) => priv && viewer !== 'human:ana'
-    ? {account_id, code, name: 'Payroll (private)', type, parent_id, private: true, actual: null, total: null, budget: budget == null ? null : cols.map(() => budget), projection: null}
-    : ({account_id, code, name: base0, type, parent_id, private: false,
+    ? {account_id, code, name: 'Payroll (private)', type, section: section(code), parent_id, private: true, actual: null, total: null, budget: budget == null ? null : cols.map(() => budget), projection: null}
+    : ({account_id, code, name: base0, type, section: section(code), parent_id, private: false,
     actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
     total: 0, budget: budget == null ? null : cols.map(() => budget), projection: cols.map((c, i) => c.state === 'future' ? wave(base, i + 1) : null)}));
   const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
   const income = sum('income'), expense = sum('expense');
   return {columns: cols, rows, income, expense, net: income.map((v, i) => v - expense[i]), excluded: 0, start: q.get('start'), end: q.get('end'), view_version: 'v1',
+    filter: {teams: q.getAll('teams'), teammates: q.getAll('teammates'), who: q.get('who') || 'both', unattributed: q.get('unattributed') === 'true'},
     ...(view === 'expenses' ? {teammates: [{teammate: 'bot:eng-lead', kind: 'bot', spent: 182000, budget: 200000}, {teammate: 'bot:builder', kind: 'bot', spent: 96000, budget: 120000},
       {teammate: 'human:cara', kind: 'person', spent: 41000, budget: null}]} : {})};
 }
@@ -97,19 +99,26 @@ const BUDGETS = [budget('b-software', 'Software', 'a-6100', 300000), budget('b-h
   budget('b-contr', 'Contractors', 'a-6300', 500000),
   budget('b-contr-platform', 'Contractors · Platform', 'a-6300', 200000, {team: 'platform', parent_id: 'b-contr'}),
   budget('b-contr-web', 'Contractors · Web', 'a-6300', 150000, {team: 'web', parent_id: 'b-contr'})];
-function line(id) {
-  const l = LINES.find(x => x[0] === id) || LINES[7];
-  return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, total: l[5], excluded: 0, hidden: 0,
+function line(id, url) {
+  const l = LINES.find(x => x[0] === id) || LINES[7], vendor = url.searchParams.get('vendor');
+  const nm = new Date(); nm.setDate(1); nm.setMonth(nm.getMonth() + 1);
+  if (vendor != null) return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor, total: 84000, excluded: 0, hidden: 0,
+    by_vendor: [{key: vendor, label: vendor, amount: 84000}], by_team: [{key: 'eng', label: 'Engineering', amount: 60000}, {key: 'platform', label: 'Platform', amount: 24000}],
+    by_teammate: [], paid_by: [{kind: 'card', name: 'Engineering', amount: 63000, count: 3}, {kind: 'bank', name: 'Checking ••0001', amount: 21000, count: 1}],
+    next_month: {month: iso(nm).slice(0, 7), projection: 310000},
+    entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor, description: vendor + ' Team', memo: '', source: 'feed', tags: {}}], more: false};
+  return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor: null, total: l[5], excluded: 0, hidden: 0,
+    paid_by: [{kind: 'card', name: 'Engineering', amount: 84000, count: 4}], next_month: {month: iso(nm).slice(0, 7), projection: 310000},
     by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'other', label: 'Other · 4', amount: 21000}],
     by_team: [{key: 'eng', label: 'Engineering', amount: 120000}, {key: 'mkt', label: 'Marketing', amount: 50000}, {key: 'unattributed', label: 'Unattributed', amount: 9000}],
     by_teammate: [{key: 'bot:eng-lead', label: 'Engineering Lead', amount: 64000}, {key: 'bot:writer', label: 'Writer', amount: 30000}, {key: 'human:cara', label: 'Cara Lee', amount: 22000}],
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor: 'GitHub', description: 'GitHub Team', memo: '', source: 'feed', tags: {teammate: 'bot:eng-lead'}},
       {line_id: 'l2', entry_id: 'e2', date: '2026-10-12', account_id: id, amount: 42000, vendor: 'Figma', description: 'Figma seats', memo: '', source: 'feed', tags: {team: 'mkt'}}], more: false};
 }
-const BS = {as_of: '2026-10-30', scoped: false, currency: 'USD',
+const BS = {as_of: '2026-10-30', scoped: false, currency: 'USD', closed_through: '2026-09-30',
   assets: [{account_id: 'a-1000', code: '1000', name: 'Cash', subtype: 'cash', parent_id: null, balance: 0, entry_sources: [], sources: []},
     {account_id: 'a-1010', code: '1010', name: 'Checking', subtype: 'cash', parent_id: 'a-1000', balance: 17105000, entry_sources: ['feed'],
-      sources: [{money_account_id: 'm1', name: 'Checking', provider: 'Mercury', last4: '0001', provider_balance: 17105000, balance_as_of: '2026-10-30'}]},
+      sources: [{money_account_id: 'm1', name: 'Checking', provider: 'Mercury', last4: '0001', provider_balance: 17105000, balance_as_of: '2026-10-30', due_out: {count: 2, amount: 430000}}]},
     {account_id: 'a-1020', code: '1020', name: 'Savings', subtype: 'cash', parent_id: 'a-1000', balance: 1315000, entry_sources: ['feed'],
       sources: [{money_account_id: 'm2', name: 'Savings', provider: 'Mercury', last4: '0002', provider_balance: 1315000, balance_as_of: '2026-10-30'}]},
     {account_id: 'a-1300', code: '1300', name: 'Prepaid expenses', subtype: 'prepaid', parent_id: null, balance: 480000, entry_sources: ['manual'], sources: []}],
@@ -129,6 +138,10 @@ const TX = [
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l1', account_id: 'a-6100', account: 'Software', amount: 21000, vendor: 'GitHub', tags: {teammate: 'bot:eng-lead', budget: 'b-software'}}]},
   {kind: 'feed', id: 'f2', date: '2026-10-28', amount: -9900, currency: 'USD', counterparty: 'Figma', description: 'FIGMA', status: 'new', pending: false, card_id: null,
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: []},
+  {kind: 'feed', id: 'f4', date: '2026-10-27', amount: -50000, currency: 'USD', counterparty: 'Linear', description: 'LINEAR', status: 'posted', pending: false, card_id: null,
+    money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [
+      {line_id: 'l5', account_id: 'a-6100', account: 'Software', amount: 30000, vendor: 'Linear', tags: {team: 'eng', teammate: 'bot:eng-lead'}},
+      {line_id: 'l6', account_id: 'a-6100', account: 'Software', amount: 20000, vendor: 'Linear', tags: {team: 'mkt'}}]},
   {kind: 'entry', id: 'l9', entry_id: 'e9', date: '2026-10-27', amount: 610000, account_id: 'a-6300', account: 'Contractors', vendor: 'Northwind Design', description: 'October design work',
     memo: '', source: 'manual', reversed: false, tags: {team: 'mkt'}}];
 const SOURCES = {groups: [
@@ -150,7 +163,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
-  const writes = [];
+  const writes = [], reads = [];
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -164,6 +177,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/events') return;
     const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
     if (method !== 'GET') writes.push([method, p + url.search, body, req.headers()['idempotency-key'] || '']);
+    else if (p.startsWith('/api/v2/finance/')) reads.push(p + url.search);
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/me') return json({...me, config});
     if (p === '/api/employees') return json(emps);
@@ -176,7 +190,9 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/access') return json(access(viewer));
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer));
     if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
-    if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop())));
+    if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
+    if (p === '/api/v2/finance/mercury-users') return json({users: [{id: 'mu-1', name: 'Ana Silva', connection_id: 'c1', email: 'a•••@acme.example', updated_at: '2026-10-30T10:00:00Z'},
+      {id: 'mu-2', name: 'Ops Card User', connection_id: 'c1', email: 'o•••@acme.example', updated_at: '2026-10-30T10:00:00Z'}]});
     if (p === '/api/v2/finance/balance-sheet') return viewer === 'ana' ? json(BS) : denied();
     if (p === '/api/v2/finance/cards') return json({cards: viewer === 'ana' ? CARDS : CARDS.filter(c => c.holder !== 'bot:writer'), next: null});
     if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
@@ -187,7 +203,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   await page.goto('http://tico-ui.test/' + hash);
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   await page.locator('#fin-head [data-fin-tab]').first().waitFor();
-  return {page, errors, writes};
+  return {page, errors, writes, reads};
 }
 
 // ----------------------------------------------------------------- helpers
@@ -214,7 +230,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
     // The owner, on a computer: every tab, the P&L as a statement, budget edits only in future months.
     {
       const tag = 'owner';
-      const {page, errors, writes} = await open(browser);
+      const {page, errors, writes, reads} = await open(browser);
       await page.locator('.fin-pl').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Cards', 'Transactions', 'Sources', 'Access'], tag + ': every phase 1 tab, in order');
       assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
@@ -281,7 +297,13 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForTimeout(150);
       assert.deepEqual(actions(writes).at(-1), {kind: 'budget_create', payload: {name: 'Notion', period: 'month', account_id: 'a-6100', vendor: 'Notion', parent_id: 'b-software', amount: 40000, effective_from: next + '-01'}},
         tag + ': a vendor budget under the line\'s, from the month shown');
+      assert.ok(reads.some(r => r === `/api/v2/finance/budgets?at=${next}-01`), tag + ': budgets read as they stand in the month shown');
       assert.match(await page.locator('#fin-rail .fin-more').getAttribute('href'), /#\/finance\/transactions\?account_id=a-6100&q=GitHub/, tag + ': All GitHub transactions');
+      await page.locator('#fin-rail .fin-bars').waitFor();
+      assert.ok(reads.some(r => r.startsWith('/api/v2/finance/lines/a-6100?') && r.includes('vendor=GitHub')), tag + ': the vendor\'s own read');
+      const lineRail = await page.locator('#fin-rail').innerText();
+      for (const want of ['Paid by', 'Card · Engineering', 'Checking ••0001', 'By team', 'Platform', 'Transactions']) assert.ok(lineRail.toLowerCase().includes(want.toLowerCase()), `${tag}: the vendor rail has ${want}`);
+      assert.match(lineRail, /Software · \w{3} projected\s+\$3,100/, tag + ': next month projected (the line\'s)');
       await shot(page, 'line-desktop');
       // A line with no budget of its own offers a line budget first, not a vendor one.
       await go(page, '#/finance/line/a-5200', '[data-fin-key="GitHub"]');
@@ -306,12 +328,28 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
         tag + ': filtered to a team, the cell edits that team\'s budget');
       assert.equal(await page.locator('td[data-fin-budget="a-6300"]').count(), 0, tag + ': no editor on a cell summing two team budgets');
       assert.equal(await page.locator('td[data-fin-budget="a-5100"]').count(), 0, tag + ': no editor where the team has no budget');
+      await page.locator('[data-fin-filter]').click();
+      await page.locator('[data-fin-pick="mate:bot:writer"]').check();
+      await page.locator('[data-fin-pick="none:"]').check();
+      await page.keyboard.press('Escape');
+      await page.locator('[data-fin-seg="who"] button[data-v="bots"]').click();
+      await page.waitForFunction(() => FIN.pnl?.data?.filter?.who === 'bots');
+      const lastPnl = new URL('http://x' + reads.filter(r => r.startsWith('/api/v2/finance/pnl?')).at(-1)).searchParams;
+      assert.deepEqual([lastPnl.getAll('teams'), lastPnl.getAll('teammates'), lastPnl.get('who'), lastPnl.get('unattributed')], [['eng'], ['bot:writer'], 'bots', 'true'],
+        tag + ': teams, teammates, who and Unattributed go to the route');
+      assert.deepEqual(await page.locator('#fin-filters .fin-chip').allInnerTexts().then(t => t.map(x => x.replace('✕', '').trim())), ['Engineering', 'Writer', 'Unattributed'], tag + ': a chip per pick');
+      await page.locator('#fin-filters [data-fin-clear="team:eng"]').click();
+      await page.waitForFunction(() => FIN.pnl?.data?.filter?.teams.length === 0);
+      await shot(page, 'pnl-expenses-filter-desktop');
       // Balance sheet, cards (freeze), transactions, sources, access.
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
       for (const want of ['Total assets', 'Total liabilities', 'Total equity', 'Liabilities + equity']) assert.ok(bsFirst.includes(want), `${tag}: balance sheet has ${want}`);
       assert.equal(await page.locator('#fin-balanced .pill').innerText(), 'Balanced', tag + ': balanced');
       await page.locator('[data-fin-line="a-1010"]').click();
+      const bsRail = await page.locator('#fin-rail').innerText();
+      assert.match(bsRail.toLowerCase(), /due out\s+checking ••0001 · 2\s+\$4,300/, tag + ': due out by money account');
+      assert.match(bsRail, /Closed through\s+Sep 30/, tag + ': closed through');
       await shot(page, 'balance-desktop');
       await go(page, '#/finance/cards', READY.cards);
       await page.locator('[data-fin-card="card-1"]').click();
@@ -324,6 +362,16 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('#fin-rail [data-fin-freeze]').click();
       await page.waitForTimeout(100);
       assert.deepEqual(actions(writes).at(-1), {kind: 'card_unfreeze', payload: {card_id: 'card-2'}}, tag + ': Unfreeze sends card_unfreeze');
+      await page.locator('[data-fin-card-add]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="user"] option').first().waitFor({state: 'attached'});
+      assert.equal(await page.locator('dialog.fin-dlg input[name="user"]').count(), 0, tag + ': no typed Mercury user id');
+      await page.locator('dialog.fin-dlg select[name="holder"]').selectOption('bot:builder');
+      await page.locator('dialog.fin-dlg select[name="user"]').selectOption('mu-2');
+      await page.locator('dialog.fin-dlg input[name="amount"]').fill('250');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(actions(writes).at(-1), {kind: 'card_create', payload: {holder: 'bot:builder', budget_id: 'b-software', amount: 25000, provider_user_id: 'mu-2'}},
+        tag + ': card_create with the picked Mercury user');
       await page.locator('[data-fin-card="card-1"]').click();
       await shot(page, 'cards-desktop');
       await go(page, '#/finance/transactions', READY.transactions);
@@ -334,10 +382,33 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForTimeout(100);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'}},
         tag + ': categorize keeps the line\'s other tags');
+      await page.locator('[data-fin-tx="feed:f4"]').click();
+      assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
+      await page.locator('#fin-rail input[name="project"]').fill('Launch');
+      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {team: 'eng', teammate: 'bot:eng-lead', project: 'Launch'}},
+        {line_id: 'l6', tags: {team: 'mkt', project: 'Launch'}}], mode: 'replace'}}, tag + ': a split row changes only the field set; each line keeps its own team');
       await go(page, '#/finance/sources', READY.sources);
       await page.locator('[data-fin-group="banks"]').click();
       await page.locator('[data-fin-src="bank:m1"]').click();
+      await page.locator('#fin-rail select[data-fin-map="m1"]').waitFor();
+      const mapTo = await page.locator('#fin-rail select[data-fin-map="m1"] option').evaluateAll(o => o.map(x => x.value));
+      assert.deepEqual(mapTo, ['a-1000', 'a-1010', 'a-1300'], tag + ': asset lines only, none another account books to');
       await shot(page, 'sources-desktop');
+      await page.locator('#fin-rail select[data-fin-map="m1"]').selectOption('a-1000');
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'connection_map', payload: {money_account_id: 'm1', account_id: 'a-1000'}}, tag + ': mapping sends connection_map');
+      await page.locator('#fin-rail [data-fin-sync]').click();
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'connection_sync', payload: {connection_id: 'c1'}}, tag + ': Sync now sends connection_sync');
+      assert.equal(await page.locator('#fin-rail [data-fin-disconnect]').count(), 0, tag + ': Disconnect is on the connection, not an account');
+      await page.locator('[data-fin-group="payments"]').click();
+      await page.locator('[data-fin-src="connection:c1"]').click();
+      await page.locator('#fin-rail [data-fin-disconnect]').click();
+      await page.locator('dialog.fin-dlg[open] [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(actions(writes).at(-1), {kind: 'connection_disconnect', payload: {connection_id: 'c1'}}, tag + ': Disconnect sends connection_disconnect');
       await go(page, '#/finance/access', READY.access);
       await page.locator('[data-fin-mate="bot:writer"]').click();
       await page.locator('#fin-rail [data-fin-grant]').waitFor();
@@ -345,7 +416,11 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('[data-fin-defaults]').click();
       await page.locator('dialog.fin-dlg[open]').waitFor();
       await shot(page, 'access-defaults-desktop');
-      await page.locator('dialog.fin-dlg [data-close]').first().click();
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="manager"] option').evaluateAll(o => o.map(x => x.value)), ['team_expenses', 'own_expenses'], tag + ': managers see expenses');
+      await page.locator('dialog.fin-dlg select[name="manager_payroll"]').selectOption('hidden');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(actions(writes).at(-1), {kind: 'view_defaults_set', payload: {manager_payroll: 'hidden'}}, tag + ': view_defaults_set with what changed');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
