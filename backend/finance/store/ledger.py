@@ -331,3 +331,21 @@ def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], 
                      f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?{cut} "
                      f"ORDER BY l.entry_date DESC, l.id LIMIT ?",
                      (book_id, *account_ids, start, end, *args, most)).fetchall()
+
+
+def insert_snapshot(c: sqlite3.Connection, book_id: str, period_id: str, month: str, accounts_json: str,
+                    pnl_json: str, balances_json: str, by: str, at: str) -> None:
+    """A closed month's snapshot. Closing a month again replaces its totals and keeps the restatements it took."""
+    c.execute("INSERT INTO fin_close_snapshots(id, book_id, period_id, month, accounts_json, pnl_json, balances_json, "
+              "restated_json, created_at, created_by) VALUES(?,?,?,?,?,?,?,'[]',?,?) ON CONFLICT(period_id) DO UPDATE "
+              "SET accounts_json=excluded.accounts_json, pnl_json=excluded.pnl_json, "
+              "balances_json=excluded.balances_json, created_at=excluded.created_at, created_by=excluded.created_by",
+              (new_id(), book_id, period_id, month, accounts_json, pnl_json, balances_json, at, by))
+
+
+def snapshot(c: sqlite3.Connection, book_id: str, month: str) -> Any:
+    return c.execute("SELECT * FROM fin_close_snapshots WHERE book_id=? AND month=?", (book_id, month)).fetchone()
+
+
+def set_restated(c: sqlite3.Connection, snapshot_id: str, restated_json: str) -> None:
+    c.execute("UPDATE fin_close_snapshots SET restated_json=? WHERE id=?", (restated_json, snapshot_id))

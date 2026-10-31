@@ -5,6 +5,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field, replace
 
 from . import budgeting, posting
+from . import closing as CL
 from .context import Ctx
 from .core import budgets as B
 from .core import dates, kinds as K
@@ -304,6 +305,7 @@ def close_period(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     def apply(aid: str) -> Result:
         pid = SL.insert_period(ctx.c, ctx.book.id, start, end, who, ctx.at)
         SL.set_period_status(ctx.c, pid, "closed", who, ctx.at)
+        CL.take(ctx, pid, start[:7], start, end, who)
         return {"period_id": pid, "month": start[:7], "status": "closed"}
     return Plan(K.default_gate(ctx.org, who, "close_period"), f"Close {start[:7]}", apply)
 

@@ -328,6 +328,13 @@ CREATE TABLE IF NOT EXISTS fin_private_lines (
   account_id TEXT PRIMARY KEY REFERENCES fin_accounts(id),
   others_see TEXT NOT NULL DEFAULT 'totals' CHECK (others_see IN ('totals','hidden')),
   full_detail_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_close_snapshots (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  period_id TEXT NOT NULL UNIQUE REFERENCES fin_periods(id), month TEXT NOT NULL,
+  accounts_json TEXT NOT NULL, pnl_json TEXT NOT NULL, balances_json TEXT NOT NULL,
+  restated_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  UNIQUE (book_id, month));
 """
 
 INDEXES = """
@@ -515,6 +522,12 @@ def phase2(c: sqlite3.Connection) -> None:
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def close_snapshots(c: sqlite3.Connection) -> None:
+    """Cloud migration 72: the close snapshot table on an install that closed months before it. Months closed before
+    it have no snapshot and read live. The same statements as `create` again, so it is idempotent."""
+    create(c)
 
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:

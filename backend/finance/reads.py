@@ -11,6 +11,7 @@ from decimal import Decimal
 from typing import Any, cast
 
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import closing as CL
 from . import context as _context
 from .store import usage as SU
 from .context import Ctx, load
@@ -248,6 +249,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
     if budget_as_of:
         made_by = budget_as_of if "T" in budget_as_of else dates.day(budget_as_of).isoformat() + "T23:59:59.999999Z"
     a, z = _window(start, end, s.ctx)
+    s, snap = _closed(s, viewer, a, z)
     fy = s.ctx.book.fiscal_year_start
     today = dates.day(s.ctx.today)
     buckets = dates.buckets(period, a, z, fy)
@@ -336,10 +338,22 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                              "state": _column_state(p, q, today)} for p, q in buckets],
                 "rows": rows, "income": totals["income"], "expense": totals["expense"],
                 "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
-                "excluded": sup.excluded, "view_version": s.view.version}
+                "excluded": sup.excluded, "view_version": s.view.version, "snapshot": snap}
     if view == "expenses":
         out["teammates"] = _side_panel(s, spent, tops, versions, a, z, f)
     return out
+
+
+def _closed(s: _Seen, viewer: str, a: date, z: date) -> tuple[_Seen, Row | None]:
+    """A window inside one closed month reads through that month's snapshot tree: the accounts as they stood when it
+    closed. Amounts still come from the posted rows the viewer may see. Also the month's snapshot marker."""
+    if (a.year, a.month) != (z.year, z.month):
+        return s, None
+    month = a.isoformat()[:7]
+    ctx = CL.frozen(s.ctx, month)
+    if ctx is None:
+        return s, None
+    return _Seen(ctx=ctx, view=ctx.view(viewer), private=s.private), CL.marker(s.ctx.c, s.ctx.book.id, month)
 
 
 def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
@@ -701,6 +715,7 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
         raise invalid(f"period is {'|'.join(dates.BUCKETS)}")
     a, z = _window(start, end, s.ctx)
     buckets = dates.buckets(period, a, z, s.ctx.book.fiscal_year_start)
+    s, snap = _closed(s, viewer, a, z)
     seen = _visible(s, False)
     most = max(1, min(int(limit), 500))
     versions = SB.versions(c, [b.id for b in seen[:most]])
@@ -714,7 +729,7 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     return {"start": a.isoformat(), "end": z.isoformat(), "period": period,
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
                         for p, q in buckets],
-            "budgets": rows, "more": len(seen) > most, "view_version": s.view.version}
+            "budgets": rows, "more": len(seen) > most, "view_version": s.view.version, "snapshot": snap}
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
