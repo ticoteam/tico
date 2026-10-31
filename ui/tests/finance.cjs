@@ -1,0 +1,424 @@
+// The Finance tab (ui/app/finance*.js) against a fake hub: Acme (acme.example) with an owner (Ana), a manager (Cara,
+// who leads Engineering) and a few bots. The owner sees every tab; the manager only P&L (expenses), Cards, Transactions
+// and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click only in a
+// future month and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Each tab draws
+// without errors and without sideways scroll on a phone. TICO_UI_SHOTS=<dir> saves screenshots (desktop and phone).
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const {html, uiFile} = require('./support/page.cjs');
+const {unrouted} = require('./support/routes.cjs');
+const uiDir = path.join(__dirname, '..');
+const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
+
+// ----------------------------------------------------------------- Acme
+const people = [{id: 'ana', name: 'Ana Silva', role: 'owner'}, {id: 'cara', name: 'Cara Lee', role: 'member', team: 'eng'}];
+const emps = [['eng-lead', 'Engineering Lead', 'eng'], ['builder', 'Builder', 'platform'], ['mkt-lead', 'Marketing Lead', 'mkt'],
+  ['writer', 'Writer', 'content'], ['bookkeeper', 'Bookkeeper', '']].map(([name, display_name, team]) =>
+  ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
+const teams = [{id: 'eng', name: 'Engineering', parent: '', lead: 'human:cara'}, {id: 'platform', name: 'Platform', parent: 'eng', lead: 'bot:eng-lead'},
+  {id: 'web', name: 'Web', parent: 'eng', lead: 'bot:eng-lead'},
+  {id: 'mkt', name: 'Marketing', parent: '', lead: 'bot:mkt-lead'}, {id: 'content', name: 'Content', parent: 'mkt', lead: 'bot:mkt-lead'}];
+const ALL_RIGHTS = ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', 'finance.cards', 'finance.budgets', 'finance.rules', 'finance.admin'];
+const mate = (teammate, kind, team, def, extra = {}) => ({teammate, kind, team, reports_to: '', default: def, grants: [], rights: [], ...extra});
+const MATES = [
+  mate('human:ana', 'person', '', 'everything', {rights: ALL_RIGHTS}),
+  mate('human:cara', 'person', 'eng', 'team_expenses', {reports_to: 'human:ana'}),
+  mate('bot:eng-lead', 'bot', 'platform', 'team_expenses', {reports_to: 'human:cara'}),
+  mate('bot:builder', 'bot', 'platform', 'own_expenses', {reports_to: 'bot:eng-lead'}),
+  mate('bot:mkt-lead', 'bot', 'mkt', 'team_expenses', {reports_to: 'human:ana', grants: [{id: 'g1', subject_kind: 'teammate', subject: 'bot:mkt-lead',
+    what: 'pnl_lines', whose: 'company', whose_team: null, account_ids: ['a-6100'], new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
+  mate('bot:writer', 'bot', 'content', 'own_expenses', {reports_to: 'bot:mkt-lead', grants: [{id: 'g2', subject_kind: 'teammate', subject: 'bot:writer',
+    what: 'expenses', whose: 'team', whose_team: 'content', account_ids: [], new_members: false, granted_by: 'bot:mkt-lead', expires_at: null, status: 'active', live: true}]}),
+  mate('bot:bookkeeper', 'bot', '', 'own_expenses', {rights: ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', 'finance.cards'],
+    grants: [{id: 'g3', subject_kind: 'teammate', subject: 'bot:bookkeeper', what: 'everything', whose: 'company', whose_team: null, account_ids: [],
+      new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
+];
+function access(viewer) {
+  const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: false}],
+    defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
+  if (viewer === 'ana') return {...base, teammates: MATES, can_view_as: true, can_edit_defaults: true};
+  const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
+  return {...base, teams: teams.filter(t => ['eng', 'platform'].includes(t.id)), private_lines: [],
+    teammates: MATES.filter(m => mine.includes(m.teammate)), can_view_as: false, can_edit_defaults: false};
+}
+
+// The chart: [id, code, name, type, parent, monthly actual (cents), budget, private]
+const LINES = [
+  ['a-4000', '4000', 'Revenue', 'income', null, 0, null],
+  ['a-4100', '4100', 'Subscriptions', 'income', 'a-4000', 4200000, 4000000],
+  ['a-4200', '4200', 'Services', 'income', 'a-4000', 800000, 1000000],
+  ['a-5000', '5000', 'Cost of revenue', 'expense', null, 0, null],
+  ['a-5100', '5100', 'Hosting', 'expense', 'a-5000', 410000, 400050],
+  ['a-5200', '5200', 'AI services', 'expense', 'a-5000', 520000, null],
+  ['a-6000', '6000', 'Operating expenses', 'expense', null, 0, null],
+  ['a-6100', '6100', 'Software', 'expense', 'a-6000', 294000, 300000],
+  ['a-6200', '6200', 'Payroll', 'expense', 'a-6000', 1800000, 1800000, true],
+  ['a-6300', '6300', 'Contractors', 'expense', 'a-6000', 610000, 500000],
+];
+const pad = n => String(n).padStart(2, '0');
+const iso = d => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const day = s => { const [y, m, d] = s.split('-').map(Number); return new Date(y, m - 1, d); };
+function columns(start, end) {
+  const out = [], today = iso(new Date());
+  for (let d = day(start); iso(d) <= end; d = new Date(d.getFullYear(), d.getMonth() + 1, 1)) {
+    const a = new Date(d.getFullYear(), d.getMonth(), 1), z = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+    const [s, e] = [iso(a), iso(z)];
+    out.push({start: s, end: e, label: s.slice(0, 7), state: e < today ? 'past' : s <= today ? 'current' : 'future'});
+  }
+  return out;
+}
+function pnl(url, me) {
+  const q = url.searchParams, cols = columns(q.get('start'), q.get('end')), view = q.get('view') || 'company';
+  const lines = LINES.filter(l => view === 'company' || l[3] === 'expense');
+  const wave = (v, i) => v ? Math.round(v * (1 + ((i * 7) % 5 - 2) / 40) / 100) * 100 : 0;
+  // A private line is hidden from all but the owner (backend/finance/reads.py pnl): renamed, no actuals or projections.
+  const viewer = url.searchParams.get('view_as') || 'human:' + me;
+  const rows = lines.map(([account_id, code, base0, type, parent_id, base, budget, priv]) => priv && viewer !== 'human:ana'
+    ? {account_id, code, name: 'Payroll (private)', type, parent_id, private: true, actual: null, total: null, budget: budget == null ? null : cols.map(() => budget), projection: null}
+    : ({account_id, code, name: base0, type, parent_id, private: false,
+    actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
+    total: 0, budget: budget == null ? null : cols.map(() => budget), projection: cols.map((c, i) => c.state === 'future' ? wave(base, i + 1) : null)}));
+  const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
+  const income = sum('income'), expense = sum('expense');
+  return {columns: cols, rows, income, expense, net: income.map((v, i) => v - expense[i]), excluded: 0, start: q.get('start'), end: q.get('end'), view_version: 'v1',
+    ...(view === 'expenses' ? {teammates: [{teammate: 'bot:eng-lead', kind: 'bot', spent: 182000, budget: 200000}, {teammate: 'bot:builder', kind: 'bot', spent: 96000, budget: 120000},
+      {teammate: 'human:cara', kind: 'person', spent: 41000, budget: null}]} : {})};
+}
+const budget = (id, name, account_id, amount, extra = {}) => ({id, name, period: 'month', account_id, catch_all: false, team: null, teammate: null, vendor: null,
+  parent_id: null, owner: 'human:ana', warn_pct: 80, at_limit: 'ask', rollover: false, active: true,
+  state: {amount, actual: Math.round(amount * 0.8), held: 0, remaining: Math.round(amount * 0.2), pct: 80, crossed_warn: true, at_limit: false}, ...extra});
+const BUDGETS = [budget('b-software', 'Software', 'a-6100', 300000), budget('b-hosting', 'Hosting', 'a-5100', 400050),
+  budget('b-figma', 'Figma', 'a-6100', 45000, {vendor: 'Figma', parent_id: 'b-software', at_limit: 'decline'}),
+  budget('b-github', 'GitHub', 'a-6100', 90000, {vendor: 'GitHub', parent_id: 'b-software'}),
+  // Team budgets: one under Software (Engineering), two under Contractors (Platform and Web, both inside Engineering).
+  budget('b-software-eng', 'Software · Engineering', 'a-6100', 120000, {team: 'eng', parent_id: 'b-software'}),
+  budget('b-contr', 'Contractors', 'a-6300', 500000),
+  budget('b-contr-platform', 'Contractors · Platform', 'a-6300', 200000, {team: 'platform', parent_id: 'b-contr'}),
+  budget('b-contr-web', 'Contractors · Web', 'a-6300', 150000, {team: 'web', parent_id: 'b-contr'})];
+function line(id) {
+  const l = LINES.find(x => x[0] === id) || LINES[7];
+  return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, total: l[5], excluded: 0, hidden: 0,
+    by_vendor: [{key: 'GitHub', label: 'GitHub', amount: 84000}, {key: 'Figma', label: 'Figma', amount: 42000}, {key: 'Notion', label: 'Notion', amount: 32000}, {key: 'other', label: 'Other · 4', amount: 21000}],
+    by_team: [{key: 'eng', label: 'Engineering', amount: 120000}, {key: 'mkt', label: 'Marketing', amount: 50000}, {key: 'unattributed', label: 'Unattributed', amount: 9000}],
+    by_teammate: [{key: 'bot:eng-lead', label: 'Engineering Lead', amount: 64000}, {key: 'bot:writer', label: 'Writer', amount: 30000}, {key: 'human:cara', label: 'Cara Lee', amount: 22000}],
+    entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor: 'GitHub', description: 'GitHub Team', memo: '', source: 'feed', tags: {teammate: 'bot:eng-lead'}},
+      {line_id: 'l2', entry_id: 'e2', date: '2026-10-12', account_id: id, amount: 42000, vendor: 'Figma', description: 'Figma seats', memo: '', source: 'feed', tags: {team: 'mkt'}}], more: false};
+}
+const BS = {as_of: '2026-10-30', scoped: false, currency: 'USD',
+  assets: [{account_id: 'a-1000', code: '1000', name: 'Cash', subtype: 'cash', parent_id: null, balance: 0, entry_sources: [], sources: []},
+    {account_id: 'a-1010', code: '1010', name: 'Checking', subtype: 'cash', parent_id: 'a-1000', balance: 17105000, entry_sources: ['feed'],
+      sources: [{money_account_id: 'm1', name: 'Checking', provider: 'Mercury', last4: '0001', provider_balance: 17105000, balance_as_of: '2026-10-30'}]},
+    {account_id: 'a-1020', code: '1020', name: 'Savings', subtype: 'cash', parent_id: 'a-1000', balance: 1315000, entry_sources: ['feed'],
+      sources: [{money_account_id: 'm2', name: 'Savings', provider: 'Mercury', last4: '0002', provider_balance: 1315000, balance_as_of: '2026-10-30'}]},
+    {account_id: 'a-1300', code: '1300', name: 'Prepaid expenses', subtype: 'prepaid', parent_id: null, balance: 480000, entry_sources: ['manual'], sources: []}],
+  liabilities: [{account_id: 'a-2100', code: '2100', name: 'Card balance', subtype: 'card', parent_id: null, balance: 1240000, entry_sources: ['feed'], sources: []}],
+  equity: [{account_id: 'a-3000', code: '3000', name: 'Owner investment', subtype: 'equity', parent_id: null, balance: 15000000, entry_sources: ['manual'], sources: []},
+    {account_id: null, code: '3999', name: 'Net income to date', subtype: 'equity', parent_id: null, balance: 2660000, entry_sources: [], sources: []}],
+  totals: {asset: 18900000, liability: 1240000, equity: 17660000}};
+const CARDS = [
+  {id: 'card-1', provider: 'mercury', holder: 'bot:eng-lead', nickname: 'Engineering', last4: '4242', kind: 'virtual', status: 'active', limit: 200000, limit_interval: 'monthly',
+    currency: 'USD', budget: {id: 'b-software', name: 'Software'}, spent: 182000, sync_status: 'ok', expires_at: '2028-10-31'},
+  {id: 'card-2', provider: 'mercury', holder: 'bot:writer', nickname: 'Content tools', last4: '1881', kind: 'virtual', status: 'frozen', limit: 50000, limit_interval: 'monthly',
+    currency: 'USD', budget: null, spent: 12000, sync_status: 'ok'},
+  {id: 'card-3', provider: 'mercury', holder: 'human:cara', nickname: 'Travel', last4: '3007', kind: 'physical', status: 'active', limit: 300000, limit_interval: 'monthly',
+    currency: 'USD', budget: null, spent: 41000, sync_status: 'ok'}];
+const TX = [
+  {kind: 'feed', id: 'f1', date: '2026-10-29', amount: -21000, currency: 'USD', counterparty: 'GitHub', description: 'GITHUB.COM', status: 'posted', pending: false, card_id: 'card-1',
+    money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l1', account_id: 'a-6100', account: 'Software', amount: 21000, vendor: 'GitHub', tags: {teammate: 'bot:eng-lead', budget: 'b-software'}}]},
+  {kind: 'feed', id: 'f2', date: '2026-10-28', amount: -9900, currency: 'USD', counterparty: 'Figma', description: 'FIGMA', status: 'new', pending: false, card_id: null,
+    money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: []},
+  {kind: 'entry', id: 'l9', entry_id: 'e9', date: '2026-10-27', amount: 610000, account_id: 'a-6300', account: 'Contractors', vendor: 'Northwind Design', description: 'October design work',
+    memo: '', source: 'manual', reversed: false, tags: {team: 'mkt'}}];
+const SOURCES = {groups: [
+  {group: 'banks', name: 'Banks', count: 2, rows: [
+    {id: 'm1', kind: 'bank', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000, balance_as_of: '2026-10-30T10:00:00Z', status: 'active', account: {id: 'a-1010', code: '1010', name: 'Checking'},
+      sync: {connection_id: 'c1', provider: 'mercury', status: 'active', last_ok_at: new Date(Date.now() - 120000).toISOString(), last_sync_at: null, last_error: null}, feed: {posted: 211, new: 3}, access: [{who: 'human:ana', via: 'default'}]},
+    {id: 'm2', kind: 'bank', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000, balance_as_of: '2026-10-30T10:00:00Z', status: 'active', account: {id: 'a-1020', code: '1020', name: 'Savings'},
+      sync: {connection_id: 'c1', provider: 'mercury', status: 'active', last_ok_at: new Date(Date.now() - 120000).toISOString(), last_sync_at: null, last_error: null}, feed: {posted: 12}, access: []}]},
+  {group: 'cards', name: 'Cards', count: 1, rows: [{id: 'm3', kind: 'card_program', name: 'Tico cards', provider: 'mercury', last4: null, balance: null, account: {id: 'a-2100', code: '2100', name: 'Card balance'},
+    sync: {connection_id: 'c1', provider: 'mercury', status: 'active', last_ok_at: new Date().toISOString(), last_error: null}, feed: {}, cards: {active: 2, frozen: 1}, access: []}]},
+  {group: 'payments', name: 'Payments', count: 1, rows: [{id: 'c1', kind: 'connection', name: 'Mercury', provider: 'mercury',
+    sync: {connection_id: 'c1', provider: 'mercury', status: 'active', last_ok_at: new Date().toISOString(), last_error: null},
+    payments: {mode: 'approval_queue', eligible: true, enabled: false, direct_send: false, why_not: null}}]},
+  {group: 'payroll', name: 'Payroll', count: 0, rows: []},
+  {group: 'manual', name: 'Manual', count: 1, rows: [{id: 'manual', kind: 'entries', name: 'Journal entries and imports', manual: 4, import: 0}]}]};
+
+// ----------------------------------------------------------------- the fake hub
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl'} = {}) {
+  const person = people.find(p => p.id === viewer);
+  const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
+  const config = {company_name: 'Acme'};
+  const writes = [];
+  const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
+  const errors = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.route('**/*', async route => {
+    const req = route.request(), url = new URL(req.url()), p = url.pathname, method = req.method();
+    const json = (body, status = 200) => route.fulfill({status, contentType: 'application/json', body: JSON.stringify(body)});
+    if (url.origin !== 'http://tico-ui.test') return route.abort();
+    if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
+    const file = p.startsWith('/tico/ui/') ? uiFile(p.slice(9)) : p.startsWith('/vendor/') ? path.join(uiDir, p) : '';
+    if (file && fs.existsSync(file)) return route.fulfill({contentType: file.endsWith('.js') ? 'application/javascript' : file.endsWith('.css') ? 'text/css' : file.endsWith('.woff2') ? 'font/woff2' : 'application/octet-stream', body: fs.readFileSync(file)});
+    if (p === '/api/v2/events') return;
+    const body = method === 'GET' ? null : req.postDataJSON?.() ?? null;
+    if (method !== 'GET') writes.push([method, p + url.search, body, req.headers()['idempotency-key'] || '']);
+    if (p === '/api/v2/config') return json(config);
+    if (p === '/api/me') return json({...me, config});
+    if (p === '/api/employees') return json(emps);
+    if (p === '/api/humans') return json({people, org_groups: []});
+    if (p === '/api/status') return json({active: [], employees: []});
+    if (p === '/api/v2/status') return json({bots: []});
+    if (p === '/api/v2/needs-you') return json({items: [], version: 'v0', count: 0, next: null});
+    if (p === '/api/v2/conversations') return json({conversations: []});
+    const denied = () => json({error: {code: 'denied', detail: 'Not in your view'}}, 403);
+    if (p === '/api/v2/finance/access') return json(access(viewer));
+    if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer));
+    if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
+    if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop())));
+    if (p === '/api/v2/finance/balance-sheet') return viewer === 'ana' ? json(BS) : denied();
+    if (p === '/api/v2/finance/cards') return json({cards: viewer === 'ana' ? CARDS : CARDS.filter(c => c.holder !== 'bot:writer'), next: null});
+    if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
+    if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
+    if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
+    return json(unrouted(p));
+  });
+  await page.goto('http://tico-ui.test/' + hash);
+  await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
+  await page.locator('#fin-head [data-fin-tab]').first().waitFor();
+  return {page, errors, writes};
+}
+
+// ----------------------------------------------------------------- helpers
+const tabs = page => page.locator('#fin-head [data-fin-tab]').allInnerTexts();
+const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
+const actions = writes => writes.filter(w => w[1] === '/api/v2/finance/actions').map(w => w[2]);
+async function shot(page, name) {
+  const dir = process.env.TICO_UI_SHOTS;
+  if (!dir) return;
+  fs.mkdirSync(dir, {recursive: true});
+  // Finite animations only (a running skeleton shimmer never finishes).
+  await page.evaluate(() => Promise.all(document.getAnimations().filter(a => a.effect?.getComputedTiming().endTime !== Infinity).map(a => a.finished.catch(() => {}))));
+  await page.screenshot({path: path.join(dir, name + '.png'), fullPage: true});
+}
+async function go(page, hash, ready) {
+  await page.evaluate(h => { location.hash = h; }, hash);
+  await page.locator(ready).first().waitFor();
+}
+const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', transactions: '[data-fin-tx]', sources: '[data-fin-group]', access: '[data-fin-mate]'};
+
+(async () => {
+  const browser = await chromium.launch();
+  try {
+    // The owner, on a computer: every tab, the P&L as a statement, budget edits only in future months.
+    {
+      const tag = 'owner';
+      const {page, errors, writes} = await open(browser);
+      await page.locator('.fin-pl').waitFor();
+      assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Cards', 'Transactions', 'Sources', 'Access'], tag + ': every phase 1 tab, in order');
+      assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
+      const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
+      for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
+      assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
+      // The budget column is the current month's: not editable, and a double-click does nothing.
+      assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': the current month\'s budgets are not editable');
+      const softwareBudget = page.locator('.fin-ln:has(a[href$="/line/a-6100"]) td.fin-b').last();
+      await softwareBudget.dblclick();
+      assert.equal(await page.locator('.fin-cell-in').count(), 0, tag + ': no editor on a current month');
+      // A past month's cell moves the budget column there; still not editable.
+      const cols = await page.evaluate(() => FIN.pnl.data.columns);
+      const past = cols.findIndex(c => c.state === 'past'), future = cols.findIndex(c => c.state === 'future');
+      await page.locator(`td[data-fin-cell="a-6100|${past}"]`).click();
+      assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': a past month\'s budgets are not editable');
+      assert.match(await page.locator('#fin-rail h2').innerText(), /^Software · /, tag + ': the rail shows the line and month');
+      // A future month: double-click, type, Enter → budget_update from that month on.
+      await page.locator(`td[data-fin-cell="a-6100|${future}"]`).click();
+      await page.locator('td[data-fin-budget="a-6100"]').dblclick();
+      await page.locator('.fin-cell-in').fill('3,500');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-software', amount: 350000, effective_from: cols[future].start}},
+        tag + ': budget_update with effective_from = the month');
+      // A line with no budget yet makes one from that month.
+      await page.locator(`td[data-fin-cell="a-5200|${future}"]`).click();
+      await page.locator('td[data-fin-budget="a-5200"]').dblclick();
+      await page.locator('.fin-cell-in').fill('6000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_create', payload: {name: 'AI services', period: 'month', account_id: 'a-5200', amount: 600000, effective_from: cols[future].start}},
+        tag + ': budget_create for a line without one');
+      // An untouched $4,000.50 shows its cents and posts nothing on blur.
+      await page.locator(`td[data-fin-cell="a-5100|${future}"]`).click();
+      await page.locator('td[data-fin-budget="a-5100"]').dblclick();
+      assert.equal(await page.locator('.fin-cell-in').inputValue(), '4000.50', tag + ': the editor seeds exact cents');
+      const before = actions(writes).length;
+      await page.locator('#fin-head').click();
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      await page.waitForTimeout(100);
+      assert.equal(actions(writes).length, before, tag + ': blur on an untouched budget posts nothing');
+      const keys = writes.map(w => w[3]);
+      assert.ok(keys.every(Boolean) && new Set(keys).size === keys.length, tag + ': a fresh Idempotency-Key per write');
+      await page.locator(`td[data-fin-cell="a-6100|${cols.findIndex(c => c.state === 'current')}"]`).click();
+      await page.locator('#fin-by .fin-bars').waitFor();
+      await shot(page, 'pnl-desktop');
+      // The line page: vendors, their budgets in place.
+      await page.locator('a[href$="/line/a-6100"]').click();
+      await page.locator('[data-fin-key="GitHub"]').waitFor();
+      assert.deepEqual(await page.locator('#fin-line thead th').allInnerTexts().then(t => t.slice(0, 2)), ['VENDOR', 'TEAM'].map(s => s), tag + ': vendor rows');
+      assert.equal(await page.locator('#fin-line tbody tr').count(), 4, tag + ': one row per vendor and Other, no totals row');
+      assert.equal(await page.locator('input[data-fin-vb]').count(), 0, tag + ': this month\'s vendor budgets are read only');
+      const next = cols[future].start.slice(0, 7);
+      await page.locator('[data-fin-month]').fill(next);
+      await page.locator('input[data-fin-vb="GitHub"]').waitFor();
+      await page.locator('input[data-fin-vb="GitHub"]').fill('950');
+      await page.locator('input[data-fin-vb="GitHub"]').press('Enter');
+      await page.waitForTimeout(150);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-github', amount: 95000, effective_from: next + '-01'}},
+        tag + ': a vendor budget changes from the month shown');
+      await page.locator('input[data-fin-vb="Notion"]').fill('400');
+      await page.locator('input[data-fin-vb="Notion"]').press('Enter');
+      await page.waitForTimeout(150);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_create', payload: {name: 'Notion', period: 'month', account_id: 'a-6100', vendor: 'Notion', parent_id: 'b-software', amount: 40000, effective_from: next + '-01'}},
+        tag + ': a vendor budget under the line\'s, from the month shown');
+      assert.match(await page.locator('#fin-rail .fin-more').getAttribute('href'), /#\/finance\/transactions\?account_id=a-6100&q=GitHub/, tag + ': All GitHub transactions');
+      await shot(page, 'line-desktop');
+      // A line with no budget of its own offers a line budget first, not a vendor one.
+      await go(page, '#/finance/line/a-5200', '[data-fin-key="GitHub"]');
+      await page.locator('[data-fin-line-add]').waitFor();
+      assert.equal(await page.locator('[data-fin-vendor-add]').count(), 0, tag + ': no vendor budget without a line budget');
+      // Expenses view.
+      await go(page, '#/finance/pnl?view=expenses', '.fin-pl');
+      await page.locator('.fin-tm').waitFor();
+      await shot(page, 'pnl-expenses-desktop');
+      await page.locator('[data-fin-filter]').click();
+      await page.locator('[data-fin-pick="team:eng"]').check();
+      await page.waitForFunction(() => /team=eng/.test(JSON.stringify(FIN.pnl?.data ? 1 : 0)) || document.querySelector('.fin-chip'));
+      assert.match(await page.locator('#fin-filters .fin-chip').innerText(), /Engineering/, tag + ': the filter chip');
+      await page.keyboard.press('Escape');
+      await page.locator(`td[data-fin-cell="a-6100|${future}"]`).click();
+      await page.locator('td[data-fin-budget="a-6100"]').dblclick();
+      await page.locator('.fin-cell-in').fill('9000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-software-eng', amount: 900000, effective_from: cols[future].start}},
+        tag + ': filtered to a team, the cell edits that team\'s budget');
+      assert.equal(await page.locator('td[data-fin-budget="a-6300"]').count(), 0, tag + ': no editor on a cell summing two team budgets');
+      assert.equal(await page.locator('td[data-fin-budget="a-5100"]').count(), 0, tag + ': no editor where the team has no budget');
+      // Balance sheet, cards (freeze), transactions, sources, access.
+      await go(page, '#/finance/balance', READY.balance);
+      const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
+      for (const want of ['Total assets', 'Total liabilities', 'Total equity', 'Liabilities + equity']) assert.ok(bsFirst.includes(want), `${tag}: balance sheet has ${want}`);
+      assert.equal(await page.locator('#fin-balanced .pill').innerText(), 'Balanced', tag + ': balanced');
+      await page.locator('[data-fin-line="a-1010"]').click();
+      await shot(page, 'balance-desktop');
+      await go(page, '#/finance/cards', READY.cards);
+      await page.locator('[data-fin-card="card-1"]').click();
+      await page.locator('#fin-rail [data-fin-freeze]').click();
+      await page.waitForFunction(n => true, null);
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'card_freeze', payload: {card_id: 'card-1'}}, tag + ': Freeze sends card_freeze');
+      await page.locator('[data-fin-card="card-2"]').click();
+      assert.equal(await page.locator('#fin-rail [data-fin-freeze]').innerText(), 'Unfreeze', tag + ': a frozen card unfreezes');
+      await page.locator('#fin-rail [data-fin-freeze]').click();
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'card_unfreeze', payload: {card_id: 'card-2'}}, tag + ': Unfreeze sends card_unfreeze');
+      await page.locator('[data-fin-card="card-1"]').click();
+      await shot(page, 'cards-desktop');
+      await go(page, '#/finance/transactions', READY.transactions);
+      await page.locator('#fin-rail [data-fin-tag]').waitFor();
+      await shot(page, 'transactions-desktop');
+      await page.locator('#fin-rail select[name="team"]').selectOption('eng');
+      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'}},
+        tag + ': categorize keeps the line\'s other tags');
+      await go(page, '#/finance/sources', READY.sources);
+      await page.locator('[data-fin-group="banks"]').click();
+      await page.locator('[data-fin-src="bank:m1"]').click();
+      await shot(page, 'sources-desktop');
+      await go(page, '#/finance/access', READY.access);
+      await page.locator('[data-fin-mate="bot:writer"]').click();
+      await page.locator('#fin-rail [data-fin-grant]').waitFor();
+      await shot(page, 'access-desktop');
+      await page.locator('[data-fin-defaults]').click();
+      await page.locator('dialog.fin-dlg[open]').waitFor();
+      await shot(page, 'access-defaults-desktop');
+      await page.locator('dialog.fin-dlg [data-close]').first().click();
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // The owner on a phone: each tab fits, the rail under the table.
+    {
+      const tag = 'owner phone';
+      const {page, errors} = await open(browser, {viewport: PHONE});
+      for (const tab of Object.keys(READY)) {
+        await go(page, '#/finance/' + tab, READY[tab]);
+        await page.waitForTimeout(50);
+        assert.equal(await sideways(page), false, `${tag}: ${tab} has no sideways scroll`);
+        await shot(page, tab + '-phone');
+      }
+      await go(page, '#/finance/line/a-6100', '[data-fin-key]');
+      assert.equal(await sideways(page), false, tag + ': the line page fits');
+      await shot(page, 'line-phone');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A manager: their teams' expenses; Balance sheet and Sources hidden, even by address.
+    {
+      const tag = 'manager';
+      const {page, errors, writes} = await open(browser, {viewer: 'cara', hash: '#/finance'});
+      await page.waitForFunction(() => location.hash === '#/finance/pnl?view=expenses');
+      await page.locator('.fin-pl').waitFor();
+      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions', 'Access'], tag + ': only the tabs in view');
+      assert.deepEqual(await page.locator('[data-fin-seg="view"] button').allInnerTexts(), ['Expenses'], tag + ': no Company view');
+      assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': no budget editing without the right');
+      assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count() > 0, true, tag + ': lines drill down');
+      const priv = page.locator('.fin-ln:has-text("Payroll (private)")');
+      assert.equal(await priv.locator('a').count(), 0, tag + ': a private line does not drill down');
+      assert.deepEqual((await priv.locator('td[data-fin-cell]').allInnerTexts()).filter(t => t !== '—'), [], tag + ': a private line shows no figures');
+      for (const hidden of ['balance', 'sources']) {
+        await page.evaluate(h => { location.hash = h; }, '#/finance/' + hidden);
+        await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
+        await page.locator('.fin-pl').waitFor();
+      }
+      assert.equal(writes.filter(w => w[1].includes('balance-sheet') || w[1].includes('sources')).length, 0, tag + ': nothing written');
+      await go(page, '#/finance/cards', READY.cards);
+      assert.equal(await page.locator('[data-fin-card-add]').count(), 0, tag + ': no card create without the right');
+      await page.locator('[data-fin-card="card-1"]').click();
+      assert.equal(await page.locator('#fin-rail [data-fin-freeze]').count(), 0, tag + ': no freeze without the right');
+      await go(page, '#/finance/access', READY.access);
+      assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // The owner viewing as the manager: the manager's tabs, read only, ?view_as on reads.
+    {
+      const tag = 'view as';
+      const {page, errors} = await open(browser, {hash: '#/finance/access'});
+      await page.locator('[data-fin-viewas]').click();
+      await page.locator('dialog.fin-dlg select[name="who"]').selectOption('human:cara');
+      const read = page.waitForRequest(r => r.url().includes('/api/v2/finance/pnl') && r.url().includes('view_as=human%3Acara'));
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await read;
+      await page.locator('.fin-as').waitFor();
+      await page.locator('.fin-pl').waitFor();
+      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': the manager\'s tabs (Access is the owner\'s own)');
+      assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
+      assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
+      await page.goBack();
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 6);
+      await page.goForward();
+      await page.locator('.fin-as').waitFor();
+      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
+      await page.locator('.fin-as button').click();
+      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 6);
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    console.log('finance: ok');
+  } finally {
+    await browser.close();
+  }
+})().catch(e => { console.error(e); process.exit(1); });
