@@ -312,7 +312,7 @@ class QuickBooks:
         if op in TRANSACTIONS:
             entity, day = TRANSACTIONS[op], str(body.get("day") or body.get("date") or "")
             if not day:
-                return Sent(False, error="UNKNOWN: no date to find the write by", final=True)
+                return Sent(False, error="UNKNOWN: no date to find the write by", final=True, unknown=True)
             where, mark = f"TxnDate = '{day}'", _marker(key)
         elif op == "account.create":
             entity, where, mark = "Account", f"Name = '{_quote(body['name'])}'", ""
@@ -325,7 +325,8 @@ class QuickBooks:
         if reply.status in (0, 429) or reply.status >= 500:
             return Sent(False, error="QuickBooks did not answer the lookup")
         if reply.status != 200:
-            return Sent(False, error=f"UNKNOWN: {_fault(reply.body, reply.status)}"[:MAX_TEXT], final=True)
+            return Sent(False, error=f"UNKNOWN: {_fault(reply.body, reply.status)}"[:MAX_TEXT], final=True,
+                        unknown=True)
         rows = Q.as_list((Q.as_map(reply.body.get("QueryResponse")) or {}).get(entity))
         for raw in rows:
             row = Q.as_map(raw) or {}
@@ -333,7 +334,7 @@ class QuickBooks:
                 return Sent(True, kind=entity, external_id=str(row.get("Id") or ""),
                             revision=str(row.get("SyncToken") or ""))
         if len(rows) >= 1000:
-            return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True)
+            return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True, unknown=True)
         return None
 
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:

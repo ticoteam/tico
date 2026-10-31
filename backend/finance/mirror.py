@@ -168,15 +168,15 @@ def _pending(c: sqlite3.Connection, cid: str) -> dict[str, dict[str, Any]]:
 
 
 # Creates whose record the books take in as the provider holds it (no local row waits for their confirmation)
-RECORD_IMPORTED = ("bill.create", "invoice.create", "account.create", "party.create")
+RECORD_IMPORTED = ("account.create", "party.create")
 
 
 def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) -> None:
-    """A write the provider took before its answer was recorded (the call was cut off) comes back in the change feed with
-    its reference in its note. The write is recorded as sent here; its record is then taken in as the provider holds it,
-    which may be newer than what was sent, so a bill is not confirmed from the local payload. A credit memo's write-off
-    is confirmed, since its credit application is queued by that confirmation. A write whose record is not among these
-    records waits for its retry."""
+    """A write the provider took before its answer was recorded (the call was cut off) comes back in the change feed
+    with its reference in its note. The write is recorded as sent here, from its local payload (which keeps the tags
+    its lines carry) at the revision the write was made at; a newer record the feed brings is then taken in as the
+    provider holds it. A credit memo's write-off is confirmed, since its credit application is queued by that
+    confirmation. A write whose record is not among these records waits for its retry."""
     found = {ext.reference: ext for ext in (_ext_of(r) for r in records) if ext.reference and not ext.deleted}
     if not found:
         return
@@ -187,7 +187,10 @@ def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) 
         local = SK.loads(o["payload_json"])
         c.execute("SAVEPOINT mirror_adopt")
         try:
-            sent = Sent(ok=True, kind=ext.kind, external_id=ext.external_id, revision=ext.revision)
+            initial = _initial_revision(c, cid)
+            revised = bool(initial) and M.revision_order(ext.revision, initial) > 0
+            sent = Sent(ok=True, kind=ext.kind, external_id=ext.external_id,
+                        revision=initial if revised else ext.revision)
             _record(c, cid, o, local, _translate(c, cid, str(o["op"]), local), sent, at,
                     confirm=str(o["op"]) not in RECORD_IMPORTED)
         except (_Missing, FinanceError, sqlite3.IntegrityError):
@@ -422,10 +425,11 @@ def _refund_cash(c: sqlite3.Connection, ctx: Ctx, credit: str, before: int, afte
     entry = SL.entry_row(c, credit)
     control = documents.control(ctx, "bill" if str(entry["source"]) == "bill" else "invoice").id
     lines = [line for _, line in SL.entry_lines(c, credit) if line.account_id != control]
-    for x, share in zip(lines, AP.shares([abs(x.amount) for x in lines], before, after), strict=True):
+    flip = -1 if sum(x.amount for x in lines) < 0 else 1       # a credit posts revenue or cost in one direction
+    for x, share in zip(lines, AP.shares([flip * x.amount for x in lines], before, after), strict=True):
         account = ctx.accounts.get(x.account_id)
         if share and account is not None and account.type in L.PNL_TYPES:
-            SAP.cash_roll(c, ctx.book.id, day, x.account_id, x.tags, x.contact_id, share if x.amount >= 0 else -share)
+            SAP.cash_roll(c, ctx.book.id, day, x.account_id, x.tags, x.contact_id, flip * share)
 
 
 def _unrefund(c: sqlite3.Connection, ctx: Ctx, row: Any) -> None:
@@ -799,6 +803,23 @@ def _target_party(c: sqlite3.Connection, targets: Sequence[tuple[str, str, int]]
     return str(doc[contact_col])
 
 
+# Credits whose money the books already hold (an overpayment or prepayment was cash): applying one is a payment.
+CASH_CREDITS = ("Overpayment", "Prepayment")
+
+
+def _control_of(c: sqlite3.Connection, kind: str, doc_id: str, default: str) -> str:
+    """The control account a bill or invoice posted against: the account its entry carries its total on (a provider may
+    name its own payable or receivable account), else the default."""
+    doc = SAP.get(c, SAP.DOCS[kind][0], doc_id)
+    if doc is None or not doc["entry_id"]:
+        return default
+    want = -int(doc["total"]) if kind == "bill" else int(doc["total"])
+    for _, line in SL.entry_lines(c, str(doc["entry_id"])):
+        if line.amount == want:
+            return line.account_id
+    return default
+
+
 def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: str, feed: str = "") -> None:
     """A payment and the bills or invoices it settles. One Payment id is one settlement set, whatever its revision: its
     cash posts an entry (a bill payment: Dr payables, Cr bank; a received payment: Dr bank, Cr receivables), and the
@@ -837,11 +858,14 @@ def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: 
         if amount > applied:
             cash_parts.append((kind, doc, amount - applied))
     credits: list[tuple[str, int]] = []
+    cash_credits: set[str] = set()
     for key, amount in s.credits:
         credit_entry = SX.ref(c, cid, "fin_entries", key)
         if credit_entry is None or str(credit_entry["status"]) != "active" or not credit_entry["local_id"]:
             raise FinanceError(NOT_AVAILABLE, f"{key} is not in the books yet")
         credits.append((str(credit_entry["local_id"]), amount))
+        if key.partition(":")[0] in CASH_CREDITS:
+            cash_credits.add(str(credit_entry["local_id"]))
     applications = _allot(credits, credit_parts)
     if verdict == M.REPLACE:
         _unsettle_ids(ctx, _ids(app))
@@ -851,14 +875,27 @@ def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: 
         bank = _mapped(c, cid, "fin_accounts", s.bank)
         contact = _mapped(c, cid, "fin_contacts", s.party) if s.party else _target_party(c, targets)
         bill = s.ext.kind == "BillPayment"
-        control = documents.control(ctx, "bill" if bill else "invoice").id
+        default = documents.control(ctx, "bill" if bill else "invoice").id
         base = ctx.book.base_currency
 
         def line(account: str, amount: int, party: str) -> L.Line:
             return L.Line(account_id=account, amount=amount, currency=base, original_amount=amount, contact_id=party)
 
-        lines = (line(control, s.total, contact), line(bank, -s.total, "")) if bill else \
-            (line(bank, s.total, ""), line(control, -s.total, contact))
+        # Each document paid in cash clears the control account it posted against; what no document takes is cleared
+        # on the default.
+        owed: dict[str, int] = {}
+        for kind, doc, amount in cash_parts:
+            account = _control_of(c, kind, doc, default)
+            owed[account] = owed.get(account, 0) + amount
+        rest = s.total - sum(owed.values())
+        if rest or not owed:
+            owed[default] = owed.get(default, 0) + rest
+        if bill:
+            lines = tuple([line(account, amount, contact) for account, amount in owed.items()]
+                          + [line(bank, -s.total, "")])
+        else:
+            lines = tuple([line(bank, s.total, "")]
+                          + [line(account, -amount, contact) for account, amount in owed.items()])
         entry = _book(c, ctx, cid, s.ext, verdict, old, s.day,
                       lambda when: L.Entry(book_id=ctx.book.id, entry_date=when, memo=(s.memo or s.ext.kind)[:200],
                                            source="sync", source_id=f"{s.ext.key}:{s.ext.revision}", lines=lines),
@@ -866,8 +903,11 @@ def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: 
     elif old:
         _retire(c, ctx, cid, old, s.ext.key, at)
     source, source_id = ("feed", feed) if feed else ("account", bank)
-    ids = [documents.settle(ctx, side, invoice, amount=part, day=s.day, from_kind="credit", from_id=credit_entry,
-                            entry_id=credit_entry, by=SYSTEM, cash=False)
+    # A cash credit was money already in the books, so applying it recognizes cash as a payment would; a credit memo
+    # applied moves no cash.
+    ids = [documents.settle(ctx, side, invoice, amount=part, day=s.day,
+                            from_kind="payment" if credit_entry in cash_credits else "credit", from_id=credit_entry,
+                            entry_id=credit_entry, by=SYSTEM, cash=credit_entry in cash_credits)
            for credit_entry, invoice, part in applications]
     ids += [documents.settle(ctx, kind, doc, amount=amount, day=s.day, from_kind=source, from_id=source_id,
                              entry_id=entry, by=SYSTEM)
@@ -1325,6 +1365,12 @@ RETRIED_CREATES = ("bill.create", "invoice.create", "journal.create", "party.cre
 INITIAL_REVISION = {"quickbooks": "0"}
 
 
+def _initial_revision(c: sqlite3.Connection, cid: str) -> str:
+    """The revision the provider gives a record it has just created, "" for a provider without counters."""
+    row = SK.get(c, "fin_connections", cid)
+    return INITIAL_REVISION.get(str(row["provider"]) if row is not None else "", "")
+
+
 def _send(books: Books, o: Any, provider: Mapping[str, Any]) -> tuple[Sent, bool]:
     """The provider's answer to a write, and whether it is the provider's own record of an earlier try (found) rather than
     this call's answer. A create tried before is looked up first: when the provider holds it, that is the answer; when it
@@ -1360,8 +1406,7 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
         # A record the provider revised after the write is imported as the provider holds it, not confirmed from what
         # was sent: the change feed is read again from the start to bring it in.
         with store.transaction() as c:
-            row = SK.get(c, "fin_connections", cid)
-            initial = INITIAL_REVISION.get(str(row["provider"]) if row is not None else "", "")
+            initial = _initial_revision(c, cid)
             revised = found and bool(initial) and M.revision_order(sent.revision, initial) > 0
             _record(c, cid, o, local, provider, sent, now, confirm=not revised)
             if revised:

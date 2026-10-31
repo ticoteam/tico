@@ -148,7 +148,7 @@ def _lookup_failure(reply: Reply) -> Sent:
     """A lookup that got no list back: a retry asks again, and a refusal says the write's fate is unknown."""
     if reply.status in (0, 429) or reply.status >= 500:
         return Sent(False, error="Xero did not answer the lookup")
-    return Sent(False, error=f"UNKNOWN: {_fault(reply)}"[:MAX_TEXT], final=True)
+    return Sent(False, error=f"UNKNOWN: {_fault(reply)}"[:MAX_TEXT], final=True, unknown=True)
 
 
 def _marker(key: str) -> str:
@@ -394,7 +394,8 @@ class Xero:
                                 revision=X.stamp(row.get("UpdatedDateUTC")))
             if entity in UNPAGED or len(rows) < PAGE:
                 return None
-        return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True)
+        return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True,
+                    unknown=True)
 
     def _allocated(self, body: Mapping[str, Any]) -> Sent | None:
         """The allocation of a credit note to an invoice for the amount, when Xero holds it: the write may have landed."""
@@ -461,7 +462,7 @@ class Xero:
         if op in ("account.create", "party.create"):
             name = str(body.get("name") or "").casefold()
             if not name:
-                return Sent(False, error="UNKNOWN: no name to find the write by", final=True)
+                return Sent(False, error="UNKNOWN: no name to find the write by", final=True, unknown=True)
             if op == "account.create":
                 return self._lookup("accounts", "Account", lambda r: str(r.get("Name") or "").casefold() == name)
             return self._lookup("parties", "Contact", lambda r: str(r.get("Name") or "").casefold() == name)

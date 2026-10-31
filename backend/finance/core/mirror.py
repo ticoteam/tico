@@ -273,7 +273,8 @@ def decode(d: Mapping[str, Any]) -> Record:
                      tuple(str(x) for x in d.get("emails", [])))
     if kind == "Journal":
         return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]),
-                       str(d.get("basis", "both")), str(d.get("currency", "")))
+                       str(d.get("basis", "both")), str(d.get("currency", "")),
+                       refund_of=str(d.get("refund_of", "")))
     if kind == "Document":
         return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
                         _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),

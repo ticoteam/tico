@@ -481,8 +481,13 @@ def test_a_retry_finds_a_bill_the_cut_off_call_made_by_its_tico_reference_and_sa
     unknown = _client(Wire(QC.Reply(400, {"Fault": {"Error": [{"Message": "bad query"}]}}))).find(
         "bill.create", body, "bill-key")
     assert unknown is not None and unknown.final is True and unknown.error.startswith("UNKNOWN")
+    assert unknown.unknown is True
     retry = _client(Wire(QC.Reply(503, {}))).find("bill.create", body, "bill-key")
     assert retry is not None and retry.ok is False and retry.final is False
+    full = [{"Id": str(n), "PrivateNote": "someone else"} for n in range(1000)]
+    capped = _client(Wire(QC.Reply(200, {"QueryResponse": {"Bill": full}}))).find(
+        "bill.create", body, "bill-key")
+    assert capped is not None and capped.final is True and capped.unknown is True
 
 
 def test_a_credit_applied_to_an_invoice_is_a_payment_of_nothing_that_links_the_invoice_and_the_credit():

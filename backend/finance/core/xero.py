@@ -308,7 +308,8 @@ def applied_record(j: Mapping[str, Any], kind: str) -> M.Settlement | M.Ext | M.
         invoice = as_map(row.get("Invoice")) or {}
         if not invoice.get("InvoiceID"):
             return M.Refused(ext, "an allocation names no invoice or bill")
-        side = "Invoice" if str(invoice.get("Type") or "").startswith("ACCREC") else "Bill"
+        named = str(invoice.get("Type") or j.get("Type") or "")     # a nested invoice may omit its Type
+        side = "Invoice" if named.startswith(("ACCREC", "RECEIVE")) else "Bill"
         links.append((f"{side}:{invoice['InvoiceID']}", minor(row.get("Amount") or 0)))
     return M.Settlement(ext, day=day(j, "Date"), memo=str(j.get("Reference") or ""), party="", bank="", total=0,
                         links=tuple(links),

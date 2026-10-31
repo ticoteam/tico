@@ -669,8 +669,8 @@ def test_a_lookup_xero_cannot_answer_marks_the_write_unknown_and_never_sends_it_
     assert _drain(books, client, cid, now=RETRY_AT, passes=3) == []    # the change feed is not due: only the outbox
     assert len(_bank_puts(xbooks)) == 1
     with books.read() as c:
-        status, last = c.execute("SELECT status, last_error FROM fin_outbox").fetchone()
-        assert status == "failed" and last.startswith("UNKNOWN:")
+        status, last, unknown = c.execute("SELECT status, last_error, unknown FROM fin_outbox").fetchone()
+        assert status == "failed" and last.startswith("UNKNOWN:") and unknown == 1
         assert c.execute("SELECT status FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0] == "new"
 
 
@@ -694,7 +694,8 @@ def test_find_matches_writes_by_their_marker_or_name_and_gives_up_on_a_scan_past
     assert by_name is not None and (by_name.kind, by_name.external_id) == ("Account", "acct-6100")
     assert client.find("account.create", {"name": "Nothing Like It"}, key) is None
     nameless = client.find("party.create", {"name": ""}, key)
-    assert nameless is not None and nameless.final and nameless.error.startswith("UNKNOWN:")
+    assert nameless is not None and nameless.final and nameless.unknown
+    assert nameless.error.startswith("UNKNOWN:")
     assert client.find("journal.delete", {"ext": "ManualJournal:mj-1"}, key) is None
     rows = []
     for n in range(250):
@@ -704,7 +705,8 @@ def test_find_matches_writes_by_their_marker_or_name_and_gives_up_on_a_scan_past
     xbooks.rows["BankTransactions"] = rows
     monkeypatch.setattr(xero, "FIND_PAGES", 2)
     capped = client.find("journal.create", {"feed": True}, "unseen-key")
-    assert capped is not None and capped.final and capped.error.startswith("UNKNOWN: too many rows")
+    assert capped is not None and capped.final and capped.unknown
+    assert capped.error.startswith("UNKNOWN: too many rows")
 
 
 def test_accounts_are_sent_as_the_account_itself_and_contacts_without_their_kind_flags(books):
@@ -1401,7 +1403,8 @@ def _cash_pnl(c: Any) -> int:
     """Income on the cash basis: the accrual lines plus the cash view's corrections."""
     return c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id = l.account_id "
                      "WHERE a.type = 'income'").fetchone()[0] + \
-        c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a ON a.id = r.account_id "
+        c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a "
+                  "ON a.id = r.account_id "
                   "WHERE a.type = 'income'").fetchone()[0]
 
 
@@ -1606,3 +1609,64 @@ def test_one_entitys_page_cap_does_not_hold_back_another_entitys_changes(books, 
     assert _drain(books, _client(xbooks), cid, now=LATER2, passes=3) == []
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_contacts WHERE name LIKE 'Acme Contact %'").fetchone()[0] == 250
+
+
+def _cash_expense(c: Any) -> int:
+    """Expense on the cash basis: the accrual lines plus the cash view's corrections."""
+    return c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id = l.account_id "
+                     "WHERE a.type = 'expense'").fetchone()[0] + \
+        c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a "
+                  "ON a.id = r.account_id "
+                  "WHERE a.type = 'expense'").fetchone()[0]
+
+
+def test_an_overpayment_or_prepayment_applied_to_documents_recognizes_its_cash_as_a_payment_of_them_would(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1"), _invoice("bill-1", kind="ACCPAY")]
+    xbooks.rows["BankTransactions"] = [_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00"),
+                                       _held_bank("pp-1", "SPEND-PREPAYMENT", "50.00")]
+    xbooks.rows["Overpayments"] = [_held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00")])]
+    xbooks.rows["Prepayments"] = [_held("pp-1", "SPEND-PREPAYMENT", [("bill-1", "ACCPAY", "50.00")])]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        # The money came in with the overpayment and went out with the prepayment: applying each to a document
+        # recognizes it on the cash basis, as cash received or paid for that document would.
+        assert _cash_pnl(c) == -10000
+        assert _cash_expense(c) == 5000
+
+
+def test_an_overpayment_allocation_whose_invoice_omits_its_type_names_the_side_its_overpayment_is_on():
+    received = {**_held("ov-9", "RECEIVE-OVERPAYMENT", [("inv-9", "ACCREC", "10.00")]),
+                "Allocations": [{"Invoice": {"InvoiceID": "inv-9"}, "Amount": "10.00"}]}
+    out = X.applied_record(received, "Overpayment")
+    assert isinstance(out, M.Settlement) and out.links == (("Invoice:inv-9", 1000),)
+    spent = {**received, "OverpaymentID": "ov-8", "Type": "SPEND-OVERPAYMENT"}
+    out = X.applied_record(spent, "Overpayment")
+    assert isinstance(out, M.Settlement) and out.links == (("Bill:inv-9", 1000),)
+
+
+def test_a_full_refund_of_a_credit_note_with_a_negative_rounding_line_recognizes_the_whole_credit_as_cash(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Accounts"].append(_account_row("4900", "Rounding", "EXPENSE", "EXPENSE", "ROUNDING"))
+    xbooks.rows["CreditNotes"] = [{**_credit_note("cn-r", "", "99.99"), "Allocations": [],
+                                   "LineItems": [_line("acct-4000", "100.00"), _line("acct-4900", "-0.01")]}]
+    xbooks.rows["Payments"] = [{**_refund("pay-r", "ARCREDITPAYMENT", "99.99"), "CreditNote": {"CreditNoteID": "cn-r"}}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        # Posting the credit note takes its P&L out of the cash view; the full refund puts all of it back on its day.
+        credit = c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id = l.entry_id "
+                           "JOIN fin_accounts a ON a.id = l.account_id WHERE e.source_id LIKE '%cn-r%' "
+                           "AND a.type IN ('income', 'expense')").fetchone()[0]
+        refund_day = c.execute("SELECT day FROM fin_credit_refunds").fetchone()[0]
+        recognized = c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a "
+                               "ON a.id = r.account_id WHERE a.type IN ('income', 'expense') AND r.day = ?",
+                               (refund_day,)).fetchone()[0]
+        rounding = c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a "
+                             "ON a.id = r.account_id WHERE a.code = '4900' AND r.day = ?", (refund_day,)).fetchone()[0]
+        assert abs(credit) == 9999 and recognized == credit and rounding == -1

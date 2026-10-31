@@ -1172,3 +1172,59 @@ def test_deleting_a_credit_application_leaves_the_cash_view_as_it_was(books):
         assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) \
             == ("sent", 0)
         assert [tuple(r) for r in c.execute("SELECT * FROM fin_cash_rollups ORDER BY 1, 2, 3, 4")] == cash_applied
+
+
+def test_a_parked_refund_keeps_the_credit_it_refunds_when_it_is_decoded_again():
+    refund = M.Journal(M.Ext("Payment", "ARCREDITPAYMENT:pay-1", "1"), "2026-10-12", "refund", "sync",
+                       (M.EntryLine("Account:1", 4000), M.EntryLine("Account:9", -4000)), refund_of="CreditNote:cn-1")
+    assert M.decode(M.encode(refund)).refund_of == "CreditNote:cn-1"
+
+
+def test_a_payment_clears_the_payable_account_its_bill_posted_against(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["accounts"].append(M.ChartAccount(M.Ext("Account", "33", "1"), "QB33", "Accounts Payable",
+                                                   "liability", "payable"))
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "12", "1"), party="Vendor:9", number="B-12",
+                                            day="2026-10-05", due="2026-11-05", total=1500,
+                                            lines=(M.EntryLine("Account:2", 1500, description="seats"),),
+                                            control="Account:33")]
+    fake.records["payments"] = [M.Settlement(M.Ext("BillPayment", "30", "1"), day="2026-10-12", memo="Acme payment",
+                                             party="Vendor:9", bank="Account:1", total=1500,
+                                             links=(("Bill:12", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        payable = _local(c, "Account:33", "fin_accounts")
+        assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "paid"
+        # The bill credited its own payable account, so the payment debits that one; the default is left alone.
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (payable,)).fetchone()[0] == 0
+        assert c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_lines WHERE account_id=?",
+                         (account(c, "2000"),)).fetchone()[0] == 0
+
+
+def test_a_bill_recovered_from_its_lost_answer_keeps_the_tags_its_local_write_carried(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    key = "bill.create:adopt-tags"
+    with books.transaction() as c:
+        body = {"party": _local(c, "Vendor:9", "fin_contacts"), "number": "B-77", "day": "2026-10-05",
+                "due": "2026-11-05", "memo": "", "lines": [{"account_id": _local(c, "Account:2", "fin_accounts"),
+                                                            "amount": 1500, "description": "seats",
+                                                            "tags": {"team": "eng"}}]}
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=body, key=key, by=OWNER, at=AT)
+    fake.changes = [M.Document(M.Ext("Bill", "77", "0", reference=M.reference(key)), party="Vendor:9", number="B-77",
+                               day="2026-10-05", due="2026-11-05", total=1500,
+                               lines=(M.EntryLine("Account:2", 1500, description="seats"),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        entry = c.execute("SELECT entry_id FROM fin_bills WHERE number='B-77'").fetchone()[0]
+        # The provider's record carries no tags; the tags the local write named stay on its line.
+        assert _line_tags(c, entry, _local(c, "Account:2", "fin_accounts")) == ["eng"]
+
