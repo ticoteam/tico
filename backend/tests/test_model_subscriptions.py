@@ -211,17 +211,54 @@ def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
         assert hold and hold["until"] > H.now()
         # Not the computer's own login: that one is not held.
         assert not login_holds.get(c, m["runner_id"], "", "claude")
-        # The other computer given it signs that runtime in with the same, held, login.
-        assert login_holds.canonical(c, n["runner_id"], "", "claude") == sub_login
+        # Every computer given it passes it over until the reset: the other one signs that runtime in with its own login.
+        assert MS.in_effect(c, n["runner_id"], "claude") is None
+        assert login_holds.canonical(c, n["runner_id"], "", "claude") == ""
     assert listed(api)[0]["usage"]["used_pct"] == 100
     post(api, "chat/cpo", {"text": "Price the Acme plan."})
-    assert claim(api, n) is None                                              # it waits for the reset
-    # Taking it off the other computer frees it: its own login is not held.
-    give(api, n, "claude", None)
+    other = claim(api, n)                                                     # it never waits on the held subscription
+    assert other and other["bot"] == "cpo" and other["config"]["runtime"] == "claude" and "subscriptions" not in other
+    assert not other["config"].get("primary_held")
+
+
+def test_a_held_subscription_falls_to_the_gateway_under_the_gateway_choice_and_waits_without_it(api, monkeypatch):
+    from backend import models_preset
+    from backend.tests.test_gateway_connection import KEY, fake_gateway, save
+    from backend.tests.test_gateway_connection import setup as gateway_setup
+    from backend.tests.test_models_preset import choose
+    gateway_setup(api, monkeypatch)
+    api.app.state.store.settings.credential_admins = ("ana@acme.example", "ben@acme.example")
+    with fake_gateway() as fake:
+        fake.active(KEY, 0.1)
+        save(api, fake)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = machine(api)                                  # not signed in to Claude itself: the subscription signs it in
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "capabilities": [MS.CAPABILITY],
+                                    "readiness": {"schema_version": 1, "isolated": True,
+                                                  "runtimes": {"claude": {"installed": True, "authenticated": "missing"},
+                                                               "pi": {"installed": True, "authenticated": "missing"}},
+                                                  # the runner's own answer once runners/assignments stops
+                                                  # naming the held subscription
+                                                  "bots": {"ops": {"runtime": "claude", "ready": False,
+                                                                   "model": "claude-sonnet-5-5",
+                                                                   "repository_present": True,
+                                                                   "configuration_valid": True,
+                                                                   "problems": ["claude is not signed in"]}}}},
+         token=m["token"])
+    give(api, m, "claude", sid)
+    with api.app.state.store.transaction() as c:      # a limit met on it until the reset, on another computer
+        login_holds._save(c, {"runner_id": "", "profile": login_holds.subscription_login(sid), "runtime": "claude",
+                              "until": "2999-01-01T00:00:00.000000Z", "since": H.now(), "error": CLAUDE_LIMIT})
     with api.app.state.store.read() as c:
-        assert login_holds.canonical(c, n["runner_id"], "", "claude") != sub_login
-    freed = claim(api, n)
-    assert freed and freed["bot"] == "cpo" and "subscriptions" not in freed
+        assert login_holds.holding(c, "", login_holds.subscription_login(sid), "claude") == "held"
+    choose(api, "subscriptions")
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    assert claim(api, m) is None                              # no subscription, no sign-in here, no Gateway: it waits
+    choose(api, models_preset.RECOMMENDED)
+    turn = claim(api, m)
+    assert turn and turn["config"]["runtime"] == "pi" and turn["config"]["waiting_for_sign_in"] == "claude"
+    assert "subscriptions" not in turn and not turn["config"].get("primary_held")
 
 
 def test_a_change_stops_the_computers_runs_on_that_runtime_after_a_confirm_and_starts_sessions_fresh(api):

@@ -20,8 +20,9 @@ stops that computer's live runs on that runtime and puts their work back in the 
 every session of that runtime on that computer starts fresh (`_restart`): nothing begun on the old login is resumed on
 the new one. The page confirms first (409 `confirm_restart` with the counts).
 
-Usage limits: a subscription is one login wherever it runs, so a limit met on it holds every computer it is given to
-until the reset (login_holds `sub:<id>`).
+Usage limits: a subscription is one login wherever it runs, so a limit met on it holds it on every computer it is given
+to until the reset (login_holds `sub:<id>`). While held it is passed over like one that needs reconnecting: turns there
+run on the computer's own login, else the Gateway under the company's choice, else wait.
 
 Owners and admins save, rename, reconnect, remove and give subscriptions. A person who sees Settings > Models reads the
 list (never a value). A bot, a run or a Tico support session never saves a value; support writes nothing here.
@@ -211,10 +212,16 @@ def given_to(c, runner_id):
 
 def in_effect(c, runner_id, runtime):
     """The subscription a turn on `runtime` on this computer signs in with, or None for the computer's own login (none
-    given, the one given needs reconnecting, or a runner too old to take one)."""
+    given, the one given needs reconnecting or is held at a usage limit until its reset, or a runner too old to take
+    one). A held one is passed over like one that needs reconnecting: the turn runs on the computer's own login, else
+    the Gateway under the company's choice, else waits; it never waits on the subscription's hold. After the reset its
+    first turn is the hold's probe as usual (backend/login_holds.py)."""
     given = _given(c)
     sub = given.get((runner_id, runtime)) if given else None
     if not sub or sub["status"] == "needs_reconnect" or KINDS.get(sub["kind"], {}).get("runtime") != runtime:
+        return None
+    from . import login_holds
+    if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
         return None
     from .read_cache import one
     runner = one(c, "SELECT capabilities_json FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,))
