@@ -344,6 +344,8 @@ def test_adding_without_a_seat_opens_a_seat_in_the_team_and_fills_it(environment
     with api.app.state.store.read() as c:
         assert H.bot(c, added["bot"])["display_name"] == "Codex"
         assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == team
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+        assert config["team"] == team                # group membership reads the bot's own config
         assert c.execute("SELECT filled_by FROM seats WHERE id=?", (added["seat"],)).fetchone()[0] == added["bot"]
     assert onboarding_artifacts(api, added["bot"])["state"] == lifecycle.statuses.NEEDS_SETUP
     assert seats(api) == []
@@ -413,6 +415,16 @@ def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_actio
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE seats SET request_state=?,updated=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
     assert ask(api, f"seats/{cancelling['id']}/cancel-request", {})["request_state"] == "cancelled"
+    # A cancel that recovers a stale filing is then refused (there is no request left to cancel), and the recovery holds.
+    orphan = ask(api, "seats", {"title": "Writer"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?", (lifecycle.FILING, orphan["id"]))
+        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, "dead-process", "key-o", "x", orphan["id"], "filing", stale, 0))
+    ask(api, f"seats/{orphan['id']}/cancel-request", {}, expected=404)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM seat_requests WHERE seat_id=?", (orphan["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT request_state FROM seats WHERE id=?", (orphan["id"],)).fetchone()[0] in ("", None)
 
 
 def test_the_listing_is_the_catalog_the_route_serves_and_a_copy(environment):

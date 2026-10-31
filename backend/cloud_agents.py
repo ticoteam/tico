@@ -210,6 +210,7 @@ def _reserve(store, auth, who, agent, key, digested, seat_id, reports_to, team, 
     """Reserve the request under its key before Tico hears of it. A repeat of a request in flight waits for it and gets the
     seat it made; a repeat of a finished one gets that seat again. Returns (True, seat) for a finished request, else
     (False, the reservation's id)."""
+    recover(store, seat_id)
     deadline = time.monotonic() + FILING_WAIT_SECONDS
     while True:
         with store.transaction() as c:
@@ -256,6 +257,14 @@ def _recover_stale(c, seat_id=""):
     scope = " AND id=?" if seat_id else ""
     c.execute("UPDATE seats SET request_state=? WHERE request_state=? AND updated<?" + scope,
               (lifecycle.REQUESTED, lifecycle.CANCELLING, stale) + ((seat_id,) if seat_id else ()))
+
+
+def recover(store, seat_id):
+    """Recover the seat's stale request in a transaction of its own, so it holds even when the action that follows is
+    refused and rolls its own transaction back."""
+    if seat_id:
+        with store.transaction() as c:
+            _recover_stale(c, seat_id)
 
 
 def release_abandoned(store):
@@ -352,8 +361,8 @@ def cancel_request(request, store, auth, settings, who, seat_id):
     fails, the request is requested again and the person can try once more. A repeat answers the same."""
     require_person(who)
     require_on(settings)
+    recover(store, seat_id)
     with store.transaction() as c:
-        _recover_stale(c, seat_id)
         row = _requested(c, seat_id)
         if row["request_state"] == lifecycle.CANCELLED:
             return _cancelled(c, seat_id)
@@ -415,6 +424,8 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     setup_task = recruiting.onboard(c, who, onboarding, row, card, slug, name=name, description=description,
                                     instructions=instructions, rendered=rendered, answers=record["answers"],
                                     model=model["id"])
+    if row["team"]:
+        Groups._set_bot(c, slug, row["team"])       # the team's group is the bot's own, as a team build's hire sets it
     return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": seat_id,
             "template": card["template"], "setup_task_id": setup_task}
 
@@ -441,6 +452,7 @@ def install(app, store, auth, settings, mutate, settings_admin, onboarding):
         auth.domain(who)
         require_person(who)
         agent = addable(agent_id)
+        recover(store, body.seat_id)
         return mutate(request, body, lambda c: _add_bot(c, auth, onboarding, settings_admin, who, agent, body))
 
     @app.post("/api/v2/cloud-agents/{agent_id}/request")
