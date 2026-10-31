@@ -122,9 +122,10 @@ const manifestCaps = JSON.parse(require('node:child_process').execFileSync('pyth
     assert.equal(await row('empty').locator('[data-machine-now]').innerText(), 'idle');
     assert.equal(await page.locator('#set-machines table [role=table], #set-machines table .people-more, #set-machines table [data-model-login]').count(), 0);
 
-    // 4, 5, 8, 9. A chip per connection: tool, thin bar and % left; hover says the rest; a red dot only where bots are stuck.
+    // 4, 5, 8, 9. A chip per connection under its tool's column: its state, thin bar and % left; hover says the rest;
+    // a red dot only where bots are stuck.
     const chips = row('box').locator('.machine-chip');
-    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Claude Code', 'Codex 30%', 'Muse Code']);
+    assert.deepEqual(await chips.allInnerTexts().then(a => a.map(t => t.replace(/\s+/g, ' ').trim())), ['Signed in', 'Signed in 30%', 'Expired']);
     assert.deepEqual(await chips.evaluateAll(list => list.map(c => [c.querySelector('meter')?.value ?? null, !!c.querySelector('.machine-chip-dot')])),
       [[null, false], [30, false], [null, true]]);
     assert.match(await chips.nth(1).getAttribute('title'), /^Codex · Computer's login · 30% left · resets \w{3} \d{1,2}:\d{2}\s?[AP]M$/);

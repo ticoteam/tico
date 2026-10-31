@@ -243,7 +243,7 @@ One row per computer. On a phone the table scrolls sideways inside its card.
 | **Computer** | A status dot (hover for online, or offline · last seen *when*) and its name, with **Update** when an update is waiting and **Waiting** while a connection it was given is not reported yet. |
 | **Bots** | How many bots run on it. |
 | **Claude Code**, **Codex** | A picker: the company's subscriptions for that tool, then **Signed in here** when the computer has its own login, else **Gateway** (or **None** with the Gateway off). Owners and admins change it. |
-| Other AI tools | One chip per connection the computer reports: the tool, a thin bar and "N%" left. A small **red dot** means bots depend on it and it needs attention. |
+| Other AI tools | One chip per connection the computer reports, under that tool's column: its state (**Signed in**, **Sign in**, **Signed out**, or a problem such as **Expired**), then a thin bar and "N%" left when there is a reading. A small **red dot** means bots depend on it and it needs attention. A click opens the computer's pop-up. |
 | **Now** | What it is doing: for example **1 running · 55 queued**, **idle**, **asleep** (a cloud computer stopped to save) or **offline**. The full queue line, with wait reasons, is in its pop-up. |
 
 **Show revoked (N)** under the list shows computers that were revoked. **No computers yet** means none is
@@ -296,7 +296,7 @@ Choose **Subscription** when you pay for a plan, such as ChatGPT or Claude:
 
 Choose **API key** when you pay the provider for each use:
 
-- There is no weekly allowance to run out. The chip shows only the tool's name, with no "% left"; its line in the
+- There is no weekly allowance to run out. The chip shows only its state, with no "% left"; its line in the
   pop-up reads "No plan usage (API key)". The provider bills each run.
 - Use it for a tool that has no subscription sign-in here (**Subscription** is greyed out), or when a plan's weekly
   limit is too small for your bots.

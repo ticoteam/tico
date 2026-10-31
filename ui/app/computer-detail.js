@@ -80,6 +80,9 @@ function machineConnections(machine) {
 // known yet, and a bot's subscription it has not reported is not missing).
 const machineShown = machine => machineReported(machine) ? machineConnections(machine) : machineConnections(machine).filter(conn => conn.shared);
 
+// The Tico release a computer runs ("0.5.19"), from its update check; what the runner itself reports (`version`) only
+// when there is none, since that constant is not bumped every release.
+const machineRelease = machine => machine.release || machine.update?.release || machine.version || '';
 // What is left of the weekly allowance, as a whole percent; null with no current reading.
 function machineLeft(weekly) {
   const reset = Date.parse(weekly?.resets_at);
@@ -106,12 +109,22 @@ function machineSharedWords(shared) {
 }
 // On a Docker runner, whether this tool's turns each run as their own user or share the bot user (readiness `turn_user`).
 const machineTurnUserWords = conn => ({own: 'Each turn runs as its own user', bot: "Turns share the bot user (not isolated from other bots' checkouts)"})[conn.value?.turn_user] || '';
-// One chip per connection: the tool, a thin bar and the % left; a red dot only when it needs attention.
+// The state in a word or two, as the chip under the tool's own column says it: a problem first, then signed in or not.
+function machineChipWords(machine, conn) {
+  if (conn.blocked) return 'Needs fix';
+  if (conn.auth === 'rejected') return 'Expired';
+  if (conn.keyCleared) return 'No key';
+  if (conn.state.signed_in === true) return 'Signed in';
+  if (conn.state.signed_in === false) return machineCanSignIn(machine) && !machine.revoked_at ? 'Sign in' : 'Signed out';
+  return 'Checking';
+}
+// One chip per connection under its tool's column: the state, a thin bar and the % left when there is a reading; a red
+// dot only when it needs attention. A click opens the computer's pop-up, where its actions are.
 function machineChipHTML(machine, conn) {
   const left = machineLeft(conn.state.weekly), warn = machineAttentionWords(conn);
   const title = [`${conn.tool} · ${conn.name}`, conn.shared ? machineSharedWords(conn.shared) : '', warn, machineLeftWords(conn.state.weekly), machineTurnUserWords(conn)].filter(Boolean).join(' · ');
   return `<button type="button" class="machine-chip${conn.attention ? ' attention' : ''}" data-computer-open="${esc(machine.id)}" data-chip="${esc(conn.key)}" title="${esc(title)}" aria-label="${esc(title)}">`
-    + `${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<span>${esc(conn.tool)}</span>`
+    + `${conn.attention ? '<span class="machine-chip-dot" aria-hidden="true"></span>' : ''}<span class="machine-chip-words">${esc(machineChipWords(machine, conn))}</span>`
     + `${left !== null ? `<meter class="machine-chip-bar" min="0" max="100" low="20" optimum="100" value="${left}" aria-hidden="true"></meter><span class="machine-chip-pct">${left}%</span>` : ''}</button>`;
 }
 // ---- the pop-up
@@ -338,9 +351,10 @@ function machineVersionsHTML(machine, online) {
   const harnesses = Object.entries(machine.readiness?.harnesses || {}).filter(([, value]) => S.me?.role === 'owner' || value.installed || value.wanted || value.state !== 'idle').map(harnessChip).join('');
   // Which runner engine it runs (runner/engine.py); hovering says the build, or why it is on Python.
   const engine = machine.readiness?.engine;
-  const facts = [`Tico ${machine.version || 'version not reported'}`, machine.platform || '',
+  const release = machineRelease(machine);
+  const facts = [`Tico ${release || 'version not reported'}`, machine.platform || '',
     engine?.name ? `<span title="${esc(engine.note || engine.build || '')}">${engine.name === 'rust' ? 'Rust' : 'Python'} runner</span>` : ''].filter(Boolean);
-  return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
+  return `<p class="computer-detail-facts">${facts.map((fact, i) => i === 2 ? fact : esc(fact)).join(' · ')}</p>${window.runnerUpdateHtml?.(machine.update, release) || ''}
     ${table}${machineAppsHtml(machine)}${harnesses ? `<details data-machine-details="${esc(machine.id)}:tools"><summary>Installation and updates</summary><div class="machine-harnesses">${harnesses}</div></details>` : ''}`;
 }
 function machineScreenSectionHTML(machine, online) {
