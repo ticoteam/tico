@@ -222,3 +222,57 @@ def test_a_card_charge_past_the_bill_search_waits_then_settles_its_hold_when_lin
         assert done.status == "committed", done
         assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2100")) == (4_500, 0, -4_500)
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
+
+
+def _payroll(c) -> str:
+    made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                            "parent_id": account(c, "6000")})
+    act(c, OWNER, "private_lines_set", {"account_id": made.result["account_id"], "others_see": "totals"})
+    return str(made.result["account_id"])
+
+
+def test_a_private_bills_lost_send_debit_matched_by_its_note_stays_hidden(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        _payroll(c)
+        bid = _approved(c, _vendor(c, recipient_id=rid), 10_000, code="6200")
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "money_account_id": _checking(c),
+                                                "obligation": f"bill:{bid}", "account_id": account(c, "2000"),
+                                                "amount": 10_000})
+        pid = str(made.result["payment_id"])
+        c.execute("UPDATE fin_payments SET status='unknown', provider_request_id=NULL WHERE id=?", (pid,))
+        key = c.execute("SELECT idempotency_key FROM fin_payments WHERE id=?", (pid,)).fetchone()[0]
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "balance_sheet"})
+        row = _ingest(c, {**_txn("txn-lost", -100.0, who="Acme Supplies"), "requestId": None, "note": f"tico:{key}"})
+        assert c.execute("SELECT request_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[0] in (None, "")
+        assert FR.bill(c, OWNER, bid)["status"] == "paid"
+    with books.read() as c:
+        assert row in {x["id"] for x in FR.transactions(c, OWNER)["rows"]}
+        assert row not in {x["id"] for x in FR.transactions(c, "human:dan")["rows"]}          # Codex r3 1
+
+
+def test_per_kind_inbox_pages_never_skip_an_item_after_a_hidden_one(books):  # noqa: F811
+    days = ["2026-10-01T09:00:00.000000Z", "2026-10-02T09:00:00.000000Z", "2026-10-03T09:00:00.000000Z",
+            "2026-10-04T09:00:00.000000Z"]
+    with books.transaction() as c:
+        payroll = _payroll(c)
+        acme = _vendor(c)
+        made = []
+        for n, at in enumerate(days):
+            code = payroll if n == 0 else account(c, "6100")
+            done = act(c, OWNER, "bill_create", {"vendor_id": acme, "bill_date": "2026-10-01", "number": f"K-{n}",
+                                                 "lines": [{"account_id": code, "amount": 1_000 + n}]}, at=at)
+            made.append(str(done.result["bill_id"]))
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "payables"})
+    with books.read() as c:
+        seen, cursor = [], None
+        for _ in range(10):
+            page = FR.inbox(c, "human:dan", kind="bill_to_enter", limit=2, cursor=cursor, at=AT)
+            seen += [x["bill_id"] for x in page["items"]]
+            cursor = page["next_cursor"]
+            if not cursor:
+                break
+        assert seen == made[1:]                                                           # Codex r3 2

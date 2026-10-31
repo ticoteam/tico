@@ -419,6 +419,14 @@ def payment_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE provider_request_id=?", (request_id,)).fetchone()
 
 
+def payments_by_txn(c: sqlite3.Connection, feed_ids: Sequence[str]) -> list[Any]:
+    """Payments whose bank row is one of these (provider_txn_id: set when it settled, by request or by its note)."""
+    if not feed_ids:
+        return []
+    return c.execute(f"SELECT * FROM fin_payments WHERE provider_txn_id IN ({_marks(feed_ids)})",
+                     tuple(feed_ids)).fetchall()
+
+
 def payment_debit(c: sqlite3.Connection, money_account_id: str, request_id: str) -> Any:
     """The settled debit a payment request became, if a sync already took it in."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND request_id=? AND pending=0 AND amount<0 "

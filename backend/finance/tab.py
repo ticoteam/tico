@@ -195,18 +195,31 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
     entries = SL.entries_touching(ctx.c, sorted({str(r["entry_id"]) for r in rows if r["entry_id"]}), cut)
     out = {str(r["id"]) for r in rows if r["entry_id"] and str(r["entry_id"]) in entries}
     bills: dict[str, list[str]] = {}         # feed row id: the bills it is the bank side of
+    # The row's payment, by its request or by the row it settled on (a lost send matched by its note has no request).
+    pays: dict[str, list[Any]] = {}
+    for pay in SK.payments_by_txn(ctx.c, [str(r["id"]) for r in rows if str(r["id"]) not in out]):
+        pays.setdefault(str(pay["provider_txn_id"]), []).append(pay)
     for r in rows:
-        if str(r["id"]) not in out and r["request_id"]:
-            pay = SK.payment_by_request(ctx.c, str(r["request_id"]))
-            if pay is not None and str(pay["account_id"]) in cut:
-                out.add(str(r["id"]))
-            elif pay is not None and str(pay["obligation"] or "").startswith("bill:"):
-                bills.setdefault(str(r["id"]), []).append(str(pay["obligation"]).removeprefix("bill:"))
-    for r in rows:
-        if str(r["id"]) not in out:
-            got = [str(s["to_id"]) for s in SAP.settlements_from(ctx.c, "feed", str(r["id"])) if s["to_kind"] == "bill"]
-            if got:
-                bills.setdefault(str(r["id"]), []).extend(got)
+        fid = str(r["id"])
+        if fid in out:
+            continue
+        mine = list(pays.get(fid, []))
+        by_request = SK.payment_by_request(ctx.c, str(r["request_id"])) if r["request_id"] else None
+        if by_request is not None:
+            mine.append(by_request)
+        for pay in mine:
+            if str(pay["account_id"]) in cut:
+                out.add(fid)
+            elif str(pay["obligation"] or "").startswith("bill:"):
+                bills.setdefault(fid, []).append(str(pay["obligation"]).removeprefix("bill:"))
+        if fid in out:
+            continue
+        # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share).
+        found = [*SAP.settlements_from(ctx.c, "feed", fid),
+                 *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"])) if r["entry_id"] else [])]
+        got = [str(s["to_id"]) for s in found if s["to_kind"] == "bill"]
+        if got:
+            bills.setdefault(fid, []).extend(got)
     hidden = hidden_bills(ctx, cut, [b for xs in bills.values() for b in xs])
     out |= {fid for fid, xs in bills.items() if hidden & set(xs)}
     return out
