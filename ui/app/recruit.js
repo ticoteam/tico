@@ -10,6 +10,8 @@ const RECRUIT = {load: 0, arrive: '', run: null, found: {}, counts: {}, prefs: {
 const RECRUIT_DEPT = {marketing: '#a63d65', sales: '#1769a6', finance: '#2f6b3c', product: '#5946b2', support: '#9a4f19',
   legal: '#4b5563', engineering: '#3f566b', operations: '#0f6e56', hr: '#7a3e9d', leadership: '#3f566b'};
 const RECRUIT_MATCH = {strong: 'Strong', good: 'Good'};
+const RECRUIT_HOLD = 1600;                         // how long a dot that landed stays in 'done' before it rests
+const RECRUIT_ARM = 4000;                          // how long Close job? waits for the second click
 const RECRUIT_NEED = {connected: 'Connected', on_hire: 'Installs on hire', not_set: 'Not set'};
 const recruitAddress = (id, template = '') => '#/seat/' + encodeURIComponent(id) + (template ? '/' + encodeURIComponent(template) : '');
 
@@ -209,7 +211,9 @@ async function recruitPostJob(seed = {}) {
     } catch (e) { error.textContent = e.message; error.hidden = false; posting = false; form.querySelector('[type=submit]').disabled = false; }
   };
   dialog.showModal();
-  f.title.focus();
+  // On a phone the dialog itself takes focus, so no field shows a ring and no keyboard opens until a tap.
+  if (matchMedia('(max-width:600px)').matches) { dialog.tabIndex = -1; dialog.focus({preventScroll: true}); }
+  else f.title.focus();
   if (f.title.value.trim()) void draftNow();
 }
 
@@ -225,6 +229,9 @@ async function pageSeat(id, template = '') {
   const main = $('#main');
   main.classList.add('recruit-layout');
   const arrive = RECRUIT.arrive === id && !template; RECRUIT.arrive = '';
+  // A seat waiting on a requested cloud agent has that agent's page instead (ui/app/cloud-agents.js).
+  const listed = (S.seats || []).find(row => row.id === id);
+  if (listed?.agent && typeof window.cloudAgentsSeat === 'function') { recruitAgentSeat(main, listed.id); return; }
   const known = RECRUIT.found[id];
   if (!known || arrive) main.innerHTML = `<div class="recruit-page"><div class="empty">${ldotHTML({state: 'thinking', size: 24})}</div></div>`;
   let found = known;
@@ -237,11 +244,16 @@ async function pageSeat(id, template = '') {
     return;
   }
   if (load !== RECRUIT.load || !S.route.startsWith('#/seat/')) return;
+  if (found.seat?.agent && typeof window.cloudAgentsSeat === 'function') { recruitAgentSeat(main, found.seat.id); return; }
   if (!arrive) recruitCount(id, found.candidates.length);
   const pick = template && found.candidates.find(c => c.template === template);
   if (template && !pick) { location.replace(recruitAddress(id)); return; }
   if (pick) recruitApplicant(main, found, pick);
   else recruitApplicants(main, found, arrive);
+}
+function recruitAgentSeat(main, id) {
+  main.innerHTML = '<div class="recruit-page"></div>';
+  window.cloudAgentsSeat(id, main.firstElementChild);
 }
 // The sidebar shows the count beside the seat; a count that changes ticks (ui/app/motion.js).
 function recruitCount(id, n) {
@@ -331,6 +343,8 @@ function recruitArrive(page, found) {
     while (shown < list.length) land(list[shown], false);
     recruitCount(seat.id, list.length);
     ldotSet(dot, 'done');
+    // The dot hops once, holds, then rests.
+    if (dot) setTimeout(() => { if (dot.isConnected) ldotSet(dot, 'idle'); }, RECRUIT_HOLD);
     if (RECRUIT.run === run) RECRUIT.run = null;
   };
   const run = {finish};
@@ -468,8 +482,22 @@ function recruitJobPost(found) {
   };
   dialog.showModal();
 }
+// Close job asks twice on the same button: the first click arms it ("Close job?"), a second within a few seconds closes;
+// waiting or moving away puts it back.
 async function recruitClose(seat, button) {
-  if (!confirm(`Close ${seat.title}? It leaves the org chart.`)) return;
+  if (!button.dataset.armed) {
+    const label = button.textContent;
+    button.dataset.armed = '1'; button.textContent = 'Close job?'; button.classList.add('danger');
+    const disarm = () => {
+      clearTimeout(timer); button.removeEventListener('blur', disarm);
+      if (!button.dataset.armed) return;
+      delete button.dataset.armed; button.textContent = label; button.classList.remove('danger');
+    };
+    const timer = setTimeout(disarm, RECRUIT_ARM);
+    button.addEventListener('blur', disarm);
+    return;
+  }
+  delete button.dataset.armed;
   button.disabled = true;
   try {
     await post(`/v2/seats/${encodeURIComponent(seat.id)}/close`, {});

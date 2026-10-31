@@ -6,7 +6,8 @@
 .recruit-post .tmodal-body{display:grid;gap:14px}
 .rp-field{display:grid;gap:6px;margin:0;min-width:0}
 .rp-field>span,.rp-label>label,.rc-main section>h2,.rc-hire h2{font-size:var(--t-xs);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
-.rp-field :is(input,select){min-height:var(--ctl)}
+.rp-field :is(input,select){height:auto;min-height:var(--ctl)}
+.recruit-post:focus{outline:none}
 .rp-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .rp-pair[hidden]{display:none}
 .rp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:var(--ctl-sm)}
@@ -122,7 +123,7 @@
   .rc-match{grid-area:match}
   .rc-act{grid-area:act;min-width:0}
   .rc-act .rc-view{display:none}
-  .rc-act button{min-width:96px;height:36px}
+  .rc-act button{min-width:0;height:var(--ctl);padding:0 16px}
   .rc-cols{grid-template-columns:minmax(0,1fr);gap:22px}
   .rc-needs{grid-template-columns:repeat(2,minmax(0,1fr))}
   .rc-hire{position:static}
@@ -133,6 +134,8 @@
   .rc-hirebar button{height:40px;padding:0 28px}
   body.mobile-composer-focus .rc-hirebar{bottom:env(safe-area-inset-bottom)}
   .rp-pair{grid-template-columns:minmax(0,1fr)}
+  /* The phone's 16px text needs a taller control: no fixed height, and room above and below the line. */
+  .rp-field :is(input,select){min-height:40px;padding-top:8px;padding-bottom:8px;line-height:22px}
   .recruit-post textarea{min-height:200px}
 }
 @media (prefers-reduced-motion:reduce){

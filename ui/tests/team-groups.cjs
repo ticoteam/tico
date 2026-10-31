@@ -614,6 +614,13 @@ async function teamAdd(browser) {
   assert.equal(await page.locator('#tree a.node.seat[data-seat-open="seat1"]').getAttribute('href'), '#/seat/seat1');
   assert.deepEqual(await page.evaluate(() => orgTreeByParent()['b:scout'].map(n => n.kind + ':' + n.id)), ['seat:seat1']);
   await shot(page, 'team-add-bot-applicants');
+  // Close job asks on the same button and closes nothing on the first click; moving away puts it back.
+  const closeJob = page.locator('[data-recruit-close]');
+  await closeJob.click();
+  assert.equal(await closeJob.textContent(), 'Close job?');
+  await closeJob.evaluate(el => el.blur());
+  assert.equal(await closeJob.textContent(), 'Close job');
+  assert.equal(calls.some(c => c[1] === 'close'), false);
   await page.locator('[data-recruit-hire="bookkeeping"]').click();
   await node(page, 'b:ledger').waitFor({state: 'attached'});
   await page.waitForFunction(() => location.hash === '#/bot/ledger');
