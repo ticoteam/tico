@@ -227,7 +227,8 @@ def _approvals(c: sqlite3.Connection, kind: str, doc_id: str) -> list[Row]:
 
 
 def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str | None = None) -> Row:
-    """One bill or invoice with its lines, settlements, attachments and the actions (and approvals) on it."""
+    """One bill or invoice with its lines, settlements, attachments and the actions (and approvals) on it. An invoice
+    line says whether it is taxable."""
     ctx = load(c, at)
     view = ctx.view(viewer)
     r = SAP.doc_with_contact(c, kind, doc_id)
@@ -241,7 +242,8 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     pay = SK.last_payments(c, [f"bill:{doc_id}"]).get(f"bill:{doc_id}") if kind == "bill" else None
     out = doc_row(kind, r, dates.day(ctx.today), attached, pay)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
-                     "description": str(x["description"]), "tags": SK.loads(x["tags_json"])}
+                     "description": str(x["description"]), "tags": SK.loads(x["tags_json"]),
+                     **({"taxable": bool(x["taxable"])} if kind == "invoice" else {})}
                     for x in found[doc_id]]
     out["settlements"] = [{"id": str(s["id"]), "from_kind": str(s["from_kind"]), "from_id": str(s["from_id"]) or None,
                            "amount": int(s["amount"]), "settled_on": str(s["settled_on"]), "entry_id": s["entry_id"],

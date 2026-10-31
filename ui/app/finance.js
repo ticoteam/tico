@@ -12,7 +12,7 @@
 
 const FIN_ROUTE = '#/finance';
 const FIN_TABS = [['pnl', 'P&L'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
-  ['cards', 'Cards'], ['transactions', 'Transactions'], ['sources', 'Sources'], ['access', 'Access']];
+  ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
 let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE = null;     // the sidebar's one read per visit
@@ -51,7 +51,8 @@ function finCaps() {
   const viewing = who !== me;
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
-const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources
+// Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
+const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
   : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
@@ -84,7 +85,29 @@ async function finProbe() {
   return FIN_ACCESS;
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
-function finProbeOnce() { if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+function finProbeOnce() { finBooksReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+
+const FIN_BOOKS = {quickbooks: 'QuickBooks', xero: 'Xero'};
+// Back from connecting QuickBooks or Xero: the server sends the browser to #/finance?books=connected or
+// ?books=error&reason=<code> (backend/finance/books_link.py codes). Says how it went once, lands on Sources and cleans
+// the address.
+function finBooksReturn() {
+  const [hashPath, hashQ = ''] = location.hash.split('?'), h = new URLSearchParams(hashQ);
+  if (!h.has('books') || !S.me?.id) return;
+  const state = h.get('books'), reason = h.get('reason') || '';
+  h.delete('books'); h.delete('reason');
+  const hs = h.toString(), path = hashPath && hashPath !== FIN_ROUTE && rdUnder(hashPath, FIN_ROUTE) ? hashPath : FIN_ROUTE + '/sources';
+  history.replaceState(history.state, '', location.pathname + location.search + path + (hs ? '?' + hs : ''));
+  if (state === 'connected') toast('Books connected');
+  else if (reason === 'reconnect_required') toast('Reconnect books', true);
+  else toast('Books not connected' + (FIN_BOOKS_WHY[reason] ? ': ' + FIN_BOOKS_WHY[reason] : ''), true);
+  setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
+}
+const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
+  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again'};
+
+// A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
+const finExcl = x => x?.excluded ? ' excl. payroll' : '';
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -237,6 +260,7 @@ function finShow(state) {
   else if (tab === 'receivables') finDocPage('invoice');
   else if (tab === 'cards') finCardsPage();
   else if (tab === 'transactions') finTxPage();
+  else if (tab === 'tax') finTaxPage();
   else if (tab === 'sources') finSourcesPage();
   else if (tab === 'access') finAccessPage();
 }

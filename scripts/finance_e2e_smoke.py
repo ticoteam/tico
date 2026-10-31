@@ -1,8 +1,8 @@
 """Finance smoke test on the local stack (scripts/finance_e2e.sh): a real browser on the demo, a fake Mercury behind it.
 
-It signs in as the demo owner, connects Mercury with a fake token (Finance > Sources > + Source), checks that accounts
-and transactions load, adds a transaction to the fake through /_fake/txn, runs "Sync now" and waits up to two minutes for
-the transaction to show. Then it opens every Finance tab, records console and page errors and failed Finance requests,
+It signs in as the demo owner, connects Mercury with a fake token (Finance > Sources > + Source > Mercury), checks
+that accounts and transactions load, adds a transaction to the fake through /_fake/txn, runs "Sync now" and waits up to
+two minutes for the transaction to show. Then it opens every Finance tab, records console and page errors and failed Finance requests,
 and takes a desktop screenshot of each tab. Exit status 0 only when every check passed.
 
   uv run --no-project --with playwright python scripts/finance_e2e_smoke.py
@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from playwright.sync_api import Error as PlaywrightError
 from playwright.sync_api import Page, sync_playwright
 
-TABS = ["pnl", "balance", "payables", "receivables", "cards", "transactions", "sources", "access"]
+TABS = ["pnl", "balance", "payables", "receivables", "cards", "transactions", "tax", "sources", "access"]
 TOKEN = "fake-token-for-smoke"
 APPROVER = "ben@acme.example"
 SMOKE_VENDOR = "SMOKE VENDOR"
@@ -101,11 +101,12 @@ def main() -> int:
                             f"{page.locator('[data-fin-tab]').count()} tabs")
         connected = False
         if tabs_ok:
-            # 2. Connect Mercury with a fake token (Finance > Sources > + Source).
+            # 2. Connect Mercury with a fake token (Finance > Sources > + Source > Mercury).
             run.current = "sources"
             try:
                 go(page, args.base, "#/finance/sources")
                 page.locator("[data-fin-connect]").click()
+                page.locator("[data-fin-connect-item=mercury]").click()
                 page.wait_for_selector("dialog.fin-dlg")
                 page.fill("dialog.fin-dlg input[name=token]", TOKEN)
                 page.fill("dialog.fin-dlg input[name=approver]", APPROVER)

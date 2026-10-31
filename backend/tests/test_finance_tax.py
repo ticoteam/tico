@@ -556,3 +556,7 @@ def test_an_exempt_income_line_is_listed_as_exempt_sales(keeper):
     first = next(r for r in rows if r["period"] == "2026-Q1")
     assert (first["taxable_sales"], first["exempt_sales"], first["tax_collected"]) == (20_000, 5_000, 1_600)
     assert csv_text.splitlines()[1] == "2026-Q1,Testland,200.00,50.00,16.00,0.00,16.00"
+    # The invoice read says which line is taxable (the income line given none defaults to taxable).
+    with keeper.read() as c:
+        read = FR.invoice(c, OWNER, str(invoice.result["invoice_id"]), AT)
+    assert [x["taxable"] for x in read["lines"]][:2] == [True, False]

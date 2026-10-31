@@ -1582,6 +1582,7 @@ access = tab.access
 view_as = tab.view_as
 # Money out and controls (finance/tab_money.py).
 payments = tab_money.payments
+transfers = tab_money.transfers
 recipients = tab_money.recipients
 reconciliations = tab_money.reconciliations
 statements = tab_money.statements

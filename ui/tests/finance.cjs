@@ -4,8 +4,10 @@
 // future month and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
 // Receivables list bills and invoices with no totals row; their decisions run a dry run first and send the right action,
 // and both tabs hide from a viewer without payables or receivables (a payables grant shows only Payables, read only).
-// The Balance sheet's "+ Add" enters a journal entry. Each tab draws without errors and without sideways scroll on a
-// phone. TICO_UI_SHOTS=<dir> saves screenshots (desktop and phone).
+// The Balance sheet's "+ Add" enters a journal entry and offers Loan, Asset and Import history. Cards: Unfreeze only
+// for a person's freeze, a bot card's Saved on chips (card_unsave). Transactions › Transfers cancels a queued one
+// (payment_cancel). Tax (owner only): Sales tax with Exempt, and 1099. The P&L marks imported months. Each tab draws
+// without errors and without sideways scroll on a phone. TICO_UI_SHOTS=<dir> saves screenshots (desktop and phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -87,10 +89,11 @@ function pnl(url, me, noRevenue = false, noCogsProjection = false) {
     : ({account_id, code, name: base0, type, section: section(code), parent_id, private: false,
     actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
     total: 0, budget: budget == null ? null : cols.map(() => budget),
-    projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null)}));
+    projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null), projection_method: 'trend'}));
   const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
   const income = sum('income'), expense = sum('expense');
   return {columns: cols, rows, income, expense, net: income.map((v, i) => v - expense[i]), excluded: rows.some(r => r.private), start: q.get('start'), end: q.get('end'), view_version: 'v1',
+    imported: viewer === 'human:ana' ? [{month: cols[0].label, basis: 'cash'}] : [], snapshot: null,
     filter: {teams: q.getAll('teams'), teammates: q.getAll('teammates'), who: q.get('who') || 'both', unattributed: q.get('unattributed') === 'true'},
     ...(view === 'expenses' ? {teammates: [{teammate: 'bot:eng-lead', kind: 'bot', spent: 182000, budget: 200000}, {teammate: 'bot:builder', kind: 'bot', spent: 96000, budget: 120000},
       {teammate: 'human:cara', kind: 'person', spent: 41000, budget: null}]} : {})};
@@ -112,7 +115,7 @@ function line(id, url) {
   if (vendor != null) return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor, total: 84000, excluded: 0, hidden: 0,
     by_vendor: [{key: vendor, label: vendor, amount: 84000}], by_team: [{key: 'eng', label: 'Engineering', amount: 60000}, {key: 'platform', label: 'Platform', amount: 24000}],
     by_teammate: [], paid_by: [{kind: 'card', name: 'Engineering', amount: 63000, count: 3}, {kind: 'bank', name: 'Checking ••0001', amount: 21000, count: 1}],
-    next_month: {month: iso(nm).slice(0, 7), projection: 310000},
+    next_month: {month: iso(nm).slice(0, 7), projection: 310000}, ...(vendor === 'GitHub' ? {seats: 12, renewal_on: '2027-01-15'} : {}),
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor, description: vendor + ' Team', memo: '', source: 'feed', tags: {}}], more: false};
   return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor: null, total: l[5], excluded: 0, hidden: 0,
     paid_by: [{kind: 'card', name: 'Engineering', amount: 84000, count: 4}], next_month: {month: iso(nm).slice(0, 7), projection: 310000},
@@ -137,9 +140,18 @@ const CARDS = [
   {id: 'card-1', provider: 'mercury', holder: 'bot:eng-lead', nickname: 'Engineering', last4: '4242', kind: 'virtual', status: 'active', limit: 200000, limit_interval: 'monthly',
     currency: 'USD', budget: {id: 'b-software', name: 'Software'}, spent: 182000, sync_status: 'ok', expires_at: '2028-10-31'},
   {id: 'card-2', provider: 'mercury', holder: 'bot:writer', nickname: 'Content tools', last4: '1881', kind: 'virtual', status: 'frozen', limit: 50000, limit_interval: 'monthly',
-    currency: 'USD', budget: null, spent: 12000, sync_status: 'ok'},
+    currency: 'USD', budget: null, spent: 12000, sync_status: 'ok', frozen_by: 'person',
+    saved_on: [{vendor: 'v-figma', label: 'Figma', saved_by: 'human:ana', saved_at: '2026-10-20T09:00:00Z'}]},
   {id: 'card-3', provider: 'mercury', holder: 'human:cara', nickname: 'Travel', last4: '3007', kind: 'physical', status: 'active', limit: 300000, limit_interval: 'monthly',
-    currency: 'USD', budget: null, spent: 41000, sync_status: 'ok'}];
+    currency: 'USD', budget: null, spent: 41000, sync_status: 'ok'},
+  {id: 'card-4', provider: 'mercury', holder: 'bot:builder', nickname: 'Build tools', last4: '5150', kind: 'virtual', status: 'frozen', limit: 80000, limit_interval: 'monthly',
+    currency: 'USD', budget: {id: 'b-software', name: 'Software'}, spent: 80000, sync_status: 'ok', frozen_by: 'budget', saved_on: []}];
+const TRANSFERS = [{id: 'xf-1', status: 'queued', amount: 500000, currency: 'USD', memo: 'to savings', from: {id: 'm1', name: 'Checking', last4: '0001'},
+  to: {id: 'm2', name: 'Savings', last4: '0002'}, created_by: 'human:ana', created_at: '2026-10-29T10:00:00Z', settled_at: null, last_error: null}];
+const SALES_TAX = {year: 2026, currency: 'USD', rows: [{period: '2026-Q3', code: 'CA', jurisdiction: 'California', taxable_sales: 1200000, exempt_sales: 300000,
+  tax_collected: 87000, tax_remitted: 60000, due: 27000, due_on: '2026-10-31'}]};
+const F1099 = {year: 2026, currency: 'USD', threshold: 60000, due_on: '2027-01-31', rows: [{vendor_id: 'v-northwind', vendor: 'Northwind Design', tin_on_file: false,
+  cash_paid: 610000, card_paid_excluded: 0, threshold: 60000, reportable: true}]};
 const TX = [
   {kind: 'feed', id: 'f1', date: '2026-10-29', amount: -21000, currency: 'USD', counterparty: 'GitHub', description: 'GITHUB.COM', status: 'posted', pending: false, card_id: 'card-1',
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l1', account_id: 'a-6100', account: 'Software', amount: 21000, vendor: 'GitHub', tags: {teammate: 'bot:eng-lead', budget: 'b-software'}}]},
@@ -221,13 +233,13 @@ const CHART = [...[['a-1010', '1010', 'Checking', 'asset', 'bank'], ['a-1020', '
 const chartFor = use => CHART.filter(a => use === 'bill' ? ['expense', 'asset'].includes(a.type) && !['payable', 'receivable'].includes(a.subtype)
   : use === 'invoice' ? a.type === 'income' : true);
 
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false, apRights = []} = {}) {
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false, apRights = [], budgetsExcl = false} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
   // hub.ask: dry runs need this approver; hub.hold: dry runs wait for it; hub.apply: a categorize that moves a bank row
   // to a line shows in the next transactions read (this page's own copy of TX); hub.noChart: the chart read fails.
-  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false, noChart: false}, tx = structuredClone(TX);
+  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false, noChart: false, impact: null}, tx = structuredClone(TX);
   let billsEmail = 'bills@acme.example';
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
@@ -284,7 +296,8 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
     }
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
-    if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
+    // budgetsExcl: a viewer whose budget figures leave payroll out (the read and each row say excluded).
+    if (p === '/api/v2/finance/budgets') return json(budgetsExcl ? {budgets: BUDGETS.map(b => ({...b, state: {...b.state, excluded: true}})), more: false, excluded: true} : {budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
     if (p === '/api/v2/finance/mercury-users') return json({users: [{id: 'mu-1', name: 'Ana Silva', connection_id: 'c1', email: 'a•••@acme.example', updated_at: '2026-10-30T10:00:00Z'},
       {id: 'mu-2', name: 'Ops Card User', connection_id: 'c1', email: 'o•••@acme.example', updated_at: '2026-10-30T10:00:00Z'}]});
@@ -298,8 +311,12 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       {settlement_id: 's-c', kind: 'bill', document_id: 'bill-2', number: '#118', contact_id: 'v-northwind', contact_name: 'Northwind Design', amount: 9900, marked_on: '2026-10-27'}]});
     if (p.startsWith('/api/v2/finance/feed/')) return json({feed_id: p.split('/')[5], kind: 'bill', amount: 0, date: '', more: false, view_version: 'v1', expected: []});
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
+    if (p === '/api/v2/finance/transfers') return viewer === 'ana' ? json({transfers: TRANSFERS, next_cursor: null}) : denied();
+    if (p === '/api/v2/finance/tax/sales-tax') return viewer === 'ana' ? json(SALES_TAX) : denied();
+    if (p === '/api/v2/finance/tax/1099') return viewer === 'ana' ? json(F1099) : denied();
+    if (p === '/api/v2/triggers' && method === 'GET') return json({triggers: []});
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.hold) await hub.hold;
-    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: {}});
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: hub.impact || {}});
     const moved = body?.kind === 'categorize' && !body.dry_run && hub.apply && tx.find(r => r.id === body.payload?.feed_id);
     if (moved) moved.lines = [{line_id: 'l-' + moved.id, account_id: body.payload.account_id, account: CHART.find(a => a.id === body.payload.account_id)?.name,
       amount: -moved.amount, vendor: moved.counterparty, tags: body.payload.tags}];
@@ -343,7 +360,7 @@ async function go(page, hash, ready) {
   await page.locator(ready).first().waitFor();
 }
 const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="bill-1"]', receivables: 'tr[data-fin-doc="inv-1"]', cards: '[data-fin-card]', transactions: '[data-fin-tx]',
-  sources: '[data-fin-group]', access: '[data-fin-mate]'};
+  tax: 'tr[data-fin-tax]', sources: '[data-fin-group]', access: '[data-fin-mate]'};
 
 (async () => {
   const browser = await chromium.launch();
@@ -353,11 +370,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const tag = 'owner';
       const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Sources', 'Access'], tag + ': every tab, in order');
+      assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
       assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
+      assert.equal(await page.locator('.fin-pl thead .fin-tag').first().textContent(), 'Imported', tag + ': an imported month says so');
       // The budget column is the current month's: not editable, and a double-click does nothing.
       assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': the current month\'s budgets are not editable');
       const softwareBudget = page.locator('.fin-ln:has(a[href$="/line/a-6100"]) td.fin-b').last();
@@ -438,6 +456,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const lineRail = await page.locator('#fin-rail').innerText();
       for (const want of ['Paid by', 'Card · Engineering', 'Checking ••0001', 'By team', 'Platform', 'Transactions']) assert.ok(lineRail.toLowerCase().includes(want.toLowerCase()), `${tag}: the vendor rail has ${want}`);
       assert.match(lineRail, /Software · \w{3} projected\s+\$3,100/, tag + ': next month projected (the line\'s)');
+      assert.match(lineRail, /Seats\s+12[\s\S]*Renews\s+Jan 15/, tag + ': seats and renewal when the read has them');
       await shot(page, 'line-desktop');
       // A line with no budget of its own offers a line budget first, not a vendor one.
       await go(page, '#/finance/line/a-5200', '[data-fin-key="GitHub"]');
@@ -531,6 +550,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail [data-fin-freeze]').click();
       await page.waitForTimeout(100);
       assert.deepEqual(actions(writes).at(-1), {kind: 'card_unfreeze', payload: {card_id: 'card-2'}}, tag + ': Unfreeze sends card_unfreeze');
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-saved] .fin-chip').allInnerTexts().then(t => t.map(x => x.replace('✕', '').trim())), ['Figma'], tag + ': a bot card is saved on Figma');
+      await page.locator('#fin-rail [data-fin-unsave="v-figma"]').click();
+      await settled(() => actions(writes).at(-1)?.kind === 'card_unsave');
+      assert.deepEqual(actions(writes).at(-1), {kind: 'card_unsave', payload: {card_id: 'card-2', vendor: 'v-figma'}}, tag + ': ✕ sends card_unsave');
+      await page.locator('[data-fin-card="card-4"]').click();
+      await page.locator('#fin-rail .fin-rail-title').waitFor();
+      assert.equal(await page.locator('#fin-rail [data-fin-freeze]').count(), 0, tag + ': a budget freeze has no Unfreeze');
+      assert.match(await page.locator('[data-fin-card="card-4"]').innerText(), /Frozen · Budget/, tag + ': it says the budget froze it');
       await page.locator('[data-fin-card-add]').click();
       await page.locator('dialog.fin-dlg[open] select[name="user"] option').first().waitFor({state: 'attached'});
       assert.equal(await page.locator('dialog.fin-dlg input[name="user"]').count(), 0, tag + ': no typed Mercury user id');
@@ -696,6 +723,19 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator(cat + ' select[name="team"]').selectOption('eng');
       await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
       await shot(page, 'transactions-categorize-desktop');
+      await page.locator('[data-fin-seg="source"] button[data-v="transfer"]').click();
+      await page.locator('#fin-rail [data-fin-xfer-cancel]').waitFor();
+      await page.locator('#fin-rail [data-fin-xfer-cancel]').click();
+      await settled(() => actions(writes).at(-1)?.kind === 'payment_cancel');
+      assert.deepEqual(actions(writes).at(-1), {kind: 'payment_cancel', payload: {transfer_id: 'xf-1'}}, tag + ': Cancel transfer sends payment_cancel');
+      await shot(page, 'transfers-desktop');
+      await page.evaluate(() => { FIN_TX.source = 'all'; });
+      await go(page, '#/finance/tax', READY.tax);
+      assert.deepEqual(await page.locator('#fin-tax thead th').allInnerTexts(), ['QUARTER', 'JURISDICTION', 'TAXABLE', 'EXEMPT', 'COLLECTED', 'REMITTED', 'DUE', 'DUE ON'], tag + ': the sales tax columns');
+      await shot(page, 'tax-desktop');
+      await page.locator('[data-fin-seg="tax"] button[data-v="1099"]').click();
+      await page.locator('tr[data-fin-tax="v-northwind"]').waitFor();
+      assert.match(await page.locator('tr[data-fin-tax="v-northwind"]').innerText(), /Northwind Design\s+Missing\s+6,100/, tag + ': a 1099 vendor without a TIN');
       await go(page, '#/finance/sources', READY.sources);
       await page.locator('[data-fin-group="banks"]').click();
       await page.locator('[data-fin-src="bank:m1"]').click();
@@ -749,7 +789,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AGING', 'AMOUNT', 'STATUS', 'PAYS'], tag + ': the bill columns');
       assert.equal(await page.locator('.fin-doc-t tbody tr').count(), BILLS.length, tag + ': one row per bill, no totals row');
       const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(6)`).innerText()).replace(/\s+/g, ' ').trim();
-      assert.equal(await statusOf('bill-3'), 'Bank approval', tag + ': a bill paying now shows its payment\'s state');
+      assert.equal(await statusOf('bill-3'), 'Approve in Mercury', tag + ': a bill paying now shows its payment\'s state');
       assert.equal(await statusOf('bill-4'), 'Open Pay cancelled', tag + ': a rejected payment shows beside Open');
       assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
@@ -811,7 +851,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-doc="bill-3"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': a scheduled bill is paid or voided, not scheduled again');
-      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Bank approval/, tag + ': the rail shows the payment\'s state');
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Approve in Mercury/, tag + ': the rail shows the payment\'s state');
       await page.locator('tr[data-fin-doc="bill-6"]').click();
       await page.locator('#fin-rail [data-fin-do="schedule"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid', 'Reschedule'], tag + ': a scheduled bill with no payment yet moves');
@@ -875,8 +915,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       // The Balance sheet's "+ Add".
       await go(page, '#/finance/balance', READY.balance);
       await page.locator('[data-fin-add]').click();
-      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Invoice', 'Bill', 'Journal entry', 'Connect'], tag + ': what the owner may add');
-      assert.match(await page.locator('#fin-add a').getAttribute('href'), /#\/finance\/sources$/, tag + ': Connect leads to Sources');
+      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Mercury', 'Stripe', 'Invoice', 'Bill', 'Loan', 'Asset', 'Journal entry', 'Import history'],
+        tag + ': what the owner may add');
       await shot(page, 'balance-add-desktop');
       await page.locator('[data-fin-add-item="journal"]').click();
       const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
@@ -999,6 +1039,45 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // Back from a books consent that needs a new grant: Sources, one "Reconnect books", and a clean address.
+    {
+      const tag = 'books return';
+      const {page, errors} = await open(browser, {hash: '#/finance?books=error&reason=reconnect_required'});
+      await page.waitForFunction(() => location.hash === '#/finance/sources');
+      await page.locator(READY.sources).first().waitFor();
+      assert.match(await page.locator('.toast').first().innerText(), /Reconnect books/, tag + ': says to reconnect');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // Budget figures without payroll say so wherever they show, as the P&L's totals do: the budget column, the line
+    // page's budget column and rail, and what an approval would leave in a budget.
+    {
+      const tag = 'budgets excl. payroll';
+      const {page, errors, hub} = await open(browser, {budgetsExcl: true});
+      await page.locator('.fin-pl').waitFor();
+      assert.match(await page.locator('.fin-pl thead th.fin-b', {hasText: 'budget'}).first().textContent(), /budget excl\. payroll$/, tag + ': the budget column');
+      await page.locator('a[href$="/line/a-6100"]').click();
+      await page.locator('[data-fin-key="GitHub"]').waitFor();
+      assert.ok((await page.locator('#fin-line thead th').allTextContents()).includes('Budget / mo excl. payroll'), tag + ': the line page\'s budget column');
+      await page.locator('[data-fin-key="GitHub"]').click();
+      await page.locator('#fin-rail .fin-bars').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Budget excl\. payroll\s+\$900/, tag + ': the line rail');
+      await go(page, '#/finance/balance', READY.balance);
+      await page.locator('[data-fin-add]').click();
+      await page.locator('[data-fin-add-item="journal"]').click();
+      const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
+      await jl.nth(0).locator('select').selectOption('a-6100');
+      await jl.nth(0).locator('[name=dr]').fill('100');
+      await jl.nth(1).locator('select').selectOption('a-1010');
+      await jl.nth(1).locator('[name=cr]').fill('100');
+      hub.ask = 'human:ana';
+      hub.impact = {budgets: [{budget_id: 'b-software', name: 'Software', remaining: 60000, remaining_after: 50000, excluded: true}]};
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg .fin-ask:not([hidden])').waitFor();
+      assert.match(await page.locator('dialog.fin-dlg [data-impact]').innerText(), /Software left excl\. payroll\s+\$600\s+→\s+\$500/, tag + ': approval impact');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
     // A manager: their teams' expenses; Balance sheet and Sources hidden, even by address.
     {
       const tag = 'manager';
@@ -1057,12 +1136,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
       assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
       await page.goBack();
-      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 8);
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
       await page.goForward();
       await page.locator('.fin-as').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
-      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 8);
+      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
