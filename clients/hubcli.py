@@ -218,6 +218,9 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules due add <rule-id> --first YYYY-MM-DD --repeats once|weekly|monthly|quarterly|yearly --owner N
                       [--timezone Z]
     hub rules due satisfied <id> [--on YYYY-MM-DD]   a due date's or its rule's id; --on when two are open
+    hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
+                                           a bot checks a draft against its rules; sending it then costs no second check
+    hub rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
@@ -1775,6 +1778,15 @@ def parser():
     s.add_argument("id", help="a due date's id, or its rule's when it has one due date")
     s.add_argument("--on", dest="due_on", metavar="YYYY-MM-DD", help="which occurrence, when two are open")
     s.set_defaults(fn="rules due satisfied")
+    s = rules.add_parser("check", help="check a draft against the rules that apply to you, as the write it will be")
+    s.add_argument("text", help="the draft, whole")
+    s.add_argument("--to", required=True, help="the teammate it goes to")
+    s.add_argument("--as", dest="as_", default="message", choices=["message", "comment", "task", "assign"])
+    s.set_defaults(fn="rules check")
+    s = rules.add_parser("appeal", help="ask the reviewer to look at your held output")
+    s.add_argument("id", help="the hold's id, from the held answer")
+    s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
+    s.set_defaults(fn="rules appeal")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
     s.set_defaults(fn="strategy show")
