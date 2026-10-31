@@ -467,3 +467,41 @@ def test_a_record_held_for_later_reads_back_as_the_record_it_was():
         assert M.decode(json.loads(json.dumps(M.encode(r)))) == r
     assert M.decide(("2", "deleted"), M.Ext("Invoice", "901", "2")) == M.SAME    # our own void, echoed back
     assert M.decide(("2", "deleted"), M.Ext("Invoice", "901", "3")) == M.CREATE
+
+
+def test_a_write_off_goes_out_as_a_credit_memo_that_closes_the_invoice_and_its_echo_adds_nothing(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _customer(fake)
+    fake.records["documents"] = [_invoice(12, 1, 2000)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        inv = _local(c, "Invoice:12", "fin_invoices")
+        made = act(c, OWNER, "invoice_write_off", {"invoice_id": inv, "account_id": account(c, "6100"),
+                                                   "date": "2026-10-12", "memo": "Uncollectible"})
+        assert made.status == "committed", made
+    fake.replies.append(mirror.Sent(True, kind="CreditMemo", external_id="901", revision="1"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _sent(fake, "writeoff.create") == {"party": "Customer:4", "account": "Account:2", "day": "2026-10-12",
+                                              "memo": "Uncollectible", "total": 2000,
+                                              "links": [["Invoice:12", 2000]]}
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
+            "paid", 2000)
+        settled = c.execute("SELECT from_kind, to_kind, amount FROM fin_settlements WHERE to_id=? AND voided_at IS NULL",
+                            (inv,)).fetchall()
+        assert [tuple(row) for row in settled] == [("credit", "invoice", 2000)]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "6100"),)).fetchone()[0] == 2000
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='CreditMemo:901'").fetchone()[0] == "active"
+    # The provider's echo of the credit memo it was sent: the same revision, so nothing is booked or settled again.
+    fake.changes = [M.Document(M.Ext("CreditMemo", "901", "1"), party="Customer:4", number="", day="2026-10-12",
+                               due="", total=2000, lines=(M.EntryLine("Account:2", 2000),), memo="Uncollectible",
+                               links=(("Invoice:12", 2000),))]
+    assert _drain(books, fake, cid, now="2026-10-15T17:00:00.000000Z") == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_settlements WHERE to_id=? AND voided_at IS NULL", (inv,)
+                         ).fetchone()[0] == 1
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
+            "paid", 2000)

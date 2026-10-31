@@ -232,6 +232,34 @@ class QuickBooks:
             return Read(False, error=known)
         return Read(True, tuple(Q.change_records(reply.body, known)))
 
+    def _write_off_item(self, account_key: str, key: str) -> str | Sent:
+        """The item a write-off is billed by: found by name, else created once (its RequestId comes from the write-off's
+        key, so a retry does not make a second). One that sells to another account is refused, since the write-off
+        would post there."""
+        account = account_key.partition(":")[2]
+        found = self._call("GET", "query", query={"query": f"SELECT * FROM Item WHERE Name = '{Q.WRITE_OFF_ITEM}'"})
+        if found.status == 0:
+            return Sent(False, error="QuickBooks did not answer")
+        if found.status != 200:
+            return Sent(False, error=_fault(found.body, found.status))
+        known = Q.item_accounts(Q.as_list((Q.as_map(found.body.get("QueryResponse")) or {}).get("Item")))
+        for sells in known.values():
+            if sells["income"] != account:
+                return Sent(False, final=True, error=(
+                    f"the {Q.WRITE_OFF_ITEM} item already sells to another account; point the write-off at that "
+                    "account or change the item in QuickBooks"))
+        if known:
+            return next(iter(known))
+        created = self._call("POST", "item", body=Q.item_body(Q.WRITE_OFF_ITEM, account),
+                             request_id=str(uuid.uuid5(NAMESPACE, f"{key}:item")))
+        if created.status == 0:
+            return Sent(False, error="QuickBooks did not answer")
+        made: dict[str, Any] = Q.as_map(created.body.get("Item")) or {}
+        if 200 <= created.status < 300 and made:
+            return str(made.get("Id") or "")
+        final = created.status == 400 and "Fault" in created.body
+        return Sent(False, error=_fault(created.body, created.status), final=final)
+
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""
         request_id = str(uuid.uuid5(NAMESPACE, key))
@@ -241,6 +269,11 @@ class QuickBooks:
             if isinstance(found, str):
                 return Sent(False, error=found)
             items = found
+        if op == "writeoff.create":
+            item = self._write_off_item(str(body["account"]), key)
+            if isinstance(item, Sent):
+                return item
+            body = {**body, "item": item}
         try:
             kind, path, payload, query = _write_of(op, body, items)
         except (KeyError, ValueError, TypeError) as e:
@@ -280,6 +313,8 @@ def _write_of(op: str, body: Mapping[str, Any],
         return "Bill", "bill", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "delete"}
     if op == "invoice.void":
         return "Invoice", "invoice", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "void"}
+    if op == "writeoff.create":
+        return "CreditMemo", "creditmemo", Q.writeoff_body(body), {}
     if op == "payment.bill":
         return "BillPayment", "billpayment", Q.bill_payment_body(body), {}
     if op == "payment.invoice":

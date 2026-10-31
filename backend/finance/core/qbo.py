@@ -384,3 +384,25 @@ def payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
     return {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")},
             "DepositToAccountRef": {"value": _account_id(body["bank"])},
             "TotalAmt": decimal_text(int(body["total"])), "Line": _applied(body["links"])}
+
+
+WRITE_OFF_ITEM = "Bad debt"     # the item a write-off is billed by: found by this name, or created once
+
+
+def item_body(name: str, account: str) -> dict[str, Any]:
+    """A service item that sells to and buys from one account (by the account's QuickBooks id)."""
+    ref = {"value": account}
+    return {"Name": name, "Type": "Service", "IncomeAccountRef": ref, "ExpenseAccountRef": ref}
+
+
+def writeoff_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A write-off as a credit memo: one line billed by the write-off item, applied to the invoice it closes. A write-off
+    closes one invoice, so anything else is refused."""
+    links = body["links"]
+    if len(links) != 1 or str(links[0][0]).partition(":")[0] != "Invoice":
+        raise ValueError("a write-off closes one invoice")
+    total = decimal_text(int(body["total"]))
+    line = {"DetailType": "SalesItemLineDetail", "Amount": total, "Description": str(body.get("memo") or "")[:4000],
+            "SalesItemLineDetail": {"ItemRef": {"value": str(body["item"])}, "Qty": 1, "UnitPrice": total},
+            "LinkedTxn": [txn for applied in _applied(links) for txn in applied["LinkedTxn"]]}
+    return {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")}, "Line": [line]}

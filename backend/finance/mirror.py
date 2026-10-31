@@ -38,7 +38,7 @@ PENDING_MOST = 500                          # provider records the books could n
 ENTITIES = ("accounts", "parties", "documents", "payments", "entries")
 TAG_SETTING = "mirror.tags"                 # {"enabled": bool, "map": {tag kind: {tag value: provider class id}}}
 # Actions a mirrored book refuses: the provider holds these records, so Tico cannot write them here.
-REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send", "invoice_write_off",
+REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match")
 
@@ -738,6 +738,16 @@ def _pay_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[
             "total": amount, "links": [[doc, amount]], "feed_id": str(local.get("feed_id") or "")}
 
 
+def _writeoff_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
+    """A write-off as the provider takes it: a credit memo to the write-off account, applied to the invoice it closes."""
+    invoice = _need(_key(c, cid, "fin_invoices", str(local["invoice_id"])), f"invoice {local['invoice_id']}")
+    party = _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}")
+    account = _need(_key(c, cid, "fin_accounts", str(local["account_id"])), f"account {local['account_id']}")
+    amount = int(local["amount"])
+    return {"party": party, "account": account, "day": local["day"], "memo": local["memo"], "total": amount,
+            "links": [[invoice, amount]]}
+
+
 def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """What the provider is sent: its keys for accounts and parties, and the tags as its classes when that is on. A
     write waits (_Missing) while an account or party it names is not in the provider yet; an export drops a contact
@@ -748,6 +758,8 @@ def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any
         return _void_out(c, cid, DOC_TABLES["Bill" if op.startswith("bill") else "Invoice"], local)
     if op in ("payment.bill", "payment.invoice"):
         return _pay_out(c, cid, local)
+    if op == "writeoff.create":
+        return _writeoff_out(c, cid, local)
     if op != "journal.create":
         return dict(local)
     export = bool(local.get("local_entry_id"))
@@ -863,6 +875,18 @@ def _confirm_payment(c: sqlite3.Connection, cid: str, local: Mapping[str, Any], 
     _settlement(c, load(c, now), cid, s, now, feed=str(local.get("feed_id") or ""))
 
 
+def _confirm_writeoff(c: sqlite3.Connection, cid: str, provider: Mapping[str, Any], sent: Sent, now: str) -> None:
+    """The provider took a write-off as a credit memo: its entry and its settlement of the invoice come in as the
+    provider's record of a credit memo would, so the echo of it that follows adds nothing."""
+    ext = M.Ext(kind=sent.kind, external_id=sent.external_id, revision=sent.revision)
+    total = int(provider["total"])
+    memo = str(provider["memo"])
+    d = M.Document(ext, party=str(provider["party"]), number="", day=str(provider["day"]), due="", total=total,
+                   lines=(M.EntryLine(str(provider["account"]), total, description=memo),), memo=memo,
+                   links=tuple((str(k), int(a)) for k, a in provider["links"]))
+    _credit(c, load(c, now), cid, d, now)
+
+
 def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], provider: Mapping[str, Any],
              sent: Sent, now: str) -> None:
     """The provider confirmed a write: only now does the local book change."""
@@ -885,6 +909,8 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
         _confirm_void(c, cid, DOC_TABLES["Bill" if op.startswith("bill") else "Invoice"], local, sent, now)
     elif op in ("payment.bill", "payment.invoice"):
         _confirm_payment(c, cid, local, provider, sent, now)
+    elif op == "writeoff.create":
+        _confirm_writeoff(c, cid, provider, sent, now)
 
 
 def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], provider: Mapping[str, Any],
@@ -1250,10 +1276,49 @@ def _payment_planner(kind: str) -> handlers.Planner:
     return planner
 
 
+def _writeoff_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """An invoice written off as a credit memo billed by the write-off item and applied to the invoice it closes. The
+    provider takes it, and the books take the entry and the settlement when it confirms."""
+    V.only(p, ("invoice_id", "amount", "account_id", "date", "memo"))
+    cid = _cid(ctx)
+    inv = documents.doc_of(ctx, "invoice", V.text(p, "invoice_id", 80))
+    documents.need_status("invoice", inv, documents.OPEN["invoice"], "only a sent invoice is written off")
+    ref = SX.ref_for_local(ctx.c, cid, "fin_invoices", str(inv["id"]))
+    if ref is None or str(ref["status"]) != "active":
+        raise FinanceError(CONFLICT, "that is not in the provider yet")
+    left = documents.left_of("invoice", inv)
+    amount = V.opt_amount(p) or left
+    if not 0 < amount <= left:
+        raise invalid(f"a write-off is more than 0 and at most what is left ({left})")
+    if "account_id" in p:
+        account = ctx.accounts.get(V.text(p, "account_id", 80))
+    else:
+        account = banking.by_code(ctx, banking.OTHER)
+    if account is None or not account.active or account.type != "expense":
+        raise FinanceError(NOT_FOUND, "no such expense account")
+    if not handlers.may_write(ctx, who, account.id, {}):
+        raise denied("that account is outside your view")
+    if _key(ctx.c, cid, "fin_accounts", account.id) is None:
+        raise FinanceError(NOT_AVAILABLE, "that account is not in the provider yet")
+    day = V.opt_day(p, "date") or ctx.today
+    memo = V.opt_text(p, "memo", 200) or f"Write off invoice {inv['number']}"
+    body = {"invoice_id": str(inv["id"]), "party": str(inv["customer_id"]), "account_id": account.id,
+            "amount": amount, "day": day, "memo": memo[:200]}
+
+    def apply(aid: str) -> handlers.Result:
+        oid = _queue(ctx.c, cid, "writeoff.create", body, by=who, action_id=aid, at=ctx.at)
+        return {"invoice_id": str(inv["id"]), "outbox_id": oid, "status": "queued", "amount": amount}
+    return handlers.Plan(K.default_gate(ctx.org, who, "invoice_write_off"),
+                         f"Write off {documents.money_of(amount)} of invoice {inv['number']}", apply,
+                         facts={"amount": amount, "counterparty": str(inv["contact_name"] or ""),
+                                "accounts": [account.code]})
+
+
 # Mirror-mode planners for the document actions: the provider takes the write first, so these queue it instead of
 # posting here (actions.py uses them in place of the native planners while the books are a provider's).
 DOC_PLANNERS: dict[str, handlers.Planner] = {
     "bill_create": _create_planner("bill"), "invoice_create": _create_planner("invoice"),
     "bill_void": _void_planner("bill"), "invoice_void": _void_planner("invoice"),
     "bill_mark_paid": _payment_planner("bill"), "invoice_record_payment": _payment_planner("invoice"),
+    "invoice_write_off": _writeoff_planner,
 }

@@ -423,3 +423,40 @@ def test_a_credit_memo_applied_to_an_invoice_carries_the_invoice_it_settles_and_
                                    "SalesItemLineDetail": {"ItemRef": {"value": "7"}},
                                    "LinkedTxn": [{"TxnType": "Invoice", "TxnId": "12"}]}]}, "CreditMemo", items)
     assert (memo.party, memo.total, memo.links) == ("Customer:4", 500, (("Invoice:12", 500),))
+
+
+WRITE_OFF = {"party": "Customer:4", "account": "Account:2", "day": "2026-10-12", "memo": "Uncollectible",
+             "total": 2000, "links": [["Invoice:12", 2000]]}
+
+
+def test_a_write_off_is_billed_by_the_bad_debt_item_that_sells_to_its_account_and_applied_to_its_invoice():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "2"}}]}}),
+                QC.Reply(200, {"CreditMemo": {"Id": "901", "SyncToken": "0"}}))
+    sent = _client(wire).send("writeoff.create", WRITE_OFF, "wo-key")
+    assert (sent.ok, sent.kind, sent.external_id) == (True, "CreditMemo", "901")
+    memo = json.loads(wire.sent[1][3] or b"{}")
+    assert memo["CustomerRef"] == {"value": "4"} and memo["TxnDate"] == "2026-10-12"
+    line = memo["Line"][0]
+    assert line["SalesItemLineDetail"] == {"ItemRef": {"value": "7"}, "Qty": 1, "UnitPrice": "20.00"}
+    assert line["Amount"] == "20.00" and line["LinkedTxn"] == [{"TxnId": "12", "TxnType": "Invoice"}]
+    assert f"requestid={uuid.uuid5(QC.NAMESPACE, 'wo-key')}" in wire.sent[1][1]
+
+
+def test_a_missing_bad_debt_item_is_created_once_with_its_own_request_id_and_then_billed_by():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {}}),
+                QC.Reply(200, {"Item": {"Id": "8", "SyncToken": "0"}}),
+                QC.Reply(200, {"CreditMemo": {"Id": "902", "SyncToken": "0"}}))
+    sent = _client(wire).send("writeoff.create", WRITE_OFF, "wo-key-2")
+    assert (sent.ok, sent.external_id) == (True, "902")
+    item = json.loads(wire.sent[1][3] or b"{}")
+    assert item == {"Name": "Bad debt", "Type": "Service", "IncomeAccountRef": {"value": "2"},
+                    "ExpenseAccountRef": {"value": "2"}}
+    assert f"requestid={uuid.uuid5(QC.NAMESPACE, 'wo-key-2:item')}" in wire.sent[1][1]
+    assert json.loads(wire.sent[2][3] or b"{}")["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {"value": "8"}
+
+
+def test_a_bad_debt_item_that_sells_to_another_account_refuses_the_write_off_before_anything_is_posted():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "40"}}]}}))
+    sent = _client(wire).send("writeoff.create", WRITE_OFF, "wo-key-3")
+    assert sent.ok is False and sent.final is True and "already sells to another account" in sent.error
+    assert [method for method, *_ in wire.sent] == ["GET"]
