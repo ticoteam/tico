@@ -38024,6 +38024,15 @@
       },
       "FinanceConnectionRequest": {
         "properties": {
+          "provider": {
+            "type": "string",
+            "enum": [
+              "mercury",
+              "stripe"
+            ],
+            "title": "Provider",
+            "default": "mercury"
+          },
           "credential_id": {
             "type": "string",
             "maxLength": 120,
@@ -38085,7 +38094,7 @@
           "credential_id"
         ],
         "title": "FinanceConnectionRequest",
-        "description": "Connect Mercury with a stored token credential. The approver is a Mercury user other than the token's creator,\nwho approves payments in Mercury; without one, payments stay off."
+        "description": "Connect a bank or Stripe with a stored credential. Mercury's token: the approver is a Mercury user other than the\ntoken's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key needs no\napprover."
       },
       "FinanceConnectionResult": {
         "type": "object",

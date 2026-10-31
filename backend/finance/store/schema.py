@@ -380,8 +380,6 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_account ON fin_feed_txns(money_account_
 CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
-CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_link ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.link'));
-CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.source'));
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
@@ -555,11 +553,18 @@ def phase4(c: sqlite3.Connection) -> None:
     create(c)
 
 
+STRIPE_INDEXES = """
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_link ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.link'));
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.source'));
+"""
+
+
 def stripe(c: sqlite3.Connection) -> None:
     """Cloud migration 69: the indexes the Stripe lookups search by, the charge link and the source id each Stripe row
-    carries in its raw json (a refund's charge total is one of them). The same statements as `create`, which skips
-    whatever exists."""
-    create(c)
+    carries in its raw json (a refund's charge total is one of them). Idempotent. They live here, not in `create`,
+    so an install from before 69 has no index on raw_json."""
+    for statement in statements(STRIPE_INDEXES):
+        c.execute(statement)
 
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:
