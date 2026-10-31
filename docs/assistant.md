@@ -3,20 +3,20 @@
 Every human has one private chat with the team's assistant (the `coo` bot; you may have renamed it): a personal
 bot that knows how Tico is laid out and does things in it on your behalf. **Ask Tico** opens it from any page: on a
 computer it is the sidebar's bottom row, above your account, with Search's icon (⌘K) at its end; it (or ⌘J / Ctrl+J)
-opens a small panel beside the rail, rising from the bottom left, and nothing floats over the page. On a phone the Liquid Dot in the
+opens a small panel straight above that row, over the sidebar, and nothing floats over the page. On a phone the Liquid Dot in the
 middle of the tab bar opens it as a sheet. The panel names the page it sees, and a message sent from it carries that
 page, so "this" and "here" mean what you are looking at. The panel is called **Tico Assistant** (or the name your team
 gave the assistant); its header has the dot, the name, the page it sees and **Loop in Support**. The chat is also a
 page of its own (`#/assistant`): the assistant's name, then the same thread and composer as a bot's chat, with a
 few things to ask while it is empty. The **Assistant** tab, first on your own page (`#/person/<you>`), opens the same
-page. An Assistant's room
-takes text only, for the owner too, so the composer has no attach button. There is no BotOps, Strategy Bot, Librarian or Assistant row in
+page. Attach files or
+pictures there, or in the Ask panel, with the clip, a drop or a paste, like any bot chat. There is no BotOps, Strategy Bot, Librarian or Assistant row in
 the rail: you ask the Assistant, and it hands its helpers what needs them (below). BotOps' own chat is still at
 `#/bot/botops`. These built-ins stay out of the team chart and Goals tree; Settings > Bots still manages all four.
 It works on a phone too.
 
 In the thread the Assistant's turns are plain text; yours are dark bubbles on the right. The live dot stays in the
-header: opening flies it up from the row (or tab) to its place beside the name, closing flies it back down; while the
+header: opening flies it up from the row (or tab) to its place beside the name, quickly, closing flies it back down; while the
 panel is open a close mark holds the dot's place. Bots' questions
 and Confirm cards sit in the thread by when they were asked, among the messages, so nothing waits out of sight.
 

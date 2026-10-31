@@ -474,13 +474,18 @@ COUNSEL_ROUTES = tuple((methods, re.compile(r"^/api/v2/" + pattern + r"$")) for 
     (GET, r"rules"),
     (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
     (WRITE, r"rules"),
-    (GET | WRITE, r"tasks/[^/]+"),
+    (GET | WRITE, r"tasks/(?!(?:flow|labels|stuck|dry-run)$)[^/]+"),     # one task, never a collection route
     (WRITE, r"tasks/[^/]+/comments"),
     (GET, r"files/[^/]+"),
     (GET, r"files/[^/]+/versions/\d+"),
     (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
 ))
 READ_SCOPE = "Counsel reads only its own task, the document version it was asked to read and its own run."
+# Counsel outside a run: every turn it takes carries the run's own token (runner-rs env.rs and warm.rs HUB_TOKEN; its
+# credentials are fetched with that token too), and it has no agent credential unless someone makes it an external
+# agent. Such a token owns every read task, so it calls nothing but `me`.
+STANDING = ((GET, re.compile(r"^/api/v2/me$")),)
+STANDING_REFUSED = "Counsel works only inside a run: outside one it reads and writes nothing."
 # SQL reads across the whole hub: never Counsel's, in a run or not (outside the allowlist too; its own words).
 SQL_READS = re.compile(r"^/api/(v2/)?sql/?$")
 SQL_REFUSED = "Counsel reads no SQL: it reads its own task and the document version it was asked to read."
@@ -489,22 +494,24 @@ SQL_REFUSED = "Counsel reads no SQL: it reads its own task and the document vers
 def read_refused(store, auth, who, method, path, query):
     """Why a call by Counsel is refused, or None. Only COUNSEL_ROUTES are its, whatever else its bot's rights would
     allow (another run's summary, an answer to another run's question, a page or a review of another version). On those:
-    a run's attempt and steps are its own run's alone, and Counsel outside a run reads none; a Counsel run reads only
-    the tasks it carries (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's
-    read (run_read), that file at that version, which it names. Counsel outside a run is left to those routes, which
-    grant it nothing from `rule_reads` (backend/files.py asked_to_read)."""
+    a run's attempt and steps are its own run's alone; a Counsel run reads only the tasks it carries
+    (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's read (run_read), that
+    file at that version, which it names. Counsel outside a run (no attempt) calls only STANDING."""
     if not is_counsel(who):
         return None
     if SQL_READS.match(path):
         return SQL_REFUSED
     method = method.upper()
+    if not who.attempt_id:
+        return None if any(method in methods and pattern.match(path) for methods, pattern in STANDING) \
+            else STANDING_REFUSED
     if not any(method in methods and pattern.match(path) for methods, pattern in COUNSEL_ROUTES):
         return READ_SCOPE
     parts = path.split("/")[3:]
     kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
     if kind in ("attempts", "turns"):
         return READ_SCOPE if ident != who.attempt_id else None
-    if not who.attempt_id or kind not in ("tasks", "files"):
+    if kind not in ("tasks", "files"):
         return None
     from .task_privacy import carried_tasks
     with store.read() as c:

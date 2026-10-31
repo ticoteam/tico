@@ -585,8 +585,8 @@ button:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .badge-btn.muted:hover { background: var(--fill-2); }
 
 /* ---- The Liquid Dot: Tico, the assistant, and nothing else. Flat jade, a little less than round. ---- */
-.ldot { display: block; width: 18px; height: 18px; border-radius: 47% 53% 52% 48% / 44% 47% 53% 56%; background: var(--dot); flex: none; }
-.ldot.thinking { animation: ld-think 2.4s ease-in-out infinite; }
+.ldot { display: block; width: 18px; height: 18px; border-radius: 43% 57% 55% 45% / 38% 44% 56% 62%; background: var(--dot); flex: none; }
+.ldot.thinking { animation: ld-think 1.6s ease-in-out infinite; }
 @keyframes ld-think { 0%, 100% { transform: rotate(0) scale(1); } 25% { transform: rotate(7deg) scale(1.04, 0.96); } 50% { transform: rotate(-3deg) scale(0.98, 1.02); } 75% { transform: rotate(4deg) scale(0.97, 1.03); } }
 @media (prefers-reduced-motion: reduce) { .ldot.thinking { animation: none; } }
 

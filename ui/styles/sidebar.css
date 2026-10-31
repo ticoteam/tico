@@ -153,7 +153,7 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 #tree .node.drop-before{box-shadow:0 -2px 0 var(--ink)}#tree .node.drop-after{box-shadow:0 2px 0 var(--ink)}
 #tree .node.drop-refused{outline:2px dashed var(--muted);outline-offset:1px;border-radius:6px;cursor:not-allowed}
 /* A status change redraws rows of the team list several times a minute: what moves inside it never lays out the
-   rest of the sidebar again. Layout only, not paint: the Bet box reaches past the list's box. */
+   rest of the sidebar again. Layout only, not paint. */
 #tree{contain:layout}
 /* A drop waits for Move: the moved row in its new place, and under it a strip across the rail (orgConfirmHTML), over
    the tree's lines. --org-confirm-in is how far the row is indented, so the strip starts at the rail's left edge. */
@@ -168,7 +168,9 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 #tree [draggable="true"]{-webkit-touch-callout:none;-webkit-user-select:none;user-select:none}
 .tree .org-no-group{display:none;margin-top:8px;padding:6px 8px;color:var(--muted);font-size:var(--t-sm);border:1px dashed var(--line);border-radius:6px}
 .tree.org-dragging .org-no-group{display:block}
-.tree .dept-label{flex:1;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+.tree .dept-label{flex:1;min-width:0;padding:5px 6px 5px 10px;color:var(--muted);font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;user-select:none}
+/* The name is its own box: text-overflow does not apply to a flex label (layout.css), so the ellipsis sits here. */
+.tree .dept-name{display:block;flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* A group's name opens its team page (#/team/<group>); the arrow beside it folds the group. */
 /* a team's label starts where the TEAM header's does (.section-toggle's 10px), not at the rows' --tree-lead */
 .tree a.dept-label{text-decoration:none}
@@ -193,12 +195,6 @@ body.in-setup #nav-inboxes-section,body.in-setup #gs-org-hint,body.in-setup #cha
 
 /* Keep the personal branch label visible even when a long bot name is clipped. */
 .org-branch{flex:none;color:var(--muted);font-size:var(--t-2xs);font-weight:500;white-space:nowrap}
-/* A group's Bet picker, under its row (ui/app/sidebar.js orgBetPopHTML); the flag stays lit when the group has one. */
-.org-tool.on{color:var(--ink)}
-/* In line with the group's members; the group's rail runs past it on the left. */
-.org-bet-pop{position:relative;margin:4px 0 6px calc(var(--tree-elbow) + var(--tree-gap) + var(--tree-lead));padding:8px;background:var(--surface);border:1px solid var(--line);border-radius:var(--r-pop);
-  --tree-stub-x:calc(-1px - var(--tree-elbow) - var(--tree-gap));--tree-from:-5px;--tree-down:7px}
-.org-bet-pop .org-bet-f select{height:32px;font-size:var(--t-base)}
 
 .bot-paused-badge{display:inline-flex;align-items:center;gap:3px;white-space:nowrap;flex-shrink:0}
 

@@ -4,10 +4,12 @@ and the reply says why, naming the bot's manager. Rehearsal changes nothing and 
 person's own write is never gated, and any failure lets the item through as before."""
 
 import threading
+import time
 
 import pytest
 
 from backend import ask_ingest as A
+from backend import call_slots as CS
 from backend import hubdb as H
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post   # noqa: F401
 
@@ -185,7 +187,7 @@ def test_rehearsal_changes_nothing_and_lists_what_on_would_do(gate):
     assert (item["mode"], item["outcome"], item["would"]) == ("rehearsal", A.THROUGH, A.SENT_BACK)
 
 
-@pytest.mark.parametrize("how", ["error", "timeout", "cap"])
+@pytest.mark.parametrize("how", ["error", "timeout", "cap", "busy"])
 def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     api, model, token = gate
     plate(api, 120)
@@ -194,6 +196,9 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     elif how == "timeout":
         monkeypatch.setattr(A, "DEADLINE", 0.2)
         model.hold = threading.Event()
+    elif how == "busy":
+        monkeypatch.setattr(A, "CONCURRENCY", 1)
+        assert A.calls_for(api.app.state.store).slots.acquire(blocking=False)     # the one slot is taken
     else:
         monkeypatch.setattr(A, "daily_cap", lambda settings, role: 0)
     out = file(api, token)
@@ -204,9 +209,80 @@ def test_it_fails_open_and_records_the_failure(gate, monkeypatch, how):
     assert item["outcome"] == A.FAILED_OPEN and item["ref"] == out["task"]["id"]
     if how == "cap":
         assert item["reason"] == "budget" and not model.calls
+    elif how == "busy":
+        # Refused at once: nothing was asked, and no judge.call row counts against the day.
+        assert item["reason"] == "busy" and not model.calls and not calls(api)
     else:
         [call] = calls(api)
         assert ('"error": "%s"' % how) in call["detail_json"]
+
+
+def test_a_full_pool_refuses_at_once_and_a_freed_slot_runs_again(gate, monkeypatch):
+    api, model, token = gate
+    monkeypatch.setattr(A, "CONCURRENCY", 1)
+    model.hold = threading.Event()
+    first = threading.Thread(target=file, args=(api, token), kwargs={"title": "First"})
+    first.start()
+    try:
+        for _ in range(500):                  # until the first call holds the slot
+            if model.calls:
+                break
+            time.sleep(0.01)
+        started = time.monotonic()
+        out = file(api, token, title="Second")
+        assert time.monotonic() - started < 2
+        assert out["task"]["owner"] == "human:ben" and "ingest" not in out
+    finally:
+        model.hold.set()
+        first.join(10)
+    reasons = [i["reason"] for i in items(api)]
+    assert len(reasons) == 2 and reasons.count("busy") == 1
+    file(api, token, title="Third")           # the first call has ended, so its slot is free
+    assert len(model.calls) == 2
+
+
+def test_an_abandoned_call_keeps_its_slot_until_it_really_ends(gate, monkeypatch):
+    api, model, token = gate
+    monkeypatch.setattr(A, "CONCURRENCY", 1)
+    monkeypatch.setattr(A, "DEADLINE", 0.2)
+    model.hold = threading.Event()
+    assert file(api, token, title="First")["task"]["owner"] == "human:ben"     # the waiter gives up; the call runs on
+    started = time.monotonic()
+    file(api, token, title="Second")          # so the slot is still taken
+    assert time.monotonic() - started < 2 and len(model.calls) == 1
+    model.hold.set()
+    slots = A.calls_for(api.app.state.store).slots
+    for _ in range(500):
+        if slots.acquire(blocking=False):
+            slots.release()
+            break
+        time.sleep(0.01)
+    else:
+        pytest.fail("the abandoned call never gave its slot back")
+    file(api, token, title="Third")
+    assert len(model.calls) == 2
+
+
+def test_repeated_failures_pause_ask_ingest_calls(gate):
+    api, model, token = gate
+    model.fail = RuntimeError("provider down")
+    for n in range(CS.BREAKER_FAILURES):
+        file(api, token, title=f"Question {n}")
+    assert len(model.calls) == CS.BREAKER_FAILURES
+    started = time.monotonic()
+    file(api, token, title="Next")
+    assert time.monotonic() - started < 2 and len(model.calls) == CS.BREAKER_FAILURES
+    assert items(api)[-1]["reason"] == "breaker"
+
+
+def test_ask_ingest_and_rule_checks_have_their_own_slots(gate, monkeypatch):
+    from backend import org_rule_check as K
+    api, model, token = gate
+    monkeypatch.setattr(A, "CONCURRENCY", 1)
+    store = api.app.state.store
+    assert A.calls_for(store).slots.acquire(blocking=False)        # ask ingest's one slot is taken
+    assert K.calls_for(store).slots.acquire(blocking=False)        # a rule check still gets one
+    K.calls_for(store).slots.release()
 
 
 def test_a_persons_own_task_for_someone_is_not_gated_but_counts(gate):

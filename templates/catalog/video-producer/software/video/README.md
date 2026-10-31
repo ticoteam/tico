@@ -58,10 +58,13 @@ Headed is used on Linux when `DISPLAY` is set, unless `--headless` is given. The
 `goto` finishes is trimmed. A cursor (arrow) is drawn in every page of the session. It glides to each
 target before a click or typing, and shows a ripple on press.
 
-`--as-bot` records your company's Tico as this bot, with this bot's rights, and only during a bot turn (it needs
-`HUB_API_URL` and `HUB_TOKEN` from the runner; `tico-file:<path>` works too). The bot token is sent only to the Tico
-server, never to other sites. With `--as-bot`, a `goto` url starting with `/` opens that page on your Tico, for example
-`"/tasks"` goes to `https://hub.tico.team/tasks`. Without it, `/` paths are files as before.
+`--as-bot` first checks, with this bot's token (`HUB_API_URL` and `HUB_TOKEN` from the runner; `tico-file:<path>` works
+too), that the Tico web app opens for a bot. For a bot it fails today: the app's pages need a person, so the run stops
+with one line before any browser starts. Record the demo workspace instead (`playbooks/screen-demo.md`). Once the check passes, the bot
+token is sent only to the Tico server, never to other sites, and a `goto` url starting with `/` opens that path on your
+Tico. Without `--as-bot`, `/` paths are files next to the shots file.
+
+Tico's pages are hash routes: a `goto` to a Tico page is `http://localhost:8765/#/tasks` (the demo), never `/tasks`.
 
 ### shots.json
 
