@@ -16,15 +16,15 @@ async function recentRuns() {
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
 // the conversation is torn down when you leave Chat, because it polls.
 // Configuration has its own five tabs (Rules lists what the bot must follow, ui/app/org-rules.js); old More, Docs and Session links retain a destination.
-const BOT_DETAIL_TABS = ['info', 'instructions', 'history', 'rules', 'settings'];
+const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings'];
 const BOT_TABS = ['chat', 'tasks', ...BOT_DETAIL_TABS];
 // The assistant is chatted with only on each person's own Assistant page (#/assistant), so its bot page has no Chat.
 const botTabs = slug => {
   const tabs = slug === assistantBot() ? BOT_TABS.filter(t => t !== 'chat') : BOT_TABS;
   const mine = S.emps.find(e => e.name === slug)?.my_access;
   // Seen but not read: no updates or docs, and Chat and Tasks only for someone who may write to it (the
-  // page then holds their own threads and tasks with the bot, and the request box).
-  return mine && !mine.read ? tabs.filter(t => t === 'info' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
+  // page then holds their own threads and tasks with the bot, and the request box). Every teammate reads its Rules.
+  return mine && !mine.read ? tabs.filter(t => t === 'info' || t === 'rules' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
@@ -462,7 +462,6 @@ async function pageBot(slug, tab) {
 
     ${settingsCanManageBot(e) ? '<section class="card"><header><h2>Settings changes</h2></header><div id="bot-settings-history">Loading…</div></section>' : ''}
   </div>
-  <div id="pane-rules" role="tabpanel" aria-labelledby="bot-tab-rules" hidden><div id="bot-rules" class="ru-bot"></div></div>
   <div id="pane-settings" role="tabpanel" aria-labelledby="bot-tab-settings" hidden>
     <section class="card"><div class="bot-editor bot-editor-inline" id="bot-editor"><div class="empty">Loading settings…</div></div><div id="bot-settings-panels"></div></section>
     <section class="card"><header><h2>Screen</h2></header><dl class="bot-setup" id="bot-screen-settings"></dl></section>
@@ -472,6 +471,7 @@ async function pageBot(slug, tab) {
 
   </div>`}
 
+  <div id="pane-rules" role="tabpanel" aria-labelledby="bot-tab-rules" hidden><div id="bot-rules" class="ru-bot"></div></div>
   ${limited ? '<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>' : `<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>
     <section class="card"><header><h2>Instructions</h2></header><div class="md" id="agent">Loading…</div>
       <div id="bot-instructions-editor"></div></section>

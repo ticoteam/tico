@@ -342,6 +342,11 @@ def test_a_due_date_keeps_its_edit_chain_and_is_readable_by_id(api):
     mid = get(api, f"rule-due/{second}")
     assert mid["replaces"] == due["id"] and mid["replaced_by"] == third
     assert [link["id"] for link in mid["chain"]] == [due["id"], second, third]
+    assert not old["can_edit"] and not old["can_satisfy"]
+    live = get(api, f"rule-due/{third}")
+    assert live["can_edit"] and live["can_satisfy"]
+    as_bot = api.get(f"/api/v2/rule-due/{third}", headers=headers("ops-test")).json()
+    assert not as_bot["can_edit"] and as_bot["can_satisfy"]
     post(api, f"rule-due/{third}/remove", {})
     removed = get(api, f"rule-due/{third}")
     assert removed["chain"][-1]["retired_at"] is not None
