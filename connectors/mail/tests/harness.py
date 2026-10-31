@@ -171,7 +171,7 @@ class Stage2(unittest.TestCase):
         # A person has already confirmed in Tico what each bot.yaml asks (backend/mail_settings.py); the tests of the
         # server-held switch itself replace this.
         pl.SERVER_GET = self.confirmed_setting
-        pl.HUB_POST = lambda path, body: None       # no Tico to ask the org rule check of: sends go on
+        pl.HUB_POST = lambda path, body, key=None: None    # no Tico to ask the org rule check of: sends go on
         audit_log.AUDIT_PATH = self.root / "audit.jsonl"
         os.environ["MAIL_REVIEWER"] = "none"
         os.environ["MAIL_DECISIONS"] = "none"        # no judge either; test_judge.py injects a fake engine

@@ -209,13 +209,15 @@ ahead of time so it doesn't try.
     connector only reads the on/off switch). It's one try within 20 s (the longest deadline plus a margin). A person's
     mail, their Assistant's included, answers `not_checked`. Another bot's token is refused; a refusal or a server
     error is a `rules.unchecked` event (reason `forbidden` / `error`), and the connector sends on a failed check but
-    logs it (`rule-check-failed`) and says so in its answer. A send after a check Tico never answered (a timeout, no
-    connection, a proxy's 502/503/504 without Tico's error body) is kept in the connector's state as an id only (at
-    most 100 per bot, oldest dropped) and reported once Tico answers again: `POST /api/v2/bots/{bot}/mail-check/misses
-    {ids}` records one `rules.unchecked` per id new for that bot (reason `connector`), so a repeat counts nothing, and
-    the connector forgets them after its 2xx. A release without that route (404/405) leaves them queued. A refusal or
-    a 5xx from Tico is never queued: the route recorded it. BotOps writing mail for
-    a person finds its holds and approvals under BotOps, the author they were held as.
+    logs it (`rule-check-failed`) and says so in its answer. Each check carries a fresh UUID as its
+    Idempotency-Key, and the route keeps it with any `rules.unchecked` it writes for that check (`org_rule_misses`).
+    A mail sent after any failed check (any status, or no answer) is kept in the connector's state by that key alone
+    (at most 100 per bot, oldest dropped) and reported once Tico answers again: `POST
+    /api/v2/bots/{bot}/mail-check/misses {ids}` records one `rules.unchecked` (reason `connector`) per id not yet
+    kept for that bot, so a check the route counted, or a repeat, counts nothing more. It counts only when a rule
+    in force names the bot with With empty (an id can't say where the mail went), up to 200 a bot a UTC day. The
+    connector forgets the ids after its 2xx; a release without the route (404/405) leaves them queued. BotOps writing
+    mail for a person finds its holds and approvals under BotOps, the author they were held as.
 
   Not phase 1: public roadmap comments (Later #16). Send/publish approvals aren't check points:
   they're optional, so they'd only catch sends a bot chose to ask about.

@@ -11,13 +11,13 @@
   messages    every normalized message a sync (or an opportunistic fetch) has stored,
               so the Mac can push a batch later without holding a hub token
   sync_state  per mailbox: Gmail history cursor, last run, last error, live count
-  mail_check_misses  mails sent after their org rule check got no answer from Tico, by id, until Tico counts them
-                     (an id, the employee and when: nothing of the mail)
+  mail_check_misses  mails sent after their org rule check brought back no verdict, by the check's id, until Tico
+                     counts them (the id, the employee and when: nothing of the mail)
 
 Nothing here talks to Google. Tests point it at a temp file.
 """
 
-import json, sqlite3, time, uuid
+import json, sqlite3, time
 from pathlib import Path
 
 from . import DB_PATH, stamp
@@ -247,10 +247,10 @@ def record_audit(conn, row):
 MAIL_CHECK_MISSES_MAX = 100     # kept per employee, oldest dropped; also what one report to Tico carries
 
 
-def add_mail_check_miss(conn, employee):
-    """A mail sent after its org rule check got no answer from Tico: an id for Tico to count once, later."""
-    conn.execute("INSERT INTO mail_check_misses (id, employee, created) VALUES (?,?,?)",
-                 (str(uuid.uuid4()), employee, stamp()))
+def add_mail_check_miss(conn, employee, check_id):
+    """A mail sent after its org rule check brought back no verdict: the check's id, for Tico to count once, later."""
+    conn.execute("INSERT OR IGNORE INTO mail_check_misses (id, employee, created) VALUES (?,?,?)",
+                 (check_id, employee, stamp()))
     conn.execute("DELETE FROM mail_check_misses WHERE employee=? AND id NOT IN (SELECT id FROM mail_check_misses "
                  "WHERE employee=? ORDER BY created DESC, rowid DESC LIMIT ?)",
                  (employee, employee, MAIL_CHECK_MISSES_MAX))

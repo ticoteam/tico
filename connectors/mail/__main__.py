@@ -41,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, weakref
+import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid, weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1859,7 +1859,8 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
     # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
     # logged and named in the answer.
-    ruled = pl.rule_check(ctx.slug, to, cc, subject, body)
+    check_id = str(uuid.uuid4())                        # the check's Idempotency-Key, and its miss's id if it fails
+    ruled = pl.rule_check(ctx.slug, to, cc, subject, body, key=check_id)
     if ruled and not ruled.get("failed") and not ctx.dry:
         # Tico answers again: the sends whose check it never answered are told to it now, forgotten once it took them.
         db.drop_mail_check_misses(ctx.conn, pl.report_misses(ctx.slug, db.mail_check_misses(ctx.conn, ctx.slug)))
@@ -1896,16 +1897,20 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         ctx.audit("send-duplicate", draft_id, {"key": key, "message": row.get("message_id")})
         return dict(base, sent=True, already_sent=True, message=row.get("message_id", ""),
                     key=key, note="this exact send was already made; nothing was sent again.")
+    missed = bool(ruled and ruled.get("failed"))
+    if missed:
+        # Out with no verdict: kept with the pending send, Tico hears of it by the check's id once it answers again.
+        db.add_mail_check_miss(ctx.conn, ctx.slug, check_id)
     try:
         res = ctx.gmail.send_draft(draft_id)
     except Failure:
         db.drop_send(ctx.conn, key)                     # never sent: let a retry try again
+        if missed:
+            db.drop_mail_check_misses(ctx.conn, [check_id])
         raise
     message_id = res.get("id", "")
     thread_id = res.get("threadId") or thread_id
     db.finish_send(ctx.conn, key, message_id, "sent")
-    if ruled and ruled.get("failed") and not ruled.get("answered"):
-        db.add_mail_check_miss(ctx.conn, ctx.slug)      # out unchecked, and Tico never heard: it hears of it next time
     handled = lb.handled(ctx.slug)
     label_thread(ctx, handled, msgs, [message_id])
     ctx.audit("send", message_id or draft_id,

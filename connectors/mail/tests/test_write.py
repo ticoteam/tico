@@ -54,7 +54,7 @@ class Sending(Writing):
         # The org rule check answers warn (backend/org_rule_check.py): the recipient reads the line above the mail.
         did = self.make()
         line = "Warning: Influencer's message may break the rule 'Offers need a review.'"
-        pl.HUB_POST = lambda path, body: {"outcome": "warn", "warning_line": line,
+        pl.HUB_POST = lambda path, body, key=None: {"outcome": "warn", "warning_line": line,
                                           "rule_warning": {"text": "delivered with a warning"}}
         rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
         self.assertEqual(rc, 0, err)
@@ -71,8 +71,8 @@ class Sending(Writing):
         # Tico refused the check (another bot's token) or failed: the send goes out, never quietly.
         did = self.make()
 
-        def refused(path, body):
-            raise pl.HubFailed("forbidden")
+        def refused(path, body, key=None):
+            raise pl.HubFailed("forbidden", status=403)
         pl.HUB_POST = refused
         rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
         self.assertEqual(rc, 0, err)
@@ -84,47 +84,59 @@ class Sending(Writing):
     def misses(self):
         return db.mail_check_misses(self.conn(), "influencer")
 
-    def send(self):
-        return self.run_json("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")[1]
+    def send(self, n=0):
+        rc, p, err = self.draft("--subject", f"Ava, 6 months of Acme on us ({n})")      # its own draft and send
+        self.assertEqual(rc, 0, err)
+        return self.run_json("send", "--as", "influencer", "--draft", p["draft"], "--issue", "42")[1]
 
-    def test_a_send_after_a_check_tico_never_answered_is_reported_once_it_answers(self):
-        reported = []
+    def test_a_send_after_any_failed_check_is_kept_by_that_checks_id_and_reported_once_tico_answers(self):
+        self.write_policy(harness.POLICY.replace("per_recipient_cooldown_days: 365", "per_recipient_cooldown_days: 0")
+                          .replace("per_recipient_cooldown_days: 14", "per_recipient_cooldown_days: 0"))
+        keys, reported = [], []
 
-        def silent(path, body):
-            raise pl.HubFailed("unavailable", answered=False)
+        def failing(failure):
+            def post(path, body, key=None):
+                keys.append(key)
+                raise failure
+            return post
 
-        def back(path, body):
+        def back(path, body, key=None):
             if path.endswith("/misses"):
                 reported.append(body["ids"])
                 return {"recorded": len(body["ids"]), "known": []}
             return {"outcome": "pass"}
-        pl.HUB_POST = silent
-        self.assertTrue(self.send()["sent"])
-        [miss] = self.misses()
+        # Whatever the failure, Tico's refusal or error, a stale lease, a proxy, a timeout: kept, by the check's key.
+        for n, failure in enumerate((pl.HubFailed("forbidden", 403), pl.HubFailed("http_409", 409),
+                                     pl.HubFailed("http_401", 401), pl.HubFailed("http_530", 530),
+                                     pl.HubFailed("http_500", 500), pl.HubFailed("unavailable"))):
+            pl.HUB_POST = failing(failure)
+            self.assertTrue(self.send(n)["sent"])
+        self.assertEqual(sorted(self.misses()), sorted(keys))
+        self.assertEqual(len(set(keys)), 6)
         pl.HUB_POST = back
-        self.send()                                     # the recipient cooldown stops this one; the report goes
-        self.assertEqual((reported, self.misses()), ([[miss]], []))
+        self.send(9)
+        self.assertEqual(([sorted(r) for r in reported], self.misses()), ([sorted(keys)], []))
+
+    def test_a_mail_that_did_not_go_out_keeps_no_miss(self):
+        pl.HUB_POST = lambda path, body, key=None: (_ for _ in ()).throw(pl.HubFailed("unavailable"))
+        self.service.send_fails = True
+        self.run_cli("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")
+        self.service.send_fails = False
+        self.assertEqual(self.misses(), [])
 
     def test_an_older_tico_without_the_misses_route_keeps_them_and_still_holds_the_mail(self):
-        pl.HUB_POST = lambda path, body: (_ for _ in ()).throw(pl.HubFailed("unavailable", answered=False))
+        pl.HUB_POST = lambda path, body, key=None: (_ for _ in ()).throw(pl.HubFailed("unavailable"))
         self.send()
         queued = self.misses()
 
-        def older(path, body):
+        def older(path, body, key=None):
             if path.endswith("/misses"):
                 raise pl.HubFailed("http_404", status=404)
             return {"outcome": "held", "held": {"text": "held by the rule 'No offers by mail.'"}}
         pl.HUB_POST = older
-        p = self.send()
+        p = self.send(1)
         self.assertEqual((p["sent"], p["gate"]), (False, "rules"))
         self.assertEqual(self.misses(), queued)
-
-    def test_a_check_tico_answered_with_a_refusal_or_its_own_error_queues_nothing(self):
-        # The route recorded those itself (backend/org_rule_check.py mail_unchecked).
-        for failure in (pl.HubFailed("forbidden", status=403), pl.HubFailed("http_500", status=500)):
-            pl.HUB_POST = lambda path, body, failure=failure: (_ for _ in ()).throw(failure)
-            self.send()
-        self.assertEqual(self.misses(), [])
 
     def test_the_idempotency_row_is_written_before_the_api_call(self):
         did = self.make()

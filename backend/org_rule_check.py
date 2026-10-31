@@ -89,6 +89,7 @@ SCHEMA = (
 )
 MISSES_MAX = 100              # ids one report carries (connectors/mail keeps at most this many per bot)
 MISSES_KEPT_DAYS = 90         # how long a reported id is remembered, so a late repeat still counts once
+MISSES_DAY_MAX = 200          # connector-reported misses one bot can add to a UTC day's unchecked count
 
 # Send anyway's writes, by operation: fn(c, bot identity, hold, replay data, ingest) -> the write's answer. Registered
 # by the module that owns the write (backend/app.py, execution, automations), so the replay is the normal write.
@@ -1124,22 +1125,44 @@ def health_findings(c, settings):
 MISS_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
 
 
+def keep_miss(c, author, check_id):
+    """The mail check `check_id` (its Idempotency-Key) is counted unchecked for this bot: a later report of the same
+    id counts nothing. Inside the write that counted it."""
+    if check_id:
+        return c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created) VALUES(?,?,?)",
+                         (author, check_id, H.now())).rowcount == 1
+    return False
+
+
+def check_id_of(request):
+    """A mail check's id: its Idempotency-Key, when the mail tool made it a UUID (connectors/mail)."""
+    key = str(request.headers.get("idempotency-key") or "").strip().lower()
+    return key if MISS_ID.fullmatch(key) else ""
+
+
 def record_misses(c, author, ids):
-    """Inside the write: each id new for this bot is kept and, when a rule applies to the bot, one `rules.unchecked`;
-    an id kept before is `known`. Ids older than MISSES_KEPT_DAYS are forgotten."""
-    now = H.now()
+    """Inside the write: each id not yet counted for this bot (by the check itself, or an earlier report) is kept and
+    is one `rules.unchecked`, when a rule in force covers the bot whatever the recipients (Who names it, With empty:
+    an id says nothing of whom the mail went to), up to MISSES_DAY_MAX a UTC day. Ids older than MISSES_KEPT_DAYS are
+    forgotten."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=MISSES_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
     c.execute("DELETE FROM org_rule_misses WHERE created<?", (cutoff,))
-    counted = watched(c, author)
-    known, recorded = [], 0
+    counted = on(c) and bool(R.matching(c, author))
+    room = MISSES_DAY_MAX - c.execute(
+        "SELECT count(*) FROM events WHERE action='rules.unchecked' AND actor=? AND ts>=? "
+        "AND json_extract(detail_json,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
+    known, recorded, over = [], 0, 0
     for miss in ids:
-        if not c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created) VALUES(?,?,?)",
-                         (author, miss, now)).rowcount:
+        if not keep_miss(c, author, miss):
             known.append(miss)
-        elif counted:
+        elif counted and recorded < room:
             H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
                                                           "bot": H.actor_id(author)})
             recorded += 1
+        elif counted:
+            over += 1
+    if over:
+        LOG.warning("%s reported %s more unchecked mails than a day counts (%s)", author, over, MISSES_DAY_MAX)
     return {"recorded": recorded, "known": known}
 
 
@@ -1174,7 +1197,7 @@ def install(app, store, auth, mutate):
     class MailMisses(Contract):
         ids: list[str] = Field(min_length=1, max_length=MISSES_MAX)
 
-    def mail_unchecked(author, bot, body, reason):
+    def mail_unchecked(author, bot, body, reason, check_id=""):
         """A mail check that could not run (refused, or the server failed): the connector sends the mail unchecked, so
         it counts as unchecked here, for the Rules header and the Health finding, when a rule applies to that bot."""
         try:
@@ -1185,15 +1208,16 @@ def install(app, store, auth, mutate):
                 if rules:
                     H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": reason,
                                                                   "rules": [r["id"] for r in rules], "bot": bot})
+                    keep_miss(c, author, check_id)
         except Exception as exc:  # noqa: BLE001 - recording a failure never adds one
             LOG.warning("Recording a failed mail check failed: %s", type(exc).__name__)
 
     @app.post("/api/v2/bots/{bot}/mail-check/misses")
     def mail_check_misses(request: Request, bot: str, body: MailMisses):
-        """Mails the bot's mail tool sent after a check that got no answer from Tico (a timeout, no connection, a proxy
-        error), reported by the ids it gave them once Tico answers again: one `rules.unchecked` each (reason
-        `connector`) when a rule applies to the bot. An id already reported counts nothing (`known`). The same
-        callers as mail-check: a person's own mail was never checked, so it records nothing."""
+        """Mails the bot's mail tool sent after a check that brought back no verdict (any failure), reported once Tico
+        answers again by each check's id, its Idempotency-Key: one `rules.unchecked` each (reason `connector`,
+        `record_misses`). An id the check itself already counted, or an earlier report, counts nothing (`known`).
+        The same callers as mail-check: a person's own mail was never checked, so it records nothing."""
         who = request.state.identity
         author = author_of(who, store.settings.assistant_bot)
         if not author:
@@ -1215,23 +1239,25 @@ def install(app, store, auth, mutate):
         author = author_of(who, store.settings.assistant_bot)
         if not author:
             return {"outcome": "not_checked"}
+        check_id = check_id_of(request)
         if author != "bot:" + bot:
             LOG.warning("A mail check for %s came with another bot's token", bot)
-            mail_unchecked(author, bot, body, "forbidden")
+            mail_unchecked(author, bot, body, "forbidden", check_id)
             raise Problem("forbidden", "A bot checks only its own mail", 403)
         try:
-            return mail_checked(request, who, author, body)
+            return mail_checked(request, who, author, body, check_id)
         except Problem as exc:
             if exc.status >= 500:
-                mail_unchecked(author, bot, body, "error")
+                mail_unchecked(author, bot, body, "error", check_id)
             raise
         except Exception:
-            mail_unchecked(author, bot, body, "error")
+            mail_unchecked(author, bot, body, "error", check_id)
             raise
 
-    def mail_checked(request, who, author, body):
+    def mail_checked(request, who, author, body, check_id=""):
         """`author` is the bot the mail is checked as (BotOps for a person included): its holds and approvals are
-        found under it; `who` stays the caller, for the write's permission and audit."""
+        found under it; `who` stays the caller, for the write's permission and audit. A check counted unchecked keeps
+        `check_id`, so the mail tool's later report of it (it never got this answer) counts nothing more."""
         key = mail_digest(body.to, body.cc, body.subject, body.body)
         output = (f"Subject: {body.subject}\n\n" if body.subject else "") + body.body
         with store.read() as c:
@@ -1252,6 +1278,14 @@ def install(app, store, auth, mutate):
             return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
 
         def work(c):
+            mark = c.execute("SELECT coalesce(max(rowid), 0) FROM events").fetchone()[0]
+            out = decide(c)
+            if check_id and c.execute("SELECT 1 FROM events WHERE rowid>? AND action='rules.unchecked' AND actor=? "
+                                      "LIMIT 1", (mark, author)).fetchone():
+                keep_miss(c, author, check_id)
+            return out
+
+        def decide(c):
             waiting = open_mail_hold(c, author, key) if holds(verdict) else None
             if approved:
                 if current_matched(c, approved) != {tuple(x) for x in check[0]}:

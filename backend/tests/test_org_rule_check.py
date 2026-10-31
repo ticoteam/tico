@@ -846,33 +846,69 @@ def test_reported_misses_count_once_however_often_or_concurrently_they_come(rule
     assert get(api, "rules/stats")["unchecked_today"] == 4
 
 
-def test_a_send_after_a_check_tico_never_answered_counts_once_when_the_connector_reports_it(ruled, tmp_path,
-                                                                                           monkeypatch):
-    # The connector's own pieces against this server: a timeout, the send's miss, then Tico back.
+@pytest.mark.parametrize("how", ["budget", "error", "stale_lease", "proxy_530", "forbidden"])
+def test_a_send_after_a_failed_check_counts_once_whether_the_route_counted_it_or_never_saw_it(ruled, tmp_path,
+                                                                                            monkeypatch, how):
+    # The connector's own pieces (connectors/mail) against this server: a check with no verdict for the mail tool,
+    # the mail sent and kept by the check's id, then Tico answering again.
     from connectors.mail import db as mail_db, policy as pl
-    api, _ = ruled
+    api, judge = ruled
     color_rule(api)
     conn = mail_db.connect(tmp_path / "mail.db")
-
-    def timed_out(path, body):
-        raise pl.HubFailed("unavailable", answered=False)
-
-    def tico(path, body):
-        return post(api, path, body, token="ops-test")
-    monkeypatch.setattr(pl, "HUB_POST", timed_out)
-    mail = (["vendor@outside.example"], [], "Hi", "Thanks for the call.")
-    failed = pl.rule_check("ops", *mail)
-    assert failed["failed"] and failed["answered"] is False
-    mail_db.add_mail_check_miss(conn, "ops")                     # the mail went out unchecked
     before = get(api, "rules/stats")["unchecked_today"]
+    token = "finance-test" if how == "forbidden" else "ops-test"
+
+    def check(path, body, key=None):
+        if how == "budget":
+            api.app.state.store.settings.rules_monthly_usd = 1.0
+            with api.app.state.store.transaction() as c:
+                H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
+        judge.fail = RuntimeError("provider down") if how == "error" else None
+        if how in ("budget", "error"):
+            # The route counts it unchecked and commits; its answer is lost on the way back.
+            assert post(api, path, body, token=token, key=key)["outcome"] == "unchecked"
+            raise pl.HubFailed("unavailable")
+        if how == "forbidden":
+            post(api, path, body, token=token, key=key, expected=403)       # counted by the route, refused
+            raise pl.HubFailed("forbidden", 403)
+        raise pl.HubFailed(*{"stale_lease": ("http_409", 409), "proxy_530": ("http_530", 530)}[how])
+
+    def tico(path, body, key=None):
+        r = api.post("/api/v2/" + path, json=body, headers=headers(token, key))
+        if r.status_code >= 300:
+            raise pl.HubFailed(f"http_{r.status_code}", r.status_code)
+        return r.json()
+    monkeypatch.setattr(pl, "HUB_POST", check)
+    mail = (["vendor@outside.example"], [], "Hi", "Thanks for the call.")
+    check_id = str(uuid.uuid4())
+    assert pl.rule_check("ops", *mail, key=check_id)["failed"]
+    mail_db.add_mail_check_miss(conn, "ops", check_id)          # the mail went out with no verdict
     monkeypatch.setattr(pl, "HUB_POST", tico)
-    assert pl.rule_check("ops", *mail)["outcome"] == "pass"
+    judge.fail = None
+    api.app.state.store.settings.rules_monthly_usd = 0
+    if how == "forbidden":
+        # The other bot's report is refused too; the route already counted that check.
+        assert pl.report_misses("ops", [check_id]) == []
+        assert get(api, "rules/stats")["unchecked_today"] == before + 1
+        return
     pending = mail_db.mail_check_misses(conn, "ops")
-    taken = pl.report_misses("ops", pending)
-    assert pl.report_misses("ops", pending) == taken == pending     # a repeat, as after a lost reply
-    mail_db.drop_mail_check_misses(conn, taken)
-    assert mail_db.mail_check_misses(conn, "ops") == []
+    assert pl.report_misses("ops", pending) == pending == [check_id]
+    assert pl.report_misses("ops", pending) == pending           # a repeat, as after a lost reply
+    mail_db.drop_mail_check_misses(conn, pending)
     assert get(api, "rules/stats")["unchecked_today"] == before + 1
+
+
+def test_a_report_counts_only_under_a_rule_with_no_with_and_up_to_a_days_cap(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api, **{"with": {"people": ["ben"]}})          # only mail to Ben: an id cannot say where a mail went
+    assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ops-test")["recorded"] == 0
+    color_rule(api)
+    monkeypatch.setattr(K, "MISSES_DAY_MAX", 3)
+    ids = [str(uuid.uuid4()) for _ in range(4)]
+    assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test") == {"recorded": 3, "known": []}
+    assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ops-test")["recorded"] == 0
+    assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test")["known"] == ids
+    assert get(api, "rules/stats")["unchecked_today"] == 3
 
 
 def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is_not_checked(ruled, monkeypatch):

@@ -6,7 +6,6 @@ exception, because a send that fails must still leave the words somewhere.
 """
 
 import sys, unittest
-from unittest import mock
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -84,24 +83,3 @@ class DraftGate(Stage2):
 
 if __name__ == "__main__":
     unittest.main()
-
-
-class RuleCheckFailures(unittest.TestCase):
-    """Which failed checks Tico never heard of (the send reports those later) and which its route recorded itself."""
-
-    def failed(self, error):
-        from clients import tico
-        with mock.patch.dict("os.environ", {"HUB_API_URL": "https://tico.acme.example", "HUB_TOKEN": "t"}), \
-                mock.patch.object(tico.Client, "post", side_effect=error):
-            with self.assertRaises(pl.HubFailed) as caught:
-                pl._default_hub_post("bots/influencer/mail-check", {})
-        return caught.exception.answered
-
-    def test_only_a_check_tico_never_answered_is_unanswered(self):
-        from clients.tico import APIError
-        self.assertFalse(self.failed(APIError("unavailable", "no answer")))
-        for status in (502, 503, 504):
-            self.assertFalse(self.failed(APIError("http_error", "HTTP 502", status)))
-            self.assertTrue(self.failed(APIError("internal", "Tico failed", status)))     # Tico's own error body
-        self.assertTrue(self.failed(APIError("forbidden", "not this bot's", 403)))
-        self.assertTrue(self.failed(APIError("http_error", "HTTP 500", 500)))
