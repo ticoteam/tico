@@ -132,11 +132,13 @@ def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> lis
         if not sees_budget(ctx, who, b):
             continue
         if private_scope(ctx, who, b):
-            out.append({"budget_id": bid, "name": b.name, "remaining": None, "remaining_after": None})
+            out.append({"budget_id": bid, "name": b.name, "remaining": None, "remaining_after": None,
+                        "excl_payroll": False})
             continue
-        s = budgeting.state(ctx, bid, at, view=ctx.view(who))
+        s = budgeting.state(ctx, bid, at, read=budgeting.Netted(ctx.view(who)))
         out.append({"budget_id": bid, "name": b.name, "remaining": s.remaining,
-                    "remaining_after": None if s.remaining is None else s.remaining - amount})
+                    "remaining_after": None if s.remaining is None else s.remaining - amount,
+                    "excl_payroll": s.excluded})
     return out
 
 

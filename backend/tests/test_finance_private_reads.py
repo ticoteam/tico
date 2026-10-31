@@ -1,6 +1,8 @@
 """The Finance tab's money reads keep private lines private and follow the current view: a payroll feed row never
 shows its amount or payee to a teammate who sees the bank line but not payroll detail, a payment to a private line is
 left out (of lists and of the balance sheet's due-out totals), and a payer whose grant was revoked sees only that their payment exists and its status."""
+from datetime import date
+
 from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
@@ -127,6 +129,7 @@ def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
 
 
 NOV = "2026-11-05T12:00:00.000000Z"
+LATER = "2026-10-15T12:30:00.000000Z"
 
 
 def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
@@ -200,9 +203,9 @@ def test_reversing_the_pays_bill_entry_never_re_exposes_the_amount(books):
         assert sorted(e["amount"] for e in mine["entries"]) == [-4_000, 4_000, 4_000]
 
 
-def _other_budget(c) -> str:
+def _other_budget(c, at: str = NOV) -> str:
     made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
-                                           "amount": 10_000}, at=NOV)
+                                           "amount": 10_000}, at=at)
     assert made.status == "committed", made
     return str(made.result["budget_id"])
 
@@ -215,17 +218,101 @@ def test_a_budget_on_other_expenses_never_shows_a_payroll_payment_to_a_viewer_wi
     with books.transaction() as c:
         _october_debit_paid_by_a_november_payroll_bill(c)
         budget_id = _other_budget(c)
+        made = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 10_000},
+                   at=NOV)
+        assert made.status == "committed", made
     with books.read() as c:
-        for who, months in ((OWNER, [4_000, -4_000]), ("human:gus", [0, 0])):
-            (row,) = [r for r in FR.budget_vs_actual(c, who, "2026-10-01", "2026-11-30", "month", at=NOV)["budgets"]
-                      if r["id"] == budget_id]
+        for who, months, excluded in ((OWNER, [4_000, -4_000], False), ("human:gus", [0, 0], True)):
+            read = FR.budget_vs_actual(c, who, "2026-10-01", "2026-11-30", "month", at=NOV)
+            (row,) = [r for r in read["budgets"] if r["id"] == budget_id]
             assert row["actual"] == months, who
+            assert row["excl_payroll"] is excluded and read["excl_payroll"] is excluded, who
+            (cloud_row,) = [r for r in read["budgets"] if r["name"] == "Cloud"]
+            assert cloud_row["excl_payroll"] is False, who
             (state,) = [r for r in FR.budgets(c, who, at=NOV)["budgets"] if r["id"] == budget_id]
             assert state["state"]["actual"] == months[1], who
         ctx = load(c, NOV)
         b = ctx.budgets()[budget_id]
         assert budgeting.actual(ctx, b, "2026-10-01", "2026-10-31") == 4_000
         assert budgeting.actual(ctx, b, "2026-11-01", "2026-11-30") == -4_000
+
+
+def _state_on(c, who: str, budget_id: str, on: str) -> dict:
+    (row,) = [r for r in FR.budgets(c, who, on=on, at=NOV)["budgets"] if r["id"] == budget_id]
+    return row["state"]
+
+
+def _card_charge_paid_by_a_november_payroll_bill(store, fake) -> str:
+    """Other expenses, on which eve's card (a 5,000 allocation) charges 40.00 in October. Payroll bills 4,000 in
+    November, paid from that charge's feed row, so the "Pays bill" reclass posts in November. Returns the budget id."""
+    with store.transaction() as c:
+        payroll = _payroll_line(c)
+        made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
+                                               "amount": 10_000})
+        assert made.status == "committed", made
+        budget_id = str(made.result["budget_id"])
+        card = act(c, OWNER, "card_create", {"holder": "human:eve", "budget_id": budget_id, "amount": 5_000,
+                                             "provider_user_id": "user-eve"})
+        assert card.status == "committed", card
+    sync_once(store, fake)                  # Mercury makes the card (card-eve); its allocation follows the sync
+    fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
+    fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(store, fake, LATER)
+    with store.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
+        made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
+                                             "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-7"},
+                   at=NOV)
+        assert made.status == "committed", made
+        bid = str(made.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}, at=NOV).status == "committed"
+        feed = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-card-oct'").fetchone()[0])
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "feed_id": feed}, at=NOV)
+        assert paid.status == "committed" and paid.result["from"] == "feed", paid
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=NOV).status == "committed"
+    return budget_id
+
+
+def test_a_card_allocation_never_recovers_a_settled_payroll_charge_for_a_viewer_without_detail(books):
+    """The card's October charge paid a private November bill. A holder without payroll detail sees the card's 5,000
+    allocation as held in full (none of it is left over to recover the 4,000); the owner sees the true 1,000 held.
+    Enforcement reads the true actual and reserve."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id = _card_charge_paid_by_a_november_payroll_bill(books, fake)
+    with books.read() as c:
+        owner = _state_on(c, OWNER, budget_id, "2026-10-15")
+        gus = _state_on(c, "human:gus", budget_id, "2026-10-15")
+        assert (owner["actual"], owner["held"], owner["remaining"]) == (4_000, 1_000, 5_000)
+        assert (gus["actual"], gus["held"], gus["remaining"]) == (0, 5_000, 5_000)
+        assert owner["excl_payroll"] is False and gus["excl_payroll"] is True
+        st = budgeting.state(load(c, NOV), budget_id, date(2026, 10, 15))
+        assert (st.actual, st.held) == (4_000, 1_000)
+
+
+def test_a_gateway_key_allocation_never_recovers_a_settled_payroll_charge_for_a_viewer_without_detail(books):
+    """A run on the company's key holds 4,000 against Other expenses, settled to the October debit that a November
+    payroll bill paid. The holder without payroll detail sees the whole 5,000 key allocation held; the owner sees 1,000."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        assert act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
+                                                "target_id": "gw-1", "amount": 5_000}, at=AT).status == "committed"
+        entry = str(c.execute("SELECT entry_id FROM fin_feed_txns WHERE provider_id='txn-pay'").fetchone()[0])
+        currency = load(c, AT).book.base_currency
+        held = budgeting.hold_place(c, budget_scope=budget_id, amount=4_000, currency=currency, source="run",
+                                    source_id="run-1", expires_at=None, target="gateway_key:gw-1", at=AT, by=OWNER)
+        assert held.allowed and held.hold_id, held
+        assert budgeting.hold_settle(c, str(held.hold_id), 4_000, entry, at=AT)
+    with books.read() as c:
+        owner = _state_on(c, OWNER, budget_id, "2026-10-15")
+        gus = _state_on(c, "human:gus", budget_id, "2026-10-15")
+        assert (owner["actual"], owner["held"], owner["remaining"]) == (4_000, 1_000, 5_000)
+        assert (gus["actual"], gus["held"], gus["remaining"]) == (0, 5_000, 5_000)
+        assert owner["excl_payroll"] is False and gus["excl_payroll"] is True
 
 
 def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll_line(books):
