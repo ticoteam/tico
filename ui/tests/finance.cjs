@@ -213,6 +213,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
   const writes = [], reads = [];
+  let billsEmail = 'bills@acme.example';
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -239,7 +240,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/access') return json(access(viewer, apGrant, apRights));
     // Payables for the owner and a payables grant; receivables for the owner only (backend/finance/tab_ap.py).
     const seesAp = viewer === 'ana' || apGrant, seesAr = viewer === 'ana';
-    if (p === '/api/v2/finance/bills') return seesAp ? json({bills: listDocs(BILLS, url), next_cursor: null, currency: 'USD', view_version: 'v1', bills_email: 'bills@acme.example',
+    if (p === '/api/v2/finance/bills') return seesAp ? json({bills: listDocs(BILLS, url), next_cursor: null, currency: 'USD', view_version: 'v1', bills_email: billsEmail,
       open: {count: 3, remaining: 513000, aging: {current: 374000, '1_30': 139000, '31_60': 0, '61_90': 0, over_90: 0}, more: false}}) : denied();
     if (p === '/api/v2/finance/invoices') return seesAr ? json({invoices: listDocs(INVOICES, url), next_cursor: null, currency: 'USD', view_version: 'v1',
       open: {count: 3, remaining: 770000, aging: {current: 620000, '1_30': 0, '31_60': 150000, '61_90': 0, over_90: 0}, more: false}}) : denied();
@@ -255,6 +256,11 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
       ? json({accounts: [{id: 'm1', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000}, {id: 'm2', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000}],
         currency: 'USD', view_version: 'v1'}) : denied();
+    // The bills address: only an Email & Phone inbox's address has an inbox; any other is kept with inbox_id null.
+    if (p === '/api/v2/finance/bills-address' && method === 'PUT') {
+      billsEmail = body.address;
+      return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
+    }
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
     if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
@@ -572,7 +578,27 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AGING', 'AMOUNT', 'STATUS', 'PAYS'], tag + ': the bill columns');
       assert.equal(await page.locator('.fin-doc-t tbody tr').count(), BILLS.length, tag + ': one row per bill, no totals row');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
-      assert.equal(await page.locator('[data-fin-copy]').getAttribute('data-fin-copy'), 'bills@acme.example', tag + ': the bills address, copyable');
+      assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
+      // The owner sets the address: an inbox address saves; any other saves but says it is not an inbox's; empty clears it.
+      const setEmail = async value => {
+        await page.locator('[data-fin-email-set]').click();
+        await page.locator('dialog.fin-dlg[open] input[name="address"]').fill(value);
+        await page.locator('dialog.fin-dlg[open] [type=submit]').click();
+      };
+      await setEmail('ap@acme.example');
+      await page.locator('dialog.fin-dlg[open] [data-error]:not([hidden])').waitFor();
+      assert.equal(await page.locator('dialog.fin-dlg [data-error]').innerText(), 'Not an inbox address', tag + ': an address no inbox has is named');
+      assert.deepEqual(writes.at(-1).slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: 'ap@acme.example'}], tag + ': PUT the address');
+      await page.locator('dialog.fin-dlg[open] input[name="address"]').fill('bills@acme.example');
+      await page.locator('dialog.fin-dlg[open] [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(writes.at(-1).slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: 'bills@acme.example'}], tag + ': an inbox address saves');
+      await setEmail('');
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(writes.at(-1).slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: null}], tag + ': empty clears it');
+      assert.equal((await page.locator('[data-fin-email-set]').innerText()).trim(), 'Bills address', tag + ': no address: a Bills address button');
+      await setEmail('bills@acme.example');
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       await page.locator('#fin-rail [data-fin-do="approve"]').waitFor();
       const rail = await page.locator('#fin-rail').innerText();
       assert.match(rail, /Lines[\s\S]*Software · Seats[\s\S]*Files[\s\S]*Approvals\s+Approve\s+Waiting Ana Silva/i, tag + ': lines, files and approvals');
@@ -674,7 +700,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator(READY.payables).waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Payables', 'Cards', 'Transactions', 'Access'], tag + ': Payables, not Receivables');
       await page.locator('#fin-rail .fin-h').first().waitFor();
-      assert.equal(await page.locator('[data-fin-do], [data-fin-doc-add]').count(), 0, tag + ': no decisions without finance.ap');
+      assert.equal(await page.locator('[data-fin-do], [data-fin-doc-add], [data-fin-email-set]').count(), 0, tag + ': no decisions without finance.ap');
+      assert.equal(await page.locator('[data-fin-copy]').getAttribute('data-fin-copy'), 'bills@acme.example', tag + ': the bills address, copyable');
       await page.evaluate(() => { location.hash = '#/finance/receivables'; });
       await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
       await page.locator('.fin-pl').waitFor();

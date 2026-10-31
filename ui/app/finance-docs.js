@@ -6,6 +6,7 @@
    Receivables: invoices the same way; the rail marks one paid or writes it off (and sends a draft). Neither draws the
    route's open total: no totals row. Bookkeeper chases late invoices; the page shows no chase history.
    Every decision is a dry run first: one the rules send for approval says to whom, and a second press sends it.
+   The owner or an admin sets or clears the bills address from the bar (PUT /api/v2/finance/bills-address).
    Reads: GET /api/v2/finance/bills[/{id}], /finance/invoices[/{id}], /finance/contacts, and for the forms the lines
    the viewer may post to (/finance/chart) and the bank accounts they may pay from (/finance/pay-from).
    Writes (POST /api/v2/finance/actions): bill_create, bill_approve, bill_schedule, bill_mark_paid, bill_void,
@@ -85,10 +86,31 @@ function finDocsReload() {
   if (FIN?.bs) void finBsLoad();
 }
 
+// ----------------------------------------------------------------- the bills address
+// The owner or an admin sets it (PUT /finance/bills-address), and outside view-as; everyone else copies it.
+const finEmailSetter = () => !finCaps()?.viewing && (S.me?.role === 'owner' || !!S.me?.bot_admin);
+function finDocEmailDraw() {
+  const box = $('#fin-doc-email'), email = FIN?.doc?.email || '';
+  if (!box) return;
+  if (finEmailSetter()) box.innerHTML = `<button type="button" class="ghost fin-copy" data-fin-email-set>${email
+    ? `<span class="nav-icon" aria-hidden="true">mail</span>${esc(email)}` : 'Bills address'}</button>`;
+  else box.innerHTML = email ? `<button type="button" class="ghost fin-copy" data-fin-copy="${esc(email)}" aria-label="Copy ${esc(email)}"><span class="nav-icon" aria-hidden="true">content_copy</span>${esc(email)}</button>` : '';
+}
+// One input: an address sets it, empty clears it. An address no Email & Phone inbox has is kept but named here.
+function finDocEmailSet() {
+  const state = FIN.doc;
+  finDialog('Bills address', `<label>Address<input type="email" name="address" maxlength="254" autocomplete="off" value="${esc(state.email || '')}"></label>`, 'Save', async form => {
+    const address = form.elements.address.value.trim();
+    const r = await put('/v2/finance/bills-address', {address: address || null});
+    if (FIN?.doc === state) { state.email = r?.bills_email || ''; finDocEmailDraw(); }
+    if (r?.bills_email && !r.inbox_id) throw new Error('Not an inbox address');
+  });
+}
+
 // ----------------------------------------------------------------- the page
 function finDocPage(kind) {
   const k = FIN_DOC[kind], f = FIN_DOC_F[kind], caps = finCaps();
-  FIN.doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0};
+  FIN.doc = {kind, rows: [], next: null, sel: '', load: 0, one: null, oneLoad: 0, email: ''};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(f.q)}" placeholder="${esc(k.search)}" aria-label="${esc(k.search)}"></label>
       ${finSeg('status', 'Status', k.filters, f.status)}<span class="spacer"></span><span id="fin-doc-email" class="fin-doc-email"></span>
       ${caps.may(k.right) ? `<button type="button" class="primary" data-fin-doc-add>+ ${k.label}</button>` : ''}</div>`
@@ -101,6 +123,7 @@ function finDocPage(kind) {
     if (seg) { if (seg.dataset.v !== f.status) { f.status = seg.dataset.v; finSegSet(seg); void finDocLoad(false); } return; }
     if (ev.target.closest('[data-fin-more]')) { void finDocLoad(true); return; }
     if (ev.target.closest('[data-fin-doc-add]')) { void finDocAdd(kind); return; }
+    if (ev.target.closest('[data-fin-email-set]')) { finDocEmailSet(); return; }
     const copy = ev.target.closest('[data-fin-copy]');
     if (copy) { void copyText(copy.dataset.finCopy).then(() => toast('Copied'), () => toast('Could not copy', true)); return; }
     const tr = ev.target.closest('tr[data-fin-doc]');
@@ -120,8 +143,7 @@ async function finDocLoad(more) {
   if (FIN?.doc !== state || state.load !== load || !$('#fin-docs')) return;
   state.rows = more ? [...state.rows, ...(d[k.list] || [])] : d[k.list] || [];
   state.next = d.next_cursor || null;
-  const email = state.kind === 'bill' ? d.bills_email || '' : '';
-  $('#fin-doc-email').innerHTML = email ? `<button type="button" class="ghost fin-copy" data-fin-copy="${esc(email)}" aria-label="Copy ${esc(email)}"><span class="nav-icon" aria-hidden="true">content_copy</span>${esc(email)}</button>` : '';
+  if (state.kind === 'bill') { state.email = d.bills_email || ''; finDocEmailDraw(); }
   if (!state.rows.some(r => r.id === state.sel)) state.sel = state.rows[0]?.id || '';
   finDocDraw(); void finDocOne();
 }
