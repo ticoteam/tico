@@ -266,11 +266,13 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/inbox")
     def finance_inbox(request: Request, cursor: str | None = Query(None, max_length=100),
-                      limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+                      limit: int = Query(50, ge=1, le=200), view_as: str | None = None,
+                      kind: str | None = Query(None, max_length=40)):
         """The caller's Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue invoices,
-        budgets near their limit, failed syncs and months ready to close, with counts per kind."""
+        budgets near their limit, failed syncs and months ready to close, with counts per kind. With `kind`, that kind
+        alone, paged past its 200."""
         actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.inbox(c, actor, cursor=cursor, limit=limit))
+        return read(lambda c: finance_reads.inbox(c, actor, cursor=cursor, limit=limit, kind=kind))
 
     @app.get("/api/v2/finance/reports/{kind}")
     def finance_report(request: Request, kind: Report, start: str | None = Query(None, pattern=DAY),

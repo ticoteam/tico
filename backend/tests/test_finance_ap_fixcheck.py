@@ -3,6 +3,7 @@ feed_match links the whole set); a bill's payment and its bank row hide a privat
 queued bill payment meets its budgets again before it goes; a combined row arriving after a close moves the bank once
 in every period. Synthetic fixtures (Acme)."""
 from backend.finance import actions as FA
+from backend.finance import documents as FD
 from backend.finance import payments as FP
 from backend.finance import reads as FR
 from backend.finance.context import load
@@ -83,6 +84,8 @@ def test_a_private_bills_payment_and_bank_row_stay_hidden_from_a_balance_sheet_v
         dan = [p["amount"] for p in FR.payments(c, "human:dan")["payments"]]
         assert dan == [2_500]                                                            # fix-check 2
         assert [p["amount"] for p in FR.payments(c, "human:gus")["payments"]] == []      # no payables view
+        due = [s["due_out"]["amount"] for a in FR.balance_sheet(c, "human:dan")["assets"] for s in a["sources"]]
+        assert sum(due) == 2_500                                                         # due-out totals too
         assert row in {x["id"] for x in FR.transactions(c, OWNER)["rows"]}
         assert row not in {x["id"] for x in FR.transactions(c, "human:dan")["rows"]}
 
@@ -132,3 +135,90 @@ def test_a_combined_row_after_a_close_moves_the_bank_once_in_every_period(books)
         _ingest(c, raw, at=DEC)                                              # the same row again changes nothing
         assert c.execute("SELECT entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[0] == entry
         assert _bank_on(c, "2026-11-30") - start == -3_000
+
+
+def test_a_row_owing_the_same_as_more_bills_than_are_looked_at_waits_for_a_person(books, monkeypatch):  # noqa: F811
+    monkeypatch.setattr(FD, "OWING_MOST", 3)
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        acme = _vendor(c)
+        for i in range(3):
+            _approved(c, acme, 50_000, number=f"F-{i}")
+        north = _approved(c, _vendor(c, "Northwind"), 50_000, number="N-1")
+        before = (_balance(c, "1000"), _balance(c, "2000"))
+        row = _ingest(c, _txn("txn-n", -500.0, who="Northwind"))
+        # Grok 1: four bills owe 500.00, more than the search reads: no new expense, the row waits and asks.
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[:] == ("new", None)
+        assert row in {s for s, _ in _events(c, "finance.feed.needs_category")}
+        assert (_balance(c, "1000"), _balance(c, "2000"), _balance(c, "6900")) == (*before, 0)
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": north, "feed_id": row})       # a person links it
+        assert done.status == "committed", done
+        assert FR.bill(c, OWNER, north)["status"] == "paid"
+        assert (_balance(c, "1000") - before[0], _balance(c, "2000") - before[1]) == (-50_000, 50_000)
+
+
+def test_a_combined_search_that_stops_early_is_unclear(books):  # noqa: F811
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        acme, freight, north = _vendor(c), _vendor(c, "Northwind Freight"), _vendor(c, "Northwind")
+        bank = _balance(c, "1000")
+        n = 0
+        for vendor, amounts in ((acme, (3_000, 7_000, 3_000, 2_000, 8_000)), (freight, (5_000, 5_000)),
+                                (north, (6_000, 4_000))):
+            for amount in amounts:
+                n += 1
+                _mark(c, _approved(c, vendor, amount, number=f"G-{n}"), "2026-10-13")
+        row = _ingest(c, _txn("txn-g", -100.0, who="Northwind"))
+        # Grok 2: the search found four sets (one Northwind Freight's) and stopped before Northwind's own: unclear.
+        assert c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (row,)).fetchone()[:] == ("new", None)
+        assert row in {s for s, _ in _events(c, "finance.feed.needs_category")}
+        assert _balance(c, "1000") - bank == -43_000 and _balance(c, "6900") == 0
+
+
+def test_the_inbox_pages_each_kind_past_its_cap(books, monkeypatch):  # noqa: F811
+    import backend.finance.reads as reads
+    monkeypatch.setattr(reads, "INBOX_EACH", 3)
+    with books.transaction() as c:
+        acme = _vendor(c)
+        made = [_bill(c, acme, [{"account_id": account(c, "6100"), "amount": 1_000 + i}], number=f"H-{i}")
+                for i in range(8)]
+    with books.read() as c:
+        whole = FR.inbox(c, OWNER, at=AT)
+        assert whole["counts"]["bill_to_enter"] == 3 and "bill_to_enter" in whole["more"]
+        # Grok 3: the kind pages from its own query, so following next_cursor reaches every draft.
+        seen, cursor = [], None
+        while True:
+            page = FR.inbox(c, OWNER, kind="bill_to_enter", limit=3, cursor=cursor, at=AT)
+            seen += [x["bill_id"] for x in page["items"]]
+            cursor = page["next_cursor"]
+            if not cursor:
+                break
+        assert len(seen) == 8 and sorted(seen) == sorted(made) and page["more"] == []
+
+
+def test_a_card_charge_past_the_bill_search_waits_then_settles_its_hold_when_linked(books, monkeypatch):  # noqa: F811
+    from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_holds, _card_use
+    from backend.tests.test_finance_fixtures import MERCURY, sync_once
+    from backend.tests.test_finance_payments import HOURS
+    monkeypatch.setattr(FD, "OWING_MOST", 0)
+    fake = FakeMercury()
+    fake.balances["credit-io"] = 0
+    connect(books, fake)
+    _, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        bid = _approved(c, _vendor(c, "Acme Cloud"), 4_500)
+    _arrives(fake, MERCURY["txn_card_pending"], 1, "evt-0001")
+    sync_once(books, fake, HOURS[1])
+    _arrives(fake, MERCURY["txn_card_posted"], 2, "evt-0002")
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        row = c.execute("SELECT id, status, entry_id FROM fin_feed_txns WHERE card_id IS NOT NULL").fetchone()
+        assert (row["status"], row["entry_id"]) == ("new", None)                         # Grok 1, card side
+        assert (_balance(c, "2100"), _balance(c, "6100")) == (0, 4_500)
+        done = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "feed_id": str(row["id"])})
+        assert done.status == "committed", done
+        assert (_balance(c, "6100"), _balance(c, "2000"), _balance(c, "2100")) == (4_500, 0, -4_500)
+        assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]

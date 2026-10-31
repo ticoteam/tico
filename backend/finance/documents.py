@@ -844,13 +844,19 @@ def _same_name(counterparty: str, name: str) -> bool:
     return bool(a and b) and (a == b or (min(len(a), len(b)) >= NAME_MIN and (a in b or b in a)))
 
 
-def match_feed(ctx: Ctx, row: Any, t: F.FeedTxn) -> tuple[str, Any] | None:
+OWING_MOST = 50             # open documents owing a row's exact amount looked at; with more, the row is unclear
+
+
+def match_feed(ctx: Ctx, row: Any, t: F.FeedTxn) -> tuple[str, Any] | str | None:
     """The one open document a new settled feed row pays: a debit and an open bill (a credit and a sent invoice) that
     still owes exactly the row's amount, from a contact whose name the counterparty carries. None when there is none
-    or more than one (a person picks)."""
+    or more than one (it posts as usual); ASK when more documents owe that amount than were looked at (the one it pays
+    may be among those left out: the row stays new, nothing posts, and a person links it)."""
     kind = "bill" if t.amount < 0 else "invoice"
-    found = [d for d in SAP.open_owing(ctx.c, kind, ctx.book.id, abs(t.amount))
-             if _same_name(t.counterparty, str(d["contact_name"] or ""))]
+    owing = SAP.open_owing(ctx.c, kind, ctx.book.id, abs(t.amount), OWING_MOST + 1)
+    if len(owing) > OWING_MOST:
+        return ASK
+    found = [d for d in owing if _same_name(t.counterparty, str(d["contact_name"] or ""))]
     return (kind, found[0]) if len(found) == 1 else None
 
 
@@ -938,8 +944,8 @@ MATCH_MOST = 100            # waiting payments one feed_match links
 
 def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], bool]:
     """Sets of two or more waiting payments to a single contact that sum to the row's amount, and whether the search
-    left some out (a contact with more than COMBINED_MOST candidates of at most the amount): then what it found may
-    not be the only answer, so the row is unclear."""
+    left some out (a contact with more than COMBINED_MOST candidates of at most the amount, or COMBINED_SETS sets found
+    before it finished): then what it found may not be the only answer, so the row is unclear."""
     by_contact: dict[str, list[Any]] = {}
     for s in waiting:
         if 0 < int(s["amount"]) <= amount:
@@ -952,7 +958,7 @@ def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], boo
             if mask & (mask - 1) and sum(int(s["amount"]) for i, s in enumerate(group) if mask >> i & 1) == amount:
                 found.append([s for i, s in enumerate(group) if mask >> i & 1])
                 if len(found) >= COMBINED_SETS:
-                    return found, False
+                    return found, True      # stopped early: other sets were never looked at
     return found, False
 
 
@@ -1151,8 +1157,13 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
         if gl is None:
             raise invalid("that row's money account has no account in the books")
         t = _row_txn(row)
-        entry = post_row(ctx, fid, t, [feed_line(ctl.id, -t.amount, {}, contact)], gl.id, [])
+        # A card charge left unposted (it may pay one of many bills) keeps its authorization: it settles here.
+        holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
+        entry = post_row(ctx, fid, t, [feed_line(ctl.id, -t.amount, {}, contact)], gl.id, holds)
         mark_posted(ctx, [fid], entry)
+        if holds:
+            from .banking import card_used
+            card_used(ctx, row, -t.amount, entry)
         return entry
     s = SIGN[kind]
     have = min(amount, _unapplied(ctx, row, ctl.id, s, contact))

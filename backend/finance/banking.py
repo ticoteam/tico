@@ -334,6 +334,9 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         # hold work the same either way.
         account, tags = card_line(ctx, card)
         found = documents.match_feed(ctx, row, t) if t.amount < 0 else None
+        if isinstance(found, str):      # it may pay a bill past what was looked at: it stays new, a person links it
+            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+            return
         if found is not None:
             lines = [feed_line(documents.control(ctx, "bill").id, -t.amount, {},
                                str(found[1][f"{documents.CONTACT_OF['bill']}_id"]))]
@@ -343,7 +346,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
         entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
-        _card_used(ctx, row, -t.amount, entry)
+        card_used(ctx, row, -t.amount, entry)
         if found is not None:
             documents.feed_paid(ctx, row, found[0], found[1], entry)
         if ask:
@@ -358,6 +361,9 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return                      # the bank row of a payment marked paid from this account: linked, posted once
     found = documents.match_feed(ctx, row, t)
+    if isinstance(found, str):          # it may pay a document past what was looked at: it stays new, a person links it
+        event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
+        return
     if found is not None:
         kind, doc = found
         entry = post_row(ctx, fid, t, [feed_line(documents.control(ctx, kind).id, -t.amount, {},
@@ -473,7 +479,7 @@ def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:
     return account.id, tags
 
 
-def _card_used(ctx: Ctx, row: Any, amount: int, entry_id: str) -> None:
+def card_used(ctx: Ctx, row: Any, amount: int, entry_id: str) -> None:
     """A settled card transaction. What a card used is read from the ledger (store/budgets.card_used: every entry for
     its rows, reversals and replacements at their own dates), so the books alone decide it; its authorization hold,
     if still held, only settles here (taken in, it no longer counts)."""
@@ -879,4 +885,4 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 __all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
-           "card_line", "undo", "reversal_locked", "new_account", "MATCH_DAYS"]
+           "card_line", "undo", "reversal_locked", "new_account", "MATCH_DAYS", "card_used"]

@@ -175,18 +175,19 @@ def test_only_the_exact_bills_address_among_the_recipients_counts(environment):
 def test_a_check_reads_every_page_of_the_queue(environment, monkeypatch):
     api = built(environment)
     ensure(api)
-    rows = [{"kind": "uncategorized", "id": f"fd_{i}", "label": f"Row {i}"} for i in range(200)]
+    rows = [{"kind": "uncategorized", "id": f"fd_{i}", "label": f"Row {i}"} for i in range(450)]
     rows += [{"kind": "bill_to_enter", "id": "bil_late", "label": "Acme Supplies 7"}]
 
-    def pages(c, viewer, limit=50, cursor=None, at=None):
+    def pages(c, viewer, limit=50, cursor=None, kind=None, at=None):     # each kind pages from its own query
+        mine = [r for r in rows if r["kind"] == kind]
         start = int(cursor or 0)
-        nxt = str(start + limit) if start + limit < len(rows) else None
-        return {"items": rows[start:start + limit], "counts": {"uncategorized": 200, "bill_to_enter": 1},
+        nxt = str(start + limit) if start + limit < len(mine) else None
+        return {"items": mine[start:start + limit], "counts": {kind: start + len(mine[start:start + limit])},
                 "next_cursor": nxt}
     monkeypatch.setattr(FR, "inbox", pages)
-    assert check(api)["items"] == 201
+    assert check(api)["items"] == 451                                # past the inbox's 200 per kind
     (task,) = checks(api)
-    assert "bil_late" in task["body"]
+    assert "bil_late" in task["body"] and "uncategorized (450)" in task["body"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT 1 FROM bookkeeper_seen WHERE key='bill_to_enter:bil_late'").fetchone()
 

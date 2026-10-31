@@ -952,87 +952,126 @@ def _money(amount: int) -> str:
     return f"{abs(amount) / 100:,.2f}"
 
 
-def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | None = None,
+def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | None = None, kind: str | None = None,
           at: str | None = None) -> Row:
     """The viewer's Finance work queue (§7.1): uncategorized rows, bills to enter (drafts, e.g. from the bills
     address), unmatched and missing receipts, bills due within a week, overdue invoices, budgets near their limit,
     failed syncs and months ready to close. Each item has its ids and a short label; `counts` covers every kind
-    (`more` when a kind has over 200)."""
+    (`more` when a kind has over 200). With `kind`, that kind alone, paged from its own query past the 200 (to
+    INBOX_DEEP), so a reader that follows `next_cursor` reaches every item."""
     s = _open(c, viewer, at)
-    ctx, view = s.ctx, s.view
-    today = dates.day(ctx.today)
-    held = ctx.rights(viewer)
+    if kind is not None:
+        return _inbox_one(s, kind, limit, cursor)
     items: list[Row] = []
     counts: dict[str, int] = {}
     more: list[str] = []
-
-    def add(kind: str, rows: list[Row], over: bool = False) -> None:
-        counts[kind] = len(rows)
-        if over:
-            more.append(kind)
-        items.extend({"kind": kind, **r} for r in rows)
-
-    rows, over = _uncategorized(s, today - timedelta(days=RECEIPT_DAYS), today, INBOX_EACH)
-    add("uncategorized", [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
-                           "amount": int(r["amount"]), "entry_id": r["entry_id"], "status": str(r["status"]),
-                           "label": f"{r['counterparty'] or r['description'] or 'Row'} · {_money(int(r['amount']))}"}
-                          for r in rows], over)
-    cut = set(tab.private_cut(ctx, view))
-    if tab_ap.sees_side(ctx, view, "bill"):
-        drafts, _ = tab_ap.keep_docs(c, "bill", SAP.drafts(c, ctx.book.id, INBOX_EACH + 1), cut)
-        add("bill_to_enter", [{"id": str(r["id"]), "bill_id": str(r["id"]), "date": str(r["bill_date"]),
-                               "amount": int(r["total"]), "origin": str(r["origin"]),
-                               "label": f"{r['contact_name'] or 'Bill'} {r['number']} · {_money(int(r['total']))}"
-                               .replace("  ", " ")} for r in drafts[:INBOX_EACH]], len(drafts) > INBOX_EACH)
-    if R.has(ctx.org, viewer, R.BOOK, held):
-        # A receipt with no subject yet is the company's to see only with the whole books; else the viewer's own.
-        files = SAP.unmatched_files(c, ctx.book.id, INBOX_EACH + 1, "" if view.everything else viewer)
-        add("unmatched_receipt", [{"id": str(r["id"]), "file_id": str(r["file_id"]), "date": str(r["created_at"])[:10],
-                                   "label": "Receipt with nothing to attach to"} for r in files[:INBOX_EACH]],
-            len(files) > INBOX_EACH)
-    money_ids, card_ids = tab.feed_scope(ctx, view)
-    card_money = [i for i in money_ids if i in {str(m["id"]) for m in SK.money_accounts(c, ctx.book.id)
-                                                if str(m["kind"]) == "card_program"}]
-    since = (today - timedelta(days=RECEIPT_DAYS)).isoformat()
-    bare = SAP.card_rows_without_receipt(c, card_money, card_ids, since, INBOX_EACH + 1)
-    gone = tab.private_feed(ctx, view, bare)
-    bare = [r for r in bare if str(r["id"]) not in gone]
-    add("missing_receipt", [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
-                             "amount": int(r["amount"]),
-                             "label": f"{r['counterparty'] or 'Card charge'} · {_money(int(r['amount']))}"}
-                            for r in bare[:INBOX_EACH]], len(bare) > INBOX_EACH)
-    for kind, name in (("bill", "bill_due"), ("invoice", "invoice_overdue")):
-        if not tab_ap.sees_side(ctx, view, kind):
+    for name in INBOX_KINDS:
+        got = _inbox_kind(s, name, INBOX_EACH)
+        if got is None:
             continue
-        docs, _ = tab_ap.keep_docs(c, kind, SAP.open_docs(c, kind, ctx.book.id), cut)
-        if kind == "bill":
-            docs = [r for r in docs if r["due_date"] and AP.days_late(r["due_date"], today) >= -7]
-        else:
-            docs = [r for r in docs if AP.days_late(r["due_date"], today) > 0]
-        add(name, [{"id": str(r["id"]), f"{kind}_id": str(r["id"]), "date": r["due_date"],
-                    "amount": tab_ap.remaining(kind, r), "days_late": AP.days_late(r["due_date"], today),
-                    "label": f"{r['contact_name'] or kind.title()} · {_money(tab_ap.remaining(kind, r))} "
-                             f"due {r['due_date']}"} for r in docs[:INBOX_EACH]], len(docs) > INBOX_EACH)
-    near: list[Row] = []
-    for b in _visible(s, False):
-        st = _state_row(s, b, budgeting.state(ctx, b.id, today))
-        if st["crossed_warn"]:
-            near.append({"id": b.id, "budget_id": b.id, "amount": st["remaining"], "pct": st["pct"],
-                         "label": f"{b.name} · {st['pct'] or '?'}% used"})
-    add("budget_near_limit", near[:INBOX_EACH], len(near) > INBOX_EACH)
-    if view.everything or view.sources or R.is_admin(ctx.org, viewer, held):
-        add("sync_failed", [{"id": str(x["id"]), "connection_id": str(x["id"]), "date": str(x["updated_at"] or "")[:10],
-                             "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}
-                            for x in SK.connections(c) if str(x["status"]) == "error"])
-    if R.has(ctx.org, viewer, R.BOOK, held):
-        ready = [p for p in _closable(c, ctx) if _checklist(s, p)["ready"]]
-        add("period_ready", [{"id": p, "month": p, "label": f"{p} is ready to close"} for p in ready])
+        rows, over = got
+        counts[name] = len(rows)
+        if over:
+            more.append(name)
+        items.extend({"kind": name, **r} for r in rows)
     offset = int((tab.decode_cursor(cursor) or ["0"])[0] or 0)
     most = tab.page_size(limit)
     page = items[offset:offset + most]
     nxt = tab.encode_cursor([str(offset + most)]) if offset + most < len(items) else None
-    return {"items": page, "counts": counts, "more": more, "next_cursor": nxt, "currency": ctx.book.base_currency,
-            "view_version": view.version}
+    return {"items": page, "counts": counts, "more": more, "next_cursor": nxt, "currency": s.ctx.book.base_currency,
+            "view_version": s.view.version}
+
+
+INBOX_DEEP = 5000           # items of one kind an inbox page reaches into (`kind`); past it, `more` says so
+
+
+def _inbox_one(s: _Seen, kind: str, limit: int, cursor: str | None) -> Row:
+    if kind not in INBOX_KINDS:
+        raise invalid(f"kind is {'|'.join(INBOX_KINDS)}")
+    offset = max(0, int((tab.decode_cursor(cursor) or ["0"])[0] or 0))
+    most = tab.page_size(limit)
+    end = min(offset + most, INBOX_DEEP)
+    rows, over = _inbox_kind(s, kind, end) or ([], False)
+    page = rows[offset:end]
+    nxt = tab.encode_cursor([str(end)]) if over and end < INBOX_DEEP else None
+    return {"items": [{"kind": kind, **r} for r in page], "counts": {kind: offset + len(page)},
+            "more": [kind] if over and nxt is None else [], "next_cursor": nxt,
+            "currency": s.ctx.book.base_currency, "view_version": s.view.version}
+
+
+def _inbox_kind(s: _Seen, kind: str, n: int) -> tuple[list[Row], bool] | None:
+    """One kind of the inbox: its first `n` items and whether there are more; None when the viewer has no such kind
+    (no view of that side, or not the right)."""
+    c, ctx, view = s.ctx.c, s.ctx, s.view
+    today = dates.day(ctx.today)
+    held = ctx.rights(s.view.viewer)
+    cut = set(tab.private_cut(ctx, view))
+    if kind == "uncategorized":
+        rows, over = _uncategorized(s, today - timedelta(days=RECEIPT_DAYS), today, n)
+        return [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
+                 "amount": int(r["amount"]), "entry_id": r["entry_id"], "status": str(r["status"]),
+                 "label": f"{r['counterparty'] or r['description'] or 'Row'} · {_money(int(r['amount']))}"}
+                for r in rows], over
+    if kind == "bill_to_enter":
+        if not tab_ap.sees_side(ctx, view, "bill"):
+            return None
+        raw = SAP.drafts(c, ctx.book.id, n + 1)
+        drafts, _ = tab_ap.keep_docs(c, "bill", raw[:n], cut)
+        return [{"id": str(r["id"]), "bill_id": str(r["id"]), "date": str(r["bill_date"]),
+                 "amount": int(r["total"]), "origin": str(r["origin"]),
+                 "label": f"{r['contact_name'] or 'Bill'} {r['number']} · {_money(int(r['total']))}"
+                 .replace("  ", " ")} for r in drafts], len(raw) > n
+    if kind == "unmatched_receipt":
+        if not R.has(ctx.org, s.view.viewer, R.BOOK, held):
+            return None
+        # A receipt with no subject yet is the company's to see only with the whole books; else the viewer's own.
+        files = SAP.unmatched_files(c, ctx.book.id, n + 1, "" if view.everything else s.view.viewer)
+        return [{"id": str(r["id"]), "file_id": str(r["file_id"]), "date": str(r["created_at"])[:10],
+                 "label": "Receipt with nothing to attach to"} for r in files[:n]], len(files) > n
+    if kind == "missing_receipt":
+        money_ids, card_ids = tab.feed_scope(ctx, view)
+        card_money = [i for i in money_ids if i in {str(m["id"]) for m in SK.money_accounts(c, ctx.book.id)
+                                                    if str(m["kind"]) == "card_program"}]
+        since = (today - timedelta(days=RECEIPT_DAYS)).isoformat()
+        raw = SAP.card_rows_without_receipt(c, card_money, card_ids, since, n + 1)
+        gone = tab.private_feed(ctx, view, raw[:n])
+        return [{"id": str(r["id"]), "feed_id": str(r["id"]), "date": str(r["txn_date"]),
+                 "amount": int(r["amount"]),
+                 "label": f"{r['counterparty'] or 'Card charge'} · {_money(int(r['amount']))}"}
+                for r in raw[:n] if str(r["id"]) not in gone], len(raw) > n
+    if kind in ("bill_due", "invoice_overdue"):
+        side = "bill" if kind == "bill_due" else "invoice"
+        if not tab_ap.sees_side(ctx, view, side):
+            return None
+        docs, _ = tab_ap.keep_docs(c, side, SAP.open_docs(c, side, ctx.book.id), cut)
+        if side == "bill":
+            docs = [r for r in docs if r["due_date"] and AP.days_late(r["due_date"], today) >= -7]
+        else:
+            docs = [r for r in docs if AP.days_late(r["due_date"], today) > 0]
+        return [{"id": str(r["id"]), f"{side}_id": str(r["id"]), "date": r["due_date"],
+                 "amount": tab_ap.remaining(side, r), "days_late": AP.days_late(r["due_date"], today),
+                 "label": f"{r['contact_name'] or side.title()} · {_money(tab_ap.remaining(side, r))} "
+                          f"due {r['due_date']}"} for r in docs[:n]], len(docs) > n
+    if kind == "budget_near_limit":
+        near: list[Row] = []
+        for b in _visible(s, False):
+            st = _state_row(s, b, budgeting.state(ctx, b.id, today))
+            if st["crossed_warn"]:
+                near.append({"id": b.id, "budget_id": b.id, "amount": st["remaining"], "pct": st["pct"],
+                             "label": f"{b.name} · {st['pct'] or '?'}% used"})
+        return near[:n], len(near) > n
+    if kind == "sync_failed":
+        if not (view.everything or view.sources or R.is_admin(ctx.org, s.view.viewer, held)):
+            return None
+        failed: list[Row] = [{"id": str(x["id"]), "connection_id": str(x["id"]), "date": str(x["updated_at"] or "")[:10],
+                   "label": f"{x['name'] or x['provider']}: {str(x['last_error'] or 'sync failed')[:120]}"}
+                  for x in SK.connections(c) if str(x["status"]) == "error"]
+        return failed[:n], len(failed) > n
+    if not R.has(ctx.org, s.view.viewer, R.BOOK, held):      # period_ready
+        return None
+    ready: list[Row] = [{"id": p, "month": p, "label": f"{p} is ready to close"} for p in _closable(c, ctx)
+             if _checklist(s, p)["ready"]]
+    return ready[:n], len(ready) > n
 
 
 # ------------------------------------------------------------------------------------------------ close
