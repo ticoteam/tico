@@ -1743,12 +1743,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase4(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(68,?)", (H.now(),))
-                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=69").fetchone():
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=74").fetchone():
                     # Finance's mirror columns (unknown writes, provider line ids) and fin_credit_refunds on an
                     # install that took migrations 64 to 68 before they existed. Idempotent like 65.
                     from .finance.store import schema as _finance_schema
                     _finance_schema.create(c)
-                    c.execute("INSERT INTO cloud_migrations VALUES(69,?)", (H.now(),))
+                    c.execute("INSERT INTO cloud_migrations VALUES(74,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

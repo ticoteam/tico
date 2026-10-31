@@ -406,16 +406,21 @@ def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: s
                           entry_id=entry_id, reversal_id=reversal_id, cid=cid, external_id=key, at=at, by=SYSTEM)
 
 
-def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str, *, keep_credit: bool = False) -> None:
+def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str, *, keep_credit: bool = False) -> list[Any]:
     """Undo the settlements a payment's entry made, before the entry is reversed: each document owes its money again.
     A replaced credit memo keeps the credit applied from it: those applications are re-pointed at its new entry.
-    A refund it made gives its share of the credit's P&L back to the accrual-only view."""
+    A refund it made gives its share of the credit's P&L back to the accrual-only view. Returns the cash applications of
+    an overpayment or a prepayment that it undid, which a revision applies again (see _resettle)."""
+    undone: list[Any] = []
     for s in SX.settlements_of(c, entry_id):
         if keep_credit and str(s["from_kind"]) == "credit":
             continue
         documents.unsettle(ctx, s, cash=str(s["from_kind"]) != "credit")
+        if str(s["from_kind"]) == "payment":
+            undone.append(s)
     for r in SX.credit_refunds_of_refund(c, entry_id):
         _unrefund(c, ctx, r)
+    return undone
 
 
 def _refund_cash(c: sqlite3.Connection, ctx: Ctx, credit: str, before: int, after: int, day: str) -> None:
@@ -463,24 +468,42 @@ def _credit_entry(c: sqlite3.Connection, cid: str, key: str) -> str:
     return str(entry["local_id"])
 
 
+def _resettle(c: sqlite3.Connection, ctx: Ctx, cid: str, undone: Sequence[Any], entry_id: str, at: str) -> None:
+    """Apply again the cash applications a revised overpayment or prepayment undid, to the same documents on the days
+    they took. The books hold them as the provider's current allocations, so a revision that leaves the allocations as
+    they were leaves the documents settled; one that moves them is taken in with its application record. Each
+    application ref that named one of the undone settlements now names its replacement."""
+    moved = {str(s["id"]): documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=int(s["amount"]),
+                                            day=str(s["settled_on"]), from_kind="payment", from_id=entry_id,
+                                            entry_id=entry_id, by=SYSTEM, cash=True) for s in undone}
+    refs = {str(r["id"]): r for old in moved for r in SX.refs_holding(c, cid, APPLICATION_TABLE, old)}
+    for row in refs.values():
+        SX.ref_set(c, str(row["id"]), local_id=",".join(moved.get(x, x) for x in _ids(row)),
+                   revision=str(row["revision"]), status=str(row["status"]), at=at)
+
+
 def _book(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, verdict: str, old: str, day: str,
           make: Callable[[str], L.Entry], at: str) -> str:
     """Post the entry a provider record needs, reversing the entry it replaces (`old`, "" for none). The new entry posts
-    first, so a failure reverses nothing. A replaced entry's settlements are undone before it is reversed, and a change
-    that lands in a closed month is flagged as a restatement. Returns the new entry's id."""
+    first, so a failure reverses nothing. A replaced entry's settlements are undone before it is reversed, an
+    overpayment's or prepayment's applications are applied again to the new entry (see _resettle), and a change that
+    lands in a closed month is flagged as a restatement. Returns the new entry's id."""
     closed = SL.closed_on(c, ctx.book.id, day)
     new_id, _ = posting.post(ctx, make(banking.open_day(ctx, day)), by=SYSTEM, importing=True)
     replaced = SL.entry_row(c, old) if verdict == M.REPLACE and old else None
     replaced_closed = False
+    undone: list[Any] = []
     if replaced is not None and str(replaced["status"]) == "posted" and not replaced["reverses_id"]:
         old_day = str(replaced["entry_date"])
-        _unsettle_entry(c, ctx, str(replaced["id"]), keep_credit=True)
+        undone = _unsettle_entry(c, ctx, str(replaced["id"]), keep_credit=True)
         rid = posting.reverse(ctx, str(replaced["id"]), day=banking.open_day(ctx, old_day),
                               memo="revised at the provider", by=SYSTEM)
         SX.link_feed(c, str(replaced["id"]), new_id)
         replaced_closed = SL.closed_on(c, ctx.book.id, old_day)
         if replaced_closed:
             _restate(c, ctx, old_day, "replaced", new_id, rid, cid, ext.key, at)
+    if undone:
+        _resettle(c, ctx, cid, undone, new_id, at)
     if closed and not replaced_closed:
         _restate(c, ctx, day, "added", new_id, None, cid, ext.key, at)
     return new_id

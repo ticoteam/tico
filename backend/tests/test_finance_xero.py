@@ -1638,6 +1638,50 @@ def test_an_overpayment_or_prepayment_applied_to_documents_recognizes_its_cash_a
         assert _cash_expense(c) == 5000
 
 
+def test_a_revised_overpayment_or_prepayment_with_the_same_allocations_stays_applied_to_its_documents(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1"), _invoice("bill-1", kind="ACCPAY")]
+    xbooks.rows["BankTransactions"] = [_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00"),
+                                       _held_bank("pp-1", "SPEND-PREPAYMENT", "50.00")]
+    xbooks.rows["Overpayments"] = [_held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00")])]
+    xbooks.rows["Prepayments"] = [_held("pp-1", "SPEND-PREPAYMENT", [("bill-1", "ACCPAY", "50.00")])]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        before = (_cash_pnl(c), _cash_expense(c))
+    # The money is revised (a new note) and the overpayment and prepayment keep the allocations they had.
+    xbooks.change("BankTransactions", {**_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00"), "Reference": "revised",
+                                       "UpdatedDateUTC": ms("2026-10-15T13:30:00Z")})
+    xbooks.change("BankTransactions", {**_held_bank("pp-1", "SPEND-PREPAYMENT", "50.00"), "Reference": "revised",
+                                       "UpdatedDateUTC": ms("2026-10-15T13:30:00Z")})
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 10000
+        assert c.execute("SELECT amount_paid FROM fin_bills WHERE number='INV-bill-1'").fetchone()[0] == 5000
+        assert (_cash_pnl(c), _cash_expense(c)) == before
+
+
+def test_a_revised_overpayment_that_moves_its_allocation_settles_the_new_document_only(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1"), _invoice("inv-2")]
+    xbooks.rows["BankTransactions"] = [_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00")]
+    xbooks.rows["Overpayments"] = [_held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00")])]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.change("BankTransactions", {**_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00"), "Reference": "revised",
+                                       "UpdatedDateUTC": ms("2026-10-15T13:30:00Z")})
+    xbooks.change("Overpayments", _held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-2", "ACCREC", "100.00")],
+                                        updated="2026-10-15T13:30:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 0
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-2'").fetchone()[0] == 10000
+
+
 def test_an_overpayment_allocation_whose_invoice_omits_its_type_names_the_side_its_overpayment_is_on():
     received = {**_held("ov-9", "RECEIVE-OVERPAYMENT", [("inv-9", "ACCREC", "10.00")]),
                 "Allocations": [{"Invoice": {"InvoiceID": "inv-9"}, "Amount": "10.00"}]}

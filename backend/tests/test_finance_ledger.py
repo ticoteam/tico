@@ -226,9 +226,9 @@ def test_a_lines_role_is_recorded_where_tico_puts_it_kept_by_its_reversal_and_ne
         assert forged.status != "committed" and forged.code == "invalid"
 
 
-def test_migration_69_adds_the_mirror_columns_and_credit_refunds_to_an_install_from_68(store):
+def test_migration_74_adds_the_mirror_columns_and_credit_refunds_to_an_install_from_68(store):
     with store.transaction() as c:
-        c.execute("DELETE FROM cloud_migrations WHERE version=69")
+        c.execute("DELETE FROM cloud_migrations WHERE version=74")
         c.execute("DROP TABLE fin_credit_refunds")
         c.execute("ALTER TABLE fin_outbox DROP COLUMN unknown")
         c.execute("ALTER TABLE fin_lines DROP COLUMN external_line")
@@ -240,4 +240,4 @@ def test_migration_69_adds_the_mirror_columns_and_credit_refunds_to_an_install_f
         for table, column in (("fin_outbox", "unknown"), ("fin_lines", "external_line"),
                               ("fin_bill_lines", "external_line"), ("fin_invoice_lines", "external_line")):
             assert column in {r[1] for r in c.execute(f"PRAGMA table_info({table})")}
-        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=69").fetchone()[0] == 1
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=74").fetchone()[0] == 1

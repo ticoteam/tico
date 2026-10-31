@@ -19,6 +19,12 @@ def ref_for_local(c: sqlite3.Connection, cid: str, local_table: str, local_id: s
                      "ORDER BY created_at LIMIT 1", (cid, local_table, local_id)).fetchone()
 
 
+def refs_holding(c: sqlite3.Connection, cid: str, local_table: str, local_id: str) -> list[Any]:
+    """The refs whose local id (a comma-separated list of ids, for an application) names `local_id`."""
+    return c.execute("SELECT * FROM fin_external_refs WHERE connection_id=? AND local_table=? AND "
+                     "(',' || local_id || ',') LIKE ?", (cid, local_table, f"%,{local_id},%")).fetchall()
+
+
 def ref_insert(c: sqlite3.Connection, *, cid: str, local_table: str, local_id: str, kind: str, external_id: str,
                revision: str, status: str, at: str, by: str) -> None:
     c.execute("INSERT INTO fin_external_refs(id, connection_id, local_table, local_id, external_id, kind, revision, "
