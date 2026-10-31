@@ -26,9 +26,10 @@ asked again after 15 minutes; anything else backs off up to six hours and reache
 and a server that is not hosted never does either.
 """
 import asyncio
+import json
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 
 from fastapi import Request
 from pydantic import Field, StrictBool
@@ -141,9 +142,16 @@ def routine_times(c, at):
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
     if table(c, "automations"):
-        for row in c.execute("SELECT next_due FROM automations WHERE enabled=1 AND deleted_at IS NULL "
-                             "AND next_due IS NOT NULL").fetchall():
-            if (due := epoch(row[0])) is not None:
+        for row in c.execute("SELECT trigger_type, next_due, flow_json FROM automations WHERE enabled=1 "
+                             "AND deleted_at IS NULL AND next_due IS NOT NULL").fetchall():
+            if row[0] == "due":
+                # A due day wakes the server when its run starts (the lead time before it), not on the day.
+                if not row[1]:
+                    continue
+                from . import automation_due as D
+                trigger = (json.loads(row[2] or "{}").get("trigger")) or {}
+                out.append(D.fire_at(date.fromisoformat(row[1]), D.open_days_of(trigger), D.zone_of(trigger)).timestamp())
+            elif (due := epoch(row[1])) is not None:
                 out.append(due)
     out.extend(t for t in fixed_times(c, when) if t > at)      # one already past is being run by the scheduler now
     out.extend(later_sends(c, at))

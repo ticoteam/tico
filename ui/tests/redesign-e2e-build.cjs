@@ -1,5 +1,5 @@
-// Journey 3 on a real hub (redesign TESTING.md §L3): + New makes a blank automation at once (Ask has the Assistant
-// build one instead): the hub has an off "New automation" of Dana's, weekdays at 9, no steps, open in the editor. Each "+" adds a step in a
+// Journey 3 on a real hub (redesign TESTING.md §L3): + New, On a schedule makes a blank automation at once (Ask has the
+// Assistant build one instead): the hub has an off "New automation" of Dana's, weekdays at 9, no steps, open in the editor. Each "+" adds a step in a
 // sheet (Filter, then Decide, then an LLM prompt); each save is a version on the hub; History lists them and restoring
 // v1 brings back the empty flow as a new version. Phone, then desktop.
 const assert = require('node:assert/strict');
@@ -21,6 +21,7 @@ run('redesign-e2e-build', ['org', 'toured', 'automations'], async ({hub, browser
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations'});
   assert.equal(await page.locator('.au-ph [data-ask-open]').getAttribute('aria-label'), 'Ask', `${tag}: Ask beside + New`);
   await page.locator('.au-new').click();
+  await page.locator('.au-newm [data-new="schedule"]').click();
   await page.locator('.au-hd .au-name:text("New automation")').waitFor({timeout: t(10000)});
   await page.locator('.au-card[data-open="trigger"]').waitFor();
   assert.equal(await page.locator('.au-pane .au-card[data-open]:not([data-open="trigger"])').count(), 0, 'no steps yet');

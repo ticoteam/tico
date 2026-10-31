@@ -39,12 +39,13 @@ import json
 import logging
 import threading
 import weakref
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from pydantic import Field
 
 from . import automation_actions as A
+from . import automation_due as D
 from . import automation_engine as E
 from . import automation_flow as F
 from . import people as P
@@ -164,6 +165,11 @@ def view(c, row, who=None, detail=False, chart=None, jobs=None):
            "problems": redesign_migration.wake_problems(c, row["id"], flow) if flow.get("wakes") else []}
     if flow["trigger"]["type"] == "schedule":
         out["next_run"] = row["next_due"] or _iso(_due(flow["trigger"], datetime.now(timezone.utc)))
+    if flow["trigger"]["type"] == "due":
+        # next_due is the next due day (a date); next_run is when its run starts.
+        day = _due_day(row["next_due"])
+        out["next_due"], out["next_run"] = (None, None) if not day else (
+            day.isoformat(), _iso(D.fire_at(day, D.open_days_of(flow["trigger"]), D.zone_of(flow["trigger"]))))
     if flow.get("enabled") is False:
         # Paused, not just off: the run guard turned it off and nobody has changed it since.
         guard = c.execute("SELECT max(ts) FROM events WHERE target=? AND action='automation.run_guard'",
@@ -232,8 +238,10 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
                int(flow["builtin"]), json.dumps(flow, sort_keys=True), n, now)
     # A new schedule is due at its next time after now, set here, so the time GET shows as next_run is the one the
     # scheduler runs even when its first pass comes after it.
-    due = _iso(_due(flow["trigger"], datetime.fromisoformat(now.replace("Z", "+00:00")))) \
-        if flow["trigger"]["type"] == "schedule" else None
+    at = datetime.fromisoformat(now.replace("Z", "+00:00"))
+    due = _iso(_due(flow["trigger"], at)) if flow["trigger"]["type"] == "schedule" else None
+    if flow["trigger"]["type"] == "due":
+        due = _due_text(D.start(flow["trigger"], at))
     if prior:
         # A due time stays through a rename, cap or group change, so the occurrence due now still runs; a new
         # schedule, or one turned back on, starts from the next time after now.
@@ -477,6 +485,9 @@ def _checked(c, flow, settings=None, access=True, saved=None, aid=None, wake_ste
         flow = F.check(flow)
     except F.Invalid as exc:
         raise Problem("invalid", str(exc), 422)
+    if flow["trigger"]["type"] == "due":
+        # Stored on the flow, so a later change to the company's zone does not move the routine.
+        flow["trigger"] = {"open_days": D.OPEN_DAYS, "tz": D.zone_of({}), **flow["trigger"]}
     if flow.get("wakes"):   # a converted "What wakes" automation: only edits its wake rules can carry out
         from .redesign_migration import check_wakes
         check_wakes(flow, c if wake_steps else None, saved, aid)
@@ -945,6 +956,11 @@ def queue(c, row, payload, ref="", *, manual=False, chain=()):
         _count(c, row["id"], "dropped")
         return None
     if not manual and _absorbed(c, row):
+        return None
+    if str(ref).startswith("due:") and c.execute(
+            "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' LIMIT 1",
+            (row["id"], str(ref)[:200])).fetchone():
+        # One due day, one run: a repeated or concurrent pass for the same day starts nothing new.
         return None
     if str(ref).startswith("slack:") and c.execute(
             "SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? LIMIT 1",
@@ -1423,7 +1439,8 @@ class HubServices:
             found = self._screened(bot, ctx["values"]) if bot else None
             if found and found["action"] != "pass":
                 args = self._screened_task(found, bot, args, ctx["values"])
-        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"]))
+        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"],
+                                                 step=ctx.get("step")))
         if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
             from . import screening
             self._write(lambda c: screening.note(c, found, "webhook", result["task"], bot=bot,
@@ -1474,7 +1491,8 @@ class HubServices:
             if cap is not None and _spent(c, self.row["id"], self.run_id) + float(ctx.get("cost") or 0) >= float(cap):
                 return None
             started = A.start_turn(c, self.auto, self.run_id, ctx["step"], who, prompt, self.hub.settings.assistant_bot,
-                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"))
+                                   ctx["key"], label=ctx.get("label"), run_model=ctx.get("run_model"),
+                                   occurrence=ctx["values"].get("due"))
             if found and found["action"] == "warn":
                 from . import screening
                 screening.note(c, found, "webhook", started["ref"], bot=bot)
@@ -1587,6 +1605,8 @@ class Hub:
                       "WHERE id=?", (status, state.get("cost", 0), json.dumps(state, default=str),
                                      None if status in ("waiting", "queued", "held") else H.now(),
                                      min(waits) if waits and status == "waiting" else None, rid))
+            if status == "failed":
+                _due_failed(c, rid, _run_error(state))
             if status == "queued":
                 _ring(c)
 
@@ -1667,6 +1687,8 @@ def _settle_run(c, run_id):
     c.execute("UPDATE automation_runs SET status=?, state_json=?, finished=? WHERE id=?",
               (status, json.dumps(state, default=str),
                run["finished"] or (None if status == "waiting" else H.now()), run_id))
+    if status == "failed" and run["status"] != "failed":
+        _due_failed(c, run_id, _run_error(state))
 
 
 def restate(c, run_id, key, value, changes):
@@ -1726,6 +1748,9 @@ def tick(store, at=None):
                 fire(c, "schedule", {"schedule": {"at": row["next_due"], "cron": trigger["cron"], "tz": zone}},
                      f"schedule:{row['next_due']}", only=row["id"])
             c.execute("UPDATE automations SET next_due=? WHERE id=?", (_iso(next_due(trigger["cron"], at, zone)), row["id"]))
+        for row in c.execute("SELECT * FROM automations WHERE deleted_at IS NULL AND enabled=1 "
+                             "AND trigger_type='due'").fetchall():
+            _due_pass(c, row, at)
         c.execute(f"UPDATE automation_runs SET status={RUNNABLE},wake_at=NULL WHERE status='waiting' AND wake_at<=?",
                   (now,))
         # A run cut off (the server stopped mid-run) goes on from its last save; its effects are not done twice.
@@ -1763,6 +1788,150 @@ def tick(store, at=None):
     return hub.drain() if hub else 0
 
 
+def _due_day(value):
+    """The cursor's due day as a date, or None (none left, or not yet set)."""
+    return date.fromisoformat(value) if value else None
+
+
+def _due_text(day):
+    """A due day as the cursor is stored: its ISO date, or "" once none is left (NULL means not yet set)."""
+    return day.isoformat() if day else ""
+
+
+DUE_RETRY = timedelta(hours=1)    # a due day whose run failed is run again no sooner than this after the failure
+DUE_TRIES = 3                     # failed runs of one due day before the routine gives that day up
+
+
+def due_input(trigger, day):
+    """The payload a due occurrence's run starts with, for its due day `day`: what `_due_pass` fires, and what a manual
+    run without input is given. Its `due` object makes the task's due and occurrence (backend/automation_actions.py)."""
+    zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
+    return {"due": {"due_on": day.isoformat(), "first_due": trigger["first_due"], "repeats": trigger["repeats"],
+                    "open_days": open_days, "tz": zone, "rule_due_id": trigger.get("rule_due_id"),
+                    "run_at": _iso(D.fire_at(day, open_days, zone))}}
+
+
+def _next_due_day(row, trigger, at):
+    """The routine's next due day not yet queued (its cursor), or None when none is left."""
+    return _due_day(row["next_due"]) if row["next_due"] is not None else D.start(trigger, at)
+
+
+def _same_trigger(c, aid, version, trigger):
+    """Whether a run's version had this due trigger (its days and zone): a run made under a trigger since changed, or
+    before the routine was a due one, is not an occurrence of the routine any more."""
+    row = c.execute("SELECT flow_json FROM automation_versions WHERE automation_id=? AND n=?", (aid, version)).fetchone()
+    if not row:
+        return False
+    was = json.loads(row[0]).get("trigger") or {}
+    return (was.get("type") == "due" and all(was.get(k) == trigger.get(k) for k in ("first_due", "repeats"))
+            and D.open_days_of(was) == D.open_days_of(trigger) and D.zone_of(was) == D.zone_of(trigger))
+
+
+def _owed(c, row, trigger):
+    """The due days whose runs failed and are still owed a try, oldest first, as (trigger_ref, last failure): fewer than
+    DUE_TRIES failed runs, no run that stands (ok, unfinished or skipped), made under this due trigger. Each day counts
+    its own failures, so the days of one catch-up that failed each keep their own tries."""
+    settled = {r[0] for r in c.execute("SELECT DISTINCT trigger_ref FROM automation_runs WHERE automation_id=? "
+                                       "AND trigger_ref LIKE 'due:%' AND status<>'failed'", (row["id"],))}
+    seen = {}
+    for r in c.execute("SELECT trigger_ref, version, finished FROM automation_runs WHERE automation_id=? "
+                       "AND trigger_ref LIKE 'due:%' AND status='failed' ORDER BY started", (row["id"],)):
+        if r["trigger_ref"] in settled:
+            continue
+        count = seen.get(r["trigger_ref"], (0, "", 0))[0]
+        seen[r["trigger_ref"]] = (count + 1, r["finished"] or "", r["version"])
+    return [(ref, last) for ref, (count, last, version) in sorted(seen.items())
+            if count < DUE_TRIES and _same_trigger(c, row["id"], version, trigger)]
+
+
+def _held_by_find(c, row):
+    """A find runs one at a time: a day waits while another run of the routine is unfinished."""
+    return bool(_finds(flow_of(row)["steps"]) and c.execute(
+        "SELECT 1 FROM automation_runs WHERE automation_id=? AND status IN ('queued','running','waiting','held') "
+        "LIMIT 1", (row["id"],)).fetchone())
+
+
+def _due_pass(c, row, at):
+    """A routine's due days whose run time has come, one run each: the cursor (`next_due`) walks forward, queueing each
+    day (`queue` refuses a second run for it). A failed day is owed another try (`_owed`), at most hourly, until
+    DUE_TRIES failed runs; the cursor is never moved back for it, so several failed days each keep their own tries.
+    A pause (access, or the bot not active) holds every day, with one `automation.deferred` event per reason and day,
+    and nothing is dropped: the next pass after it runs them. A find waits for its unfinished run."""
+    flow = flow_of(row)
+    trigger = flow["trigger"]
+    cursor = _next_due_day(row, trigger, at)
+    zone, open_days = D.zone_of(trigger), D.open_days_of(trigger)
+    owed = _owed(c, row, trigger)
+    if why := cloud_access.routines_paused(c) or _bot_away(c, row):
+        waiting = [date.fromisoformat(ref[4:]) for ref, _ in owed]
+        if cursor and D.fire_at(cursor, open_days, zone) <= at:
+            waiting.append(cursor)
+        if waiting:
+            _deferred(c, row, min(waiting).isoformat(), why)
+        return
+    cutoff = _iso(at - DUE_RETRY)
+    for ref, last in owed:
+        if last and last > cutoff:
+            continue    # a failed day is tried again no sooner than an hour after it failed
+        if _held_by_find(c, row):
+            break
+        fire(c, "due", due_input(trigger, date.fromisoformat(ref[4:])), ref, only=row["id"])
+    day, passed = cursor, 0
+    while day and passed < D.MAX_CATCH_UP and D.fire_at(day, open_days, zone) <= at:
+        if _held_by_find(c, row):
+            break
+        fire(c, "due", due_input(trigger, day), f"due:{day.isoformat()}", only=row["id"])
+        day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
+        passed += 1
+    c.execute("UPDATE automations SET next_due=? WHERE id=?", (_due_text(day), row["id"]))
+
+
+def _deferred(c, row, day, why):
+    """A due day a pause holds: one `automation.deferred` event per reason and day, not one per pass."""
+    last = c.execute("SELECT detail_json FROM events WHERE action='automation.deferred' AND target=? "
+                     "ORDER BY rowid DESC LIMIT 1", (row["id"],)).fetchone()
+    detail = {"due_on": day, "reason": why}
+    if last and json.loads(last[0] or "{}") == detail:
+        return
+    H.event(c, H.KEEPER, "automation.deferred", row["id"], detail)
+
+
+def _run_error(state):
+    """Why a run failed, in words: the run's own error, else the first failed step's detail (an action's refusal)."""
+    if state.get("error"):
+        return str(state["error"])
+    for record in state.get("steps") or []:
+        if record.get("status") == "failed":
+            found = next((a.get("detail") or a.get("error") for a in _entries(record) if not a.get("ok", True)), None)
+            return str(found or record.get("error") or "a step failed")
+    return "failed"
+
+
+def _due_failed(c, rid, error=""):
+    """A due day's run has failed (once, as the run turns failed). Nothing moves: the day stays owed its next try
+    (`_owed`), and the cursor stays where it is. The try that makes DUE_TRIES failures gives the day up, with one
+    `automation.due_gave_up` event. A run under another trigger, or a routine that is no longer a due one, says nothing."""
+    run = c.execute("SELECT automation_id, trigger_ref, version FROM automation_runs WHERE id=?", (rid,)).fetchone()
+    ref = str(run["trigger_ref"] or "") if run else ""
+    if not ref.startswith("due:"):
+        return
+    try:
+        day = date.fromisoformat(ref[4:])
+    except ValueError:
+        return
+    aid = run["automation_id"]
+    auto = c.execute("SELECT trigger_type, flow_json FROM automations WHERE id=?", (aid,)).fetchone()
+    if not auto or auto["trigger_type"] != "due":
+        return
+    trigger = json.loads(auto["flow_json"])["trigger"]
+    if not _same_trigger(c, aid, run["version"], trigger):
+        return
+    failed = c.execute("SELECT count(*) FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status='failed'",
+                       (aid, ref)).fetchone()[0]
+    if failed == DUE_TRIES:
+        H.event(c, H.KEEPER, "automation.due_gave_up", aid, {"due_on": day.isoformat(), "error": str(error or "")[:300]})
+
+
 def _fail(c, rid, state, now, why):
     """The tick gives up on a run: failed, its unclaimed mail cancelled, its unfinished items left for a retry."""
     run = c.execute("SELECT automation_id FROM automation_runs WHERE id=?", (rid,)).fetchone()
@@ -1772,8 +1941,11 @@ def _fail(c, rid, state, now, why):
         _found_done(c, run["automation_id"], state, ended=True)
     else:
         _cancel_mail(c, rid)
+    was = c.execute("SELECT status FROM automation_runs WHERE id=?", (rid,)).fetchone()
     c.execute("UPDATE automation_runs SET status='failed',finished=?,claimed_at=NULL,state_json=coalesce(?,state_json) "
               "WHERE id=?", (now, json.dumps(state, default=str) if state else None, rid))
+    if was and was["status"] != "failed":
+        _due_failed(c, rid, why)
 
 
 def _due(trigger, at):
@@ -2120,7 +2292,12 @@ def install(app, store, auth, mutate):
                 # A sample the trigger's filters drop is dropped as the trigger would drop it: counted, no run row.
                 _count(c, aid, "dropped")
                 return {"run": None, "dropped": True}
-            rid = queue(c, row, {**body.input, "manual": {"by": who.actor}}, "manual", manual=True, chain=(aid,))
+            start = dict(body.input)
+            if not start and flow["trigger"].get("type") == "due":
+                # A due routine run by hand with no sample starts as its scheduler would for its next due day.
+                day = _next_due_day(row, flow["trigger"], datetime.now(timezone.utc)) or D.first_due(flow["trigger"])
+                start = due_input(flow["trigger"], day)
+            rid = queue(c, row, {**start, "manual": {"by": who.actor}}, "manual", manual=True, chain=(aid,))
             if not rid:
                 raise Problem("on_hold", "The automation is on hold: release or drop its held runs first", 409)
             return {"run": rid}

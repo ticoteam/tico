@@ -49,7 +49,7 @@ from .auth import LOCAL_COOKIE, LOCAL_COOKIE_DAYS, LOCAL_SIGNIN_PATH, LOGOUT_PAT
 from .config import Settings
 from .observability import Observability, browser_config, staff_display_name, route as error_route
 from .execution import (ClaimFaults, Execution, bot_repository, bump_bot_session_epoch, claim_scope, clear_limits,
-                        lift_after_model_change, model_choice, own_login_hold)
+                        flag_cut, lift_after_model_change, model_choice, own_login_hold)
 from .onboarding import BOTOPS, Onboarding
 from .recruit import Recruiter
 from . import rooms
@@ -176,6 +176,13 @@ def create_app(settings=None):
                 onboarding.ensure_task_manager(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
+        try:
+            from .finance import actions as finance
+            with store.transaction() as c:
+                finance.ensure_setup(c, settings.owner_email)
+        except Exception as exc:
+            telemetry.capture("finance_setup", exc)
         # The Librarian gets the market posts from Listening, once (Settings > Listening).
         try:
             from . import listening
@@ -217,6 +224,13 @@ def create_app(settings=None):
                 ship_deployed(c, settings)
         except Exception as exc:
             telemetry.capture("github", exc)
+        # The runs the last process still held were cut by its stop, unless their computers carry on: flagged, they
+        # resume on the next sweep if they lapse (execution.cut_by_update).
+        try:
+            with store.transaction() as c:
+                flag_cut(c, "restart")
+        except Exception as exc:
+            telemetry.capture("flag_cut", exc)
         # A deploy keeps the API down longer than a lease; do not fail turns for that.
         execution.grace_leases()
         # A live support session picks its link to HQ back up (backend/support_access.py).
@@ -325,6 +339,10 @@ def create_app(settings=None):
         if webhooks_on:
             from . import webhook_delivery
             webhook_delivery.start(store, app.state.vault, rehearsal=settings.rehearsal)
+            # Finance's Gateway worker (backend/finance/gateway_sync.py): the key's self cap and its usage meter. A
+            # rehearsal copy runs it only to record what it would send as withheld.
+            from .finance import actions as finance
+            finance.gateway_start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
@@ -420,6 +438,7 @@ def create_app(settings=None):
                 await asyncio.to_thread(recorder_thread.stop)
             if webhooks_on:
                 await asyncio.to_thread(webhook_delivery.stop)
+                await asyncio.to_thread(finance.gateway_stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,
@@ -1075,7 +1094,10 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         if not value.get("snoozed_note"):
             value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
+        if not value.get("occurrence"):
+            value.pop("occurrence", None)       # only a due-date routine's task has one: a board of 500 carries none
         value.pop("labels_json", None)
+        value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
@@ -1566,6 +1588,7 @@ def create_app(settings=None):
             c.execute("INSERT INTO registry_metadata VALUES('update-pending',?) "
                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (json.dumps(record),))
             H.event(c, who.actor, "system.update.started", target, {"from": record["from"], "to": target})
+            flag_cut(c, "update", target)    # the runs it cuts resume after it (execution.cut_by_update)
         return result
 
     @app.get("/api/v2/providers")
@@ -4834,6 +4857,9 @@ def create_app(settings=None):
             decided = H.approval_decide(c, who.actor, aid, body.decision, body.note)
             if row["kind"] in proposals.KINDS and body.decision == "approved":
                 proposals.apply(c, auth, settings, who, row)     # the hub applies it itself (CONTRACT §5)
+            if row["kind"] in ("finance", "spend"):
+                from .finance import actions as finance
+                finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
         return mutate(request, body, work)
 
@@ -7234,6 +7260,8 @@ def create_app(settings=None):
     release_flow.install(app, store, auth, mutate)
     from . import screening
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
+    from . import finance_routes
+    finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)

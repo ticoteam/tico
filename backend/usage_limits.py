@@ -12,6 +12,10 @@ on a ChatGPT or Claude sign-in are flat cost, so their API-equivalent counts onl
   100%  the bot takes no new job until the period turns over or the limit is raised: the job stays queued and the bot
         reads "Paused: over its hourly limit". A run already going finishes.
 
+A Finance budget that refuses at its limit (`decline`) on AI services or Video production is one more limit: at its
+cutoff every bot it covers is held the same way and reads "Paused: AI services budget reached" (scope `budget`, no
+amounts, since who reads a paused bot may not see the budget). Caps and budgets both stay; whichever is met first holds.
+
 The window is the UTC half hour (`per_30m`): it replaces the hour for every new limit, and an hour limit set before
 stays in force. The day is the UTC day, the week starts
 Monday 00:00 UTC and the month is the UTC calendar month. Over a window the bot takes no new turn and resumes when the
@@ -19,6 +23,7 @@ window ends.
 """
 
 import json
+import logging
 import math
 from datetime import datetime, timedelta, timezone
 
@@ -359,7 +364,33 @@ def state(c, bot, at=None, default=None):
                 result["blocked_by"] = {"scope": scope, "name": label(c, scope, default), "period": period,
                                         "spent": found[label_ + "_spent"], "limit": found[period + "_usd"]}
                 break
+    if not result["blocked"]:
+        cut = budget_cutoff(c, bot, at, default)
+        if cut:
+            result["blocked"] = cut["period"]
+            result["blocked_by"] = cut
     return result
+
+
+def budget_cutoff(c, bot, at=None, default=None):
+    """The Finance budget at its cutoff that holds the bot: {scope: budget, name, period, budget_id, until}, else None.
+    One pass over many bots reads the budgets once (the memo on `default`). A fault in Finance holds no bot."""
+    memo = default.memo if at is None and isinstance(default, Default) else None
+    try:
+        if memo is not None and "finance_cutoffs" in memo:
+            cuts = memo["finance_cutoffs"]
+        else:
+            from .finance import reads as finance_reads
+            cuts = finance_reads.cutoffs(c, at.strftime("%Y-%m-%dT%H:%M:%S.%fZ") if at else None)
+            if memo is not None:
+                memo["finance_cutoffs"] = cuts
+        cut = cuts.of(bot)
+    except Exception:
+        logging.getLogger(__name__).exception("Reading Finance budget cutoffs failed")
+        return None
+    if cut is None:
+        return None
+    return {"scope": "budget", "name": cut.name, "period": cut.period, "budget_id": cut.budget_id, "until": cut.until}
 
 
 def blocked(c, bot, at=None, default=None):
@@ -371,6 +402,8 @@ def why(met):
     """The words on a paused bot, from `over`'s answer (or a bare period, for the bot's own limit)."""
     met = met if isinstance(met, dict) else {"period": met, "scope": "bot"}
     word = WORDS.get(met["period"], met["period"])
+    if met.get("scope") == "budget":
+        return f"Paused: {met['name']} budget reached"
     if met.get("scope", "bot") == "bot":
         return f"Paused: over its {word} limit"
     return f"Paused: {met['name']} is over its {word} limit"
@@ -378,11 +411,14 @@ def why(met):
 
 def over(c, bot, at=None, default=None):
     """The limit a bot is held by, for the pages and the hub tools: {period, spent, limit, until, scope, name}, else
-    None. `scope` is `bot`, `company` or `group:<id>`; `name` names a pool; `until` is when the period turns over (UTC)."""
+    None. `scope` is `bot`, `company`, `group:<id>` or `budget` (a Finance budget at its cutoff, with no amounts);
+    `name` names a pool or budget; `until` is when the period turns over (UTC)."""
     found = state(c, bot, at, default)
     met = found["blocked_by"]
     if not met:
         return None
+    if met["scope"] == "budget":
+        return dict(met)
     return {**met, "until": bounds(at)[met["period"]][2] + "Z"}
 
 
@@ -408,6 +444,9 @@ def warning(c, actor, at=None):
         return None
     name = (H.bot(c, bot) or {}).get("display_name") or bot
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
+    if met["scope"] == "budget":
+        return (f"{name} is waiting: the {met['name']} budget is used up for this period; it starts again on "
+                f"{reset} or when a person raises the budget.")
     if met["scope"] == "bot":
         return (f"{name} is over its {WORDS.get(met['period'], met['period'])} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}); "
                 f"it starts again at {reset} or when a person raises the limit.")

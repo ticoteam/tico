@@ -54,7 +54,7 @@
 .au-tbl-t th.au-tt{width:15%}
 .au-tbl-t th.au-to{width:64px}
 .au-tbl-t th.au-cl{width:78px}
-.au-tbl-t th.au-cx{width:64px}
+.au-tbl-t th.au-cx{width:104px}
 .au-tbl-t th.au-cs{width:104px;padding-right:0}
 .au-tbl-t th.au-n{width:58px}
 .au-tbl-t th.au-cc{width:74px}
@@ -65,7 +65,7 @@
 /* a narrow table beside the editor folds Next (and a run's Steps and Time) to nothing, then Cost; folded, not removed, so a
    group row's colspan still matches the columns. A phone keeps them all and scrolls sideways instead. */
 @media (min-width:761px){
-  @container (max-width:1000px){
+  @container (max-width:940px){
     .au-tbl-t th.au-cx{width:0}
     .au-tbl-t .au-cx{padding:0;font-size:0}
   }
@@ -85,6 +85,10 @@
 .au-to>span{display:inline-flex;align-items:center;gap:6px;max-width:100%;color:var(--g7)}
 .au-to>span>span{overflow:hidden;text-overflow:ellipsis}
 .au-lr{display:inline-flex;align-items:center;gap:6px;font-variant-numeric:tabular-nums}
+/* a due date's Next: the due day over when its task opens */
+.au-nx{display:flex;flex-direction:column;line-height:1.25;font-size:var(--t-xs)}
+.au-nx>*{overflow:hidden;text-overflow:ellipsis}
+.au-nx-d{color:var(--ink);font-size:var(--t-sm)}
 .au-spark{display:block}
 .au-bad{color:var(--fail)}
 .au-grp td{padding:6px 10px;background:var(--surface);font-size:var(--t-sm);font-weight:600;cursor:pointer}
@@ -202,10 +206,13 @@ button.au-chip:hover{background:var(--surface2)}
 .au-dots{display:none}
 
 /* menus: "+" step types and ⋯ */
-.au-menu{position:absolute;z-index:30;min-width:180px;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.35)}
-.au-menu button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
-.au-menu button:hover:not(:disabled),.au-menu button:focus-visible{background:var(--surface2)}
-.au-menu .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+.au-menu,.au-newm{position:absolute;z-index:30;min-width:180px;padding:4px;border:1px solid var(--line);border-radius:var(--r-pop);background:var(--surface);box-shadow:0 10px 30px rgba(0,0,0,.35)}
+.au-menu button,.au-newm button{display:flex;align-items:center;gap:9px;width:100%;padding:6px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;text-align:left;cursor:pointer}
+.au-menu button:hover:not(:disabled),.au-menu button:focus-visible,.au-newm button:hover,.au-newm button:focus-visible{background:var(--surface2)}
+.au-menu .nav-icon,.au-newm .nav-icon{font-size:17px;width:18px;height:18px;color:var(--muted)}
+/* + New's trigger choices, under the button */
+.au-newbox{position:relative}
+.au-newm{top:calc(100% + 4px);right:0;min-width:220px}
 
 /* the side: the open editor */
 .au-side{display:flex;flex-direction:column;min-height:0;min-width:0;border-left:1px solid var(--line)}
@@ -229,6 +236,7 @@ button.au-chip:hover{background:var(--surface2)}
 .au-rbh select{width:auto}
 .au-ir{display:flex;align-items:center;gap:6px;min-width:0}
 .au-ir>:is(input,select){flex:1;min-width:0}
+.au-days>input{flex:0 0 80px}
 .au-cond-row{display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,.7fr) minmax(0,1fr) 62px auto;gap:6px;align-items:center}
 /* the minimum confidence reads as a percent once filled in */
 .au-pct{position:relative;display:block;min-width:0}
@@ -318,8 +326,8 @@ button.au-chip:hover{background:var(--surface2)}
   .au-add:not(.au-add-end){width:28px;height:28px;line-height:25px}
   .au-ln:not(.au-ln-end){height:32px}
   .au-add-end{height:40px;padding:0 16px 0 14px}
-  .au-menu{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
-  .au-menu button{min-height:44px}
+  .au-menu,.au-newm{position:fixed;left:8px;right:8px;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom) + 8px);top:auto!important}
+  .au-menu button,.au-newm button{min-height:44px}
   /* an editor: a sheet over the flow */
   .au.ed-open .au-side{display:flex;position:fixed;z-index:41;left:0;right:0;bottom:0;height:auto;max-height:88dvh;border-radius:14px 14px 0 0;background:var(--surface);box-shadow:0 -10px 40px rgba(0,0,0,.4)}
   .au.ed-open .au-ed{height:auto;max-height:88dvh}

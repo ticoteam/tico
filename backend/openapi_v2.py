@@ -713,7 +713,8 @@ SCHEMAS = {
     "TaskTypeResult": obj({"type": ref("TaskType")}),
     "Task": obj({"private": "b", "id": "s", "title": "s", "body": "s", "requester": "s", "owner": "s", "status": "s", "created": "s",
                  "updated": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
-                 "acceptance_criteria": items({"type": "string"})},
+                 "acceptance_criteria": items({"type": "string"}),
+                 "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
                 required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels"],
                 owner_name={"type": "string", "description": "Display name of owner (`owner` stays the actor id)"},
                 requester_name={"type": "string", "description": "Display name of requester"},
@@ -1383,6 +1384,36 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
     "rows": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
     "next": {"type": ["string", "null"]}}}})
 
+# Finance (backend/finance_routes.py): every read is cut to the caller's own view.
+TAGS["Finance"] = ("Budgets, the P&L, expenses and one line's detail, as far as the caller sees; Finance actions, "
+                   "committed or sent to one person for approval.")
+STABLE.extend([
+    ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
+     "The budgets the caller sees, each with where it stands today (amounts in cents)", "FinanceBudgets"),
+    ("/api/v2/finance/pnl", "get", "Finance", "getFinancePnl",
+     "The P&L the caller sees, by month, quarter or year, with budget and projection beside each actual", "FinanceReport"),
+    ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
+     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line", "FinanceReport"),
+    ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
+     "One line's spend by vendor, team and teammate, and its entries, as far as the caller sees", "FinanceReport"),
+    ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
+     "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
+     "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
+     "what would happen",
+     "FinanceAction"),
+    ("/api/v2/finance/actions/{action_id}", "get", "Finance", "getFinanceAction",
+     "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
+     "otherwise only while that view covers it",
+     "FinanceAction"),
+])
+SCHEMAS.update({
+    "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
+                           "view_version": "i"}),
+    "FinanceReport": obj({"view_version": "i"}),
+    "FinanceAction": obj({"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"},
+                         required=["status", "kind"]),
+})
+
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
 STABLE.extend([
     ("/api/v2/approvals", "post", "Needs you", "requestApproval",
@@ -1413,7 +1444,7 @@ STABLE.extend([
     ("/api/v2/automations/question-sets", "get", "Automations", "listQuestionSets",
      "The saved question sets a Decide step may name (`set`), each with its questions", "QuestionSets"),
     ("/api/v2/automations/{aid}", "get", "Automations", "getAutomation",
-     "One automation with set questions filled in, today's counts and, for a schedule, next_run", "Automation"),
+     "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)", "Automation"),
     ("/api/v2/automations/{aid}", "patch", "Automations", "updateAutomation",
      "Change it: a new trigger, steps or batch is a new version. A bot without edit rights gets "
      "`pending`, a proposal a person restores", "Automation"),
@@ -1454,7 +1485,10 @@ SCHEMAS.update({
                        "spend_cap": {"type": ["object", "null"]}, "batch": {"type": ["object", "null"]},
                        "last_run": {"type": ["object", "null"]},
                        "counts": obj({"today": obj({"runs": "i", "dropped": "i"})}),
-                       "next_run": {"type": ["string", "null"]}, "pending": "i", "warning": "s",
+                       "next_run": {"type": ["string", "null"]},
+                       "next_due": {"type": ["string", "null"], "description": "A due-date trigger's next due day "
+                                    "(YYYY-MM-DD); next_run is when its run starts"},
+                       "pending": "i", "warning": "s",
                        "kind": {"type": "string", "description": "The trigger as the overview groups it; system for "
                                 "Tico's own jobs"},
                        "problems": {"type": "array", "description": "Wake rules that name a step their task type "
@@ -1476,7 +1510,7 @@ SCHEMAS.update({
     "AutomationOverviewRuns": obj({
         "runs": items(obj({"id": "s", "automation_id": "s", "automation_name": "s",
                            "trigger": {"enum": ["message", "task_received", "schedule", "webhook", "listening", "event",
-                                                "system"]},
+                                                "due", "system"]},
                            "owner": "s", "started": "s", "finished": {"type": ["string", "null"]}, "status": "s",
                            "cost": "f", "started_by": "s", "outcome": "s", "step_count": {"type": ["integer", "null"]},
                            "count": {"type": "integer", "description": "Quiet system-job runs folded into this row"}},

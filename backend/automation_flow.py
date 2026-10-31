@@ -11,7 +11,7 @@ from clients import judge as J
 from backend import templating
 
 TRIGGERS = {"message": ("inbox",), "task_received": ("to",), "schedule": ("cron",), "webhook": ("id",),
-            "listening": ("destination",), "event": ("name",)}
+            "listening": ("destination",), "event": ("name",), "due": ("first_due", "repeats")}
 STEP_TYPES = ("filter", "decide", "llm", "find", "bot_turn", "paths", "action")
 ACTIONS = ("archive", "leave_for_you", "draft_reply", "send_reply", "create_task", "label", "forward", "wake_bot",
            "note", "post_update", "call_webhook", "assign")
@@ -151,11 +151,31 @@ def _check_trigger(trigger):
         _need(len(trigger["cron"].split()) == 5 and croniter.is_valid(trigger["cron"]), "trigger",
               "cron is a five-field schedule such as 0 9 * * 1-5")
         _check_zone(trigger.get("tz") or "UTC", "trigger")
+    if kind == "due":
+        _check_due(trigger)
     if kind == "message":
         inbox = trigger["inbox"]
         _need("@" in inbox or inbox == "slack:dm" or re.fullmatch(r"slack:#[a-z0-9][a-z0-9._-]{0,79}", inbox), "trigger",
               "inbox is an email address, slack:dm or slack:#<channel>")
     check_conds(trigger.get("filters") or [], "trigger filters")
+
+
+def _check_due(trigger):
+    """A due-date trigger (backend/automation_due.py): a first due day, a repeat, the lead time and an optional zone
+    and rule id (the rules feature stores its due date's id here; nothing checks it yet)."""
+    from . import automation_due as D
+    try:
+        D.first_due(trigger)
+    except ValueError:
+        raise Invalid("trigger: first_due is a date such as 2027-01-31") from None
+    _need(trigger["repeats"] in D.REPEATS, "trigger", "repeats is once, weekly, monthly, quarterly or yearly")
+    open_days = trigger.get("open_days", D.OPEN_DAYS)
+    _need(type(open_days) is int and 0 <= open_days <= D.MAX_OPEN_DAYS, "trigger",
+          f"open_days is a whole number of days from 0 to {D.MAX_OPEN_DAYS}")
+    if trigger.get("tz") is not None:
+        _check_zone(trigger["tz"], "trigger")
+    if trigger.get("rule_due_id") is not None:
+        _text(trigger["rule_due_id"], "trigger", "rule_due_id", cap=200)
 
 
 def _check_zone(zone, where):
@@ -435,7 +455,7 @@ def render_prompt(text, values, cap=MAX_TEXT):
 
 # ---------------------------------------------------------------------------------------------------- Decide's state
 # The trigger's object a Decide step judges, first found wins: a find's item, then the trigger's own object.
-OBJECTS = ("item", "message", "task", "event", "listening", "webhook", "schedule")
+OBJECTS = ("item", "message", "task", "event", "listening", "webhook", "schedule", "due")
 SNIPPET_CHARS = 400     # as the mail connector's brief listing (connectors/mail/judge.py)
 
 
@@ -480,7 +500,8 @@ ACTION_ARGS = {
     "label": {"name": "the label (or tag); a Gmail system label such as STARRED stays as it is"},
     "create_task": {"title": "required: the task's title",
                     "body": "the task's text",
-                    "owner": "a person id or a bot slug (default the automation's owner)"},
+                    "owner": "a person id or a bot slug (default the automation's owner)",
+                    "due": "a date (YYYY-MM-DD) for the task; a due-date trigger's due day by default"},
     "assign": {"owner": "required: a person id or a bot slug",
                "text": "a note on the change (or note)"},
     "note": {"text": "the note (or note)",
@@ -501,6 +522,7 @@ TRIGGER_WORDS = {
     "webhook": "an existing incoming webhook (its id, no secret)",
     "listening": "a match at a listening destination",
     "event": "a named event from Tico's catalog",
+    "due": "a due date that repeats: its run starts open_days before each one (default 14)",
 }
 TRIGGER_FIELDS = {
     "message": "inbox: an email address, `slack:dm`, or `slack:#<channel>`",
@@ -509,6 +531,8 @@ TRIGGER_FIELDS = {
     "webhook": "id: the existing trigger's id",
     "listening": "destination: the destination's key",
     "event": "name: the event name",
+    "due": "first_due: the first due day, 2027-01-31; repeats: once, weekly, monthly, quarterly or yearly; "
+            "open_days: days before the due day the run starts (default 14); tz: a time zone (default the company's)",
 }
 STEP_WORDS = {
     "filter": "rules: the first rule whose conditions hold runs its actions (`stop` ends the list)",

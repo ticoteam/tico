@@ -2038,7 +2038,7 @@ def parser():
     s = auto.add_parser("recent-runs", help="runs across every automation you may see, newest first")
     s.add_argument("--range", choices=["5m", "1h", "24h", "7d"])
     s.add_argument("--status", choices=["done", "failed", "waiting", "running", "held"])
-    s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event or system")
+    s.add_argument("--trigger", help="message, task_received, schedule, webhook, listening, event, due or system")
     s.add_argument("--owner", help="person:<id>, bot:<slug> or group:<id>")
     s.add_argument("--limit", type=int)
     s.add_argument("--before", help="`next` from the page before")

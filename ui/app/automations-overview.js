@@ -8,9 +8,9 @@
 const AU_RANGES = {'5m': '30 s', '1h': '5 min', '24h': 'hour', '7d': '6 hours'};
 const AU_RANGE_SECONDS = {'5m': 300, '1h': 3600, '24h': 86400, '7d': 604800};
 const AU_RANGE_KEY = 'tico.automations.range';
-const AU_KINDS = ['message', 'task_received', 'schedule', 'webhook', 'listening', 'event', 'system'];
+const AU_KINDS = ['message', 'task_received', 'schedule', 'webhook', 'listening', 'event', 'due', 'system'];
 const AU_KIND_WORDS = {message: 'Message', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
-  listening: 'Listening', event: 'Event', system: 'System job'};
+  listening: 'Listening', event: 'Event', due: 'Due date', system: 'System job'};
 const AU_KIND_ICONS = {...AU_TRIGGER_ICONS, system: 'settings'};
 const AU_STATES = [['on', 'On', 'ok'], ['failing', 'Last run failed', 'fail'], ['hold', 'On hold', 'wait'], ['paused', 'Paused', 'wait'], ['off', 'Off', 'idle']];
 const AU_SORTS = [['last', 'Last run'], ['fail', 'Most failures'], ['runs', 'Most runs'], ['cost', 'Cost'], ['name', 'Name']];
@@ -158,6 +158,16 @@ function auPill(a) {
       : st === 'hold' ? '<span class="pill waiting">On hold</span>' : '');
 }
 const AU_DOTS = {ok: 'ok', empty: 'ok', skipped: 'ok', failed: 'fail', waiting: 'wait'};
+// The Next cell: when it next runs; for a due date, the due day over when its task opens.
+function auNextHTML(a) {
+  if (a.enabled === false || !a.next_run) return '—';
+  const at = new Date(a.next_run).getTime(), age = at > Date.now() ? auAge(a.next_run, true) : 'now';
+  if (auKind(a) === 'due' && a.next_due) {
+    const far = Date.parse(a.next_due) - Date.now() > 330 * 864e5;   // the year only once it could be mistaken
+    return `<span class="au-nx"><span class="au-nx-d">Due ${esc(auDay(a.next_due, far))}</span><span>${age === 'now' ? 'opens now' : 'opens in ' + esc(age)}</span></span>`;
+  }
+  return age === 'now' ? 'due' : 'in ' + esc(age);
+}
 // On a phone (auPhone, automations.js) the table's columns come in another order: redraw when the width crosses over.
 matchMedia('(max-width:760px)').addEventListener?.('change', () => { if (AU?.root && document.body.contains(AU.root)) auDrawTable(); });
 
@@ -172,7 +182,9 @@ function auTableHTML() {
   const keyOf = r => AU.group === 'trigger' ? auKind(r.a) : AU.group === 'owner' ? r.a.owner || '' : '';
   const groups = [];
   for (const r of rows) { const k = keyOf(r); let g = groups.find(x => x.k === k); if (!g) groups.push(g = {k, rows: []}); g.rows.push(r); }
-  if (AU.group === 'trigger') groups.sort((x, y) => AU_KINDS.indexOf(x.k) - AU_KINDS.indexOf(y.k));
+  // A kind this page does not know yet goes after the known ones, not before them.
+  const rank = k => { const i = AU_KINDS.indexOf(k); return i < 0 ? AU_KINDS.length : i; };
+  if (AU.group === 'trigger') groups.sort((x, y) => rank(x.k) - rank(y.k));
   if (AU.group === 'owner') groups.sort((x, y) => auActorName(x.k).localeCompare(auActorName(y.k)));
   const label = k => AU.group === 'trigger' ? auIcon(AU_KIND_ICONS[k] || 'bolt') + esc(AU_KIND_WORDS[k] || auCap(k))
     : personCircle(auActorName(k), 16) + esc(auActorName(k));
@@ -184,7 +196,7 @@ function auTableHTML() {
     trigger: ['au-tt', 'Trigger', ({a}) => esc(auTrigLine(a))],
     owner: ['au-to', 'Owner', ({a}) => `<span title="${esc(auActorName(a.owner))}" aria-label="${esc(auActorName(a.owner))}">${personCircle(auActorName(a.owner), 18)}</span>`],
     last: ['au-cl', 'Last run', ({a}) => a.last_run ? `<span class="au-lr"><span class="au-dot ${AU_DOTS[a.last_run.status] || 'idle'}" role="img" aria-label="${esc(AU_RUN_STATUS[a.last_run.status] || a.last_run.status)}"></span>${esc(auAge(a.last_run.started))}</span>` : '<span class="muted">—</span>'],
-    next: ['au-cx muted', 'Next', ({a}) => { const next = a.enabled !== false && a.next_run ? auAge(a.next_run, true) : ''; return next ? (next === 'now' ? 'due' : 'in ' + esc(next)) : '—'; }],
+    next: ['au-cx muted', 'Next', ({a}) => auNextHTML(a)],
     trend: ['au-cs', 'Last ' + AU.range, ({s}) => auSpark(s.buckets || zero)],
     runs: ['au-n au-cn', 'Runs', ({s}) => s.runs ? s.runs.toLocaleString() : '<span class="muted">0</span>'],
     failed: ['au-n au-cf', 'Failed', ({s}) => s.failed || '—'],

@@ -66,13 +66,14 @@ function taskPropsHTML(t, opts = {}) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
     rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
   }
-  // Due: a person's deadline (red once passed), or when a bot's parked task wakes (muted "Wakes Oct 2")
+  // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due);
   const info = taskDueInfo(t);
-  const dueDay = dueAt ? new Date(dueAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
+  const dueDayAt = occurrenceDay(t) || dueAt;   // an occurrence's calendar day is its routine's, not the viewer's zone
+  const dueDay = dueAt ? new Date(dueDayAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
   const dueWords = !dueAt ? '' : info?.kind === 'wake' ? `${info.words.split(' ')[0]} ${dueDay}` : dueDay;
   const dueLate = !!info?.late;
-  const dueISO = dueAt ? new Date(dueAt - new Date(dueAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
+  const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')

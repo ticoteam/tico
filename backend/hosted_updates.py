@@ -240,6 +240,8 @@ def advance(store, now):
                       "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
                       (json.dumps({"actor": ACTOR, "from": current, "to": target}),))
             H.event(c, ACTOR, "system.update.started", target, {"from": current, "to": target})
+            from .execution import flag_cut
+            flag_cut(c, "update", target)    # the runs it cuts resume after it (execution.cut_by_update)
         try:
             releases.start(target)
         except Problem as problem:

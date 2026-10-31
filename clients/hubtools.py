@@ -3170,11 +3170,11 @@ _AUTO_FIELDS = {
     "group": _s("group:<id>, for permissions"), "enabled": {"type": "boolean"},
     "spend_cap": {"type": ["object", "null"], "description": "{per_30m: dollars} for its LLM and bot turns; null = the bot's limit"},
     "batch": {"type": "object", "description": "{times: [\"08:00\", ...], tz}: filters on receipt, the rest at these times"},
-    "trigger": {"type": "object", "description": "{type: message|task_received|schedule|webhook|listening|event, ...}"},
+    "trigger": {"type": "object", "description": "{type: message|task_received|schedule|webhook|listening|event|due, ...}; a due trigger is {type: due, first_due: YYYY-MM-DD, repeats: once|weekly|monthly|quarterly|yearly, open_days (default 14), tz}"},
     "steps": {"type": "array", "items": {"type": "object"},
               "description": "The whole step tree (filter, decide, llm, find, bot_turn, paths, action). An action step is "
                              "{type: action, do, args}; args by do: draft_reply and send_reply body (or text), to, bot "
-                             "(Slack send); forward to, body, webhook; label name (or tag); create_task title, body, owner; "
+                             "(Slack send); forward to, body, webhook; label name (or tag); create_task title, body, owner, due (a date; a due trigger's day by default); "
                              "assign owner, text; note text (or note), bot; wake_bot bot, text; post_update to ([updates, market]), text (none posts what the bot_turn before it wrote); "
                              "call_webhook webhook, type, data; archive and leave_for_you take none"},
 }
@@ -3259,7 +3259,7 @@ def automation_held(api, args):
       "started each, its outcome or failing step, steps, time and cost. `trigger: system` is Tico's own jobs.",
       {"range": {"type": "string", "enum": ["5m", "1h", "24h", "7d"], "default": "1h"},
        "status": {"type": "string", "enum": ["done", "failed", "waiting", "running", "held"]},
-       "trigger": _s("message, task_received, schedule, webhook, listening, event or system; comma-separated"),
+       "trigger": _s("message, task_received, schedule, webhook, listening, event, due or system; comma-separated"),
        "owner": _s("person:<id>, bot:<slug> or group:<id>"), "limit": {"type": "integer", "default": 50},
        "before": _s("`next` from the page before")})
 def automation_recent_runs(api, args):

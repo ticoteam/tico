@@ -598,6 +598,9 @@ def operation_issues(c, who, auth):
                 "AND (expires_at IS NULL OR expires_at > ?) AND deleted_at IS NULL", ("bot:" + slug, H.now()))]
             queued = len(privacy.readable_messages(c, privacy.actor(who), waiting))
         uncertain = jobs["uncertain"]
+        if uncertain:
+            from .execution import tico_chosen
+            uncertain -= tico_chosen(c, who, slug)
         if uncertain and not mac_offline:
             noun = "run" if uncertain == 1 else "runs"
             queued_note = (f" {queued} other request{' is' if queued == 1 else 's are'} still queued."

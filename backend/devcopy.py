@@ -85,6 +85,10 @@ EMPTY = (
     "task_cap_sends", "task_cap_log",
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
+    # Finance: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
+    # inbox, cards and their authorizations) and spend holds. Its pending actions and undrained events are trimmed
+    # in prune; the books, budgets, views and rules are kept.
+    "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
@@ -123,6 +127,13 @@ KEEP = frozenset((
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",
     "turn_usage_segments", "turns", "update_archive_overrides", "update_reads", "update_settings", "updates",
     "usage_limits", "usage_pools", "task_caps",
+    # Finance history and definitions (EMPTY has what acts; prune drops pending actions and settles undrained events)
+    "fin_accounts", "fin_actions", "fin_allocations", "fin_attachments", "fin_bill_lines", "fin_bills", "fin_books",
+    "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries", "fin_events",
+    "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
+    "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_rights", "fin_rollups",
+    "fin_rule_runs", "fin_rules", "fin_settings", "fin_usage_snapshots", "fin_view_defaults", "fin_view_grants",
+    "fin_view_versions",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
@@ -283,6 +294,12 @@ def prune(c, days, keep_automations=False):
     if "registry_metadata" in present:
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
+    # Finance makes its kept tables inert itself: pending actions, undrained events, links to emptied holds.
+    if "fin_actions" in present:
+        from .finance import actions as finance
+        dropped = finance.scrub_dev_copy(c, now())["fin_actions"]
+        if dropped:
+            removed["fin_actions"] = removed.get("fin_actions", 0) + dropped
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
