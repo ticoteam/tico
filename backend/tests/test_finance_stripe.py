@@ -631,6 +631,26 @@ def test_a_sale_a_posting_rule_asks_about_is_held_and_a_person_is_asked(books):
         assert (_sum(c, "1050"), _sum(c, "4000")) == (0, 0)
 
 
+def test_a_held_sale_a_person_categorizes_posts_its_gross_income_and_its_fee_like_an_unheld_sale(books):
+    """The held row is the net. Categorizing it posts the gross to the chosen account and the fee to fees, the same
+    entry an unheld sale of that amount would post, so the balance nets."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
+                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    stripe.add("charge", 3_000, 90, "Acme Hold")
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        held = str(_feed(c, "txn_0001")["id"])
+        done = act(c, OWNER, "categorize", {"feed_id": held, "account_id": account(c, "4000")})
+        assert done.status == "committed", done
+    with books.read() as c:
+        assert (_sum(c, "1050"), _sum(c, "6200"), _sum(c, "4000")) == (2_910, 90, -3_000)
+        assert _every_entry_balances(c)
+
+
 def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
     body = json.dumps({"id": "evt_1", "type": "payout.paid", "data": {}}).encode()
     now = int(time.time())

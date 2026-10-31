@@ -702,11 +702,16 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                   status=F.POSTED, kind=str(row["kind"]), counterparty=str(row["counterparty"]),
                   description=str(row["description"]), card_id=str(row["card_id"] or ""))
 
+    from .stripe_post import categorized_lines  # local: stripe_post imports this module
+
     def apply(aid: str) -> Result:
         if row["entry_id"]:
             _unpost(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []
-        entry = post_row(ctx, str(row["id"]), t, [feed_line(account.id, -amount, tags, t.counterparty)], gl.id, holds)
+        lines = categorized_lines(ctx, row, money, account.id, tags, t.counterparty)
+        if lines is None:
+            lines = [feed_line(account.id, -amount, tags, t.counterparty)]
+        entry = post_row(ctx, str(row["id"]), t, lines, gl.id, holds)
         mark_posted(ctx, [str(row["id"])], entry)
         return {"feed_id": str(row["id"]), "entry_id": entry}
     return Plan(K.default_gate(ctx.org, who, "categorize"),

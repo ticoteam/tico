@@ -101,6 +101,19 @@ def stale(ctx: Ctx) -> None:
                 _ask(ctx, str(r["id"]), "it has no sale or payout to post against", "stale")
 
 
+def categorized_lines(ctx: Ctx, row: Any, money: Any, account_id: str, tags: Mapping[str, str],
+                      counterparty: str) -> list[dict[str, object]] | None:
+    """The lines a person's category posts for a Stripe sale: its gross to the chosen account and its fee to fees, as an
+    unheld sale posts them, so the row (its net) and these lines balance. None for any row that is not a Stripe sale."""
+    if str(money["provider"]) != "stripe" or str(row["kind"]) not in F.STRIPE_CHARGES:
+        return None
+    gross, fee = F.stripe_parts(SK.loads(row["raw_json"]))
+    lines = [banking.feed_line(account_id, -gross, tags, counterparty)]
+    if fee:
+        lines.append(banking.feed_line(_fees(ctx).id, fee))
+    return lines
+
+
 # ------------------------------------------------------------------------------------------------ sales
 def _sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) -> None:
     """A sale the way a bank receipt is matched: a payment marked from this account first (the sale's fee posts with
