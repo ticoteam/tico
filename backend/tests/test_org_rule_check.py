@@ -799,24 +799,52 @@ def test_send_anyway_refuses_once_the_task_changed(ruled):
     assert sql(api, "SELECT owner FROM tasks WHERE id=?", (task["id"],))[0]["owner"] == "bot:ops"
 
 
-def test_an_assign_whose_task_changed_after_its_check_goes_unchecked(ruled, monkeypatch):
-    api, judge = ruled
-    color_rule(api)
-    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Pick one."})
+def edit_after_check(api, monkeypatch, task_id, body, times=1):
+    """The automation's check of its step runs, then the task changes (version bumped) before the step's write."""
     from backend import automations as AU
-    real = AU.HubServices._rule_check
+    real, left = AU.HubServices._rule_check, [times]
 
     def then_edit(self, *args, **kw):
         verdict = real(self, *args, **kw)
-        with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET body='Our favorite color is red.', version=version+1 WHERE id=?", (task["id"],))
+        if left[0]:
+            left[0] -= 1
+            with api.app.state.store.transaction() as c:
+                c.execute("UPDATE tasks SET body=?, version=version+1 WHERE id=?", (body, task_id))
         return verdict
     monkeypatch.setattr(AU.HubServices, "_rule_check", then_edit)
+
+
+def test_a_version_bump_never_releases_a_block_on_an_assign(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    edit_after_check(api, monkeypatch, task["id"], "Our favorite color is red.")
+    post(api, f"automations/{hand_over(api)}/run", {"input": {"task": {"id": task["id"]}}})
+    assert sql(api, "SELECT owner FROM tasks WHERE id=?", (task["id"],))[0]["owner"] == "bot:ops"
+    assert len(events(api, "rules.blocked")) == 1 and events(api, "rules.unchecked") == []
+
+
+def test_an_assign_whose_task_changed_after_a_pass_checks_again_before_it_runs(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Pick one."})
+    edit_after_check(api, monkeypatch, task["id"], "Our favorite color is red.")
+    post(api, f"automations/{hand_over(api)}/run", {"input": {"task": {"id": task["id"]}}})
+    assert sql(api, "SELECT owner FROM tasks WHERE id=?", (task["id"],))[0]["owner"] == "bot:ops"
+    assert len(judge.calls) == 2 and len(events(api, "rules.blocked")) == 1
+    assert events(api, "rules.unchecked") == []
+
+
+def test_a_task_that_keeps_changing_fails_the_step_and_writes_nothing(ruled, monkeypatch):
+    api, _ = ruled
+    color_rule(api)
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Pick one."})
+    edit_after_check(api, monkeypatch, task["id"], "Pick two.", times=5)
     aid = hand_over(api)
     post(api, f"automations/{aid}/run", {"input": {"task": {"id": task["id"]}}})
-    assert sql(api, "SELECT owner FROM tasks WHERE id=?", (task["id"],))[0]["owner"] == "human:ana"
-    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["changed"]
-    assert events(api, "rules.blocked") == []
+    assert sql(api, "SELECT owner FROM tasks WHERE id=?", (task["id"],))[0]["owner"] == "bot:ops"
+    run = sql(api, "SELECT id FROM automation_runs WHERE automation_id=?", (aid,))[0]["id"]
+    assert sql(api, "SELECT key FROM automation_effects WHERE run_id=?", (run,)) == []
 
 
 def test_a_rule_added_since_an_approval_is_checked_on_the_mails_addresses_and_holds_once(ruled):
@@ -859,6 +887,47 @@ def test_a_warn_rule_added_since_the_hold_puts_its_line_on_the_sent_copy(ruled):
     assert "launch date" in sent[0]["body"]
 
 
+def test_retries_of_one_blocked_mail_keep_one_hold_and_the_third_escalates_it(ruled):
+    api, _ = ruled
+    color_rule(api, reviewer="ben")
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
+    outcomes = [post(api, "bots/ops/mail-check", mail, token="ops-test")["held"]["outcome"] for _ in range(3)]
+    assert outcomes == ["blocked", "blocked", "escalated"]
+    rows = sql(api, "SELECT id, task_id FROM org_rule_holds")
+    assert len(rows) == 1 and rows[0]["task_id"]
+    assert len(events(api, "rules.blocked")) == 2 and len(events(api, "rules.escalated")) == 1
+    assert get(api, f"rule-holds/{rows[0]['id']}", token="ben-test")["outcome"] == "escalated"
+
+
+def test_send_anyway_refuses_a_comment_whose_task_went_to_someone_else(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    task = post(api, "tasks", {"owner": "ana", "title": "Palette notes", "body": "Collect ideas."}, token="ops-test")
+    task = task.get("task", task)
+    held = post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")["held"]
+    nonce = get(api, f"rule-holds/{held['id']}", token="ben-test")["nonce"]
+    version = sql(api, "SELECT version FROM tasks WHERE id=?", (task["id"],))[0]["version"]
+    post(api, f"tasks/{task['id']}", {"version": version, "owner": "ben"})
+    calls = len(judge.calls)
+    r = send_anyway(api, held["id"], expected=409)
+    assert r["error"]["code"] == "changed" and len(judge.calls) == calls
+    assert hold_row(api, held["id"])["state"] == "held"
+    assert get(api, f"rule-holds/{held['id']}", token="ben-test")["nonce"] == nonce
+    assert bodies(api, "favorite color is red") == []
+
+
+def test_a_hold_that_kept_no_route_is_refused_for_a_new_check(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    held = say(api, "Our favorite color is gold")["held"]
+    stored = json.loads(hold_row(api, held["id"])["payload_json"])
+    stored["provenance"].pop("path")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_holds SET payload_json=? WHERE id=?", (json.dumps(stored), held["id"]))
+    assert send_anyway(api, held["id"], expected=409)["error"]["code"] == "recheck"
+    assert hold_row(api, held["id"])["state"] == "held" and bodies(api, "favorite color is gold") == []
+
+
 def test_a_breaking_final_text_after_a_safe_tool_reply_is_still_held(ruled):
     api, _ = ruled
     color_rule(api)
@@ -872,25 +941,45 @@ def test_a_breaking_final_text_after_a_safe_tool_reply_is_still_held(ruled):
     row = sql(api, "SELECT final_text, result_json FROM attempts WHERE id=?", (aid,))[0]
     assert "blue" not in row["final_text"] and json.loads(row["result_json"])["held_reply"] is True
     assert bodies(api, "favorite color is blue") == []
+    thread = get(api, f"conversations/{msg['conversation_id']}/messages")
+    assert any("reply was held" in m["body"] for m in thread)
 
 
 # ---- where a warning goes -----------------------------------------------------------------------------------------
 
-def test_a_warning_goes_on_each_field_a_task_write_sets_and_no_other(ruled):
+def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")
     task = task_for_ops(api)
-    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "title": "Our favorite color is red"},
-               token="ops-test")
+    task = post(api, f"tasks/{task['id']}", {"version": task["version"], "note": "Waiting on the vendor."})
+    task = task.get("task", task)
+    title = ("Our favorite color is red, " + "x" * 300)[:299] + "Z"
+    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "title": title}, token="ops-test")
     assert got["rule_warning"]
     row = sql(api, "SELECT title, body, note FROM tasks WHERE id=?", (task["id"],))[0]
-    assert row["title"].startswith("Warning") and row["title"].endswith("Our favorite color is red")
-    assert row["body"] == "Draft it." and "Warning" not in str(row["note"] or "")
+    assert row["title"] == title and row["body"] == "Draft it."
+    assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
     post(api, "roadmaps/settings", {"bot_public_approval": False})
     made = post(api, "tasks", {"owner": "ops", "title": "Ship the palette", "body": "Internal draft.",
                                "visibility": "public", "public_title": "Our favorite color is red"}, token="ops-test")
-    made = sql(api, "SELECT public_title, public_summary FROM tasks WHERE id=?", (made.get("task", made)["id"],))[0]
-    assert made["public_title"].startswith("Warning") and not made["public_summary"]
+    made = sql(api, "SELECT title, body, public_title, public_summary FROM tasks WHERE id=?",
+               (made.get("task", made)["id"],))[0]
+    assert made["public_title"] == "Our favorite color is red" and made["title"] == "Ship the palette"
+    assert made["body"].startswith("Warning:") and made["body"].endswith("Internal draft.")
+    assert not made["public_summary"]
+
+
+def test_a_warned_hand_off_puts_its_line_before_the_note_already_there(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    task = post(api, f"tasks/{task['id']}", {"version": task["version"], "note": "Waiting on the vendor."})
+    task = task.get("task", task)
+    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "owner": "ana"}, token="ops-test")
+    assert got["rule_warning"]
+    row = sql(api, "SELECT owner, note FROM tasks WHERE id=?", (task["id"],))[0]
+    assert row["owner"] == "human:ana"
+    assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
 
 
 def test_a_warned_answer_keeps_its_pick_and_its_reader_gets_the_line(ruled):
@@ -917,14 +1006,17 @@ def test_automation_warnings_land_on_the_posted_text_and_the_hand_off_note(ruled
     values = {"turn": {"ref": "t1", "turn": {}, "text": "Our favorite color is red."}}
     key = AU._rule_key("post_update", {})
     assert key == "text"
-    posted = AU._warned_args(gate, "post_update", {}, key, values)["text"]
+    posted = AU._warned_args(None, None, gate, "post_update", {}, key, values)["text"]
     assert posted == "Warning: careful.\n\nOur favorite color is red."
+    assert AU._rule_key("create_task", {"title": "T", "body": "B"}) == "body"
     task = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Our favorite color is red."})
+    task = post(api, f"tasks/{task['id']}", {"version": task["version"], "note": "Waiting on the vendor."})
+    task = task.get("task", task)
     aid = hand_over(api)
     post(api, f"automations/{aid}/run", {"input": {"task": {"id": task["id"]}}})
     row = sql(api, "SELECT owner, body, note FROM tasks WHERE id=?", (task["id"],))[0]
     assert row["owner"] == "human:ana" and row["body"] == "Our favorite color is red."
-    assert row["note"].startswith("Warning:")
+    assert row["note"].startswith("Warning:") and row["note"].endswith("Waiting on the vendor.")
 
 
 # ---- the hold list, a moved recipient ------------------------------------------------------------------------------
@@ -965,3 +1057,49 @@ def test_a_conversation_post_whose_recipient_moved_goes_out_unchecked(ruled, mon
     got = post(api, f"conversations/{cid}/messages", {"text": "Our favorite color is red."}, token="ops-test")
     assert "held" not in got and got["message"]["to_actor"] == "human:ben"
     assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["changed"]
+
+
+def ask_turn(api, label):
+    """A started turn of ops answering Ana's options-only question on its task (the job's message is the question)."""
+    r, msg, attempt = started_turn(api)
+    task = task_for_ops(api)
+    question = pick_question(api, task["id"], label)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET message_id=? WHERE id=(SELECT job_id FROM attempts WHERE id=?)",
+                  (question["id"], attempt["id"]))
+    return r, attempt, task
+
+
+def answered(api):
+    """The structured answers written: each one's text and its picks."""
+    rows = sql(api, "SELECT body, refs_json FROM messages WHERE json_extract(refs_json,'$.answer') IS NOT NULL "
+                    "ORDER BY rowid")
+    return [(r["body"], json.loads(r["refs_json"])["answer"]["answers"]) for r in rows]
+
+
+def test_a_warned_completion_answers_an_options_question_with_its_pick(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    label = "My favorite color is blue"
+    r, attempt, task = ask_turn(api, label)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
+         token=r["token"])
+    got = answered(api)
+    assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
+
+
+def test_send_anyway_of_a_held_answer_resolves_its_pick_before_a_new_warning(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    label = "Our favorite color is blue and launch is Tuesday"
+    r, attempt, task = ask_turn(api, label)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": label, "last_seq": 0},
+         token=r["token"])
+    hold = sql(api, "SELECT id FROM org_rule_holds WHERE operation='reply'")[0]["id"]
+    rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
+    judge.needles[LAUNCH] = "launch is"
+    send_anyway(api, hold)
+    got = answered(api)
+    assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}

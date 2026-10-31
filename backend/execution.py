@@ -4552,6 +4552,8 @@ class Execution:
                         replyable = False
                         H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": row["bot"], "task": task["id"],
                                                                      "to": target, "reason": "no_change"})
+                # A reply the turn already sent is not posted again, but the person waiting still hears of a hold.
+                reaches = replyable
                 replyable = replyable and posting
                 if target not in (H.KEEPER, actor):
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
@@ -4574,7 +4576,7 @@ class Execution:
                                              conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
                     # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
                     # waits on the run until Done: held, the run keeps only the note, never the reply.
-                    rule_gate = None
+                    rule_gate, asked_text = None, body.text
                     if rule_check and not refused:
                         from . import org_rule_check
                         checked = rule_check if target in rule_check["recipients"] else \
@@ -4584,7 +4586,7 @@ class Execution:
                     if rule_gate and rule_gate.get("held"):
                         held = True
                         note = org_rule_check.held_note(c, actor, rule_gate["rule"])
-                        if H.is_human(target) and replyable:
+                        if H.is_human(target) and reaches:
                             H._write_message(c, H.KEEPER, target, note, conv, "notice",
                                              {"org_rule": {"hold": rule_gate["hold_id"], "bot": row["bot"]},
                                               **({"task": task["id"]} if task else {})}, None, None)
@@ -4596,9 +4598,16 @@ class Execution:
                         body = body.model_copy(update={"text": org_rule_check.warned_text(rule_gate, body.text)})
                     if replyable and not refused:
                         def post_reply():
-                            sent = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
-                                c, actor, target, text, conversation_id=conv["id"],
-                                in_reply_to=msg["id"], refs=refs)
+                            if msg["kind"] == "ask":
+                                # The pick is resolved on the reply's own words; a warning goes on what the asker
+                                # reads (task_review.reply_answer).
+                                from .task_review import reply_answer
+                                from . import org_rule_check
+                                sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
+                                                    asked_text, org_rule_check.warn_line(rule_gate))
+                            else:
+                                sent = H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"],
+                                             refs=refs)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, msg)
                             return sent

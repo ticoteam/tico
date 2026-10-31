@@ -2827,18 +2827,22 @@ def create_app(settings=None):
         return "\n\n".join(filter(None, (body.title, body.body, getattr(body, "public_title", None),
                                           getattr(body, "public_summary", None))))
 
-    def rule_warned_fields(gate, body):
-        """A warned task write's recipient copies: the warning on every text field the write sets (a short one on a
-        title, which is one line), never on a field it leaves unset; whoever reads any of them reads the warning. A
-        hand-off alone (only the owner changes) carries it on its hand-off note, as an automation's assign does."""
+    def rule_warned_fields(gate, body, row=None):
+        """A warned task write's recipient copies: the warning on every multi-line text field the write sets, never on
+        one it leaves unset. A title (and public title) is kept whole and unmarked: a new task with one carries the
+        line on its body; a change that sets no other text field (a title, or a hand-off alone) puts the line before
+        the task's note (`row`'s), which stays whole."""
         out = {}
-        for key in ("title", "body", "note", "public_title", "public_summary"):
+        for key in ("body", "note", "public_summary"):
             value = getattr(body, key, None)
             if value:
-                out[key] = org_rule_check.warned_title(gate, value) if key in ("title", "public_title") else \
-                    org_rule_check.warned_text(gate, value)
-        if not out and getattr(body, "owner", None) and "note" in type(body).model_fields:
-            out["note"] = org_rule_check.warn_line(gate)
+                out[key] = org_rule_check.warned_text(gate, value)
+        titled = getattr(body, "title", None) or getattr(body, "public_title", None)
+        if row is None:
+            if titled and "body" not in out:
+                out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
+        elif not out and (titled or getattr(body, "owner", None)):
+            out["note"] = org_rule_check.warned_note(gate, row.get("note") or "")
         return out
 
     def rule_update_text(body, row):
@@ -4207,7 +4211,7 @@ def create_app(settings=None):
             return org_rule_check.answer(rule_gate)
         if rule_gate and rule_gate.get("warn"):
             # The warning line goes on the change itself, where the recipient reads it.
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body))
+            body = body.model_copy(update=rule_warned_fields(rule_gate, body, row))
         if body.close:
             if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,
@@ -7483,12 +7487,60 @@ def create_app(settings=None):
         privacy.require_destination(c, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), target, conv["id"],
                                     refs, msg)
         if msg["kind"] == "ask":
-            sent = H.answer(c, bot.actor, msg["id"], org_rule_check.warned_text(gate, replay["text"]))
+            from .task_review import reply_answer
+            sent = reply_answer(c, auth, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), msg, replay["text"],
+                                org_rule_check.warn_line(gate))
         else:
             text, _ = split_runner_notices(replay["text"])
             sent = H.say(c, bot.actor, target, org_rule_check.warned_text(gate, text), conversation_id=conv["id"],
                          in_reply_to=msg["id"], refs=refs)
         return {"message": sent}
+
+    def reply_audience(c, bot, replay):
+        from .execution import reply_target, work_task_id
+        msg = H.message(c, replay["message"])
+        if not msg:
+            raise Problem("not_found", "The message this reply answered is gone", 409)
+        conv = H.conversation(c, msg["conversation_id"])
+        tid = work_task_id(msg, conv)
+        return [reply_target(msg, conv, H.task(c, tid) if tid else None)]
+
+    def rule_audiences():
+        """Who each held write would reach now, from its replay data, counted as its route's check counted them:
+        Send anyway refuses a hold whose audience moved (org_rule_check._same_audience)."""
+        def task_row(c, bot, replay):
+            return auth.task(c, bot, auth.resolve_task(c, bot, replay["task"]))
+
+        def message(c, bot, replay):
+            return rule_message_audience(c, bot, M.MessageCreate.model_validate(replay["body"]))
+
+        def note(c, bot, replay):
+            return [rule_target(c, bot, M.NoteCreate.model_validate(replay["body"]).to)]
+
+        def task_create(c, bot, replay):
+            body = M.TaskCreate.model_validate(replay["body"])
+            return [rule_target(c, bot, body.owner), *(org_rule_check.company(c) if rule_public(body) else [])]
+
+        def task_update(c, bot, replay):
+            body = M.TaskUpdate.model_validate(replay["body"])
+            return rule_task_audience(c, task_row(c, bot, replay), bot.actor, "",
+                                      *([rule_target(c, bot, body.owner)] if body.owner else []))
+
+        def comment(c, bot, replay):
+            body = M.TaskComment.model_validate(replay["body"])
+            return rule_task_audience(c, task_row(c, bot, replay), bot.actor, body.text,
+                                      *([rule_target(c, bot, body.ask.who)] if body.ask and body.ask.who else []))
+
+        def comment_edit(c, bot, replay):
+            body = M.TaskComment.model_validate(replay["body"])
+            return rule_task_audience(c, task_row(c, bot, replay), bot.actor, body.text)
+
+        return {"message": message, "note": note, "task_create": task_create, "task_update": task_update,
+                "task_owner": task_update, "bulk": task_update, "comment": comment, "comment_edit": comment_edit,
+                "answer": lambda c, bot, replay: answer_audience(c, bot, replay["message"]),
+                "task_ask": lambda c, bot, replay: [task_row(c, bot, replay)["requester"]],
+                "task_answer": lambda c, bot, replay: rule_task_audience(c, task_row(c, bot, replay), bot.actor),
+                "reply": reply_audience}
 
     def completion_rule_check(request, aid, body):
         """The org rule check of a turn's reply, before the completion's write (backend/org_rule_check.py): the reply
@@ -7637,8 +7689,10 @@ def create_app(settings=None):
     task_caps.install(app, store, auth, mutate)
     from . import org_rules
     # Org rule checks first: their /api/v2/rules/stats and /check come before org_rules' /api/v2/rules/{rule_id}.
-    from .automations import replay_step
+    from .automations import replay_audience, replay_step
     org_rule_check.REPLAY["automation"] = replay_step
+    org_rule_check.AUDIENCE.update(rule_audiences())
+    org_rule_check.AUDIENCE["automation"] = replay_audience
     org_rule_check.install(app, store, auth, mutate)
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)

@@ -73,6 +73,9 @@ SCHEMA = (
 REPLAY = {}
 # An optional step outside the transaction before a replay (ask ingest's own call): fn(store, bot identity, replay).
 PREPARE = {}
+# Who a held write would reach now, from its replay data: fn(c, bot identity, replay) -> actors. Send anyway refuses
+# when that is not the audience the hold was checked for (`_same_audience`).
+AUDIENCE = {}
 # The request path of the write being checked (app.mutate sets it): kept on a hold, so Send anyway runs that path's
 # privacy guard again as the bot (task_privacy.guard_write).
 PATH = contextvars.ContextVar("org_rule_path", default="")
@@ -84,11 +87,13 @@ def ensure(c):
         c.execute(statement)
 
 
-def replayer(operation, prepare=None):
+def replayer(operation, prepare=None, audience=None):
     def register(fn):
         REPLAY[operation] = fn
         if prepare:
             PREPARE[operation] = prepare
+        if audience:
+            AUDIENCE[operation] = audience
         return fn
     return register
 
@@ -403,13 +408,14 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
     line on the recipient's copy; {"held": view} to write nothing and answer with the hold. `payload` is the text the
     reviewer reads, `replay` what Send anyway needs to run the normal write. `tell` also leaves the bot a note (a
     write the bot does not see answered: a completion reply, an automation). `obj_now`: the object as the write reads
-    it (`current_obj`); moved since the check, the verdict is stale and the write goes through unchecked."""
+    it (`current_obj`). Moved since the check, a verdict that holds still holds (a version bump never releases a
+    Block); any other comes back as {"moved": True}, and the caller does not write: its next try checks again."""
     if verdict and "applied" in verdict:
         return verdict["applied"]
     if not verdict or verdict.get("draft"):
         return None
-    if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"]:
-        verdict = changed(c, verdict)
+    if obj_now is not None and verdict.get("obj") and obj_now != verdict["obj"] and not holds(verdict):
+        return {"moved": True}
     author, operation = verdict["author"], verdict["operation"]
     if verdict["outcome"] in ("broken", "too_large"):
         # The rules in force now must be the ones checked: a rule edited, retired or added since is a new check, which
@@ -506,11 +512,12 @@ def warn_line(gate):
     return (gate or {}).get("warn") or ""
 
 
-def warned_title(gate, title, limit=300):
-    """A one-line field (a title) on a warned write: a short warning first, within the field's length."""
-    if not (gate and gate.get("warn")) or not title:
-        return title
-    return ("Warning, may break a rule: " + title)[:limit]
+def warned_note(gate, note):
+    """A note the warning line is put before, the note kept whole (a hand-off's note, a title change's note)."""
+    line = warn_line(gate)
+    if not line:
+        return note
+    return line + ("\n\n" + note if note else "")
 
 
 def answer(gate):
@@ -569,7 +576,7 @@ def view_hold(c, who, hold, role=None, summary=False):
     cut = (lambda v: v[:SUMMARY_CHARS] if summary and isinstance(v, str) else v)
     out = {"id": hold["id"], "operation": hold["operation"], "author": hold["author"],
            "author_name": cut(_bot_name(c, hold["author"])), "state": hold["state"],
-           "outcome": verdict.get("outcome"), "rules": rules,
+           "outcome": "escalated" if verdict.get("outcome") == "escalate" else "blocked", "rules": rules,
            "to": [cut(n) for n in _names(c, destinations)],
            "reviewer": hold["reviewer"], "reviewer_name": cut(reviewer_name), "task_id": hold["task_id"],
            "created": hold["created"], "decided_at": hold["decided_at"], "decided_by": hold["decided_by"],
@@ -698,12 +705,36 @@ def _unchanged(c, hold):
                       "check it.", 409)
 
 
-def recheck(store, primary, hold):
+def current_audience(c, hold, audience=None):
+    """Who the held write would reach now, as its check counts them, or None when its operation names no way to tell
+    (a mail, addressed by the bot's own tool) or its replay would be refused anyway (the replayer's own checks)."""
+    fn = (audience if audience is not None else AUDIENCE).get(hold["operation"])
+    if fn is None:
+        return None
+    stored = json.loads(hold["payload_json"] or "{}")
+    try:
+        found = fn(c, bot_identity(hold), stored.get("replay") or {})
+    except Problem:
+        return None
+    return sorted({r for r in found or () if r and r != hold["author"]})
+
+
+def _same_audience(c, hold, audience=None):
+    """Refuse Send anyway once the held write would reach someone else than its check was for (a task handed to a
+    new owner since): a rule's With is matched on the actual recipients, so that is a new check."""
+    now = current_audience(c, hold, audience)
+    if now is not None and now != sorted(json.loads(hold["destinations_json"] or "[]")):
+        raise Problem("changed", "Who this goes to changed since it was held; it stays held. Write it again to "
+                      "check it.", 409)
+
+
+def recheck(store, primary, hold, audience=None):
     """Outside the write, before Send anyway or an approved mail: when the rules that match now differ from those at
     the hold (a rule edited or added since), the rules changed or added are a new check, on the same input the first
     check had (text, audience, context, object). Returns (the pairs matching now, that verdict or None). The write
-    checks the pairs again and refuses on a change in between."""
+    checks the pairs again and refuses on a change in between. A changed audience refuses first (`_same_audience`)."""
     with store.read() as c:
+        _same_audience(c, hold, audience)
         now = current_matched(c, hold)
     if now <= hold_matched(hold):
         return sorted(now), None
@@ -733,11 +764,12 @@ def _rechecked(c, hold, check):
     return apply(c, verdict)
 
 
-def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None):
+def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None, audience=None):
     """Send anyway: the normal write runs once, as the bot, with the hold's one-shot nonce; no Decide call for the
     rules it was held on. `check` is `recheck`'s answer: rules changed since the hold are checked again first. The
     write's route guard runs again as the bot and its run (`auth` given), and the replayer runs the write's own access
-    checks: a refusal keeps the hold, its nonce unspent."""
+    checks: a refusal keeps the hold, its nonce unspent. A hold that kept no route (written before holds kept one)
+    cannot be guarded that way, so it is refused: the bot writes it again."""
     hold = _hold(c, hold_id)
     if _reader(who, hold) != "reviewer":
         raise Problem("not_found", "There is no hold " + hold_id, 404)
@@ -748,11 +780,15 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None)
     fn = (table or REPLAY).get(hold["operation"])
     if fn is None:
         raise Problem("unsupported", "This hold can't be sent from here", 409)
-    _unchanged(c, hold)
-    gate = _rechecked(c, hold, check)
     stored = json.loads(hold["payload_json"] or "{}")
+    if "path" not in (stored.get("provenance") or {}):
+        raise Problem("recheck", "This hold is from an older version and can't be sent as it is; it stays held. "
+                      "Write it again to check it.", 409)
+    _unchanged(c, hold)
+    _same_audience(c, hold, audience)
+    gate = _rechecked(c, hold, check)
     bot = bot_identity(hold)
-    path = (stored.get("provenance") or {}).get("path") or ""
+    path = stored["provenance"]["path"] or ""
     if auth is not None and path:
         from . import task_privacy
         task_privacy.guard_write(c, bot, path, auth)
@@ -839,8 +875,11 @@ def open_mail_hold(c, author, key):
     return dict(row) if row else None
 
 
-def held_again(c, hold):
-    """The answer for a mail whose hold already waits: the same hold, nothing new recorded."""
+def held_again(c, hold, verdict=None):
+    """The answer for a mail whose hold already waits: the same hold. `verdict` (this attempt's, which holds): the
+    attempt counts as a block of the hold's rule toward the repeats rule, and the third escalates that same hold."""
+    if verdict is not None:
+        hold = _blocked_again(c, hold, verdict)
     verdict = json.loads(hold["verdict_json"] or "{}")
     rules = []
     for rid in json.loads(hold["rule_ids_json"] or "[]")[:SUMMARY_RULES]:
@@ -850,6 +889,34 @@ def held_again(c, hold):
     return {"id": hold["id"], "outcome": "escalated" if verdict.get("outcome") == "escalate" else "blocked",
             "rules": rules, "operation": "mail", "text": "This email is still held. "
             + appeal_line(c, hold["id"], hold["reviewer"])}
+
+
+def _blocked_again(c, hold, verdict):
+    """One more blocked attempt at a held mail: recorded as a block of its rule; the bot's third block of that rule
+    today escalates the hold (a review task, the day's repeat task reused). The hold row comes back as it is now."""
+    detail = json.loads(hold["verdict_json"] or "{}")
+    rid, author = detail.get("rule"), hold["author"]
+    if detail.get("outcome") != "block" or not rid:
+        return hold
+    rules = json.loads(hold["rule_ids_json"] or "[]")
+    if _repeats(c, author, rid) < REPEAT_BLOCKS - 1:
+        H.event(c, author, "rules.blocked", "org_rule:" + rid, {
+            "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
+            "reviewer": hold["reviewer"], "again": True})
+        return hold
+    row = c.execute("SELECT task_id FROM org_rule_holds WHERE author=? AND created>=? AND task_id IS NOT NULL "
+                    "AND json_extract(verdict_json,'$.rule')=? AND json_extract(verdict_json,'$.repeat')=1 "
+                    "ORDER BY created LIMIT 1", (author, _day(), rid)).fetchone()
+    task_id = hold["task_id"] or (row[0] if row else None)
+    if task_id is None and hold["reviewer"]:
+        rule = c.execute("SELECT id, text FROM org_rules WHERE id=?", (rid,)).fetchone()
+        task_id = _review_task(c, hold["id"], author, dict(rule) if rule else {"text": "a rule"}, hold["reviewer"])
+    c.execute("UPDATE org_rule_holds SET verdict_json=json_set(verdict_json,'$.outcome','escalate','$.repeat',1), "
+              "task_id=? WHERE id=?", (task_id, hold["id"]))
+    H.event(c, author, "rules.escalated", "org_rule:" + rid, {
+        "hold": hold["id"], "operation": "mail", "rules": rules, "cached": bool(verdict.get("cached")),
+        "reviewer": hold["reviewer"], "repeat": True, **({"task": task_id} if task_id else {})})
+    return _hold(c, hold["id"])
 
 
 def supersede_mail(c, hold_id):
@@ -912,7 +979,7 @@ def install(app, store, auth, mutate):
     from typing import Literal
     from .models import Contract
     # This app's writes, as registered while it was built (one server builds one app; tests build many).
-    table, prepare = dict(REPLAY), dict(PREPARE)
+    table, prepare, audience = dict(REPLAY), dict(PREPARE), dict(AUDIENCE)
 
     class HoldSend(Contract):
         nonce: str = Field(min_length=1, max_length=200)
@@ -970,7 +1037,7 @@ def install(app, store, auth, mutate):
                     # A newer rule holds an approved mail: the old approval is spent, and the mail has one hold.
                     supersede_mail(c, approved["id"])
                     if waiting:
-                        return {"outcome": "held", "held": held_again(c, waiting)}
+                        return {"outcome": "held", "held": held_again(c, waiting, verdict)}
                     return outcome(apply(c, verdict, output, {"mail_digest": key}))
                 if not claim_mail(c, approved["id"]):
                     # Another send already used this approval: this one stays a draft.
@@ -980,7 +1047,7 @@ def install(app, store, auth, mutate):
                 return {**outcome(gate), "outcome": "warn" if gate and gate.get("warned") else "pass",
                         "approved": approved["id"]}
             if waiting:
-                return {"outcome": "held", "held": held_again(c, waiting)}
+                return {"outcome": "held", "held": held_again(c, waiting, verdict)}
             return outcome(apply(c, verdict, output, {"mail_digest": key}))
         return mutate(request, body, work)
 
@@ -1024,14 +1091,14 @@ def install(app, store, auth, mutate):
         if ready:
             # Both outside the write: rules changed since the hold are a new check, and ask ingest runs as it would
             # have for the original write (the rules it was held on are not asked again).
-            check = recheck(store, app.state.judge, hold)
+            check = recheck(store, app.state.judge, hold, audience)
             if hold["operation"] in prepare:
                 stored = json.loads(hold["payload_json"] or "{}")
                 try:
                     ingest = prepare[hold["operation"]](store, bot_identity(hold), stored.get("replay") or {})
                 except Exception as exc:          # ask ingest's own preflight never stops the send
                     LOG.warning("Hold replay preflight failed: %s", type(exc).__name__)
-        return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth))
+        return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience))
 
     @app.post("/api/v2/rule-holds/{hold_id}/appeal")
     def rule_hold_appeal(request: Request, hold_id: str, body: HoldAppeal):

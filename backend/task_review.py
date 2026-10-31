@@ -210,6 +210,25 @@ def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
             "feedback": "Note saved. Decision still open; choose one of the options."}
 
 
+def reply_answer(c, auth, who, asked, text, warn=""):
+    """A turn's reply to the question it was asked (a completion, Send anyway of a held one), as a message: on an
+    options question the pick is resolved on the reply's own text, as an answer typed in is (`answer_text`), and
+    `warn` goes on the message the asker reads. A pick the reply may not make there stays the plain answer; None when
+    that same pick was already recorded."""
+    if H.has_pick_options(asked):
+        c.execute("SAVEPOINT reply_answer")
+        try:
+            out = answer_text(c, auth, who, asked, text, warn=warn)
+        except Problem:
+            c.execute("ROLLBACK TO reply_answer")
+            c.execute("RELEASE reply_answer")
+        else:
+            c.execute("RELEASE reply_answer")
+            made = out.get("comment") or (out if out.get("id") else None)
+            return H.message(c, made["id"]) if made else None      # None: that very pick was already recorded
+    return H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, classify_text=text)
+
+
 def answer_task(c, auth, who, task_id, body, wake, warn=""):
     """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
     (its picks and Other text) is recorded as given."""
