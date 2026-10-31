@@ -62,11 +62,15 @@ STOP_WORDS = frozenset("the and for with that this from are can our your you any
 _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"',
                            "–": "-", "—": "-", " ": " "})
 
-# The versions Counsel was asked to read: the only versions it may cite (backend/files.py asked_to_read).
-# `source_id` is the From the read was asked for: Counsel's suggestions from that read's private task name it.
+# Each read Counsel was asked for, one row per read task: the file version (the only versions it may cite,
+# backend/files.py asked_to_read) and the From it was asked for. Two people reading one version are two rows.
 RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
- file_id TEXT NOT NULL, version INTEGER NOT NULL, task_id TEXT, requested_by TEXT NOT NULL,
- created TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT, PRIMARY KEY(file_id, version))"""
+ task_id TEXT PRIMARY KEY, file_id TEXT NOT NULL, version INTEGER NOT NULL, requested_by TEXT NOT NULL,
+ created TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, source_id TEXT)"""
+RULE_READS_INDEX = "CREATE INDEX IF NOT EXISTS rule_reads_version ON rule_reads(file_id, version)"
+# A quote shorter than this from a private read could be a word that is in any document: too little to tie the
+# suggestion to the version it cites.
+PRIVATE_QUOTE_MIN = 20
 
 
 class RuleRead(Contract):
@@ -83,9 +87,18 @@ class RuleAsk(Contract):
 
 def ensure(c):
     """The table of the document versions Counsel was asked to read. Unversioned, as the org-rules tables are."""
+    columns = {r[1]: r[5] for r in c.execute("PRAGMA table_info(rule_reads)")}
+    if columns and columns.get("task_id") != 1:
+        # A development table keyed by (file, version): a second reader replaced the first read's row. One row per task.
+        c.execute("ALTER TABLE rule_reads RENAME TO rule_reads_by_version")
+        c.execute(RULE_READS)
+        source = "source_id" if "source_id" in columns else "NULL"
+        c.execute("INSERT OR IGNORE INTO rule_reads(task_id, file_id, version, requested_by, created, truncated, "
+                  f"source_id) SELECT task_id, file_id, version, requested_by, created, truncated, {source} "
+                  "FROM rule_reads_by_version WHERE task_id IS NOT NULL")
+        c.execute("DROP TABLE rule_reads_by_version")
     c.execute(RULE_READS)
-    if "source_id" not in {r[1] for r in c.execute("PRAGMA table_info(rule_reads)")}:
-        c.execute("ALTER TABLE rule_reads ADD COLUMN source_id TEXT")    # a table made before reads named their From
+    c.execute(RULE_READS_INDEX)
 
 
 def available(c):
@@ -385,23 +398,18 @@ def read(c, auth, who, files, blobs, body, found):
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
                                                           "task": task["id"], "bot": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
-    c.execute("INSERT INTO rule_reads(file_id, version, task_id, requested_by, created, truncated, source_id) "
-              "VALUES(?,?,?,?,?,?,?) ON CONFLICT(file_id, version) DO UPDATE SET task_id=excluded.task_id, "
-              "requested_by=excluded.requested_by, created=excluded.created, truncated=excluded.truncated, "
-              "source_id=excluded.source_id",
-              (file_id, number, task["id"], who.actor, H.now(), int(cut), source["id"]))
+    c.execute("INSERT INTO rule_reads(task_id, file_id, version, requested_by, created, truncated, source_id) "
+              "VALUES(?,?,?,?,?,?,?)", (task["id"], file_id, number, who.actor, H.now(), int(cut), source["id"]))
     screening.note(c, verdict, "document", file_id, task=task["id"])
     return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], task["id"], existing=False)
 
 
-def run_read(c, who):
-    """The read a Counsel run is working: the `rule_reads` row of its read task, when that task, Counsel's own, is the
-    only task the run carries. None for any other caller or run (a run that carries a second task could carry that
-    task's text into a company-wide rule)."""
-    if not is_counsel(who) or not who.attempt_id:
-        return None
-    from .task_privacy import attempt_tasks
-    tasks = attempt_tasks(c, who.attempt_id)
+def attempt_read(c, aid):
+    """The read a Counsel run may publish from: the `rule_reads` row of its read task, Counsel's own, when that task is
+    the only task whose text the run carries (an assignment notice's list of other open tasks names them, it does not
+    carry them). None for any other run: one that carries a second task could carry its text into a company-wide rule."""
+    from .task_privacy import carried_tasks
+    tasks = carried_tasks(c, aid)
     if len(tasks) != 1:
         return None
     row = c.execute("SELECT r.* FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.task_id=? AND t.owner=?",
@@ -409,11 +417,20 @@ def run_read(c, who):
     return dict(row) if row else None
 
 
+def run_read(c, who):
+    """attempt_read for a call Counsel's run makes; None for any other caller."""
+    if not is_counsel(who) or not who.attempt_id:
+        return None
+    return attempt_read(c, who.attempt_id)
+
+
 def private_suggestion(c, who, data):
     """A rule Counsel writes from a private run. Its read tasks are private, and a private run publishes nothing
     company-wide (backend/task_privacy.py guard_write), except this: on its own read task, Counsel suggests external
-    rules for that read's From, each citing that read's file version, whose quote only the file's readers see
-    (org_rules.view). Anything else from a private run is refused here. A run that is not private is left to the route."""
+    rules for that read's From, each citing that read's file version with a quote of at least PRIVATE_QUOTE_MIN
+    characters (check_cite then finds it in that version), whose quote only the file's readers see (org_rules.view).
+    While it may, its reads are scoped to that read (read_refused). Anything else from a private run is refused here.
+    A run that is not private is left to the route."""
     from .task_privacy import private_execution
     if not is_counsel(who) or not private_execution(c, who):
         return
@@ -427,17 +444,55 @@ def private_suggestion(c, who, data):
     if cite.get("file_id") != read["file_id"] or _version(cite.get("version")) != read["version"]:
         raise Problem("privacy", "From a document's read, Counsel's rule cites that document at the version its task "
                       f"names: file {read['file_id']} version {read['version']}", 403)
+    if len(normal(cite.get("quote"))) < PRIVATE_QUOTE_MIN:
+        raise Problem("validation", f"Quote at least {PRIVATE_QUOTE_MIN} characters of the document, copied exactly", 422)
+
+
+# Reads that could return text other than its read's: another task, a file or version, a run, a chat. While a run may
+# publish (attempt_read), Counsel reads its own read task, that file at that version and its own run; nothing else here.
+SCOPED_READS = re.compile(r"^/api/(v2/)?(tasks|deleted-tasks|files|uploads|conversations|messages|inbox|inboxes|events|"
+                          r"runs|turns|attempts|search|context/search|bots/[^/]+/(files|task-tabs)|employees/[^/]+/files)"
+                          r"(/|$)")
+READ_SCOPE = "While Counsel reads a document it may publish from, it reads only that task, that file at that version and its own run."
+
+
+def read_refused(store, auth, who, path, query):
+    """Whether a read by Counsel's run is outside its read (SCOPED_READS). Only a run attempt_read lets publish is
+    scoped: any other Counsel run publishes nothing company-wide, and its reads are left to the routes."""
+    if not is_counsel(who) or not who.attempt_id or not SCOPED_READS.match(path):
+        return False
+    with store.read() as c:
+        read = run_read(c, who)
+        if not read:
+            return False
+        parts = path.split("/")[2:]
+        parts = parts[1:] if parts[:1] == ["v2"] else parts
+        kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
+        if kind in ("attempts", "turns"):
+            return ident != who.attempt_id
+        if kind == "tasks" and ident:
+            try:
+                return auth.resolve_task(c, who, ident) != read["task_id"]
+            except Problem:
+                return True
+        if kind == "files" and ident == read["file_id"]:
+            if rest == ["versions", str(read["version"])] or rest in (["meta"], ["versions"]):
+                return False
+            return not (not rest and _version(query.get("v")) == read["version"])
+    return True
 
 
 def turn_done(c, attempt, outcome, task_id, text):
     """Counsel's turn on a document's read task ended (backend/execution.py complete). A completed turn finishes the
-    read: the task is marked done with the turn's last line, so it never sits in doing after the work. A failed,
+    read it was allowed to publish from (attempt_read): the task is marked done with the turn's last line, so it never
+    sits in doing after the work. A run that carried another task copies nothing and finishes nothing. A failed,
     stopped or cancelled turn leaves the task to the normal retry and cleanup; a task Counsel set waiting or already
     finished is left as it is."""
     if attempt["bot"] != SLUG or outcome != "completed" or not task_id:
         return
-    if not c.execute("SELECT 1 FROM rule_reads WHERE task_id=?", (task_id,)).fetchone():
-        return
+    read = attempt_read(c, attempt["id"])
+    if not read or read["task_id"] != task_id:
+        return          # a run that carried another task: its text stays on the run, the task to the normal cleanup
     row = H.task(c, task_id)
     if not row or row["owner"] != "bot:" + SLUG or row["status"] not in ("open", "doing"):
         return

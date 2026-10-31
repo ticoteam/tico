@@ -871,3 +871,89 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "text": "Model error.", "last_seq": 0},
          token=r["token"])
     assert task_state(api, second["task_id"])["status"] in ("open", "doing")
+
+
+def next_counsel_run(api, r):
+    attempt = post(api, "jobs/claim", {"bot": "counsel", "start_places": True}, token=r["token"])["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
+    return attempt
+
+
+def run_suggests(api, attempt, file_id, version, quote="Keep a record of each consent for five years.", text=None):
+    return api.post("/api/v2/rules", headers=headers(attempt["token"]), json={
+        "kind": "external", "text": text or "Keep a consent record for five years.", "source_id": "Acme Vendor",
+        "cite": {"file_id": file_id, "version": version, "quote": quote}})
+
+
+def finish(api, r, attempt, text="Wrote 1 suggestion; read, nothing else for us."):
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": text},
+         token=r["token"])
+
+
+def test_a_leftover_counsel_task_does_not_block_a_read_and_the_read_sees_only_its_document(api):
+    from backend.task_privacy import attempt_tasks
+    org(api)
+    counsel_on(api)
+    # A declined "Can I" stays in the person's list with Counsel: the next read's notice names it, without its text.
+    asked = post(api, "rules/ask", {"question": "Can I text customers on Sunday about the secret Globex launch?"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET status='declined' WHERE id=?", (asked["task_id"],))
+        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='counsel'")
+    file_id, version = store_file(api, CONTRACT)
+    other_file, _ = store_file(api, "Globex launch plan: secret.", title="Globex Plan")
+    read_document(api, other_file)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET state='cancelled' WHERE bot='counsel'")
+    read = read_document(api, file_id)
+    r, attempt = counsel_run(api)
+    with api.app.state.store.read() as c:
+        assert asked["task_id"] in attempt_tasks(c, attempt["id"])
+    made = run_suggests(api, attempt, file_id, version)
+    assert made.status_code == 200, made.text
+    run = headers(attempt["token"])
+    # Its reads: its own task and that file at that version. Not the other task, the task list, another file, or
+    # the file's current bytes without the version.
+    assert api.get(f"/api/v2/tasks/{read['task_id']}", headers=run).status_code == 200
+    assert api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=run).status_code == 200
+    for path in (f"/api/v2/tasks/{asked['task_id']}", f"/api/v2/tasks/{asked['task_id']}/comments", "/api/v2/tasks",
+                 f"/api/v2/files/{file_id}", f"/api/v2/files/{other_file}/versions/1", f"/api/v2/files/{other_file}"):
+        refused = api.get(path, headers=run)
+        assert refused.status_code == 403 and "Globex" not in refused.text, (path, refused.text)
+    # A quote of a word or two ties a suggestion to nothing: refused on this path.
+    assert run_suggests(api, attempt, file_id, version, quote="five years.").status_code == 422
+    finish(api, r, attempt)
+    assert task_state(api, read["task_id"])["status"] == "done"
+
+
+def test_a_run_carrying_a_second_private_task_neither_publishes_nor_finishes_the_read(api):
+    org(api)
+    counsel_on(api)
+    file_id, version = store_file(api, CONTRACT)
+    read = read_document(api, file_id)
+    asked = post(api, "rules/ask", {"question": "Can I share the secret Globex price list with Initech?"}, token="ben-test")
+    r, attempt = counsel_run(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (attempt["id"], asked["task_id"]))
+    assert run_suggests(api, attempt, file_id, version).status_code == 403
+    finish(api, r, attempt, text="Read it. Globex price list is secret.")
+    assert task_state(api, read["task_id"])["status"] != "done"
+    with api.app.state.store.read() as c:
+        notes = [x[0] or "" for x in c.execute("SELECT note FROM task_events WHERE task_id=?", (read["task_id"],))]
+    assert not any("Globex" in note for note in notes)
+
+
+def test_two_people_reading_one_version_each_suggest_and_each_finish(api):
+    org(api)
+    counsel_on(api)
+    file_id, version = store_file(api, CONTRACT)
+    first = read_document(api, file_id)
+    second = read_document(api, file_id, token="ben-test")
+    assert first["task_id"] != second["task_id"]
+    r, attempt = counsel_run(api)
+    assert run_suggests(api, attempt, file_id, version).status_code == 200
+    finish(api, r, attempt)
+    attempt = next_counsel_run(api, r)
+    assert run_suggests(api, attempt, file_id, version, quote="Delete raw logs after 30 days.",
+                   text="Delete raw logs after 30 days.").status_code == 200
+    finish(api, r, attempt)
+    assert task_state(api, first["task_id"])["status"] == task_state(api, second["task_id"])["status"] == "done"

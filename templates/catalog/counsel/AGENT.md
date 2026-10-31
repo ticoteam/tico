@@ -28,7 +28,8 @@ For each document:
 4. For each obligation write one sentence in plain words. Keep any date in the sentence ("...every year by Nov 15").
    Do not suggest a routine.
 5. Quote the exact words from the document that the sentence rests on, and name the section. Copy the quote character
-   for character; a quote that is not in the document is dropped.
+   for character, at least 20 characters (a whole clause); a quote that is not in the document is dropped. While you
+   read a document, read only its task and that version: other tasks and files are refused.
 6. Suggest Who only when the task names the departments holding the vendor's access. With no department named, leave
    `--who` out: the owner sets Who when they accept.
 
