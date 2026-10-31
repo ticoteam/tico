@@ -1,8 +1,9 @@
 // Cloud agents on Recruit (ui/app/cloud-agents.js, backend/cloud_agents.py): the agents grid is four across and two
 // across on a phone, a request files a seat and opens its Connecting page, the team builder's Request link opens the same
-// dialog for the team it names, the seat sits on the chart as a dashed node with its own pill, Add hires a supported
-// agent as a bot in the seat or under the line it names, and the Connecting pulse moves opacity only and stops under reduced motion. The agents are the
-// backend's own catalog. Fixtures only, no network.
+// dialog for the team it names, the seat sits on the chart with a Connecting pill and its address opens its page in Recruit,
+// Add hires a supported agent as a bot in the seat or under the line it names, and the Connecting pulse moves opacity only
+// and stops under reduced motion. The grid and the seat page are reached through the real Team menu and route. The agents
+// are the backend's own catalog. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const {execFileSync} = require('node:child_process');
@@ -59,6 +60,12 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
       const seat = state.seats.find(s => s.id === detail[1]);
       return seat ? json(detailOf(seat)) : json({error: {code: 'not_found', detail: 'Seat not found', retryable: false}}, 404);
     }
+    // The Recruit page asks for a seat's candidates when the chart has not listed it yet; a cloud seat answers with its agent.
+    const recruit = p.match(/^\/api\/v2\/seats\/([^/]+)\/recruit$/);
+    if (recruit && method === 'POST') {
+      const seat = state.seats.find(s => s.id === recruit[1]);
+      return seat ? json({seat, candidates: []}) : json({error: {code: 'not_found', detail: 'Seat not found', retryable: false}}, 404);
+    }
     const asked = p.match(/^\/api\/v2\/cloud-agents\/([^/]+)\/request$/) || p.match(/^\/api\/v2\/seats\/([^/]+)\/request-agent$/);
     if (asked && method === 'POST') {
       const body = request.postDataJSON();
@@ -107,26 +114,29 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.goto('https://tico-ui.test/#/tasks');
       const node = page.locator('#tree [data-seat="s-devin"]');
       await node.waitFor();
-      assert.ok(await node.evaluate(el => el.hasAttribute('data-seat-agent')), 'a cloud agent seat is marked as one');
-      assert.equal(await node.locator('.pill.connecting').count(), 1, 'and shows the Connecting pill');
-      assert.equal(await node.locator('.seat-agent').evaluate(el => getComputedStyle(el).borderTopStyle), 'dashed', 'with a dashed node');
+      assert.equal(await node.getAttribute('href'), '#/seat/s-devin', 'the seat links to its own page');
+      assert.equal(await node.locator('.pill.connecting').count(), 1, 'a cloud agent seat shows the Connecting pill');
 
+      // Its address opens the Connecting page in Recruit's main area: three steps, the first in progress, its first task waiting.
       await node.click();
-      const seatDialog = page.locator('dialog.cloud-seat');
-      await seatDialog.locator('.cloud-step').nth(2).waitFor();
-      assert.equal(await seatDialog.locator('.cloud-step').count(), 3, 'three steps: requested, building, ready');
-      assert.equal(await seatDialog.locator('.cloud-step').first().evaluate(el => el.classList.contains('now')), true, 'the first step is the one in progress');
-      assert.equal(await seatDialog.locator('[aria-current="step"]').count(), 1);
-      assert.equal(await seatDialog.locator('.cloud-waiting li').count(), 1, 'the first task waits on the seat');
-      assert.equal(await seatDialog.locator('.cloud-pulse').evaluate(el => getComputedStyle(el).animationName), 'cloud-wait');
+      const seatPage = page.locator('#main .cloud-seat-page');
+      await seatPage.locator('.cloud-step').nth(2).waitFor();
+      assert.equal(await seatPage.locator('.cloud-step').count(), 3, 'three steps: requested, building, ready');
+      assert.equal(await seatPage.locator('.cloud-step').first().evaluate(el => el.classList.contains('now')), true, 'the first step is the one in progress');
+      assert.equal(await seatPage.locator('[aria-current="step"]').count(), 1);
+      assert.equal(await seatPage.locator('.cloud-waiting li').count(), 1, 'the first task waits on the seat');
+      assert.equal(await seatPage.locator('.cloud-pulse').evaluate(el => getComputedStyle(el).animationName), 'cloud-wait');
       assert.equal(await pulseIsOpacityOnly(page), true, 'the pulse animates opacity only');
       page.once('dialog', dialog => dialog.accept());
-      await seatDialog.locator('[data-cloud-cancel]').click();
-      await seatDialog.waitFor({state: 'detached'});
+      await seatPage.locator('[data-cloud-cancel]').click();
+      await page.locator('#main .cloud-seat-page').waitFor({state: 'detached'});
       assert.deepEqual(calls.map(c => c.path), ['/api/v2/seats/s-devin/cancel-request'], 'cancelling withdraws the request');
 
-      // The grid from Team's plus menu: four across, two of them Add, six Request.
-      await page.evaluate(() => window.cloudAgentsOpen('eng'));
+      // The grid from Team's plus menu on Engineering, the way a person opens it: four across, two of them Add, six Request.
+      const engineering = page.locator('#tree li.org-group > .noderow', {has: page.locator('[data-group-plus="eng"]')});
+      await engineering.hover();                       // the group's plus shows on hover, as it does for a person
+      await engineering.locator('[data-group-plus="eng"]').click();
+      await page.locator('#team-add-menu [data-team-add="cloud"]').click();
       const grid = page.locator('dialog.cloud-open');
       await grid.locator('.cloud-card').nth(7).waitFor();
       assert.equal(await grid.locator('.cloud-card').count(), 8);
@@ -141,6 +151,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       assert.equal(await request.locator('.cloud-note .ldot').count(), 1, 'the placeholder note carries the Liquid Dot');
       await request.locator('textarea[name="first_task"]').fill('Map the sign-in errors');
       await request.locator('button[type="submit"]').click();
+      const seatDialog = page.locator('dialog.cloud-seat');   // a request opens its Connecting page as a dialog
       await seatDialog.locator('.cloud-step').nth(2).waitFor();
       await request.waitFor({state: 'detached'});
       assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/devin/request',
@@ -217,6 +228,25 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.close();
     }
 
+    // A seat's Applicants page offers Cloud agents as a tab, and the grid there attaches its agent to that seat.
+    {
+      const lead = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
+        reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
+      const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
+      await page.goto('https://tico-ui.test/#/seat/s-lead');
+      await page.locator('#main .rc-tabs [data-recruit-tab="cloud"]').click();
+      await page.locator('#main .rc-cloud [data-cloud-add="claude"]').click();
+      const add = page.locator('dialog.cloud-add');
+      await add.waitFor();
+      await add.locator('button[type="submit"]').click();
+      await add.waitFor({state: 'detached'});
+      assert.deepEqual(calls, [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {seat_id: 's-lead'}}]);
+      assert.deepEqual(state.seats, [], 'the seat is filled');
+      assert.deepEqual(errors, []);
+      console.log('cloud-agents: applicants tab ok');
+      await page.close();
+    }
+
     // A refused request keeps its dialog open and says so, so the person can try again.
     {
       const {page, errors, state} = await open(browser, {width: 1300, height: 900});
@@ -238,6 +268,18 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       assert.equal(await page.locator('dialog.cloud-add button[type="submit"]').isDisabled(), false);
       assert.deepEqual(errors, []);
       console.log('cloud-agents: refusal ok');
+      await page.close();
+    }
+
+    // A seat's own address (#/seat/<id>) opens its Connecting page in Recruit's main area.
+    {
+      const {page, errors} = await open(browser, {width: 1300, height: 900});
+      await page.goto('https://tico-ui.test/#/seat/s-devin');
+      await page.locator('#main .cloud-seat-page .cloud-step.now').waitFor();
+      assert.equal(await page.locator('#main .cloud-seat-page .cloud-step').count(), 3);
+      assert.equal(await page.locator('dialog.cloud-seat').count(), 0, 'the page is inline, not a dialog');
+      assert.deepEqual(errors, []);
+      console.log('cloud-agents: seat route ok');
       await page.close();
     }
 
@@ -265,8 +307,8 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.waitForSelector('#tree [data-seat="s-devin"]');
       assert.equal(await page.locator('#tree [data-seat="s-devin"] .pill.connecting').evaluate(el => getComputedStyle(el).animationName), 'none');
       await page.locator('#tree [data-seat="s-devin"]').click();
-      await page.locator('dialog.cloud-seat .cloud-pulse').waitFor();
-      assert.equal(await page.locator('dialog.cloud-seat .cloud-pulse').evaluate(el => getComputedStyle(el).animationName), 'none');
+      await page.locator('#main .cloud-seat-page .cloud-pulse').waitFor();
+      assert.equal(await page.locator('#main .cloud-seat-page .cloud-pulse').evaluate(el => getComputedStyle(el).animationName), 'none');
       assert.deepEqual(errors, []);
       console.log('cloud-agents: reduced motion ok');
       await page.close();

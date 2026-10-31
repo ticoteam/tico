@@ -59,7 +59,6 @@
 .cloud-label{font-size:11px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--muted)}
 
 /* The seat on the chart while its agent is requested: a dashed node with a Connecting pill (ui/app/sidebar.js). */
-#tree .seat-agent{width:16px;height:16px;box-sizing:border-box;border:1.5px dashed var(--muted);border-radius:5px;font-size:0}
 #tree .pill.connecting{border:1px dashed var(--line);color:var(--muted);background:none;animation:cloud-wait 1.6s ease-in-out infinite}
 
 @media (prefers-reduced-motion:reduce){.cloud-pulse,#tree .pill.connecting{animation:none}}

@@ -469,6 +469,26 @@ def test_an_added_bot_joins_the_seats_team_or_the_team_the_request_names(environ
     assert teams == {added["bot"]: "support", named["bot"]: "operations"}
 
 
+def test_a_team_add_or_request_needs_the_rule_every_add_to_a_team_obeys(environment, hq):
+    api = environment()
+    team = ask(api, "groups", {"name": "Engineering"})["id"]
+    quinn = as_person(api, "quinn")                  # a plain member: not a bot admin, and leads no team
+    # The seat is placed under Quinn, so placement passes and the team's rule is what refuses.
+    seat = ask(api, "seats", {"title": "Engineer", "team": team, "reports_to": "human:quinn"})
+    before, seats_before = bot_count(api), len(seats(api))
+    assert ask(api, "cloud-agents/claude/add", {"reports_to": "human:quinn", "team": team}, headers=quinn,
+               expected=403)["error"]["code"] == "forbidden"
+    assert ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, headers=quinn,
+               expected=403)["error"]["code"] == "forbidden"
+    assert ask(api, "cloud-agents/devin/request", {"reports_to": "human:quinn", "team": team}, headers=quinn,
+               expected=403)["error"]["code"] == "forbidden"
+    assert bot_count(api) == before and len(seats(api)) == seats_before and filed(hq) == []
+    # The owner may add into the team, and the bot joins it.
+    added = ask(api, "cloud-agents/claude/add", {"team": team})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == team
+
+
 def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_starts(environment, hq):
     api = environment()
     key = str(uuid.uuid4())

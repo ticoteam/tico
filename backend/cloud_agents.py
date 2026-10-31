@@ -20,6 +20,7 @@ from typing import Annotated
 
 from pydantic import Field
 
+from . import groups as Groups
 from . import hubdb as H
 from . import lifecycle
 from . import task_privacy as privacy
@@ -178,6 +179,8 @@ def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, f
     """Inside the write transaction: check the request, make its seat and first task, mark the seat as being filed, and
     record the reservation under the key. Nothing else can take, move, close or fill the seat from here until it is kept
     or released, since every such change refuses a seat that is filing."""
+    if team:
+        Groups.may_add(c, auth, who, team)      # the agent joins this team when it connects: an add to it
     if seat_id:
         row = lifecycle.seat(c, seat_id)
         lifecycle.refuse_if_requested(row)
@@ -369,6 +372,8 @@ def _add_bot(c, auth, settings_admin, who, agent, body):
     else:
         title, description, team = agent["name"], "", body.team.strip()
         placed = lifecycle.placement(auth, c, who, body.reports_to)
+    if team:
+        Groups.may_add(c, auth, who, team)      # the bot joins this team: the rule every add to a team obeys
     created = settings_admin.create_bot(c, who, BotDefinitionCreate(
         display_name=title[:100], description=str(description or "")[:2000],
         reports_to=lifecycle.bot_parent(c, placed) or None, status="planned", model=model["id"],
