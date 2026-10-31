@@ -56,12 +56,18 @@ class FakeStripe:
         self.race_when = "before"
 
     def add(self, kind: str, amount: int, fee: int = 0, name: str = "", link: str = "",
-            created: int | None = None) -> str:
+            created: int | None = None, source: str = "") -> str:
+        """`source` is the refund a refund failure undoes. Left empty, a refund failure names the latest refund of its
+        charge, as Stripe does."""
         tid = f"txn_{len(self.txns) + 1:04d}"
+        if kind == "refund_failure" and not source:
+            source = next((str(t["source"]["id"]) for t in reversed(self.txns)
+                           if t["type"] == "refund" and t["source"]["charge"] == link), "")
+        src = {"id": source, "object": "refund", "charge": link} if source else _source(kind, tid, link, name)
         self.txns.append({"id": tid, "object": "balance_transaction", "type": kind, "amount": amount, "fee": fee,
                           "net": amount - fee, "currency": "usd", "status": "available",
                           "created": created if created is not None else DAY + 60 * (len(self.txns) + 1),
-                          "description": kind, "source": _source(kind, tid, link, name)})
+                          "description": kind, "source": src})
         return tid
 
     def account(self) -> Answer:
@@ -261,6 +267,32 @@ def test_a_refund_failure_restores_the_refunded_sale(books):
     stripe_pass(books, stripe)
     with books.read() as c:
         assert (_sum(c, "4000"), _sum(c, "6200"), _sum(c, "1050")) == (-10_000, 320, 9_680)
+        assert _every_entry_balances(c)
+
+
+def test_a_refund_that_fails_restores_what_it_gave_back_and_not_a_share_of_the_others(books):
+    """A $100 sale: refund A of $50 before anything settled it, then $50 applied by hand to a $50 invoice, then refund B
+    of $50, which gives the invoice its $50 back. Refund A fails. It gave nothing back, so the invoice still owes its
+    $50; the restore takes A's own record, not a share of what the charge's refunds gave back in all."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
+    stripe.add("charge", 10_000, 0, "Acme Shop")
+    stripe_pass(books, stripe)
+    refund_a = stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.transaction() as c:
+        sale = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": sale, "amount": 5_000})
+        assert made.status == "committed", made
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    assert _invoice_row(books, iid) == (0, "sent")
+    stripe.add("refund_failure", 5_000, link="ch_txn_0001", source=f"re_{refund_a}")
+    stripe_pass(books, stripe, "2026-10-15T15:00:00.000000Z")
+    assert _invoice_row(books, iid) == (0, "sent")
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "1050")) == (5_000, -10_000, 5_000)
         assert _every_entry_balances(c)
 
 

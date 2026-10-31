@@ -300,9 +300,10 @@ def _carried(ctx: Ctx, raw: Mapping[str, Any]) -> list[Share]:
 
 # ------------------------------------------------------------------------------------------------ refunds and disputes
 def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) -> None:
-    """A refund, dispute or returned refund reverses (or restores) its sale. What the sale's settlements take back reopens
-    each document they paid, through that document's control account. The rest reverses the sale's own counter lines in
-    proportion, its fee is an expense, and the balance takes the net. A sale that has not arrived yet waits as new."""
+    """A refund or dispute reverses its sale, and a refund failure restores the refund it names. What the sale's settlements
+    take back reopens each document they paid, through that document's control account. The rest reverses the sale's own
+    counter lines in proportion, its fee is an expense, and the balance takes the net. A sale or refund that has not
+    arrived yet waits as new."""
     fid = str(row["id"])
     link = str(t.raw.get("link") or "")
     if not link:
@@ -318,7 +319,18 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
         _ask(ctx, fid, "the sale it names has no lines to reverse")
         return
     given = SK.stripe_given(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link)
-    shares = _shares(ctx, original, gross, given)
+    if gross < 0:
+        shares = _shares(ctx, original, gross, given)
+    else:
+        # A restore undoes exactly the refund it names, so it gives back what that refund gave, and nothing more.
+        source = str(t.raw.get("source") or "")
+        if not source:
+            _ask(ctx, fid, "it names no refund to restore")
+            return
+        failed = SK.stripe_reversal(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, source)
+        if failed is None:
+            return
+        shares = _restores(ctx, original, failed)
     # The plain part is what this refund takes from the sale itself: the refunds so far, less what settlements gave back.
     before = SK.stripe_refunded(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link) - sum(given.values())
     plain = -gross - sum(move for _, move in shares)
@@ -336,17 +348,20 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
 
 
 def _shares(ctx: Ctx, original: Any, gross: int, given: Mapping[str, int]) -> list[tuple[Any, int]]:
-    """What each settlement of the refunded sale gives back for this refund: a positive share reopens its document, a
-    restore is negative. A refund shares out over what each settlement still holds after the refunds before it, so a
-    settlement made later takes none of an earlier refund, and nothing goes past what a settlement received."""
+    """What each settlement of the refunded sale gives back for this refund. A refund shares out over what each
+    settlement still holds after the refunds before it, so a settlement made later takes none of an earlier refund, and
+    nothing goes past what a settlement received."""
     live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
-    held = [max(given.get(str(s["id"]), 0), 0) for s in live]
-    if gross < 0:
-        remaining = [max(int(s["amount"]) - h, 0) for s, h in zip(live, held, strict=True)]
-        moves = _allocate(min(-gross, sum(remaining)), remaining)
-    else:
-        moves = [-x for x in _allocate(min(gross, sum(held)), held)]
-    return list(zip(live, moves, strict=True))
+    remaining = [max(int(s["amount"]) - max(given.get(str(s["id"]), 0), 0), 0) for s in live]
+    return list(zip(live, _allocate(min(-gross, sum(remaining)), remaining), strict=True))
+
+
+def _restores(ctx: Ctx, original: Any, failed: Any) -> list[tuple[Any, int]]:
+    """What a restore takes back from each settlement: exactly what the refund it undoes gave that settlement (kept on
+    that refund as `gave`). A refund that gave nothing back restores nothing, whatever the other refunds gave."""
+    gave = cast(Mapping[str, int], cast(Mapping[str, Any], SK.loads(failed["raw_json"])).get(GAVE) or {})
+    live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
+    return [(s, -int(gave.get(str(s["id"]), 0))) for s in live]
 
 
 def _reopened(ctx: Ctx, settlement: Any, move: int) -> dict[str, object]:

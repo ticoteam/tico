@@ -763,6 +763,14 @@ def stripe_given(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[s
     return {str(key): int(total) for key, total in rows}
 
 
+def stripe_reversal(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], source: str) -> Any:
+    """The posted money-out row (a refund or a dispute) that a refund failure names by its Stripe source id, or None."""
+    return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id=? AND kind IN ({_marks(kinds)}) AND "
+                     "json_extract(raw_json, '$.source')=? AND json_extract(raw_json, '$.amount')<0 AND "
+                     "status='posted' AND entry_id IS NOT NULL ORDER BY json_extract(raw_json, '$.created') LIMIT 1",
+                     (money_account_id, *kinds, source)).fetchone()
+
+
 def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
     """Stripe rows marked for their day's summary entry that have not posted yet."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "
