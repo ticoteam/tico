@@ -336,11 +336,24 @@ def test_an_added_supported_agent_lands_in_onboarding_like_a_template_hire(envir
     assert [s["id"] for s in seats(api)] == []
 
 
-def test_adding_without_a_seat_is_refused_because_the_bot_needs_a_role(environment, hq):
-    api = environment()
+def test_adding_without_a_seat_opens_a_seat_in_the_team_and_fills_it(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
+    team = ask(api, "groups", {"name": "Engineering"})["id"]
+    added = ask(api, "cloud-agents/codex/add", {"team": team})
+    assert added["seat"] and added["template"] and added["harness"] == "codex"
+    with api.app.state.store.read() as c:
+        assert H.bot(c, added["bot"])["display_name"] == "Codex"
+        assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == team
+        assert c.execute("SELECT filled_by FROM seats WHERE id=?", (added["seat"],)).fetchone()[0] == added["bot"]
+    assert onboarding_artifacts(api, added["bot"])["state"] == lifecycle.statuses.NEEDS_SETUP
+    assert seats(api) == []
+
+
+def test_a_seatless_add_no_template_fits_leaves_no_seat_and_no_bot(environment, hq):
+    api = environment()                              # the fixture catalog offers no template to any seat
     before = bot_count(api)
-    assert ask(api, "cloud-agents/codex/add", {}, expected=409)["error"]["code"] == "seat"
-    assert bot_count(api) == before
+    assert ask(api, "cloud-agents/codex/add", {}, expected=409)["error"]["code"] == "template"
+    assert bot_count(api) == before and seats(api) == []
 
 
 def test_a_seat_no_template_fits_refuses_the_add_and_builds_nothing(environment, hq):

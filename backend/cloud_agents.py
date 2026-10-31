@@ -78,6 +78,9 @@ class SeatAgentRequest(Contract):
     name: Annotated[str, Field(max_length=NAME_MAX)] = ""     # `other` only
 
 
+SEATLESS_TITLE = "Software engineer"   # the seat an add with no seat opens: every connected agent is a coding agent
+
+
 class CloudAgentAdd(Contract):
     reports_to: Annotated[str, Field(max_length=200)] = ""   # the line the bot goes under, when no seat is named
     seat_id: Annotated[str, Field(max_length=200)] = ""      # the seat the bot fills
@@ -377,16 +380,22 @@ def cancel_request(request, store, auth, settings, who, seat_id):
 def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     """Add the agent as a Tico bot that fills the seat it names, on the harness the agent runs on, under the line the seat
     names. Its role is the template Recruit ranks first for the seat, and it lands exactly where that template's hire does:
-    in Onboarding, with its repository built by its computer or by BotOps (recruiting.onboard). A team without a seat has
-    no role to build a repository for, so its add waits for one."""
+    in Onboarding, with its repository built by its computer or by BotOps (recruiting.onboard). An add with no seat opens
+    one first, a software engineer's in `team` under `reports_to`, named for the agent; it is in the same transaction, so a
+    refusal below leaves no seat behind."""
     from .onboarding import BOTOPS
-    if not body.seat_id:
-        raise Problem("seat", "A cloud agent joins a team by filling a seat, so Tico knows what it does. Add it to a seat.",
-                      409)
-    _recover_stale(c, body.seat_id)
-    row = lifecycle.seat(c, body.seat_id)
+    seat_id, name = body.seat_id, ""
+    if not seat_id:
+        team = body.team.strip()
+        if team:
+            Groups.may_add(c, auth, who, team)      # a new seat in this team, which the bot joins
+        placed = lifecycle.placement(auth, c, who, body.reports_to)
+        seat_id = lifecycle.create_seat(auth, c, who, SEATLESS_TITLE, agent["line"], placed, team)["id"]
+        name = agent["name"]
+    _recover_stale(c, seat_id)
+    row = lifecycle.seat(c, seat_id)
     lifecycle.refuse_if_requested(row)
-    placed = lifecycle.placement(auth, c, who, row["reports_to"], body.seat_id)
+    placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
     if row["team"]:
         Groups.may_add(c, auth, who, row["team"])   # the bot joins the seat's team: the rule every add to a team obeys
     card = recruiting.top_card(auth, onboarding, c, who, row)
@@ -396,7 +405,7 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     if not card["starter"] and not H.bot(c, BOTOPS):
         raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
     model = _model_for(agent["connect_id"])
-    name = row["title"][:100]
+    name = (name or row["title"])[:100]
     slug = onboarding.admin.pick_slug(c, name)
     record, rendered, description, instructions = recruiting.brief(c, onboarding, card, row)
     settings_admin.create_bot(c, who, BotDefinitionCreate(
@@ -406,7 +415,7 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
     setup_task = recruiting.onboard(c, who, onboarding, row, card, slug, name=name, description=description,
                                     instructions=instructions, rendered=rendered, answers=record["answers"],
                                     model=model["id"])
-    return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": body.seat_id,
+    return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": seat_id,
             "template": card["template"], "setup_task_id": setup_task}
 
 

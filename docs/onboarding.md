@@ -250,8 +250,9 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   fills the seat with a bot on that harness, owned by the person. Its role is the template Recruit ranks first for the
   seat, so it lands exactly as a hire of that template does: in Onboarding, in the seat's place on the chart, with its
   repository built by its computer (a starter) or by BotOps (any other template). It joins the seat's team and runs under
-  its own bot identity, with no personal token issued. A seat no template fits, and an add without a seat, are refused
-  (`409`): a bot needs a role to build its repository (`backend/cloud_agents.py`).
+  its own bot identity, with no personal token issued. An add with `{team, reports_to}` and no seat first opens a
+  *Software engineer* seat there and names the bot for the agent. A seat no template fits is refused (`409`) and leaves
+  nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
