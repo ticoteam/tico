@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { botHeaders, hubAuth, resolveStepUrl } from '../record.mjs';
+import { botHeaders, checkBotCanOpenApp, hubAuth, resolveStepUrl } from '../record.mjs';
 
 const hub = { origin: 'https://hub.tico.team', token: 'bot-token-123' };
 
@@ -66,4 +66,20 @@ test('with --as-bot a leading slash resolves against the Tico origin', () => {
   assert.equal(resolveStepUrl('/tasks/42?tab=log', '/work/demo', hub.origin), 'https://hub.tico.team/tasks/42?tab=log');
   assert.equal(resolveStepUrl('site/index.html', '/work/demo', hub.origin), pathToFileURL('/work/demo/site/index.html').href);
   assert.equal(resolveStepUrl('https://example.com/a', '/work/demo', hub.origin), 'https://example.com/a');
+});
+
+test('--as-bot stops before any browser when the web app will not open for a bot', async () => {
+  const seen = [];
+  const personOnly = async (url, init) => {
+    seen.push([String(url), init.headers.authorization]);
+    return { ok: false, status: 403 };
+  };
+  await assert.rejects(checkBotCanOpenApp(hub, personOnly), /needs a person/);
+  assert.deepEqual(seen, [['https://hub.tico.team/api/me', 'Bearer bot-token-123']]);
+});
+
+test('--as-bot passes a bot that can open the web app, and names other failures', async () => {
+  await checkBotCanOpenApp(hub, async () => ({ ok: true, status: 200 }));
+  await assert.rejects(checkBotCanOpenApp(hub, async () => ({ ok: false, status: 401 })), /answered 401/);
+  await assert.rejects(checkBotCanOpenApp(hub, async () => { throw new TypeError('fetch failed'); }), /cannot reach/);
 });

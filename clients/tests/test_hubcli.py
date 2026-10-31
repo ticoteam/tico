@@ -791,3 +791,22 @@ def test_a_plain_webhook_header_sends_no_secret_key():
     from clients import hubtools
     fields = hubtools.webhook_options({"header": ["X-Team: acme"], "secret_header": ["X-Key: k"]})
     assert fields["headers"] == [{"name": "X-Team", "value": "acme"}, {"name": "X-Key", "secret": True, "value": "k"}]
+
+
+def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
+    """`hub file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+    from clients import hubtools, remotecli, tico
+    sent = []
+    monkeypatch.setattr(tico.Client, "request", lambda self, method, path, *a, **kw: sent.append((method, path)) or {"approved": True})
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "bot-token")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "brief.md").write_bytes(b"# Brief\n")
+    assert remotecli.main(hubcli.parser().parse_args(["file", "approved", "brief.md", "--by", "human"])) == 0
+    (method, url), = sent
+    parts = urlsplit(url)
+    assert (method, parts.path) == ("GET", "/api/v2/file-approvals")
+    assert parse_qs(parts.query) == {"path": ["brief.md"], "digest": [hashlib.sha256(b"# Brief\n").hexdigest()], "by": ["human"]}
+    assert hubtools.files_approved(tico.Client("https://tico.acme.example", "bot-token"), {"target": "brief.md"}) == {"approved": True}
