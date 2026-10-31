@@ -115,9 +115,23 @@ def unlink_feed(c: sqlite3.Connection, entry_id: str, at: str) -> None:
 
 
 def writes_for_feed(c: sqlite3.Connection, feed_id: str) -> list[Any]:
-    """Writes out for a bank row not yet confirmed (pending, or claimed for a send)."""
-    return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND json_extract(payload_json, '$.feed_id')=?",
-                     (feed_id,)).fetchall()
+    """Writes out for a bank row not yet confirmed: pending (or claimed for a send), or unknown, which may have landed at
+    the provider and so is never sent again."""
+    return c.execute("SELECT * FROM fin_outbox WHERE (status='pending' OR (status='failed' AND unknown=1)) "
+                     "AND json_extract(payload_json, '$.feed_id')=?", (feed_id,)).fetchall()
+
+
+def outbox_counts(c: sqlite3.Connection, cid: str) -> dict[str, int]:
+    """A connection's writes out by state: pending, failed (refused by the provider), unknown (it cannot tell whether
+    the write landed), withheld (held back in rehearsal)."""
+    out = {"pending": 0, "failed": 0, "unknown": 0, "withheld": 0}
+    for status, unknown, n in c.execute("SELECT status, unknown, COUNT(*) FROM fin_outbox WHERE connection_id=? "
+                                        "GROUP BY status, unknown", (cid,)).fetchall():
+        if status == "failed" and unknown:
+            out["unknown"] += int(n)
+        elif status in out:
+            out[str(status)] += int(n)
+    return out
 
 
 def cancel_feed_writes(c: sqlite3.Connection, feed_id: str, why: str, at: str) -> None:
@@ -247,9 +261,10 @@ def books_status(c: sqlite3.Connection, cid: str) -> str:
 
 
 def pending_writes(c: sqlite3.Connection, cid: str) -> list[Any]:
-    """This connection's writes not yet answered, oldest first: one of them may already be at the provider."""
-    return c.execute("SELECT * FROM fin_outbox WHERE connection_id=? AND status='pending' ORDER BY created_at, id",
-                     (cid,)).fetchall()
+    """This connection's writes not answered, oldest first: one of them may already be at the provider (an unknown one
+    too, until the provider's record shows up)."""
+    return c.execute("SELECT * FROM fin_outbox WHERE connection_id=? AND (status='pending' OR (status='failed' AND "
+                     "unknown=1)) ORDER BY created_at, id", (cid,)).fetchall()
 
 
 def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:

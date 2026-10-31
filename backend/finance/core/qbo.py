@@ -165,7 +165,7 @@ def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]]) -> M.EntryLin
         found = items.get(_ref(detail, "ItemRef"))
         account = found.get(side, "") if found is not None else ""
     return M.EntryLine(account=f"Account:{account}" if account else "", amount=units,
-                       description=_id(line.get("Description")))
+                       description=_id(line.get("Description")), key=_id(line.get("Id")))
 
 
 def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str, str]]) -> M.Document:
@@ -177,9 +177,11 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
     party_kind = "Vendor" if kind == "Bill" else "Customer"
     party_value = _ref(row, "VendorRef" if kind == "Bill" else "CustomerRef")
     lines = tuple(x for x in (_doc_line(raw, items) for raw in as_list(row.get("Line"))) if x is not None)
+    control = _ref(row, "APAccountRef" if kind == "Bill" else "ARAccountRef")
     return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
                       number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
-                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row), tax=_tax(row))
+                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row), tax=_tax(row),
+                      control=f"Account:{control}" if control else "")
 
 
 def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
@@ -219,14 +221,27 @@ def _links(row: Mapping[str, Any], target: str) -> tuple[tuple[str, int], ...]:
     return tuple(out)
 
 
-def item_accounts(rows: Iterable[object]) -> dict[str, dict[str, str]]:
-    """Each item's income and expense account (QuickBooks keeps them on the item): what its lines post to."""
-    out: dict[str, dict[str, str]] = {}
+def item_accounts(rows: Iterable[object]) -> dict[str, dict[str, Any]]:
+    """Each item's income and expense account (QuickBooks keeps them on the item): what its lines post to, and whether
+    the item is active (an inactive one is read for history, never sent on a new sale)."""
+    out: dict[str, dict[str, Any]] = {}
     for raw in rows:
         row = as_map(raw)
         if row is None or not _id(row.get("Id")):
             continue
-        out[_id(row.get("Id"))] = {"income": _ref(row, "IncomeAccountRef"), "expense": _ref(row, "ExpenseAccountRef")}
+        out[_id(row.get("Id"))] = {"income": _ref(row, "IncomeAccountRef"), "expense": _ref(row, "ExpenseAccountRef"),
+                                   "active": str(row.get("Active", True)).lower() != "false"}
+    return out
+
+
+def income_items(items: Mapping[str, Mapping[str, Any]]) -> dict[str, str]:
+    """The item a sale on each income account is sent on: an active item over an inactive one that shares its account
+    (the first found wins among those)."""
+    out: dict[str, str] = {}
+    for item_id, found in sorted(items.items(), key=lambda kv: (not kv[1].get("active", True), kv[0])):
+        account = str(found.get("income") or "")
+        if account and account not in out:
+            out[account] = item_id
     return out
 
 
@@ -234,17 +249,6 @@ def _tax(row: Mapping[str, Any]) -> int:
     """A transaction's sales tax in minor units: QuickBooks keeps it in TxnTaxDetail, outside its lines."""
     detail = as_map(row.get("TxnTaxDetail")) or {}
     return _units(detail.get("TotalTax")) or 0
-
-
-def _foreign(row: Mapping[str, Any]) -> bool:
-    """A transaction in another currency: QuickBooks gives a home-currency transaction an exchange rate of 1."""
-    rate = row.get("ExchangeRate")
-    if rate is None or rate == "":
-        return False
-    try:
-        return Decimal(str(rate)) != 1
-    except InvalidOperation:
-        return True
 
 
 def _reference(row: Mapping[str, Any]) -> str:
@@ -260,15 +264,16 @@ def _one(entity: str, row: dict[str, Any], items: Mapping[str, Mapping[str, str]
         return party_record(row, entity)
     if entity not in ENTITIES:
         return None
-    if _foreign(row):
-        return M.Refused(M.Ext(entity, _id(row.get("Id")), _id(row.get("SyncToken"))), FOREIGN)
     if entity == "JournalEntry":
-        return journal_record(row)
-    if entity in DOCUMENTS:
-        return document_record(row, entity, items)
-    if entity in PAYMENTS:
-        return settlement_record(row, entity)
-    return posted_record(row, entity, items)
+        made: Made = journal_record(row)
+    elif entity in DOCUMENTS:
+        made = document_record(row, entity, items)
+    elif entity in PAYMENTS:
+        made = settlement_record(row, entity)
+    else:
+        made = posted_record(row, entity, items)
+    code = _ref(row, "CurrencyRef")
+    return replace(made, ext=replace(made.ext, currency=code)) if code else made
 
 
 def _with_reference(made: Made, ref: str) -> Made:
@@ -300,20 +305,19 @@ def records(entity: str, rows: Iterable[object], items: Mapping[str, Mapping[str
 CHANGE_CAP = 1000       # the most objects one change feed answer holds
 
 
-def change_through(answer: Mapping[str, Any]) -> str:
-    """Where a change feed answer is complete to when it is cut at its cap (""  when it is whole): one second before the
-    newest change in it, so a change made in that second is read again by the next read."""
+def change_through(answer: Mapping[str, Any], entity: str) -> str:
+    """Where one entity's change feed answer is complete to when it is cut at its cap (""  when it is whole): one second
+    before the newest change of that entity in it, so a change made in that second is read again by the next read.
+    Each entity is read in its own answer, so no other entity's changes move this boundary."""
     stamps: list[datetime] = []
     count = 0
     for block in as_list(answer.get("CDCResponse")):
         for query in as_list((as_map(block) or {}).get("QueryResponse")):
-            page = as_map(query) or {}
-            for entity in ENTITIES:
-                for raw in as_list(page.get(entity)):
-                    count += 1
-                    meta = as_map((as_map(raw) or {}).get("MetaData")) or {}
-                    if meta.get("LastUpdatedTime"):
-                        stamps.append(M.parse(str(meta["LastUpdatedTime"])))
+            for raw in as_list((as_map(query) or {}).get(entity)):
+                count += 1
+                meta = as_map((as_map(raw) or {}).get("MetaData")) or {}
+                if meta.get("LastUpdatedTime"):
+                    stamps.append(M.parse(str(meta["LastUpdatedTime"])))
     if count < CHANGE_CAP or not stamps:
         return ""
     return (max(stamps) - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

@@ -17,6 +17,7 @@ Posting a feed row:
 - Pending -> posted, or an amount change, updates the row in place; a changed posted row is reversed and posted
   again, never twice. A row a done reconciliation cleared is locked."""
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 
@@ -515,6 +516,13 @@ def _card_hold(ctx: Ctx, row: Any, card: Any, amount: int) -> None:
                                             "created_at": ctx.at, "created_by": SYSTEM})
 
 
+def left_of(ctx: Ctx, row: Any) -> int:
+    """A bank row's amount no payment has applied yet, signed: the part its own entry has to carry."""
+    amount = int(row["amount"])
+    applied = SAP.settled_from(ctx.c, "feed", str(row["id"]))
+    return (1 if amount >= 0 else -1) * (abs(amount) - applied)
+
+
 def feed_line(account_id: str, amount: int, tags: Mapping[str, str] | None = None, vendor: str = "") -> dict[str, object]:
     line: dict[str, object] = {"account_id": account_id, "amount": amount, "tags": dict(tags or {})}
     if vendor:
@@ -711,10 +719,14 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if mirrored:
             from .mirror import write_feed
             return write_feed(ctx, row, account, tags, gl, by=who, action_id=aid)
+        left = left_of(ctx, row)            # only the part no payment has applied is posted here
+        if left == 0:
+            raise FinanceError(CONFLICT, "that bank row is already applied in full")
         if row["entry_id"]:
             _unpost(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []
-        entry = post_row(ctx, str(row["id"]), t, [feed_line(account.id, -amount, tags, t.counterparty)], gl.id, holds)
+        entry = post_row(ctx, str(row["id"]), replace(t, amount=left),
+                         [feed_line(account.id, -left, tags, t.counterparty)], gl.id, holds)
         mark_posted(ctx, [str(row["id"])], entry)
         return {"feed_id": str(row["id"]), "entry_id": entry}
     return Plan(K.default_gate(ctx.org, who, "categorize"),

@@ -774,7 +774,7 @@ def test_a_change_window_longer_than_the_page_cap_is_reported_not_read_short(mon
     _chart(xbooks)
     xbooks.rows["Contacts"] = [{"ContactID": f"contact-{n:03d}", "Name": f"Acme Contact {n:03d}", "IsCustomer": True,
                                 "ContactStatus": "ACTIVE", "UpdatedDateUTC": ms(_now())} for n in range(250)]
-    read = _client(xbooks).changed("2026-10-15T11:55:00Z")
+    read = _client(xbooks).changed({"changes": "2026-10-15T11:55:00Z"})
     assert not read.ok and "changed too much" in read.error
 
 
@@ -1165,7 +1165,7 @@ def test_a_bank_transfer_is_one_entry_and_its_legs_are_not_counted_again(books):
         lines = {r[0]: r[1] for r in c.execute("SELECT account_id, amount FROM fin_lines WHERE entry_id=?", (entry,))}
         assert lines == {account(c, "1010"): 10000, account(c, "1000"): -10000}
     xbooks.calls.clear()
-    _client(xbooks).changed("2026-10-15T11:55:00Z")
+    _client(xbooks).changed({"changes": "2026-10-15T11:55:00Z"})
     (read,) = [c for c in xbooks.calls if c["method"] == "GET" and c["path"] == "BankTransfers"]
     assert read["query"].get("includeDeleted") == "true" and "If-Modified-Since" not in read["headers"]
 

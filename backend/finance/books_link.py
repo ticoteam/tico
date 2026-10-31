@@ -256,19 +256,36 @@ def access_token(store: Any, vault: object, link: Link, cid: str, provider: str,
         return fresh.access_token
 
 
+def _same_account(c: Any, provider: str, tokens: Tokens) -> str | None:
+    """The books connection, not disconnected, that already holds this QuickBooks company or Xero organisation."""
+    key = tokens.realm_id or tokens.tenant_id
+    if not key:
+        return None
+    for cid, _, _ in SX.books_connections(c, provider):
+        books = SX.books_settings(c, cid)
+        if key in (str(books.get("realm_id") or ""), str(books.get("tenant_id") or "")):
+            return cid
+    return None
+
+
 def connect_claim(store: Any, vault: object, link: Link, *, provider: str, company_id: str, claim_id: str,
                   name: str, by: str, now: str) -> str:
-    """Claim the pair HQ holds for a finished consent and make the books connection with its tokens in the vault.
+    """Claim the pair HQ holds for a finished consent and keep its tokens in the vault for the books connection.
 
-    The claim is single use and is spent first. The connection row exists before the vault write, in status
-    `reconnect`, so a failure is visible. The pair stays in this call's memory while the vault write is tried
-    VAULT_TRIES times; when every try fails the connection stays in `reconnect`, a Needs-you item asks for a new
-    connect, and ReconnectRequired is raised. A pair cut off by a crash before the write is lost the same way."""
+    The claim is single use and is spent first. A consent for a company or organisation that already has a books
+    connection repairs that connection (same row, same book); any other makes a new one. The row is in status
+    `reconnect` before the vault write, so a failure is visible. The pair stays in this call's memory while the vault
+    write is tried VAULT_TRIES times; when every try fails the connection stays in `reconnect`, a Needs-you item asks
+    for a new connect, and ReconnectRequired is raised. A pair cut off by a crash before the write is lost the same
+    way."""
     tokens = claim(link, provider, company_id, claim_id)
-    cid = tico.new_id()
     with store.transaction() as c:
-        SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
-        SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id})
+        cid = _same_account(c, provider, tokens)
+        if cid is None:
+            cid = tico.new_id()
+            SX.books_connection_insert(c, cid=cid, provider=provider, name=name, by=by, at=now)
+            SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
+                                          "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
         SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
     for attempt in range(1, VAULT_TRIES + 1):
         try:
@@ -377,8 +394,8 @@ def start(store: Any, link: Link, *, provider: str, company_id: str, user: str, 
 def finish(store: Any, vault: object, link: Link, *, flow: str, user: str, outcome: str, reason: str,
            claim_id: str) -> str:
     """The browser came back from HQ for a consent: the flow is spent, then the pair is claimed once and kept, and the
-    books connection made. Returns its id. Raises NotStarted, ConsentFailed (HQ did not finish the consent) or the
-    BrokerFailed of the claim or the vault."""
+    books connection made or repaired. Returns its id. Raises NotStarted, ConsentFailed (HQ did not finish the consent)
+    or the BrokerFailed of the claim or the vault."""
     now = tico.now()
     with store.transaction() as c:
         started = _spend_flow(c, flow, user=user, now=now)

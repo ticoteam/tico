@@ -244,7 +244,8 @@ def credit_application(j: Mapping[str, Any]) -> M.Settlement | M.Ext | None:
     applied = _allocations(j, CREDIT_SIDE.get(kind_type, ""))
     total = sum(amount for _, amount in applied)
     return M.Settlement(ext, day=day(j, "Date"), memo=str(j.get("Reference") or ""), party="", bank="", total=0,
-                        links=applied, credits=((f"{DOC_KIND.get(kind_type, 'CreditMemo')}:{ident}", total),))
+                        links=applied,
+                        credits=((f"{DOC_KIND.get(kind_type, 'CreditMemo')}:{ident}", total),) if applied else ())
 
 
 def payment_record(j: Mapping[str, Any], system: System) -> M.Settlement | M.Journal | M.Ext | M.Refused | None:
@@ -307,7 +308,8 @@ def applied_record(j: Mapping[str, Any], kind: str) -> M.Settlement | M.Ext | M.
         side = "Invoice" if str(invoice.get("Type") or "").startswith("ACCREC") else "Bill"
         links.append((f"{side}:{invoice['InvoiceID']}", minor(row.get("Amount") or 0)))
     return M.Settlement(ext, day=day(j, "Date"), memo=str(j.get("Reference") or ""), party="", bank="", total=0,
-                        links=tuple(links), credits=((f"{kind}:{ident}", sum(amount for _, amount in links)),))
+                        links=tuple(links),
+                        credits=((f"{kind}:{ident}", sum(amount for _, amount in links)),) if links else ())
 
 
 def manual_journal_record(j: Mapping[str, Any], system: System) -> M.Journal | M.Ext | None:

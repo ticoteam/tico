@@ -231,6 +231,7 @@ class Xero:
     rate limit that outlasts the pass's budget stops every later call in it, and `hold` says how long the books wait."""
 
     entities: tuple[str, ...] = M.BOOK_ENTITIES["xero"]
+    feeds: tuple[str, ...] = ("changes",)       # one pass reads every entity from one stamp, so one cursor
 
     def __init__(self, tenant: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -335,7 +336,11 @@ class Xero:
             number += 1
         return self._taken(entity, rows[skip:skip + size])
 
-    def changed(self, since: str) -> Read:
+    def changed(self, since: Mapping[str, str]) -> Read:
+        """The change feed's one cursor (see feeds) as the pass reads it."""
+        return self._changed(since["changes"])
+
+    def _changed(self, since: str) -> Read:
         """Every row of every entity changed since the time, page by page (a short page ends a list). Bank transfers are
         read whole with no change time, since Xero stamps none on them."""
         stamp = format_datetime(M.parse(since), usegmt=True)     # If-Modified-Since is an HTTP date
