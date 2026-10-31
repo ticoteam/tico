@@ -81,6 +81,23 @@ class Sending(Writing):
         [failed] = [a for a in self.audit_lines() if a["action"] == "rule-check-failed"]
         self.assertEqual(failed["detail"]["reason"], "forbidden")
 
+    def test_sends_after_a_check_that_never_reached_tico_ride_the_next_check_and_clear_once_it_answers(self):
+        asked = []
+
+        def down(path, body):
+            asked.append(body)
+            raise pl.HubFailed("unavailable")
+
+        def up(path, body):
+            asked.append(body)
+            return {"outcome": "pass"}
+        # The first goes out unchecked; the second, still unchecked, is stopped by the recipient cooldown, so it is no
+        # miss and the count is not cleared; the first answer clears it.
+        for hub in (down, down, up, up):
+            pl.HUB_POST = hub
+            self.run_json("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")
+        self.assertEqual([b.get("unchecked_before") for b in asked], [None, 1, 1, None])
+
     def test_the_idempotency_row_is_written_before_the_api_call(self):
         did = self.make()
         self.service.send_fails = True

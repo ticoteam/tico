@@ -324,6 +324,30 @@ def _nobody_near_ops(api):
         assert not person_above(c, "ops") and H.default_human(c) == "dan"
 
 
+def test_the_owner_lists_and_decides_a_hold_whose_reviewer_lost_sign_in_and_a_member_sees_none(ruled):
+    api, _ = ruled
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO humans(id, name, email) VALUES('dan', 'Dan', 'dan@acme.example')")
+        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["people"].append({"id": "dan", "email": "dan@acme.example"})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(raw),))
+    color_rule(api, if_broken="escalate", reviewer="dan")
+    row = hold_row(api, say(api, "Our favorite color is gold")["held"]["id"])
+    assert row["reviewer"] == "human:dan"
+    listed = f"rule-holds?task={row['task_id']}"
+    assert get(api, listed, token="ana-test")["holds"] == []        # Dan reviews it while Dan can sign in
+    with api.app.state.store.transaction() as c:
+        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        next(p for p in raw["people"] if p["id"] == "dan")["sign_in"] = False
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(raw),))
+    assert get(api, listed, token="cara-test")["holds"] == []
+    [card] = get(api, listed, token="ana-test")["holds"]
+    assert card["id"] == row["id"] and card["can_send"]
+    nonce = get(api, f"rule-holds/{row['id']}", token="ana-test")["nonce"]
+    post(api, f"rule-holds/{row['id']}/send", {"nonce": nonce}, token="ana-test")
+    assert hold_row(api, row["id"])["state"] == "sent"
+
+
 def test_an_escalate_with_nobody_near_the_bot_files_its_review_task_for_the_owner(ruled):
     api, _ = ruled
     _nobody_near_ops(api)
@@ -768,6 +792,43 @@ def test_a_mail_approval_is_spent_once(ruled):
     for t in threads:
         t.join()
     assert sorted(outcomes) == ["held", "held", "pass"]
+
+
+def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_once(ruled):
+    api, _ = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"all_bots": True}, "if_broken": "escalate", "reviewer": "ben"})
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR IGNORE INTO bots(slug, display_name, state) VALUES('botops', 'BotOps', 'active')")
+    as_bot(api, "botops", "botops-test")
+    api.app.state.auth.settings.test_identities["ana-botops"] = Identity(
+        "human:ana", "owner", "ana@acme.example", via="botops", task_actor="bot:botops", agent="test")
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
+    first = post(api, "bots/botops/mail-check", mail, token="ana-botops")
+    again = post(api, "bots/botops/mail-check", mail, token="ana-botops")
+    assert first["outcome"] == again["outcome"] == "held" and first["held"]["id"] == again["held"]["id"]
+    [hold] = sql(api, "SELECT id, author FROM org_rule_holds WHERE operation='mail'")
+    assert hold["author"] == "bot:botops"
+    view = get(api, f"rule-holds/{hold['id']}", token="ben-test")
+    post(api, f"rule-holds/{hold['id']}/send", {"nonce": view["nonce"]}, token="ben-test")
+    sent = post(api, "bots/botops/mail-check", mail, token="ana-botops")
+    assert sent["outcome"] == "pass" and sent["approved"] == hold["id"]
+    assert post(api, "bots/botops/mail-check", mail, token="ana-botops")["outcome"] == "held"
+
+
+def test_sends_after_checks_that_never_reached_tico_count_once_with_the_next_check(ruled):
+    api, _ = ruled
+    color_rule(api)
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Thanks for the call.",
+            "unchecked_before": 2}
+    key = "mail-recovered-1"
+    assert post(api, "bots/ops/mail-check", mail, token="ops-test", key=key)["outcome"] == "pass"
+    post(api, "bots/ops/mail-check", mail, token="ops-test", key=key)       # a retry of that same request
+    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["connector"] * 2
+    assert get(api, "rules/stats")["unchecked_today"] == 2
+    # A bot no rule covers reports nothing: its mail was never going to be checked.
+    post(api, "bots/finance/mail-check", mail, token="finance-test")
+    assert get(api, "rules/stats")["unchecked_today"] == 2
+    post(api, "bots/ops/mail-check", {**mail, "unchecked_before": 101}, token="ops-test", expected=422)
 
 
 def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is_not_checked(ruled, monkeypatch):

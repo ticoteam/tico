@@ -497,15 +497,18 @@ def _default_hub_post(path, body):
 HUB_POST = _default_hub_post
 
 
-def rule_check(slug, to, cc, subject, body):
+def rule_check(slug, to, cc, subject, body, unchecked_before=0):
     """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
     {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
     A check that failed (refused, timed out, a server error) lets the send go on, as every other failure of the check
     lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason}, for the send
-    to log and answer with. The server records its own side (a `rules.unchecked` event) for a refusal or an error."""
+    to log and answer with. The server records its own side (a `rules.unchecked` event) for a refusal or an error;
+    a failure that never reached it rides the next check as `unchecked_before`, a count of such sends."""
+    ask = {"to": list(to or []), "cc": list(cc or []), "subject": subject or "", "body": body or ""}
+    if unchecked_before:
+        ask["unchecked_before"] = int(unchecked_before)
     try:
-        answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
-                                                      "subject": subject or "", "body": body or ""})
+        answer = HUB_POST(f"bots/{slug}/mail-check", ask)
     except HubFailed as exc:
         import sys
         print(f"mail: the org rule check failed ({exc.reason}); this send goes out unchecked", file=sys.stderr)

@@ -724,19 +724,23 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
     return out
 
 
-def _reader_sql(who):
-    """`_reader` as SQL, so a page counts only the holds this caller may read."""
+def _reader_sql(who, c=None, auth=None):
+    """`_reader` as SQL, so a page counts only the holds this caller may read. The owner and Admins (with `c` and
+    `auth`) also read holds whose reviewer is missing or gone: those rows come back with `fallback` True, for
+    `_reader` to settle row by row."""
     if who.role == "bot" and not who.via:
-        return "author=?", who.actor
+        return "author=?", (who.actor,), False
     if H.is_human(who.actor) and who.via not in ("botops", "assistant"):
-        return "reviewer=?", who.actor
-    return None, None
+        if c is not None and auth is not None and auth.bot_admin(who):
+            return "1", (), True
+        return "reviewer=?", (who.actor,), False
+    return None, (), False
 
 
-def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX):
+def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX, auth=None):
     """One page of a task's holds the caller may read, oldest first, as summaries: at most `limit` and at most
     HOLD_LIST_BYTES. `next_cursor` continues it."""
-    where, arg = _reader_sql(who)
+    where, args, fallback = _reader_sql(who, c, auth)
     if not where:
         return [], None
     limit = max(1, min(int(limit or HOLD_LIST_MAX), HOLD_LIST_MAX))
@@ -746,13 +750,21 @@ def holds_for_task(c, who, task_id, cursor=None, limit=HOLD_LIST_MAX):
         if not created or not hid:
             raise Problem("validation", "That cursor is not valid", 422)
         after = (created, hid)
-    rows = c.execute(f"SELECT * FROM org_rule_holds WHERE task_id=? AND {where} AND (created>? OR (created=? AND id>?)) "
-                     "ORDER BY created, id LIMIT ?", (task_id, arg, after[0], after[0], after[1], limit + 1)).fetchall()
+    query = c.execute(f"SELECT * FROM org_rule_holds WHERE task_id=? AND {where} AND (created>? OR (created=? AND "
+                      "id>?)) ORDER BY created, id", (task_id, *args, after[0], after[0], after[1]))
+    rows = []
+    for row in query:                       # one row past the page says there is more
+        role = _reader(who, dict(row), c, auth) if fallback else None
+        if fallback and not role:
+            continue
+        rows.append((dict(row), role))
+        if len(rows) > limit:
+            break
     # The whole answer counts: its envelope and the longest cursor it can carry, then each row as serialized.
     used = len(json.dumps({"holds": [], "next_cursor": "x" * 120}))
     out = []
-    for row in rows[:limit]:
-        item = view_hold(c, who, dict(row), summary=True)
+    for row, role in rows[:limit]:
+        item = view_hold(c, who, row, role=role, summary=True)
         size = len(json.dumps(item, default=str)) + 1
         if used + size > HOLD_LIST_BYTES:
             break
@@ -1127,6 +1139,8 @@ def install(app, store, auth, mutate):
         cc: list[str] = Field(default_factory=list, max_length=200)
         subject: str = Field(default="", max_length=2000)
         body: str = Field(default="", max_length=500_000)
+        # Mails the connector sent after a check that never reached Tico (a timeout, no connection): counted here.
+        unchecked_before: int = Field(default=0, ge=0, le=100)
 
     def mail_unchecked(author, bot, body, reason):
         """A mail check that could not run (refused, or the server failed): the connector sends the mail unchecked, so
@@ -1157,7 +1171,7 @@ def install(app, store, auth, mutate):
             mail_unchecked(author, bot, body, "forbidden")
             raise Problem("forbidden", "A bot checks only its own mail", 403)
         try:
-            return mail_checked(request, who, body)
+            return mail_checked(request, who, author, body)
         except Problem as exc:
             if exc.status >= 500:
                 mail_unchecked(author, bot, body, "error")
@@ -1166,11 +1180,13 @@ def install(app, store, auth, mutate):
             mail_unchecked(author, bot, body, "error")
             raise
 
-    def mail_checked(request, who, body):
+    def mail_checked(request, who, author, body):
+        """`author` is the bot the mail is checked as (BotOps for a person included): its holds and approvals are
+        found under it; `who` stays the caller, for the write's permission and audit."""
         key = mail_digest(body.to, body.cc, body.subject, body.body)
         output = (f"Subject: {body.subject}\n\n" if body.subject else "") + body.body
         with store.read() as c:
-            approved = mail_approved(c, who.actor, key)
+            approved = mail_approved(c, author, key)
             recipients = mail_recipients(c, [*body.to, *body.cc])
         # An approved mail (Send anyway) is not judged again on the rules it was held on; rules changed or added
         # since are a new check, as for any Send anyway. Otherwise the whole mail is checked.
@@ -1187,7 +1203,12 @@ def install(app, store, auth, mutate):
             return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
 
         def work(c):
-            waiting = open_mail_hold(c, who.actor, key) if holds(verdict) else None
+            if body.unchecked_before and watched(c, author):
+                # One `rules.unchecked` per mail, so the day's count stays one plain count; once, with this write.
+                for _ in range(body.unchecked_before):
+                    H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
+                                                                  "bot": H.actor_id(author)})
+            waiting = open_mail_hold(c, author, key) if holds(verdict) else None
             if approved:
                 if current_matched(c, approved) != {tuple(x) for x in check[0]}:
                     return {"outcome": "held", "held": {"id": approved["id"], "text": "The rules changed while this "
@@ -1224,7 +1245,7 @@ def install(app, store, auth, mutate):
         a page at a time: pass `next_cursor` as `cursor` for the rest."""
         who = request.state.identity
         with store.read() as c:
-            items, nxt = holds_for_task(c, who, task, cursor, limit)
+            items, nxt = holds_for_task(c, who, task, cursor, limit, auth)
         return {"holds": items, "next_cursor": nxt}
 
     @app.get("/api/v2/rule-holds/{hold_id}")

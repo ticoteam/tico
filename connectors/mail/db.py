@@ -11,6 +11,7 @@
   messages    every normalized message a sync (or an opportunistic fetch) has stored,
               so the Mac can push a batch later without holding a hub token
   sync_state  per mailbox: Gmail history cursor, last run, last error, live count
+  rule_check_misses  per employee: mails sent after their org rule check failed, not yet told to Tico (a count only)
 
 Nothing here talks to Google. Tests point it at a temp file.
 """
@@ -128,6 +129,10 @@ CREATE TABLE IF NOT EXISTS sync_state (
   last_error    TEXT NOT NULL DEFAULT '',
   message_count INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS rule_check_misses (
+  employee  TEXT PRIMARY KEY,
+  count     INTEGER NOT NULL DEFAULT 0
+);
 CREATE TABLE IF NOT EXISTS judge_cache (
   cache_key   TEXT PRIMARY KEY,
   expires_at  INTEGER NOT NULL,
@@ -231,6 +236,29 @@ def record_audit(conn, row):
                  (row["ts"], row["employee"], row.get("issue", "") or "", row.get("mailbox", ""),
                   row["action"], row.get("target", ""),
                   json.dumps(row.get("detail") or {}, sort_keys=True)))
+    conn.commit()
+
+
+# ---------------------------------------------------------------- org rule check misses
+
+RULE_CHECK_MISSES_MAX = 100      # what one mail check carries (backend/org_rule_check.py MailCheck.unchecked_before)
+
+
+def rule_check_misses(conn, employee):
+    r = conn.execute("SELECT count FROM rule_check_misses WHERE employee=?", (employee,)).fetchone()
+    return min(int(r["count"]), RULE_CHECK_MISSES_MAX) if r else 0
+
+
+def add_rule_check_miss(conn, employee):
+    """One more mail sent after its org rule check failed, for the next check that reaches Tico to report."""
+    conn.execute("INSERT INTO rule_check_misses (employee, count) VALUES (?, 1) ON CONFLICT(employee) DO UPDATE "
+                 "SET count=min(count + 1, ?)", (employee, RULE_CHECK_MISSES_MAX))
+    conn.commit()
+
+
+def clear_rule_check_misses(conn, employee, told):
+    """Tico counted `told` of them (a check that carried them answered 2xx); misses added since stay."""
+    conn.execute("UPDATE rule_check_misses SET count=max(count - ?, 0) WHERE employee=?", (told, employee))
     conn.commit()
 
 
