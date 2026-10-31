@@ -1,11 +1,12 @@
 """Tax tracking (spec §11): sales tax jurisdictions, their remittances and quarterly due dates, the 1099-NEC due date, and the
 two workpapers with their CSV exports. Each due date is an external rule owned by the Bookkeeper, seeded once when Finance
 is set up, and a remittance is a bill to the jurisdiction's tax authority contact. A workpaper is filed as a whole, so only
-someone who sees everything can read one; anyone else is refused rather than shown partial totals. A vendor's TIN is never
-read here, only whether one is on file (the vault holds it, see payments.py)."""
+someone who sees everything can read one, and it is refused whole rather than shown partial: to anyone who does not see
+everything, and to a viewer who lacks full detail on a private account that a line behind the workpaper sits on. A
+vendor's TIN is never read here, only whether one is on file (the vault holds it, see payments.py)."""
 import re
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Iterable
 from dataclasses import asdict, replace
 from datetime import date, timedelta
 from typing import Any
@@ -142,8 +143,9 @@ def tax_remit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if "amount" in p:
         amount = V.amount(p)
     else:
-        _require_full(ctx, who)                         # the amount owed is read off the workpaper
-        amount = next((r.due for r in _sales_rows(ctx, int(period[:4]), False)
+        year = int(period[:4])
+        _require_full(ctx, who, _sales_feeds(ctx, year, period))    # the amount owed is read off the workpaper
+        amount = next((r.due for r in _sales_rows(ctx, year, False)
                        if r.code == j["code"] and r.period == period), 0)
     if amount <= 0:
         raise invalid(f"nothing is owed for {j['code']} {period}")
@@ -195,18 +197,40 @@ def seed_dues(c: sqlite3.Connection, at: str) -> list[str]:
 
 
 # ------------------------------------------------------------------------------------------------ reads
-def _require_full(ctx: Ctx, viewer: str) -> None:
-    """Refuses anyone who does not see everything. A workpaper is filed whole, so a total that leaves out a line the
-    viewer cannot see would be partial: seeing everything includes full detail on every private line."""
+def _remit_for(tags_json: str, year: int, period: str | None) -> bool:
+    """Whether a remittance line is tagged for the year, or for one period of it when one is given."""
+    tag = T.tags_of(tags_json).get("custom", "")
+    if not tag.startswith(T.REMIT_TAG + ":"):
+        return False
+    key = tag[len(T.REMIT_TAG) + 1:]
+    return key == period if period else key.startswith(f"{year}-")
+
+
+def _sales_feeds(ctx: Ctx, year: int, period: str | None = None) -> set[str]:
+    """The accounts of the lines behind a year's sales tax rows, or behind one period's remittance: the year's invoice
+    lines, and every line of the remittance bills tagged for it."""
+    c = ctx.c
+    account_ids = [str(j["account_id"]) for j in ST.jurisdictions(c, ctx.book.id)]
+    bills = sorted({str(r["bill_id"]) for r in ST.remittance_lines(c, ctx.book.id, account_ids)
+                    if _remit_for(str(r["tags_json"]), year, period)})
+    lines = [*ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31"), *ST.bill_lines(c, bills)]
+    return {str(r["account_id"]) for r in lines}
+
+
+def _require_full(ctx: Ctx, viewer: str, feeding: Iterable[str]) -> None:
+    """Refuses a workpaper to anyone who does not see everything. Even for them, it is refused whole when a line behind it
+    sits on a private account the viewer lacks full detail for, since a total without that line would be partial."""
     view = ctx.view(viewer)
-    if not view.everything or tab.private_cut(ctx, view):
+    if not view.everything:
         raise denied("tax workpapers need full view: only someone who sees everything can read them")
+    if set(feeding) & set(tab.private_cut(ctx, view)):
+        raise denied("a line behind this tax workpaper is on a private account you do not see in full")
 
 
 def _sales(c: sqlite3.Connection, viewer: str, year: int | None, at: str | None) -> tuple[Ctx, int, list[T.SalesRow]]:
     ctx = load(c, at)
-    _require_full(ctx, viewer)
     y = _year(ctx, year)
+    _require_full(ctx, viewer, _sales_feeds(ctx, y))
     return ctx, y, _sales_rows(ctx, y, True)
 
 
@@ -223,21 +247,8 @@ def sales_tax_csv(c: sqlite3.Connection, viewer: str, year: int | None = None, a
     return T.csv_text(T.SALES_COLUMNS, T.sales_export(rows))
 
 
-def _settled(ctx: Ctx, start: str, end: str) -> list[T.Settlement]:
-    """Money settled against the bills of flagged vendors in the window, by the day it was paid."""
-    return [(str(r["vendor_id"]), str(r["from_kind"]), int(r["amount"]), str(r["money_kind"]), str(r["subtype"]),
-             bool(r["by_card"])) for r in ST.settlements(ctx.c, ctx.book.id, start, end)]
-
-
-def _expenses(ctx: Ctx, start: str, end: str, owner: Mapping[str, str]) -> list[T.Expense]:
-    """Expense lines posted under a flagged vendor's id or any name it went by, in the window."""
-    return [(owner[str(r["vendor_key"])], bool(r["by_card"]), int(r["amount"]))
-            for r in ST.expense_lines(ctx.c, ctx.book.id, start, end) if str(r["vendor_key"]) in owner]
-
-
 def _form(c: sqlite3.Connection, viewer: str, year: int | None, at: str | None) -> tuple[Ctx, int, list[T.FormRow]]:
     ctx = load(c, at)
-    _require_full(ctx, viewer)
     y = _year(ctx, year)
     start, end = f"{y}-01-01", f"{y}-12-31"
     vendors = ST.vendors_1099(c, ctx.book.id)
@@ -245,7 +256,16 @@ def _form(c: sqlite3.Connection, viewer: str, year: int | None, at: str | None) 
     for r in vendors:
         for key in SAP.vendor_keys(c, ctx.book.id, str(r["id"])):
             owner.setdefault(key, str(r["id"]))
-    cash, card = T.paid_by_vendor(_settled(ctx, start, end), _expenses(ctx, start, end, owner))
+    flagged = {str(r["id"]) for r in vendors}
+    expenses = [r for r in ST.expense_lines(c, ctx.book.id, start, end) if str(r["vendor_key"]) in owner]
+    settled = [r for r in ST.settlements(c, ctx.book.id, start, end) if str(r["vendor_id"]) in flagged]
+    feeding = {str(r["account_id"]) for r in expenses}
+    feeding |= {str(r["account_id"]) for r in ST.bill_lines(c, sorted({str(r["bill_id"]) for r in settled}))}
+    _require_full(ctx, viewer, feeding)
+    cash, card = T.paid_by_vendor(
+        [(str(r["vendor_id"]), str(r["from_kind"]), int(r["amount"]), str(r["money_kind"]), str(r["subtype"]),
+          bool(r["by_card"])) for r in settled],
+        [(owner[str(r["vendor_key"])], bool(r["by_card"]), int(r["amount"])) for r in expenses])
     rows = [(str(r["id"]), str(r["name"]), bool(r["tin_ref"])) for r in vendors]
     return ctx, y, T.form_rows(y, rows, cash, card)
 

@@ -43,6 +43,14 @@ def _card_gl(c):
     assert made.status == "committed", made
 
 
+def _private_salaries(c):
+    """A private expense account for payroll, hidden from everyone but the owner."""
+    made = act(c, OWNER, "account_create", {"code": "6500", "name": "Salaries", "type": "expense"})
+    assert made.status == "committed", made
+    assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6500"), "private": True,
+                                               "others_see": "hidden"}).status == "committed"
+
+
 def _bank(c):
     return SK.insert(c, "fin_money_accounts", {
         "book_id": _book(c), "provider": "mercury", "created_at": AT, "created_by": "system:finance", "kind": "bank",
@@ -64,10 +72,10 @@ def _card_charge(c, program, amount, provider_id):
         "status": "posted", "raw_json": "{}"})
 
 
-def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01"):
-    """A bill for one expense, approved and paid from `source` (a money account or a GL account). Returns the bill."""
+def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01", code="6100"):
+    """A bill for one expense on account `code`, approved and paid from `source` (a money or GL account). Returns the bill."""
     made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": bill_day,
-                                         "lines": [{"account_id": account(c, "6100"), "amount": amount}]})
+                                         "lines": [{"account_id": account(c, code), "amount": amount}]})
     assert made.status == "committed", made
     bill = str(made.result["bill_id"])
     assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
@@ -309,6 +317,58 @@ def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(k
     assert mine == everyone
     assert _quarter(mine, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 1_600,
                                          "due": 0}
+
+
+def test_an_everything_grant_reads_both_workpapers_when_no_line_behind_them_is_private(keeper):
+    with keeper.transaction() as c:
+        _private_salaries(c)
+        # Payroll with no vendor and no tax on it: nothing the two workpapers read sits on the private account.
+        FA.post_entry(c, {"date": "2026-06-02", "source": "bank", "source_id": "payroll", "lines": [
+            {"account_id": account(c, "6500"), "amount": 90_000}, {"account_id": account(c, "1000"), "amount": -90_000}]},
+            at=AT)
+        authority = _contact(c, "Testland Revenue")
+        made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority,
+                                                      "due_day": 20})
+        tax_account = str(made.result["account_id"])
+        customer = _contact(c, "Globex", kind="customer")
+        _invoice(c, customer, "2026-02-10", 20_000, 1_600, tax_account)
+        remit = _remit(c, "2026-Q1")
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": remit, "account_id": account(c, "1000")}).status == "committed"
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        _pay(c, acme, 40_000, {"money_account_id": _bank(c)})
+        _grant(c, PAYABLES, "everything", whose="company")
+    with keeper.read() as c:
+        assert FR.sales_tax_report(c, PAYABLES, 2026, AT) == FR.sales_tax_report(c, OWNER, 2026, AT)
+        assert FR.sales_tax_csv(c, PAYABLES, 2026, AT) == FR.sales_tax_csv(c, OWNER, 2026, AT)
+        assert FR.form_1099_report(c, PAYABLES, 2026, AT) == FR.form_1099_report(c, OWNER, 2026, AT)
+        assert FR.form_1099_csv(c, PAYABLES, 2026, AT) == FR.form_1099_csv(c, OWNER, 2026, AT)
+        assert _quarter(FR.sales_tax_report(c, PAYABLES, 2026, AT)["rows"], "2026-Q1") == {
+            "taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 1_600, "due": 0}
+        assert _vendor_row(FR.form_1099_report(c, PAYABLES, 2026, AT), "Acme Consulting")["cash_paid"] == 40_000
+
+
+def test_an_everything_grant_is_refused_a_1099_with_a_private_line_behind_it(keeper):
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        _private_salaries(c)
+        # The vendor's bill has a line on the private account, so its settlement is part of the 1099 total.
+        _pay(c, acme, 40_000, {"money_account_id": _bank(c)}, code="6500")
+        _grant(c, PAYABLES, "everything", whose="company")
+    with keeper.read() as c:
+        for read in (FR.form_1099_report, FR.form_1099_csv):
+            with pytest.raises(FinanceError) as refused:
+                read(c, PAYABLES, 2026, AT)
+            assert refused.value.code == "denied"
+        # No sales tax line sits on that account, so the sales tax workpaper still reads.
+        assert FR.sales_tax_report(c, PAYABLES, 2026, AT)["year"] == 2026
+        assert _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")["cash_paid"] == 40_000
+    with keeper.transaction() as c:
+        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6500"), "private": True,
+                                                   "others_see": "hidden",
+                                                   "full_detail": [PAYABLES]}).status == "committed"
+    with keeper.read() as c:
+        assert FR.form_1099_report(c, PAYABLES, 2026, AT) == FR.form_1099_report(c, OWNER, 2026, AT)
+        assert FR.form_1099_csv(c, PAYABLES, 2026, AT) == FR.form_1099_csv(c, OWNER, 2026, AT)
 
 
 def test_1099_payments_count_in_the_year_they_were_paid(keeper):

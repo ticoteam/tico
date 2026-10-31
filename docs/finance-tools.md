@@ -44,8 +44,11 @@ comes back as `{"error": "too_big", "chars", "cap"}`.
 ## Tax
 
 Sales tax and 1099 workpapers (`/api/v2/finance/tax/`) are filed as a whole, so only someone who sees everything (the owner,
-or an Everything grant with full detail on every private line) can read them, CSV included. Anyone else is refused
-rather than shown partial totals. A sales tax jurisdiction is added with `tax_jurisdiction_add` (`code`, `name`, a vendor contact as
+or an Everything grant) can read them, CSV included. Anyone else is refused rather than shown partial totals. So is an
+Everything viewer when a line behind the workpaper sits on a private account they lack full detail for: a sales tax
+remittance line, or a 1099 vendor's expense or bill line. Payroll that feeds neither workpaper does not block them. The
+Bookkeeper reads the workpapers once it is granted Everything, which the owner is asked to do at setup. A sales tax
+jurisdiction is added with `tax_jurisdiction_add` (`code`, `name`, a vendor contact as
 `authority_id`, `due_day` 1 to 28), and a quarter's tax is remitted with `tax_remit` (`jurisdiction`, `period` such as
 `2026-Q3`, optional `amount`): a bill to that authority, tagged with the quarter, counted as remitted by what is paid on it (partial payments count). Without `amount` the owed figure is read off the workpaper, so that needs full view.
 
