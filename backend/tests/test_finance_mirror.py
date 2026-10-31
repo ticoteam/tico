@@ -15,6 +15,7 @@ from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
 from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
+from backend.finance.store import schema
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, account, act, books, finance_template, store)
 
@@ -99,6 +100,12 @@ def _local(c: sqlite3.Connection, ext: str, table: str) -> str:
 def _entry_of(c: sqlite3.Connection, ext: str) -> str:
     return str(c.execute("SELECT local_id FROM fin_external_refs WHERE external_id=? AND local_table='fin_entries'",
                          (ext,)).fetchone()[0])
+
+
+def _line_tags(c: sqlite3.Connection, entry: str, account: str) -> list[str]:
+    """The team tags on an entry's lines on one account."""
+    return [str(r[0]) for r in c.execute("SELECT t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id "
+                                         "WHERE l.entry_id=? AND l.account_id=? AND t.kind='team'", (entry, account))]
 
 
 def _chart(fake: FakeBooks) -> None:
@@ -1025,6 +1032,58 @@ def test_a_tag_on_a_bill_line_survives_an_amount_edit_to_the_same_provider_line(
     with books.read() as c:
         tags = [json.loads(row[0]) for row in c.execute("SELECT tags_json FROM fin_bill_lines WHERE bill_id=?", (bill,))]
         assert tags == [{"team": "eng"}]
+
+
+def test_a_tag_on_a_credit_memo_line_survives_an_amount_edit_to_the_same_provider_line(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _customer(fake)
+    fake.records["documents"] = [M.Document(M.Ext("CreditMemo", "20", "1"), party="Customer:4", number="CM-20",
+                                            day="2026-10-10", due="", total=500,
+                                            lines=(M.EntryLine("Account:3", 500, description="consulting", key="7"),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        line = c.execute("SELECT id FROM fin_lines WHERE entry_id=? AND account_id=?",
+                         (_entry_of(c, "CreditMemo:20"), account(c, "4000"))).fetchone()[0]
+        done = act(c, OWNER, "categorize", {"lines": [{"line_id": line, "tags": {"team": "web"}}]})
+        assert done.status == "committed", done
+    fake.changes = [M.Document(M.Ext("CreditMemo", "20", "2"), party="Customer:4", number="CM-20", day="2026-10-10",
+                               due="", total=600,
+                               lines=(M.EntryLine("Account:3", 600, description="consulting", key="7"),))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert _line_tags(c, _entry_of(c, "CreditMemo:20"), account(c, "4000")) == ["web"]
+
+
+def test_a_tag_on_a_journal_line_survives_an_amount_edit_to_the_same_provider_line(books):
+    fake = FakeBooks()
+    _chart(fake)
+    fake.records["entries"] = [M.Journal(M.Ext("JournalEntry", "50", "1"), "2026-10-05", "Acme Software", "sync",
+                                         (M.EntryLine("Account:2", 100, key="71"),
+                                          M.EntryLine("Account:1", -100, key="72")))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        line = c.execute("SELECT id FROM fin_lines WHERE entry_id=? AND account_id=?",
+                         (_entry_of(c, "JournalEntry:50"), _local(c, "Account:2", "fin_accounts"))).fetchone()[0]
+        done = act(c, OWNER, "categorize", {"lines": [{"line_id": line, "tags": {"team": "web"}}]})
+        assert done.status == "committed", done
+    fake.changes = [M.Journal(M.Ext("JournalEntry", "50", "2"), "2026-10-05", "Acme Software", "sync",
+                              (M.EntryLine("Account:2", 150, key="71"), M.EntryLine("Account:1", -150, key="72")))]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert _line_tags(c, _entry_of(c, "JournalEntry:50"), _local(c, "Account:2", "fin_accounts")) == ["web"]
+
+
+def test_phase_four_adds_the_line_key_to_an_install_made_before_it_and_running_it_again_changes_nothing(books):
+    with books.transaction() as c:
+        c.execute("ALTER TABLE fin_lines DROP COLUMN external_line")
+        schema.phase4(c)
+        schema.phase4(c)
+        assert "external_line" in {str(r[1]) for r in c.execute("PRAGMA table_info(fin_lines)")}
 
 
 def test_a_bill_posts_to_the_payable_account_the_provider_names(books):

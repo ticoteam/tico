@@ -51,6 +51,7 @@ class Line:
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+    external_line: str = ""  # the provider's id for the line, so its tags follow it across a revision
 
 
 NAME_MAX = 80               # a vendor name's length: names are capped to it before they are keyed, never keys after

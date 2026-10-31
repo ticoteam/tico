@@ -160,10 +160,11 @@ def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: s
         lid = new_id()
         ids.append(lid)
         c.execute("INSERT INTO fin_lines(id, entry_id, book_id, line_no, entry_date, account_id, amount, currency, "
-                  "original_amount, fx_rate, contact_id, description, role, created_at, created_by) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "original_amount, fx_rate, contact_id, description, role, external_line, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (lid, entry_id, e.book_id, n, e.entry_date, item.account_id, item.amount, item.currency,
-                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, item.role, at, by))
+                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, item.role,
+                   item.external_line, at, by))
         for kind, value in item.tags.items():
             c.execute("INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
                       (lid, kind, value, at, by))
@@ -256,7 +257,8 @@ def posted_total(c: sqlite3.Connection, entry_ids: Sequence[str], account_id: st
 def _line(r: Any, tags: Mapping[str, str]) -> Line:
     return Line(account_id=r["account_id"], amount=int(r["amount"]), currency=r["currency"],
                 original_amount=int(r["original_amount"]), fx_rate=Decimal(r["fx_rate"]), contact_id=r["contact_id"],
-                description=r["description"], tags=dict(tags), role=str(r["role"] or ""))
+                description=r["description"], tags=dict(tags), role=str(r["role"] or ""),
+                external_line=str(r["external_line"] or ""))
 
 
 def set_line_tags(c: sqlite3.Connection, row: Any, old: Mapping[str, str], new: Mapping[str, str], by: str,

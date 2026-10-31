@@ -577,6 +577,22 @@ def test_a_change_feed_answer_cut_at_its_cap_is_read_through_to_a_second_before_
     assert "entities=Invoice&" in wire.sent[0][1] or "entities=Invoice" in wire.sent[0][1]
 
 
+def test_a_journal_line_and_a_posted_line_read_to_the_other_side_keep_the_provider_line_ids():
+    journal = {"Id": "50", "SyncToken": "0", "TxnDate": "2026-10-09", "Line": [
+        {"Id": "1", "Amount": "100.00", "DetailType": "JournalEntryLineDetail",
+         "JournalEntryLineDetail": {"PostingType": "Debit", "AccountRef": {"value": "40"}}},
+        {"Id": "2", "Amount": "100.00", "DetailType": "JournalEntryLineDetail",
+         "JournalEntryLineDetail": {"PostingType": "Credit", "AccountRef": {"value": "1"}}}]}
+    sale = {"Id": "60", "SyncToken": "0", "TxnDate": "2026-10-09", "TotalAmt": "100.00",
+            "DepositToAccountRef": {"value": "1"},
+            "Line": [{"Id": "9", "Amount": "100.00", "DetailType": "AccountBasedExpenseLineDetail",
+                      "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "40"}}}]}
+    [entry] = Q.records("JournalEntry", [journal], {})
+    [posted] = Q.records("SalesReceipt", [sale], {})
+    assert sorted((x.account, x.key) for x in entry.lines) == [("Account:1", "2"), ("Account:40", "1")]
+    assert sorted((x.account, x.key) for x in posted.lines) == [("Account:1", ""), ("Account:40", "9")]
+
+
 def test_a_purchase_is_read_as_an_entry_between_its_bank_and_its_expense_account():
     row = {"Id": "50", "SyncToken": "0", "TxnDate": "2026-10-09", "TotalAmt": "100.00", "PaymentType": "Cash",
            "AccountRef": {"value": "1"}, "Line": [{"Amount": "100.00", "DetailType": "AccountBasedExpenseLineDetail",

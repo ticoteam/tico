@@ -486,6 +486,8 @@ ADDED = (
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
     ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
     ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
+    ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -545,9 +547,9 @@ def phase2(c: sqlite3.Connection) -> None:
 
 
 def phase4(c: sqlite3.Connection) -> None:
-    """Cloud migration 68: the mirror's tables and columns (external refs with their kind, revision and status, and the
-    restatements a closed month takes), on an install made before them. The same statements as `create`, which skips
-    whatever exists."""
+    """Cloud migration 68: the mirror's tables and columns (external refs with their kind, revision and status, the
+    restatements a closed month takes, and each entry line's provider id), on an install made before them. The same
+    statements as `create`, which skips whatever exists."""
     create(c)
 
 

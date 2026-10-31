@@ -348,36 +348,46 @@ def _tax_account(ctx: Ctx) -> str:
     return found.id
 
 
-def _entry_tags(c: sqlite3.Connection, entry_id: str) -> list[tuple[str, int, dict[str, str]]]:
-    """A posted entry's lines as (account, amount, tags): what the entry that replaces it carries forward."""
+Carry = tuple[str, int, str, dict[str, str]]    # a replaced line: account, amount, provider line id, tags
+
+
+def _entry_tags(c: sqlite3.Connection, entry_id: str) -> list[Carry]:
+    """A posted entry's lines as (account, amount, provider line id, tags): what the entry that replaces it carries
+    forward."""
     if not entry_id:
         return []
-    return [(line.account_id, line.amount, dict(line.tags)) for _, line in SL.entry_lines(c, entry_id)]
+    return [(line.account_id, line.amount, line.external_line, dict(line.tags))
+            for _, line in SL.entry_lines(c, entry_id)]
 
 
-def _carried(old: Sequence[tuple[str, int, dict[str, str]]], new: Sequence[tuple[str, int]]) -> list[dict[str, str]]:
-    """Each new line's tags from the replaced line on the same account for the same amount, each replaced line used once."""
+def _carried(old: Sequence[Carry], new: Sequence[tuple[str, int, str]]) -> list[dict[str, str]]:
+    """Each new line's tags: from the replaced line with the same provider line id (so an amount edit keeps them), else
+    from the replaced line on the same account and amount. Each replaced line is used once."""
     pool = list(old)
-    out: list[dict[str, str]] = []
-    for account, amount in new:
-        hit = next((x for x in pool if x[0] == account and x[1] == amount), None)
-        if hit is None:
-            out.append({})
-        else:
+    out: list[dict[str, str] | None] = [None] * len(new)
+    for i, (_, _, key) in enumerate(new):
+        hit = next((x for x in pool if key and x[2] == key), None)
+        if hit is not None:
             pool.remove(hit)
-            out.append(dict(hit[2]))
-    return out
+            out[i] = dict(hit[3])
+    for i, (account, amount, _) in enumerate(new):
+        if out[i] is None:
+            hit = next((x for x in pool if x[0] == account and x[1] == amount), None)
+            if hit is not None:
+                pool.remove(hit)
+                out[i] = dict(hit[3])
+    return [mark or {} for mark in out]
 
 
-def _entry(c: sqlite3.Connection, cid: str, ctx: Ctx, j: M.Journal, day: str,
-           old: Sequence[tuple[str, int, dict[str, str]]] = ()) -> L.Entry:
-    """A provider entry as the books post it. A replaced entry's tags carry to the lines on the same account and amount."""
+def _entry(c: sqlite3.Connection, cid: str, ctx: Ctx, j: M.Journal, day: str, old: Sequence[Carry] = ()) -> L.Entry:
+    """A provider entry as the books post it. A replaced entry's tags carry to the lines with the same provider line id,
+    else to the lines on the same account and amount."""
     accounts = [_account_of(c, cid, ctx, x.account) for x in j.lines]
-    tags = _carried(old, [(account, x.amount) for account, x in zip(accounts, j.lines, strict=True)])
+    tags = _carried(old, [(account, x.amount, x.key) for account, x in zip(accounts, j.lines, strict=True)])
     lines = tuple(L.Line(account_id=account, amount=x.amount, currency=ctx.book.base_currency,
                          original_amount=x.amount, fx_rate=Decimal(1),
                          contact_id=_mapped(c, cid, "fin_contacts", x.party) if x.party else "",
-                         description=x.description, tags=mark)
+                         description=x.description, tags=mark, external_line=x.key)
                   for account, x, mark in zip(accounts, j.lines, tags, strict=True))
     return L.Entry(book_id=ctx.book.id, entry_date=day, memo=j.memo,
                    source=j.source if j.source in L.SOURCES else "sync",
@@ -555,16 +565,23 @@ def _doc_lines(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document) -> list
     return rows
 
 
+def _line_keys(d: M.Document) -> list[str]:
+    """The provider's line id for each row `_doc_lines` makes: the lines, then the tax line, which has none."""
+    return [x.key for x in d.lines] + ([""] if d.tax else [])
+
+
 def _doc_entry(ctx: Ctx, *, control_kind: str, sign: int, source: str, source_id: str, contact: str,
                rows: Sequence[tuple[str, int, str]], memo: str, day: str,
-               tags: Sequence[Mapping[str, str]] = (), control_id: str = "") -> L.Entry:
+               tags: Sequence[Mapping[str, str]] = (), control_id: str = "", keys: Sequence[str] = ()) -> L.Entry:
     """A document's entry: its lines (sign +1 debits, -1 credits) against its control account for the same total. Each
-    line carries the tags given for it (`tags` lines up with `rows`)."""
+    line carries the tags given for it (`tags` lines up with `rows`) and the provider's id for it (`keys`)."""
     base = ctx.book.base_currency
     marks = list(tags) or [{} for _ in rows]
+    ids = list(keys) or [""] * len(rows)
     lines = [L.Line(account_id=account, amount=sign * amount, currency=base, original_amount=sign * amount,
-                    fx_rate=Decimal(1), contact_id=contact, description=description[:200], tags=dict(mark))
-             for (account, amount, description), mark in zip(rows, marks, strict=True)]
+                    fx_rate=Decimal(1), contact_id=contact, description=description[:200], tags=dict(mark),
+                    external_line=key)
+             for (account, amount, description), mark, key in zip(rows, marks, ids, strict=True)]
     total = sum(amount for _, amount, _ in rows)
     control = control_id or documents.control(ctx, control_kind).id
     lines.append(L.Line(account_id=control, amount=-sign * total, currency=base, original_amount=-sign * total,
@@ -602,7 +619,7 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
     _currency(ctx, d.currency)
     contact = _mapped(c, cid, "fin_contacts", d.party)
     rows = _doc_lines(c, ctx, cid, d)
-    keys = [x.key for x in d.lines] + ([""] if d.tax else [])
+    keys = _line_keys(d)
     _write_document(c, ctx, cid, d, verdict, row, contact, rows, at, keys=keys)
 
 
@@ -641,7 +658,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
     new_entry = _book(c, ctx, cid, d.ext, verdict, old_entry, d.day,
                       lambda when: _doc_entry(ctx, control_kind=kind, sign=sign, source=kind, source_id=local,
                                               contact=contact, rows=rows, memo=_doc_label(d), day=when,
-                                              tags=line_tags, control_id=control), at)
+                                              tags=line_tags, control_id=control, keys=keys), at)
     SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
     for s in settled:
         documents.settle(ctx, kind, local, amount=int(s["amount"]), day=str(s["settled_on"]),
@@ -664,13 +681,16 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
     _currency(ctx, d.currency)
     contact = _mapped(c, cid, "fin_contacts", d.party)
     rows = _doc_lines(c, ctx, cid, d)
+    keys = _line_keys(d)
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
-    carry = _carried(_entry_tags(c, old), [(account, amount) for account, amount, _ in rows])
+    carry = _carried(_entry_tags(c, old),
+                     [(account, sign * amount, key) for (account, amount, _), key in zip(rows, keys, strict=True)])
     control = _mapped(c, cid, "fin_accounts", d.control) if d.control else ""
     new_id = _book(c, ctx, cid, d.ext, verdict, old, d.day,
                    lambda when: _doc_entry(ctx, control_kind=side, sign=sign, source=side,
                                            source_id=f"{d.ext.key}:{d.ext.revision}", contact=contact, rows=rows,
-                                           memo=_doc_label(d), day=when, tags=carry, control_id=control), at)
+                                           memo=_doc_label(d), day=when, tags=carry, control_id=control,
+                                           keys=keys), at)
     if old:
         SAP.repoint_credit(c, old, new_id)      # the applications this memo made still point at it, now re-posted
         _move_refunds(c, ctx, old, new_id)
@@ -722,8 +742,9 @@ def _carry_lines(c: sqlite3.Connection, kind: str, doc_id: str, old_entry: str, 
     its tags), else from the replaced entry's line on the same account and amount."""
     by_key = {str(x["external_line"]): dict(SK.loads(x["tags_json"])) for x in SAP.lines(c, kind, [doc_id])[doc_id]
               if x["external_line"]}
-    fallback = _carried(_entry_tags(c, old_entry), [(account, sign * amount) for account, amount, _ in rows])
     marks = list(keys) or [""] * len(rows)
+    fallback = _carried(_entry_tags(c, old_entry),
+                        [(account, sign * amount, key) for (account, amount, _), key in zip(rows, marks, strict=True)])
     return [by_key[key] if key and key in by_key else mark for key, mark in zip(marks, fallback, strict=True)]
 
 
