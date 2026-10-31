@@ -807,3 +807,67 @@ def test_counsel_still_completes_its_own_attempt(api):
     identity = Identity("bot:counsel", "bot", attempt_id=attempt["id"])
     assert counsel.refused(api.app.state.store, identity, f"/api/v2/attempts/{attempt['id']}/complete", "POST") is False
     assert counsel.refused(api.app.state.store, identity, "/api/v2/runners/heartbeat", "POST") is False
+
+
+def task_state(api, task_id):
+    with api.app.state.store.read() as c:
+        return dict(c.execute("SELECT status, private FROM tasks WHERE id=?", (task_id,)).fetchone())
+
+
+def counsel_run(api):
+    """Counsel's runner claims its next job: the run on the read task a person just opened. Its token is the run's own,
+    so every call it makes goes through the API's private-run guard (backend/task_privacy.py guard_write)."""
+    from backend.tests.test_api import assign, claim, ready, runner
+    r = runner(api, "ana")
+    assign(api, r, "counsel")
+    ready(api, r, ["counsel"])
+    attempt = claim(api, r)
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
+    return r, attempt
+
+
+def test_counsel_suggests_from_its_private_read_run_and_publishes_nothing_else(api):
+    org(api)
+    counsel_on(api)
+    file_id, version = store_file(api, CONTRACT)
+    read = read_document(api, file_id)
+    other_source = source(api, name="Globex", kind="customer")
+    assert task_state(api, read["task_id"])["private"]
+    r, attempt = counsel_run(api)
+    def run():
+        return headers(attempt["token"])
+    cite = {"file_id": file_id, "version": version, "section": "4. Messaging",
+            "quote": "Keep a record of each consent for five years."}
+    rule = {"kind": "external", "text": "Keep a consent record for five years.", "source_id": "Acme Vendor", "cite": cite}
+    made = api.post("/api/v2/rules", headers=run(), json=rule)
+    assert made.status_code == 200, made.text
+    assert made.json()["status"] == "suggested" and made.json()["cite"]["quote"] == cite["quote"]
+    # Only that: a rule with no cite, another version, another From, an internal rule, a new From or an edit is refused.
+    for body in ({**rule, "cite": None}, {**rule, "cite": {**cite, "version": version + 1}},
+                 {**rule, "source_id": other_source}, {"kind": "internal", "text": "Keep consent records."}):
+        refused = api.post("/api/v2/rules", headers=run(), json=body)
+        assert refused.status_code == 403, (body, refused.text)
+    assert api.post("/api/v2/rule-sources", headers=run(), json={"name": "Initech", "kind": "vendor"}).status_code == 403
+    edit = api.post(f"/api/v2/rules/{made.json()['id']}", headers=run(), json={"version": 1, "text": "Changed."})
+    assert edit.status_code == 403, edit.text
+    # Its note goes on its own task, which stays private.
+    note = api.post(f"/api/v2/tasks/{read['task_id']}/comments", headers=run(),
+                    json={"text": "read, nothing else for us"})
+    assert note.status_code < 300, note.text
+
+
+def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_not(api):
+    org(api)
+    counsel_on(api)
+    first = read_document(api, store_file(api, CONTRACT)[0])
+    r, attempt = counsel_run(api)
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0,
+         "text": "Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."}, token=r["token"])
+    assert task_state(api, first["task_id"])["status"] == "done"
+    # A failed run leaves its read task to the normal retry.
+    second = read_document(api, store_file(api, CONTRACT, title="Globex Terms")[0])
+    attempt = post(api, "jobs/claim", {"bot": "counsel", "start_places": True}, token=r["token"])["attempt"]
+    post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
+    post(api, f"attempts/{attempt['id']}/complete", {"outcome": "failed", "text": "Model error.", "last_seq": 0},
+         token=r["token"])
+    assert task_state(api, second["task_id"])["status"] in ("open", "doing")

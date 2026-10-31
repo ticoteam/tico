@@ -1032,6 +1032,10 @@ def guard_write(c, who, path, auth):
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
+    if path == "/api/v2/rules":
+        from . import counsel
+        if counsel.run_read(c, who):
+            return          # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 
