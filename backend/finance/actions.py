@@ -323,18 +323,21 @@ def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
     return ""
 
 
-def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str) -> ActionResult:
+def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str,
+           fit_budget: str = "") -> ActionResult:
     """End a waiting action: it releases any hold it reserved, and the key's result is final (ask again with a new
     key)."""
     action_id = str(row["id"])
     budgeting.release_for(ctx, "action", action_id)
     payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
-    SX.finish(ctx.c, action_id, status=status, result={}, code=code, reason=reason, at=ctx.at)
+    SX.finish(ctx.c, action_id, status=status, result={"fit": {"budget_id": fit_budget}} if fit_budget else {},
+              code=code, reason=FIT_REASON if fit_budget else reason, at=ctx.at)
     if str(row["kind"]) == "payment_create":     # a scheduled bill that asked for it is open again, and says why
         documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload_json"] or "{}")), status, reason)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
-    return _stored(SX.by_id(ctx.c, action_id))
+    out = _stored(SX.by_id(ctx.c, action_id))
+    return replace(out, reason=reason) if fit_budget else out
 
 
 def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]:
@@ -388,6 +391,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
     mark = _savepoint(c, "fin_decide")
     try:
+        ctx.deciding = True
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _approver(ctx, gate, p.who)
         if now_to and now_to != row["approval_to"]:
@@ -404,7 +408,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         _rollback(c, "fin_decide", mark)
         if isinstance(e, gating.Denied):
             gating.logged_denial(ctx, e, str(row["id"]))
-        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
+        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.fit_budget)
     except (sqlite3.IntegrityError, tico.Refused) as e:
         _rollback(c, "fin_decide", mark)
         return _close(ctx, row, "failed", "failed", str(e)[:300])
@@ -416,10 +420,11 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
 def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object]) -> ActionResult:
     """The approved payload is not the one about to run: that approval is void for this action, and the right person
     is asked again for the real one."""
+    ctx.deciding = True
     try:
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
     except FinanceError as e:
-        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
+        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.fit_budget)
     try:
         approver = _approver(ctx, gate, p.who) or ctx.org.owner
     except FinanceError as e:

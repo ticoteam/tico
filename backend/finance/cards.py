@@ -330,7 +330,7 @@ def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     amount = V.amount(p)
     if amount <= 0:
         raise invalid("a card's monthly limit is more than 0; freeze or cancel it instead")
-    check_lower(ctx, card, amount)
+    check_lower(ctx, card, amount, who)
     alloc = handlers.allocation_plan(ctx, who, {"budget_id": str(card["budget_id"]), "target_kind": "card",
                                                 "target_id": str(card["id"]), "amount": amount})
 
@@ -395,11 +395,24 @@ def _state(kind: str) -> handlers.Planner:
     return planner
 
 
-def check_lower(ctx: Ctx, card: Any, amount: int) -> None:
-    """A card's limit can't go below what it has already used this period (holds and settled spend)."""
+def check_lower(ctx: Ctx, card: Any, amount: int, who: str = "") -> None:
+    """A card's limit can't go below what it has already used this period (holds and settled spend). The figure is
+    named only where `who`'s own figure for the card is the true one."""
     have = used(ctx, card)
     if 0 < amount < have:
+        if who and figure_hidden(ctx, who, card):
+            raise invalid("the card has used more than that this period; its limit can't go below that")
         raise invalid(f"the card has used {have / 100:.2f} this period; its limit can't go below that")
+
+
+def figure_hidden(ctx: Ctx, who: str, card: Any) -> bool:
+    """Whether `who`'s figure for the card's spend differs from the true one (a settled private part is netted out)."""
+    from .budgeting import Netted, period_window, settled_used, subtree
+    bid = str(card["budget_id"] or "")
+    start, end = period_window(ctx, bid)
+    netted = Netted(ctx.view(who))
+    settled_used(ctx, netted, subtree(ctx, bid), start, end, f"card:{card['id']}", absorbed=True)
+    return netted.excluded
 
 
 def limit_follows(ctx: Ctx, card_id: str, amount: int, aid: str, by: str, lowered: bool) -> None:

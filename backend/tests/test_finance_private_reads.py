@@ -319,8 +319,8 @@ def test_a_gateway_key_allocation_never_recovers_a_settled_payroll_charge_for_a_
 
 def test_an_allocation_refusal_states_a_budget_figure_only_when_the_viewer_sees_that_figure(books):
     """Other expenses has 6,000 left for the owner (the October debit counts) and 10,000 for a viewer without payroll
-    detail. Setting aside 8,000 is refused on the owner's figure for everyone, but the viewer is told only that it does
-    not fit in Other expenses, never the 6,000 they cannot check."""
+    detail. Setting aside 8,000 is refused on the owner's figure. The viewer's figures differ from the true ones, so
+    their request goes to approval whatever the amount: the outcome never tells them the 6,000 they cannot check."""
     connect(books, FakeMercury())
     with books.transaction() as c:
         budget_id = _other_budget(c, at=AT)
@@ -329,7 +329,7 @@ def test_an_allocation_refusal_states_a_budget_figure_only_when_the_viewer_sees_
         owner = act(c, OWNER, "allocation_set", ask, at=AT)
         gus = act(c, "human:gus", "allocation_set", ask, at=AT)
     assert (owner.code, owner.reason) == ("invalid", "it does not fit: Other expenses has 6000 left")
-    assert (gus.code, gus.reason) == ("invalid", "it does not fit in Other expenses")
+    assert gus.status == "needs_approval", gus
 
 
 def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder: str) -> None:
@@ -413,3 +413,40 @@ def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll
         assert mine["accounts"] == theirs["accounts"]
         assert set(mine) == set(theirs)
         assert "Payroll" not in repr(mine) and "Acme Payroll" not in repr(mine) and "PR-7" not in repr(mine)
+
+
+def test_a_card_limit_refusal_names_the_card_figure_only_where_the_reader_sees_it(books):
+    """The holder's October charge paid a private payroll bill in November, so the owner's figure for the card is 4,000
+    and the holder's is 0. Lowering the limit below what the card used is refused with the figure only for the owner;
+    the holder's allocation on the card asks for approval instead of refusing with a figure."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus")
+    with books.transaction() as c:
+        card_id, budget_id = (str(x) for x in c.execute(
+            "SELECT id, budget_id FROM fin_cards WHERE holder='human:gus'").fetchone())
+        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"}, at=OCT_END).status == \
+            "committed"
+        owner = act(c, OWNER, "card_update_limit", {"card_id": card_id, "amount": 1_000}, at=OCT_END)
+        held = act(c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 1_000}, at=OCT_END)
+        asked = act(c, "human:gus", "allocation_set", {"budget_id": budget_id, "target_kind": "card",
+                                                       "target_id": card_id, "amount": 1_000}, at=OCT_END)
+    assert "40.00" in owner.reason, owner
+    assert "40.00" not in held.reason, held
+    assert asked.status == "needs_approval" and "40.00" not in asked.reason, asked
+
+
+def test_a_pnl_grantee_gets_one_outcome_for_every_set_aside_amount(books):
+    """A P&L grantee without payroll detail dry-runs set-asides on a budget whose October debit a November payroll bill
+    paid. Their figure is not the true one, so every amount gets the same outcome: the approver decides it on the true
+    figures. The amounts either side of the true remaining must not tell the 4,000 apart."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
+        outcomes = {amount: act(c, "human:gus", "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
+                                                                   "target_id": "gw-1", "amount": amount},
+                                f"dry-{amount}", dry_run=True, at=AT).status
+                    for amount in (3_000, 9_000, 9_001, 12_000)}
+    assert set(outcomes.values()) == {"needs_approval"}, outcomes

@@ -2,6 +2,7 @@
 payload voids and asks again, decline denies, a withdrawn or expired approval ends the action)."""
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
@@ -187,3 +188,21 @@ def test_the_bot_gate_counts_the_whole_entry(books):
                                                  {"account_id": account(c, "1000"), "amount": -300_000},
                                                  {"account_id": account(c, "2000"), "amount": -300_000}]}
         assert act(c, "bot:coder", "journal", split).status == "needs_approval"
+
+
+def test_an_approval_that_no_longer_fits_stores_no_figure(books):
+    """A set-aside a teammate without finance.budgets asks for is decided when its manager approves. If the budget was
+    cut meanwhile, the refusal is stored without the figure; the owner reads the figure from the budget's name."""
+    with books.transaction() as c:
+        parent = _software(c)
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "pnl"}, "coder-view").status == "committed"
+        asked = act(c, "bot:coder", "allocation_set", {"budget_id": parent, "target_kind": "teammate",
+                                                       "target_id": "bot:coder", "amount": 5_000}, "coder-set")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:cara"), asked
+        assert act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 1_000}, "cut").status == "committed"
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status in ("failed", "denied") and done.code == "invalid", done
+        stored = FA.action(c, str(asked.action_id)).reason
+        assert not any(ch.isdigit() for ch in stored), stored
+        assert "Software" in FR.action_for(c, OWNER, asked.action_id)["reason"]

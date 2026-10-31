@@ -2,6 +2,7 @@
 asker's view, and returns a Plan: the default gate it meets, its budget impact, and the write to run when it commits.
 Planning writes nothing, so a dry run and an approval's re-check run the same code as the real thing."""
 from collections.abc import Callable, Mapping
+from typing import Any
 from dataclasses import dataclass, field, replace
 
 from . import budgeting, posting
@@ -464,12 +465,34 @@ def fit_reason(ctx: Ctx, who: str, budget_id: str, approver: bool = False) -> st
     return f"it does not fit: {b.name} has {true} left"
 
 
+def _route(ctx: Ctx, who: str, budget_id: str, card: Any = None) -> str:
+    """How an allocation the actor asks for is decided. Where their figure for the budget or a parent (or, for a card,
+    its own spend) is the true one, "" (decided here, as before). Where it is not, the amount must not tell them the
+    difference, so every amount gets one outcome: "hidden" (an approver decides on the true figures) or "request" (they
+    lack finance.budgets, so the gate sends it to their manager)."""
+    b = ctx.budgets().get(budget_id)
+    if b is None or ctx.deciding:
+        return ""
+    day = dates.day(ctx.today)
+    from .cards import figure_hidden
+    hidden = card is not None and figure_hidden(ctx, who, card)
+    for one in B.chain(ctx.budgets(), b.id) if not hidden else ():
+        true = budgeting.state(ctx, one.id, day).remaining
+        if budgeting.state(ctx, one.id, day, read=budgeting.Netted(ctx.view(who))).remaining != true:
+            hidden = True
+            break
+    if not hidden:
+        return ""
+    return "request" if K.authority(ctx.org, who, "allocation_set", ctx.rights(who)) is not None else "hidden"
+
+
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set aside part of a budget for one card, Gateway key or teammate. It must fit what the budget and every parent
     have left; 0 ends it. A card's allocation is on the card's own budget, by someone who sees the card."""
     V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
+    card = None
     if p.get("target_kind") == "card":
-        from .cards import check_lower, sees as sees_card
+        from .cards import sees as sees_card
         card = SK.get(ctx.c, "fin_cards", V.text(p, "target_id", 120))
         if card is None or not sees_card(ctx, who, card):
             raise FinanceError(NOT_FOUND, "no such card")
@@ -477,11 +500,14 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             raise invalid("a card's allocation is on its own budget")
         if str(card["status"]) == "cancelled":
             raise FinanceError(CONFLICT, "that card is cancelled")
-        check_lower(ctx, card, V.amount(p))
-    return allocation_plan(ctx, who, p)
+    route = _route(ctx, who, str(p.get("budget_id") or ""), card)
+    if card is not None and not route:
+        from .cards import check_lower
+        check_lower(ctx, card, V.amount(p), who)
+    return allocation_plan(ctx, who, p, route)
 
 
-def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     """The allocation itself (card_create and card_update_limit come here with their own card checks). A card's lower
     allocation keeps the old reservation until Mercury confirms the lower limit (cards.limit_follows)."""
     V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
@@ -496,7 +522,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     row = SB.allocation(ctx.c, b.id, kind, target)
     grow = amount - (int(row["amount"]) if row else 0)
     at = dates.day(ctx.today)
-    if grow > 0:
+    if grow > 0 and route not in ("hidden", "request"):
         for one in B.chain(ctx.budgets(), b.id):
             s = budgeting.state(ctx, one.id, at)
             if s.remaining is not None and grow > s.remaining:
@@ -511,8 +537,9 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             from .cards import limit_follows          # a card's provider limit is its allocation (§8.2)
             limit_follows(ctx, target, amount, aid, who, lowered)
         return {"allocation_id": made}
-    return Plan(K.default_gate(ctx.org, who, "allocation_set"), f"Set aside {amount / 100:.2f} of {b.name} for "
-                f"{kind} {target}", apply)
+    gate = K.Gate("needs_approval", "owner", "default:figures-hidden") if route == "hidden" else \
+        K.default_gate(ctx.org, who, "allocation_set")
+    return Plan(gate, f"Set aside {amount / 100:.2f} of {b.name} for {kind} {target}", apply)
 
 
 def projection_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
