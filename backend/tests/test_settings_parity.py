@@ -11,7 +11,7 @@ from contextlib import closing
 
 import pytest
 
-from backend import settings_catalog
+from backend import providers, settings_catalog
 from backend.settings_entries import ENTRIES
 from backend.store import H
 from backend.tests.test_api import api, get, post, runner  # noqa: F401  (fixture)
@@ -50,7 +50,9 @@ SAMPLES = {
     "bot.access": {"see": {"everyone": True}, "read": {"everyone": True}, "write": {"everyone": False, "people": ["ana"]},
                    "revision": 1},
     "team.budget": {"turns_per_hour": 10},
-    "models.providers": {"enabled": ["openai"]},
+    # Both providers stay on (saving the subscription in _objects turned Anthropic on, and turning it off would be
+    # refused), at the revision _objects read.
+    "models.providers": lambda o: {"enabled": ["openai", "anthropic"], "expected_revision": o.get("providers-revision", 0)},
     "bot.profile": {"description": "Keeps the books."},
     "bot.repositories": {"mode": "chosen", "chosen": [{"full_name": "Acme/product", "access": "write",
                                                         "run_workflows": True}]},
@@ -71,6 +73,9 @@ SAMPLES = {
     "inbound.inbox.create": {"bot": "finance"},
     "inbound.inbox": {"enabled": True},
     "inbound.phone_request.cancel": {},
+    # A computer given the subscription `_objects` made for it (a real computer and a real subscription, no run to stop).
+    "models.computer_subscription": lambda o: {"runner_id": o.get("computers", ""), "runtime": "claude",
+                                              "subscription": o.get("model-subscriptions", ""), "confirm": False},
 }
 # Routes whose request body this synthetic fixture can't yet satisfy: the rights a direct entry claims are not proven
 # for them here. The test fails when one of these runs after all (take it out) or a new one turns up (fix the sample).
@@ -109,9 +114,10 @@ KNOWN_GAPS = {
 }
 
 
-def _sample(e):
+def _sample(e, objects=None):
     if e.key in SAMPLES:
-        return SAMPLES[e.key]
+        value = SAMPLES[e.key]
+        return value(objects or {}) if callable(value) else value
     return {"bool": True, "int": 1, "number": 1, "text": "x", "list": "x", "json": {}}.get(
         e.value.split(":")[0], e.value.split(":", 1)[-1].split("|")[0])
 
@@ -142,7 +148,20 @@ def _objects(api, machine):
     found["settings/transitions"] = "tr-parity"
     found["system-routines"] = system[0] if system else "daily_update"
     found["computers"] = machine["runner_id"]
+    with api.app.state.store.read() as c:
+        found["providers-revision"] = providers.load(c, api.app.state.store.settings)["revision"]
     return found
+
+
+def _saved_subscription(api, objects):
+    """A saved subscription for the remove and give entries (a pasted key, synthetic, sealed in the test vault). Made
+    when the first such entry is asked, not in `_objects`: a saved login makes the Assistant's turn place the helper
+    bots on the computer, and the entries before it are asked with the fixture as it was."""
+    if "model-subscriptions" not in objects:
+        made = post(api, "model-subscriptions", {"kind": "anthropic_key", "name": "Parity key",
+                                                 "secret": "sk-ant-parity-synthetic-0000"}, "ana-test")
+        objects["model-subscriptions"] = made["id"]
+    return objects["model-subscriptions"]
 
 
 def _target(e, objects, person):
@@ -204,8 +223,10 @@ def ask(api, attempt, e, objects, person, token):
     """`hub settings set` as BotOps does it for the person: the plan, then the request the plan says to make. A card,
     from the plan or from the route, is tapped as the person (`tapped`): a catalogue card never reaches the route
     until then, so this is where the route says whether that person may."""
+    if e.route.startswith("model-subscriptions/") or e.route == "computer-subscriptions":
+        _saved_subscription(api, objects)
     target = _target(e, objects, person)
-    planned = act(api, attempt, "POST", f"settings/catalog/{e.key}/plan", {"value": _sample(e), **target})
+    planned = act(api, attempt, "POST", f"settings/catalog/{e.key}/plan", {"value": _sample(e, objects), **target})
     if planned.status_code == 200 and "run" in planned.json():
         run = planned.json()["run"]
         planned = act(api, attempt, run["method"], run["path"], run["body"])

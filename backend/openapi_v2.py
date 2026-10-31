@@ -1928,6 +1928,38 @@ SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bo
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
                         'name': 's', 'group': 's'}, required=['place', 'kind', 'saved', 'can_edit', 'pins'])
 
+# Settings > Models: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
+TAGS['Model subscriptions'] = ("The company's saved model logins and keys, given to computers per runtime. A value is "
+                               "sent only to add or reconnect one; no answer carries it.")
+STABLE.extend([
+    ('/api/v2/model-subscriptions', 'get', 'Model subscriptions', 'listModelSubscriptions', 'Saved subscriptions and the kinds that can be added', 'ModelSubscriptionList'),
+    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name and the pasted value (owners and admins)', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'delete', 'Model subscriptions', 'removeModelSubscription', 'Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`', 'ModelSubscriptionDeleted'),
+    ('/api/v2/computer-subscriptions', 'get', 'Model subscriptions', 'listComputerSubscriptions', 'Which subscription each computer uses per runtime, and the computers that can take one', 'ComputerSubscriptionList'),
+    ('/api/v2/computer-subscriptions', 'put', 'Model subscriptions', 'setComputerSubscription', 'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true', 'ComputerSubscriptionResult'),
+])
+_SUB_KIND = {"enum": ["claude_token", "codex_login", "anthropic_key", "openai_key"]}
+SCHEMAS['ModelSubscription'] = obj({
+    'id': 's', 'name': 's', 'kind': _SUB_KIND, 'runtime': {'enum': ['claude', 'codex']}, 'label': 's',
+    'status': {'enum': ['new', 'working', 'needs_reconnect']}, 'status_detail': 's', 'status_at': 'n', 'preview': 's',
+    'revision': 'i', 'computers': items({'type': 'string'}),
+    'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
+                             'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
+                        {'type': 'null'}]},
+    'added_by': 's', 'added_by_name': 's', 'created': 's', 'updated': 's'},
+    required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
+              'computers', 'usage', 'added_by', 'added_by_name', 'created', 'updated'])
+SCHEMAS['ModelSubscriptionList'] = obj({
+    'subscriptions': items(ref('ModelSubscription')),
+    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
+SCHEMAS['ModelSubscriptionDeleted'] = obj({'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'})
+SCHEMAS['ComputerSubscriptionList'] = obj({
+    'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
+    'capable': items({'type': 'string'})})
+SCHEMAS['ComputerSubscriptionResult'] = obj({
+    'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
+
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "
     "never removed or renamed, and a breaking change is a new /api/v3. Routes not listed are internal. "

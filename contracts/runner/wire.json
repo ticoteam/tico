@@ -16,7 +16,8 @@
   "error": "ErrorEnvelope",
   "gated": {
     "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
-    "heartbeat.request.capabilities[]=\"private_lanes_v1\"": "runner-rs lanes::refused_field drops it on the 422 that refuses it and sends it again ten minutes later"
+    "heartbeat.request.capabilities[]=\"private_lanes_v1\"": "runner-rs lanes::refused_field drops it on the 422 that refuses it and sends it again ten minutes later",
+    "heartbeat.request.capabilities[]=\"model_subscriptions_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes"
   },
   "$defs": {
     "ErrorEnvelope": {
@@ -97,6 +98,7 @@
         "credential_vault": {"type": "boolean"},
         "gateway": {"type": "boolean"},
         "continue_thread": {"type": "string"},
+        "subscriptions": {"type": "array", "x-note": "The company subscriptions this turn signs in with (its computer's, per runtime) (backend/model_subscriptions.py hand_out): ids and kinds, never values, which the run reads from credential-runtime. Only to a runner with model_subscriptions_v1; absent when none.", "items": {"type": "object", "additionalProperties": true}},
         "source_continuation": {"type": "object", "additionalProperties": true},
         "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},

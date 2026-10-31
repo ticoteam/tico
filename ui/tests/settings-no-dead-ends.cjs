@@ -97,12 +97,12 @@ const address = page => page.evaluate(() => location.hash);
       await go(page, '#/settings/gateway');
       assert.equal(await selected(page), 'gateway');
       await go(page, '#/settings/models');
-      assert.equal(await selected(page), 'devices');
-      await page.locator('#settings-models').waitFor();
+      assert.equal(await selected(page), 'models');
+      await page.locator('#settings-models [data-gateway-advanced] > summary').click();
       await page.locator('#settings-models a[href="#/settings/gateway"]').click();
       await page.waitForFunction(() => location.hash === '#/settings/gateway' && SETTINGS_TAB === 'gateway');
       await page.locator('[data-gateway-key-link]').click();
-      await page.waitForFunction(() => location.hash === '#/settings/devices' && SETTINGS_TAB === 'devices');
+      await page.waitForFunction(() => location.hash === '#/settings/models' && SETTINGS_TAB === 'models');
       await page.waitForFunction(() => { const r = document.querySelector('#settings-models')?.getBoundingClientRect(); return r && r.top < innerHeight && r.bottom > 0; });
 
       // A Settings address survives a refresh in a new tab: the address, not the last tab, decides.
@@ -127,8 +127,10 @@ const address = page => page.evaluate(() => location.hash);
       await page.locator('#settings-tabs [data-settings-tab=bots][aria-selected=true]').waitFor();
       assert.equal(await address(page), '#/settings/bots', 'a reload reopens the same tab');
       // Other names and sections show the address of the tab they open.
-      await go(page, '#/settings/models');
-      assert.equal(await address(page), '#/settings/devices');
+      await go(page, '#/settings/providers');
+      assert.equal(await address(page), '#/settings/models');
+      await go(page, '#/settings/devices/settings-models');
+      assert.equal(await address(page), '#/settings/models', 'the old Models card on Computers opens Models');
       await go(page, '#/settings/computers');
       assert.equal(await address(page), '#/settings/devices');
       // The old Rules and Routines addresses open System, and a redraw keeps Settings and the tab.

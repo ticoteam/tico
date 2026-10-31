@@ -23,7 +23,6 @@ function settingsBotEditorRows(e) {
     ${budgetRowHTML(e)}
     ${e.agent ? `<div class="sb-row"><span>Computer</span>${settingsAgentCell(e)}</div>${settingsAppDeliveryRow(e)}`
       : `<div class="sb-row"><span>Model</span>${settingsChoiceCombo(e, 'model')}<span></span></div>
-    <div class="sb-sub" data-bot-sub-line hidden></div>
     ${settingsCompactRow(e)}
     <div class="sb-row"><span>Fallback</span>${settingsChoiceCombo(e, 'fallback')}<span></span></div>
     <div class="sb-row"><span>Task model</span><div>${settingsChoiceCombo(e, 'task')}${settingsTaskWarning(e)}</div><span></span></div>
@@ -234,7 +233,7 @@ function settingsEditBot(slug = '', inline = false) {
   };
   const stage = (key, label, run) => { if (run) pending.set(key, {label, run}); else pending.delete(key); paintPending(); };
   if (rows) {
-    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void subsBotMount(rows, slug); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending(); };
+    const paint = () => { rows.innerHTML = settingsBotEditorRows(S.emps.find(row => row.name === slug) || e); rows.querySelectorAll('[data-choice-apply]').forEach(button => button.remove()); settingsWireCombos(rows); void settingsMailSummary(rows, slug); void budgetMount(rows, slug, stage); void profileMount(rows, slug); void cloudMachineMount(rows, slug); paintPending(); };
     const refresh = () => { if (!active() || !form.isConnected) { cleanup(); return; } if (pendingNames().length) return; if (touched) rev = (S.emps.find(row => row.name === slug) || e).revision; paint(); };
     paint();
     document.addEventListener('tico:settings-loaded', refresh);
