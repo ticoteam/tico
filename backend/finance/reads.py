@@ -78,7 +78,40 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
                 continue
             out.append(VW.Cell(account_id=r["account_id"], day=r["day"], team=r["team"], teammate=r["teammate"],
                                vendor=_vendor(s, vendors, str(r["vendor"])), amount=int(r["amount"])))
-    return out
+    return _without_settled(s, vendors, out, tab.settled_lines(s.ctx, s.view, a, z, plain, basis))
+
+
+def _without_settled(s: _Seen, vendors: dict[str, str], cells: list[VW.Cell], lines: list[Any]) -> list[VW.Cell]:
+    """Takes the lines of settled private payroll entries out of the cells they sit in, before any total or breakdown is
+    built, so their amounts reach no read: not the total, a by-vendor row, the P&L or a spend report. A cell that nets
+    to nothing is dropped by suppression, and the cells marked linked make the totals say "excl. payroll"."""
+    if not lines:
+        return cells
+    tags = SL.line_tags(s.ctx.c, [str(r["id"]) for r in lines])
+    removed: dict[tuple[str, str, str, str, str], int] = {}
+    for r in lines:
+        account = s.ctx.accounts.get(r["account_id"])
+        mine = tags.get(str(r["id"]), {})
+        team, teammate = mine.get("team", ""), mine.get("teammate", "")
+        if account is None or not s.view.sees(account, {"team": team, "teammate": teammate}):
+            continue
+        key = (str(r["account_id"]), str(r["entry_date"]), team, teammate,
+               _vendor(s, vendors, str(r["contact_id"] or "")))
+        removed[key] = removed.get(key, 0) + int(r["amount"])
+    if not removed:
+        return cells
+    kept: list[VW.Cell] = []
+    left: dict[tuple[str, str, str, str, str], int] = {}
+    for cell in cells:
+        key = (cell.account_id, cell.day, cell.team, cell.teammate, cell.vendor)
+        if key in removed:
+            left[key] = left.get(key, 0) + cell.amount
+        else:
+            kept.append(cell)
+    for (account_id, day, team, teammate, vendor), amount in removed.items():
+        kept.append(VW.Cell(account_id=account_id, day=day, team=team, teammate=teammate, vendor=vendor,
+                            amount=left.get((account_id, day, team, teammate, vendor), 0) - amount, linked=True))
+    return kept
 
 
 def _vendor(s: _Seen, seen: dict[str, str], key: str) -> str:

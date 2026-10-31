@@ -5,6 +5,7 @@ import base64
 import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
+from datetime import date
 from typing import Any, cast
 
 from .context import Ctx, load
@@ -220,9 +221,10 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
                 bills.setdefault(fid, []).append(str(pay["obligation"]).removeprefix("bill:"))
         if fid in out:
             continue
-        # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share).
-        found = [*SAP.settlements_from(ctx.c, "feed", fid),
-                 *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"])) if r["entry_id"] else [])]
+        # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share). Voided
+        # settlements count: reversing a "Pays bill" entry must not make its row's amounts visible again.
+        found = [*SAP.settlements_from(ctx.c, "feed", fid, voided=True),
+                 *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"]), voided=True) if r["entry_id"] else [])]
         got = [str(s["to_id"]) for s in found if s["to_kind"] == "bill"]
         if got:
             bills.setdefault(fid, []).extend(got)
@@ -235,6 +237,19 @@ def feed_origin(r: Any) -> str:
     """The feed row a bank or card entry (or its reversal) was posted for, from its source id ("" for other entries):
     so an earlier posting of a feed row that now stands for a private line can't show its amount either."""
     return str(r["source_id"]).split(":")[0] if str(r["source"]) in ("bank", "card") else ""
+
+
+def settled_lines(ctx: Ctx, view: VW.View, a: date, z: date, account_ids: Sequence[str], basis: str) -> list[Any]:
+    """The lines a totals read takes out before it sums them (spec §7.5): on these accounts in the window, of the bank
+    and card entries posted for a feed row that stands for a private line this viewer has no full detail for. Those
+    are the row's posting, its "Pays bill" reclass and any reversal, which copies its origin. The cash basis takes
+    only the entries the cash view takes as posted (Entry.cash_view), since the others are corrected out of its cells."""
+    if not account_ids or not private_cut(ctx, view):
+        return []
+    rows = SL.bank_lines(ctx.c, ctx.book.id, a.isoformat(), z.isoformat(), account_ids)
+    feeds = SK.feed_rows(ctx.c, sorted({feed_origin(r) for r in rows} - {""}))
+    cut = private_feed(ctx, view, list(feeds.values()))
+    return [r for r in rows if feed_origin(r) in cut and (basis != "cash" or str(r["basis"]) == "both")]
 
 
 def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str, str], set[str]]:
