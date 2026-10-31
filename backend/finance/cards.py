@@ -395,13 +395,10 @@ def _state(kind: str) -> handlers.Planner:
             if str(card["status"]) == "cancelled":
                 raise FinanceError(CONFLICT, "that card is cancelled")
         if kind == "card_unfreeze":
-            from .budgeting import state
             from .core import dates
-            b = ctx.budgets().get(str(cards[0]["budget_id"] or ""))
-            if b is not None and b.at_limit == "decline":
-                left = state(ctx, b.id, dates.day(ctx.today)).remaining
-                if left is not None and left <= 0:
-                    raise denied(f"the {b.name} budget is used up; raise it before unfreezing")
+            name = blocked_by(ctx, str(cards[0]["budget_id"] or ""), dates.day(ctx.today))
+            if name:
+                raise denied(f"the {name} budget is used up; raise it before unfreezing")
 
         def apply(aid: str) -> Result:
             for card in cards:
@@ -436,7 +433,7 @@ def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
     """Lift the freezes a budget's cutoff made once every budget over the card has room again: a new period, a raise, or
     a hold or reserve released (§8.2). A card a person froze is never lifted. With `budget_id`, only cards under that
     budget are looked at. Each lift goes to Mercury through `sync`, like any change. How many."""
-    from .budgeting import chain_of, subtree
+    from .budgeting import subtree
     from .core import dates
     budgets = ctx.budgets()
     scope = subtree(ctx, budget_id) if budget_id else None
@@ -444,7 +441,7 @@ def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
     lifted = 0
     for card in SK.budget_frozen_cards(ctx.c, scope):
         leaf = str(card["budget_id"] or "")
-        if leaf not in budgets or any(_over(ctx, bid, today) for bid in chain_of(ctx, leaf)):
+        if leaf not in budgets or blocked_by(ctx, leaf, today):
             continue
         cid = str(card["id"])
         SK.update(ctx.c, "fin_cards", cid, {"status": "active", "freeze_by": None, "freeze_budget_id": None,
@@ -473,6 +470,21 @@ def _over(ctx: Ctx, budget_id: str, at: date) -> bool:
     from .budgeting import state
     left = state(ctx, budget_id, at).remaining
     return left is not None and left <= 0
+
+
+BLOCKING = ("decline", "hold_payment")     # the at-limit actions that refuse spend: a card under one stays frozen
+
+
+def blocked_by(ctx: Ctx, leaf: str, at: date) -> str:
+    """The name of the first budget on a card's path (its own, then its parents) that refuses spend and is at its
+    amount on `at`, or "". A freeze made at a cutoff reaches a card through these same parent links, so a card is
+    lifted, or unfrozen by hand, only when none of them is still at its cutoff. A warn or ask budget blocks nothing."""
+    from .budgeting import chain_of
+    budgets = ctx.budgets()
+    for bid in chain_of(ctx, leaf):
+        if budgets[bid].at_limit in BLOCKING and _over(ctx, bid, at):
+            return budgets[bid].name
+    return ""
 
 
 def check_lower(ctx: Ctx, card: Any, amount: int) -> None:
@@ -523,6 +535,12 @@ def _vendor(ctx: Ctx, text: str) -> tuple[str, str]:
     return key, label[:80]
 
 
+def _saves(ctx: Ctx, card_id: str, key: str) -> list[Any]:
+    """A card's saved-card records at a vendor under any key it goes by: its contact's id, the names it went by and the
+    names phase 1 posted it under (SAP.vendor_keys, as a budget's vendor resolves)."""
+    return SK.card_save_rows(ctx.c, card_id, SAP.vendor_keys(ctx.c, ctx.book.id, key))
+
+
 def card_save(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Record that a card is saved on a vendor's account (§8.3), so the bot can buy there with it. One record per card
     and vendor: saving again after a removal reuses it, and saving one already saved is a conflict."""
@@ -532,9 +550,10 @@ def card_save(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if str(card["status"]) == "cancelled":
         raise FinanceError(CONFLICT, "that card is cancelled")
     key, label = _vendor(ctx, V.text(p, "vendor", 120))
-    row = SK.card_save_row(ctx.c, card_id, key)
-    if row is not None and int(row["active"]):
+    rows = _saves(ctx, card_id, key)
+    if any(int(r["active"]) for r in rows):
         raise FinanceError(CONFLICT, f"that card is already saved on {label}")
+    row = next((r for r in rows if str(r["vendor_key"]) == key), None)
 
     def apply(aid: str) -> Result:
         if row is None:
@@ -553,18 +572,21 @@ def card_save(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def card_unsave(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """Record that a card was removed from a vendor's account: the bot can no longer buy there with it."""
+    """Record that a card was removed from a vendor's account: the bot can no longer buy there with it. The record is
+    found under the vendor's contact id or any name it went by, so a save made before the vendor became a contact
+    still comes off."""
     V.only(p, ("card_id", "vendor"))
     card = _card(ctx, who, V.text(p, "card_id", 80))
     card_id = str(card["id"])
     key, label = _vendor(ctx, V.text(p, "vendor", 120))
-    row = SK.card_save_row(ctx.c, card_id, key)
-    if row is None or not int(row["active"]):
+    live = [r for r in _saves(ctx, card_id, key) if int(r["active"])]
+    if not live:
         raise FinanceError(CONFLICT, f"that card is not saved on {label}")
 
     def apply(aid: str) -> Result:
-        SK.update(ctx.c, "fin_card_saves", str(row["id"]),
-                  {"active": 0, "removed_by": who, "removed_at": ctx.at, "updated_at": ctx.at})
+        for row in live:
+            SK.update(ctx.c, "fin_card_saves", str(row["id"]),
+                      {"active": 0, "removed_by": who, "removed_at": ctx.at, "updated_at": ctx.at})
         return {"card_id": card_id, "vendor": key, "vendor_label": label, "saved": False}
     return Plan(K.default_gate(ctx.org, who, "card_unsave"),
                 f"Record card ••{card['last4'] or '----'} as removed from {label}", apply,

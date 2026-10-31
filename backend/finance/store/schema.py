@@ -4,10 +4,13 @@ for phase 1's additions, 66 for phase 2's, 67 for phase 3's), including the ones
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
 """
+import json
 import re
 import sqlite3
+from typing import cast
 
 from ..core.ledger import name_key
+from ..core.org import SYSTEM
 
 TABLES = """
 CREATE TABLE IF NOT EXISTS fin_settings (
@@ -519,9 +522,36 @@ def phase1(c: sqlite3.Connection) -> None:
 
 
 def phase3(c: sqlite3.Connection) -> None:
-    """Cloud migration 67: phase 3's saved-card record (fin_card_saves: which vendor accounts a card is saved on). The
-    same statements as `create`, which skips whatever exists."""
+    """Cloud migration 67: phase 3's saved-card record (fin_card_saves: which vendor accounts a card is saved on), and
+    why an earlier cutoff froze its cards (freeze_provenance). The same statements as `create`, which skips whatever
+    exists."""
     create(c)
+    freeze_provenance(c)
+
+
+def freeze_provenance(c: sqlite3.Connection) -> None:
+    """A card a budget's cutoff froze before `freeze_by` existed has no record of why it is frozen, so it would never
+    lift once its budget has room. The action log says: a system card_freeze for a budget is the cutoff's freeze, and it
+    is the card's latest freeze or unfreeze when the card's last word is that one. Such a card that still has an
+    allocation is marked `budget` with that budget. Every other frozen card keeps NULL (a person's freeze). Only NULL
+    rows are read, so a second run changes nothing."""
+    if not c.execute("SELECT 1 FROM fin_cards WHERE status='frozen' AND freeze_by IS NULL LIMIT 1").fetchone():
+        return
+    last: dict[str, str] = {}     # card id -> the budget its latest freeze or unfreeze was a cutoff of ("" if none)
+    for kind, actor, payload, result in c.execute(
+            "SELECT kind, actor, payload_json, result_json FROM fin_actions WHERE status='committed' AND "
+            "kind IN ('card_freeze','card_unfreeze') ORDER BY created_at, rowid").fetchall():
+        body = cast(dict[str, object], json.loads(str(payload or "{}")))
+        cut = str(body.get("budget_id") or "") if kind == "card_freeze" and actor == SYSTEM else ""
+        outcome = cast(dict[str, object], json.loads(str(result or "{}")))
+        for card in cast(list[object], outcome.get("cards") or []):
+            last[str(card)] = cut
+    for card_id, budget_id in last.items():
+        if budget_id:
+            c.execute("UPDATE fin_cards SET freeze_by='budget', freeze_budget_id=? WHERE id=? AND status='frozen' AND "
+                      "freeze_by IS NULL AND EXISTS (SELECT 1 FROM fin_allocations a "
+                      "WHERE a.budget_id=fin_cards.budget_id AND a.target_kind='card' AND a.target_id=fin_cards.id "
+                      "AND a.amount>0)", (budget_id, card_id))
 
 
 def phase2(c: sqlite3.Connection) -> None:

@@ -56,18 +56,26 @@ budget line, so a bot sees its own cards and a manager sees its reports' cards. 
 accounts it is `saved_on` (vendor, label, who saved it, when): the first ten, oldest first; the vendor filter finds
 all.
 
-A card's cutoff freeze (its budget reached its decline amount) is recorded as `frozen_by: budget` on the card row. It
-lifts by itself once every budget over the card has room again: a new period, a raise that leaves room, or a hold or
-reserve released (checked at each hourly look and at each raise). A freeze a person made (`frozen_by: person`), or one a
-person claims by freezing the card, stays until a person unfreezes it. A pause (the budget set to 0, which takes
-effect now) freezes every active card on the budget and under it, also as `frozen_by: budget`, and keeps their
-allocations; a raise that leaves room lifts them the same way. A budget can't be set to a non-zero amount below what its
-cards reserve (each card's allocation, or what it has used if more) plus its child budgets; the refusal names the cards
-to lower first.
+A card's cutoff freeze (its budget reached its decline or hold-payment amount) is recorded as `frozen_by: budget` on the
+card row, with the budget it came from. It lifts by itself once every budget over the card has room again: a new period,
+a raise that leaves room, or a hold or reserve released (checked at each hourly look and at each raise). Only decline and
+hold-payment budgets at their cutoff keep a card frozen; a warn or ask budget at zero does not. A manual unfreeze is
+refused while any decline or hold-payment budget over the card is at its cutoff ("the Tools budget is used up; raise it
+before unfreezing"). A freeze a person made (`frozen_by: person`), or one a person claims by freezing the card, stays
+until a person unfreezes it. A pause (the budget set to 0, which takes effect now) freezes every active card on the
+budget and under it, also as `frozen_by: budget`, and keeps their allocations; a raise that leaves room lifts them the
+same way. A budget can't be set to a non-zero amount below what its cards reserve (each card's allocation, or what it
+has used if more) plus its child budgets on any day from the change onward, including days a child's later version
+raises it; the refusal names the cards to lower first.
+
+Migration 67 backfills `frozen_by: budget` on cards the action log shows a cutoff froze before the column existed (only
+cards that still have an allocation; a card whose allocation is zero, or one a person froze, stays unset). An install
+that already recorded migration 67 does not re-run the backfill.
 
 `hub finance search --kind card --vendor "Acme Cloud"` answers "which of my cards works at this vendor". `card_unsave`
-records that a card was removed from a vendor's account. Both are gated: a bot's `card_save` or `card_unsave` waits for
-a finance admin.
+records that a card was removed from a vendor's account. A save is found under the vendor's contact id, its aliases and
+its legacy names, so a save made before the vendor became a contact still unsaves; `card_save` refuses a second save
+under any of those keys. Both are gated: a bot's `card_save` or `card_unsave` waits for a finance admin.
 
 ## Card fill
 

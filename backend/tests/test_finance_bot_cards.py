@@ -14,6 +14,8 @@ from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import validate as V
+from backend.finance.store import schema as FS
+from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
 from clients import hubtools
@@ -408,6 +410,152 @@ def test_an_id_is_never_read_as_a_card_number():
     rnd = random.Random(7)
     ids = [uuid.UUID(int=rnd.getrandbits(128)) for _ in range(20_000)]
     assert not any(V.has_card_number({"card_id": str(i), "budget_id": i.hex}) for i in ids)
+
+
+def _stored_digits(c):
+    """Every digit the action log, the card rows and the saved-card records hold, as one string."""
+    text = " ".join(str(v) for table in ("fin_actions", "fin_cards", "fin_card_saves")
+                    for row in c.execute(f"SELECT * FROM {table}").fetchall() for v in tuple(row))
+    return re.sub(r"\D", "", text)
+
+
+def test_a_card_number_is_refused_however_its_digits_are_spaced_or_followed(books):
+    fake = FakeMercury()
+    _, coder, _ = _world(books, fake)
+    for typed in ("4242  4242  4242  4242", "4242\t4242 4242-4242", "4242\u00a04242\u00a04242\u00a04242",
+                  "4242 4242 4242 4242 123", "4242-4242-4242-4242"):
+        assert V.has_card_number({"vendor": typed}), typed
+        with books.transaction() as c:
+            refused = act(c, OWNER, "card_save", {"card_id": coder, "vendor": typed})
+            assert (refused.status, refused.code, refused.reason) == \
+                ("failed", "invalid", FA.CARD_NUMBER_REFUSED), typed
+    with books.read() as c:
+        assert "4242424242424242" not in _stored_digits(c)
+    # Ordinary text with digits in it, and a number that fails Luhn, stay as they are.
+    assert not V.has_card_number("4242 4242 4242 4241")
+    assert not V.has_card_number("order 2026-10-31 ref 0001")
+    assert not V.has_card_number({"budget_id": "ab4222222222222cd", "card_id": "12345678-1234-1234-1234-123456789012"})
+
+
+def test_a_card_number_sent_as_a_json_number_is_refused_before_anything_is_stored(books):
+    fake = FakeMercury()
+    _, coder, _ = _world(books, fake)
+    assert V.has_card_number({"vendor": 4242424242424242})
+    assert V.has_card_number({"vendor": 4242424242424242.0})
+    assert V.has_card_number({"vendor": [4242424242424242]})
+    assert not V.has_card_number({"vendor": 4242424242424241})
+    with books.transaction() as c:
+        refused = act(c, OWNER, "card_save", {"card_id": coder, "vendor": 4242424242424242})
+        assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", FA.CARD_NUMBER_REFUSED)
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE kind='card_save'").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM fin_card_saves").fetchone()[0] == 0
+        assert "4242424242424242" not in _stored_digits(c)
+
+
+def test_a_card_number_in_a_route_payload_never_reaches_the_idempotency_receipt(api, monkeypatch):
+    """store.mutate hashes the body it is given as the receipt: a card number must not be in that body."""
+    from backend.store import Store
+    given, original = [], Store.mutate
+
+    def spy(self, *args, **kwargs):
+        given.append(repr(args) + repr(kwargs))
+        return original(self, *args, **kwargs)
+    monkeypatch.setattr(Store, "mutate", spy)
+    body = {"kind": "card_save", "payload": {"card_id": "card-none", "vendor": 4242424242424242}}
+    refused = api.post("/api/v2/finance/actions", json=body, headers=headers("ana-test")).json()
+    assert refused["status"] == "failed" and "4242424242424242" not in repr(refused)
+    assert given and not any("4242424242424242" in text for text in given)
+
+
+def test_an_unfreeze_waits_while_an_ancestor_decline_budget_is_at_its_cutoff(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00, decline; two 20.00 cards on it
+    with books.transaction() as c:
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
+        ctx = load(c, AT)
+        # Tools has 5.00 left once Eng tools' 5.00 card reserves its share: a 5.00 hold takes Tools to its cutoff, while
+        # Eng tools (10.00, 5.00 reserved) still has room.
+        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="cutoff-tools", expires_at=None)
+        assert held.allowed
+        FA.drain_events(c, AT)
+        assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
+        refused = act(c, OWNER, "card_unfreeze", {"card_id": kid})
+        assert (refused.status, refused.code) == ("denied", "denied") and "Tools budget is used up" in refused.reason
+        FA.watch_documents(c, LATER)                  # the hourly sweep: Tools is still at its cutoff
+        assert _status(c, kid) == "frozen"
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        assert _status(c, kid) == "active" and _frozen_by(c, kid) is None
+
+
+def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "at_limit": "warn"}).status == "committed"
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
+        ctx = load(c, AT)
+        # One 5.00 hold on Eng tools takes it to its cutoff, and Tools (a warn budget) to zero with it.
+        held = budgeting.place(ctx, budget_scope=eng, amount=5_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="cutoff-eng", expires_at=None)
+        assert held.allowed
+        FA.drain_events(c, AT)
+        assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 20_000}).status == "committed"
+        assert _status(c, kid) == "active" and _frozen_by(c, kid) is None
+
+
+def test_a_budget_cut_checks_its_cards_against_a_child_version_from_a_later_day(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00; coder and seller hold 40.00 of it
+    with books.transaction() as c:
+        eng = str(act(c, OWNER, "budget_create", {"name": "Eng tools", "account_id": account(c, "6100"), "team": "eng",
+                                                  "parent_id": budget}).result["budget_id"])
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 6_000,
+                                               "effective_from": "2026-11-01"}).status == "committed"
+        # October alone would pass (400.00 of cards under 450.00), but Eng tools rises to 60.00 in November:
+        # 460.00 is needed.
+        refused = act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 45_000})
+        assert refused.code == "invalid" and "reserve 460.00" in refused.reason
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 46_000}).status == "committed"
+
+
+def test_unsave_finds_a_save_made_before_the_vendor_became_a_contact(books):
+    fake = FakeMercury()
+    _, coder, _ = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_save", {"card_id": coder, "vendor": "Acme Cloud"}).status == "committed"
+        contact = str(act(c, OWNER, "contact_create", {"name": "Acme Cloud", "kind": "vendor"}).result["contact_id"])
+        # The save is keyed by the name; the contact's id is another key, and its alias is the name's.
+        assert act(c, OWNER, "card_save", {"card_id": coder, "vendor": contact}).code == "conflict"
+        off = act(c, OWNER, "card_unsave", {"card_id": coder, "vendor": "Acme Cloud"})
+        assert off.status == "committed", (off.code, off.reason)
+        assert FR.search(c, "bot:coder", kind="card", filters={"vendor": contact})["results"] == []
+        assert act(c, OWNER, "card_unsave", {"card_id": coder, "vendor": contact}).code == "conflict"
+        assert act(c, OWNER, "card_save", {"card_id": coder, "vendor": contact}).status == "committed"
+
+
+def test_migration_67_marks_a_cutoff_freeze_made_before_freeze_by_existed(books):
+    fake = FakeMercury()
+    budget, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": seller}).status == "committed"     # a person's freeze first
+        spend(c, "6100", 50_000)
+        FA.drain_events(c, AT)                                                          # then the cutoff: coder only
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "person"
+        # An install from before freeze_by: the columns are empty, the action log is what there is.
+        c.execute("UPDATE fin_cards SET freeze_by=NULL, freeze_budget_id=NULL")
+        FS.phase3(c)
+        row = c.execute("SELECT freeze_by, freeze_budget_id FROM fin_cards WHERE id=?", (coder,)).fetchone()
+        assert tuple(row) == ("budget", budget)
+        assert _frozen_by(c, seller) is None
+        # A cutoff freeze whose card has since been given no allocation was a person's zero: it stays NULL.
+        c.execute("UPDATE fin_cards SET freeze_by=NULL, freeze_budget_id=NULL")
+        c.execute("UPDATE fin_allocations SET amount=0 WHERE target_kind='card' AND target_id=?", (coder,))
+        FS.phase3(c)
+        assert _frozen_by(c, coder) is None
 
 
 def test_migration_67_adds_the_saved_card_record_to_an_install_from_66(store):

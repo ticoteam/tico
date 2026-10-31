@@ -366,39 +366,52 @@ def _fits(ctx: Ctx, b: B.Budget, effective: str, amount: int) -> None:
 
 
 def _cards_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int) -> None:
-    """A version may not set `b` below what its cards reserve in the period it takes effect, plus its child budgets'
-    amounts there (§4.4): a card reserves the more of its allocation and what it has used (holds and actuals). Names
-    the cards to lower first where `who` may see them and the budget's numbers. Separate from `_fit`, which checks the
-    children alone."""
+    """A version may not set `b` below what its cards reserve plus its child budgets' amounts (§4.4), on every day a
+    version changes from `effective` on (a child's later raise included, as `_fits` checks the children). A card
+    reserves the more of its allocation and what it has used in that period (holds and actuals). Names the cards to
+    lower first
+    where `who` may see them and the budget's numbers. Separate from `_fit`, which checks the children alone."""
     if not b.id or amount == 0:      # a pause (0) freezes its cards instead (cards.freeze_paused)
         return
     from .cards import sees as sees_card
-    versions = SB.versions(ctx.c, [b.id])[b.id]
-    start, end = B.period_of(b, dates.day(effective), ctx.book.fiscal_year_start, versions)
     tree = budgeting.subtree(ctx, b.id)
-    cards: list[tuple[Any, int]] = []
-    for row in SB.allocations(ctx.c, [b.id]):
-        card = SK.get(ctx.c, "fin_cards", str(row["target_id"])) if row["target_kind"] == "card" else None
+    mine = SB.versions(ctx.c, [b.id])[b.id]
+    mine.append(B.Version(budget_id=b.id, version=10**9, effective_from=effective, amount=amount))
+    kids = [x.id for x in ctx.budgets().values() if x.parent_id == b.id and x.active]
+    found = SB.versions(ctx.c, kids) if kids else {}
+    every = [v for vs in found.values() for v in vs] + mine
+    allocs = [row for row in SB.allocations(ctx.c, [b.id]) if row["target_kind"] == "card"]
+    for at in B.fit_points(dates.day(effective), every):
+        cap = B.amount_at(mine, at)
+        if cap is None:
+            continue
+        start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
+        cards = _card_reserves(ctx, tree, allocs, start.isoformat(), end.isoformat())
+        owed = sum(B.amount_at(vs, at) or 0 for vs in found.values())
+        total = sum(reserve for _, reserve in cards) + owed
+        if not cards or total <= cap:
+            continue
+        if not shows_numbers(ctx, who, b) or not all(sees_card(ctx, who, card) for card, _ in cards):
+            raise invalid("it does not fit: its cards reserve more than that")
+        names = "; ".join(f"{card['nickname'] or card['holder']} ••{card['last4'] or '----'} "
+                          f"reserves {reserve / 100:.2f}" for card, reserve in cards)
+        raise invalid(f"it does not fit: its cards and child budgets reserve {total / 100:.2f}; "
+                      f"lower these cards first: {names}")
+
+
+def _card_reserves(ctx: Ctx, tree: list[str], allocs: list[Any], start: str, end: str) -> list[tuple[Any, int]]:
+    """Each card allocated on a budget with what it reserves in the period: its allocation, or what it used if that is
+    more (its holds and settled spend under the tree)."""
+    out: list[tuple[Any, int]] = []
+    for row in allocs:
+        card = SK.get(ctx.c, "fin_cards", str(row["target_id"]))
         if card is None:
             continue
-        used = SB.target_used(ctx.c, tree, start.isoformat(), end.isoformat(), f"card:{card['id']}", absorbed=True)
+        used = SB.target_used(ctx.c, tree, start, end, f"card:{card['id']}", absorbed=True)
         reserve = max(int(row["amount"]), used)
         if reserve > 0:
-            cards.append((card, reserve))
-    kids = [x.id for x in ctx.budgets().values() if x.parent_id == b.id and x.active]
-    owed = 0
-    if kids:
-        for vs in SB.versions(ctx.c, kids).values():
-            owed += B.amount_at(vs, start) or 0
-    total = sum(reserve for _, reserve in cards) + owed
-    if not cards or total <= amount:
-        return
-    if not shows_numbers(ctx, who, b) or not all(sees_card(ctx, who, card) for card, _ in cards):
-        raise invalid("it does not fit: its cards reserve more than that")
-    names = "; ".join(f"{card['nickname'] or card['holder']} ••{card['last4'] or '----'} reserves {reserve / 100:.2f}"
-                      for card, reserve in cards)
-    raise invalid(f"it does not fit: its cards and child budgets reserve {total / 100:.2f}; lower these cards first: "
-                  f"{names}")
+            out.append((card, reserve))
+    return out
 
 
 def _need_budget_view(ctx: Ctx, who: str, b: B.Budget) -> None:

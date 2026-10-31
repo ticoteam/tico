@@ -402,9 +402,13 @@ def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None)
     return c.execute(sql + " ORDER BY created_at, id", [] if budget_ids is None else list(budget_ids)).fetchall()
 
 
-def card_save_row(c: sqlite3.Connection, card_id: str, vendor_key: str) -> Any:
-    """The saved-card record of a card at one vendor, active or removed (one row per card and vendor)."""
-    return c.execute("SELECT * FROM fin_card_saves WHERE card_id=? AND vendor_key=?", (card_id, vendor_key)).fetchone()
+def card_save_rows(c: sqlite3.Connection, card_id: str, vendor_keys: Sequence[str]) -> list[Any]:
+    """A card's saved-card records at any of a vendor's keys (its contact id and the names it went by), active or
+    removed, oldest first."""
+    if not vendor_keys:
+        return []
+    return c.execute(f"SELECT * FROM fin_card_saves WHERE card_id=? AND vendor_key IN ({_marks(vendor_keys)}) "
+                     "ORDER BY saved_at, id", [card_id, *vendor_keys]).fetchall()
 
 
 def card_saves(c: sqlite3.Connection, card_ids: Sequence[str]) -> list[Any]:

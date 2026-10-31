@@ -260,6 +260,11 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         raise
 
 
+def carries_card_number(payload: Mapping[str, object]) -> bool:
+    """Whether a payload holds a card number anywhere in it: a route then keeps no receipt of the payload as sent."""
+    return V.has_card_number(payload)
+
+
 def receipt_payload(c: sqlite3.Connection, kind: str, payload: Mapping[str, object]) -> dict[str, object]:
     """The payload as a route's idempotency receipt may hash it: bank account and routing numbers become a keyed
     fingerprint and the last 4, and a card number is never kept (the receipt says it was refused), so no receipt holds

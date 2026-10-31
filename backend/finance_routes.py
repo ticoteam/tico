@@ -410,8 +410,9 @@ def install(app, store, auth, mutate):
             first["result"] = done
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
         receipt = body
-        if any(k in body.payload for k in finance.BANK_FIELDS):
-            # Bank numbers never reach the idempotency receipt, not even hashed: a keyed fingerprint stands in.
+        if any(k in body.payload for k in finance.BANK_FIELDS) or finance.carries_card_number(body.payload):
+            # Bank numbers never reach the idempotency receipt, not even hashed: a keyed fingerprint stands in. A card
+            # number is not kept either: the receipt says it was refused (store.mutate hashes what it is given).
             with store.transaction() as c:
                 receipt = body.model_copy(update={"payload": finance.receipt_payload(c, body.kind, body.payload)})
         saved = mutate(request, receipt, work)
