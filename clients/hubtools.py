@@ -5945,6 +5945,8 @@ FINANCE_REPORTS = ["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_
 FINANCE_METRICS = ["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
                    "ar_overdue", "uncategorized_count", "unreconciled_days"]
 FINANCE_SEARCH = ["entry", "feed", "bill", "invoice", "contact", "rule"]
+FINANCE_INBOX = ["uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
+                 "budget_near_limit", "sync_failed", "period_ready"]
 FIN_DAY = {"type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$", "description": "YYYY-MM-DD"}
 # Whole-number fields an "Other · n" row does not add up: they describe one row, not an amount.
 _FIN_NOT_ADDED = {"pct", "days_late", "priority", "depth", "level", "version", "revision", "view_version"}
@@ -6207,11 +6209,13 @@ def finance_action(api, args):
 
 
 @tool("hub_finance_inbox", "Your Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue "
-      "invoices, budgets near limit, failed syncs, months ready to close; with counts per kind.",
-      {"cursor": _s("next_cursor from the last page"),
+      "invoices, budgets near limit, failed syncs, months ready to close; with counts per kind. Name a kind to page "
+      "through that kind alone, past its first 200.",
+      {"kind": _s("Only this kind of work, paged on with cursor", enum=FINANCE_INBOX),
+       "cursor": _s("next_cursor from the last page (same kind)"),
        "limit": {"type": "integer", "minimum": 1, "maximum": 200, "description": "Items per page (default 50)"}})
 def finance_inbox(api, args):
-    return _fin_paged(api, "finance/inbox", _fin_query(args, ("cursor", "limit")), "items",
+    return _fin_paged(api, "finance/inbox", _fin_query(args, ("kind", "cursor", "limit")), "items",
                       _fin_budget(args.get("limit"), 50))
 
 
