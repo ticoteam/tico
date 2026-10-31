@@ -6,7 +6,7 @@
    Access: who sees what in Finance, on the org chart (each teammate's default and grants), private lines, the owner's
    "View as", Edit defaults, and a teammate's "Grant more".
    Reads: GET /api/v2/finance/sources, /finance/access, /finance/balance-sheet (the lines an account maps to). Writes:
-   POST /api/v2/credentials, /finance/connections; connection_sync, connection_disconnect, connection_map, view_grant,
+   POST /api/v2/credentials, /finance/connections, /finance/books/connect, /finance/books/{id}/disconnect; connection_sync, connection_disconnect, connection_map, view_grant,
    view_revoke and view_defaults_set through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -136,8 +136,9 @@ function finSrcRail() {
   });
   rail.querySelector('[data-fin-disconnect]')?.addEventListener('click', () => {
     finDialog('Disconnect ' + (r.name || r.provider || ''), '', 'Disconnect', async () => {
-      const res = await finAct('connection_disconnect', {connection_id: conn});
-      if (res.status === 'committed') toast('Disconnected');
+      // QuickBooks and Xero go through HQ's broker (it drops its grant first); the rest are a Finance action.
+      if (books) { await post(`/v2/finance/books/${encodeURIComponent(conn)}/disconnect`, {}); toast('Disconnected'); }
+      else { const res = await finAct('connection_disconnect', {connection_id: conn}); if (res.status === 'committed') toast('Disconnected'); }
       void finSrcLoad();
     });
   });
@@ -232,13 +233,13 @@ function finConnectStripe() {
     if (FIN?.bs) void finBsLoad();
   });
 }
-// QuickBooks or Xero: HQ's broker sends the browser to the provider's consent page and back here with a claim
-// (finOAuthReturn in finance.js). Route (not on a branch yet): POST /api/v2/finance/books/connect {provider, return_to}
-// -> {url}.
+// QuickBooks or Xero: POST /api/v2/finance/books/connect {provider} -> {url, expires_in}, HQ's consent page. The server
+// takes the browser's return (GET /api/v2/finance/books/return/{flow}) and sends it to #/finance?books=connected or
+// ?books=error&reason=<code> (finBooksReturn in finance.js).
 function finConnectBooks(provider) {
   const name = FIN_BOOKS[provider];
   finDialog('Connect ' + name, '', 'Continue', async () => {
-    const r = await post('/v2/finance/books/connect', {provider, return_to: location.origin + location.pathname + FIN_ROUTE + '/sources'});
+    const r = await post('/v2/finance/books/connect', {provider});
     if (!String(r?.url || '').startsWith('https://')) throw new Error(name + ' did not answer');
     location.assign(r.url);
     return false;

@@ -85,37 +85,26 @@ async function finProbe() {
   return FIN_ACCESS;
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
-function finProbeOnce() { finOAuthReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+function finProbeOnce() { finBooksReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
 
-// A QuickBooks or Xero consent comes back here from HQ's broker (spec §3.4), in the address before or after the hash:
-// ?finance=connected&claim=… makes the books connection from the claim (single use, so once); ?finance=error says why
-// it stopped. Either way the address drops them and lands on Sources.
-// Route (not on a branch yet): POST /api/v2/finance/books/claim {provider, claim} -> {connection_id}.
 const FIN_BOOKS = {quickbooks: 'QuickBooks', xero: 'Xero'};
-const FIN_OAUTH_KEYS = ['finance', 'claim', 'provider', 'reason', 'error'];
-let FIN_OAUTH = '';
-function finOAuthReturn() {
-  const [hashPath, hashQ = ''] = location.hash.split('?');
-  const q = new URLSearchParams(location.search), h = new URLSearchParams(hashQ);
-  const src = q.has('finance') ? q : h.has('finance') ? h : null;
-  if (!src || !S.me?.id) return;
-  const state = src.get('finance'), claim = src.get('claim') || '', provider = src.get('provider') || '';
-  const reason = src.get('reason') || src.get('error') || '';
-  FIN_OAUTH_KEYS.forEach(k => { q.delete(k); h.delete(k); });
-  const qs = q.toString(), hs = h.toString();
-  const to = rdUnder(hashPath || '', FIN_ROUTE) ? hashPath + (hs ? '?' + hs : '') : FIN_ROUTE + '/sources';
-  history.replaceState(history.state, '', location.pathname + (qs ? '?' + qs : '') + to);
-  const name = FIN_BOOKS[provider] || 'Books';
-  if (state === 'connected' && claim && FIN_OAUTH !== claim) {
-    FIN_OAUTH = claim;
-    void post('/v2/finance/books/claim', {provider, claim}).then(() => {
-      toast(name + ' connected');
-      if (FIN?.src) void finSrcLoad();
-    }).catch(e => toast(e.message || name + ' not connected', true));
-  } else if (state === 'error') toast(name + ' not connected' + (reason ? ': ' + (FIN_OAUTH_WHY[reason] || reason) : ''), true);
+// Back from connecting QuickBooks or Xero: the server sends the browser to #/finance?books=connected or
+// ?books=error&reason=<code> (backend/finance/books_link.py codes). Says how it went once, lands on Sources and cleans
+// the address.
+function finBooksReturn() {
+  const [hashPath, hashQ = ''] = location.hash.split('?'), h = new URLSearchParams(hashQ);
+  if (!h.has('books') || !S.me?.id) return;
+  const state = h.get('books'), reason = h.get('reason') || '';
+  h.delete('books'); h.delete('reason');
+  const hs = h.toString(), path = hashPath && hashPath !== FIN_ROUTE && rdUnder(hashPath, FIN_ROUTE) ? hashPath : FIN_ROUTE + '/sources';
+  history.replaceState(history.state, '', location.pathname + location.search + path + (hs ? '?' + hs : ''));
+  if (state === 'connected') toast('Books connected');
+  else if (reason === 'reconnect_required') toast('Reconnect books', true);
+  else toast('Books not connected' + (FIN_BOOKS_WHY[reason] ? ': ' + FIN_BOOKS_WHY[reason] : ''), true);
   setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
 }
-const FIN_OAUTH_WHY = {access_denied: 'access denied', expired: 'the link expired', state_mismatch: 'try again'};
+const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
+  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again'};
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
