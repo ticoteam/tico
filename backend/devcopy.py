@@ -95,7 +95,7 @@ EMPTY = (
     # inbox, cards and their authorizations, payees and payments) and spend holds. Its pending actions and undrained events are trimmed
     # in prune; the books, budgets, views and rules are kept.
     "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
-    "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users",
+    "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
@@ -142,6 +142,7 @@ KEEP = frozenset((
     "fin_rule_counters", "fin_rule_runs", "fin_rules", "fin_settings", "fin_statements", "fin_usage_snapshots",
     "fin_settlements", "fin_cash_rollups", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy",
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
+    "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.
