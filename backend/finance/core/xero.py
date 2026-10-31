@@ -291,7 +291,8 @@ def payment_record(j: Mapping[str, Any], system: System) -> M.Settlement | M.Jou
 
 def applied_record(j: Mapping[str, Any], kind: str) -> M.Settlement | M.Ext | M.Refused | None:
     """An overpayment's or prepayment's allocations as the applications the books take: the credit it has applied to each
-    invoice or bill it names. Removing every allocation is a revision with nothing applied; only its status deletes it."""
+    invoice or bill it names. A deleted allocation applies nothing, and removing every allocation is a revision with
+    nothing applied; only the overpayment's own status deletes it."""
     ident = str(j.get(BANK_ID[kind]) or "")
     ext = M.Ext("Payment", f"{kind}:{ident}", stamp(j.get("UpdatedDateUTC")))
     if _status(j) in ("DELETED", "VOIDED"):
@@ -302,6 +303,8 @@ def applied_record(j: Mapping[str, Any], kind: str) -> M.Settlement | M.Ext | M.
     links: list[tuple[str, int]] = []
     for raw in as_list(j.get("Allocations")):
         row = as_map(raw) or {}
+        if row.get("IsDeleted") is True:
+            continue
         invoice = as_map(row.get("Invoice")) or {}
         if not invoice.get("InvoiceID"):
             return M.Refused(ext, "an allocation names no invoice or bill")

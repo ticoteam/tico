@@ -1561,3 +1561,19 @@ def test_an_explicit_negative_line_on_the_rounding_account_is_taken_in_as_roundi
                                                "GROUP BY account_id", (entry,))}
         assert sum(lines.values()) == 0
         assert lines[account(c, "4900")] == 1
+
+
+def test_a_deleted_allocation_of_an_overpayment_applies_nothing(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1"), _invoice("inv-2")]
+    xbooks.rows["BankTransactions"] = [_held_bank("ov-d", "RECEIVE-OVERPAYMENT", "100.00")]
+    held = _held("ov-d", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00"), ("inv-2", "ACCREC", "40.00")])
+    held["Allocations"][1]["IsDeleted"] = True
+    xbooks.rows["Overpayments"] = [held]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 10000
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-2'").fetchone()[0] == 0
