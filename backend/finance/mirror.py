@@ -75,6 +75,7 @@ class Sent:
     error: str = ""
     final: bool = False                     # the provider refused the write itself: it is not tried again
     unknown: bool = False                   # a final answer the provider could not settle: the write may have landed
+    record: M.Document | M.Journal | M.Settlement | None = None     # a found record, as the change feed reads it
 
 
 class Books(Protocol):
@@ -174,28 +175,60 @@ RECORD_IMPORTED = ("account.create", "party.create")
 def _adopt(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) -> None:
     """A write the provider took before its answer was recorded (the call was cut off) comes back in the change feed
     with its reference in its note. The write is recorded as sent here, from its local payload (which keeps the tags
-    its lines carry) at the revision the write was made at; a newer record the feed brings is then taken in as the
-    provider holds it. A credit memo's write-off is confirmed, since its credit application is queued by that
-    confirmation. A write whose record is not among these records waits for its retry."""
-    found = {ext.reference: ext for ext in (_ext_of(r) for r in records) if ext.reference and not ext.deleted}
+    its lines carry), unless the record has changed since the write (see _revised): that one is recorded at the oldest
+    revision, so the record the feed brings in replaces what was sent. A credit memo's write-off is confirmed, since its
+    credit application is queued by that confirmation. A write whose record is not among these records waits for its
+    retry."""
+    found: dict[str, Record] = {}
+    for r in records:
+        ext = _ext_of(r)
+        if ext.reference and not ext.deleted:
+            found[ext.reference] = r
     if not found:
         return
     for o in SX.pending_writes(c, cid):
-        ext = found.get(M.reference(str(o["idempotency_key"])))
-        if ext is None or str(o["op"]) not in RETRIED_CREATES:
+        r = found.get(M.reference(str(o["idempotency_key"])))
+        op = str(o["op"])
+        if r is None or op not in RETRIED_CREATES:
             continue
+        ext = _ext_of(r)
         local = SK.loads(o["payload_json"])
         c.execute("SAVEPOINT mirror_adopt")
         try:
-            initial = _initial_revision(c, cid)
-            revised = bool(initial) and M.revision_order(ext.revision, initial) > 0
+            revised = _revised(c, cid, op, local, ext, r)
             sent = Sent(ok=True, kind=ext.kind, external_id=ext.external_id,
-                        revision=initial if revised else ext.revision)
-            _record(c, cid, o, local, _translate(c, cid, str(o["op"]), local), sent, at,
-                    confirm=str(o["op"]) not in RECORD_IMPORTED)
+                        revision=(_initial_revision(c, cid) or "") if revised else ext.revision)
+            _record(c, cid, o, local, _translate(c, cid, op, local), sent, at,
+                    confirm=op not in RECORD_IMPORTED)
         except (_Missing, FinanceError, sqlite3.IntegrityError):
             c.execute("ROLLBACK TO mirror_adopt")
         c.execute("RELEASE mirror_adopt")
+
+
+def _sent_as(op: str, local: Mapping[str, Any], record: object) -> bool:
+    """Whether a provider record holds what a write sent: a bill's or invoice's lines, a journal's lines, a payment's
+    total. A write with no such check (a credit application, a write-off) is taken to hold what it sent."""
+    if op in ("bill.create", "invoice.create"):
+        return isinstance(record, M.Document) and \
+            sorted(x.amount for x in record.lines if not x.rounding) == sorted(int(x["amount"]) for x in local["lines"])
+    if op == "journal.create":
+        return isinstance(record, M.Journal) and \
+            sorted(x.amount for x in record.lines) == sorted(int(x["amount"]) for x in local["lines"])
+    if op in ("payment.bill", "payment.invoice"):
+        return isinstance(record, M.Settlement) and record.total == int(local["amount"])
+    return True
+
+
+def _revised(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], ext: M.Ext, record: object) -> bool:
+    """Whether a record the provider holds for a write has changed since the write: its revision is past the one a
+    write makes, for a provider that counts revisions; for one that does not (Xero stamps times), its content is not
+    what was sent, so an edit made after the write is never taken for the write itself."""
+    initial = _initial_revision(c, cid)
+    if initial:
+        return M.revision_order(ext.revision, initial) > 0
+    return not _sent_as(op, local, record)
+
+
 
 
 def _do(c: sqlite3.Connection, ctx: Ctx, cid: str, r: Record, at: str) -> None:
@@ -1426,14 +1459,18 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
             continue
         local, provider = prepared
         sent, found = _send(books, o, provider)
-        # A record the provider revised after the write is imported as the provider holds it, not confirmed from what
-        # was sent: the change feed is read again from the start to bring it in.
+        # A record the provider changed after the write is not confirmed as sent. A provider that counts revisions
+        # leaves the write unconfirmed; one that does not binds it at its oldest revision. Either way the change feed
+        # is read again from the start, to take the provider's record in as it holds it.
         with store.transaction() as c:
-            initial = _initial_revision(c, cid)
-            revised = found and bool(initial) and M.revision_order(sent.revision, initial) > 0
-            _record(c, cid, o, local, provider, sent, now, confirm=not revised)
+            op, initial = str(o["op"]), _initial_revision(c, cid)
+            revised = found and sent.ok and \
+                _revised(c, cid, op, local, M.Ext(sent.kind, sent.external_id, sent.revision), sent.record)
+            if revised and not initial:
+                sent = Sent(ok=True, kind=sent.kind, external_id=sent.external_id, revision="")
+            _record(c, cid, o, local, provider, sent, now, confirm=not revised or not initial)
             if revised:
-                SX.set_mirror_state(c, cid, {"cursors": {}, "changed_at": None})
+                SX.set_mirror_state(c, cid, {"cursors": {}, "changed_at": None, "exact": []})
         if not sent.ok:
             problems.append(f"{o['op']}: {sent.error}")
     return problems
@@ -1488,10 +1525,14 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
     for feed in books.feeds:
         raw = stored.get(feed)
         cursors[feed] = raw if isinstance(raw, str) else legacy
-    due = any(M.cdc_due(cursors[feed], now, every) for feed in books.feeds)
+    # A feed the provider cut short at its page cap is read again from its exact stamp, not moved back by the overlap.
+    exact_raw = st.get("exact")
+    exact = {str(feed) for feed in cast(list[object], exact_raw)} if isinstance(exact_raw, list) else set[str]()
+    due = bool(exact) or any(M.cdc_due(cursors[feed], now, every) for feed in books.feeds)
     if not M.backfill_done(_backfill_state(st), books.entities) or not (waiting or due):
         return ""
-    read = books.changed({feed: M.cdc_since(cursors[feed], now) for feed in books.feeds})
+    read = books.changed({feed: (cursors[feed] or now) if feed in exact else M.cdc_since(cursors[feed], now)
+                          for feed in books.feeds})
     if not read.ok:
         return f"changes: {read.error}"
     with store.transaction() as c:
@@ -1502,7 +1543,8 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
         # complete to this read.
         cut = dict(read.through)
         stamps = {feed: cut.get(feed, now) for feed in books.feeds}
-        SX.set_mirror_state(c, cid, {"cursors": stamps, "changed_at": min(stamps.values())})
+        SX.set_mirror_state(c, cid, {"cursors": stamps, "changed_at": min(stamps.values(), key=M.parse),
+                                     "exact": sorted(cut)})
     return ""
 
 

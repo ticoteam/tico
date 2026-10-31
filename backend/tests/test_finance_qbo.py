@@ -598,6 +598,16 @@ def test_a_journal_line_and_a_posted_line_read_to_the_other_side_keep_the_provid
     assert sorted((x.account, x.key) for x in posted.lines) == [("Account:1", ""), ("Account:40", "9")]
 
 
+def test_a_deposit_line_keeps_its_provider_line_id():
+    row = {"Id": "70", "SyncToken": "0", "TxnDate": "2026-10-09", "TotalAmt": "15.00",
+           "DepositToAccountRef": {"value": "1"},
+           "Line": [{"Id": "7", "Amount": "15.00", "DetailType": "DepositLineDetail",
+                     "DepositLineDetail": {"AccountRef": {"value": "40"}}}]}
+    [made] = Q.records("Deposit", [row], {})
+    assert sorted((x.account, x.amount, x.key) for x in made.lines) == [
+        ("Account:1", 1500, ""), ("Account:40", -1500, "7")]
+
+
 def test_a_purchase_is_read_as_an_entry_between_its_bank_and_its_expense_account():
     row = {"Id": "50", "SyncToken": "0", "TxnDate": "2026-10-09", "TotalAmt": "100.00", "PaymentType": "Cash",
            "AccountRef": {"value": "1"}, "Line": [{"Amount": "100.00", "DetailType": "AccountBasedExpenseLineDetail",

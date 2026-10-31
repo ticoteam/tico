@@ -10,6 +10,7 @@ from typing import Any
 from backend.finance import books_sync, mirror
 from backend.finance.context import load
 from backend.finance.core import mirror as M
+from backend.finance.core import qbo as Q
 from backend.finance.core.errors import CONFLICT, NOT_AVAILABLE
 from backend.finance.store import ap as SAP
 from backend.finance.store import banking as SK
@@ -1076,6 +1077,32 @@ def test_a_tag_on_a_journal_line_survives_an_amount_edit_to_the_same_provider_li
     assert _drain(books, fake, cid, now=LATER) == []
     with books.read() as c:
         assert _line_tags(c, _entry_of(c, "JournalEntry:50"), _local(c, "Account:2", "fin_accounts")) == ["web"]
+
+
+def _deposit(total: str, token: str) -> dict[str, Any]:
+    """A QuickBooks deposit of one line on account 2 into account 1, the line keeping its provider id 7."""
+    return {"Id": "70", "SyncToken": token, "TxnDate": "2026-10-05", "TotalAmt": total,
+            "DepositToAccountRef": {"value": "1"},
+            "Line": [{"Id": "7", "Amount": total, "DetailType": "DepositLineDetail",
+                      "DepositLineDetail": {"AccountRef": {"value": "2"}}}]}
+
+
+def test_a_tag_on_a_deposit_line_survives_an_amount_edit_to_the_same_provider_line(books):
+    fake = FakeBooks()
+    _chart(fake)
+    fake.records["entries"] = [Q.records("Deposit", [_deposit("15.00", "0")], {})[0]]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        line = c.execute("SELECT id FROM fin_lines WHERE entry_id=? AND account_id=?",
+                         (_entry_of(c, "Deposit:70"), _local(c, "Account:2", "fin_accounts"))).fetchone()[0]
+        done = act(c, OWNER, "categorize", {"lines": [{"line_id": line, "tags": {"team": "web"}}]})
+        assert done.status == "committed", done
+    fake.changes = [Q.records("Deposit", [_deposit("20.00", "1")], {})[0]]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert _line_tags(c, _entry_of(c, "Deposit:70"), _local(c, "Account:2", "fin_accounts")) == ["web"]
 
 
 def test_phase_four_adds_the_line_key_to_an_install_made_before_it_and_running_it_again_changes_nothing(books):

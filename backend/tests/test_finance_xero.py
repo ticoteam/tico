@@ -779,8 +779,8 @@ def test_a_change_window_longer_than_the_page_cap_is_cut_to_the_changes_read(mon
                                 "UpdatedDateUTC": ms(f"2026-10-15T12:{n // 60:02d}:{n % 60:02d}Z")}
                                for n in range(250)]
     read = _client(xbooks).changed({"parties": "2026-10-15T11:55:00Z"})
-    assert read.ok and len(read.records) == 200
-    assert read.through == (("parties", "2026-10-15T12:03:18Z"),)
+    assert read.ok and len(read.records) == 199
+    assert read.through == (("parties", "2026-10-15T12:03:17.999000Z"),)
 
 
 def test_archived_contacts_are_read_with_the_archived_ones_and_kept_inactive(books):
@@ -1600,15 +1600,151 @@ def test_one_entitys_page_cap_does_not_hold_back_another_entitys_changes(books, 
     assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_invoices WHERE number='INV-inv-x'").fetchone()[0] == 1
-        assert c.execute("SELECT COUNT(*) FROM fin_contacts WHERE name LIKE 'Acme Contact %'").fetchone()[0] == 200
+        assert c.execute("SELECT COUNT(*) FROM fin_contacts WHERE name LIKE 'Acme Contact %'").fetchone()[0] == 199
         cursors = SX.mirror_state(c, cid)["cursors"]
-    # The capped entity is complete only to the last change it read, one second before it; the other moves on to now.
-    assert cursors["parties"] == "2026-10-15T12:03:18Z"
+    # The capped entity is complete to just before the last change it read; the other moves on to now.
+    assert cursors["parties"] == "2026-10-15T12:03:17.999000Z"
     assert cursors["invoices"] == LATER
     monkeypatch.setattr(xero, "MAX_PAGES", 200)
     assert _drain(books, _client(xbooks), cid, now=LATER2, passes=3) == []
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_contacts WHERE name LIKE 'Acme Contact %'").fetchone()[0] == 250
+
+
+def test_a_row_edited_between_two_pages_of_a_change_read_is_not_skipped(monkeypatch):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice(f"inv-{n:03d}", updated=f"2026-10-15T12:{n // 60:02d}:{n % 60:02d}Z")
+                               for n in range(150)]
+    read_list = xbooks._list
+    edited: list[bool] = []
+
+    def list_then_edit(name: str, query: Mapping[str, str], since: str) -> xero.Reply:
+        reply = read_list(name, query, since)
+        if name == "Invoices" and not edited:          # the first page is answered, then its first invoice is edited
+            edited.append(True)
+            xbooks.change("Invoices", _invoice("inv-000", updated="2026-10-15T14:00:00Z", total="200.00"))
+        return reply
+
+    monkeypatch.setattr(xbooks, "_list", list_then_edit)
+    read = _client(xbooks).changed({"invoices": "2026-10-15T11:00:00Z"})
+    assert read.ok and edited
+    by_key = {r.ext.key: r for r in read.records}
+    assert set(by_key) == {f"Invoice:inv-{n:03d}" for n in range(150)}
+    assert by_key["Invoice:inv-000"].total == 20000
+
+
+def test_a_capped_change_window_is_read_through_over_later_passes_without_stalling(books, monkeypatch):
+    monkeypatch.setattr(xero, "MAX_PAGES", 2)
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.rows["Invoices"] = [_invoice(f"inv-{n:03d}", updated=f"2026-10-15T12:{n // 60:02d}:{n % 60:02d}Z")
+                               for n in range(250)]
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=3) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_invoices WHERE number LIKE 'INV-inv-%'").fetchone()[0] == 250
+
+
+def test_a_page_of_one_timestamp_moves_on_by_page_and_every_row_is_read():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice(f"inv-{n:03d}", updated="2026-10-15T12:00:00Z") for n in range(250)]
+    read = _client(xbooks).changed({"invoices": "2026-10-15T11:00:00Z"})
+    assert read.ok and read.through == ()
+    assert {r.ext.key for r in read.records} == {f"Invoice:inv-{n:03d}" for n in range(250)}
+    assert sum(1 for c in xbooks.calls if c["path"] == "Invoices") == 4
+
+
+def _later_than_now() -> str:
+    """A time after the ones the fake gives its writes, so an edit made after a write reads as the newer record."""
+    return ms((datetime.now(UTC) + timedelta(hours=1)).strftime("%Y-%m-%dT%H:%M:%S.%fZ"))
+
+
+def test_a_write_lost_and_then_edited_in_xero_is_recovered_as_the_edit_when_the_retry_finds_it(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    cid, client, fid = _categorized(books, xbooks)
+    xbooks.lost = 1                                                   # the write lands; its answer never arrives
+    assert mirror.sync_once(books, client, cid, LATER) == ["journal.create: Xero did not answer"]
+    (bank,) = xbooks.rows["BankTransactions"]
+    xbooks.change("BankTransactions", {**bank, "LineItems": [{**bank["LineItems"][0], "LineAmount": "20.00"}],
+                                       "UpdatedDateUTC": _later_than_now()})     # edited before the retry
+    assert mirror.sync_once(books, client, cid, RETRY_AT) == []
+    assert _drain(books, client, cid, now=RETRY_AT, passes=2) == []
+    _assert_recovered_as_edited(books, fid, xbooks)
+
+
+def test_a_write_lost_and_then_edited_in_xero_is_recovered_from_the_change_feed_as_the_edit(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    cid, client, fid = _categorized(books, xbooks)
+    xbooks.lost = 1
+    assert mirror.sync_once(books, client, cid, LATER) == ["journal.create: Xero did not answer"]
+    (bank,) = xbooks.rows["BankTransactions"]
+    xbooks.change("BankTransactions", {**bank, "LineItems": [{**bank["LineItems"][0], "LineAmount": "20.00"}],
+                                       "UpdatedDateUTC": _later_than_now()})
+    assert _drain(books, client, cid, now=LATER2, passes=2) == []     # the feed brings the marked edit back first
+    _assert_recovered_as_edited(books, fid, xbooks)
+
+
+def _assert_recovered_as_edited(books: Any, fid: str, xbooks: XeroBooks) -> None:
+    with books.read() as c:
+        status, entry = c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()
+        expense = c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a "
+                            "ON a.id = l.account_id WHERE l.entry_id=? AND a.type='expense'",
+                            (entry,)).fetchone()[0]
+    assert status == "posted" and expense == 2000
+    assert len(_bank_puts(xbooks)) == 1
+
+
+def test_a_revised_credit_note_keeps_its_applications_on_the_invoice_and_points_them_at_its_new_entry(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.change("CreditNotes", _credit_note("cn-1", "inv-1", "100.00", updated="2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    xbooks.change("CreditNotes", _credit_note("cn-1", "inv-1", "100.00", updated="2026-10-15T13:30:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        entry = c.execute("SELECT local_id FROM fin_external_refs WHERE external_id='CreditMemo:cn-1'").fetchone()[0]
+        applied = c.execute("SELECT from_id, entry_id FROM fin_settlements "
+                            "WHERE from_kind='credit' AND voided_at IS NULL").fetchall()
+        paid = c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0]
+    assert [tuple(r) for r in applied] == [(entry, entry)]
+    assert paid == 10000
+
+
+def test_an_overpayment_applied_in_an_earlier_pass_stays_applied_when_its_journal_is_revised_in_a_later_one(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    xbooks.rows["BankTransactions"] = [_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00")]
+    xbooks.rows["Overpayments"] = [_held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00")])]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        cash_before = _cash_pnl(c)
+    # The application is revised in one pass (its allocation stays), its journal in a later one.
+    xbooks.change("Overpayments", _held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00")],
+                                        updated="2026-10-15T13:00:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    xbooks.change("BankTransactions", {**_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00"), "Reference": "revised",
+                                       "UpdatedDateUTC": ms("2026-10-15T13:30:00Z")})
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 10000
+        assert _cash_pnl(c) == cash_before
+        revisions = dict(c.execute("SELECT external_id, revision FROM fin_external_refs "
+                                   "WHERE external_id LIKE '%ov-1'").fetchall())
+    assert revisions == {"Overpayment:ov-1": "2026-10-15T13:30:00.000Z",
+                         "Payment:Overpayment:ov-1": "2026-10-15T13:00:00.000Z"}
 
 
 def _cash_expense(c: Any) -> int:

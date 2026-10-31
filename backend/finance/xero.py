@@ -22,7 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from datetime import timedelta
+from datetime import datetime, timedelta
 from decimal import Decimal
 from email.utils import format_datetime
 from typing import Any
@@ -142,6 +142,12 @@ def _fault(reply: Reply) -> str:
     if detail and detail.get("Message"):
         text = f"{text} {detail['Message']}".strip()
     return text[:MAX_TEXT] or f"Xero answered {reply.status}"
+
+
+def _latest(rows: list[dict[str, Any]]) -> datetime | None:
+    """The newest UpdatedDateUTC among rows, None when no row has one."""
+    stamps = [M.parse(text) for text in (X.stamp(row.get("UpdatedDateUTC")) for row in rows) if text]
+    return max(stamps, default=None)
 
 
 def _lookup_failure(reply: Reply) -> Sent:
@@ -341,38 +347,51 @@ class Xero:
         return self._taken(entity, rows[skip:skip + size])
 
     def changed(self, since: Mapping[str, str]) -> Read:
-        """The change feed, one cursor per entity (see feeds), each read from its own stamp, oldest change first. An
-        entity cut at the page cap is complete only to one second before the newest change it read, so the rest of its
-        changes are read next time and no other entity waits on it. Bank transfers have no change time: read whole."""
+        """The change feed, one cursor per entity (see feeds), each read from its own stamp, oldest change first. Each
+        page asks for the changes after the newest one the page before brought in (keyset paging), so an edit between
+        pages cannot move a row past the read. A feed cut at the page cap is complete to `through`: the stamp just
+        before the newest change read, which is kept exactly and read again from. Bank transfers have no change time:
+        read whole."""
         out: list[Record] = []
         through: list[tuple[str, str]] = []
         for entity in self.feeds:
             if entity not in since:
                 continue
-            stamp = format_datetime(M.parse(since[entity]), usegmt=True)     # If-Modified-Since is an HTTP date
             if entity in UNPAGED:
-                got = self._read(entity, 1, stamp)
+                got = self._read(entity, 1, format_datetime(M.parse(since[entity]), usegmt=True))  # an HTTP date
                 if not got.ok:
                     return got
                 out += got.records
                 continue
-            newest = ""
-            for number in range(1, MAX_PAGES + 1):
-                rows, reply = self._rows(entity, number, stamp, CHANGE_ORDER)
+            start = M.parse(since[entity])
+            ims, newest, page = start, start, 1
+            seen: set[tuple[str, str]] = set()
+            for _ in range(MAX_PAGES):
+                rows, reply = self._rows(entity, page, format_datetime(ims, usegmt=True), CHANGE_ORDER)
                 if reply.status != 200:
                     return Read(False, error=_fault(reply) if reply.status else reply.note)
                 got = self._taken(entity, rows)
                 if not got.ok:
                     return got
-                out += got.records
-                newest = max([newest, *(X.stamp(row.get("UpdatedDateUTC")) for row in rows)])
+                for record in got.records:
+                    ext = record if isinstance(record, M.Ext) else record.ext
+                    if (ext.key, ext.revision) not in seen:
+                        seen.add((ext.key, ext.revision))
+                        out.append(record)
                 if len(rows) < PAGE:
                     break
+                last = _latest(rows)
+                if last is not None and last > newest:
+                    # Every change before `last` is read by now, so the next page starts at the whole second before
+                    # it: a row at `last` is after that second, and a row a second earlier is read again, not missed.
+                    newest = last
+                    moved = max(ims, (last - timedelta(microseconds=1)).replace(microsecond=0))
+                    ims, page = (moved, 1) if moved != ims else (ims, page + 1)
+                else:
+                    page += 1       # the rows of one timestamp fill the page: the next page of that same second
             else:
-                # Without a change time on any row there is nothing to move to, so the cursor stays where it was.
-                complete = (M.parse(newest) - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ") if newest \
-                    else since[entity]
-                through.append((entity, complete))
+                cut = max(start, newest - timedelta(milliseconds=1))
+                through.append((entity, cut.strftime("%Y-%m-%dT%H:%M:%S.%fZ")))
         if "bank_transfers" in self.entities:
             got = self._read("bank_transfers", 1)
             if not got.ok:
@@ -391,11 +410,19 @@ class Xero:
             for row in rows:
                 if row.get(id_key) and _live(entity, row) and hit(row):
                     return Sent(True, kind=kind, external_id=str(row[id_key]),
-                                revision=X.stamp(row.get("UpdatedDateUTC")))
+                                revision=X.stamp(row.get("UpdatedDateUTC")), record=self._found(entity, row))
             if entity in UNPAGED or len(rows) < PAGE:
                 return None
         return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True,
                     unknown=True)
+
+    def _found(self, entity: str, row: dict[str, Any]) -> M.Document | M.Journal | M.Settlement | None:
+        """The record a found row reads as, for the books to check the write it answers against."""
+        got = self._taken(entity, [row])
+        for record in (got.records if got.ok else ()):
+            if isinstance(record, (M.Document, M.Journal, M.Settlement)):
+                return record
+        return None
 
     def _allocated(self, body: Mapping[str, Any]) -> Sent | None:
         """The allocation of a credit note to an invoice for the amount, when Xero holds it: the write may have landed."""

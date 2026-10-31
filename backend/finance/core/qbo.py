@@ -355,7 +355,7 @@ def _deposit_lines(row: Mapping[str, Any]) -> list[M.EntryLine]:
         units = _units(line.get("Amount"))
         account = _ref(detail, "AccountRef")
         out.append(M.EntryLine(f"Account:{account}" if account else "", units or 0,
-                               description=_id(line.get("Description"))))
+                               description=_id(line.get("Description")), key=_id(line.get("Id"))))
     return out
 
 
