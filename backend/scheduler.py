@@ -189,6 +189,7 @@ class Scheduler:
         steps = []
         try:
             finance.gateway_ensure()                   # a Gateway worker that died comes back on the next tick
+            finance.banking_ensure()                   # so does the bank worker
             with self.store.read() as c:
                 ready = finance_reads.is_set_up(c)
                 waiting = ready and finance_reads.events_waiting(c)

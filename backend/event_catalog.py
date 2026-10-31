@@ -114,6 +114,19 @@ def _build():
         {"budget_id": "b1", "event_id": "e1", "period": "2026-10-01"}, sourceless=True, outbound=False)
     add("finance.budget.cutoff", "A Finance budget reached its limit this period.",
         {"budget_id": "b1", "event_id": "e2", "period": "2026-10-01"}, sourceless=True, outbound=False)
+    # Finance's bank feed, payments, cards and sync (backend/finance/banking.py, payments.py, sync.py): ids only too.
+    add("finance.feed.new", "A new bank or card transaction arrived in Finance.",
+        {"feed_id": "f1", "event_id": "e3"}, sourceless=True, outbound=False)
+    add("finance.feed.needs_category", "A bank transaction needs a category before it can be posted.",
+        {"feed_id": "f1", "event_id": "e4"}, sourceless=True, outbound=False)
+    add("finance.payment.sent", "A Finance payment settled at the bank.",
+        {"payment_id": "p1", "event_id": "e5"}, sourceless=True, outbound=False)
+    add("finance.payment.failed", "A Finance payment failed, was returned or was rejected at the bank.",
+        {"payment_id": "p1", "why": "returned", "event_id": "e6"}, sourceless=True, outbound=False)
+    add("finance.card.declined", "A card charge was declined.",
+        {"card_id": "c1", "feed_id": "f2", "event_id": "e7"}, sourceless=True, outbound=False)
+    add("finance.sync.failed", "Finance could not sync a bank connection.",
+        {"connection_id": "n1", "event_id": "e8"}, sourceless=True, outbound=False)
     add("custom.*", "Anything a bot or rule sends: custom.<name>.",
         {"note": "custom.<name> carries whatever its sender puts in data."})
     return found

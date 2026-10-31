@@ -489,6 +489,11 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
     shown = content + (f"\nThe rest: hub trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
     payload = _payload_of(body)
     fired = []
+    if effective_preset(found) == "mercury":
+        # Mercury's events are Finance's alone (backend/finance/sync.py): kept once by event id, never shown to rules.
+        from .finance import actions as finance
+        kept = finance.mercury_delivery(c, None, payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
     if builtin(trigger_id):
         # A notice from Tico Team is judged once, as `tico.notice`; `webhook.received` is for senders outside Tico.
         results = tico_notices.arrived(c, found, delivery, type_, via, body, payload, content, _judge)

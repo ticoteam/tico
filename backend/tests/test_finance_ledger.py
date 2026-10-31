@@ -1,4 +1,4 @@
-"""The books: migration 64 on an existing hub, setup, the posting invariants (seeded property test: balanced posts,
+"""The books: migrations 64 and 65 on an existing hub, setup, the posting invariants (seeded property test: balanced posts,
 unbalanced never do, rollups always equal the lines), immutability and closed periods in the database itself."""
 import random
 import sqlite3
@@ -44,6 +44,18 @@ def test_migration_64_on_an_existing_hub(store):
         assert tables == {t for t in schema.table_names()}
         assert c.execute("SELECT value_json FROM registry_metadata WHERE key='kept'").fetchone()[0] == "1"
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=64").fetchone()[0] == 1
+
+
+def test_migration_65_adds_phase_1_to_an_install_from_64(store):
+    with store.transaction() as c:
+        c.execute("DELETE FROM cloud_migrations WHERE version=65")
+        c.execute("DROP TABLE fin_payments")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw_json")
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_payments'").fetchone()
+        assert "raw_json" in {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=65").fetchone()[0] == 1
 
 
 def test_setup_is_idempotent_and_takes_the_usage_cap(store):

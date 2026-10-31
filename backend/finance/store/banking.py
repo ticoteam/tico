@@ -26,6 +26,14 @@ def loads(raw: object) -> dict[str, Any]:
     return cast(dict[str, Any], value) if isinstance(value, dict) else {}
 
 
+def loads_list(raw: object) -> list[Any]:
+    try:
+        value = json.loads(str(raw or "[]"))
+    except ValueError:
+        return []
+    return cast(list[Any], value) if isinstance(value, list) else []
+
+
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:
     """Insert one row (an id is made when the row has none) and return its id."""
     assert table in TABLES
@@ -162,6 +170,21 @@ def feed_for_match(c: sqlite3.Connection, money_account_id: str, amount: int, st
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND amount=? AND txn_date BETWEEN ? AND ? "
                      "AND status='new' AND pending=0 ORDER BY txn_date, id", (money_account_id, amount, start, end)
                      ).fetchall()
+
+
+def transfer_candidates(c: sqlite3.Connection, money_account_ids: Sequence[str], amount: int, start: str,
+                        end: str) -> list[Any]:
+    """Settled, unreconciled rows on these money accounts with this amount in a window: a transfer's other side."""
+    if not money_account_ids:
+        return []
+    return c.execute(f"SELECT * FROM fin_feed_txns WHERE money_account_id IN ({_marks(money_account_ids)}) AND "
+                     "amount=? AND txn_date BETWEEN ? AND ? AND status IN ('new','posted') AND pending=0 AND "
+                     "reconciliation_id IS NULL ORDER BY txn_date, id", [*money_account_ids, amount, start, end]
+                     ).fetchall()
+
+
+def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
+    return c.execute("SELECT * FROM fin_feed_txns WHERE entry_id=? ORDER BY id", (entry_id,)).fetchall()
 
 
 def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> list[Any]:
@@ -452,3 +475,21 @@ def lines_page(c: sqlite3.Connection, book_id: str, *, account_ids: Sequence[str
                      f"l.description, e.memo, e.source, e.source_id, e.status AS entry_status FROM fin_lines l "
                      f"JOIN fin_entries e ON e.id=l.entry_id WHERE {' AND '.join(where)} "
                      f"ORDER BY l.entry_date DESC, l.id DESC LIMIT ?", [*args, most]).fetchall()
+
+
+def seed_rule(c: sqlite3.Connection, *, rule_id: str, name: str, words: str, when: Mapping[str, object],
+              outcome: Mapping[str, object], examples: Sequence[Mapping[str, object]], by: str, at: str) -> bool:
+    """A default gate rule, once: a rule with this id that exists (even disabled or edited) is left alone."""
+    return c.execute("INSERT OR IGNORE INTO fin_rules(id, kind, name, words, when_json, outcome_json, examples_json, "
+                     "owner, active, created_at, created_by) VALUES(?, 'gate', ?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                     (rule_id, name, words, dump(when), dump(outcome), dump(list(examples)), by, at, by)).rowcount == 1
+
+
+def rule_runs(c: sqlite3.Connection, rule_id: str, most: int) -> list[Any]:
+    return c.execute("SELECT * FROM fin_rule_runs WHERE rule_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
+                     (rule_id, most)).fetchall()
+
+
+def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
+    return c.execute("SELECT 1 FROM fin_payments WHERE recipient_id=? AND status='settled' LIMIT 1",
+                     (recipient_id,)).fetchone() is not None

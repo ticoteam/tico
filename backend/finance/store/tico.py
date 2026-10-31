@@ -297,6 +297,19 @@ def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tu
     return str(secret or ""), str(base or "")
 
 
+def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
+    """A stored credential's secret, read at use time ("" when it is gone or holds none). Never logged or kept."""
+    row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
+    if row is None or row["ciphertext"] is None or vault is None:
+        return ""
+    return str(cast(Any, vault).cipher.decrypt(c, row) or "")
+
+
+def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:
+    return c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)
+                     ).fetchone() is not None
+
+
 def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
     """Run `fn` once the caller's transaction commits (a doorbell); at once on a connection that has no such list."""
     pending = cast(list[Callable[[], None]] | None, getattr(c, "after_commit", None))

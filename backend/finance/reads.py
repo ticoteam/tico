@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from . import budgeting, limits, tab, usage
+from . import budgeting, limits, tab, tab_money, usage
 from . import context as _context
 from .store import usage as SU
 from .context import Ctx, load
@@ -488,6 +488,13 @@ cards = tab.cards
 sources = tab.sources
 access = tab.access
 view_as = tab.view_as
+# Money out and controls (finance/tab_money.py).
+payments = tab_money.payments
+recipients = tab_money.recipients
+reconciliations = tab_money.reconciliations
+statements = tab_money.statements
+rules = tab_money.rules
+may_connect = tab_money.may_connect
 
 
 # What usage limits and the server read (part B).

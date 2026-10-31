@@ -1719,6 +1719,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.create(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(64,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=65").fetchone():
+                    # Finance phase 1 (banking, cards, payments, gate rules): its new fin_* tables, and the columns it
+                    # added to tables migration 64 made. Idempotent, so an install made after phase 1 changes nothing.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase1(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(65,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

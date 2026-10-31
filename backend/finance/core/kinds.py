@@ -10,19 +10,32 @@ from .org import SYSTEM, Org
 ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
        "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
-       "payment_create", "recipient_add", "card_create", "card_update_limit", "card_freeze", "card_cancel",
+       "payment_create", "payment_cancel", "recipient_add", "card_create", "card_update_limit", "card_freeze",
+       "card_unfreeze", "card_cancel", "reconcile_undo", "connection_create", "payment_settings",
        "budget_create", "budget_update", "allocation_set", "projection_set",
        "view_grant", "view_revoke", "private_lines_set",
-       "rule_create", "rule_update", "rule_disable", "rule_test", "contact_create", "contact_update",
+       "rule_create", "rule_update", "rule_disable", "rule_enable", "rule_test", "contact_create", "contact_update",
        "account_create", "account_update", "right_grant", "right_revoke")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
-        "reopen_period", "right_grant", "right_revoke")
+        "reopen_period", "right_grant", "right_revoke",
+        # phase 1: banks, cards, payments, reconciliation and gate rules
+        "reconcile", "reconcile_undo", "connection_create", "payment_settings", "card_create", "card_update_limit",
+        "card_freeze", "card_unfreeze", "card_cancel", "recipient_add", "payment_create", "payment_cancel",
+        "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test")
 NEEDS = {"journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
-         "allocation_set": R.BUDGETS, "projection_set": R.BUDGETS}
+         "allocation_set": R.BUDGETS, "projection_set": R.BUDGETS, "reconcile": R.BOOK, "reconcile_undo": R.BOOK,
+         "card_create": R.CARDS, "card_update_limit": R.CARDS, "card_freeze": R.CARDS, "card_unfreeze": R.CARDS,
+         "card_cancel": R.CARDS, "recipient_add": R.PAY, "payment_create": R.PAY, "payment_cancel": R.PAY,
+         "rule_create": R.RULES, "rule_update": R.RULES, "rule_enable": R.RULES, "rule_disable": R.RULES,
+         "rule_test": R.RULES}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
-ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke")
+ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create")
+# Only the owner turns direct send on or off for the company (§9).
+OWNER_ONLY = ("payment_settings",)
+# System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
+SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)
 # A bot categorizing or posting more than this in one action (an entry's debits, or the lines it tags) asks a finance
 # admin (§6.4 rule 5).
@@ -51,6 +64,10 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     """The right check. None: the actor may ask. A Gate: they may not ask outright, only request through it (a
     teammate without `finance.budgets` requests and their manager approves, §4.4). Raises nothing; the caller turns
     a missing right with no fallback into a denial (returned as Gate("deny"))."""
+    if actor == SYSTEM and kind in SYSTEM_KINDS:
+        return None
+    if kind in OWNER_ONLY:
+        return None if org.owner and actor == org.owner else Gate("deny", rule="right:owner")
     if kind in ADMIN_ONLY:
         if not R.is_admin(org, actor, held):
             return Gate("deny", rule="right:finance.admin")

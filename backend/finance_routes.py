@@ -22,6 +22,16 @@ STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not
 Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account"]
 
 
+class FinanceConnectionRequest(Contract):
+    """Connect Mercury with a stored token credential. The approver is a Mercury user other than the token's creator,
+    who approves payments in Mercury; without one, payments stay off."""
+    credential_id: str = Field(min_length=1, max_length=120)
+    name: str | None = Field(None, max_length=120)
+    approver_email: str | None = Field(None, max_length=200)
+    token_creator_email: str | None = Field(None, max_length=200)
+    server_ip: str | None = Field(None, max_length=64)
+
+
 class FinanceActionRequest(Contract):
     """One Finance action: its kind (`budget.create`, `entry.post`, ...), its payload, and whether only to say what would
     happen."""
@@ -117,6 +127,66 @@ def install(app, store, auth, mutate):
         """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""
         who = viewer(request)
         return read(lambda c: finance_reads.access(c, who.actor))
+
+    @app.get("/api/v2/finance/payments")
+    def finance_payments(request: Request, status: Literal["queued", "awaiting_bank_approval", "submitted", "settled",
+                                                           "returned", "failed", "cancelled", "unknown"] | None = None,
+                         cursor: str | None = Query(None, max_length=100), limit: int = Query(50, ge=1, le=200),
+                         view_as: str | None = None):
+        """Payments the caller made or whose line they see, newest first, with their lifecycle status."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.payments(c, actor, status=status, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/recipients")
+    def finance_recipients(request: Request):
+        """Current recipients, last 4 only, for teammates who may pay."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.recipients(c, who.actor))
+
+    @app.get("/api/v2/finance/reconciliations")
+    def finance_reconciliations(request: Request, money_account_id: str | None = None,
+                                limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Reconciliations of the money accounts the caller sees, with each account's locked-through day."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.reconciliations(c, actor, money_account_id=money_account_id, limit=limit))
+
+    @app.get("/api/v2/finance/statements")
+    def finance_statements(request: Request, money_account_id: str | None = None,
+                           limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Bank and card statements for the money accounts the caller sees."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.statements(c, actor, money_account_id=money_account_id, limit=limit))
+
+    @app.get("/api/v2/finance/rules")
+    def finance_rules(request: Request, external_rule_id: str | None = Query(None, max_length=120)):
+        """Finance gate rules for teammates who may write them; `external_rule_id` lists those linked to one."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
+
+    @app.post("/api/v2/finance/connections")
+    def finance_connect(request: Request, body: FinanceConnectionRequest):
+        """Connect Mercury: the token is tested and its accounts listed (outside any transaction), then the
+        connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
+        who = viewer(request)
+        if not read(lambda c: finance_reads.may_connect(c, who.actor)):
+            raise Problem("denied", "connecting a bank is for finance admins", 403)
+        found, why = finance.mercury_probe(store, request.app.state.vault, body.credential_id)
+        if why:
+            raise Problem("invalid", why, 422)
+        key = (request.headers.get("idempotency-key") or "").strip()
+        payload = {"provider": "mercury", "credential_id": body.credential_id, "probe": found,
+                   **{k: v for k, v in (("name", body.name), ("approver_email", body.approver_email),
+                                        ("token_creator_email", body.token_creator_email),
+                                        ("server_ip", body.server_ip)) if v}}
+
+        def work(c):
+            done = finance.act(c, who.actor, "connection_create", payload, key)
+            return {"action_id": done.action_id, "kind": done.kind, "status": done.status, "code": done.code,
+                    "reason": done.reason, "approver": done.approver, "result": dict(done.result)}
+        saved = mutate(request, body, work)
+        if saved.get("status") == "committed":
+            finance.banking_ring()                     # after the commit: the worker's first sync starts now
+        return saved
 
     @app.get("/api/v2/finance/expenses")
     def finance_expenses(request: Request, start: str | None = None, end: str | None = None,

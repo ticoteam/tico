@@ -1,5 +1,5 @@
-"""Every Finance table (spec §4), created once by the core migration chain (backend/store.py, cloud migration 64),
-including the ones later phases fill, so the schema has one starting point.
+"""Every Finance table (spec §4), created by the core migration chain (backend/store.py: cloud migration 64, and 65
+for phase 1's additions), including the ones later phases fill, so the schema has one starting point.
 
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
@@ -361,8 +361,8 @@ BEGIN SELECT RAISE(ABORT, 'period closed'); END;
 """
 
 
-# Columns phase 1 added to tables an install may already have from migration 64 (table, column, definition). `ensure`
-# adds whichever is missing, so an install upgraded in place ends with the same schema as a new one.
+# Columns phase 1 added to tables an install may already have from migration 64 (table, column, definition). Migration
+# 65 (`phase1`) adds whichever is missing, so an upgraded install ends with the same schema as a new one.
 ADDED = (
     ("fin_money_accounts", "provider_account_id", "TEXT"), ("fin_money_accounts", "subtype", "TEXT NOT NULL DEFAULT ''"),
     ("fin_money_accounts", "available_balance", "BIGINT"),
@@ -427,13 +427,7 @@ def create(c: sqlite3.Connection) -> None:
     tico.watch_org(c)
 
 
-def current(c: sqlite3.Connection) -> bool:
-    """Whether this install has every Finance table and column (cheap: one PRAGMA per changed table)."""
-    names = {str(r[0]) for r in c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'fin_%'")}
-    if not set(table_names()) <= names:
-        return False
-    for table in {t for t, _, _ in ADDED}:
-        cols = {str(r[1]) for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
-        if not {col for t, col, _ in ADDED if t == table} <= cols:
-            return False
-    return True
+def phase1(c: sqlite3.Connection) -> None:
+    """Cloud migration 65: phase 1's tables, columns, indexes and triggers on an install migration 64 made before
+    them. The same statements as `create`, which skips whatever exists."""
+    create(c)

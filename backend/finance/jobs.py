@@ -1,6 +1,7 @@
 """Finance's short scheduler jobs (spec §7.3, §9), each one step inside the caller's transaction and none touching the
 network: setting Finance up on an install that lacks it, draining `fin_events` into Tico's rules and automations with
 the budget owner's notice, opening next month's period, and what the Gateway cap should be."""
+import json
 import sqlite3
 from collections.abc import Mapping
 from typing import cast
@@ -10,11 +11,11 @@ from .budgeting import LIMIT_EVENT, WARN_EVENT, actual, event_period, state, sub
 from .context import is_set_up, load
 from .core import budgets as B
 from .core import dates
+from .core.org import SYSTEM
 from .posting import ensure_period
 from .setup import AI, VIDEO, setup
 from .store import budgets as SB
 from .store import ledger as SL
-from .store import schema
 from .store import tico
 from .store import usage as SU
 
@@ -26,8 +27,6 @@ CAP_KEY = "gateway_cap"                 # what the Gateway cap worker last pushe
 def ensure_setup(c: sqlite3.Connection, owner_email: str = "", at: str | None = None) -> bool:
     """Set Finance up for the install owner (the stored owner record, else `owner_email`'s person). Idempotent; False
     when the install has no owner yet."""
-    if not schema.current(c):
-        schema.create(c)                # a release's new fin_* tables and columns, added in place
     owner = tico.owner_person(c) or tico.person_by_email(c, owner_email)
     if not owner:
         return False
@@ -63,9 +62,15 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
         tico.after_commit(c, gateway_sync.ring)
     for row in rows:
         name, subject, eid = str(row["name"]), str(row["subject"]), str(row["id"])
-        tico.emit(c, name, subject, {"budget_id": subject, "event_id": eid,
-                                        "period": event_period(str(row["period_key"]))})
         b = ctx.budgets().get(subject) if ctx is not None else None
+        if name.startswith("finance.budget."):
+            data: dict[str, object] = {"budget_id": subject, "event_id": eid,
+                                       "period": event_period(str(row["period_key"]))}
+        else:
+            data = {**cast(dict[str, object], json.loads(str(row["payload_json"] or "{}"))), "event_id": eid}
+        tico.emit(c, name, subject, data)
+        if ctx is not None and b is not None and name == LIMIT_EVENT and b.at_limit == "decline":
+            _freeze_cards(c, b.id, eid, ctx.at)
         if ctx is not None and b is not None and name in (WARN_EVENT, LIMIT_EVENT):
             owner = b.owner if b.owner.startswith("human:") and handlers.sees_budget(ctx, b.owner, b) else ctx.org.owner
             if owner:
@@ -78,6 +83,16 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
                     c.execute("RELEASE fin_notice")
         SU.drained(c, eid, ctx.at if ctx is not None else tico.now())
     return len(rows)
+
+
+def _freeze_cards(c: sqlite3.Connection, budget_id: str, event_id: str, at: str) -> None:
+    """A decline budget at cutoff freezes its cards (§6.4 rule 4), as system work through the one write path."""
+    from . import actions
+    from .store import banking as SK
+    ctx = load(c, at)
+    if SK.cards_on_budgets(c, subtree(ctx, budget_id)):
+        actions.act(c, SYSTEM, "card_freeze", {"budget_id": budget_id, "reason": "budget at cutoff"},
+                    f"cutoff-freeze-{event_id}", at=at)
 
 
 def open_next_period(c: sqlite3.Connection, at: str | None = None) -> str | None:

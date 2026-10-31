@@ -16,6 +16,8 @@ Unix seconds. Nothing here touches the database, so each can be tested with a pu
 - `slack`: `X-Slack-Signature: v0=<hex>`, HMAC-SHA256 over `v0:<X-Slack-Request-Timestamp>:<body>` with Slack's signing
   secret as the key. Within five minutes. Slack's `url_verification` call is answered with its challenge
   (`slack_challenge`) before it counts as a delivery.
+- `mercury`: `Mercury-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over `<t>.<body>` with the endpoint's secret (Mercury
+  returns it once when the webhook is made). Within five minutes. A Mercury trigger's deliveries go to Finance only.
 """
 import base64
 import binascii
@@ -25,10 +27,10 @@ import json
 import re
 import secrets
 
-PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack")
+PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack", "mercury")
 TOLERANCE = 300                         # seconds a timestamped signature stays good, either side of now
 TYPE_FROM = {"github": "X-GitHub-Event", "stripe": "/type", "standard": "/type",
-             "slack": "/event/type|/type"}      # a preset's default `type_from`; `a|b` tries a, then b
+             "slack": "/event/type|/type", "mercury": "/resourceType"}      # a preset's default `type_from`; `a|b` tries a, then b
 MAX_TYPE = 100
 PREFIX = "whsec_"
 
@@ -117,20 +119,25 @@ def _standard(headers, body, secret, now):
     return False, "The signature does not match the body and this trigger's signing secret"
 
 
-def _stripe(headers, body, secret, now):
-    header = str(headers.get("stripe-signature") or "").strip()
+def _stripe(headers, body, secret, now, header_name="stripe-signature", shown="Stripe-Signature"):
+    header = str(headers.get(header_name) or "").strip()
     if not header:
-        return False, "This trigger needs a Stripe-Signature header"
+        return False, f"This trigger needs a {shown} header"
     pairs = [part.strip().partition("=") for part in header.split(",")]
     stamps = [value for name, _, value in pairs if name == "t"]
     if not stamps:
-        return False, "The Stripe-Signature header has no timestamp"
+        return False, f"The {shown} header has no timestamp"
     if (why := _stamp(stamps[0], now)):
         return False, why
     want = hmac.new(secret.encode(), f"{stamps[0]}.".encode() + body, hashlib.sha256).hexdigest()
     if any(name == "v1" and _constant(value.lower(), want) for name, _, value in pairs):
         return True, ""
     return False, "The signature does not match the body and this trigger's signing secret"
+
+
+def _mercury(headers, body, secret, now):
+    """Mercury signs as Stripe does, under its own header name."""
+    return _stripe(headers, body, secret, now, "mercury-signature", "Mercury-Signature")
 
 
 def _slack(headers, body, secret, now):
@@ -156,7 +163,8 @@ def slack_challenge(body):
     return None
 
 
-VERIFY = {"hmac": _hmac, "github": _github, "standard": _standard, "stripe": _stripe, "slack": _slack}
+VERIFY = {"hmac": _hmac, "github": _github, "standard": _standard, "stripe": _stripe, "slack": _slack,
+          "mercury": _mercury}
 
 
 def verify(preset, headers, body, secret, now):
@@ -198,14 +206,16 @@ def sender_id(headers):
 
 
 def body_id(preset, body):
-    """The sender's delivery id when it travels in the body: Stripe's `evt_...` at `/id`, the same for a resend."""
-    if preset != "stripe":
+    """The sender's delivery id when it travels in the body: Stripe's `evt_...` or Mercury's event id at `/id`, the
+    same for a resend."""
+    if preset not in ("stripe", "mercury"):
         return ""
     try:
         found = json.loads(body.decode("utf-8", "replace")).get("id")
     except (ValueError, AttributeError):
         return ""
-    return found if isinstance(found, str) and re.fullmatch(r"evt_[A-Za-z0-9_]{1,100}", found) else ""
+    shape = r"evt_[A-Za-z0-9_]{1,100}" if preset == "stripe" else r"[A-Za-z0-9_-]{1,100}"
+    return found if isinstance(found, str) and re.fullmatch(shape, found) else ""
 
 
 def fallback_id(headers, body, received_at):

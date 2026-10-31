@@ -6,9 +6,11 @@ from dataclasses import dataclass
 from .context import APPROVER_KEY, OWNER_KEY, now
 from .core import budgets as B
 from .core import dates, money
+from .core import gates as G
 from .core.errors import invalid
 from .core.ledger import Account, Book
 from .store import access as SA
+from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
@@ -77,6 +79,9 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
         start = dates.add_months(first, n)
         SL.insert_period(c, book.id, start.isoformat(), dates.month_end(start).isoformat(), by, at)
     SA.seed_defaults(c, by, at)
+    for rid, name, words, when, outcome, examples in G.DEFAULTS:
+        SK.seed_rule(c, rule_id=rid, name=name, words=words, when=when, outcome=outcome, examples=examples, by=by,
+                     at=at)
     if SA.view_version(c) == 0:
         SA.bump_view(c, "setup", at)
     existing = SB.budgets(c, book.id)

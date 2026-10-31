@@ -25,7 +25,7 @@ GROUP_NAMES = {"banks": "Banks", "cards": "Cards", "payments": "Payments", "payr
 OTHER_CODE = "6900"
 
 
-def _page(limit: int) -> int:
+def page_size(limit: int) -> int:
     return max(1, min(int(limit), MAX_PAGE))
 
 
@@ -192,7 +192,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         raise invalid("source is all|feed|entry")
     if status and status not in ("new", "matched", "posted", "ignored", "pending"):
         raise invalid("status is new|matched|posted|ignored|pending")
-    most = _page(limit)
+    most = page_size(limit)
     start_day = dates.day(start).isoformat() if start else ""
     end_day = dates.day(end).isoformat() if end else ""
     text = (q or "").strip()[:100]
@@ -308,7 +308,7 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     view = ctx.view(viewer)
     if status and status not in ("active", "frozen", "cancelled"):
         raise invalid("status is active|frozen|cancelled")
-    most = _page(limit)
+    most = page_size(limit)
     marks = decode_cursor(cursor)
     after = marks[0] if marks else ""
     accounts = _card_accounts(ctx)

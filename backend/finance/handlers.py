@@ -15,6 +15,7 @@ from .core import view as VW
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .store import access as SA
+from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
@@ -31,6 +32,8 @@ class Plan:
     # Defaults that depend on when the action runs (a version's effective day, a reversal's date), fixed into the
     # canonical payload before an approval is asked, so what runs is exactly what was approved.
     resolved: Result = field(default_factory=lambda: Result())
+    # What gate rules match on beyond kind and actor (amount, recipient, accounts, tags...), see finance/gating.py.
+    facts: Result = field(default_factory=lambda: Result())
 
 
 Planner = Callable[[Ctx, str, V.Payload], Plan]
@@ -149,6 +152,8 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             _need_line(ctx, who, item.account_id, item.tags)
         if row["status"] != "posted" or row["reverses_id"]:
             raise FinanceError(CONFLICT, "that entry is already reversed or is a reversal")
+        if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)):
+            raise FinanceError(CONFLICT, "that entry is in a reconciled statement; undo the reconciliation first")
         total = sum(x.amount for x in lines if x.amount > 0)
         return Plan(K.default_gate(ctx.org, who, "journal", total=total), f"Reverse entry {entry_id}",
                     lambda aid: {"entry_id": posting.reverse(ctx, entry_id, day=when, memo=memo, by=who,
@@ -173,7 +178,10 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Add or replace tags on posted lines. Lines in a closed period are refused until it is reopened, so a closed
-    month's scoped reports never change underneath."""
+    month's scoped reports never change underneath. With `feed_id` it posts or ignores a bank or card row instead."""
+    if "feed_id" in p:
+        from .banking import categorize_feed
+        return categorize_feed(ctx, who, p)
     V.only(p, ("lines", "mode"))
     mode = V.choice(p, "mode", ("add", "replace"), "add")
     wanted: dict[str, dict[str, str]] = {}
@@ -445,9 +453,12 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 raise invalid("it does not fit: not enough left")
 
     def apply(aid: str) -> Result:
-        return {"allocation_id": SB.upsert_allocation(ctx.c, budget_id=b.id, target_kind=kind, target_id=target,
-                                                      amount=amount, currency=ctx.book.base_currency, by=who,
-                                                      at=ctx.at)}
+        made = SB.upsert_allocation(ctx.c, budget_id=b.id, target_kind=kind, target_id=target, amount=amount,
+                                    currency=ctx.book.base_currency, by=who, at=ctx.at)
+        if kind == "card":
+            from .cards import limit_follows          # a card's provider limit is its allocation (§8.2)
+            limit_follows(ctx, target, amount, aid, who)
+        return {"allocation_id": made}
     return Plan(K.default_gate(ctx.org, who, "allocation_set"), f"Set aside {amount / 100:.2f} of {b.name} for "
                 f"{kind} {target}", apply)
 
@@ -600,7 +611,7 @@ PLANNERS: dict[str, Planner] = {
     "budget_update": budget_update, "allocation_set": allocation_set, "projection_set": projection_set,
     "view_grant": view_grant, "view_revoke": view_revoke, "private_lines_set": private_lines_set,
     "right_grant": right_grant, "right_revoke": right_revoke}
-assert set(PLANNERS) == set(K.LIVE)
+assert set(PLANNERS) <= set(K.LIVE)          # the rest live in banking, cards, payments and gating (actions.py)
 
 __all__ = ["Plan", "PLANNERS", "sees_scope", "sees_budget", "shows_numbers", "private_scope", "may_write",
            "suspend_unstanding", "SYSTEM"]

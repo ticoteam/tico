@@ -1407,6 +1407,21 @@ STABLE.extend([
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
      "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
      "FinanceAccess"),
+    ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
+     "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
+     "finance admin", "FinancePayments"),
+    ("/api/v2/finance/recipients", "get", "Finance", "listFinanceRecipients",
+     "Current payment recipients, last 4 only, for teammates who may pay", "FinanceRecipients"),
+    ("/api/v2/finance/reconciliations", "get", "Finance", "listFinanceReconciliations",
+     "Reconciliations of the money accounts the caller sees, and how far each is locked", "FinanceReconciliations"),
+    ("/api/v2/finance/statements", "get", "Finance", "listFinanceStatements",
+     "Bank and card statements for the money accounts the caller sees", "FinanceStatements"),
+    ("/api/v2/finance/rules", "get", "Finance", "listFinanceRules",
+     "Finance gate rules with their words, condition, outcome, examples and latest runs, for teammates who may write "
+     "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
+    ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
+     "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
+     "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
     ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
      "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
@@ -1484,6 +1499,42 @@ SCHEMAS.update({
         "can_view_as": "b", "can_edit_defaults": "b", "view_version": "i"}),
     "FinanceAction": obj({"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"},
                          required=["status", "kind"]),
+    "FinancePayments": obj({
+        "payments": items(obj({
+            "id": "s", "status": {"type": "string", "enum": ["queued", "awaiting_bank_approval", "submitted", "settled",
+                                                             "returned", "failed", "cancelled", "unknown"]},
+            "amount": "i", "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
+            "recipient": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
+                                                                     "name": {"type": "string"},
+                                                                     "last4": {"type": ["string", "null"]},
+                                                                     "version": {"type": "integer"}}},
+            "account": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
+                                                                   "code": {"type": "string"},
+                                                                   "name": {"type": "string"}}},
+            "money_account_id": "s", "created_by": "s", "created_at": "s", "settled_at": "n", "error": "n"},
+            required=["id", "status", "amount", "currency"])),
+        "next_cursor": "n"}),
+    "FinanceRecipients": obj({"recipients": items(obj({
+        "id": "s", "name": "s", "method": "s", "last4": "n", "version": "i", "replaces_id": "n", "known": "b",
+        "synced": "b", "created_at": "s"}, required=["id", "name", "method", "version"]))}),
+    "FinanceReconciliations": obj({
+        "reconciliations": items(obj({
+            "id": "s", "money_account_id": "s", "statement_end": "s", "statement_balance": "i", "difference": "i",
+            "status": {"type": "string", "enum": ["open", "done", "undone"]}, "cleared_total": "i", "cleared": "i",
+            "statement_id": "n", "created_by": "s", "created_at": "s", "undone_at": "n"},
+            required=["id", "money_account_id", "statement_end", "statement_balance", "difference", "status"])),
+        "locked_through": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}}),
+    "FinanceStatements": obj({"statements": items(obj({
+        "id": "s", "money_account_id": "s", "start_date": "n", "end_date": "s",
+        "starting_balance": {"type": ["integer", "null"]}, "ending_balance": "i", "currency": "s", "source": "s"},
+        required=["id", "money_account_id", "end_date", "ending_balance"]))}),
+    "FinanceRules": obj({"rules": items(obj({
+        "id": "s", "name": "s", "words": "s", "when": "o", "outcome": "o",
+        "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
+        "active": "b", "created_at": "s",
+        "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
+    "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
+                                    "approver": "n", "result": "o"}, required=["status", "kind"]),
 })
 
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
@@ -1747,7 +1798,7 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}','get','Triggers','getTrigger','One trigger',None),
     ('/api/v2/triggers/{trigger_id}','post','Triggers','updateTrigger','Change its name, preset, type source, hourly limit, keep days or unheard setting',None),
     ('/api/v2/triggers/{trigger_id}/rotate','post','Triggers','rotateTrigger','A new address secret; the old one stops at once',None),
-    ('/api/v2/triggers/{trigger_id}/signing','post','Triggers','signTrigger','Verify calls with a preset (hmac, github, standard, stripe, slack) or stop; the signing secret is shown once',None),
+    ('/api/v2/triggers/{trigger_id}/signing','post','Triggers','signTrigger','Verify calls with a preset (hmac, github, standard, stripe, slack, mercury) or stop; the signing secret is shown once',None),
     ('/api/v2/triggers/{trigger_id}/delete','post','Triggers','deleteTrigger','Delete a trigger and its kept calls',None),
     ('/api/v2/triggers/{trigger_id}/deliveries','get','Triggers','listTriggerDeliveries','The latest calls, newest first',None),
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}','get','Triggers','getTriggerDelivery','One kept call: redacted headers and body (a bot reads fenced 20,000-character parts, only of a call it was given)',None),
