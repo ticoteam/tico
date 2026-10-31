@@ -8317,6 +8317,86 @@
         ]
       }
     },
+    "/api/v2/finance/chart": {
+      "get": {
+        "summary": "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill keeps expense and asset lines, invoice income lines; for teammates who write to the books",
+        "operationId": "getFinanceChart",
+        "parameters": [
+          {
+            "name": "for",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "bill",
+                    "invoice",
+                    "journal"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "For"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceChart"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/connections": {
       "post": {
         "summary": "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and mapped into the books. The Idempotency-Key is the action's key",
@@ -35213,7 +35293,10 @@
                   }
                 },
                 "rights": {
-                  "type": "array",
+                  "type": [
+                    "array",
+                    "null"
+                  ],
                   "items": {
                     "type": "string"
                   }
@@ -35899,6 +35982,78 @@
         "required": [
           "cards",
           "next",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceChart": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "number": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "company_wide": {
+                  "type": "boolean"
+                },
+                "attributable": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "team": {
+                        "type": "string"
+                      },
+                      "teammate": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "number",
+                "type"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accounts",
+          "more",
           "view_version"
         ],
         "additionalProperties": true

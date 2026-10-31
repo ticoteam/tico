@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from .context import Ctx, load
 from .core import dates
+from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, descendants
@@ -23,6 +24,9 @@ GROUPS = ("banks", "cards", "payments", "payroll", "bills_invoices", "tico", "ac
 GROUP_NAMES = {"banks": "Banks", "cards": "Cards", "payments": "Payments", "payroll": "Payroll",
                "bills_invoices": "Bills and invoices", "tico": "Tico", "accounting": "Accounting", "manual": "Manual"}
 OTHER_CODE = "6900"
+CHART_MOST = 2000
+CONTROL_SUBTYPES = ("payable", "receivable")
+CHART_FOR = {"bill": ("expense", "asset"), "invoice": ("income",)}
 
 
 def page_size(limit: int) -> int:
@@ -527,34 +531,37 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
-    """Who can see what in Finance: the org chart with each teammate's default and grants, private lines and the
-    defaults. The owner sees everyone and may view as anyone; a manager sees the teammates in the teams they lead
-    (whom they may grant to); anyone else sees their own row."""
+    """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
+    and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
+    sees their own row and the teammates in the teams they manage (nested), with defaults and grants but no rights and
+    no private lines. Anyone else sees only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
+    admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
-    everyone = sorted(org.humans | org.bots)
-    if owner:
-        shown = everyone
+    own_team = org.team_of.get(viewer, "")
+    if admin:
+        shown = sorted(org.humans | org.bots)
     else:
-        shown = [m for m in everyone if m == viewer or org.team_of.get(m, "") in led]
+        shown = sorted({viewer} | {m for m in org.members(led) if m in org.humans or m in org.bots})
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
-    rights_rows = {m: sorted(ctx.rights(m)) for m in shown}
     teammates: list[Row] = []
     for m in shown:
         mine = [g for g in grants if VW.applies(org, g, m)]
+        # Rights are admin-only, except a teammate's own.
+        rights = sorted(ctx.rights(m)) if admin or m == viewer else None
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
                           "default": _default_of(bool(org.led_by(m)), defaults, bool(org.owner) and m == org.owner),
-                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights_rows[m]})
+                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
              for t in sorted(org.teams.values(), key=lambda x: x.name)
-             if owner or t.id in led or t.id == org.team_of.get(viewer, "")]
+             if admin or t.id in led or t.id == own_team]
     private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
                 "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
-               for a, p in sorted(ctx.private().items())]
+               for a, p in sorted(ctx.private().items())] if admin else []
     return {"teams": teams, "teammates": teammates, "private_lines": private,
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
@@ -571,3 +578,54 @@ def view_as(c: sqlite3.Connection, viewer: str, target: str, at: str | None = No
     if target not in ctx.org.humans | ctx.org.bots:
         raise FinanceError(NOT_FOUND, "no such teammate")
     return target
+
+
+def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: str | None = None) -> Row:
+    """The active lines the viewer may post to, for the bill, invoice and journal forms: every line in their view,
+    for teammates who write to the books (finance.book, ap or ar). `for_` bill keeps expense and asset lines, invoice
+    income lines (never accounts payable or receivable, which only documents move); journal keeps every line.
+    `company_wide` says whether a line takes untagged amounts from this viewer; when it does not, `attributable` lists
+    the team and teammate tags they may use on it (the same rule a write checks)."""
+    from .handlers import may_write
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    held = ctx.rights(viewer)
+    if not any(R.has(ctx.org, viewer, r, held) for r in (R.BOOK, R.AP, R.AR)):
+        raise denied("the chart is for teammates who write to the books")
+    if for_ is not None and for_ not in (*CHART_FOR, "journal"):
+        raise invalid("for is bill|invoice|journal")
+    types = CHART_FOR.get(for_ or "journal")
+    out: list[Row] = []
+    for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id)):
+        if not a.active or not (view.everything or view.sees_account(a)):
+            continue
+        if types is not None and (a.type not in types or a.subtype in CONTROL_SUBTYPES):
+            continue
+        wide = may_write(ctx, viewer, a.id, {})
+        row: Row = {"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+                    "parent_id": a.parent_id or None, "company_wide": wide}
+        if not wide:
+            row["attributable"] = _attributable(ctx, viewer, a)
+        out.append(row)
+    return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST, "view_version": view.version}
+
+
+ATTRIBUTABLE_MOST = 200
+
+
+def _attributable(ctx: Ctx, viewer: str, account: Account) -> list[Row]:
+    """The tags the viewer may put an amount on this line under (handlers.may_write decides each): the viewer's own
+    teammate tag first (when allowed), then teams, then other teammates, as {"team": id} or {"teammate": id}."""
+    from .handlers import may_write
+    view = ctx.view(viewer)
+    mine = may_write(ctx, viewer, account.id, {"teammate": viewer})
+    out: list[Row] = [{"teammate": viewer}] if mine else []     # their own tag first, never cut by the cap
+    for t in sorted(view.teams(account)):
+        if may_write(ctx, viewer, account.id, {"team": t}):
+            out.append({"team": t})
+    for m in sorted(ctx.org.humans | ctx.org.bots):
+        if len(out) >= ATTRIBUTABLE_MOST:
+            break
+        if m != viewer and may_write(ctx, viewer, account.id, {"teammate": m}):
+            out.append({"teammate": m})
+    return out[:ATTRIBUTABLE_MOST]

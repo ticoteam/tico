@@ -141,6 +141,14 @@ def install(app, store, auth, mutate):
         who = viewer(request)
         return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
 
+    @app.get("/api/v2/finance/chart")
+    def finance_chart(request: Request, for_: Literal["bill", "invoice", "journal"] | None = Query(None, alias="for"),
+                      view_as: str | None = None):
+        """The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for
+        teammates who write to the books."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.chart(c, actor, for_=for_))
+
     @app.get("/api/v2/finance/access")
     def finance_access(request: Request):
         """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""

@@ -505,6 +505,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
             entries.append({"line_id": r["line_id"], "entry_id": r["entry_id"], "date": r["entry_date"],
                             "account_id": r["account_id"], "amount": int(r["amount"]), "vendor": r["contact_id"],
                             "description": r["description"], "memo": r["memo"], "source": r["source"],
+                            "status": str(r["entry_status"]), "reverses": r["reverses_id"] or None,
                             "tags": tags.get(r["line_id"], {})})
         more = more or len(rows) > most * 4
         out["paid_by"] = _paid_by(s, seen)
@@ -628,6 +629,7 @@ cards = tab.cards
 sources = tab.sources
 access = tab.access
 view_as = tab.view_as
+chart = tab.chart
 # Money out and controls (finance/tab_money.py).
 payments = tab_money.payments
 recipients = tab_money.recipients

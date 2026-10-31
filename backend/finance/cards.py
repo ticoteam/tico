@@ -10,6 +10,7 @@ as it stands then (a freeze made before then follows once it exists); a card lef
 (`WAITING` until it has one), and a cancelled one never is. A lower limit or a cancel keeps the old reservation until
 Mercury confirms it (`allocation_due`), so the budget never counts on room the card can still spend."""
 import sqlite3
+from collections.abc import Callable
 from typing import Any, cast
 
 from . import handlers
@@ -56,10 +57,12 @@ def _program(ctx: Ctx, money_id: str | None) -> Any:
 
 def queue(ctx: Ctx, card: Any, op: str, body: dict[str, object], key: str, aid: str, by: str) -> None:
     """One write owed to the provider for this card; the card shows `pending` until the worker sends it. A card_sync
-    already waiting (not yet claimed) covers any later change, so a second one is not queued."""
+    already waiting (not yet claimed) covers any later change, so a second one is not queued. The worker is rung once
+    the action commits, so Mercury hears of the change now rather than at its next sweep."""
     if op == "card_sync" and SK.card_sync_waiting(ctx.c, str(card["id"])):
         SK.update(ctx.c, "fin_cards", str(card["id"]), {"sync_status": "pending", "sync_error": None,
                                                         "updated_at": ctx.at})
+        _ring_after_commit(ctx)
         return
     money = SK.get(ctx.c, "fin_money_accounts", str(card["money_account_id"] or ""))
     SK.outbox_add(ctx.c, connection_id=str(money["connection_id"]) if money is not None and money["connection_id"]
@@ -67,6 +70,18 @@ def queue(ctx: Ctx, card: Any, op: str, body: dict[str, object], key: str, aid: 
                   at=ctx.at)
     SK.update(ctx.c, "fin_cards", str(card["id"]), {"sync_status": "pending", "sync_error": None,
                                                     "updated_at": ctx.at})
+    _ring_after_commit(ctx)
+
+
+def _ring_after_commit(ctx: Ctx) -> None:
+    """Ring the bank worker after this transaction commits (the store runs `after_commit` callbacks then, and drops
+    them on rollback), so the worker reads the outbox row it can see. Imported here: sync reads cards."""
+    from . import sync
+    hooks = cast(list[Callable[[], object]] | None, getattr(ctx.c, "after_commit", None))
+    if hooks is not None:
+        hooks.append(sync.ring)
+    else:
+        sync.ring()
 
 
 def sync(ctx: Ctx, card_id: str, aid: str, by: str, after: str = "") -> None:

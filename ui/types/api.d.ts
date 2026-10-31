@@ -1101,7 +1101,7 @@ export type FinanceAccess = {
   grants: Array<Record<string, unknown>>;
   kind: string;
   reports_to: string | null;
-  rights: Array<string>;
+  rights: Array<string> | null;
   team: string | null;
   teammate: string;
 }>;
@@ -1233,6 +1233,24 @@ export type FinanceCards = {
   sync_status: string;
 }>;
   next: string | null;
+  view_version: number;
+};
+
+export type FinanceChart = {
+  accounts: Array<{
+  attributable?: Array<{
+  team?: string;
+  teammate?: string;
+}>;
+  company_wide?: boolean;
+  id: string;
+  name: string;
+  number: string;
+  parent_id?: string | null;
+  subtype?: string;
+  type: string;
+}>;
+  more: boolean;
   view_version: number;
 };
 
@@ -5312,6 +5330,14 @@ export type GetFinanceBalanceSheetParams = {
 };
 export type GetFinanceBalanceSheetBody = never;
 export type GetFinanceBalanceSheetResponse = FinanceBalanceSheet;
+
+/** GET /api/v2/finance/chart */
+export type GetFinanceChartParams = {
+  for?: "bill" | "invoice" | "journal" | null;
+  view_as?: string | null;
+};
+export type GetFinanceChartBody = never;
+export type GetFinanceChartResponse = FinanceChart;
 
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
