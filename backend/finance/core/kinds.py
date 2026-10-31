@@ -65,6 +65,9 @@ OWNER_ONLY = ("payment_settings", "view_defaults_set")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
 SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)
+# Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach an approval, a
+# rule test or anything a requester reads. Drift still compares it, from the stored body.
+SERVER_ONLY_KEYS = frozenset({"raise_check"})
 
 
 def approval_kind(kind: str) -> str:

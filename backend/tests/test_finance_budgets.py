@@ -501,3 +501,39 @@ def test_a_fit_refusal_keeps_no_amounts_and_a_replay_gives_the_viewer_its_senten
         assert stored == "it does not fit: not enough left"
         replay = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 60_000}, key="too-big")
         assert replay.replayed and replay.reason == refused.reason
+
+
+def test_a_rule_that_names_the_finance_approver_never_lets_them_approve_their_own_raise(books):
+    # Cara owns Software and is the finance approver; a rule asks a finance admin for every budget change. Her raise
+    # goes to the owner, the finance admin who is not the requester, and nothing moves until the owner decides.
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
+        FA.setup(c, OWNER, AT, finance_approver="human:cara")
+        rule = act(c, OWNER, "rule_create", {"name": "Budget changes", "when": {"kind": "budget_update"},
+                                             "outcome": {"outcome": "needs_approval", "who": "finance_admin"},
+                                             "examples": [{"input": {"kind": "budget_update"},
+                                                           "expect": "needs_approval"}]})
+        assert rule.status == "committed", rule
+        grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert (grow.status, grow.approver) == ("needs_approval", OWNER)
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_000, 10_000)
+        H.approval_decide(c, OWNER, grow.approval_id, "approved")
+        done = FA.approval_decided(c, grow.approval_id, AT)
+        assert done is not None and done.status == "committed"
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
+
+
+def test_a_rule_test_never_reads_the_fingerprint_of_a_hidden_raise(books):
+    # The stored budget change carries its parent-raise fingerprint; a probe rule over it must not see it.
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:ben"}).status == "committed"
+        asked = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert asked.status == "needs_approval"
+        stored = c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        assert "raise_check" in stored
+        probe = act(c, OWNER, "rule_test", {"when": {"raise_check": {"matches": "^"}}, "outcome": {"outcome": "deny"}},
+                    dry_run=True)
+        assert probe.status == "committed", probe
+        assert probe.impact["test"]["changed_count"] == 0

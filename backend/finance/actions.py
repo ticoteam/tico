@@ -58,9 +58,6 @@ STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
 RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check"})
-# Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach the approval, where
-# requesters and approvers read it. Drift still compares it, from the stored body.
-SERVER_ONLY_KEYS = frozenset({"raise_check"})
 
 
 @dataclass(frozen=True)
@@ -128,7 +125,7 @@ def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
 
 
 def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], what: str) -> dict[str, object]:
-    shown = {k: v for k, v in payload.items() if k not in SERVER_ONLY_KEYS}
+    shown = {k: v for k, v in payload.items() if k not in K.SERVER_ONLY_KEYS}
     out: dict[str, object] = {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what, "payload": shown}
     if kind in K.SPEND:
         # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
@@ -188,6 +185,10 @@ def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
     if gate.outcome != "needs_approval":
         return ""
     approver = O.approver(ctx.org, gate.who, who, ctx.approver_setting(), gate.person)
+    if approver == who and who != ctx.org.owner:
+        # A rule can make a gate stricter than the right's, and the person it names may be the requester (a finance
+        # approver asking). Their own approval is never permission: the install owner decides instead (spec §6.3).
+        approver = ctx.org.owner
     if not approver:
         raise FinanceError(DENIED, "nobody can approve this: the install has no owner")
     return "" if approver == who else approver

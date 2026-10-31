@@ -325,10 +325,10 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
 
 
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
-               most: int, vendors: Sequence[str] | None = None) -> list[Any]:
-    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries (one vendor's when
-    `vendors`, its keys, is given; [""] is lines with none). Each says the card or money account its feed row came
-    through."""
+               most: int, vendors: Sequence[str] | None = None, offset: int = 0) -> list[Any]:
+    """Lines on `account_ids` in the window with their entry, newest first, `most` of them after the first `offset`: a
+    drill-down's entries (one vendor's when `vendors`, its keys, is given; [""] is lines with none). Each says the card
+    or money account its feed row came through."""
     if not account_ids:
         return []
     marks = ",".join("?" * len(account_ids))
@@ -341,8 +341,8 @@ def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], 
                      f"WHERE f.entry_id=l.entry_id LIMIT 1) AS money_account_id "
                      f"FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
                      f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?{cut} "
-                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?",
-                     (book_id, *account_ids, start, end, *args, most)).fetchall()
+                     f"ORDER BY l.entry_date DESC, l.id LIMIT ? OFFSET ?",
+                     (book_id, *account_ids, start, end, *args, most, offset)).fetchall()
 
 
 def insert_snapshot(c: sqlite3.Connection, book_id: str, period_id: str, month: str, accounts_json: str,
