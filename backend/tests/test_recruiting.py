@@ -183,6 +183,32 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
         server.shutdown()
         server.server_close()
 
+    # A real server that answers at once with a Content-Length body is read to its end and used: http.client closes
+    # its reader when the body is complete, and the loop must stop there rather than touch the closed socket.
+    whole = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads the support desk."}]}}]}).encode()
+
+    class Whole(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(whole)))
+            self.end_headers()
+            self.wfile.write(whole)
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Whole)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        url = f"http://127.0.0.1:{server.server_address[1]}/"
+        monkeypatch.setattr(recruiting, "urlopen", lambda request, timeout: real_urlopen(Request(url, data=request.data), timeout=timeout))
+        assert recruiting._rewrite("Composed.", "Support lead", "") == "Leads the support desk."
+    finally:
+        server.shutdown()
+        server.server_close()
+
     # An answer longer than the cap is not read past it, and is not used.
     huge = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads support. " * 20000}]}}]}).encode()
     big = Answer(huge)

@@ -172,7 +172,9 @@ def _rewrite_call(text, title, boss, deadline):
                 left = deadline - time.monotonic()
                 if left <= 0:
                     raise TimeoutError("the answer came too slowly")
-                if sock is not None:
+                if getattr(response, "isclosed", lambda: False)():
+                    break                   # the whole body has arrived and http.client closed its reader
+                if sock is not None and sock.fileno() != -1:
                     sock.settimeout(left)
                 want = min(REWRITE_CHUNK, REWRITE_BYTES + 1 - len(raw))
                 chunk = response.read1(want) if hasattr(response, "read1") else response.read(want)
