@@ -206,7 +206,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                        ("method?", "internal", "a move between our own bank accounts: from_account and to_account"),
                        ("from_account?", "str", "internal only: the bank account to take from"),
                        ("to_account?", "str", "internal only: the bank account to move it into, same connection")),
-    "payment_cancel": (("payment_id", "str", ""),),
+    "payment_cancel": (("payment_id?", "str", ""),
+                       ("transfer_id?", "str", "an internal transfer not yet sent (instead of payment_id)")),
     "rule_create": _RULE,
     "rule_update": (("rule_id", "str", ""), *((n if n.endswith("?") else n + "?", t, w) for n, t, w in _RULE
                                               if n != "kind?")),
@@ -282,7 +283,7 @@ WORDS: dict[str, str] = {
     "card_freeze": "Freeze a card.", "card_unfreeze": "Unfreeze a card.", "card_cancel": "Cancel a card.",
     "card_resolve": "Say whether the bank issued a card whose creation was cut off.",
     "recipient_add": "Add someone to pay (bank details are sealed).",
-    "payment_create": "Request a payment, or move money between two of our bank accounts (method internal).", "payment_cancel": "Cancel a queued payment.",
+    "payment_create": "Request a payment, or move money between two of our bank accounts (method internal).", "payment_cancel": "Cancel a queued payment, or an internal transfer not yet sent.",
     "rule_create": "Add a gate or posting rule; its examples must pass.", "rule_update": "Change a rule.",
     "rule_enable": "Turn a rule on.", "rule_disable": "Turn a rule off.",
     "rule_test": "Run a rule over the last 90 days you can see; writes nothing.",

@@ -895,3 +895,65 @@ def test_direct_send_is_for_a_paid_recipient_once_the_owner_turns_it_on_and_skip
     sync_once(books, fake, HOURS[10])
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "settled"
+
+
+def _paid_acme(books, fake):
+    """Direct send on, and one payment to Acme Supplies paid through Mercury: the payee is known and paid."""
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
+                                                "tags": {"team": "eng"}, "money_account_id": _checking(c)})
+        assert made.status == "committed", made
+    sync_once(books, fake, HOURS[1])
+    fake.txns["txn-pay"] = {**MERCURY["txn_bank_fee"], "id": "txn-pay", "amount": -500.0, "kind": "outgoingPayment",
+                            "counterpartyName": "Acme Supplies", "requestId": "req-1", "postedAt": "2026-10-16T10:00:00Z"}
+    fake.events_list.append({"id": "evt-pay", "resourceType": "transaction", "resourceId": "txn-pay",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[3])
+    sync_once(books, fake, HOURS[6])
+    return rid
+
+
+def _direct(books, rid, amount=10_000):
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": amount, "account_id": account(c, "6100"),
+                                                "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
+        assert made.status == "committed", made
+        return str(made.result["payment_id"])
+
+
+def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by_the_approval_queue(books):
+    """Item 4: the company switch is read again at send. A direct payment queued while it was on goes to Mercury's
+    approval queue once it is off, and is never sent as a direct transaction."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    dpid = _direct(books, rid)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": False}).status == "committed"
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+    assert len(fake.sent("request_send_money")) == 2
+    with books.read() as c:
+        mode, status = c.execute("SELECT mode, status FROM fin_payments WHERE id=?", (dpid,)).fetchone()
+    assert mode == "approval_queue" and status not in ("failed", "cancelled"), (mode, status)
+
+
+def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold_is_released(books):
+    """Item 8: a direct send has no request id, so its own Mercury transaction id ends it when the bank voids the row."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    dpid = _direct(books, rid)
+    sync_once(books, fake, HOURS[8])
+    assert len(fake.sent("create_transaction")) == 1
+    fake.txns["txn-direct-1"] = {**MERCURY["txn_bank_fee"], "id": "txn-direct-1", "amount": -100.0,
+                                 "kind": "outgoingPayment", "counterpartyName": "Acme Supplies",
+                                 "status": "cancelled", "postedAt": "2026-10-16T12:00:00Z"}
+    fake.events_list.append({"id": "evt-direct-cancel", "resourceType": "transaction", "resourceId": "txn-direct-1",
+                             "operationType": "update", "resourceVersion": 2})
+    sync_once(books, fake, HOURS[10])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "failed"
+        assert (10_000, "released") in _holds(c)

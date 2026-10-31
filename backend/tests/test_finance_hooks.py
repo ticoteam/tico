@@ -49,8 +49,11 @@ def test_only_a_finance_admin_manages_a_mercury_trigger_and_no_trigger_route_sho
                _get(api, "finance/webhook-deliveries", "ben-test")]
     assert [r.status_code for r in refused] == [403] * len(refused), [r.text for r in refused]
     assert "Finance" in refused[0].text
+    # A finance trigger is listed only to finance admins (consumer "finance"); its bodies are never listed.
     listed = _get(api, "triggers", "ben-test").json()["triggers"]
-    assert [t["preset"] for t in listed if t["id"] == "mercury"] == ["mercury"] and "evt-0002" not in json.dumps(listed)
+    assert [t for t in listed if t["id"] == "mercury"] == [] and "evt-0002" not in json.dumps(listed)
+    owners = _get(api, "triggers").json()["triggers"]
+    assert [t["preset"] for t in owners if t["id"] == "mercury"] == ["mercury"]
     # The owner (a finance admin who sees everything) manages it, but reads its bodies only in Finance.
     assert _get(api, "triggers/mercury/deliveries/evt-0002").status_code == 403
     assert [d["delivery"] for d in _get(api, "triggers/mercury/deliveries").json()["deliveries"]] == ["evt-0002"]
@@ -65,6 +68,8 @@ def test_only_a_finance_admin_manages_a_mercury_trigger_and_no_trigger_route_sho
     with api.app.state.store.transaction() as c:
         assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.admin"}).status == "committed"
     assert _post(api, "triggers/mercury", {"name": "Mercury (Acme)"}, "ben-test").status_code == 200
+    assert [t["preset"] for t in _get(api, "triggers", "ben-test").json()["triggers"] if t["id"] == "mercury"] == [
+        "mercury"]
     assert _get(api, "finance/webhook-deliveries", "ben-test").status_code == 403
     assert _get(api, "triggers/mercury/deliveries/evt-0002", "ben-test").status_code == 403
 

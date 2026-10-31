@@ -50,3 +50,13 @@ def test_new_posting_rules_lists_the_rules_made_since_a_time(books):  # noqa: F8
         assert made.status == "committed", made
         assert [r["name"] for r in FR.new_posting_rules(c, "2026-10-08T00:00:00.000000Z")] == ["Acme Cafe asks"]
         assert FR.new_posting_rules(c, "2026-10-16T00:00:00.000000Z") == []
+
+
+def test_a_rise_of_exactly_ten_percent_is_a_price_increase_and_a_cent_less_is_not():
+    """Integer math: 110,000 is exactly ten percent above 100,000, which a float compare against 1.1 misses."""
+    exact = [charge("1", "cloudco", 100_000, "2026-08-01"), charge("2", "cloudco", 100_000, "2026-09-01"),
+             charge("3", "cloudco", 110_000, "2026-10-01")]
+    assert [f["key"] for f in W.price_increases(exact)] == ["price_increase:3"]
+    short = [charge("1", "cloudco", 100_000, "2026-08-01"), charge("2", "cloudco", 100_000, "2026-09-01"),
+             charge("3", "cloudco", 109_999, "2026-10-01")]
+    assert W.price_increases(short) == []

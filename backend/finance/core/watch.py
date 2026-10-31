@@ -15,7 +15,7 @@ UNUSUAL_RATIO = 2          # a month's spend at least this many times the median
 UNUSUAL_MIN = 10_000       # ... and at least this much more than that median ($100)
 HISTORY = 3                # months before the month judged; a series is HISTORY + 1 months, oldest first
 DUPLICATE_DAYS = 3         # two charges of one amount to one payee this close together may be a duplicate
-PRICE_RISE = 0.10          # a recurring charge that rises by this share ...
+PRICE_RISE_PERCENT = 10     # a recurring charge that rises by this many percent ...
 PRICE_MIN = 1_000          # ... and by at least this much ($10) is a price increase
 
 
@@ -74,7 +74,7 @@ def duplicate_charges(charges: Sequence[Charge]) -> list[dict[str, Any]]:
 
 def price_increases(charges: Sequence[Charge]) -> list[dict[str, Any]]:
     """A recurring charge: the two charges before the latest are the same amount to one payee, and the latest rose by
-    PRICE_RISE and at least PRICE_MIN."""
+    PRICE_RISE_PERCENT percent and at least PRICE_MIN."""
     by_payee: dict[str, list[Charge]] = {}
     for ch in charges:
         by_payee.setdefault(ch.payee, []).append(ch)
@@ -84,7 +84,7 @@ def price_increases(charges: Sequence[Charge]) -> list[dict[str, Any]]:
             continue
         older, before, last = sorted(rows, key=lambda r: (r.day, r.id))[-3:]
         if (older.amount == before.amount and last.amount - before.amount >= PRICE_MIN
-                and last.amount >= before.amount * (1 + PRICE_RISE)):
+                and last.amount * 100 >= before.amount * (100 + PRICE_RISE_PERCENT)):
             found.append({"kind": "price_increase", "key": f"price_increase:{last.id}",
                           "stamp": {"amount": last.amount},
                           "label": f"{payee}: {_money(last.amount)} now, {_money(before.amount)} before"})

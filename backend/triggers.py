@@ -817,9 +817,12 @@ def install(app, settings, store, auth, mutate):
     @app.get("/api/v2/triggers")
     def trigger_list(request: Request):
         """Every trigger, its address without the secret, its settings, and the automations that listen for it."""
-        readers(request)
+        who = readers(request)
         with store.read() as c:
-            return {"triggers": listing(c, settings)}
+            rows = listing(c, settings)
+            if not _finance_admin(c, who):
+                rows = [r for r in rows if r["consumer"] != "finance"]     # Finance's calls are read in Finance
+            return {"triggers": rows}
 
     @app.post("/api/v2/triggers")
     def trigger_create(request: Request, body: TriggerCreate):

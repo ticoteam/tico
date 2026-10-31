@@ -361,6 +361,9 @@ def ring() -> None:
 def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Cancel a payment Finance has not sent yet. Once it is in Mercury's queue there is no API to cancel it: a person
     rejects it in Mercury, which ends the payment here when the worker sees it."""
+    if "transfer_id" in p:
+        from .transfers import plan_cancel      # lazy: transfers imports this module
+        return plan_cancel(ctx, who, p)
     V.only(p, ("payment_id",))
     pay = SK.get(ctx.c, "fin_payments", V.text(p, "payment_id", 80))
     if pay is None or (str(pay["created_by"]) != who and not may_write(ctx, who, str(pay["account_id"]),
@@ -461,15 +464,15 @@ def _hold(ctx: Ctx, pay: Any, why: str) -> str:
     return "wait"
 
 
-def _own_counts(ctx: Ctx, pay: Any) -> set[tuple[str, str, str]]:
+def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[str, str, str]]:
     """The rule counters this payment already moved: its own action's, and those reserved when it was claimed to send
     (so a recheck or a retried send never counts it twice)."""
     out: set[tuple[str, str, str]] = set()
-    for raw in SK.loads_list(pay["counted_json"]):
+    for raw in SK.loads_list(counted_json):
         if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
             rule, key, subject = cast(list[Any], raw)
             out.add((str(rule), str(key), str(subject)))
-    run = SK.last_rule_run(ctx.c, str(pay["action_id"] or ""))
+    run = SK.last_rule_run(ctx.c, str(action_id or ""))
     if run is None:
         return out
     hits = cast(list[Any], SK.loads(run["outcome_json"]).get("hits") or [])
@@ -513,7 +516,7 @@ def decided_by(ctx: Ctx, action: Any) -> str:
     return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
 
 
-def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:
+def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:
     """Whether what a gate asks for now was already given: the payer may approve it themselves now (as at the action),
     or the payment's action was approved for this very gate (its rule: an approval for one rule or budget never covers
     another) by someone who may approve it."""
@@ -544,6 +547,11 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
     line = ctx.accounts.get(str(pay["account_id"]))
     why = ""
+    if str(pay["mode"]) == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
+        # The company turned direct send off since the action: the payment takes the approval-queue route like any
+        # other, so the send below is a request, never a direct call (the switch is read here, in the claim).
+        SK.update(ctx.c, "fin_payments", str(pay["id"]), {"mode": "approval_queue", "updated_at": ctx.at})
+        pay = SK.get(ctx.c, "fin_payments", str(pay["id"]))
     right = K.authority(ctx.org, who, "payment_create", ctx.rights(who))
     if right is not None and right.outcome == "deny":
         why = "whoever asked for it no longer has the right to pay"
@@ -564,7 +572,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
              "actor.kind": "bot" if who in ctx.org.bots else "human", "actor.team": ctx.org.team_of.get(who, ""),
              "now": ctx.at, "currency": ctx.book.base_currency,
              **_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money)}
-    mine = _own_counts(ctx, pay)
+    mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -575,7 +583,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         end(ctx, pay, "cancelled", why)
         return why
     if verdict.outcome == "needs_approval" and (verdict.stale or
-                                                not _approved_for(ctx, action, who, verdict.who, verdict.rule)):
+                                                not approved_for(ctx, action, who, verdict.who, verdict.rule)):
         return _hold(ctx, pay, f"{verdict.reason or 'a finance rule asks for approval'}"
                                f"{' (its data is stale)' if verdict.stale else ''}")
     hold = SB.hold(ctx.c, str(pay["hold_id"])) if pay["hold_id"] else None
@@ -603,7 +611,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         asks = bill_budget(ctx, str(pay["obligation"]).removeprefix("bill:"))
         # Approved for this budget at the action: it goes, even if that budget dropped further since (the person
         # approved paying this bill past it). A different budget now over asks again, unless the payer may approve.
-        if asks.outcome == "needs_approval" and not _approved_for(ctx, action, who, asks.who, asks.rule):
+        if asks.outcome == "needs_approval" and not approved_for(ctx, action, who, asks.who, asks.rule):
             budget = ctx.budgets().get(asks.rule.removeprefix("budget:"))
             return _hold(ctx, pay, f"the {budget.name if budget else 'bill'} budget is over")
     if fresh is not None:
@@ -773,4 +781,4 @@ def feed_failed(ctx: Ctx, request_id: str, status: str) -> None:
 PLANNERS = {"recipient_add": recipient_add, "payment_create": payment_create, "payment_cancel": payment_cancel,
             "payment_settings": payment_settings}
 
-__all__ = ["PLANNERS", "recheck", "not_found", "cut_off", "unknown", "sent", "polled", "found", "feed_settled", "feed_failed", "request_body", "end"]
+__all__ = ["PLANNERS", "recheck", "own_counts", "approved_for", "not_found", "cut_off", "unknown", "sent", "polled", "found", "feed_settled", "feed_failed", "request_body", "end"]

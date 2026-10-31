@@ -65,3 +65,23 @@ def test_a_vendor_renewal_raises_one_event_per_stage_for_each_date_and_none_once
         assert act(c, OWNER, "contact_update", {"contact_id": vid, "renewal_on": "2026-10-01"}).status == "committed"
         FA.watch_documents(c, AT)
         assert len(_events(c, "finance.vendor.renewal_due")) == 2
+
+
+def test_a_viewer_without_the_vendors_cells_or_the_payables_view_gets_no_seats_or_renewal(books):  # noqa: F811
+    with books.transaction() as c:
+        vid = _vendor(c)
+        assert act(c, OWNER, "contact_update", {"contact_id": vid, "seats": 12,
+                                                "renewal_on": "2026-11-14"}).status == "committed"
+        bid = str(act(c, OWNER, "bill_create", {"vendor_id": vid, "bill_date": "2026-10-10", "lines": [
+            {"account_id": account(c, "6900"), "amount": 20_000}]}).result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        # Ben sees the expense line through his own spend only: the vendor's cells on it are the owner's, not his.
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:ben", "what": "expenses",
+                                            "whose": "own"}).status == "committed"
+        hidden = FR.line_detail(c, "human:ben", account(c, "6900"), "2026-10-01", "2026-10-31", vendor=vid)
+        assert (hidden["seats"], hidden["renewal_on"]) == (None, None)
+        assert FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31", vendor=vid)["seats"] == 12
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:ben", "what": "payables",
+                                            "whose": "company"}).status == "committed"
+        seen = FR.line_detail(c, "human:ben", account(c, "6900"), "2026-10-01", "2026-10-31", vendor=vid)
+        assert (seen["seats"], seen["renewal_on"]) == (12, "2026-11-14")

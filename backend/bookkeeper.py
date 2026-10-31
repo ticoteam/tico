@@ -180,13 +180,15 @@ def collect(c):
     return items, {k: v for k, v in counts.items() if v}
 
 
-def _fresh(c, items, at):
+def _fresh(c, items, at, repeat=True):
+    """Items to list: new ones, and ones whose facts changed. With `repeat`, also any listed more than REPEAT_HOURS
+    ago; Watch findings pass repeat=False, so a reviewed finding is news again only when its facts change."""
     gap = H.shift(at, hours=-REPEAT_HOURS)
     old = {r["key"]: (r["stamp"], r["seen"]) for r in c.execute(
         "SELECT key, stamp, seen FROM bookkeeper_seen WHERE key IN (%s)" % ",".join("?" * len(items)),
         [item["key"] for item in items])} if items else {}
     return [item for item in items if item["key"] not in old or old[item["key"]][0] != item["stamp"]
-            or old[item["key"]][1] < gap]
+            or (repeat and old[item["key"]][1] < gap)]
 
 
 def render(items, counts):
@@ -280,21 +282,31 @@ def watch(c, auth, at: str) -> dict[str, Any]:
         return {"items": 0, "words": "The Bookkeeper is off", "task": None, "state": ""}
     items = [{"kind": f["kind"], "id": f["key"], "key": f["key"], "label": f["label"],
               "stamp": json.dumps(f["stamp"], sort_keys=True)} for f in FR.watch_findings(c, ACTOR, at)]
-    fresh = _fresh(c, items, at)
+    fresh = _fresh(c, items, at, repeat=False)
     task_id, state = None, ""
     if fresh:
         task_id, state = deliver(c, render_watch(items), len(items), name=WATCH_TITLE, event=WATCH_EVENT)
-        for item in fresh:
-            c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
-                      "stamp=excluded.stamp, seen=excluded.seen", (item["key"], item["stamp"], at))
         H.event(c, H.KEEPER, "bookkeeper.watch", SLUG, {"items": len(items), "new": len(fresh), "state": state})
+    for item in items:
+        # Still standing, listed or reviewed: seen now, so the ledger forgets only what is gone for KEEP_DAYS.
+        c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "
+                  "stamp=excluded.stamp, seen=excluded.seen", (item["key"], item["stamp"], at))
     words = f"{len(fresh)} new to watch" if fresh else "Nothing new to watch"
     return {"items": len(fresh), "words": words, "task": task_id, "state": state}
 
 
+def _reach_owner(c, auth, task_id: str) -> None:
+    """A private task's readers are its parties and one guest: the company owner is the guest, so the digest reads for
+    them and the Bookkeeper, never for the rest of the team."""
+    owner = _owner(c, auth)
+    row = H.task(c, task_id)
+    if owner and row is not None and H.task_reach_refusal(c, H.KEEPER, row, owner) is None:
+        H.task_reach(c, H.KEEPER, row, owner)
+
+
 def rules_digest(c, auth, at: str) -> dict[str, Any]:
     """The weekly digest of the posting rules made in the last RULES_DAYS: a precheck in plain code, so no new rule is
-    a quiet run. Otherwise one task for the Bookkeeper, visible to people, lists them for the digest."""
+    a quiet run. Otherwise one private task for the Bookkeeper, read by its owner, lists them for the digest."""
     from .finance import reads as FR
     if not FR.is_set_up(c) or not active(c):
         return {"items": 0, "words": "The Bookkeeper is off", "task": None, "state": ""}
@@ -307,8 +319,9 @@ def rules_digest(c, auth, at: str) -> dict[str, Any]:
         lines.append(f"  - {rule['id']}  {rule['name'][:120]}  (by {rule['created_by'] or 'unknown'}, {state})")
     body = "\n".join(lines).encode()[:BODY_BYTES].decode(errors="ignore")
     made = H.task_create(c, H.KEEPER, f"{DIGEST_TITLE} ({len(rules)})", body, ACTOR, deduplicate=False, lint=False,
-                         private=False, wake_refs={"wake": DIGEST_EVENT}, trigger="schedule",
+                         private=True, wake_refs={"wake": DIGEST_EVENT}, trigger="schedule",
                          trigger_source=DIGEST_EVENT)
+    _reach_owner(c, auth, made["id"])
     H.event(c, H.KEEPER, "bookkeeper.rules_digest", SLUG, {"rules": len(rules)})
     return {"items": len(rules), "words": f"{len(rules)} new posting rule{'' if len(rules) == 1 else 's'}",
             "task": made["id"], "state": "opened"}

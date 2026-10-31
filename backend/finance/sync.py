@@ -448,6 +448,8 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         with store.transaction() as c:
             if not SK.outbox_claim(c, str(o["id"]), now):
                 continue
+            if str(o["op"]) == "transfer_create" and transfers.recheck(load(c, now), o):
+                continue          # re-checked at use: cancelled or held, so nothing is sent
         body = SK.loads(o["payload_json"])
         answer = _send(store, provider, str(o["op"]), body)
         with store.transaction() as c:

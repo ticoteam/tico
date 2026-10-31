@@ -3,6 +3,7 @@ reconciliations, cards, recipients, payments, the inbox and outbox, gate rules a
 values; no provider is called from here."""
 import json
 import sqlite3
+from datetime import date, timedelta
 from collections.abc import Iterable, Mapping, Sequence
 from typing import Any, cast
 
@@ -426,38 +427,75 @@ def payment_by_key(c: sqlite3.Connection, key: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE idempotency_key=?", (key,)).fetchone()
 
 
+def outbox_by_key(c: sqlite3.Connection, key: str) -> Any:
+    """The outbox write under this idempotency key (a transfer's is `transfer-<id>`)."""
+    return c.execute("SELECT * FROM fin_outbox WHERE idempotency_key=?", (key,)).fetchone()
+
+
+TRANSFER_WINDOW_DAYS = 5     # a transfer's two legs post on its submit day or within this many days after it
+
+
+def _window(submitted_at: object) -> tuple[str, str]:
+    """The first and last day a leg of a transfer submitted at `submitted_at` may be dated."""
+    day = date.fromisoformat(str(submitted_at)[:10])
+    return day.isoformat(), (day + timedelta(days=TRANSFER_WINDOW_DAYS)).isoformat()
+
+
+def _leg(c: sqlite3.Connection, feed: str) -> Any:
+    return c.execute("SELECT id, money_account_id, amount, txn_date, provider_id, request_id FROM fin_feed_txns "
+                     "WHERE id=?", (feed,)).fetchone()
+
+
 def settle_pair(c: sqlite3.Connection, out_feed: str, in_feed: str, at: str) -> str | None:
-    """Link the two posted legs of a move to the oldest Finance transfer between the same accounts for the same amount
-    that still waits on them (submitted, or unknown: its legs may be what made it real). Its id, or None when no
-    transfer fits: the move was made outside Finance."""
-    out = c.execute("SELECT money_account_id, amount FROM fin_feed_txns WHERE id=?", (out_feed,)).fetchone()
-    inn = c.execute("SELECT money_account_id, amount FROM fin_feed_txns WHERE id=?", (in_feed,)).fetchone()
-    if out is None or inn is None or int(out[1]) >= 0 or int(inn[1]) != -int(out[1]):
+    """Link the two posted legs of a move to the Finance transfer they are: one between the same accounts for the same
+    amount that still waits on them (submitted, or unknown: its legs may be what made it real), with both legs dated
+    from its submit day through TRANSFER_WINDOW_DAYS on, so an older move between the same accounts never settles it.
+    A transfer whose Mercury id a leg carries wins; else the oldest that fits. Its id, or None (a move made outside
+    Finance)."""
+    out, inn = _leg(c, out_feed), _leg(c, in_feed)
+    if out is None or inn is None or int(out["amount"]) >= 0 or int(inn["amount"]) != -int(out["amount"]):
         return None
-    row = c.execute("SELECT id FROM fin_transfers WHERE status IN ('submitted','unknown') AND from_money_account_id=? "
-                    "AND to_money_account_id=? AND amount=? ORDER BY created_at, id LIMIT 1",
-                    (str(out[0]), str(inn[0]), int(inn[1]))).fetchone()
-    if row is None:
+    ids = {str(x) for x in (out["provider_id"], out["request_id"], inn["provider_id"], inn["request_id"]) if x}
+    best = None
+    for t in c.execute("SELECT id, provider_txn_id, submitted_at FROM fin_transfers WHERE status IN ('submitted',"
+                       "'unknown') AND from_money_account_id=? AND to_money_account_id=? AND amount=? AND "
+                       "submitted_at IS NOT NULL ORDER BY created_at, id",
+                       (str(out["money_account_id"]), str(inn["money_account_id"]), -int(out["amount"]))).fetchall():
+        first, last = _window(t["submitted_at"])
+        if not all(first <= str(leg["txn_date"])[:10] <= last for leg in (out, inn)):
+            continue
+        if t["provider_txn_id"] and str(t["provider_txn_id"]) in ids:
+            best = t
+            break
+        if best is None:
+            best = t
+    if best is None:
         return None
-    _settle_transfer(c, str(row[0]), out_feed, in_feed, at)
-    return str(row[0])
+    _settle_transfer(c, str(best["id"]), out_feed, in_feed, at)
+    return str(best["id"])
 
 
 def settle_legs(c: sqlite3.Connection, transfer_id: str, at: str, kinds: Sequence[str]) -> bool:
-    """Link a transfer to its legs when both are already posted and not yet linked (the feed came first)."""
-    t = c.execute("SELECT from_money_account_id, to_money_account_id, amount, status FROM fin_transfers WHERE id=?",
-                  (transfer_id,)).fetchone()
-    if t is None or str(t[3]) not in ("submitted", "unknown"):
+    """Link a transfer to its legs when both are already posted and not yet linked (the feed came first), with the same
+    dates and preference as settle_pair."""
+    t = c.execute("SELECT from_money_account_id, to_money_account_id, amount, status, submitted_at, provider_txn_id "
+                  "FROM fin_transfers WHERE id=?", (transfer_id,)).fetchone()
+    if t is None or str(t["status"]) not in ("submitted", "unknown") or t["submitted_at"] is None:
         return False
+    first, last = _window(t["submitted_at"])
+    amount = int(t["amount"])
+    pid = str(t["provider_txn_id"] or "")
 
-    def leg(money: str, amount: int) -> str | None:
+    def leg(money: object, value: int) -> str | None:
         found = c.execute(
-            f"SELECT id FROM fin_feed_txns f WHERE money_account_id=? AND amount=? AND kind IN ({_marks(kinds)}) AND "
-            "status='posted' AND NOT EXISTS (SELECT 1 FROM fin_transfers x WHERE x.from_feed_id=f.id OR x.to_feed_id=f.id)"
-            " ORDER BY txn_date, id LIMIT 1", [money, amount, *kinds]).fetchone()
+            f"SELECT f.id FROM fin_feed_txns f WHERE f.money_account_id=? AND f.amount=? AND f.kind IN ({_marks(kinds)}) "
+            "AND f.status='posted' AND substr(f.txn_date,1,10)>=? AND substr(f.txn_date,1,10)<=? AND NOT EXISTS "
+            "(SELECT 1 FROM fin_transfers x WHERE x.from_feed_id=f.id OR x.to_feed_id=f.id) "
+            "ORDER BY CASE WHEN f.provider_id=? OR f.request_id=? THEN 0 ELSE 1 END, f.txn_date, f.id LIMIT 1",
+            [str(money), value, *kinds, first, last, pid, pid]).fetchone()
         return str(found[0]) if found else None
-    amount = int(t[2])
-    out, inn = leg(str(t[0]), -amount), leg(str(t[1]), amount)
+    out = leg(t["from_money_account_id"], -amount)
+    inn = leg(t["to_money_account_id"], amount)
     if out is None or inn is None:
         return False
     _settle_transfer(c, transfer_id, out, inn, at)

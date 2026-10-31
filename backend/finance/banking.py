@@ -295,8 +295,13 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         undo(ctx, row)
         if card is not None and t.status in ("failed", "blocked"):
             event(ctx, DECLINED_EVENT, str(card["id"]), {"card_id": str(card["id"]), "feed_id": fid}, fid)
+        status = "returned" if t.reversed else "failed"
         if t.request_id:
-            payments.feed_failed(ctx, t.request_id, "returned" if t.reversed else "failed")
+            payments.feed_failed(ctx, t.request_id, status)
+        elif t.amount < 0 and SK.direct_payment(ctx.c, t.provider_id) is not None:
+            # A direct send has no request: its Mercury transaction id is its key, so a voided bank row ends it here
+            # (its hold released), as an approval request's voided row does.
+            payments.feed_failed(ctx, t.provider_id, status)
         return
     if t.pending:
         if program and card is not None and t.amount < 0:

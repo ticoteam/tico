@@ -51,7 +51,12 @@ def test_the_rules_digest_skips_a_week_with_no_new_rule_and_lists_the_new_ones_a
         made = BK.rules_digest(c, api.app.state.auth, H.now())
     assert made["items"] == 1 and made["state"] == "opened"
     (task,) = checks(api)
-    assert task["title"] == "Rules digest (1)" and task["private"] == 0 and "rul_1" in task["body"]
+    assert task["title"] == "Rules digest (1)" and task["private"] == 1 and "rul_1" in task["body"]
+    # Private: the company owner reads the digest (the guest), and a teammate who is not the owner does not.
+    with store.read() as c:
+        row = H.task(c, task["id"])
+        assert H.task_private_readable(c, BK._owner(c, api.app.state.auth), row)
+        assert not H.task_private_readable(c, "human:nobody", row)
 
 
 def test_the_watch_runs_daily_and_the_digest_weekly_on_their_own_cadence_and_neither_is_a_switch(environment,
@@ -76,3 +81,20 @@ def test_the_watch_runs_daily_and_the_digest_weekly_on_their_own_cadence_and_nei
     scheduler.tick(at + timedelta(days=1, minutes=1))   # the watch is due a day on; the digest is a week on
     assert calls == {"watch": 2, "digest": 1}
     assert "bookkeeper_watch" not in SR.CONTROLS and "bookkeeper_rules_digest" not in SR.CONTROLS
+
+
+def test_a_reviewed_finding_is_not_news_again_after_a_day_but_is_when_its_facts_change(environment, monkeypatch):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
+    with store.transaction() as c:
+        assert BK.watch(c, api.app.state.auth, H.now())["items"] == 1
+    later = H.shift(H.now(), hours=25)
+    with store.transaction() as c:
+        assert BK.watch(c, api.app.state.auth, later)["words"] == "Nothing new to watch"
+    assert len(checks(api)) == 1
+    changed = {**FINDING, "stamp": {"amount": 1500, "gap": 1}}
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(changed)])
+    with store.transaction() as c:
+        assert BK.watch(c, api.app.state.auth, H.shift(later, hours=1))["items"] == 1

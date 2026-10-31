@@ -517,9 +517,11 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
     whole = _suppress(s, cells, vendor is not None or f.narrow(s.ctx.org), a, z)
     split = _suppress(s, cells, True, a, z)
-    # A vendor drill-down shows its seats and renewal date (spec §12); a contact of another book shows nothing.
+    # A vendor drill-down shows its seats and renewal date (spec §12) only where the viewer sees that vendor's cells on
+    # this line, or has the payables view; a contact of another book shows nothing.
     contact = SAP.get(c, "fin_contacts", vendor) if vendor else None
-    if contact is not None and str(contact["book_id"]) != s.ctx.book.id:
+    sees_vendor = (account_id not in whole.hidden and bool(whole.cells)) or s.view.payables or s.view.everything
+    if contact is not None and (str(contact["book_id"]) != s.ctx.book.id or not sees_vendor):
         contact = None
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
