@@ -43,7 +43,7 @@ async function review(browser, {viewport, theme}) {
   const card = page.locator('#task-modal .rh-card[data-hold="h-1"]');
   await card.waitFor();
   const text = await card.innerText();
-  assert.match(text, /Tried to send[\s\S]*transcription vendor/);
+  assert.match(text, /Tried to send[\s\S]*transcription vendor/i);
   assert.match(text, /Acme data stays in the EU/);
   assert.match(text, /The vendor signed the EU addendum/);
   assert.equal(await card.locator('a[href="#/rules?rule=r-eu"]').innerText(), 'Edit rule');
