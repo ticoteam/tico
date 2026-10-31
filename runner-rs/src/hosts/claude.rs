@@ -1965,8 +1965,7 @@ mod tests {
             // SAFETY: signal 0 only checks whether any process of the group is left.
             unsafe { libc::kill(-group, 0) == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
         };
-        // The SIGTERM-deaf process keeps the turn's whole grace, as a tool finishing its own cleanup would.
-        let deadline = Instant::now() + STOP_TIMEOUT + Duration::from_secs(3);
+        let deadline = Instant::now() + Duration::from_secs(3);
         while !gone() && Instant::now() < deadline {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
