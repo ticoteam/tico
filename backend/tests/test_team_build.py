@@ -70,6 +70,9 @@ def test_a_role_a_bot_on_the_team_already_fills_is_on_the_team_and_not_offered_a
     found = suggest(api, team)
     lead = next(role for role in found["roles"] if role["pick"]["template"] == "engineering-lead")
     assert lead["on_team"] and not lead["checked"] and lead["alternatives"] == []
+    # The role names the bot that fills it, not the template it was built from.
+    slug = hired["bots"][0]["slug"]
+    assert lead["bot"]["slug"] == slug and lead["bot"]["name"] == get(api, f"bots/{slug}")["display_name"]
     assert all(role["pick"]["template"] != "engineering-lead" for role in found["roles"] if not role["on_team"])
 
 

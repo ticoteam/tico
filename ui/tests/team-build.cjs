@@ -15,7 +15,8 @@ const item = (template, name, match = '') => ({template, name, icon: '', departm
 const cloud = {id: 'devin', name: 'Devin', maker: 'Cognition', site: 'devin.ai', line: 'A cloud agent.', supported: false,
   connect_id: null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''};
 const suggestion = () => ({team: 'engineering', department: 'engineering', roles: [
-  {role: 'Head of Engineering', pick: item('engineering-lead', 'Engineering Lead'), alternatives: [], on_team: true, checked: false},
+  {role: 'Head of Engineering', pick: item('engineering-lead', 'Engineering Lead'), alternatives: [], on_team: true, checked: false,
+    bot: {slug: 'ana-eng-lead', name: 'Rhea', icon: ''}},
   {role: 'Security engineer', pick: item('security-engineer', 'Security Engineer', 'strong'),
     alternatives: [item('software-architect', 'Software Architect', 'good'), item('pr-reviewer', 'PR Reviewer')], on_team: false, checked: true},
   {role: 'DevOps engineer', pick: item('devops-engineer', 'DevOps Engineer'), alternatives: [], on_team: false, checked: true},
@@ -75,6 +76,10 @@ async function scenario(browser, {name, viewport, theme}) {
   await page.evaluate(() => teamBuildOpen('engineering'));
   const dialog = page.locator('#team-build-dialog'), cards = page.locator('#team-build-dialog .tb-card');
   await dialog.waitFor();
+  // Focus starts on the brief on the desktop, and on the dialog on the phone so the keyboard stays down until a tap.
+  const focused = await page.evaluate(() => document.activeElement.id === 'team-build-dialog' ? 'dialog'
+    : document.activeElement.matches('.tb-brief input') ? 'brief' : 'other');
+  assert.equal(focused, phone ? 'dialog' : 'brief');
   // While the answer is out, the header dot is working; the cards arrive after it.
   await until(() => calls.length === 1);
   assert.equal(await page.locator('#team-build-dialog .tb-dot').getAttribute('data-state'), 'thinking');
@@ -90,10 +95,19 @@ async function scenario(browser, {name, viewport, theme}) {
   assert.equal(columns, phone ? 1 : 3);
   assert.ok(await dialog.evaluate(el => el.scrollWidth <= el.clientWidth + 1), 'the dialog does not scroll sideways');
   if (phone) assert.equal(await page.locator('#team-build-dialog .tb-foot').evaluate(el => getComputedStyle(el).position), 'sticky');
+  // The header dot keeps its round shape in the flex header (390px and desktop alike). Measured once the done hop has
+  // settled, on the visible blob, so the transform is counted.
+  await page.waitForTimeout(1000);
+  const dotRatio = await page.locator('#team-build-dialog .tb-dot .body').evaluate(el => {
+    const box = el.getBoundingClientRect();
+    return box.width / box.height;
+  });
+  assert.ok(dotRatio >= 0.8 && dotRatio <= 1.25, `the dot is ${dotRatio.toFixed(2)} times as wide as tall`);
   await page.waitForTimeout(400);
   await shot('');
   // A team bot already in the team is greyed and has no checkbox to take; a cloud agent is not picked (it cannot be hired here yet).
   assert.equal(await page.locator('#team-build-dialog .tb-card.is-team').count(), 1);
+  assert.equal(await page.locator('#team-build-dialog .tb-card.is-team .tb-pick-name').innerText(), 'Rhea');
   assert.ok(await page.locator('#team-build-dialog .tb-card.is-team .tb-check').isDisabled());
   assert.equal(await page.locator('#team-build-dialog .tb-card.is-team .tb-change').count(), 0);
   assert.ok(await page.locator('#team-build-dialog [data-card="4"] .tb-check').isDisabled());

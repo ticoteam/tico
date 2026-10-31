@@ -87,6 +87,11 @@ def _filled(c, group):
     return {configs[slug].get("template"): slug for slug in group["bots"] if configs.get(slug, {}).get("template")}
 
 
+def _bot(c, slug, icon):
+    """The bot on the team that fills a role: its slug, the name it goes by, and its template's icon."""
+    return {"slug": slug, "name": (H.bot(c, slug) or {}).get("display_name") or slug, "icon": icon}
+
+
 def _about(c, who):
     """What the company is and its strategy bets, as the org builder's recommender reads them (backend/recruit.py)."""
     bets = recruit.strategy_bets(c, who)
@@ -161,6 +166,7 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
                       "alternatives": [] if on_team else [_item(members[t], raw.get(t, {}), _match(members[t], words, common))
                                                           for t in pool],
                       "on_team": on_team,
+                      "bot": _bot(c, filled[template], card["icon"]) if on_team else None,
                       "checked": not on_team and (template in suggested or match in ("strong", "good"))})
     agent = _cloud_agent()
     if agent:

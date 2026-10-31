@@ -5,7 +5,9 @@
   flex-direction:column;overflow:hidden}
 .tb-dialog[open]{display:flex}
 .tb-dialog::backdrop{background:rgb(0 0 0 / .5)}
+.tb-dialog:focus,.tb-dialog:focus-visible{outline:none}
 .tb-head{display:flex;align-items:center;gap:10px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.tb-dot{flex:none;width:22px;height:22px}
 .tb-head h2{margin:0;font-size:var(--t-md);font-weight:600}
 .tb-team{color:var(--muted);font-size:var(--t-sm);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .tb-spacer{flex:1}

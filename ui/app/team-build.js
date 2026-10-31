@@ -15,6 +15,7 @@ function teamBuildOpen(group) {
   const dialog = document.createElement('dialog');
   dialog.id = 'team-build-dialog';
   dialog.className = 'tb-dialog';
+  dialog.tabIndex = -1;
   dialog.setAttribute('aria-labelledby', 'team-build-title');
   dialog.innerHTML = `<div class="tb-head">${ldotHTML({state: 'idle', size: 22, cls: 'tb-dot'})}
     <h2 id="team-build-title">Build a team</h2><span class="tb-team">${esc(teamName)}</span><span class="tb-spacer"></span>
@@ -65,6 +66,9 @@ function teamBuildOpen(group) {
   // Any click ends the motion where it is: the cards that arrive after it show their final state.
   dialog.addEventListener('pointerdown', () => dialog.classList.add('tb-still'));
   dialog.showModal();
+  // Desktop: the brief is where you start. Phone: the dialog takes focus, so the keyboard stays down until a tap.
+  if (matchMedia('(max-width: 600px)').matches) dialog.focus();
+  else dialog.querySelector('.tb-brief input').focus();
   void tbSuggest(state);
 }
 
@@ -99,7 +103,7 @@ function tbRows(roles, prev) {
     const pool = [role.pick, ...role.alternatives];
     const kept = old?.pick.template && pool.find(item => item.template === old.pick.template);
     const pick = kept || role.pick;
-    return {role: role.role, pick, cloud, on_team: role.on_team,
+    return {role: role.role, pick, cloud, on_team: role.on_team, bot: role.bot ?? null,
       alternatives: kept && kept !== role.pick ? pool.filter(item => item !== kept) : role.alternatives,
       checked: role.on_team || cloud ? false : old ? old.checked : role.checked,
       open: !!old?.open && !role.on_team};
@@ -119,7 +123,9 @@ const tbMatch = item => item.match === 'strong' ? '<span class="tb-match">Strong
 
 // A role card. `still` marks a card that replaces one already on screen, so it does not fade in again.
 function tbCard(row, i, still) {
-  const {pick, role, cloud} = row, team = row.on_team;
+  const {pick, role, cloud, bot} = row, team = row.on_team;
+  // On the team, the card names the bot that fills the role, with that bot's avatar.
+  const onBot = team && bot;
   const action = team ? '<span class="tb-state">On the team</span>'
     : cloud ? `<button class="tb-link" type="button" data-tb-request="${i}">Request</button>`
     : row.alternatives.length ? `<button class="tb-link" type="button" data-tb-change="${i}" aria-expanded="${row.open}" aria-controls="tb-alts-${i}">Change</button>`
@@ -130,8 +136,8 @@ function tbCard(row, i, still) {
   return `<article class="tb-card${team ? ' is-team' : ''}${still ? ' tb-still' : ''}" data-card="${i}" style="--i:${i}">
     <div class="tb-top"><span class="tb-role" title="${esc(role)}">${esc(role)}</span>
       <input class="tb-check" type="checkbox" data-tb-check="${i}" aria-label="Include ${esc(role)}"${row.checked ? ' checked' : ''}${team || cloud ? ' disabled' : ''}></div>
-    <div class="tb-pick">${botAvatar({slug: pick.template || pick.name, icon: pick.icon}, 30)}
-      <div class="tb-pick-text"><span class="tb-pick-name">${esc(pick.name)}</span>${cloud ? '<span class="tb-pick-sub">Cloud agent</span>' : ''}</div></div>
+    <div class="tb-pick">${onBot ? botAvatar({slug: bot.slug, icon: bot.icon}, 30) : botAvatar({slug: pick.template || pick.name, icon: pick.icon}, 30)}
+      <div class="tb-pick-text"><span class="tb-pick-name">${esc(onBot ? bot.name : pick.name)}</span>${cloud ? '<span class="tb-pick-sub">Cloud agent</span>' : ''}</div></div>
     <div class="tb-card-foot">${action}</div>${alts}</article>`;
 }
 
