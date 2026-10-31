@@ -3,6 +3,8 @@ shows its amount or payee to a teammate who sees the bank line but not payroll d
 left out (of lists and of the balance sheet's due-out totals), and a payer whose grant was revoked sees only that their payment exists and its status."""
 from datetime import date
 
+from backend import hubdb as H
+from backend.finance import actions as FA
 from backend.finance import budgeting, tab
 from backend.finance import reads as FR
 from backend.finance.store import actions as SX
@@ -332,10 +334,10 @@ def test_an_allocation_refusal_states_a_budget_figure_only_when_the_viewer_sees_
     assert gus.status == "needs_approval", gus
 
 
-def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder: str) -> None:
+def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder: str, between=None) -> None:
     """Other expenses on a card held by `holder` (a 5,000 allocation) charges 40.00 on 14 October. The holder has the
     P&L grant from the start; in November a 4,000 payroll bill is paid from that charge's feed row, closing October
-    first, so the "Pays bill" reclass posts in November."""
+    first, so the "Pays bill" reclass posts in November. `between(store)` runs once the card exists, before its charge."""
     with store.transaction() as c:
         made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
                                                "amount": 10_000})
@@ -346,6 +348,8 @@ def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder:
         assert card.status == "committed", card
         assert act(c, OWNER, "view_grant", {"subject": holder, "what": "pnl"}).status == "committed"
     sync_once(store, fake)                  # Mercury makes the card (card-eve); its allocation follows the sync
+    if between is not None:
+        between(store)
     fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
     fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
                              "operationType": "create", "resourceVersion": 1})
@@ -501,3 +505,46 @@ def test_a_budget_change_gets_one_outcome_for_every_amount_the_reader_cannot_che
                     for amount in (3_000, 6_000, 6_001, 7_000, 12_000)}
     assert {r.status for r in outcomes.values()} == {"needs_approval"}, {a: r.status for a, r in outcomes.items()}
     assert not any(ch.isdigit() for r in outcomes.values() for ch in r.reason), outcomes
+
+
+def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
+    """A teammate asks a 1,000 limit on a card they have not yet been charged on, and a rule asks the owner for approval.
+    A 40.00 charge lands before the approval, so the recheck refuses. The refusal is stored with the card id and no
+    figure; reads render the figure only for a reader whose own figure is the true one and who still sees the card (the
+    owner, and the teammate once they have payroll detail and while the pnl view stands)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    asked = {}
+
+    def ask_before_the_charge(store):
+        with store.transaction() as c:
+            assert act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.cards"}, at=AT).status == \
+                "committed"
+            pnl = act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "pnl"}, at=AT)
+            assert pnl.status == "committed", pnl
+            assert act(c, OWNER, "rule_create", {
+                "kind": "gate", "name": "Card limits", "when": {"kind": "card_update_limit"},
+                "outcome": {"outcome": "needs_approval", "who": "finance_admin"},
+                "examples": [{"input": {"kind": "card_update_limit"}, "expect": "needs_approval"}]},
+                at=AT).status == "committed"
+            card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:gus'").fetchone()[0])
+            held = act(c, "human:cara", "card_update_limit", {"card_id": card_id, "amount": 1_000}, "limit-ask", at=AT)
+            assert (held.status, held.approver) == ("needs_approval", OWNER), held
+            asked.update(card_id=card_id, held=held, grant=str(pnl.result["grant_id"]))
+    _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus", between=ask_before_the_charge)
+    held = asked["held"]
+    with books.transaction() as c:
+        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6200"), "others_see": "totals",
+                                                   "full_detail": ["human:cara"]}, at=OCT_END).status == "committed"
+        H.approval_decide(c, OWNER, held.approval_id, "approved")
+        done = FA.approval_decided(c, held.approval_id, OCT_END)
+        assert done.status in ("failed", "denied") and done.code == "invalid", done
+        reason, result = c.execute("SELECT reason, result_json FROM fin_actions WHERE id=?",
+                                   (str(held.action_id),)).fetchone()
+        assert not any(ch.isdigit() for ch in str(reason)) and asked["card_id"] in str(result), (reason, result)
+        for reader in (OWNER, "human:cara"):
+            assert "40.00" in FR.action_for(c, reader, held.action_id, at=OCT_END)["reason"], reader
+        # the teammate asked, then lost sight of the card: they get the sentence with no figure, the owner still the figure
+        assert act(c, OWNER, "view_revoke", {"grant_id": asked["grant"]}, at=OCT_END).status == "committed"
+        assert "40.00" not in FR.action_for(c, "human:cara", held.action_id, at=OCT_END)["reason"]
+        assert "40.00" in FR.action_for(c, OWNER, held.action_id, at=OCT_END)["reason"]

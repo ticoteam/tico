@@ -17,7 +17,7 @@ from . import handlers
 from .context import Ctx
 from .core import kinds as K
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
+from .core.errors import CONFLICT, INVALID, LIMIT_REASON, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result
 from .store import banking as SK
@@ -401,14 +401,20 @@ def _state(kind: str) -> handlers.Planner:
     return planner
 
 
-def check_lower(ctx: Ctx, card: Any, amount: int, who: str = "") -> None:
-    """A card's limit can't go below what it has already used this period (holds and settled spend). The figure is
-    named only where `who`'s own figure for the card is the true one."""
-    have = used(ctx, card)
-    if 0 < amount < have:
-        if who and figure_hidden(ctx, who, card):
-            raise invalid("the card has used more than that this period; its limit can't go below that")
-        raise invalid(f"the card has used {have / 100:.2f} this period; its limit can't go below that")
+def check_lower(ctx: Ctx, card: Any, amount: int, who: str) -> None:
+    """A card's limit can't go below what it has already used this period (holds and settled spend). A refusal keeps
+    the card's id, and its figure is shown per reader (limit_reason)."""
+    if 0 < amount < used(ctx, card):
+        raise FinanceError(INVALID, limit_reason(ctx, who, str(card["id"])), fit_card=str(card["id"]))
+
+
+def limit_reason(ctx: Ctx, who: str, card_id: str, approver: bool = False) -> str:
+    """The sentence a refused card limit shows `who`, now. The card's figure is named only where `who` sees the card (or
+    decides the action) and `who`'s own figure for it is the true one; otherwise the sentence has no figure."""
+    card = SK.get(ctx.c, "fin_cards", card_id)
+    if card is None or not (approver or sees(ctx, who, card)) or figure_hidden(ctx, who, card):
+        return LIMIT_REASON
+    return f"the card has used {used(ctx, card) / 100:.2f} this period; its limit can't go below that"
 
 
 def figure_hidden(ctx: Ctx, who: str, card: Any) -> bool:

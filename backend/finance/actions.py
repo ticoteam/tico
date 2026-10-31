@@ -19,7 +19,7 @@ from .context import Ctx, load
 from .core import gates as G
 from .core import kinds as K
 from .core import org as O
-from .core.errors import CONFLICT, DENIED, FIT_REASON, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError
+from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError, record_of
 from .store import actions as SX
 from .store import budgets as SB
 from .store import usage as SU
@@ -283,10 +283,11 @@ def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapp
     if dry_run:
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
+    result, stored = record_of(e)
     SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
               rule_id=p.rule, key=key, rules=[], status=status,
-              result={"fit": {"budget_id": e.fit_budget}} if e.fit_budget else {}, code=e.code,
-              reason=FIT_REASON if e.fit_budget else e.message, by=p.actor,
+              result=result, code=e.code,
+              reason=stored, by=p.actor,
               at=when)
     _audit(c, p, action_id, kind, status, e.code)
     return ActionResult(status=status, kind=kind, action_id=action_id, code=e.code, reason=e.message)
@@ -324,20 +325,20 @@ def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
 
 
 def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str,
-           fit_budget: str = "") -> ActionResult:
+           refusal: FinanceError | None = None) -> ActionResult:
     """End a waiting action: it releases any hold it reserved, and the key's result is final (ask again with a new
-    key)."""
+    key). A refusal's record keeps its budget or card id and no figure (record_of)."""
     action_id = str(row["id"])
     budgeting.release_for(ctx, "action", action_id)
     payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
-    SX.finish(ctx.c, action_id, status=status, result={"fit": {"budget_id": fit_budget}} if fit_budget else {},
-              code=code, reason=FIT_REASON if fit_budget else reason, at=ctx.at)
+    result, stored = record_of(refusal) if refusal is not None else ({}, reason)
+    SX.finish(ctx.c, action_id, status=status, result=result, code=code, reason=stored, at=ctx.at)
     if str(row["kind"]) == "payment_create":     # a scheduled bill that asked for it is open again, and says why
         documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload_json"] or "{}")), status, reason)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
     out = _stored(SX.by_id(ctx.c, action_id))
-    return replace(out, reason=reason) if fit_budget else out
+    return replace(out, reason=reason)
 
 
 def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]:
@@ -408,7 +409,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         _rollback(c, "fin_decide", mark)
         if isinstance(e, gating.Denied):
             gating.logged_denial(ctx, e, str(row["id"]))
-        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.fit_budget)
+        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e)
     except (sqlite3.IntegrityError, tico.Refused) as e:
         _rollback(c, "fin_decide", mark)
         return _close(ctx, row, "failed", "failed", str(e)[:300])
@@ -424,7 +425,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     try:
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
     except FinanceError as e:
-        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.fit_budget)
+        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e)
     try:
         approver = _approver(ctx, gate, p.who) or ctx.org.owner
     except FinanceError as e:

@@ -21,6 +21,7 @@ from .core import dates, money
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, descendants, pnl_section
+from .cards import limit_reason
 from .handlers import fit_reason, private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA
@@ -1325,14 +1326,15 @@ def _covers(ctx: Ctx, viewer: str, payload: Mapping[str, object]) -> bool | None
     return all(seen) if seen else None
 
 
-def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, object] | None:
-    """An action's status for `viewer`, read now: None unless they asked for it, are the one to decide its approval, or
-    their current view covers what it is about. Its reason (which may carry amounts) for the approver, and otherwise
-    only while the viewer's view covers that; else its code alone."""
+def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | None = None) -> dict[str, object] | None:
+    """An action's status for `viewer`, read at `at` (default now): None unless they asked for it, are the one to decide
+    its approval, or their current view covers what it is about. Its reason (which may carry amounts) for the approver,
+    and otherwise only while the viewer's view covers that; else its code alone. A refused figure is stored without its
+    amount and rendered here per reader (fit_reason for a set-aside, limit_reason for a card limit)."""
     row = SX.by_id(c, action_id)
     if row is None:
         return None
-    ctx = load(c)
+    ctx = load(c, at)
     try:
         payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
     except ValueError:
@@ -1343,8 +1345,10 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, 
     if not asked and not covers and not approver:
         return None
     shown = covers is True or approver or (covers is None and asked)
-    fit = json.loads(str(row["result_json"] or "{}")).get("fit")
-    reason = fit_reason(ctx, viewer, str(fit["budget_id"]), approver) if fit else str(row["reason"] or "")
+    stored = json.loads(str(row["result_json"] or "{}"))
+    fit, limit = stored.get("fit"), stored.get("limit")
+    reason = (fit_reason(ctx, viewer, str(fit["budget_id"]), approver) if fit
+              else limit_reason(ctx, viewer, str(limit["card_id"]), approver) if limit else str(row["reason"] or ""))
     return {"action_id": str(row["id"]), "kind": str(row["kind"]), "status": str(row["status"]),
             "code": str(row["code"] or ""), "reason": reason if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
