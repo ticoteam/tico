@@ -8,7 +8,7 @@ import pytest
 
 from backend.finance import actions as FA
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
 def _rollups_match_lines(c: sqlite3.Connection) -> None:
@@ -72,6 +72,17 @@ def test_setup_is_idempotent_and_leaves_ai_services_without_an_amount(store):
         assert act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 5_000}, at=later).status == "committed"
         FA.setup(c, OWNER, "2026-10-16T11:00:00.000000Z")
         assert FA.budget_state(c, ai, later).amount == 5_000
+
+
+def test_setup_keeps_the_amount_of_a_replacement_ai_budget_a_person_made(books):
+    with books.transaction() as c:
+        ai, later = budget(c, "AI services"), "2026-10-16T10:00:00.000000Z"
+        assert act(c, OWNER, "budget_update", {"budget_id": ai, "active": False}, at=later).status == "committed"
+        made = act(c, OWNER, "budget_create", {"name": "AI spend", "account_id": account(c, "5100"), "amount": 7_000,
+                                               "at_limit": "decline"}, at=later)
+        assert made.status == "committed", made
+        FA.setup(c, OWNER, "2026-10-16T11:00:00.000000Z")
+        assert FA.budget_state(c, str(made.result["budget_id"]), later).amount == 7_000  # type: ignore[index]
 
 
 def test_random_entries_post_only_when_balanced_and_rollups_follow(books):

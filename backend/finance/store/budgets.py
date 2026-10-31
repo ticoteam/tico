@@ -58,11 +58,15 @@ def insert_version(c: sqlite3.Connection, budget_id: str, effective_from: str, a
 
 
 def seeded_version(c: sqlite3.Connection, budget_id: str) -> bool:
-    """Whether the budget's only version was written with the budget itself, by the same writer at the same moment
-    (setup's copy of the usage cap); any version a person set comes later."""
+    """Whether the budget's only version is setup's copy of the usage cap: written with the budget itself, by the same
+    writer at the same moment, on a budget no `budget_create` action made (a person's new budget with an amount is
+    written the same way, and leaves that action). Any version a person set later comes at a later moment."""
     rows = c.execute("SELECT v.created_at = b.created_at AND v.created_by = b.created_by FROM fin_budget_versions v "
                      "JOIN fin_budgets b ON b.id = v.budget_id WHERE v.budget_id=? LIMIT 2", (budget_id,)).fetchall()
-    return len(rows) == 1 and bool(rows[0][0])
+    if len(rows) != 1 or not rows[0][0]:
+        return False
+    return c.execute("SELECT 1 FROM fin_actions WHERE kind='budget_create' "
+                     "AND json_extract(result_json, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
 
 
 def drop_versions(c: sqlite3.Connection, budget_id: str) -> None:
