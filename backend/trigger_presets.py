@@ -28,6 +28,8 @@ import re
 import secrets
 
 PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack", "mercury")
+# A trigger on one of these is Finance's (spec §3.4): its calls go to Finance, and only a finance admin manages it.
+FINANCE = ("mercury",)
 TOLERANCE = 300                         # seconds a timestamped signature stays good, either side of now
 TYPE_FROM = {"github": "X-GitHub-Event", "stripe": "/type", "standard": "/type",
              "slack": "/event/type|/type", "mercury": "/resourceType"}      # a preset's default `type_from`; `a|b` tries a, then b

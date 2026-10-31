@@ -1198,7 +1198,7 @@ export type FinancePayments = {
   id?: string;
   name?: string;
 } | null;
-  amount: number;
+  amount: number | null;
   created_at?: string;
   created_by?: string;
   currency: string;
@@ -1216,7 +1216,7 @@ export type FinancePayments = {
   version?: number;
 } | null;
   settled_at?: string | null;
-  status: "queued" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
 }>;
 };
 
@@ -1366,6 +1366,18 @@ export type FinanceTransactions = {
   vendor?: string;
 }>;
   view_version: number;
+};
+
+export type FinanceWebhookDeliveries = {
+  deliveries: Array<{
+  body: string;
+  delivery: string;
+  outcome: string;
+  received_at: string;
+  trigger: string;
+  type: string;
+  via: string;
+}>;
 };
 
 export type Goal = {
@@ -5726,6 +5738,13 @@ export type ListFinanceTransactionsParams = {
 };
 export type ListFinanceTransactionsBody = never;
 export type ListFinanceTransactionsResponse = FinanceTransactions;
+
+/** GET /api/v2/finance/webhook-deliveries */
+export type ListFinanceWebhookDeliveriesParams = {
+  limit?: number;
+};
+export type ListFinanceWebhookDeliveriesBody = never;
+export type ListFinanceWebhookDeliveriesResponse = FinanceWebhookDeliveries;
 
 /** GET /api/v2/goals/{gid}/checkins */
 export type ListGoalCheckinsParams = {

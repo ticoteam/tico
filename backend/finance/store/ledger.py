@@ -182,6 +182,31 @@ def entry_lines(c: sqlite3.Connection, entry_id: str) -> list[tuple[Any, Line]]:
     return [(r, _line(r, tags.get(r["id"], {}))) for r in rows]
 
 
+def entries_touching(c: sqlite3.Connection, entry_ids: Sequence[str], account_ids: Sequence[str]) -> set[str]:
+    """Which of these entries have a line on any of these accounts."""
+    if not entry_ids or not account_ids:
+        return set()
+    out: set[str] = set()
+    accounts = ",".join("?" * len(account_ids))
+    for chunk in _chunks(list(entry_ids)):
+        marks = ",".join("?" * len(chunk))
+        out |= {str(r[0]) for r in c.execute(
+            f"SELECT DISTINCT entry_id FROM fin_lines WHERE entry_id IN ({marks}) AND account_id IN ({accounts})",
+            [*chunk, *account_ids])}
+    return out
+
+
+def posted_total(c: sqlite3.Connection, entry_ids: Sequence[str], account_id: str) -> int:
+    """What these entries, where still posted (not reversed), moved on one account."""
+    total = 0
+    for chunk in _chunks(list(dict.fromkeys(entry_ids))):
+        marks = ",".join("?" * len(chunk))
+        total += int(c.execute(f"SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON "
+                               f"e.id=l.entry_id WHERE l.entry_id IN ({marks}) AND l.account_id=? AND "
+                               f"e.status='posted'", [*chunk, account_id]).fetchone()[0])
+    return total
+
+
 def _line(r: Any, tags: Mapping[str, str]) -> Line:
     return Line(account_id=r["account_id"], amount=int(r["amount"]), currency=r["currency"],
                 original_amount=int(r["original_amount"]), fx_rate=Decimal(r["fx_rate"]), contact_id=r["contact_id"],

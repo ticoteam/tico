@@ -269,6 +269,18 @@ def notice(c: sqlite3.Connection, person: str, text: str) -> None:
     _H.say(c, _H.KEEPER, person, text, kind="notice")
 
 
+def needs_you(c: sqlite3.Connection, person: str, title: str, body: str) -> str | None:
+    """One Needs-you item (a keeper task the person owns); an open one with the same title is reused. None when the
+    person cannot be given one."""
+    try:
+        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True)
+    except _H.Refused:
+        return None
+    task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}
+    found: object = task.get("id")
+    return str(found) if found else None
+
+
 def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, object]) -> None:
     """A Finance event to Tico's rules (a sourceless `judge_event`) and automations, with ids only."""
     from ... import rules
@@ -368,6 +380,23 @@ def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
         fn()
     elif fn not in pending:
         pending.append(fn)
+
+
+# ------------------------------------------------------------------------------------------------ Finance's webhooks
+def finance_presets() -> tuple[str, ...]:
+    """The trigger presets whose calls are Finance's (backend/trigger_presets.py FINANCE): a Mercury trigger."""
+    from ... import trigger_presets as _presets
+    return tuple(str(p) for p in cast(Sequence[Any], cast(Any, _presets).FINANCE))
+
+
+def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
+    """Calls to Finance's triggers still kept (trigger_bodies, backend/triggers.py), newest first, bodies included."""
+    presets = finance_presets()
+    marks = ",".join("?" * len(presets))
+    return list(c.execute(
+        "SELECT b.trigger_id, b.delivery, b.received_at, b.type, b.via, b.outcome, b.body FROM trigger_bodies b "
+        "JOIN triggers t ON t.id=b.trigger_id WHERE t.deleted_at IS NULL AND t.preset IN (" + marks + ") "
+        "AND b.expires_at>? ORDER BY b.received_at DESC, b.delivery DESC LIMIT ?", (*presets, at, most)).fetchall())
 
 
 # ------------------------------------------------------------------------------------------------ the view version

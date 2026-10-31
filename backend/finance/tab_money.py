@@ -1,6 +1,7 @@
 """The Finance tab's money-out and control reads (spec §9, §6, §12): payments, recipients, reconciliations, statements
-and finance rules. Each cuts to the viewer: a payment shows to whoever made it or sees the line it posts to; a
-reconciliation or statement with its money account; recipients to whoever may pay; rules to whoever may write them.
+and finance rules. Each cuts to the viewer: a payment shows to whoever sees the line it posts to (a private line
+needs full detail), and only its status to whoever made it otherwise; a reconciliation or statement with its money
+account; recipients to whoever may pay; rules to whoever may write them.
 Re-exported by finance/reads, the only door."""
 import sqlite3
 from typing import Any
@@ -9,9 +10,9 @@ from .context import load
 from .core import rights as R
 from .core.errors import denied
 from .store import banking as SK
-from .tab import Row, page_size, sees_money_account
+from .tab import Row, page_size, private_cut, sees_money_account
 
-PAYMENT_STATUSES = ("queued", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+PAYMENT_STATUSES = ("queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
                     "unknown")
 
 
@@ -23,10 +24,14 @@ def may_connect(c: sqlite3.Connection, viewer: str, at: str | None = None) -> bo
 
 def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, cursor: str | None = None,
              limit: int = 50, at: str | None = None) -> Row:
-    """Payments the viewer may see, newest first: theirs, and those posting to a line their view covers with its tags.
-    A provider error shows only to someone who can act on it (the payer or a finance admin)."""
+    """Payments the viewer may see, newest first: those posting to a line their current view covers with its tags,
+    and their own. A payment to a private line the viewer has no full detail for is left out (phase 0's row rule). The
+    payer of a payment their current view does not cover (a revoked grant, a private line) still sees that it exists
+    and its status, with amount, recipient, memo, bill and line withheld (null or empty). A provider error shows only
+    to someone who sees the payment and can act on it (the payer or a finance admin)."""
     ctx = load(c, at)
     view = ctx.view(viewer)
+    cut = set(private_cut(ctx, view))
     admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
     most = page_size(limit)
     recs: dict[str, Any] = {}
@@ -41,21 +46,27 @@ def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, c
             before = str(r["created_at"])
             account = ctx.accounts.get(str(r["account_id"]))
             mine = str(r["created_by"]) == viewer
-            if not (view.everything or mine or (account is not None and view.sees(account, SK.loads(r["tags_json"])))):
+            private = str(r["account_id"]) in cut
+            seen = not private and (view.everything or (account is not None and
+                                                        view.sees(account, SK.loads(r["tags_json"]))))
+            if not (seen or mine):
                 continue
             rid = str(r["recipient_id"])
-            if rid not in recs:
+            if seen and rid not in recs:
                 recs[rid] = SK.get(c, "fin_recipients", rid)
-            rec = recs[rid]
-            out.append({"id": str(r["id"]), "status": str(r["status"]), "amount": int(r["amount"]),
-                        "currency": str(r["currency"]), "method": str(r["method"]), "memo": str(r["memo"]),
-                        "obligation": str(r["obligation"]) or None, "mode": str(r["mode"]),
+            rec = recs.get(rid) if seen else None
+            out.append({"id": str(r["id"]), "status": str(r["status"]),
+                        "amount": int(r["amount"]) if seen else None,
+                        "currency": str(r["currency"]), "method": str(r["method"]),
+                        "memo": str(r["memo"]) if seen else "",
+                        "obligation": (str(r["obligation"]) or None) if seen else None, "mode": str(r["mode"]),
                         "recipient": {"id": rid, "name": str(rec["name"]), "last4": rec["last4"],
                                       "version": int(r["recipient_version"])} if rec is not None else None,
-                        "account": {"id": account.id, "code": account.code, "name": account.name} if account else None,
+                        "account": {"id": account.id, "code": account.code, "name": account.name}
+                        if account and seen else None,
                         "money_account_id": str(r["money_account_id"]), "created_by": str(r["created_by"]),
                         "created_at": str(r["created_at"]), "settled_at": r["settled_at"],
-                        "error": r["last_error"] if (mine or admin) else None})
+                        "error": r["last_error"] if seen and (mine or admin) else None})
             if len(out) == most:
                 nxt = before
                 break

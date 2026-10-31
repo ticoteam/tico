@@ -1404,6 +1404,9 @@ STABLE.extend([
     ("/api/v2/finance/sources", "get", "Finance", "listFinanceSources",
      "Every source of the books grouped with counts, each with its account mapping, sync and access. Owner-only "
      "unless granted", "FinanceSources"),
+    ("/api/v2/finance/webhook-deliveries", "get", "Finance", "listFinanceWebhookDeliveries",
+     "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
+     "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
      "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
      "FinanceAccess"),
@@ -1501,9 +1504,10 @@ SCHEMAS.update({
                          required=["status", "kind"]),
     "FinancePayments": obj({
         "payments": items(obj({
-            "id": "s", "status": {"type": "string", "enum": ["queued", "awaiting_bank_approval", "submitted", "settled",
-                                                             "returned", "failed", "cancelled", "unknown"]},
-            "amount": "i", "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
+            "id": "s", "status": {"type": "string", "enum": ["queued", "sending", "awaiting_bank_approval", "submitted",
+                                                             "settled", "returned", "failed", "cancelled",
+                                                             "unknown"]},
+            "amount": {"type": ["integer", "null"]}, "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
             "recipient": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
                                                                      "name": {"type": "string"},
                                                                      "last4": {"type": ["string", "null"]},
@@ -1533,6 +1537,8 @@ SCHEMAS.update({
         "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
         "active": "b", "created_at": "s",
         "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
+    "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
+        "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
                                     "approver": "n", "result": "o"}, required=["status", "kind"]),
 })

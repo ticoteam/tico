@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from . import budgeting, limits, tab, tab_money, usage
+from . import budgeting, limits, tab, tab_hooks, tab_money, usage
 from . import context as _context
 from .store import usage as SU
 from .context import Ctx, load
@@ -495,6 +495,9 @@ reconciliations = tab_money.reconciliations
 statements = tab_money.statements
 rules = tab_money.rules
 may_connect = tab_money.may_connect
+# Finance's webhook triggers (finance/tab_hooks.py).
+hook_admin = tab_hooks.hook_admin
+webhook_deliveries = tab_hooks.webhook_deliveries
 
 
 # What usage limits and the server read (part B).

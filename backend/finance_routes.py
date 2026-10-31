@@ -122,6 +122,13 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.sources(c, actor, group=group))
 
+    @app.get("/api/v2/finance/webhook-deliveries")
+    def finance_webhook_deliveries(request: Request, limit: int = Query(20, ge=1, le=100)):
+        """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
+        sees sources. The ordinary trigger routes never show these bodies."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
+
     @app.get("/api/v2/finance/access")
     def finance_access(request: Request):
         """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""

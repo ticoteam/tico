@@ -1,0 +1,89 @@
+"""The Finance tab's money reads keep private lines private and follow the current view: a payroll feed row never
+shows its amount or payee to a teammate who sees the bank line but not payroll detail, a payment to a private line is
+left out, and a payer whose grant was revoked sees only that their payment exists and its status."""
+from backend.finance import reads as FR
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
+
+SALARY = -812_345
+
+
+def _payroll_line(c) -> str:
+    made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                            "parent_id": account(c, "6000")})
+    pay = str(made.result["account_id"])
+    assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+    return pay
+
+
+def _checking(c) -> str:
+    return str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+
+
+def _payee(store, fake) -> str:
+    with store.transaction() as c:
+        made = act(c, OWNER, "recipient_add", {"name": "Eve Example", "method": "ach",
+                                               "account_number": "000011112222", "routing_number": "000000000"})
+        assert made.status == "committed", made
+    sync_once(store, fake)
+    return str(made.result["recipient_id"])
+
+
+def test_a_payroll_feed_row_never_shows_to_a_bank_line_viewer_without_payroll_detail(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    gusto = {**MERCURY["txn_bank_fee"], "id": "txn-gusto", "amount": SALARY / 100, "counterpartyName": "Gusto",
+             "bankDescription": "GUSTO PAYROLL EVE EXAMPLE", "kind": "externalTransfer"}
+    for raw in (gusto, MERCURY["txn_deposit"]):
+        fake.txns[str(raw["id"])] = dict(raw)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        pay = _payroll_line(c)
+        feed = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-gusto'").fetchone()[0])
+        done = act(c, OWNER, "categorize", {"feed_id": feed, "account_id": pay, "tags": {"teammate": "human:eve"}})
+        assert done.status == "committed", done
+        act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "bs_lines", "account_ids": [account(c, "1000")]})
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"})
+
+        def feed_rows(who):
+            return [r for r in FR.transactions(c, who, at=AT)["rows"] if r["kind"] == "feed"]
+        assert {r["amount"] for r in feed_rows(OWNER)} == {SALARY, 50_000}
+        for who in ("human:cara", "human:dan"):                 # a bank line grant; everything but payroll detail
+            rows = feed_rows(who)
+            assert [r["amount"] for r in rows] == [50_000], who
+            every = FR.transactions(c, who, at=AT)["rows"]           # feed rows and entries, earlier postings too
+            assert "gusto" not in repr(every).lower() and all(abs(int(r["amount"])) != -SALARY for r in every)
+        act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals", "full_detail": ["human:dan"]})
+        assert {r["amount"] for r in feed_rows("human:dan")} == {SALARY, 50_000}
+
+
+def test_payments_hide_private_lines_and_a_revoked_payer_keeps_only_the_status(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        pay = _payroll_line(c)
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        grant = act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "expenses", "whose": "team",
+                                             "whose_team": "sales"})
+        made = act(c, "human:ben", "payment_create", {"recipient_id": rid, "amount": 9_000,
+                                                      "account_id": account(c, "6100"), "tags": {"team": "sales"},
+                                                      "money_account_id": _checking(c), "memo": "Acme parts"})
+        assert made.status == "committed", made
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 812_345, "account_id": pay,
+                                                "tags": {"teammate": "human:eve", "team": "web"},
+                                                "money_account_id": _checking(c), "memo": "Eve salary"})
+        assert made.status == "committed", made
+
+        def payments(who):
+            return FR.payments(c, who, at=AT)["payments"]
+        assert sorted(p["amount"] for p in payments(OWNER)) == [9_000, 812_345]
+        assert [p["amount"] for p in payments("human:cara")] == []          # leads Web, but no payroll detail
+        assert [p["amount"] for p in payments("human:ben")] == [9_000]
+        act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
+        (left,) = payments("human:ben")
+        assert left["status"] == "queued" and left["created_by"] == "human:ben"
+        assert left["amount"] is None and left["recipient"] is None and left["account"] is None
+        assert left["memo"] == "" and left["obligation"] is None and left["error"] is None
+        assert set(left) == set(payments(OWNER)[0])

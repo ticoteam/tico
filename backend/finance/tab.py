@@ -134,16 +134,45 @@ def _feed_row(ctx: Ctx, r: Any, money: Mapping[str, Any], lines: Mapping[str, li
             "lines": lines.get(str(r["entry_id"] or ""), [])}
 
 
+def private_cut(ctx: Ctx, view: VW.View) -> list[str]:
+    """The private accounts this viewer has no full detail for. A row-level read never shows a line on one, nor any
+    row that carries such a line's amount or payee (a bank feed row, a payment): it is left out whole, as phase 0's
+    line reads do, so a salary can't be read off a feed amount or worked out by subtraction (spec §7.5)."""
+    return sorted(a for a in ctx.private() if a not in view.full_detail)
+
+
+def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
+    """Ids of the feed rows that stand for a private line this viewer has no full detail for: posted to an entry with
+    such a line, or the bank side of a payment to one."""
+    cut = private_cut(ctx, view)
+    if not cut or not rows:
+        return set()
+    entries = SL.entries_touching(ctx.c, sorted({str(r["entry_id"]) for r in rows if r["entry_id"]}), cut)
+    out = {str(r["id"]) for r in rows if r["entry_id"] and str(r["entry_id"]) in entries}
+    for r in rows:
+        if str(r["id"]) not in out and r["request_id"]:
+            pay = SK.payment_by_request(ctx.c, str(r["request_id"]))
+            if pay is not None and str(pay["account_id"]) in cut:
+                out.add(str(r["id"]))
+    return out
+
+
+def _feed_origin(r: Any) -> str:
+    """The feed row a bank or card entry (or its reversal) was posted for, from its source id ("" for other entries):
+    so an earlier posting of a feed row that now stands for a private line can't show its amount either."""
+    return str(r["source_id"]).split(":")[0] if str(r["source"]) in ("bank", "card") else ""
+
+
 def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, list[Row]]:
     """The P&L lines of these entries the viewer sees (private lines without full detail never show)."""
     out: dict[str, list[Row]] = {}
-    private = ctx.private()
+    cut = set(private_cut(ctx, view))
     for eid in entry_ids:
         for r, line in SL.entry_lines(ctx.c, eid):
             account = ctx.accounts.get(line.account_id)
             if account is None or account.type not in PNL_TYPES:
                 continue
-            if account.id in private and account.id not in view.full_detail:
+            if account.id in cut:
                 continue
             if view.sees(account, line.tags):
                 out.setdefault(eid, []).append({"line_id": str(r["id"]), "account_id": account.id,
@@ -184,7 +213,8 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
                  at: str | None = None) -> Row:
     """Feed rows and entries as plain rows, newest first. A feed row shows to whoever sees its money account or
     follows its card (with the lines of its posted entry they see); an entry shows as the P&L lines the viewer sees,
-    unless a feed row they see stands for it. Filter by money account, status (feed rows), line, dates and a search;
+    unless a feed row they see stands for it. A feed row standing for a private line the viewer has no full detail for
+    is left out whole (`private_feed`). Filter by money account, status (feed rows), line, dates and a search;
     `next` is the cursor for the following page."""
     ctx = load(c, at)
     view = ctx.view(viewer)
@@ -223,6 +253,8 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
 
     def show_feed(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         rows = [r for r in batch if feed_seen(r)]
+        cut = private_feed(ctx, view, rows)
+        rows = [r for r in rows if str(r["id"]) not in cut]
         lines = _visible_lines(ctx, view, [str(r["entry_id"]) for r in rows if r["entry_id"]])
         out: list[tuple[tuple[str, str], Row]] = []
         for r in rows:
@@ -231,8 +263,9 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
             out.append((_key_of(r), _feed_row(ctx, r, money, lines)))
         return out
 
+    hidden = set(private_cut(ctx, view))
     line_ids = [a.id for a in ctx.accounts.values() if a.type in PNL_TYPES and view.sees_account(a) and
-                (not wanted or a.id in wanted) and (a.id not in ctx.private() or a.id in view.full_detail)]
+                (not wanted or a.id in wanted) and a.id not in hidden]
 
     def fetch_lines(mark: tuple[str, str] | None, n: int) -> list[Any]:
         return SK.lines_page(c, ctx.book.id, account_ids=line_ids, before=mark, most=n, start=start_day, end=end_day,
@@ -241,12 +274,16 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
         stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in batch}))
+        origins = {str(r["line_id"]): _feed_origin(r) for r in batch}
+        history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
+        cut = private_feed(ctx, view, [*stands.values(), *history.values()])
         out: list[tuple[tuple[str, str], Row]] = []
         for r in batch:
             account = ctx.accounts[str(r["account_id"])]
             tagged = tags.get(str(r["line_id"]), {})
             fed = stands.get(str(r["entry_id"]))
-            if not view.sees(account, tagged) or (fed is not None and feed_seen(fed)) or \
+            shown = fed is not None and feed_seen(fed) and str(fed["id"]) not in cut
+            if not view.sees(account, tagged) or shown or origins[str(r["line_id"])] in cut or \
                     (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id)):
                 continue
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),

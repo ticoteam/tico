@@ -9273,6 +9273,61 @@
         ]
       }
     },
+    "/api/v2/finance/webhook-deliveries": {
+      "get": {
+        "summary": "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees sources; the ordinary trigger routes refuse them",
+        "operationId": "listFinanceWebhookDeliveries",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceWebhookDeliveries"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/github/product-repos": {
       "post": {
         "summary": "Create the confirmed product repository",
@@ -33164,6 +33219,7 @@
                   "type": "string",
                   "enum": [
                     "queued",
+                    "sending",
                     "awaiting_bank_approval",
                     "submitted",
                     "settled",
@@ -33174,7 +33230,10 @@
                   ]
                 },
                 "amount": {
-                  "type": "integer"
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
                 },
                 "currency": {
                   "type": "string"
@@ -33959,6 +34018,54 @@
           "next",
           "rows",
           "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceWebhookDeliveries": {
+        "type": "object",
+        "properties": {
+          "deliveries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "trigger": {
+                  "type": "string"
+                },
+                "delivery": {
+                  "type": "string"
+                },
+                "received_at": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "via": {
+                  "type": "string"
+                },
+                "outcome": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "body",
+                "delivery",
+                "outcome",
+                "received_at",
+                "trigger",
+                "type",
+                "via"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "deliveries"
         ],
         "additionalProperties": true
       },
