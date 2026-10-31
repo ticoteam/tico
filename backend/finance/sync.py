@@ -595,8 +595,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
     if op in ("card_sync", "card_limit", "card_state") and card_id and answer.body.get("confirmed"):
         cards.confirmed(load(c, now), card_id, cast(dict[str, Any], answer.body.get("confirmed")))
     why = error_text(answer, write=True)
-    final = answer.status is not None and 400 <= answer.status < 500 and not answer.refused_write and \
-        answer.status != 429
+    final = answer.status is not None and 300 <= answer.status < 500 and not answer.refused_write and \
+        answer.status != 429                     # a redirect (never followed) is no better on a retry
     if op in NO_KEY_OPS and (answer.status is None or answer.status >= 500):
         # Mercury takes no idempotency key for these: a call that may have landed is never sent again on its own.
         final, why = True, f"{why}; it may have gone through: check Mercury before trying again"

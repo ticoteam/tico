@@ -1,8 +1,9 @@
 """The Mercury adapter (spec §8.1, §9): plain HTTP calls to Mercury's API with the company's own token, read at use
 time and never logged. It is only ever called outside a transaction, by the sync worker (finance/sync.py) and the
 connect probe. Every call returns (status, JSON); it never raises for an HTTP answer. A 429 waits out Retry-After a
-few times; 401/403 on a write means the token's IP allowlist lacks this server. The Vault host (full card numbers)
-is never called."""
+few times; 401/403 on a write means the token's IP allowlist lacks this server; a redirect is never followed (the
+token stays with the host it was meant for) and a 3xx is a failed answer. The Vault host (full card numbers) is never
+called."""
 import http.client
 import json
 import logging
@@ -93,6 +94,18 @@ def dollars(cents: int) -> Decimal:
     return (Decimal(cents) / 100).quantize(Decimal("0.01"))
 
 
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would resend the Authorization header to wherever Location points, past the
+    host guard. The 3xx comes back as the answer (an HTTPError), a failure no one retries to the Location."""
+
+    def redirect_request(self, req: urllib.request.Request, fp: Any, code: int, msg: str, headers: Any,
+                         newurl: str) -> urllib.request.Request | None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect())
+
+
 class Mercury:
     def __init__(self, token: str, base: str = BASE, opener: Opener | None = None,
                  sleep: Callable[[float], None] = time.sleep) -> None:
@@ -112,7 +125,7 @@ class Mercury:
             headers["Content-Type"] = "application/json"
         for attempt in range(TRIES_429 + 1):
             request = urllib.request.Request(url, data=data, method=method, headers=headers)
-            send = self._opener or cast(Opener, urllib.request.urlopen)
+            send = self._opener or cast(Opener, _OPENER.open)
             try:
                 with send(request, timeout=TIMEOUT) as response:
                     return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
@@ -245,6 +258,8 @@ def error_text(answer: Answer, write: bool = False) -> str:
         return IP_HINT
     if answer.status in (401, 403):
         return "Mercury refused the token"
+    if 300 <= answer.status < 400:
+        return f"Mercury answered {answer.status}, a redirect, which is never followed"
     message = answer.body.get("message") or answer.body.get("error")
     return f"Mercury said {answer.status}" + (f": {str(message)[:200]}" if isinstance(message, str) else "")
 
