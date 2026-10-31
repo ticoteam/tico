@@ -32,6 +32,7 @@ from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
+from .core.tax import SALES_TAX
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import ap as SAP
@@ -46,6 +47,11 @@ CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 SIGN = {"bill": 1, "invoice": -1}       # a bill's lines are debits, an invoice's credits
 OPEN = {"bill": AP.OPEN_BILL, "invoice": AP.OPEN_INVOICE}
 LINE_TYPES = {"bill": ("expense", "asset"), "invoice": ("income",)}
+
+
+def _line_type_ok(kind: str, account: L.Account) -> bool:
+    """A line posts to the kind's own types, or to a sales tax account: a bill remits it, an invoice collects it."""
+    return account.type in LINE_TYPES[kind] or account.subtype == SALES_TAX
 NAME_MIN = 4                            # a counterparty matches a contact's name on at least this many characters
 CLEARING = ("1050", "Payments clearing", "asset", "clearing")
 
@@ -254,7 +260,7 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
     ctl = control(ctx, kind).id
     for x in out:
         account = ctx.accounts.get(x.account_id)
-        if account is None or not account.active or account.id == ctl or account.type not in LINE_TYPES[kind]:
+        if account is None or not account.active or account.id == ctl or not _line_type_ok(kind, account):
             raise FinanceError(NOT_FOUND, f"no such {'/'.join(LINE_TYPES[kind])} account for a {kind} line")
         tags = posting.with_team(ctx, x.tags)
         if not may_write(ctx, who, account.id, tags):

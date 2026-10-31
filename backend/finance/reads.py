@@ -21,6 +21,10 @@ from .core import dates, money
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, descendants, pnl_section
+from .tax import form_1099_csv as form_1099_csv
+from .tax import form_1099_report as form_1099_report
+from .tax import sales_tax_csv as sales_tax_csv
+from .tax import sales_tax_report as sales_tax_report
 from .handlers import private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA

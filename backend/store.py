@@ -1737,6 +1737,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase2(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=70").fetchone():
+                    # Finance tax (spec §11): the sales tax jurisdictions and the due dates seeded for the outside
+                    # obligations. Idempotent, like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.tax(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(70,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the
