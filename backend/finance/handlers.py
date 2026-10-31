@@ -3,6 +3,7 @@ asker's view, and returns a Plan: the default gate it meets, its budget impact, 
 Planning writes nothing, so a dry run and an approval's re-check run the same code as the real thing."""
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from datetime import date
 from typing import Any
 
 from . import budgeting, posting
@@ -466,9 +467,9 @@ def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> i
     every = [v for vs in children.values() for v in vs] + parent_versions
     need = 0
     for at in B.fit_points(start, every):
-        total = sum(B.amount_at(v, at) or 0 for v in children.values())
+        total = _owed(ctx, children, at)
         period_start, period_end = B.period_of(parent, at, ctx.book.fiscal_year_start, parent_versions)
-        reserves, direct = _reserves(ctx, parent, period_start.isoformat(), period_end.isoformat())
+        reserves, direct = _reserves(ctx, parent, period_start.isoformat(), period_end.isoformat(), list(children))
         total += sum(reserve for _, _, reserve in reserves) + direct
         if ends is None or at < ends:
             need = max(need, total)
@@ -598,8 +599,8 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         if not cap:
             continue
         start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
-        reserves, direct = _reserves(ctx, b, start.isoformat(), end.isoformat())
-        owed = sum(B.amount_at(vs, at) or 0 for vs in kids.values())
+        reserves, direct = _reserves(ctx, b, start.isoformat(), end.isoformat(), list(kids))
+        owed = _owed(ctx, kids, at)
         total = sum(reserve for _, _, reserve in reserves) + direct + owed
         if (not reserves and not direct) or total <= cap:
             continue
@@ -622,14 +623,28 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         raise named_refusal(INVALID, named, [b.name, *labels], shown)
 
 
-def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str) -> tuple[list[tuple[Any, Any, int]], int]:
-    """What a budget's allocations reserve in a period beyond its children's amounts, for every target kind (card,
-    gateway_key, teammate), and the holds placed directly on it with no target. Returns (allocation row, card row or None,
-    reserve) for each reserve above zero, and the direct holds. Each allocation reserves its amount, or what its target
-    used under the budget if that is more: a card's or a gateway key's holds and settled spend, and a teammate's the same
-    plus the posted lines of that teammate under the budget, as budgeting._reserve counts them. A child's holds sit inside
-    the child's own amount, so they are not counted again here (SB.budget_holds)."""
-    tree = budgeting.subtree(ctx, b.id)
+def _owed(ctx: Ctx, kids: dict[str, list[B.Version]], at: date) -> int:
+    """What a budget's children hold it to on `at`. Each child counts once, as its amount or as what it already needs if
+    that is more: its spend, holds and allocation reserves (budgeting.state), all inside its own envelope. So nothing that
+    sits inside a child is counted again on its parent. A child with no stored budget yet needs nothing."""
+    budgets = ctx.budgets()
+    total = 0
+    for cid, versions in kids.items():
+        amount = B.amount_at(versions, at) or 0
+        need = 0
+        if cid in budgets:
+            st = budgeting.state(ctx, cid, at)
+            need = st.actual + st.held
+        total += max(amount, need)
+    return total
+
+
+def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str, kid_ids: list[str]
+              ) -> tuple[list[tuple[Any, Any, int]], int]:
+    """What a budget's allocations reserve in a period, for every target kind (card, gateway_key, teammate), and the holds
+    placed directly on it with no target. Returns (allocation row, card row or None, reserve) for each reserve above zero,
+    and the direct holds. An allocation reserves its amount, or what its target used on the budget itself if that is more.
+    Use inside a child sits in the child's envelope, which _owed counts once, so it is not counted again here."""
     out: list[tuple[Any, Any, int]] = []
     for row in SB.allocations(ctx.c, [b.id]):
         kind, tid = str(row["target_kind"]), str(row["target_id"])
@@ -638,13 +653,22 @@ def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str) -> tuple[list[tuple[A
             card = SK.get(ctx.c, "fin_cards", tid)
             if card is None:
                 continue
-        used = SB.target_used(ctx.c, tree, start, end, f"{kind}:{tid}", absorbed=kind != "teammate")
-        if kind == "teammate":
-            used += budgeting.actual(ctx, b, start, end, teammate=tid)
-        reserve = max(int(row["amount"]), used)
+        reserve = max(int(row["amount"]), _own_use(ctx, b, kind, tid, start, end, kid_ids))
         if reserve > 0:
             out.append((row, card, reserve))
     return out, SB.budget_holds(ctx.c, b.id, start, end)
+
+
+def _own_use(ctx: Ctx, b: B.Budget, kind: str, tid: str, start: str, end: str, kid_ids: list[str]) -> int:
+    """What an allocation's target used on the budget itself, outside its children: the holds placed on the budget for that
+    target, and for a teammate the posted lines of that teammate on it. A teammate's lines in a child are inside the
+    child's amount, so they come out."""
+    used = SB.target_used(ctx.c, [b.id], start, end, f"{kind}:{tid}", absorbed=kind != "teammate")
+    if kind == "teammate":
+        budgets = ctx.budgets()
+        inside = sum(budgeting.actual(ctx, budgets[cid], start, end, teammate=tid) for cid in kid_ids if cid in budgets)
+        used += budgeting.actual(ctx, b, start, end, teammate=tid) - inside
+    return used
 
 
 def _reserve_parts(reserves: list[tuple[Any, Any, int]]) -> tuple[list[str], str]:

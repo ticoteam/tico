@@ -73,7 +73,8 @@ def _cells(s: _Seen, a: date, z: date, account_ids: Iterable[str] | None = None,
     hidden = [i for i in ids if i in s.private and i not in s.view.full_detail]
     plain = [i for i in ids if i not in hidden]
     fy = s.ctx.book.fiscal_year_start
-    wide = (dates.fiscal_bounds(a, 3, fy)[0], dates.fiscal_bounds(z, 3, fy)[1])
+    wide_start, _, wide_end = dates.quarters_around(a, z, fy, budgeting.horizon(s.ctx))
+    wide = (wide_start, wide_end)
     out: list[VW.Cell] = []
     vendors: dict[str, str] = {}                     # a name a contact took counts as that contact (fin_vendor_aliases)
     for ids_, (p, q) in ((plain, (a, z)), (hidden, wide)):

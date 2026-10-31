@@ -638,3 +638,21 @@ def test_a_card_limit_refusal_keeps_a_private_charge_hidden_when_read_in_a_later
         assert "40.00" in FR.action_for(c, OWNER, asked.action_id)["reason"]
         later = FR.action_for(c, "human:gus", asked.action_id, at=NOV)["reason"]
     assert "40.00" not in later and "4000" not in later, later
+
+
+def test_a_once_budget_over_a_private_payroll_account_reads_for_a_viewer_without_its_detail(books):
+    """A once budget runs to 9999-12-31. Over a private payroll account, a viewer without that account's detail reads the
+    budget list, so its netted figure expands the window to whole quarters: the window must stop at the last posting or
+    today, and no quarter may be built past 9999-12-31."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _payroll_line(c)
+        made = act(c, OWNER, "budget_create", {"name": "Once", "account_id": account(c, "6000"), "amount": 10_000,
+                                               "period": "once"}, at=AT)
+        assert made.status == "committed", made
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
+                   at=AT).status == "committed"
+        rows = FR.budgets(c, "human:gus", at=AT)["budgets"]
+        FR.budget_vs_actual(c, "human:gus", at=AT)
+    assert [r["name"] for r in rows if r["name"] == "Once"] == ["Once"], rows

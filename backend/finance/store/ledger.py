@@ -288,6 +288,12 @@ def _chunks(values: Sequence[str], size: int = 400) -> Iterable[list[str]]:
 
 
 # ------------------------------------------------------------------------------------------------ rollup reads
+def last_day(c: sqlite3.Connection, book_id: str) -> str | None:
+    """The last day any posting falls on in the book, or None when nothing is posted."""
+    row = c.execute("SELECT MAX(day) FROM fin_rollups WHERE book_id=?", (book_id,)).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
 def rollup_rows(c: sqlite3.Connection, book_id: str, start: str, end: str,
                 account_ids: Iterable[str] | None = None) -> list[Any]:
     """Every rollup row in the window (on `account_ids` when given): what reports and budget actuals sum."""

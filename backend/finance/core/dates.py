@@ -46,6 +46,14 @@ def fiscal_bounds(at: date, months: int, fiscal_start: int) -> tuple[date, date]
     return first, add_months(first, months) - timedelta(days=1)
 
 
+def quarters_around(a: date, z: date, fiscal_start: int, horizon: date) -> tuple[date, date, date]:
+    """For a read over private lines: the window's first day, its last day held to `horizon` (the later of today and the
+    book's last posting), and the last day of the fiscal quarter holding that. An open-ended window (a once budget runs
+    to 9999-12-31) reads no further than the book does, so no quarter is built past it."""
+    end = min(z, max(horizon, a))
+    return fiscal_bounds(a, 3, fiscal_start)[0], end, fiscal_bounds(end, 3, fiscal_start)[1]
+
+
 def bucket_bounds(kind: str, at: date, fiscal_start: int = 1) -> tuple[date, date]:
     """The report bucket holding `at`: a day, an ISO week (Monday first), a month, a fiscal quarter or year."""
     if kind == "day":

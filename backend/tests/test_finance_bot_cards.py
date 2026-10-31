@@ -945,3 +945,24 @@ def test_a_routed_raise_covers_the_grandparents_teammate_and_gateway_allocations
         assert (over.status, over.code) == ("failed", "invalid"), (over.status, over.code, over.reason)
         lowered = act(c, OWNER, "budget_update", {"budget_id": company, "amount": 84_000}, key="alloc-lower")
         assert (lowered.status, lowered.code) == ("failed", "invalid"), (lowered.status, lowered.code, lowered.reason)
+
+
+def test_a_hold_inside_a_child_counts_once_against_the_parents_teammate_allocation(books):
+    """A teammate's allocation on a parent reserves only what that teammate uses outside the children: a hold for them on a
+    child sits inside the child's amount, which the parent already counts. Parent 1,000.00 with a 500.00 child and a 100.00
+    teammate allocation for eve, and a 300.00 hold for eve on the child. The parent needs 600.00 (500.00 of child and
+    100.00 of allocation): lowering it to 700.00 commits, lowering it to 599.00 is refused."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        parent = _budget(c, name="Parent", amount=100_000)
+        child = _budget(c, name="Child", amount=50_000, team="eng", parent_id=parent)
+        made = act(c, OWNER, "allocation_set", {"budget_id": parent, "target_kind": "teammate",
+                                                "target_id": "human:eve", "amount": 10_000})
+        assert made.status == "committed", (made.status, made.reason)
+        held = FA.hold_place(c, budget_scope=child, amount=30_000, currency="USD", source="run", source_id="run-eve",
+                             expires_at=None, target="teammate:human:eve", at=AT)
+        assert held.allowed, held
+        lowered = act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 70_000}, key="child-hold-700")
+        assert lowered.status == "committed", (lowered.status, lowered.code, lowered.reason)
+        refused = act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 59_900}, key="child-hold-599")
+        assert (refused.status, refused.code) == ("failed", "invalid"), (refused.status, refused.code, refused.reason)

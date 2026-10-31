@@ -118,6 +118,14 @@ def _cut_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence[str
             + _private_in(ctx, read, start, end, [a for a in accounts if a in hidden], teams, teammate, vendors))
 
 
+def horizon(ctx: Ctx) -> date:
+    """The latest day a read reaches: the later of today and the book's last posting. An open-ended window (a once budget
+    runs to 9999-12-31) is held to it, so no read builds a date past the book."""
+    today = dates.day(ctx.today)
+    last = SL.last_day(ctx.c, ctx.book.id)
+    return max(today, dates.day(last)) if last else today
+
+
 def _private_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence[str], teams: Sequence[str] | None,
                 teammate: str, vendors: Sequence[str]) -> int:
     """The lines on these private accounts, in the rollup's scope and the window, that the viewer's figure leaves out.
@@ -126,9 +134,10 @@ def _private_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence
     teammate or a vendor) shows none of it. `excluded` is set when a line in the window is not shown to the viewer."""
     if not accounts or (teams is not None and not teams):
         return 0
-    a, z = dates.day(start), dates.day(end)
     fy = ctx.book.fiscal_year_start
-    wide = (dates.fiscal_bounds(a, 3, fy)[0], dates.fiscal_bounds(z, 3, fy)[1])
+    a = dates.day(start)
+    wide_start, z, wide_end = dates.quarters_around(a, dates.day(end), fy, horizon(ctx))
+    wide = (wide_start, wide_end)
     cells: list[VW.Cell] = []
     total = 0
     unseen = False
