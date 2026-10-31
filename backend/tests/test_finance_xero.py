@@ -10,10 +10,11 @@ from email.utils import parsedate_to_datetime
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-from backend.finance import books_link, mirror, xero
+from backend.finance import books_link, books_sync, mirror, xero
 from backend.finance.core import mirror as M
 from backend.finance.core import xero as X
 from backend.finance.store import ledger as SL
+from backend.finance.store import mirror as SX
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, account, act, books, finance_template, store)
 
@@ -448,3 +449,17 @@ def test_the_bodies_sent_carry_exact_decimals_and_xeros_codes():
     assert body["Status"] == "POSTED" and body["LineAmountTypes"] == "NoTax"
     assert X.account_body({"code": "6100", "name": "Software", "type": "expense"})["Type"] == "EXPENSE"
     assert X.void_body("mj-1") == {"ManualJournals": [{"ManualJournalID": "mj-1", "Status": "VOIDED"}]}
+
+
+def test_a_relayed_xero_event_is_kept_once_for_the_company_it_names(books):
+    with books.transaction() as c:
+        SX.books_connection_insert(c, cid="conn-xero-hook", provider="xero", name="Acme Xero", by=OWNER, at=AT)
+        SX.set_books_settings(c, "conn-xero-hook", {"provider": "xero", "company_id": "co_acme", "tenant_id": TENANT})
+    body = {"type": "tico.finance.webhook", "provider": "xero", "company_id": "co_acme", "external_id": "evt-x1",
+            "payload": {"events": [{"resourceId": "inv-1", "eventCategory": "INVOICE", "eventType": "UPDATE"}]}}
+    with books.transaction() as c:
+        assert books_sync.delivery(c, "xero", body) == "kept"
+        assert books_sync.delivery(c, "xero", body) == "seen"
+        assert books_sync.delivery(c, "xero", {**body, "external_id": "evt-x2", "company_id": "co_other"}) == "refused"
+        assert books_sync.delivery(c, "xero", {**body, "external_id": "evt-x3",
+                                               "payload": {"eventNotifications": []}}) == "refused"
