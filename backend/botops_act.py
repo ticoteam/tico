@@ -259,6 +259,9 @@ DO = _routes(
     # checks). Saving its key is a secret, refused in the request; checking it changes nothing.
     ("PUT", r"providers/gateway"),
     ("DELETE", r"providers/gateway"), ("POST", r"providers/gateway/automatic"),
+    # Giving a computer a company subscription, or removing one: an owner's or an admin's call, which the route checks;
+    # a Confirm card (backend/settings_entries.py), since it restarts that computer's runs. Saving a value is refused there.
+    ("PUT", r"computer-subscriptions"), ("DELETE", rf"model-subscriptions/{_S}"),
     # A message or chat to a bot stays in the team; a message to a person is a card (`classify`).
     ("POST", rf"chat/{_S}"),
     ("POST", r"system/update(/check)?"),

@@ -163,6 +163,21 @@ ENTRIES = TEAM_RULES + [
       "providers/gateway/automatic", value="json", card=_card("devices", "settings-models")),
     S("models.gateway.remove", "Remove the Tico AI Gateway", COMPUTERS + " > Models", "owner", "confirm", "DELETE",
       "providers/gateway", value="json", card=_card("devices", "settings-models")),
+    # Company subscriptions (backend/model_subscriptions.py): a value is pasted only in Settings; giving one to a
+    # computer, or removing one in use, restarts that computer's runs on that runtime.
+    S("models.subscription.add", "Add a subscription", COMPUTERS + " > Models > Subscriptions", "admin", "person",
+      "POST", "model-subscriptions", value="json", card=_card("devices", "settings-models"),
+      words="claude max chatgpt plan setup token api key login", why="A subscription's token, key or login is "
+      "pasted in Settings, never passed through a bot"),
+    S("models.subscription.change", "Rename or reconnect a subscription", COMPUTERS + " > Models > Subscriptions",
+      "admin", "person", "POST", "model-subscriptions/{id}", value="json", card=_card("devices", "settings-models"),
+      words="rename reconnect", why="A subscription's token, key or login is pasted in Settings, never passed "
+      "through a bot"),
+    S("models.subscription.remove", "Remove a subscription", COMPUTERS + " > Models > Subscriptions", "admin",
+      "confirm", "DELETE", "model-subscriptions/{id}", value="json", card=_card("devices", "settings-models")),
+    S("models.computer_subscription", "A computer's subscription", COMPUTERS + " > Models > Subscriptions", "admin",
+      "confirm", "PUT", "computer-subscriptions", value="json", card=_card("devices", "settings-models"),
+      read="computer-subscriptions", words="give assign subscription computer claude codex"),
     # Bots
     S("bot.fallback", "Fallback model", BOTS, "bot", "direct", "POST", "bots/{bot}/fallback", "fallback", "text",
       _card("bots")),

@@ -1,16 +1,21 @@
-"""A person's model subscriptions: saved once, picked per task, bot or team, and handed to whichever computer runs the
-turn (backend/model_subscriptions.py)."""
+"""Company subscriptions: saved once in Settings > Models, given to computers one per runtime, and signing in every turn
+on that computer (backend/model_subscriptions.py)."""
 
 import base64
 import json
 
+import pytest
+
+from backend import login_holds
 from backend import model_subscriptions as MS
-from backend.store import encode
-from backend.tests.test_api import api, as_member, assign, claim, get, post, put, runner  # noqa: F401
+from backend.auth import Identity
+from backend.store import H, Problem, encode
+from backend.tests.test_api import api, assign, claim, get, headers, post, put, runner  # noqa: F401
 from backend.tests.test_credentials import setup
 
 TOKEN = "sk-ant-oat01-" + "a" * 24
 OTHER = "sk-ant-oat01-" + "b" * 24
+CLAUDE_LIMIT = "You've hit your limit · resets 2:40am (UTC)"
 
 
 def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
@@ -19,11 +24,11 @@ def codex_file(account="acct-1", refresh="r-1", email="ana@acme.example"):
                                   "refresh_token": refresh, "account_id": account}})
 
 
-def company(api):
+def company(api, enabled=("anthropic", "openai")):
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM registry_metadata WHERE key='providers'")
         c.execute("INSERT INTO registry_metadata VALUES('providers',?)",
-                  (encode({"revision": 1, "enabled": ["anthropic", "openai"], "runtime": "claude",
+                  (encode({"revision": 1, "enabled": list(enabled), "runtime": "claude",
                            "model": "claude-sonnet-5-5"}),))
 
 
@@ -34,29 +39,18 @@ def on(api, bot, runtime, model):
         c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot))
 
 
-def teams(api):
-    """product (led by Ben) inside company (led by Ana); cpo and product-design are on product."""
-    with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        roster["org_groups"] = {"company": {"name": "Company", "lead": "person:ana"},
-                                "product": {"name": "Product", "parent": "company", "lead": "person:ben"}}
-        for p in roster["people"]:
-            p["team"] = {"ana": "company", "ben": "product"}.get(p["id"], p.get("team"))
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
-
-
-def add(api, kind="claude_token", secret=TOKEN, name=None, token="ana-test", expected=200):
-    return post(api, "me/subscriptions", {"kind": kind, "secret": secret, **({"name": name} if name else {})},
+def add(api, kind="claude_token", secret=TOKEN, name="Company Max", token="ana-test", expected=200):
+    return post(api, "model-subscriptions", {"kind": kind, "secret": secret, **({"name": name} if name else {})},
                 token, expected=expected)
 
 
-def pick(api, scope, id, runtime, sid, token="ana-test", expected=200):
-    return put(api, "subscription-picks", {"scope": scope, "id": id, "runtime": runtime, "subscription": sid},
-               token, expected=expected)
+def give(api, m, runtime, sid, confirm=False, token="ana-test", expected=200):
+    return put(api, "computer-subscriptions", {"runner_id": m["runner_id"], "runtime": runtime, "subscription": sid,
+                                               "confirm": confirm}, token, expected=expected)
 
 
-def machine(api, signed_in=False, takes=True, bot="ops", claude=None):
-    m = runner(api)
+def machine(api, signed_in=False, takes=True, bot="ops", claude=None, label="Test Mac"):
+    m = runner(api, label=label)
     assign(api, m, bot)
     post(api, "runners/heartbeat", {
         "version": "test", "platform": "test", "capabilities": [MS.CAPABILITY] if takes else [],
@@ -68,120 +62,96 @@ def machine(api, signed_in=False, takes=True, bot="ops", claude=None):
     return m
 
 
-def resolved(api, bot, runtime, task_id=None):
+def effect(api, m, runtime="claude"):
     with api.app.state.store.read() as c:
-        found = MS.resolve(c, bot, runtime, task_id=task_id)
-    return found and found["subscription"] and (found["scope"], found["subscription"]["id"])
+        found = MS.in_effect(c, m["runner_id"], runtime)
+    return found and found["id"]
 
 
-def test_saved_once_listed_without_its_value_and_the_value_sealed(api):
+def listed(api, token="ana-test"):
+    return get(api, "model-subscriptions", token)["subscriptions"]
+
+
+def test_owners_and_admins_save_the_company_subscriptions_and_nobody_reads_a_value(api):
     setup(api)
-    saved = add(api, name="Ana's Max")
+    company(api, enabled=["openai"])
+    saved = add(api)
     assert saved["kind"] == "claude_token" and saved["status"] == "new" and saved["runtime"] == "claude"
+    assert saved["added_by"] == "human:ana" and saved["computers"] == [] and saved["usage"] is None
     assert TOKEN not in json.dumps(saved) and saved["preview"].endswith(TOKEN[-4:])
-    codex = add(api, "codex_login", codex_file())
-    assert codex["preview"] == "ana@acme.example"
-    listed = get(api, "me/subscriptions")
-    assert [s["name"] for s in listed["subscriptions"]] == ["Ana's Max", "ChatGPT"]
-    assert {k["kind"] for k in listed["kinds"]} == set(MS.KINDS)
-    assert TOKEN not in json.dumps(listed) and "r-1" not in json.dumps(listed)
+    # Saving it turns its provider on, so its models are offered.
     with api.app.state.store.read() as c:
-        stored = c.execute("SELECT sealed FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]
-        assert TOKEN not in stored
+        from backend import providers
+        assert "anthropic" in providers.load(c, api.app.state.store.settings)["enabled"]
+    assert add(api, "codex_login", codex_file(), name="ChatGPT", token="ben-test")["preview"] == "ana@acme.example"
+    body = get(api, "model-subscriptions", "cara-test")                       # a member reads, no values
+    assert [s["name"] for s in body["subscriptions"]] == ["ChatGPT", "Company Max"]
+    assert [k["kind"] for k in body["kinds"]] == ["claude_token", "codex_login", "anthropic_key", "openai_key"]
+    assert TOKEN not in json.dumps(body) and "r-1" not in json.dumps(body)
+    with api.app.state.store.read() as c:
+        assert TOKEN not in c.execute("SELECT sealed FROM model_subscriptions WHERE id=?", (saved["id"],)).fetchone()[0]
         assert not c.execute("SELECT 1 FROM idempotency WHERE response_json LIKE ? OR request_hash LIKE ?",
                              (f"%{TOKEN}%", f"%{TOKEN}%")).fetchone()
         assert not c.execute("SELECT 1 FROM events WHERE detail_json LIKE ?", (f"%{TOKEN}%",)).fetchone()
-    # Each person sees only their own.
-    assert get(api, "me/subscriptions", "cara-test")["subscriptions"] == []
+    add(api, token="cara-test", expected=403)                                 # a member saves nothing
+    add(api, name="  ", expected=422)
     add(api, "claude_token", "not-a-token", expected=422)
     add(api, "codex_login", "{}", expected=422)
-    add(api, "openai_key", "sk-proj-" + "c" * 20)
-
-
-def test_task_then_bot_then_team_then_the_team_above_and_a_broken_pick_falls_through(api):
-    setup(api)
-    teams(api)
-    on(api, "cpo", "claude", "claude-sonnet-5-5")
-    top, team, own, once = (add(api, name=n)["id"] for n in ("Top", "Team", "Bot", "Task"))
-    assert resolved(api, "cpo", "claude") is None                     # nothing picked: the computer or the Gateway
-    pick(api, "team", "company", "claude", top)
-    assert resolved(api, "cpo", "claude") == ("team", top)
-    pick(api, "team", "product", "claude", team)
-    assert resolved(api, "cpo", "claude") == ("team", team)
-    pick(api, "bot", "cpo", "claude", own)
-    assert resolved(api, "cpo", "claude") == ("bot", own)
-    t = post(api, "tasks", {"owner": "cpo", "title": "Price the Acme plan", "body": "Draft it."})
-    pick(api, "task", t["id"], "claude", once)
-    assert resolved(api, "cpo", "claude", t["id"]) == ("task", once)
-    assert resolved(api, "cpo", "claude") == ("bot", own)             # the override is that task's only
-    assert resolved(api, "cpo", "codex") is None                      # picks are per runtime
+    api.app.state.store.settings.test_identities["assistant"] = Identity("human:ana", "owner",
+                                                                         email="ana@acme.example", via="assistant")
+    add(api, token="assistant", expected=403)                                 # a secret is pasted by the person
+    support = Identity("human:support", "owner", email="ana@acme.example", support="full")
+    with pytest.raises(Problem):                                              # a support session changes nothing
+        MS._admin(api.app.state.auth, support)
+    # Rename, and reconnect: a new value counts again from `new`.
+    post(api, f"model-subscriptions/{saved['id']}", {"name": "Max"}, "cara-test", expected=403)
+    assert post(api, f"model-subscriptions/{saved['id']}", {"name": "Max"})["name"] == "Max"
     with api.app.state.store.transaction() as c:
-        MS._status(c, once, "needs_reconnect")
-        found = MS.resolve(c, "cpo", "claude", task_id=t["id"])
-    assert found["scope"] == "bot" and found["passed"][0]["why"] == "needs_reconnect"
-    # The picker shows what is in effect and why.
-    view = get(api, f"subscription-picks?scope=task&id={t['id']}")
-    [row] = view["runtimes"]
-    assert row["pick"]["id"] == once and row["effect"]["source"] == "bot" and row["effect"]["subscription"]["id"] == own
-    # Removing a subscription takes its picks with it.
-    post(api, f"me/subscriptions/{own}", {"name": "Renamed"})
-    assert api.delete(f"/api/v2/me/subscriptions/{own}", headers={"Authorization": "Bearer ana-test",
-                                                                   "Idempotency-Key": "rm-own"}).status_code == 200
-    assert resolved(api, "cpo", "claude") == ("team", team)
-    used = {s["id"]: s["used_by"] for s in get(api, "me/subscriptions")["subscriptions"]}
-    assert [(u["scope"], u["id"]) for u in used[team]] == [("team", "product")]
+        MS._status(c, saved["id"], "needs_reconnect", "expired")
+    again = post(api, f"model-subscriptions/{saved['id']}", {"secret": OTHER})
+    assert again["status"] == "new" and again["revision"] == 2 and again["preview"].endswith(OTHER[-4:])
 
 
-def test_only_your_own_subscription_on_a_bot_task_or_team_you_manage(api):
+def test_a_computer_holds_one_subscription_per_runtime_of_the_right_kind(api):
     setup(api)
-    teams(api)
-    as_member(api, "ben@acme.example")
-    on(api, "ops", "claude", "claude-sonnet-5-5")
-    on(api, "cpo", "claude", "claude-sonnet-5-5")
-    anas, bens, caras = add(api)["id"], add(api, token="ben-test")["id"], add(api, token="cara-test")["id"]
-    pick(api, "bot", "ops", "claude", caras, "cara-test", expected=403)      # not her bot
-    pick(api, "bot", "cpo", "claude", anas, "ben-test", expected=403)        # his bot, someone else's subscription
-    pick(api, "bot", "cpo", "claude", bens, "ben-test")                      # his bot, his own
-    pick(api, "team", "product", "claude", bens, "ben-test")                 # the team he leads
-    pick(api, "team", "company", "claude", bens, "ben-test", expected=403)   # the team above him
-    pick(api, "team", "company", "claude", anas)                             # the owner, any team
-    pick(api, "bot", "cpo", "codex", bens, "ben-test", expected=422)         # a Claude login for Codex
-    t = post(api, "tasks", {"owner": "cpo", "title": "Price the Acme plan", "body": "Draft it."})
-    pick(api, "task", t["id"], "claude", caras, "cara-test", expected=403)
-    pick(api, "task", t["id"], "claude", bens, "ben-test")
-    assert get(api, f"subscription-picks?scope=bot&id=cpo", "ben-test")["can_pick"] is True
-    # Ana manages every bot: she may take Ben's pick off; Cara may not; Ben may take his own off anywhere.
-    pick(api, "bot", "cpo", "claude", None, "cara-test", expected=403)
-    pick(api, "team", "company", "claude", None, "ben-test", expected=403)
-    pick(api, "bot", "cpo", "claude", None)
-    assert resolved(api, "cpo", "claude") == ("team", bens)
-    # A subscription is the person's: nobody else renames, reconnects or removes it.
-    post(api, f"me/subscriptions/{bens}", {"name": "Mine now"}, "cara-test", expected=404)
-    # An owner who has left: their subscription is passed over.
-    with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        for p in roster["people"]:
-            if p["id"] == "ben":
-                p["hidden"] = True
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
-    assert resolved(api, "cpo", "claude") == ("team", anas)
+    company(api)
+    m = machine(api)
+    old = machine(api, takes=False, bot="cpo", label="Old Mac")
+    first, second = add(api, name="One")["id"], add(api, name="Two")["id"]
+    chatgpt = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    give(api, m, "codex", first, expected=422)                                # a Claude login for Codex
+    given = give(api, m, "claude", first)
+    assert (given["subscription_id"], given["stopped"]) == (first, 0)
+    give(api, m, "claude", second)                                            # a switch replaces it
+    give(api, m, "codex", chatgpt)
+    give(api, old, "claude", second)
+    give(api, m, "claude", first, token="cara-test", expected=403)
+    state = get(api, "computer-subscriptions", "cara-test")
+    assert sorted((a["runner_id"], a["runtime"], a["subscription_id"]) for a in state["assignments"]) == sorted(
+        [(m["runner_id"], "claude", second), (m["runner_id"], "codex", chatgpt), (old["runner_id"], "claude", second)])
+    assert state["capable"] == [m["runner_id"]]                               # the old one needs an update
+    computers = {s["id"]: s["computers"] for s in listed(api)}
+    assert computers[first] == [] and sorted(computers[second]) == sorted([m["runner_id"], old["runner_id"]])
+    assert effect(api, m) == second and effect(api, old) is None
+    give(api, m, "claude", None)
+    assert effect(api, m) is None and len(get(api, "computer-subscriptions")["assignments"]) == 2
 
 
-def test_a_turn_reads_its_subscription_on_any_computer_and_a_refusal_needs_a_reconnect(api):
+def test_a_turn_signs_in_with_its_computers_subscription_and_a_refused_one_is_passed_over(api):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    sid = add(api, name="Ana's Max")["id"]
-    pick(api, "bot", "ops", "claude", sid)
+    sid = add(api)["id"]
     m = machine(api, claude="rejected")               # its own Claude login refused: the subscription still runs
+    give(api, m, "claude", sid)
     [entry] = [e for e in get(api, "runners/assignments", m["token"]) if e["bot"] == "ops"]
     assert entry["subscriptions"] == {"claude": "claude_token"}       # its readiness needs no Claude sign-in here
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     assert turn and turn["config"]["runtime"] == "claude" and turn["credential_vault"] is True
     [handed] = turn["subscriptions"]
-    assert handed["id"] == sid and handed["env"] == "CLAUDE_CODE_OAUTH_TOKEN" and "value" not in handed
-    assert TOKEN not in json.dumps(turn)
+    assert handed["id"] == sid and handed["env"] == "CLAUDE_CODE_OAUTH_TOKEN" and handed["source"] == "computer"
+    assert "value" not in handed and TOKEN not in json.dumps(turn)
     got = get(api, "credential-runtime", turn["token"])["subscriptions"]
     assert [(s["env"], s["value"], s["billing"]) for s in got] == [("CLAUDE_CODE_OAUTH_TOKEN", TOKEN, "subscription")]
     get(api, "credential-runtime", "ana-test", expected=403)
@@ -189,42 +159,138 @@ def test_a_turn_reads_its_subscription_on_any_computer_and_a_refusal_needs_a_rec
     post(api, f"attempts/{turn['id']}/complete", {
         "outcome": "failed", "last_seq": 0,
         "auth_rejected": {"runtime": "claude", "reason": "OAuth token has expired"}}, m["token"])
-    [mine] = get(api, "me/subscriptions")["subscriptions"]
-    assert mine["status"] == "needs_reconnect"
+    [mine] = listed(api)
+    assert mine["status"] == "needs_reconnect" and mine["status_detail"] == "OAuth token has expired"
     with api.app.state.store.read() as c:
-        # The computer's own login is not marked refused, and nothing waits on a computer sign-in card.
+        # Nothing waits on a computer sign-in card: the refusal was the subscription's.
         assert not c.execute("SELECT 1 FROM task_reconnects WHERE key LIKE 'login:%'").fetchone()
-        assert (json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (m["runner_id"],)).fetchone()[0])
-                ["runtimes"]["claude"]["authenticated"]) == "rejected"
-    assert resolved(api, "ops", "claude") is None
-    # Reconnecting with a new value makes it count again, and a completed turn marks it working.
-    post(api, f"me/subscriptions/{sid}", {"secret": OTHER})
-    assert resolved(api, "ops", "claude") == ("bot", sid)
+    # Passed over: the computer's own login (refused here) decides again, so nothing is handed.
+    assert effect(api, m) is None
+    assert "subscriptions" not in [e for e in get(api, "runners/assignments", m["token"]) if e["bot"] == "ops"][0]
+    assert claim(api, m) is None                         # no sign-in here and no Gateway in this preset: it waits
+    # Reconnecting with a new value makes it count again, and a completed turn on that revision marks it working.
+    post(api, f"model-subscriptions/{sid}", {"secret": OTHER})
+    assert effect(api, m) == sid
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE attempt_subscriptions SET revision=2 WHERE attempt_id=?", (turn["id"],))
         MS.turn_worked(c, turn["id"], "claude")
-    assert get(api, "me/subscriptions")["subscriptions"][0]["status"] == "working"
+    assert listed(api)[0]["status"] == "working"
 
 
-def test_an_older_computer_runs_as_before(api):
+def test_an_older_computer_runs_on_its_own_login_as_before(api):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
-    pick(api, "bot", "ops", "claude", add(api)["id"])
     m = machine(api, signed_in=True, takes=False)
+    give(api, m, "claude", add(api)["id"])
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
-    assert turn and "subscriptions" not in turn
+    assert turn and turn["config"]["runtime"] == "claude" and "subscriptions" not in turn
     assert "subscriptions" not in get(api, "credential-runtime", turn["token"])
+
+
+def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    on(api, "cpo", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m, n = machine(api, signed_in=True), machine(api, signed_in=True, bot="cpo", label="Other Mac")
+    give(api, m, "claude", sid)
+    give(api, n, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
+    post(api, f"attempts/{turn['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+         m["token"])
+    sub_login = login_holds.subscription_login(sid)
+    with api.app.state.store.read() as c:
+        hold = login_holds.get(c, "", sub_login, "claude")
+        assert hold and hold["until"] > H.now()
+        # Not the computer's own login: that one is not held.
+        assert not login_holds.get(c, m["runner_id"], "", "claude")
+        # The other computer given it signs that runtime in with the same, held, login.
+        assert login_holds.canonical(c, n["runner_id"], "", "claude") == sub_login
+    assert listed(api)[0]["usage"]["used_pct"] == 100
+    post(api, "chat/cpo", {"text": "Price the Acme plan."})
+    assert claim(api, n) is None                                              # it waits for the reset
+    # Taking it off the other computer frees it: its own login is not held.
+    give(api, n, "claude", None)
+    with api.app.state.store.read() as c:
+        assert login_holds.canonical(c, n["runner_id"], "", "claude") != sub_login
+    freed = claim(api, n)
+    assert freed and freed["bot"] == "cpo" and "subscriptions" not in freed
+
+
+def test_a_change_stops_the_computers_runs_on_that_runtime_after_a_confirm_and_starts_sessions_fresh(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    first, second = add(api, name="One")["id"], add(api, name="Two")["id"]
+    m = machine(api, claude="rejected")
+    give(api, m, "claude", first)
+    message = post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-one"}, m["token"])
+
+    def epoch():
+        with api.app.state.store.read() as c:
+            found = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?",
+                              (message["conversation_id"],)).fetchone()
+        return found[0] if found else 0
+    before = epoch()
+    refused = api.put("/api/v2/computer-subscriptions", headers=headers(),
+                      json={"runner_id": m["runner_id"], "runtime": "claude", "subscription": second})
+    assert refused.status_code == 409
+    error = refused.json()["error"]
+    assert error["code"] == "confirm_restart" and error["running"] == 1 and error["sessions"] >= 1
+    assert effect(api, m) == first and epoch() == before                      # nothing changed without the confirm
+    assert give(api, m, "codex", None)["stopped"] == 0                        # another runtime: nothing to stop
+    done = give(api, m, "claude", second, confirm=True)
+    assert done["subscription_id"] == second and done["stopped"] == 1 and done["sessions_reset"] >= 1
+    assert epoch() > before                                                   # every session there starts fresh
+    renewed = post(api, f"attempts/{turn['id']}/renew", {}, m["token"])
+    assert renewed["stop"] is True and "sign-in changed" in renewed["stop_reason"]
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, m["token"])
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT state FROM jobs WHERE id=?", (turn["job_id"],)).fetchone()[0] == "queued"
+    again = claim(api, m)                                                     # back in the queue, on the new login
+    assert again and again["job_id"] == turn["job_id"] and again["subscriptions"][0]["id"] == second
+
+
+def test_removing_a_subscription_in_use_confirms_then_takes_it_off_every_computer(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = machine(api, claude="rejected")
+    idle = machine(api, bot="cpo", label="Idle Mac")
+    give(api, m, "claude", sid)
+    give(api, idle, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-one"}, m["token"])
+    gone = api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers())
+    assert gone.status_code == 409
+    error = gone.json()["error"]
+    assert error["code"] == "confirm_restart" and error["running"] == 1 and error["computers"] == 2
+    assert api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1",
+                      headers=headers("cara-test")).status_code == 403
+    r = api.delete(f"/api/v2/model-subscriptions/{sid}?confirm=1", headers=headers())
+    assert r.status_code == 200 and r.json()["stopped"] == 1 and r.json()["computers"] == 2
+    assert listed(api) == [] and get(api, "computer-subscriptions")["assignments"] == []
+    assert post(api, f"attempts/{turn['id']}/renew", {}, m["token"])["stop"] is True
 
 
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):
     setup(api)
     company(api)
     on(api, "ops", "codex", "gpt-6.1-sol")
-    sid = add(api, "codex_login", codex_file())["id"]
-    pick(api, "bot", "ops", "codex", sid)
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
     m = machine(api)
+    give(api, m, "codex", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     [handed] = turn["subscriptions"]
@@ -233,14 +299,17 @@ def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api)
     assert json.loads(value["value"])["tokens"]["refresh_token"] == "r-1"
     body = {"attempt": turn["id"], "subscription": sid, "revision": 1}
     other = runner(api, label="Other Mac")
-    post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, other["token"], expected=403)
-    post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, "ana-test", expected=403)
-    assert post(api, "runner-person-subscription-refresh", {**body, "value": codex_file("acct-2", "r-2")},
+    post(api, "runner-model-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, other["token"],
+         expected=403)
+    post(api, "runner-model-subscription-refresh", {**body, "value": codex_file(refresh="r-2")}, "ana-test",
+         expected=403)
+    assert post(api, "runner-model-subscription-refresh", {**body, "value": codex_file("acct-2", "r-2")},
                 m["token"])["stored"] is False                  # another account's file is never kept
-    assert post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-2")},
+    assert post(api, "runner-model-subscription-refresh", {**body, "value": codex_file(refresh="r-2")},
                 m["token"]) == {"stored": True, "revision": 2}
-    assert post(api, "runner-person-subscription-refresh", {**body, "value": codex_file(refresh="r-3")},
+    assert post(api, "runner-model-subscription-refresh", {**body, "value": codex_file(refresh="r-3")},
                 m["token"])["stored"] is False                  # stale: the stored one moved on
     with api.app.state.store.read() as c:
         sub = MS.row(c, sid)
-        assert json.loads(api.app.state.vault.cipher.unseal(c, MS._context(sid), sub["sealed"]))["tokens"]["refresh_token"] == "r-2"
+        assert json.loads(api.app.state.vault.cipher.unseal(c, MS._context(sid), sub["sealed"]))["tokens"][
+            "refresh_token"] == "r-2"

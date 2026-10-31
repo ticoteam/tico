@@ -12,6 +12,10 @@ there instead (Dev 137), and only one with none waits. When it ends, one queued 
 every other job on it waits for that turn's result: a success clears the hold, another limit saves a longer one. So a
 login sees at most one turn per hold window, however many jobs and bots wait on it. Try now ends the hold early the
 same way (`try_now`): one probe, and the cut-short window back if it meets the limit again.
+
+A company subscription given to computers (backend/model_subscriptions.py) is one login wherever it runs: its login is
+`sub:<id>` (SUBSCRIPTION) on every computer it is given to, and its hold is keyed without a computer, so a limit met on
+one computer holds every computer using it until the reset.
 """
 
 import json
@@ -61,16 +65,32 @@ def _iso(at):
     return at.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
+SUBSCRIPTION = "sub:"
+
+
 def key(runner_id, profile, runtime):
+    if str(profile or "").startswith(SUBSCRIPTION):
+        return f"{PREFIX}{profile}|{runtime}"     # one login on every computer it is given to
     return f"{PREFIX}{runner_id}|{profile or ''}|{runtime}"
 
 
-def canonical(c, runner_id, profile, runtime):
+def subscription_login(subscription_id):
+    return SUBSCRIPTION + subscription_id
+
+
+def canonical(c, runner_id, profile, runtime, subscription=True):
     """The login a profile's turns on `runtime` sign in with, as holds key it: "" (the computer's own) for a profile
     the computer reports shares it (`shared_login`, runner-rs/src/fallback.rs `login`), else the profile.
     Inside a transaction it is answered once: a claim scan asks it per bot and per job, and the runner's readiness
-    document is parsed each time. Writes clear the read cache (backend/read_cache.py), so a changed runner is re-read."""
+    document is parsed each time. Writes clear the read cache (backend/read_cache.py), so a changed runner is re-read.
+    The computer's subscription for `runtime`, while one is in effect there, is the login whatever the profile
+    (`subscription=False` asks for the computer's own login)."""
     from .read_cache import cache
+    if subscription:
+        from .model_subscriptions import in_effect
+        found = in_effect(c, runner_id, runtime)
+        if found:
+            return subscription_login(found["id"])
     values = cache(c)
     if values is None:
         return _canonical(c, runner_id, profile, runtime)
@@ -283,10 +303,14 @@ def take_probe(c, runner_id, profile, runtime, job_id, now=None):
 
 
 def on_runner(c, runner_id):
-    """Every saved hold on the computer's logins, oldest first."""
+    """Every saved hold on the computer's logins, oldest first, and on the subscriptions it is given."""
+    from .model_subscriptions import given_to
     out = []
-    for (value,) in c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? ORDER BY key",
-                              (f"{PREFIX}{runner_id}|%",)):
+    keys = [key("", subscription_login(sid), runtime) for runtime, sid in given_to(c, runner_id)]
+    rows = c.execute("SELECT value_json FROM registry_metadata WHERE key LIKE ? ORDER BY key",
+                     (f"{PREFIX}{runner_id}|%",)).fetchall()
+    rows += [r for k in keys for r in c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (k,))]
+    for (value,) in rows:
         try:
             hold = json.loads(value)
         except ValueError:
@@ -441,7 +465,13 @@ def source(c, attempt_id, runtime, result, profile="", runner_id=None, held=None
     own = (used if used is not None and not fallback else profile) or ""
     hop = (used if used is not None and fallback else profile) or ""
     if runner_id:
-        own, hop = canonical(c, runner_id, own, runtime), canonical(c, runner_id, hop, steps[-1][0])
+        from .model_subscriptions import handed
+
+        def login(name, rt):
+            given = handed(c, attempt_id, rt)
+            return (subscription_login(given["subscription_id"]) if given
+                    else canonical(c, runner_id, name, rt, subscription=False))
+        own, hop = login(own, runtime), login(hop, steps[-1][0])
     held_kind = window(held.get("error")) if held else ""
     if field(result, "primary_held") and field(result, "limited") and not fallback:
         # Sent away from its held login and no fallback started: nothing new was refused.
@@ -481,7 +511,9 @@ def failure_line(result):
     what = ("model capacity" if kind == CAPACITY_KIND else "quota" if src.get("billing") else "usage limit")
     who = str(src["runtime"]).capitalize() + (" fallback" if src.get("role") == "fallback" else "")
     parts = [who + ("" if src.get("role") == "fallback" else ", primary")]
-    if src.get("profile"):
+    if str(src.get("profile") or "").startswith(SUBSCRIPTION):
+        parts.append("a saved subscription")
+    elif src.get("profile"):
         parts.append(f"login {src['profile']}")
     if src.get("model"):
         parts.append(f"model {src['model']}")
@@ -492,7 +524,8 @@ def label(src, at="", primary_until=""):
     """One line a person reads: "Fallback codex (the work login) API quota or billing limit at 20:05; primary claude
     not limited", "Primary claude plan usage limit (5-hour window)". `at` is when it was met; `primary_until` when the
     primary's own hold ends, for a fallback's limit met while the primary is held too."""
-    login = f" (the {src['profile']} login)" if src.get("profile") else ""
+    login = (" (a saved subscription)" if str(src.get("profile") or "").startswith(SUBSCRIPTION)
+             else f" (the {src['profile']} login)" if src.get("profile") else "")
     said = f"{src['role'].capitalize()} {src['runtime']}{login} {src['kind']}"
     if src.get("waiting"):
         return said + ", held from an earlier turn; no fallback could take this one"
@@ -527,8 +560,13 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
     hop_profile = body.profile_used if body.fallback and body.profile_used is not None else profile
     claimed = (c.execute("SELECT created FROM attempts WHERE id=?", (attempt_id,)).fetchone() or [""])[0] or ""
     kept = {}
+    from .model_subscriptions import handed
     for n, (rt, notice, limited) in enumerate(steps):
-        login = canonical(c, runner_id, profile if n == 0 else hop_profile, rt)
+        # A step signed in with a company subscription met its limit (or worked) on that subscription, wherever it
+        # runs; any other step on the computer's own login.
+        given = handed(c, attempt_id, rt)
+        login = (subscription_login(given["subscription_id"]) if given
+                 else canonical(c, runner_id, profile if n == 0 else hop_profile, rt, subscription=False))
         last = n == len(steps) - 1
         if limited:
             if n == 0 and body.primary_held:

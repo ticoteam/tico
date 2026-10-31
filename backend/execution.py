@@ -1625,8 +1625,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         return "login_upgrade", None
     record = providers.load(c, settings)
     filled = providers.fill(record, config)
-    # A runtime the bot's or its team's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
-    ready = model_subscriptions.covered(ready, model_subscriptions.bot_runtimes(c, runner, bot, filled))
+    # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
+    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled))
     if cloud_access.frozen(c) and (gateway_connection.is_tico(filled.get("model"))
                                    or models_preset.waiting(record, ready, filled)):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
@@ -2480,7 +2480,7 @@ class Execution:
                            'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
                            'mail_agent': bool(P.inbox_person(row['bot'], people)),
                            # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
-                           **model_subscriptions.assignment_fields(c, runner, row['bot'], config)})
+                           **model_subscriptions.assignment_fields(c, runner, config)})
         return result
 
     def assign(self, c, who, bot, body):
@@ -3373,9 +3373,9 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness_json"])
-        # The person's subscription the task, bot or team picked for this runtime signs the turn in, so a missing or
+        # The computer's subscription for this runtime signs the turn in, so a missing or
         # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
-        subscribed = model_subscriptions.for_claim(c, runner, row["bot"], task["id"] if task else None, config)
+        subscribed = model_subscriptions.for_claim(c, runner, config)
         here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         # Its department's tier (Medium by default) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot"], followed)
@@ -3546,7 +3546,7 @@ class Execution:
                             "credential_vault": bool(subscriptions) or c.execute(
                                 "SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
                                 ("bot:" + row["bot"],)).fetchone() is not None,
-                            # The person's subscriptions this turn signs in with: ids and kinds, never values, which the run
+                            # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
                             # reads from credential-runtime (backend/model_subscriptions.py).
                             **({"subscriptions": subscriptions} if subscriptions else {}),
                             # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
@@ -3838,7 +3838,7 @@ class Execution:
         (`quarantine_stops.requeues`)."""
         person = row["stop_requested"]
         benched = quarantine_stops.stopped_by(c, row)
-        then = quarantine_stops.HELD if held else quarantine_stops.REQUEUED
+        then = quarantine_stops.then(c, row, held)
         said = f"{benched}. {then}" if benched else f"Stopped by {stopper(c, person)}"
         settle_status(c, row["bot"], "idle", "", claimed=row["created"])
         # Quiet: the bot reads it with the room next time; it does not start a run of its own. A quarantined bot's
@@ -3846,8 +3846,9 @@ class Execution:
         H.unless_queue_full(c, lambda: H.say(c, H.KEEPER, "bot:" + row["bot"], said, conversation_id=conversation_id,
                                              kind="notice", refs={"quiet": True, "stopped_by": person,
                                                                   "turn_id": row["id"]}))
+        reason = "restart" if benched and quarantine_stops.restarted(c, row) else "quarantine"
         H.event(c, H.KEEPER, "attempt.stopped", row["id"], {"bot": row["bot"], "job_id": row["job_id"], "by": person,
-                                                            **({"quarantine": benched, "requeued": not held}
+                                                            **({reason: benched, "requeued": not held}
                                                                if benched else {})})
         # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
         from .worktree_waits import cancel_for_attempt
@@ -4335,7 +4336,9 @@ class Execution:
         # (`quarantine_stops.requeues`); otherwise the whole turn's work is held for review, where the kept answer
         # shows what the run already finished (Dev 573).
         benched = quarantine_stops.stopped_by(c, row)
-        if benched and body.outcome == "completed":
+        # A turn that finished before its runner heard a restart's Stop (its computer's subscription changed) stays a
+        # finished turn: nothing to run again.
+        if benched and body.outcome == "completed" and not quarantine_stops.restarted(c, row):
             body = body.model_copy(update={"outcome": "interrupted"})
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose
         # lease lapsed under it: settle the job with it when the job is still waiting, and file it
@@ -4756,7 +4759,7 @@ class Execution:
         if source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
                 c, self.store.settings, row['runner_id'], row['bot'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
-        # A turn signed in with a person's subscription: a refusal is that subscription's, never the computer's login.
+        # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
         subscription = model_subscriptions.turn_rejected(
             c, self.store.settings, aid, row["bot"], body.auth_rejected.runtime, body.auth_rejected.reason,
             turn_task_id) if rejected else None
@@ -4905,7 +4908,7 @@ class Execution:
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
-                          (f"reconnect {subscription['name']} in Settings > Subscriptions" if subscription and requeue
+                          (f"reconnect {subscription['name']} in Settings > Models" if subscription and requeue
                            else "sign in on this computer to continue" if requeue else "this run is saved for review"),
                           claimed=row["created"], stop=aid if not requeue else None)
         elif silent and tico_code == gateway.UNAVAILABLE:
