@@ -183,7 +183,9 @@ const docDetail = r => ({...r, terms_days: 30, view_version: 'v1',
   lines: [{id: 'dl-' + r.id, account: r.kind === 'bill' ? {id: 'a-6100', code: '6100', name: 'Software'} : {id: 'a-4200', code: '4200', name: 'Services'},
     amount: r.total, description: 'Seats', tags: {}}],
   attachments: r.attachments ? [{id: 'att-1', file_id: 'file-1', created_by: 'bot:bookkeeper', created_at: '2026-10-20T09:00:00Z'}] : [],
-  settlements: r.paid ? [{id: 's-1', from_kind: 'feed', from_id: 'f9', amount: r.paid, settled_on: '2026-10-25', entry_id: 'e9', voided_at: null, created_by: 'bot:bookkeeper'}] : [],
+  // Part came in on a bank row; the rest was marked paid and its bank row has not arrived (from_kind expected).
+  settlements: r.paid ? [{id: 's-1', from_kind: 'feed', from_id: 'f9', amount: 60000, settled_on: '2026-10-25', entry_id: 'e9', voided_at: null, created_by: 'bot:bookkeeper'},
+    {id: 's-2', from_kind: 'expected', from_id: 'm1', amount: r.paid - 60000, settled_on: '2026-10-29', entry_id: 'e10', voided_at: null, created_by: 'human:ana'}] : [],
   actions: r.id === 'bill-1' ? [{action_id: 'act-b1', kind: 'bill_approve', status: 'needs_approval', actor: 'bot:bookkeeper', approval_id: 'ap-1',
     approval_to: 'human:ana', rule_id: 'r-1', created_at: '2026-10-20T09:01:00Z'}] : [],
   ...(r.kind === 'bill' ? {schedule: null} : {})});
@@ -598,10 +600,11 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-doc="bill-4"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
-      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="account"] option').allInnerTexts(), ['Checking', 'Savings', 'Card balance'], tag + ': paid from a bank or card line');
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="from"] option').allInnerTexts(), ['Checking ••0001', 'Savings ••0002', 'Elsewhere'], tag + ': paid from a bank account or elsewhere');
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
-      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_mark_paid', payload: {bill_id: 'bill-4', amount: 139000, date: today, account_id: 'a-1010'}}, tag + ': bill_mark_paid');
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_mark_paid', payload: {bill_id: 'bill-4', amount: 139000, date: today, money_account_id: 'm1'}}, tag + ': bill_mark_paid');
       await page.locator('tr[data-fin-doc="bill-3"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': a scheduled bill is paid or voided, not scheduled again');
@@ -626,12 +629,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('#fin-body button, #fin-body a').filter({hasText: /remind|chase/i}).count(), 0, tag + ': no reminders');
       await page.locator('tr[data-fin-doc="inv-2"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      await page.locator('dialog.fin-dlg select[name="from"]').selectOption('');
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
-      assert.deepEqual(sent(writes).at(-1), {kind: 'invoice_record_payment', payload: {invoice_id: 'inv-2', amount: 150000, date: today, account_id: 'a-1010'}}, tag + ': Mark paid records the payment');
+      assert.deepEqual(sent(writes).at(-1), {kind: 'invoice_record_payment', payload: {invoice_id: 'inv-2', amount: 150000, date: today}}, tag + ': Elsewhere sends no account');
       await page.locator('tr[data-fin-doc="inv-3"]').click();
       await page.locator('#fin-rail [data-fin-do="writeoff"]').waitFor();
-      assert.match(await page.locator('#fin-rail').innerText(), /Left\s+\$2,200[\s\S]*Payments\s+Oct 25 · Bank row\s+\$1,000/i, tag + ': what is left and what was paid');
+      assert.match(await page.locator('#fin-rail').innerText(), /Left\s+\$2,200[\s\S]*Payments\s+Oct 25 · Bank row\s+\$600\s+Oct 29 · Expected\s+\$400/i, tag + ': what is left, what was paid, what is expected');
       await shot(page, 'receivables-desktop');
       await page.locator('#fin-rail [data-fin-do="writeoff"]').click();
       await page.locator('dialog.fin-dlg input[name="memo"]').fill('Settled');
@@ -687,6 +692,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-doc="bill-2"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': no Schedule without finance.pay');
+      await page.locator('#fin-rail [data-fin-do="paid"]').click();
+      assert.deepEqual(await page.locator('dialog.fin-dlg[open] select[name="from"] option').allInnerTexts(), ['Elsewhere'], tag + ': Mark paid offers only Elsewhere');
+      await page.locator('dialog.fin-dlg[open] [data-close], dialog.fin-dlg[open] button.ghost').first().click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       await page.locator('[data-fin-doc-add]').click();
       await page.locator('dialog.fin-dlg[open] select[name="line"] option[value="a-6100"]').waitFor({state: 'attached'});
       assert.ok(reads.includes('/api/v2/finance/chart?for=bill'), tag + ': the bill form reads the chart for bills');

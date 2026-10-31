@@ -31,7 +31,7 @@ const FIN_ACT_WORD = {bill_create: 'Enter', bill_update: 'Change', bill_approve:
   invoice_write_off: 'Write off', invoice_void: 'Void'};
 const FIN_ACT_STATUS = {needs_approval: ['waiting', 'Waiting'], committed: ['ok', 'Done'], denied: ['fail', 'Denied'],
   failed: ['fail', 'Failed'], withdrawn: ['', 'Withdrawn']};
-const FIN_PAID_FROM = {payment: 'Payment', feed: 'Bank row', credit: 'Credit', account: 'Recorded'};
+const FIN_PAID_FROM = {payment: 'Payment', feed: 'Bank row', credit: 'Credit', account: 'Recorded', expected: 'Expected'};
 
 const finPill = ([cls, label]) => `<span class="pill ${cls}">${esc(label)}</span>`;
 const finDocStatus = d => finPill(FIN_DOC_STATUS[d.status] || ['', d.status]);
@@ -244,14 +244,6 @@ async function finPayFrom() {
   const r = await get('/v2/finance/pay-from' + finAs('?'), {fresh: true});
   return FIN.payFrom = (r?.accounts || []).map(a => ({id: a.id, name: `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`}));
 }
-// The money lines a payment moves through: bank (and card, for bills) lines, else any asset or liability line other
-// than payables and receivables.
-async function finMoneyLines(bill) {
-  const all = (await finChart('journal')).filter(a => (a.type === 'asset' || (bill && a.type === 'liability')) &&
-    !['payable', 'receivable'].includes(a.subtype || ''));
-  const money = all.filter(a => ['bank', 'cash', 'card'].includes(a.subtype || ''));
-  return money.length ? money : all;
-}
 const finOpts = (rows, val = '') => rows.map(r => `<option value="${esc(r.id)}"${r.id === val ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
 
 // ----------------------------------------------------------------- decisions with a form
@@ -267,17 +259,17 @@ async function finBillSchedule(d) {
     return ['bill_schedule', {bill_id: d.id, pay_on, money_account_id: from}];
   }, 'Scheduled');
 }
+// Marked paid from (or to) a connected bank account, whose bank row links when it arrives, or "Elsewhere": no account,
+// so the payment waits in clearing. Viewers without finance.pay see only "Elsewhere".
 async function finDocMarkPaid(d) {
   const bill = FIN.doc.kind === 'bill';
-  let lines;
-  try { lines = await finMoneyLines(bill); } catch (e) { toast(e.message, true); return; }
+  const banks = finCaps().may('finance.pay') ? await finPayFrom().catch(() => []) : [];
   finDecideDialog('Mark paid', `<label>Amount<input name="amount" inputmode="decimal" required autocomplete="off" value="${finCentsValue(d.remaining)}"></label>
     <label>Date<input type="date" name="date" required value="${finToday()}"></label>
-    <label>${bill ? 'From' : 'To'}<select name="account" required>${finOpts(lines)}</select></label>`, 'Mark paid', form => {
-    const amount = finParseCents(form.elements.amount.value), date = form.elements.date.value, account = form.elements.account.value;
+    <label>${bill ? 'From' : 'To'}<select name="from">${finOpts(banks)}<option value="">Elsewhere</option></select></label>`, 'Mark paid', form => {
+    const amount = finParseCents(form.elements.amount.value), date = form.elements.date.value, from = form.elements.from.value;
     if (!amount) throw new Error('A dollar amount, like 500');
-    if (!account) throw new Error('No money line in your view');
-    const payload = {[bill ? 'bill_id' : 'invoice_id']: d.id, amount, ...(date ? {date} : {}), account_id: account};
+    const payload = {[bill ? 'bill_id' : 'invoice_id']: d.id, amount, ...(date ? {date} : {}), ...(from ? {money_account_id: from} : {})};
     return [bill ? 'bill_mark_paid' : 'invoice_record_payment', payload];
   }, 'Marked paid');
 }
