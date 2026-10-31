@@ -426,12 +426,21 @@ def _restart(c, settings, runner_id, runtime):
     return {"stopped": stopped, "sessions_reset": _reset(c, settings, runner_id, runtime)}
 
 
+def _signed_in_with(c, sid):
+    """The computers given this subscription that sign in with it: (runner_id, runtime) of each whose runner takes one.
+    An older runner never did (its turns use its own login, `in_effect`), so a change of the subscription leaves its
+    runs and sessions alone."""
+    return [(g["runner_id"], g["runtime"]) for g in c.execute(
+        "SELECT g.runner_id,g.runtime,r.capabilities_json FROM computer_subscriptions g "
+        "JOIN runners r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
+        (sid,)).fetchall() if runner_takes(g)]
+
+
 def _effect_changed(c, settings, sid):
-    """The subscription stopped counting (it needs reconnecting): each computer given it now signs that runtime in
-    another way, so its sessions there start fresh. Its runs are not stopped: the refused one already ended. (A
-    reconnect restarts them, `save`.)"""
-    for runner_id, runtime in c.execute("SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=?",
-                                        (sid,)).fetchall():
+    """The subscription stopped counting (it needs reconnecting): each computer signing in with it now signs that
+    runtime in another way, so its sessions there start fresh. Its runs are not stopped: the refused one already ended.
+    (A reconnect restarts them, `save`.)"""
+    for runner_id, runtime in _signed_in_with(c, sid):
         _reset(c, settings, runner_id, runtime)
 
 
@@ -472,12 +481,9 @@ def save(c, vault, settings, who, body, sid=None):
         given = []
         if body.secret is not None:
             value, preview = checked(sub["kind"], body.secret.get_secret_value())
-            given = [g for g in c.execute("SELECT g.runner_id,g.runtime,r.capabilities_json "
-                                          "FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
-                                          "WHERE g.subscription_id=? ORDER BY g.runner_id", (sid,)).fetchall()
-                     if runner_takes(g)]
+            given = _signed_in_with(c, sid)
             if not body.confirm:
-                plans = [_plan(c, settings, g["runner_id"], g["runtime"]) for g in given]
+                plans = [_plan(c, settings, runner_id, runtime) for runner_id, runtime in given]
                 running = sum(p["running"] for p in plans)
                 if running:
                     _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)},
@@ -491,7 +497,7 @@ def save(c, vault, settings, who, body, sid=None):
             # A new value may be another account: as for a change, every computer given it stops its live runs on
             # that runtime (their work goes back in the queue; confirmed first) and starts its sessions there fresh.
             # An older runner never signed in with it, so nothing changes there.
-            stopped = sum(_restart(c, settings, g["runner_id"], g["runtime"])["stopped"] for g in given)
+            stopped = sum(_restart(c, settings, runner_id, runtime)["stopped"] for runner_id, runtime in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
@@ -514,32 +520,34 @@ def save(c, vault, settings, who, body, sid=None):
 
 
 def remove(c, settings, who, sid, confirm=False):
-    """Delete a subscription and take it off every computer given it: those computers' live runs on its runtime stop
-    and start again (confirmed first), their sessions start fresh, and the sealed value is gone."""
+    """Delete a subscription and take it off every computer given it (`computers`, as Settings counts them): those
+    signing in with it stop their live runs on its runtime and start again (confirmed first), their sessions start
+    fresh, and the sealed value is gone. An older runner never signed in with it: nothing there stops."""
     sub = row(c, sid)
     if not sub:
         raise Problem("not_found", "Subscription not found", 404)
-    given = c.execute("SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=? "
-                      "ORDER BY runner_id", (sid,)).fetchall()
+    computers = c.execute("SELECT count(*) FROM computer_subscriptions WHERE subscription_id=?", (sid,)).fetchone()[0]
+    given = _signed_in_with(c, sid)
     if not confirm:
-        plans = [_plan(c, settings, g["runner_id"], g["runtime"]) for g in given]
+        plans = [_plan(c, settings, runner_id, runtime) for runner_id, runtime in given]
         running = sum(p["running"] for p in plans)
         if running:
-            _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": len(given)})
+            _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)}, {"computers": computers})
     c.execute("DELETE FROM computer_subscriptions WHERE subscription_id=?", (sid,))
     stopped = reset = 0
-    for g in given:
-        done = _restart(c, settings, g["runner_id"], g["runtime"])
+    for runner_id, runtime in given:
+        done = _restart(c, settings, runner_id, runtime)
         stopped, reset = stopped + done["stopped"], reset + done["sessions_reset"]
     c.execute("DELETE FROM model_subscriptions WHERE id=?", (sid,))
-    H.event(c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": len(given),
+    H.event(c, who.actor, "subscription.deleted", sid, {"kind": sub["kind"], "computers": computers,
                                                          "stopped": stopped})
-    return {"deleted": True, "id": sid, "computers": len(given), "stopped": stopped, "sessions_reset": reset}
+    return {"deleted": True, "id": sid, "computers": computers, "stopped": stopped, "sessions_reset": reset}
 
 
 def give(c, settings, who, body):
     """Give a computer a subscription for one runtime, switch it, or take it off (`subscription` null). A change stops
-    the computer's live runs on that runtime (confirmed first) and starts its sessions of that runtime fresh."""
+    the computer's live runs on that runtime (confirmed first) and starts its sessions of that runtime fresh. A runner
+    too old to take one keeps signing in with its own login, so there it is only recorded: nothing stops."""
     runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (body.runner_id,)).fetchone()
     if not runner:
         raise Problem("not_found", "Computer not found", 404)
@@ -555,7 +563,8 @@ def give(c, settings, who, body):
     out = {"runner_id": body.runner_id, "runtime": body.runtime, "subscription_id": want}
     if (current[0] if current else None) == want:
         return {**out, "stopped": 0, "sessions_reset": 0}
-    if not body.confirm:
+    takes = runner_takes(runner)
+    if takes and not body.confirm:
         plan = _plan(c, settings, body.runner_id, body.runtime)
         if plan["running"]:
             _confirm(plan)
@@ -566,7 +575,7 @@ def give(c, settings, who, body):
                   (body.runner_id, body.runtime, want, who.actor, H.now()))
     else:
         c.execute("DELETE FROM computer_subscriptions WHERE runner_id=? AND runtime=?", (body.runner_id, body.runtime))
-    done = _restart(c, settings, body.runner_id, body.runtime)
+    done = _restart(c, settings, body.runner_id, body.runtime) if takes else {"stopped": 0, "sessions_reset": 0}
     H.event(c, who.actor, "subscription.given" if want else "subscription.taken_off", want or current[0],
             {"runner": body.runner_id, "runtime": body.runtime, **done})
     return {**out, **done}

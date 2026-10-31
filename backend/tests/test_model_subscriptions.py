@@ -330,6 +330,54 @@ def test_removing_a_subscription_in_use_confirms_then_takes_it_off_every_compute
     assert post(api, f"attempts/{turn['id']}/renew", {}, m["token"])["stop"] is True
 
 
+def test_an_older_computer_on_its_own_login_is_left_alone_by_give_remove_and_a_refusal(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    on(api, "cpo", "claude", "claude-sonnet-5-5")
+    old = machine(api, signed_in=True, takes=False, label="Old Mac")    # runs Claude on its own login
+    m = machine(api, bot="cpo", claude="rejected")
+    message = post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, old)
+    assert turn and "subscriptions" not in turn
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-own"}, old["token"])
+
+    def untouched():
+        with api.app.state.store.read() as c:
+            epoch = c.execute("SELECT epoch FROM session_epochs WHERE conversation_id=?",
+                              (message["conversation_id"],)).fetchone()
+            assert c.execute("SELECT state,stop_requested FROM attempts WHERE id=?", (turn["id"],)).fetchone()[:] == (
+                "running", None)
+        assert not epoch
+        assert not post(api, f"attempts/{turn['id']}/renew", {}, old["token"]).get("stop")
+    sid = add(api)["id"]
+    # Giving it: recorded (it signs in with it once updated), no confirm, nothing stopped, no session reset.
+    done = give(api, old, "claude", sid)
+    assert (done["subscription_id"], done["stopped"], done["sessions_reset"]) == (sid, 0, 0)
+    untouched()
+    # A refusal on a capable computer given the same subscription resets only that computer's sessions.
+    give(api, m, "claude", sid)
+    post(api, "chat/cpo", {"text": "Price the Acme plan."})
+    other = claim(api, m)
+    assert other["subscriptions"][0]["id"] == sid
+    post(api, f"attempts/{other['id']}/started", {"thread_id": "t-sub"}, m["token"])
+    post(api, f"attempts/{other['id']}/complete", {
+        "outcome": "failed", "last_seq": 0,
+        "auth_rejected": {"runtime": "claude", "reason": "OAuth token has expired"}}, m["token"])
+    assert listed(api)[0]["status"] == "needs_reconnect"
+    untouched()
+    # Removing it: no confirm (nothing on the older computer stops), both computers counted as taken off.
+    r = api.delete(f"/api/v2/model-subscriptions/{sid}", headers=headers())
+    assert r.status_code == 200 and r.json()["stopped"] == 0 and r.json()["computers"] == 2
+    assert get(api, "computer-subscriptions")["assignments"] == []
+    untouched()
+    # Taking one off an older computer is the same: recorded only.
+    again = add(api, name="Again")["id"]
+    give(api, old, "claude", again)
+    assert give(api, old, "claude", None)["stopped"] == 0
+    untouched()
+
+
 def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api):
     setup(api)
     company(api)
