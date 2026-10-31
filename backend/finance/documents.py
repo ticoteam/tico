@@ -665,15 +665,16 @@ def invoice_void(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 # ------------------------------------------------------------------------------------------------ settlements
 def settle(ctx: Ctx, kind: str, doc_id: str, *, amount: int, day: str, from_kind: str, from_id: str, entry_id: str,
-           action_id: str = "", by: str = SYSTEM) -> str:
+           action_id: str = "", by: str = SYSTEM, cash: bool = True) -> str:
     """Link money to a document: its paid amount and status move, and the cash view takes the lines' share of it on
     `day` (or the first open day, when that month is closed, as its entry posts). An invoice is paid once received
-    plus written off covers it."""
+    plus written off covers it. `cash=False` moves the document without moving the cash view (a credit note applied to
+    it: no money changed hands)."""
     from .banking import open_day
     doc = _doc(ctx, kind, doc_id)
     before = int(doc["amount_paid"])
     after = before + amount
-    if from_kind != "credit":                   # a credit applied moves no cash
+    if cash and from_kind != "credit":          # a credit applied moves no cash, whoever applies it
         _cash(ctx, kind, doc, before, after, open_day(ctx, day))
     sid = SAP.insert(ctx.c, "fin_settlements", {
         "book_id": ctx.book.id, "from_kind": from_kind, "from_id": from_id, "to_kind": kind, "to_id": doc_id,
@@ -694,6 +695,11 @@ def _status(kind: str, doc: Any, paid: int) -> str:
     return was if was in AP.OPEN_BILL else "scheduled" if doc["pay_on"] else "open"
 
 
+def status_of(kind: str, doc: Any, paid: int) -> str:
+    """A document's status once `paid` is settled against it (what a mirrored document takes from its settlements)."""
+    return _status(kind, doc, paid)
+
+
 def _cash(ctx: Ctx, kind: str, doc: Any, before: int, after: int, day: str) -> None:
     lines = doc_lines_of(ctx, kind, str(doc["id"]))
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
@@ -704,9 +710,10 @@ def _cash(ctx: Ctx, kind: str, doc: Any, before: int, after: int, day: str) -> N
                           SIGN[kind] * share)
 
 
-def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM) -> None:
+def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM, *, cash: bool = True) -> None:
     """Undo one settlement (its money left, or its feed row changed): the document owes it again and the cash view
-    gives the share back on the day it took it (or today, when that month is closed)."""
+    gives the share back on the day it took it (or today, when that month is closed). `cash=False` undoes a settlement
+    that never moved the cash view (see settle)."""
     from .banking import open_day
     kind = str(s["to_kind"])
     doc = _doc(ctx, kind, str(s["to_id"]))
@@ -715,7 +722,7 @@ def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM) -> None:
     if SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"voided_at": ctx.at, "voided_by": by},
                   "voided_at IS NULL") != 1:
         return
-    if str(s["from_kind"]) != "credit":
+    if cash and str(s["from_kind"]) != "credit":
         _cash(ctx, kind, doc, before, after, open_day(ctx, str(s["settled_on"])))
     status = _status(kind, doc, after)
     if kind == "bill" and status == "scheduled" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is None:

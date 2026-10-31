@@ -8,15 +8,17 @@ from collections.abc import Mapping
 from typing import Any
 
 from .gateway_sync import Bell
+from .core import mirror as M
 from .core import qbo as Q
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
 from .store import tico
-from . import books_link, mirror, qbo
+from . import books_link, mirror, qbo, xero
 
 log = logging.getLogger(__name__)
 PROVIDERS = {"intuit": "quickbooks", "xero": "xero"}      # a trigger's preset -> the provider's name
+BOOKS = ("quickbooks", "xero")                                    # the providers a books connection can be
 ENVELOPE = "tico.finance.webhook"                          # the body HQ relays for one provider event
 REFUSED, KEPT, SEEN = "refused", "kept", "seen"
 SWEEP = 300.0                                              # seconds between passes without a ring
@@ -88,17 +90,34 @@ def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str
             return []
         cid = book.mirror_connection_id
         held = [row for row in SX.books_connections(c) if row[0] == cid]
-        if not held or held[0][1] != "quickbooks" or SX.books_status(c, cid) not in ("active", "error"):
+        if not held or held[0][1] not in BOOKS or SX.books_status(c, cid) not in ("active", "error"):
             return []
         provider = held[0][1]
         link = link_of(c, vault, settings)
-        realm = SX.books_settings(c, cid).get("realm_id")
+        found = SX.books_settings(c, cid)
+        realm, tenant = found.get("realm_id"), found.get("tenant_id")
         waiting = [str(row["id"]) for row in SK.inbox_waiting(c, 50, cid, now)]
+        held_until = str(SX.mirror_state(c, cid).get("held_until") or "") if provider == "xero" else ""
+    if held_until and M.parse(held_until) > M.parse(now):
+        return [f"Xero is rate limiting; the books wait until {held_until}"]
     if link is None:
         return ["the Gateway key is not set, so the books cannot be reached"]
-    adapter = qbo.QuickBooks(str(realm or ""), lambda force: books_link.access_token(
-        store, vault, link, cid, provider, now=now, force=force))
-    problems = mirror.sync_once(store, adapter, cid, now, waiting=bool(waiting))
+
+    def token(force: bool) -> str:
+        return books_link.access_token(store, vault, link, cid, provider, now=now, force=force)
+    if provider == "xero":
+        if not tenant:
+            return ["the Xero organisation is not known yet; connect Xero again"]
+        adapter: mirror.Books = xero.Xero(str(tenant), token)
+    else:
+        adapter = qbo.QuickBooks(str(realm or ""), token)
+    every = xero.CHANGE_EVERY if provider == "xero" else M.CDC_EVERY
+    problems = mirror.sync_once(store, adapter, cid, now, waiting=bool(waiting), every=every)
+    if provider == "xero":
+        hold = float(getattr(adapter, "hold", 0.0) or 0.0)
+        if hold or held_until:
+            with store.transaction() as c:
+                SX.set_mirror_state(c, cid, {"held_until": M.stamp(now, int(hold * 1_000_000)) if hold else ""})
     if waiting and not any(p.startswith("changes") for p in problems):
         with store.transaction() as c:
             for inbox_id in waiting:
