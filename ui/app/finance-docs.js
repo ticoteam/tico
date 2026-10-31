@@ -267,31 +267,14 @@ async function finPayFrom() {
   return FIN.payFrom = (r?.accounts || []).map(a => ({id: a.id, name: `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`}));
 }
 const finOpts = (rows, val = '') => rows.map(r => `<option value="${esc(r.id)}"${r.id === val ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
-// Whom a viewer without company-wide view of a line may attribute it to (backend/finance/handlers.py may_write): the
-// viewer first where they see their own spending, then the teams their view covers on that line, then the teammates
-// in those teams. Each is a tag: {teammate} or {team}.
+// Whom a viewer without company-wide view of a line may attribute it to: the chart read's `attributable` tags (the
+// backend's own rule), with the viewer first, then teams, then teammates.
 function finAttribution(line) {
-  const caps = finCaps(), acc = FIN?.acc || FIN_ACCESS, me = caps?.who || '', teams = acc?.teams || [];
-  if (!caps || !line) return [];
-  const below = id => {
-    const out = new Set([id]);
-    for (let grew = true; grew;) { grew = false; for (const t of teams) if (t.parent && out.has(t.parent) && !out.has(t.id)) { out.add(t.id); grew = true; } }
-    return out;
-  };
-  const expense = line.type === 'expense', pnl = expense || line.type === 'income';
-  const covers = g => g.what === 'everything' || (g.what === 'pnl' && pnl) || (g.what === 'expenses' && expense)
-    || (g.what === 'pnl_lines' && (g.account_ids || []).includes(line.id));
-  const scope = new Set();
-  let own = expense && ['team_expenses', 'own_expenses'].includes(caps.row.default);
-  if (expense && caps.row.default === 'team_expenses') for (const t of teams) if (t.lead === me) below(t.id).forEach(x => scope.add(x));
-  for (const g of (caps.row.grants || []).filter(g => g.live && g.status === 'active' && covers(g))) {
-    if (g.whose === 'own') own = true;
-    else if (g.whose === 'team' && g.whose_team) below(g.whose_team).forEach(x => scope.add(x));
-  }
-  const mates = (acc?.teammates || []).filter(m => m.teammate !== me && scope.has(m.team || ''));
-  return [...(own ? [{id: 'teammate:' + me, name: finWho(me)}] : []),
-    ...[...scope].map(t => ({id: 'team:' + t, name: finTeamName(t)})),
-    ...mates.map(m => ({id: 'teammate:' + m.teammate, name: finWho(m.teammate)}))];
+  const me = finCaps()?.who || '', tags = line?.attributable || [];
+  const mine = tags.filter(t => t.teammate === me), teams = tags.filter(t => t.team), mates = tags.filter(t => t.teammate && t.teammate !== me);
+  return [...mine.map(t => ({id: 'teammate:' + t.teammate, name: finWho(t.teammate)})),
+    ...teams.map(t => ({id: 'team:' + t.team, name: finTeamName(t.team)})),
+    ...mates.map(t => ({id: 'teammate:' + t.teammate, name: finWho(t.teammate)}))];
 }
 // A "For" pick as a line's tags.
 const finAttrTags = v => { const i = v.indexOf(':'); return i > 0 ? {[v.slice(0, i)]: v.slice(i + 1)} : null; };

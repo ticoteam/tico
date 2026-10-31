@@ -252,7 +252,8 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     // The form pickers: the chart for teammates who write to the books, the bank accounts for finance.pay.
     const rights = viewer === 'ana' ? ALL_RIGHTS : apRights;
     if (p === '/api/v2/finance/chart') return ['finance.book', 'finance.ap', 'finance.ar'].some(r => rights.includes(r))
-      ? json({accounts: chartFor(url.searchParams.get('for')).map(a => viewer === 'ana' || !['expense', 'income'].includes(a.type) ? a : {...a, company_wide: false}),
+      ? json({accounts: chartFor(url.searchParams.get('for')).map(a => viewer === 'ana' || !['expense', 'income'].includes(a.type) ? a
+        : {...a, company_wide: false, attributable: [{team: 'eng'}, {team: 'platform'}, {teammate: 'bot:builder'}, {teammate: 'bot:eng-lead'}, {teammate: 'human:cara'}]}),
         more: false, view_version: 'v1'}) : denied();
     if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
       ? json({accounts: [{id: 'm1', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000}, {id: 'm2', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000}],
@@ -728,13 +729,13 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('dialog.fin-dlg[open] select[name="line"] option[value="a-6100"]').waitFor({state: 'attached'});
       assert.ok(reads.includes('/api/v2/finance/chart?for=bill'), tag + ': the bill form reads the chart for bills');
       assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/pay-from')), tag + ': pay-from never read');
-      // Software is not company-wide for a manager: the bill names whom it is for, the manager first, then the teams
-      // they lead and the teammates in them. Checking is, so it asks no one.
+      // Software is not company-wide for a manager: the bill names whom it is for from the chart's attributable tags,
+      // the manager first, then teams, then teammates. Checking is, so it asks no one.
       const forPick = page.locator('dialog.fin-dlg[open] [data-fin-for]');
       await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-1010');
       assert.equal(await forPick.isHidden(), true, tag + ': a company-wide line asks no one');
       await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
-      assert.deepEqual(await forPick.locator('option').allInnerTexts(), ['Cara Lee', 'Engineering', 'Platform', 'Engineering Lead', 'Builder'], tag + ': whom the manager may attribute to');
+      assert.deepEqual(await forPick.locator('option').allInnerTexts(), ['Cara Lee', 'Engineering', 'Platform', 'Builder', 'Engineering Lead'], tag + ': whom the manager may attribute to');
       assert.equal(await forPick.locator('select').inputValue(), 'teammate:human:cara', tag + ': their own scope first');
       await page.locator('dialog.fin-dlg input[name="amount"]').fill('80');
       await page.locator('dialog.fin-dlg [type=submit]').click();
