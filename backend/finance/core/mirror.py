@@ -57,7 +57,7 @@ class ChartAccount:
 class Party:
     ext: Ext
     name: str
-    kind: str           # vendor | customer | both
+    kind: str           # vendor | customer | both; "" when the provider does not say (the books keep their kind)
     active: bool = True
     emails: tuple[str, ...] = ()
 
@@ -79,6 +79,8 @@ class Journal:
     memo: str
     source: str
     lines: tuple[EntryLine, ...]
+    basis: str = "both"     # "accrual" when the provider keeps the entry out of its cash-basis reports
+    currency: str = ""      # the provider's currency code; "" when the provider names none (the books' own)
 
 
 @dataclass(frozen=True)
@@ -238,7 +240,8 @@ def decode(d: Mapping[str, Any]) -> Record:
         return Party(ext, str(d["name"]), str(d["kind"]), bool(d.get("active", True)),
                      tuple(str(x) for x in d.get("emails", [])))
     if kind == "Journal":
-        return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]))
+        return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]),
+                       str(d.get("basis", "both")), str(d.get("currency", "")))
     if kind == "Document":
         return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
                         _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),

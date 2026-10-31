@@ -1,7 +1,7 @@
 """Xero's records as the mirror takes them (spec §10), and the bodies Tico sends to it. Pure: no I/O.
 
-A row a page or a change read holds gives one record, or none when the books do not take it in (a draft, a supplier
-credit note, a prepayment). The page still counts every row (Read.seen), so a backfill cursor moves past the rest.
+A row a page or a change read holds gives one record, or none when the books do not take it in (a draft, a prepayment).
+The page still counts every row (Read.seen), so a backfill cursor moves past the rest.
 Amounts are integer minor units; Xero's decimals arrive as exact Decimal (the client parses JSON with parse_float)."""
 import re
 from collections.abc import Callable, Iterable, Mapping
@@ -9,23 +9,34 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from typing import Any
 
+from . import ledger as L
 from . import mirror as M
 from .qbo import as_list, as_map, minor
 
 Record = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Ext
-TaxKey = Callable[[], str]                  # the tax control account's key, read only when a document carries tax
+SystemKey = Callable[[], str]               # a system account's key (tax, rounding), read only when a record needs it
 MS_DATE = re.compile(r"/Date\((-?\d+)([+-]\d{4})?\)/")
 ACCOUNT_KIND = {"ASSET": "asset", "LIABILITY": "liability", "EQUITY": "equity", "REVENUE": "income", "EXPENSE": "expense"}
 WRITE_TYPE = {"asset": "CURRENT", "liability": "CURRLIAB", "equity": "EQUITY", "income": "REVENUE", "expense": "EXPENSE"}
 SYSTEM_SUBTYPE = {"DEBTORS": "receivable", "CREDITORS": "payable"}     # the control accounts Tico's documents post to
-DOC_KIND = {"ACCREC": "Invoice", "ACCPAY": "Bill", "ACCRECCREDIT": "CreditMemo"}   # ACCPAYCREDIT is not taken in
-PAYMENT_KIND = {"ACCREC": ("Payment", "Invoice"), "ACCPAY": ("BillPayment", "Bill")}
+DOC_KIND = {"ACCREC": "Invoice", "ACCPAY": "Bill", "ACCRECCREDIT": "CreditMemo", "ACCPAYCREDIT": "VendorCredit"}
+CREDIT_KINDS = ("CreditMemo", "VendorCredit")
+CREDIT_SIDE = {"ACCRECCREDIT": "Invoice", "ACCPAYCREDIT": "Bill"}      # the documents a credit note applies to
+INVOICE_PAYMENT = {"ACCREC": ("Payment", "Invoice"), "ACCPAY": ("BillPayment", "Bill")}
+PAYMENT_TYPE = {"ACCRECPAYMENT": ("Payment", "Invoice"), "ACCPAYPAYMENT": ("BillPayment", "Bill")}
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 
 
 def amount_text(units: int) -> str:
     """Integer minor units as Xero's decimal text, signed (a journal line's debit is positive)."""
     return f"{Decimal(units).scaleb(-2):.2f}"
+
+
+def marked(text: str, marker: str, limit: int) -> str:
+    """The text cut to fit `limit` with the Tico marker at its end, so the marker is always whole."""
+    if not marker:
+        return text[:limit]
+    return f"{text[:max(limit - len(marker) - 1, 0)].rstrip()} {marker}".lstrip()
 
 
 def _utc(value: object) -> datetime | None:
@@ -78,30 +89,42 @@ def _contact(j: Mapping[str, Any]) -> str:
     return f"Contact:{contact['ContactID']}" if contact.get("ContactID") else ""
 
 
+def _id_of(key: object, kind: str) -> str:
+    """The Xero id a provider key holds ("Account:55" is 55 for an account)."""
+    prefix, _, value = str(key or "").partition(":")
+    if prefix != kind or not value:
+        raise ValueError(f"not a Xero {kind.lower()}: {key!r}")
+    return value
+
+
 def account_record(j: Mapping[str, Any]) -> M.ChartAccount | M.Ext | None:
-    """An account. One with no code or no class is not taken in (Tico needs both); a deleted one is made inactive."""
+    """An account, keyed by its id: Xero's code is optional, so an account without one gets a placeholder code. An
+    account with no class is not taken in; a deleted one is made inactive."""
     ext = _ext("Account", j, "AccountID")
     if _status(j) == "DELETED":
         return M.Ext(ext.kind, ext.external_id, ext.revision, True)
     kind = ACCOUNT_KIND.get(str(j.get("Class") or ""))
-    code = str(j.get("Code") or "")
-    if kind is None or not code:
+    if kind is None:
         return None
-    return M.ChartAccount(ext, code, str(j.get("Name") or code), kind,
-                          SYSTEM_SUBTYPE.get(str(j.get("SystemAccount") or ""), ""), _status(j) != "ARCHIVED")
+    code = str(j.get("Code") or "") or f"X-{ext.external_id}"
+    name = str(j.get("Name") or "") or code
+    return M.ChartAccount(ext, code, name, kind, SYSTEM_SUBTYPE.get(str(j.get("SystemAccount") or ""), ""),
+                          _status(j) != "ARCHIVED")
 
 
 def contact_record(j: Mapping[str, Any]) -> M.Party:
+    """A contact. Xero decides whether it is a customer or a supplier from its activity; with neither flag set the kind
+    is "", so the books keep the kind they hold."""
     ext = _ext("Contact", j, "ContactID")
     customer, vendor = bool(j.get("IsCustomer")), bool(j.get("IsSupplier"))
-    kind = "both" if customer and vendor else "vendor" if vendor else "customer"
+    kind = "both" if customer and vendor else "customer" if customer else "vendor" if vendor else ""
     email = str(j.get("EmailAddress") or "")
     name = str(j.get("Name") or j.get("ContactNumber") or ext.external_id)
     return M.Party(ext, name, kind, active=str(j.get("ContactStatus") or "ACTIVE") != "ARCHIVED",
                    emails=(email,) if email else ())
 
 
-def _lines(j: Mapping[str, Any], tax: TaxKey) -> tuple[M.EntryLine, ...]:
+def _lines(j: Mapping[str, Any], tax: SystemKey) -> tuple[M.EntryLine, ...]:
     """A document's lines net of tax (an Inclusive line carries its tax inside its amount), then one line for the tax
     they carry on the tax account, so the lines add up to the document's total."""
     inclusive = str(j.get("LineAmountTypes") or "") == "Inclusive"
@@ -118,42 +141,51 @@ def _lines(j: Mapping[str, Any], tax: TaxKey) -> tuple[M.EntryLine, ...]:
     return tuple(lines)
 
 
-def _allocations(j: Mapping[str, Any]) -> tuple[tuple[str, int], ...]:
-    """The invoices a credit note is applied to, with each amount. A deleted allocation counts for nothing."""
+def _allocations(j: Mapping[str, Any], side: str) -> tuple[tuple[str, int], ...]:
+    """The documents a credit note is applied to (`side` names their kind), with each amount. A deleted allocation counts
+    for nothing."""
     out: list[tuple[str, int]] = []
     for raw in as_list(j.get("Allocations")):
         allocation = as_map(raw) or {}
         target = as_map(allocation.get("Invoice")) or {}
         if allocation.get("IsDeleted") is True or not target.get("InvoiceID"):
             continue
-        out.append((f"Invoice:{target['InvoiceID']}", minor(allocation.get("Amount") or 0)))
+        out.append((f"{side}:{target['InvoiceID']}", minor(allocation.get("Amount") or 0)))
     return tuple(out)
 
 
-def document_record(j: Mapping[str, Any], *, tax: TaxKey, credit: bool = False) -> M.Document | M.Ext | None:
-    """An invoice, a bill (both Xero Invoices) or a receivable credit note (Xero CreditNotes). A draft or a submitted one
-    waits; a voided one is a deleted document, its entry reversed."""
+def document_record(j: Mapping[str, Any], *, tax: SystemKey, rounding: SystemKey,
+                    credit: bool = False) -> M.Document | M.Ext | None:
+    """An invoice, a bill (both Xero Invoices), or a credit note of either side (Xero CreditNotes). A draft or a submitted
+    one waits; a voided one is a deleted document, its entry reversed. The total is Xero's, and its rounding is a line of
+    its own on the rounding account (no account, no rounding: the document waits)."""
     kind = DOC_KIND.get(str(j.get("Type") or ""))
-    if kind is None or (kind == "CreditMemo") != credit:
+    if kind is None or (kind in CREDIT_KINDS) != credit:
         return None
     ext = _ext(kind, j, "CreditNoteID" if credit else "InvoiceID")
     if _status(j) in ("DELETED", "VOIDED"):
         return M.Ext(ext.kind, ext.external_id, ext.revision, True)
     if _status(j) in ("", "DRAFT", "SUBMITTED"):
         return None
-    lines = _lines(j, tax)
+    lines = list(_lines(j, tax))
+    rounded = minor(j.get("RoundingAmount") or 0)
+    if rounded:
+        lines.append(M.EntryLine(rounding(), rounded, description="rounding"))
+    total = minor(j["Total"]) if j.get("Total") is not None else sum(x.amount for x in lines)
+    side = CREDIT_SIDE.get(str(j.get("Type") or ""), "")
     return M.Document(ext, party=_contact(j), number=str(j.get("CreditNoteNumber" if credit else "InvoiceNumber") or ""),
-                      day=day(j, "Date"), due=day(j, "DueDate") if j.get("DueDate") else "",
-                      total=sum(x.amount for x in lines), lines=lines,
-                      memo=str(j.get("Reference") or ""), currency=str(j.get("CurrencyCode") or ""),
-                      links=_allocations(j) if credit else ())
+                      day=day(j, "Date"), due=day(j, "DueDate") if j.get("DueDate") else "", total=total,
+                      lines=tuple(lines), memo=str(j.get("Reference") or ""), currency=str(j.get("CurrencyCode") or ""),
+                      links=_allocations(j, side) if credit else ())
 
 
 def payment_record(j: Mapping[str, Any]) -> M.Settlement | M.Ext | None:
-    """A payment of an invoice or a bill. A prepayment, an overpayment or a payment of a credit note is not an invoice's
-    money, so it waits."""
+    """A payment of an invoice or a bill, told apart by Xero's PaymentType (the invoice's type when it names none). A
+    prepayment, an overpayment or a payment of a credit note is not an invoice's money, so it waits."""
     target = as_map(j.get("Invoice")) or {}
-    kind, side = PAYMENT_KIND.get(str(target.get("Type") or ""), ("Payment", ""))
+    ptype = str(j.get("PaymentType") or "")
+    kind, side = (PAYMENT_TYPE.get(ptype, ("Payment", "")) if ptype
+                  else INVOICE_PAYMENT.get(str(target.get("Type") or ""), ("Payment", "")))
     ext = _ext(kind, j, "PaymentID")
     if _status(j) == "DELETED":
         return M.Ext(ext.kind, ext.external_id, ext.revision, True)
@@ -166,63 +198,82 @@ def payment_record(j: Mapping[str, Any]) -> M.Settlement | M.Ext | None:
                         links=((f"{side}:{target['InvoiceID']}", amount),))
 
 
-def manual_journal_record(j: Mapping[str, Any]) -> M.Journal | M.Ext | None:
+def manual_journal_record(j: Mapping[str, Any], tax: SystemKey) -> M.Journal | M.Ext | None:
+    """A manual journal. A line's tax moves from its account to the tax account, so the journal still adds up to zero
+    (a line's LineAmount is its gross amount). A journal Xero keeps out of its cash-basis reports is accrual only."""
     ext = _ext("ManualJournal", j, "ManualJournalID")
     if _status(j) in ("VOIDED", "DELETED"):
         return M.Ext(ext.kind, ext.external_id, ext.revision, True)
     if _status(j) != "POSTED":
         return None
-    lines = tuple(M.EntryLine(_account(x), minor(x.get("LineAmount") or 0), description=str(x.get("Description") or ""))
-                  for x in (as_map(raw) or {} for raw in as_list(j.get("JournalLines"))))
-    return M.Journal(ext, day(j, "Date"), str(j.get("Narration") or ""), "sync", lines)
+    lines: list[M.EntryLine] = []
+    due_total = 0
+    for raw in as_list(j.get("JournalLines")):
+        line = as_map(raw) or {}
+        gross, due = minor(line.get("LineAmount") or 0), minor(line.get("TaxAmount") or 0)
+        due_total += due
+        lines.append(M.EntryLine(_account(line), gross - due, description=str(line.get("Description") or "")))
+    if due_total:
+        lines.append(M.EntryLine(tax(), due_total, description="tax"))
+    basis = "accrual" if j.get("ShowOnCashBasisReports") is False else "both"
+    return M.Journal(ext, day(j, "Date"), str(j.get("Narration") or ""), "sync", tuple(lines), basis)
 
 
-def bank_record(j: Mapping[str, Any]) -> M.Journal | M.Ext | None:
-    """A bank transaction as an entry on its bank account: each line item on its account, the bank account the rest."""
+def bank_record(j: Mapping[str, Any], tax: SystemKey) -> M.Journal | M.Ext | None:
+    """A bank transaction as an entry on its bank account: each line item on its account (net of its tax when the line is
+    inclusive), its tax on the tax account, and the bank account the rest. Its currency is carried; the books refuse
+    another than their own."""
     ext = _ext("BankTransaction", j, "BankTransactionID")
     if _status(j) in ("DELETED", "VOIDED"):
         return M.Ext(ext.kind, ext.external_id, ext.revision, True)
     if _status(j) != "AUTHORISED":
         return None
-    receive = str(j.get("Type") or "").startswith("RECEIVE")
+    sign = -1 if str(j.get("Type") or "").startswith("RECEIVE") else 1
+    inclusive = str(j.get("LineAmountTypes") or "") == "Inclusive"
     party = _contact(j)
     contra: list[M.EntryLine] = []
+    due_total = 0
     for raw in as_list(j.get("LineItems")):
         item = as_map(raw) or {}
-        gross = minor(item.get("LineAmount") or 0) + minor(item.get("TaxAmount") or 0)
-        contra.append(M.EntryLine(_account(item), -gross if receive else gross, party=party,
+        gross, due = minor(item.get("LineAmount") or 0), minor(item.get("TaxAmount") or 0)
+        due_total += due
+        net = gross - due if inclusive else gross
+        contra.append(M.EntryLine(_account(item), sign * net, party=party,
                                   description=str(item.get("Description") or "")))
+    if due_total:
+        contra.append(M.EntryLine(tax(), sign * due_total, party=party, description="tax"))
     bank = as_map(j.get("BankAccount")) or {}
     lines = (M.EntryLine(f"Account:{bank.get('AccountID') or ''}", -sum(x.amount for x in contra)), *contra)
-    return M.Journal(ext, day(j, "Date"), str(j.get("Reference") or ""), "bank", lines)
+    return M.Journal(ext, day(j, "Date"), str(j.get("Reference") or ""), "bank", lines,
+                     currency=str(j.get("CurrencyCode") or ""))
 
 
-def _build(entity: str, j: Mapping[str, Any], tax: TaxKey) -> Record | None:
+def _build(entity: str, j: Mapping[str, Any], tax: SystemKey, rounding: SystemKey) -> Record | None:
     if entity == "accounts":
         return account_record(j)
     if entity == "parties":
         return contact_record(j)
     if entity == "invoices":
-        return document_record(j, tax=tax)
+        return document_record(j, tax=tax, rounding=rounding)
     if entity == "credit_notes":
-        return document_record(j, tax=tax, credit=True)
+        return document_record(j, tax=tax, rounding=rounding, credit=True)
     if entity == "payments":
         return payment_record(j)
     if entity == "manual_journals":
-        return manual_journal_record(j)
+        return manual_journal_record(j, tax)
     if entity == "bank_transactions":
-        return bank_record(j)
+        return bank_record(j, tax)
     raise ValueError(f"not a Xero entity: {entity}")
 
 
-def records(entity: str, rows: Iterable[object], tax: TaxKey) -> list[Record]:
+def records(entity: str, rows: Iterable[object], tax: SystemKey, rounding: SystemKey) -> list[Record]:
     """The records a page or a change read of one entity holds, in order: a row that is not taken in gives none."""
     out: list[Record] = []
     for raw in rows:
         j = as_map(raw)
         if j is None:
             raise ValueError(f"a {entity} row is not an object")
-        made = _build(entity, j, tax)
+        made = _build(entity, j, tax, rounding)
         if made is not None:
             out.append(made)
     return out
@@ -245,10 +296,9 @@ def account_body(body: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def party_body(body: Mapping[str, Any]) -> dict[str, Any]:
-    kind = str(body.get("kind") or "")
+    """A contact as Xero takes it. Xero sets whether it is a customer or a supplier from its activity, so no flag is sent."""
     emails = as_list(body.get("emails"))
-    out: dict[str, Any] = {"Name": str(body.get("name") or ""), "IsCustomer": kind in ("customer", "both"),
-                           "IsSupplier": kind in ("vendor", "both"),
+    out: dict[str, Any] = {"Name": str(body.get("name") or ""),
                            "ContactStatus": "ACTIVE" if body.get("active", True) else "ARCHIVED"}
     if emails:
         out["EmailAddress"] = str(emails[0])
@@ -260,17 +310,48 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
     lines: list[dict[str, Any]] = []
     for raw in as_list(body.get("lines")):
         line = as_map(raw) or {}
-        account, _, value = str(line.get("account") or "").partition(":")
-        if account != "Account" or not value:
-            raise ValueError("not a Xero account")
-        row: dict[str, Any] = {"LineAmount": amount_text(int(line["amount"])), "AccountID": value,
+        row: dict[str, Any] = {"LineAmount": amount_text(int(line["amount"])),
+                               "AccountID": _id_of(line.get("account"), "Account"),
                                "Description": str(line.get("description") or "")[:4000]}
         tracking = _tracking(as_map(line.get("classes")) or {})
         if tracking:
             row["Tracking"] = tracking
         lines.append(row)
-    return {"Narration": str(body.get("memo") or "")[:500], "Date": str(body["date"]), "Status": "POSTED",
-            "LineAmountTypes": "NoTax", "JournalLines": lines}
+    return {"Narration": marked(str(body.get("memo") or ""), str(body.get("marker") or ""), 500),
+            "Date": str(body["date"]), "Status": "POSTED", "LineAmountTypes": "NoTax", "JournalLines": lines}
+
+
+def bank_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A categorized bank row as a bank transaction: its money account is the bank account, and its other line is the one
+    line item. Xero's type gives the direction (SPEND takes money out, RECEIVE brings it in)."""
+    money: Mapping[str, Any] | None = None
+    items: list[Mapping[str, Any]] = []
+    for raw in as_list(body.get("lines")):
+        line = as_map(raw) or {}
+        if line.get("role") == L.MONEY_ROLE and money is None:
+            money = line
+        else:
+            items.append(line)
+    if money is None or len(items) != 1:
+        raise ValueError("a bank transaction takes one money line and one category")
+    amount = int(money["amount"])
+    item = items[0]
+    if amount == 0 or int(item["amount"]) != -amount:
+        raise ValueError("a bank transaction's two lines do not mirror each other")
+    row: dict[str, Any] = {"AccountID": _id_of(item.get("account"), "Account"), "LineAmount": amount_text(abs(amount)),
+                           "Description": str(item.get("description") or "")[:4000]}
+    tracking = _tracking(as_map(item.get("classes")) or {})
+    if tracking:
+        row["Tracking"] = tracking
+    out: dict[str, Any] = {"Type": "SPEND" if amount < 0 else "RECEIVE",
+                           "BankAccount": {"AccountID": _id_of(money.get("account"), "Account")},
+                           "Date": str(body["date"]), "Status": "AUTHORISED", "LineAmountTypes": "NoTax",
+                           "Reference": marked(str(body.get("memo") or ""), str(body.get("marker") or ""), 1000),
+                           "LineItems": [row]}
+    party = str(item.get("party") or "")
+    if party:
+        out["Contact"] = {"ContactID": _id_of(party, "Contact")}
+    return out
 
 
 def void_body(ident: str) -> dict[str, Any]:

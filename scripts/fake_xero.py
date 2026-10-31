@@ -74,6 +74,8 @@ def _check(endpoint: str, row: dict[str, object]) -> str:
         return "Contact Name is required"
     if endpoint == "ManualJournals" and not _balanced(row.get("JournalLines")):
         return "Journal lines do not balance"
+    if endpoint == "BankTransactions" and (not isinstance(row.get("BankAccount"), dict) or not row.get("LineItems")):
+        return "A bank account and at least one line item are required"
     return ""
 
 
@@ -98,7 +100,9 @@ def create(endpoint: str, body: dict[str, Any], key: str) -> tuple[int, dict[str
     if endpoint not in ENDPOINTS:
         return 404, {"Message": "no such endpoint"}
     made: list[dict[str, object]] = []
-    for raw in body.get(endpoint) or []:
+    # PUT /Accounts takes the account itself, not a list of them.
+    raws = [body] if endpoint == "Accounts" else body.get(endpoint) or []
+    for raw in raws:
         row = dict(raw)
         problem = _check(endpoint, row)
         if problem:
@@ -121,8 +125,13 @@ def void_journal(ident: str) -> tuple[int, dict[str, object]]:
 
 def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[int, dict[str, object]]:
     rows = [dict(r) for r in STATE["books"][endpoint]]  # type: ignore[index,union-attr]
+    if endpoint == "Contacts" and query.get("includeArchived") != "true":
+        rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
     if since is not None:
         rows = [r for r in rows if (ms_of(r.get("UpdatedDateUTC")) or 0) > since]
+    order = query.get("order", "")
+    if order:
+        rows.sort(key=lambda r: ms_of(r.get("UpdatedDateUTC")) or 0, reverse=order.endswith("DESC"))
     if endpoint == "Accounts":
         return 200, {"Accounts": rows}
     page = max(int(query.get("page") or 1), 1)

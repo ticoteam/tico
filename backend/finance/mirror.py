@@ -45,10 +45,12 @@ REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
 Record = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Ext
 DOC_TABLES = {"Bill": "fin_bills", "Invoice": "fin_invoices"}   # a document kind with a row of its own
 TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMemo": "fin_entries",
+            "VendorCredit": "fin_entries",
             "BillPayment": "fin_entries", "Payment": "fin_entries", "Bill": "fin_bills", "Invoice": "fin_invoices",
             "ManualJournal": "fin_entries", "BankTransaction": "fin_entries"}
 GROUP_OF = {"Account": "accounts", "Vendor": "parties", "Customer": "parties", "Bill": "documents",
-            "Invoice": "documents", "CreditMemo": "documents", "BillPayment": "payments", "Payment": "payments",
+            "Invoice": "documents", "CreditMemo": "documents", "VendorCredit": "documents",
+            "BillPayment": "payments", "Payment": "payments",
             "JournalEntry": "entries",
             "ManualJournal": "entries", "BankTransaction": "entries"}
 
@@ -235,11 +237,13 @@ def _party(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Party, at: str) -> No
         current = SX.contact_by_name(c, ctx.book.id, p.name)     # a party the books already keep by name
     if current is None:
         local = SL.new_id()
-        SX.contact_insert(c, book_id=ctx.book.id, contact_id=local, name=p.name, kind=p.kind, emails=p.emails,
-                          active=p.active, at=at, by=SYSTEM)
+        SX.contact_insert(c, book_id=ctx.book.id, contact_id=local, name=p.name, kind=p.kind or "both",
+                          emails=p.emails, active=p.active, at=at, by=SYSTEM)
     else:
         local = str(current["id"])
-        SX.contact_update(c, local, name=p.name, kind=p.kind, emails=p.emails, active=p.active, at=at)
+        # A provider that does not say what the party is (no sales or purchase activity yet) keeps the kind it has.
+        SX.contact_update(c, local, name=p.name, kind=p.kind or str(current["kind"]), emails=p.emails,
+                          active=p.active, at=at)
     _bind(c, cid, "fin_contacts", local, p.ext, at)
 
 
@@ -276,7 +280,7 @@ def _entry(c: sqlite3.Connection, cid: str, ctx: Ctx, j: M.Journal, day: str) ->
                          description=x.description) for x in j.lines)
     return L.Entry(book_id=ctx.book.id, entry_date=day, memo=j.memo,
                    source=j.source if j.source in L.SOURCES else "sync",
-                   source_id=f"{j.ext.key}:{j.ext.revision}", lines=lines)
+                   source_id=f"{j.ext.key}:{j.ext.revision}", lines=lines, basis=j.basis)
 
 
 def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: str | None,
@@ -322,6 +326,7 @@ def _journal(c: sqlite3.Connection, ctx: Ctx, cid: str, j: M.Journal, at: str) -
     verdict = M.decide(_have(row), j.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
+    _currency(ctx, j.currency)
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
     new_id = _book(c, ctx, cid, j.ext, verdict, old, j.day, lambda when: _entry(c, cid, ctx, j, when), at)
     _bind(c, cid, "fin_entries", new_id, j.ext, at)
@@ -411,7 +416,7 @@ def _currency(ctx: Ctx, code: str) -> None:
 def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
     """A bill or invoice (its own row, its lines and its entry) or a credit memo (its entry only). A newer revision
     replaces the entry and the lines; the document keeps its id, so the payments that settled it still point at it."""
-    if d.ext.kind == "CreditMemo":
+    if d.ext.kind in ("CreditMemo", "VendorCredit"):
         _credit(c, ctx, cid, d, at)
         return
     table = DOC_TABLES[d.ext.kind]
@@ -464,8 +469,11 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
 
 
 def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
-    """A credit memo: debits to income against receivables, one entry (it has no row of its own). What it applies to
-    is settled against those invoices, so their paid amounts move with it, and deleting it undoes that."""
+    """A credit memo (debits to income against receivables) or a supplier's credit (credits to expense against payables):
+    one entry, with no row of its own. What it applies to is settled against documents of its own side, so their paid
+    amounts move with it, and deleting it undoes that."""
+    side = "bill" if d.ext.kind == "VendorCredit" else "invoice"
+    sign = -1 if side == "bill" else 1
     row = SX.ref(c, cid, "fin_entries", d.ext.key)
     verdict = M.decide(_have(row), d.ext)
     if verdict not in (M.CREATE, M.REPLACE):
@@ -475,18 +483,18 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
     rows = _doc_lines(c, cid, d)
     applied = sum(amount for _, amount in d.links)
     if applied > d.total:
-        raise FinanceError(NOT_AVAILABLE, "the credit memo applies more than its total")
+        raise FinanceError(NOT_AVAILABLE, "the credit applies more than its total")
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
     new_id = _book(c, ctx, cid, d.ext, verdict, old, d.day,
-                   lambda when: _doc_entry(ctx, control_kind="invoice", sign=1, source="invoice",
+                   lambda when: _doc_entry(ctx, control_kind=side, sign=sign, source=side,
                                            source_id=f"{d.ext.key}:{d.ext.revision}", contact=contact, rows=rows,
                                            memo=_doc_label(d), day=when), at)
     _bind(c, cid, "fin_entries", new_id, d.ext, at)
     for key, amount in d.links:
-        kind, invoice = _settle_target(c, cid, key)
-        if kind != "invoice":
-            raise FinanceError(NOT_AVAILABLE, "a credit memo applies to invoices")
-        documents.settle(ctx, "invoice", invoice, amount=amount, day=d.day, from_kind="credit", from_id=new_id,
+        kind, doc = _settle_target(c, cid, key)
+        if kind != side:
+            raise FinanceError(NOT_AVAILABLE, f"a {d.ext.kind} applies to {side}s")
+        documents.settle(ctx, side, doc, amount=amount, day=d.day, from_kind="credit", from_id=new_id,
                          entry_id=new_id, by=SYSTEM, cash=False)
 
 
@@ -806,7 +814,7 @@ def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any
         lines.append({"account": account, "party": party, "amount": x["amount"], "description": x["description"],
                       "role": x["role"], "classes": M.class_refs(x["tags"], mapping)})
     return {"date": local["date"], "memo": local["memo"], "source": local["source"], "lines": lines,
-            "export": export}
+            "export": export, "feed": bool(local.get("feed_id"))}
 
 
 def _finish(c: sqlite3.Connection, o: Any, why: str, now: str, status: str) -> None:
