@@ -15,6 +15,13 @@ SIGNATURE_TOLERANCE = 300            # seconds a signed delivery may be old (Mer
 POSTED, PENDING = "sent", "pending"
 VOID = ("cancelled", "failed", "blocked")
 REVERSED = "reversed"
+RECLASS = "reclass"     # a found payment's reconciled debit moved to its line (banking._reclass): `<feed id>:reclass`
+
+
+def reclass_of(source: str, source_id: str) -> str:
+    """The feed row a reclassification entry moved the spend of, else ""."""
+    parts = source_id.split(":")
+    return parts[0] if source == "bank" and len(parts) > 1 and parts[1] == RECLASS else ""
 # Mercury IO statements dated after this day carry charges positive (its changelog); earlier ones carry what is owed
 # negative (its endpoint page). Normalized once, in `credit_owed`.
 CREDIT_SIGN_FLIP = "2026-06-15"

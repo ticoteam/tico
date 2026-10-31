@@ -761,15 +761,17 @@ def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payme
     """Codex round 6 #4 and round 7: a 500.00 Software payment holds 500.00 on a 1,000.00 Software budget; its debit
     posted as an unknown spend (Other expenses) and was reconciled before the recovery found the payment. The bank
     line stays as reconciled; the spend moves to the payment's line in an entry that takes in the hold, so Software
-    reads (500 spent, 0 held, 500 left), never (0, 0, 1,000). The categorize event stays."""
+    reads (500 spent, 0 held, 500 left), never (0, 0, 1,000). The categorize event stays. Grok round 8: found in
+    November with October still open, the move is dated on the debit's own October day; and while the row stays
+    reconciled the move can't be reversed by hand (that would free the budget)."""
     fake = FakeMercury()
     connect(books, fake)
     with books.transaction() as c:
         made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 100_000})
         budget_id = str(made.result["budget_id"])
 
-    def software(c):
-        s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
+    def software(c, at="2026-10-20T12:00:00.000000Z"):
+        s = FA.budget_state(c, budget_id, at)
         return s.actual, s.held, s.remaining
     pid, key = _lost_send(books, fake)
     _debit(fake, "txn-lost", "req-9", "evt-lost")
@@ -779,12 +781,19 @@ def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payme
         bank = [x for x in _lines(c) if x[0] == "1000"]
         assert software(c) == (0, 50_000, 50_000)
     fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
-    sync_once(books, fake, HOURS[3])
-    sync_once(books, fake, HOURS[4])
-    with books.read() as c:
+    sync_once(books, fake, "2026-11-02T13:30:00.000000Z")
+    sync_once(books, fake, "2026-11-02T14:30:00.000000Z")
+    with books.transaction() as c:
         assert tuple(c.execute("SELECT status, provider_txn_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
             == ("settled", fid)
         assert _holds(c) == [(50_000, "settled")]
+        assert software(c) == (50_000, 0, 50_000)
+        assert software(c, "2026-11-20T12:00:00.000000Z") == (0, 0, 100_000)
+        moved = c.execute("SELECT id, entry_date FROM fin_entries WHERE source='bank' AND source_id=?",
+                          (f"{fid}:reclass",)).fetchone()
+        assert moved["entry_date"] == "2026-10-16"
+        refused = act(c, OWNER, "journal", {"reverses": moved["id"]})
+        assert refused.code == "conflict" and "reconciled" in refused.reason
         assert software(c) == (50_000, 0, 50_000)
         # Round 8 #2: the move and the hold never count together, so no warn or cutoff fired on the way.
         assert c.execute("SELECT count(*) FROM fin_events WHERE name LIKE 'finance.budget.%' AND subject=?",

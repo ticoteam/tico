@@ -8,6 +8,7 @@ from . import budgeting, posting
 from .context import Ctx
 from .core import budgets as B
 from .core import dates, kinds as K
+from .core import feeds as F
 from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
@@ -152,7 +153,10 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             _need_line(ctx, who, item.account_id, item.tags)
         if row["status"] != "posted" or row["reverses_id"]:
             raise FinanceError(CONFLICT, "that entry is already reversed or is a reversal")
-        if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)):
+        # A reclassification of a reconciled row's spend is locked with that row's own entry (banking._reclass).
+        moved = SK.get(ctx.c, "fin_feed_txns", F.reclass_of(str(row["source"]), str(row["source_id"])) or "-")
+        if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)) or \
+                (moved is not None and moved["reconciliation_id"]):
             raise FinanceError(CONFLICT, "that entry is in a reconciled statement; undo the reconciliation first")
         total = sum(x.amount for x in lines if x.amount > 0)
         return Plan(K.default_gate(ctx.org, who, "journal", total=total), f"Reverse entry {entry_id}",

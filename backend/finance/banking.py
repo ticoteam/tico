@@ -423,8 +423,10 @@ def _reclass(ctx: Ctx, row: Any, pay: Any) -> None:
                                        "contact_id": x.contact_id} for x in spent]
     lines.append(_line(account, sum(x.amount for x in spent), tags, vendor))
     fid = str(row["id"])
-    done = posting.post_entry(ctx.c, {"date": open_day(ctx, ctx.today), "source": "bank",
-                                      "source_id": fresh_source(ctx, "bank", f"{fid}:reclass"),
+    debit = SL.entry_row(ctx.c, entry_id)
+    day = str(debit["entry_date"]) if debit is not None else ctx.today
+    done = posting.post_entry(ctx.c, {"date": open_day(ctx, day), "source": "bank",      # where the debit sits
+                                      "source_id": fresh_source(ctx, "bank", f"{fid}:{F.RECLASS}"),
                                       "memo": f"Payment {pay['id']} found after reconciling"[:200], "lines": lines},
                               hold_ids=[hold] if hold else [], at=ctx.at)
     if not done.get("posted"):
@@ -535,7 +537,7 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
     waiting too."""
     entry_id = str(row["entry_id"])
     entry = SL.entry_row(ctx.c, entry_id)
-    later = SL.posted_by_source_prefix(ctx.c, ctx.book.id, "bank", f"{row['id']}:reclass")
+    later = SL.posted_by_source_prefix(ctx.c, ctx.book.id, "bank", f"{row['id']}:{F.RECLASS}")
     for e in [entry, *later]:
         if e is not None and str(e["status"]) == "posted" and not e["reverses_id"]:
             # Its period may be closed by now: the reversal posts on an open day, as a late item does.
