@@ -101,3 +101,111 @@ def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
         groups[team].pop("lead", None)
     c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
               (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),))
+
+
+# ------------------------------------------------------------------------------------------------ a fake Mercury
+MERCURY = json.loads((Path(__file__).parent / "fixtures" / "mercury" / "responses.json").read_text())
+
+
+class FakeMercury:
+    """A Mercury that answers from the recorded responses and remembers what Finance sent. `txns` is what
+    /transactions holds (by id), `events` the Events API in order, `queue[name]` answers to give `name` first."""
+
+    def __init__(self) -> None:
+        from backend.finance.mercury import Answer
+        self.Answer = Answer
+        self.txns: dict[str, dict[str, object]] = {}
+        self.events_list: list[dict[str, object]] = []
+        self.requests: dict[str, dict[str, object]] = {}
+        self.queue: dict[str, list[object]] = {}
+        self.calls: list[tuple[str, object]] = []
+
+    def _answer(self, name: str, arg: object, default: object):
+        self.calls.append((name, arg))
+        waiting = self.queue.get(name)
+        found = waiting.pop(0) if waiting else default
+        return found if isinstance(found, self.Answer) else self.Answer(200, dict(found))  # type: ignore[arg-type]
+
+    def sent(self, name: str) -> list[object]:
+        return [arg for n, arg in self.calls if n == name]
+
+    def accounts(self):
+        return self._answer("accounts", None, MERCURY["accounts"])
+
+    def credit(self):
+        return self._answer("credit", None, MERCURY["credit"])
+
+    def users(self):
+        return self._answer("users", None, MERCURY["users"])
+
+    def transactions(self, start_after, limit=500):
+        return self._answer("transactions", start_after, {"transactions": list(self.txns.values()), "page": {}})
+
+    def transaction(self, txn_id):
+        raw = self.txns.get(txn_id)
+        return self._answer("transaction", txn_id, raw if raw is not None else self.Answer(404, {}))
+
+    def events(self, start_after, limit=500, newest=False):
+        found = list(reversed(self.events_list))[:limit] if newest else self.events_list
+        if start_after and not newest:
+            ids = [str(e["id"]) for e in found]
+            found = found[ids.index(start_after) + 1:] if start_after in ids else found
+        return self._answer("events", start_after, {"events": found})
+
+    def statements(self, account_id, start, end):
+        return self._answer("statements", account_id, {"statements": [MERCURY["bank_statement"]]})
+
+    def credit_statements(self, account_id):
+        return self._answer("credit_statements", account_id, {"statements": [MERCURY["credit_statement_new"]]})
+
+    def create_card(self, user_id, nickname, monthly_cents):
+        return self._answer("create_card", (user_id, monthly_cents), MERCURY["card_created"])
+
+    def card_limit(self, card_id, monthly_cents):
+        return self._answer("card_limit", (card_id, monthly_cents), {})
+
+    def card_state(self, card_id, op):
+        return self._answer("card_state", (card_id, op), {})
+
+    def create_recipient(self, body):
+        return self._answer("create_recipient", dict(body), {"id": f"rcp-{len(self.sent('create_recipient')) + 1}"})
+
+    def recipient(self, recipient_id):
+        return self._answer("recipient", recipient_id, {"id": recipient_id})
+
+    def request_send_money(self, account_id, body):
+        answer = self._answer("request_send_money", dict(body), MERCURY["send_request_created"])
+        if answer.ok:
+            self.requests[str(answer.body.get("requestId"))] = {**answer.body, "note": body.get("note")}
+        return answer
+
+    def send_request(self, request_id):
+        return self._answer("send_request", request_id, self.requests.get(request_id) or self.Answer(404, {}))
+
+    def send_requests(self, account_id):
+        return self._answer("send_requests", account_id, {"requests": list(self.requests.values())})
+
+
+def connect(store: Store, fake: FakeMercury, *, approver: str = "ben@acme.example",
+            creator: str = "ana@acme.example") -> dict[str, object]:
+    """Connect Acme's Mercury (checking, savings and IO) as the owner; the connection_create result."""
+    from backend.finance import sync
+    found, why = sync.probe(fake)  # type: ignore[arg-type]
+    assert not why, why
+    with store.transaction() as c:
+        done = act(c, OWNER, "connection_create", {"provider": "mercury", "credential_id": "cred-mercury",
+                                                   "probe": found, "approver_email": approver,
+                                                   "token_creator_email": creator})
+    assert done.status == "committed", done
+    return dict(done.result)
+
+
+def sync_once(store: Store, fake: FakeMercury, at: str = AT, **kw: object) -> str:
+    """One pass of the bank worker over every connection, with `fake` as Mercury."""
+    from backend.finance import sync
+    with store.read() as c:
+        ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_connections")]
+    out = ""
+    for cid in ids:
+        out = sync.connection(store, None, cid, make=lambda _token: fake, at=at, **kw)  # type: ignore[arg-type]
+    return out

@@ -33,6 +33,7 @@ EVENTS_PAGES = 4
 INBOX_MOST, OUTBOX_MOST, PAY_MOST = 200, 50, 50
 STATEMENT_HOURS = 24
 RETRY = (60, 300, 1800, 3600)
+NO_KEY_OPS = ("card_create", "recipient_create")   # Mercury documents no idempotency for these creates
 Make = Callable[[str], Provider]
 
 
@@ -370,6 +371,9 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
     why = error_text(answer, write=True)
     final = answer.status is not None and 400 <= answer.status < 500 and not answer.refused_write and \
         answer.status != 429
+    if op in NO_KEY_OPS and (answer.status is None or answer.status >= 500):
+        # Mercury takes no idempotency key for these: a call that may have landed is never sent again on its own.
+        final, why = True, f"{why}; it may have gone through: check Mercury before trying again"
     SK.update(c, "fin_outbox", str(o["id"]), {
         "status": "failed" if final else "pending", "attempts": attempts, "last_error": why,
         "next_try_at": None if final else _after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]), "updated_at": now})

@@ -1,0 +1,308 @@
+"""Cards, payments and finance gate rules against a fake Mercury: a card's provider limit is its allocation and cards
+racing for a budget never pass it; a decline budget at cutoff freezes its cards (and the watch-rule actions do it as
+the rule's maker); a payment that times out is `unknown`, keeps its hold, blocks a second payment for the same bill
+and is found again by its one key; rejected in Mercury releases the hold; settled posts once. Gate rules: strictest
+wins, examples must pass, a bot's rule needs a finance admin, limit counters hold under concurrency, stale data asks.
+The new reads, as a manager, a plain bot and a bot with grants."""
+import threading
+
+import pytest
+
+from backend import rules as TR
+from backend.finance import actions as FA
+from backend.finance import reads as FR
+from backend.finance.actions import FinanceError
+from backend.finance.mercury import Answer
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, spend, store, sync_once)
+
+HOURS = [f"2026-10-15T{h:02d}:30:00.000000Z" for h in range(13, 24)]
+
+
+def _budget_and_card(store, amount=30_000, card=20_000, holder="human:eve"):
+    with store.transaction() as c:
+        b = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": amount,
+                                            "at_limit": "decline"})
+        made = act(c, OWNER, "card_create", {"holder": holder, "budget_id": b.result["budget_id"], "amount": card,
+                                             "provider_user_id": "user-eve"})
+        assert made.status == "committed", made
+    return str(b.result["budget_id"]), str(made.result["card_id"])
+
+
+def _card(c, card_id):
+    return c.execute("SELECT status, limit_amount, provider_limit, sync_status FROM fin_cards WHERE id=?",
+                     (card_id,)).fetchone()
+
+
+def _race(store, n, work):
+    """Run `work(c, i)` in n threads at once, each in its own write transaction; the results."""
+    barrier, out = threading.Barrier(n), []
+
+    def one(i):
+        barrier.wait()
+        with store.transaction() as c:
+            out.append(work(c, i))
+    threads = [threading.Thread(target=one, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    return out
+
+
+def test_a_cards_limit_is_its_allocation_and_racing_cards_never_pass_the_budget(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, eve = _budget_and_card(books)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_update_limit", {"card_id": eve, "amount": 22_000}).status == "committed"
+        assert act(c, OWNER, "card_update_limit", {"card_id": eve, "amount": 30_001}).code == "invalid"
+    sync_once(books, fake, HOURS[0])
+    assert fake.sent("card_limit") == [("card-eve", 22_000)]
+    with books.read() as c:
+        assert tuple(_card(c, eve)) == ("active", 22_000, 22_000, "ok")
+    done = _race(books, 2, lambda c, i: act(c, OWNER, "card_create", {
+        "holder": ("human:fay", "human:gus")[i], "budget_id": budget_id, "amount": 6_000, "provider_user_id": "u"}))
+    assert sorted(r.status for r in done) == ["committed", "failed"]
+    with books.read() as c:
+        total = c.execute("SELECT sum(amount) FROM fin_allocations WHERE budget_id=?", (budget_id,)).fetchone()[0]
+        assert total == 28_000 <= 30_000
+
+
+def test_a_decline_budget_at_cutoff_freezes_its_cards_and_unfreezing_waits_for_room(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, eve = _budget_and_card(books)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        spend(c, "6100", 30_000)
+        FA.drain_events(c, AT)
+        assert _card(c, eve)["status"] == "frozen"
+        assert act(c, OWNER, "card_unfreeze", {"card_id": eve}).code == "denied"
+        frozen_by = c.execute("SELECT actor FROM fin_actions WHERE kind='card_freeze'").fetchone()[0]
+        assert frozen_by == "system:finance"
+    sync_once(books, fake, HOURS[0])
+    assert fake.sent("card_state") == [("card-eve", "freeze")]
+    with books.transaction() as c:
+        act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 60_000})
+        assert act(c, OWNER, "card_unfreeze", {"card_id": eve}).status == "committed"
+
+
+def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, eve = _budget_and_card(books)
+    freeze, pause, act_ = (TR.EVENT_RUNNERS[k] for k in ("finance_freeze_cards", "finance_pause_budget", "finance_act"))
+    values = {"data": {"budget_id": budget_id, "event_id": "e1"}}
+    with books.transaction() as c:
+        first = freeze(c, "rule-1", OWNER, {}, values, event="finance.budget.warn", subject="e1", revision=None)
+        again = freeze(c, "rule-1", OWNER, {}, values, event="finance.budget.warn", subject="e1", revision=None)
+        assert first["ok"] and again["ok"] and _card(c, eve)["status"] == "frozen"
+        assert c.execute("SELECT count(*) FROM fin_actions WHERE kind='card_freeze'").fetchone()[0] == 1
+        by_bot = act_(c, "rule-2", "bot:coder", {"kind": "card_unfreeze", "payload": {"card_id": eve}}, values,
+                      event="finance.budget.warn", subject="e1", revision=None)
+        assert not by_bot["ok"] and _card(c, eve)["status"] == "frozen"         # a bot's rule has only the bot's rights
+        paused = pause(c, "rule-3", OWNER, {}, values, event="finance.budget.warn", subject="e2", revision=None)
+        assert paused["ok"]
+        assert FA.budget_state(c, budget_id, AT).amount == 0
+        rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
+        assert tuple(rule_of)[1] == OWNER
+
+
+def _payee(store, fake, *, at=AT):
+    """Acme Supplies by ACH, synced to Mercury."""
+    with store.transaction() as c:
+        made = act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
+                                               "account_number": "000099998888", "routing_number": "000000000"})
+        assert made.status == "committed", made
+    sync_once(store, fake, at)
+    with store.read() as c:
+        payload = c.execute("SELECT payload_json FROM fin_outbox WHERE op='recipient_create'").fetchone()[0]
+        assert "000099998888" not in payload                                     # erased once Mercury has it
+    return str(made.result["recipient_id"])
+
+
+def _checking(c):
+    return str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+
+
+def _holds(c, source="payment"):
+    return [tuple(r) for r in c.execute("SELECT amount, status FROM fin_holds WHERE source=?", (source,))]
+
+
+def test_a_timed_out_payment_is_unknown_keeps_its_hold_and_is_found_again_by_its_one_key(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    body = {"recipient_id": rid, "amount": 50_000, "account_id": None, "obligation": "bill-7", "tags": {"team": "eng"}}
+    with books.transaction() as c:
+        body["account_id"], body["money_account_id"] = account(c, "6100"), _checking(c)
+        made = act(c, OWNER, "payment_create", body)
+        assert made.status == "committed" and made.result["status"] == "queued", made
+        pid = str(made.result["payment_id"])
+        assert _holds(c) == [(50_000, "held")]
+    fake.queue["request_send_money"] = [Answer(None, {})]                       # sent, but no answer came back
+    sync_once(books, fake, HOURS[1])
+    with books.transaction() as c:
+        status, key = c.execute("SELECT status, idempotency_key FROM fin_payments WHERE id=?", (pid,)).fetchone()
+        assert status == "unknown" and _holds(c) == [(50_000, "held")]
+        assert act(c, OWNER, "payment_create", body).code == "conflict"         # one live payment per bill
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).code == "conflict"
+    # Mercury did take it: the worker finds it by the key in its note and never sends again under a new key.
+    fake.requests["req-1"] = {**MERCURY["send_request_created"], "note": f"tico:{key}"}
+    sync_once(books, fake, HOURS[3])
+    assert len(fake.sent("request_send_money")) == 1
+    assert {b["idempotencyKey"] for b in fake.sent("request_send_money")} == {key}
+    with books.read() as c:
+        assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()[:] == \
+            ("awaiting_bank_approval", "req-1")
+    fake.requests["req-1"] = {**MERCURY["send_request_rejected"], "note": f"tico:{key}"}
+    sync_once(books, fake, HOURS[6])
+    with books.transaction() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
+        assert _holds(c) == [(50_000, "released")]
+        assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.payment.failed'").fetchone()[0] == 1
+        assert act(c, OWNER, "payment_create", body).status == "committed"     # the bill may be paid again
+
+
+def test_a_payment_settles_once_when_its_bank_transaction_posts_and_direct_send_stays_off(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000,
+                                                "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                                                "money_account_id": _checking(c)})
+        pid = str(made.result["payment_id"])
+        direct = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 1, "account_id": account(c, "6100"),
+                                                  "mode": "direct", "money_account_id": _checking(c)})
+        assert direct.code == "not_available" and "off" in direct.reason
+        assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        direct = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 1, "account_id": account(c, "6100"),
+                                                  "mode": "direct", "money_account_id": _checking(c)})
+        assert direct.code == "not_available" and "approval queue" in direct.reason
+        assert act(c, "human:ben", "payment_settings", {"direct_send": False}).code == "denied"
+    sync_once(books, fake, HOURS[1])
+    paid = {**MERCURY["txn_bank_fee"], "id": "txn-pay", "amount": -500.0, "kind": "outgoingPayment",
+            "counterpartyName": "Acme Supplies", "requestId": "req-1", "postedAt": "2026-10-16T10:00:00Z"}
+    fake.txns["txn-pay"] = paid
+    fake.events_list.append({"id": "evt-pay", "resourceType": "transaction", "resourceId": "txn-pay",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[3])
+    sync_once(books, fake, HOURS[6])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "settled"
+        assert _holds(c) == [(50_000, "settled")]
+        lines = sorted(tuple(r) for r in c.execute(
+            "SELECT a.code, l.amount FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id JOIN fin_entries e "
+            "ON e.id=l.entry_id WHERE e.source='bank'"))
+        assert lines == [("1000", -50_000), ("6100", 50_000)]
+        assert FR.recipients(c, OWNER, at=AT)["recipients"][0]["known"] is True
+
+
+def _rule(c, who, name, when, outcome, examples, key=None):
+    return act(c, who, "rule_create", {"name": name, "when": when, "outcome": outcome, "examples": examples}, key)
+
+
+def test_rules_strictest_wins_examples_must_pass_and_a_bots_rule_needs_a_finance_admin(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        bad = _rule(c, OWNER, "Big cards", {"kind": "card_create", "amount": {"gt": 5_000}},
+                    {"outcome": "deny"}, [{"input": {"kind": "card_create", "amount": 6_000}, "expect": "allow"}])
+        assert bad.code == "invalid" and "examples" in bad.reason
+        ask = _rule(c, OWNER, "Cards ask", {"kind": "card_create"}, {"outcome": "needs_approval", "who": "manager"},
+                    [{"input": {"kind": "card_create"}, "expect": "needs_approval"}])
+        deny = _rule(c, OWNER, "No gus cards", {"kind": "card_create", "holder": "human:gus"},
+                     {"outcome": "deny", "reason": "gus has no cards"},
+                     [{"input": {"kind": "card_create", "holder": "human:gus"}, "expect": "deny"},
+                      {"input": {"kind": "card_create", "holder": "human:eve"}, "expect": "allow"}])
+        assert ask.status == deny.status == "committed"
+        b = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 50_000})
+        refused = act(c, OWNER, "card_create", {"holder": "human:gus", "budget_id": b.result["budget_id"],
+                                                "amount": 1_000, "provider_user_id": "u"})
+        assert refused.status == "denied" and refused.reason == "gus has no cards"   # deny beats needs_approval
+        runs = c.execute("SELECT json_extract(outcome_json,'$.outcome') FROM fin_rule_runs WHERE rule_id=?",
+                         (deny.result["rule_id"],)).fetchall()
+        assert [r[0] for r in runs] == ["deny"]
+        tested = act(c, OWNER, "rule_test", {"rule_id": deny.result["rule_id"]})
+        assert tested.result["changed_count"] == 1
+        assert FR.rules(c, OWNER, at=AT)["rules"]
+        with pytest.raises(FinanceError):
+            FR.rules(c, "bot:coder", at=AT)
+        act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.rules"})
+        act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.rules"})
+        by_bot = _rule(c, "bot:coder", "Coder rule", {"kind": "journal"}, {"outcome": "allow"},
+                       [{"input": {"kind": "journal"}, "expect": "allow"}])
+        assert by_bot.status == "needs_approval" and by_bot.approver == OWNER
+        by_cara = _rule(c, "human:cara", "Cara rule", {"kind": "journal"}, {"outcome": "allow"},
+                        [{"input": {"kind": "journal"}, "expect": "allow"}])
+        assert by_cara.status == "committed"
+
+
+def test_a_daily_limit_holds_under_concurrency(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        made = _rule(c, OWNER, "Card money a day", {"kind": "card_create"},
+                     {"outcome": "limit", "limit": 10_000, "per": "day"},
+                     [{"input": {"kind": "card_create", "amount": 10_001}, "expect": "deny"},
+                      {"input": {"kind": "card_create", "amount": 10_000}, "expect": "limit"}])
+        assert made.status == "committed", made
+        b = act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": account(c, "6100"), "amount": 90_000})
+    done = _race(books, 3, lambda c, i: act(c, OWNER, "card_create", {
+        "holder": ("human:eve", "human:fay", "human:gus")[i], "budget_id": b.result["budget_id"], "amount": 4_000,
+        "provider_user_id": "u"}))
+    assert sorted(r.status for r in done) == ["committed", "committed", "denied"]
+    with books.read() as c:
+        assert c.execute("SELECT sum(amount) FROM fin_rule_counters WHERE rule_id=?", (made.result["rule_id"],)
+                         ).fetchone()[0] == 8_000
+
+
+def test_stale_bank_data_asks_instead_of_allowing(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        made = _rule(c, OWNER, "Keep a cushion", {"kind": "payment_create", "balance": {"gte": 0}},
+                     {"outcome": "limit", "limit": 1_000_000},
+                     [{"input": {"kind": "payment_create", "balance": 5, "amount": 10}, "expect": "limit"}])
+        assert made.status == "committed", made
+        body = {"recipient_id": rid, "amount": 10_000, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c)}
+        fresh = act(c, "human:ben", "payment_create", body, dry_run=True, at="2026-10-15T12:10:00.000000Z")
+        assert fresh.status == "committed", fresh
+        stale = act(c, "human:ben", "payment_create", body, dry_run=True, at="2026-10-15T13:00:00.000000Z")
+        assert stale.status == "needs_approval" and stale.approver == OWNER
+
+
+def test_money_reads_cut_to_the_viewer_and_a_revoked_grant_is_gone(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 5_000, "account_id": account(c, "6100"),
+                                         "tags": {"team": "web"}, "money_account_id": _checking(c)})
+        act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 7_000, "account_id": account(c, "6100"),
+                                         "tags": {"team": "sales"}, "money_account_id": _checking(c)})
+
+        def amounts(who):
+            return sorted(p["amount"] for p in FR.payments(c, who, at=AT)["payments"])
+        assert amounts(OWNER) == [5_000, 7_000]
+        assert amounts("human:cara") == [5_000] and amounts("human:ben") == [5_000]       # managers: their teams
+        assert amounts("human:dan") == [7_000]
+        assert amounts("bot:coder") == []                                                  # a plain bot
+        grant = act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "expenses", "whose": "team",
+                                             "whose_team": "sales"})
+        assert amounts("bot:coder") == [7_000]
+        assert all(p["error"] is None for p in FR.payments(c, "bot:coder", at=AT)["payments"])
+        act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
+        assert amounts("bot:coder") == []
+        with pytest.raises(FinanceError):
+            FR.recipients(c, "bot:coder", at=AT)
+        assert FR.recipients(c, OWNER, at=AT)["recipients"][0]["last4"] == "8888"
+        assert FR.reconciliations(c, "human:cara", at=AT)["reconciliations"] == []
+        assert FR.may_connect(c, OWNER, at=AT) and not FR.may_connect(c, "human:cara", at=AT)

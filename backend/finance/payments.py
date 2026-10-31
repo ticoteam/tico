@@ -172,6 +172,7 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     facts: Result = {"amount": amount, "recipient.id": str(rec["id"]), "recipient.known": known(ctx, str(rec["id"])),
                      "recipient.name": str(rec["name"]), "counterparty": str(rec["name"]), "method": method,
                      "accounts": [line.code], "obligation": obligation, **{f"tags.{k}": v for k, v in tags.items()},
+                     "balance": bank["available_balance"] if bank["available_balance"] is not None else bank["balance"],
                      G.AGES: {"balance": _age(ctx, bank["balance_as_of"])}}
     return Plan(K.default_gate(ctx.org, who, "payment_create"),
                 f"Pay {amount / 100:.2f} {ctx.book.base_currency} to {rec['name']} by {method}"
