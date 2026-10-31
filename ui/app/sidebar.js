@@ -173,6 +173,7 @@ function renderInboxNav() {
 function navCurSync(root) {
   const bot = S.route.startsWith('#/bot/') ? S.route.slice(6).split('/')[0] : null;
   const person = S.route.startsWith('#/person/') ? decodeURIComponent(S.route.slice(9).split('/')[0]) : null;
+  const seat = S.route.startsWith('#/seat/') ? decodeURIComponent(S.route.slice(7).split(/[/?]/)[0]) : null;
   const here = S.route.startsWith(MESSAGING) ? messagingParams() : null;
   for (const a of root.querySelectorAll('a.dept-label, a.node, a.person-mail-link, .inbox-list a')) {
     const href = a.getAttribute('href') || '', org = a.dataset.org || '';
@@ -180,7 +181,8 @@ function navCurSync(root) {
     const on = a.matches('.dept-label') ? S.route === href
       : a.matches('.person-mail-link') ? !!q && here.bot === q.get('bot')
       : q ? here.bot === q.get('bot') && here.source === q.get('source')
-      : org.startsWith('p:') ? person === org.slice(2) : org.startsWith('b:') ? bot === org.slice(2) : false;
+      : org.startsWith('p:') ? person === org.slice(2) : org.startsWith('b:') ? bot === org.slice(2)
+      : a.dataset.seat ? seat === a.dataset.seat : false;
     a.classList.toggle('cur', on);
     // The mail link beside a person marks its bot's mailbox; the person's own row is the page.
     if (on && !a.matches('.person-mail-link')) a.setAttribute('aria-current', 'page'); else a.removeAttribute('aria-current');
@@ -767,10 +769,12 @@ function renderTree() {
       // target or dragged here (data-seat, not data-org): it is opened and moved from its own page.
       const key = 's:' + node.id, kids = !flat && byParent[key], isCol = kids && collapsed.has(key);
       const tip = node.title + ' (Recruiting)' + (node.description ? '\n\n' + node.description : '');
+      const applicants = recruitSeatCount(node.id);    // known once its Applicants page listed them
       return `<li class="${kids ? 'dept' : ''}"><div class="noderow">
         ${kids ? `<button class="chev ${isCol ? 'col' : ''}" data-toggle="${esc(key)}" aria-label="${isCol ? 'Expand' : 'Collapse'} ${esc(node.title)}">›</button>` : ''}
-        <a class="node seat" href="#" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
-          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span><span class="pill waiting seat-pill">Recruiting</span></a></div>
+        <a class="node seat" href="${esc(recruitAddress(node.id))}" data-seat="${esc(node.id)}" data-seat-open="${esc(node.id)}" title="${esc(tip)}">
+          <span class="nav-icon seat-icon" aria-hidden="true">person_search</span><span class="nm">${esc(node.title)}</span>${applicants === undefined
+            ? '<span class="pill waiting seat-pill">Recruiting</span>' : `<span class="cnt" title="Applicants">${applicants}</span>`}</a></div>
         ${kids ? `<ul ${isCol ? 'hidden' : ''}>${rec(key, depth + 1)}</ul>` : ''}</li>`;
     }
     if (node.kind === 'person') {
@@ -826,7 +830,7 @@ function renderTree() {
   orgGroupFieldWire();
   $('#tree').onclick = ev => {
     const seat = ev.target.closest('[data-seat-open]');
-    if (seat) { ev.preventDefault(); setDrawer(false); void recruitSeat(seat.dataset.seatOpen); return; }
+    if (seat) { setDrawer(false); return; }        // its Applicants page (ui/app/recruit.js)
     const confirm = ev.target.closest('[data-org-confirm]');
     if (confirm) { ev.preventDefault(); if (confirm.dataset.orgConfirm === 'go') void orgPendingSave(); else orgPendingCancel(); return; }
     if (ev.target.closest('.org-confirm')) return;

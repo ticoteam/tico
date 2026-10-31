@@ -3067,15 +3067,23 @@ export type SeatBatchCreate = {
 };
 
 export type SeatCandidate = {
-  department?: string;
+  department: string;
+  department_id?: string;
   effort?: string;
-  icon?: string;
+  icon: string;
+  line: string;
+  match: "strong" | "good" | "";
   model: string;
   model_name: string;
   name: string;
-  reason: string;
-  recommended: boolean;
+  never?: Array<string>;
+  onboarding?: Array<string>;
+  owns: Array<string>;
+  prerequisites: Array<SeatNeed>;
+  source: "template";
+  starter?: boolean;
   summary?: string;
+  tags: Array<string>;
   template: string;
 };
 
@@ -3105,12 +3113,7 @@ export type SeatDetail = {
   can_edit: boolean;
   created?: string;
   description: string;
-  description_by?: "strategy_bot" | "chart" | "person";
-  draft: {
-  at: string;
-  by: string;
-  state: "none" | "drafting" | "drafted";
-};
+  description_by?: "chart" | "person";
   id: string;
   kind: "seat";
   reports_to: string;
@@ -3120,16 +3123,27 @@ export type SeatDetail = {
 };
 
 export type SeatDraft = {
-  text: string;
+  redraft?: boolean;
+  reports_to?: string;
+  team?: string;
+  title: string;
+};
+
+export type SeatDrafted = {
+  description: string;
+  source: "catalog" | "model" | "none";
 };
 
 export type SeatHire = {
   model?: string;
+  name?: string;
+  runner_id?: string | null;
   template: string;
 };
 
 export type SeatHired = {
   model?: string;
+  name?: string;
   note?: string | null;
   reports_to: string;
   seat: string;
@@ -3141,6 +3155,13 @@ export type SeatHired = {
 
 export type SeatList = {
   seats: Array<Seat>;
+};
+
+export type SeatNeed = {
+  label: string;
+  required: boolean;
+  state: "connected" | "on_hire" | "not_set";
+  tool: string;
 };
 
 export type SeatUpdate = {
@@ -5045,13 +5066,12 @@ export type DisconnectGranolaParams = {
 export type DisconnectGranolaBody = never;
 export type DisconnectGranolaResponse = GranolaDisconnect;
 
-/** POST /api/v2/seats/{seat_id}/draft */
+/** POST /api/v2/seats/draft */
 export type DraftSeatParams = {
   "Idempotency-Key": string;
-  seat_id: string;
 };
 export type DraftSeatBody = SeatDraft;
-export type DraftSeatResponse = SeatDetail;
+export type DraftSeatResponse = SeatDrafted;
 
 /** POST /api/v2/strategy/draft-from */
 export type DraftStrategyFromParams = {
@@ -6579,14 +6599,6 @@ export type ModerateTaskCommentParams = {
 };
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
-
-/** POST /api/v2/seats/{seat_id}/open */
-export type OpenSeatParams = {
-  "Idempotency-Key": string;
-  seat_id: string;
-};
-export type OpenSeatBody = Empty;
-export type OpenSeatResponse = SeatDetail;
 
 /** POST /api/v2/places/{place}/order */
 export type OrderPlaceParams = {

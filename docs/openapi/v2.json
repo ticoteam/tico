@@ -20464,6 +20464,68 @@
         ]
       }
     },
+    "/api/v2/seats/draft": {
+      "post": {
+        "summary": "A job description for a job not posted yet, from its title: composed from the template catalog at once, or with `redraft` rewritten once by the model when the server has a key. Stores nothing",
+        "operationId": "draftSeat",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatDraft"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatDrafted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/seats/{seat_id}": {
       "patch": {
         "summary": "Change a seat's title, job description, reporting line or group (a person it reports up to, or the owner)",
@@ -20535,7 +20597,7 @@
         ]
       },
       "get": {
-        "summary": "One seat, with whether the Strategy Bot's draft of its job description is done and whether the caller may edit it",
+        "summary": "One seat, with whose words its job description is and whether the caller may edit it",
         "operationId": "getSeat",
         "parameters": [
           {
@@ -20656,77 +20718,6 @@
         ]
       }
     },
-    "/api/v2/seats/{seat_id}/draft": {
-      "post": {
-        "summary": "The Strategy Bot's draft of the job description the owner asked for; a person's own words are kept",
-        "operationId": "draftSeat",
-        "parameters": [
-          {
-            "name": "seat_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Seat Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/SeatDraft"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SeatDetail"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Team chart"
-        ]
-      }
-    },
     "/api/v2/seats/{seat_id}/hire": {
       "post": {
         "summary": "Pick a candidate: the bot is created in Onboarding in the seat's place, then its repository",
@@ -20798,80 +20789,9 @@
         ]
       }
     },
-    "/api/v2/seats/{seat_id}/open": {
-      "post": {
-        "summary": "Open a seat: the owner opening it asks the Strategy Bot to draft its job description, unless a person wrote it",
-        "operationId": "openSeat",
-        "parameters": [
-          {
-            "name": "seat_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "title": "Seat Id"
-            }
-          },
-          {
-            "name": "Idempotency-Key",
-            "in": "header",
-            "required": true,
-            "schema": {
-              "type": "string"
-            },
-            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
-          }
-        ],
-        "requestBody": {
-          "required": true,
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/Empty"
-              }
-            }
-          }
-        },
-        "responses": {
-          "200": {
-            "description": "OK",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SeatDetail"
-                }
-              }
-            }
-          },
-          "401": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          },
-          "422": {
-            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Problem"
-                }
-              }
-            }
-          }
-        },
-        "tags": [
-          "Team chart"
-        ]
-      }
-    },
     "/api/v2/seats/{seat_id}/recruit": {
       "post": {
-        "summary": "Up to three Tico templates for the seat at once, each with a one-line reason and a suggested model, exactly one recommended, and the models one may choose instead. Local: nothing leaves the server",
+        "summary": "Up to eight Tico templates for the seat at once, best fit first, each with one line, what it needs, how well it matches and a suggested model, and the models one may choose instead. Local: nothing leaves the server",
         "operationId": "recruitSeat",
         "parameters": [
           {
@@ -45454,19 +45374,64 @@
           "name": {
             "type": "string"
           },
-          "summary": {
-            "type": "string"
-          },
           "icon": {
             "type": "string"
           },
           "department": {
             "type": "string"
           },
-          "reason": {
+          "department_id": {
             "type": "string"
           },
-          "recommended": {
+          "line": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "owns": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "never": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "onboarding": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "prerequisites": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SeatNeed"
+            }
+          },
+          "match": {
+            "enum": [
+              "strong",
+              "good",
+              ""
+            ]
+          },
+          "source": {
+            "enum": [
+              "template"
+            ]
+          },
+          "starter": {
             "type": "boolean"
           },
           "model": {
@@ -45480,11 +45445,17 @@
           }
         },
         "required": [
+          "department",
+          "icon",
+          "line",
+          "match",
           "model",
           "model_name",
           "name",
-          "reason",
-          "recommended",
+          "owns",
+          "prerequisites",
+          "source",
+          "tags",
           "template"
         ],
         "additionalProperties": true
@@ -45615,34 +45586,9 @@
           },
           "description_by": {
             "enum": [
-              "strategy_bot",
               "chart",
               "person"
             ]
-          },
-          "draft": {
-            "type": "object",
-            "properties": {
-              "state": {
-                "enum": [
-                  "none",
-                  "drafting",
-                  "drafted"
-                ]
-              },
-              "by": {
-                "type": "string"
-              },
-              "at": {
-                "type": "string"
-              }
-            },
-            "required": [
-              "at",
-              "by",
-              "state"
-            ],
-            "additionalProperties": true
           },
           "can_edit": {
             "type": "boolean"
@@ -45651,7 +45597,6 @@
         "required": [
           "can_edit",
           "description",
-          "draft",
           "id",
           "kind",
           "reports_to",
@@ -45662,20 +45607,57 @@
       },
       "SeatDraft": {
         "properties": {
-          "text": {
+          "title": {
             "type": "string",
-            "maxLength": 8000,
+            "maxLength": 120,
             "minLength": 1,
-            "title": "Text"
+            "title": "Title"
+          },
+          "reports_to": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Reports To",
+            "default": ""
+          },
+          "team": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Team",
+            "default": ""
+          },
+          "redraft": {
+            "type": "boolean",
+            "title": "Redraft",
+            "default": false
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "text"
+          "title"
         ],
         "title": "SeatDraft",
-        "description": "The Strategy Bot's draft of a seat's job description (backend/recruiting.py)."
+        "description": "A job description for a seat not posted yet, drafted from its title (backend/recruiting.py `draft`)."
+      },
+      "SeatDrafted": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "source": {
+            "enum": [
+              "catalog",
+              "model",
+              "none"
+            ]
+          }
+        },
+        "required": [
+          "description",
+          "source"
+        ],
+        "additionalProperties": true
       },
       "SeatHire": {
         "properties": {
@@ -45690,6 +45672,25 @@
             "maxLength": 200,
             "title": "Model",
             "default": ""
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Name",
+            "default": ""
+          },
+          "runner_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Runner Id"
           }
         },
         "additionalProperties": false,
@@ -45698,12 +45699,15 @@
           "template"
         ],
         "title": "SeatHire",
-        "description": "The candidate picked for a seat: a Tico template, on its suggested model unless `model` names another."
+        "description": "The candidate picked for a seat: a Tico template, on its suggested model unless `model` names another, named\nafter the seat unless `name` says otherwise, and on `runner_id`'s computer when one is chosen."
       },
       "SeatHired": {
         "type": "object",
         "properties": {
           "slug": {
+            "type": "string"
+          },
+          "name": {
             "type": "string"
           },
           "seat": {
@@ -45757,6 +45761,34 @@
         },
         "required": [
           "seats"
+        ],
+        "additionalProperties": true
+      },
+      "SeatNeed": {
+        "type": "object",
+        "properties": {
+          "tool": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "state": {
+            "enum": [
+              "connected",
+              "on_hire",
+              "not_set"
+            ]
+          }
+        },
+        "required": [
+          "label",
+          "required",
+          "state",
+          "tool"
         ],
         "additionalProperties": true
       },

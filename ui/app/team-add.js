@@ -1,25 +1,31 @@
-/* ui/app/team-add.js — The Team plus menu reuses the section, seat and people flows. */
+/* ui/app/team-add.js — The Team plus menu: hiring (Post a job, Build a team, Cloud agents, From scratch), sections and people. */
 'use strict';
 
 const teamAddCanBot = () => !!S.me?.id && settingsCanCreateBots();
 const teamAddCanExisting = () => !!S.me?.id && settingsCanMakeTokens();
 const teamAddCanHuman = () => orgCanGroups() || !!S.me?.can_add_people;
-// One menu for the Team header's plus and each group's plus (ui/app/sidebar.js). In a group it recruits into that group
-// and adds a group inside it; people are added from the header only.
+// One menu for the Team header's plus and each group's plus (ui/app/sidebar.js). In a group it hires into that group
+// and adds a group inside it; people are added from the header only. Build a team and Cloud agents show only where
+// their pages are loaded (window.teamBuildOpen, window.cloudAgentsOpen).
 let TEAM_ADD_GROUP = null;
 const TEAM_ADD_MENU = document.createElement('div');
 TEAM_ADD_MENU.id = 'team-add-menu';
 TEAM_ADD_MENU.setAttribute('role', 'menu');
 TEAM_ADD_MENU.setAttribute('aria-label', 'Add to team');
 TEAM_ADD_MENU.hidden = true;
-TEAM_ADD_MENU.innerHTML = `<button type="button" role="menuitem" data-team-add="bot">Recruit a bot</button>
+TEAM_ADD_MENU.innerHTML = `<button type="button" role="menuitem" data-team-add="bot">Post a job</button>
+  <button type="button" role="menuitem" data-team-add="build">Build a team</button>
+  <button type="button" role="menuitem" data-team-add="cloud">Cloud agents</button>
+  <button type="button" role="menuitem" data-team-add="scratch">From scratch</button>
   <button type="button" role="menuitem" data-team-add="existing">Add existing bot</button>
   <button type="button" role="menuitem" data-team-add="section">Add section</button>
   <button type="button" role="menuitem" data-team-add="human">Add human</button>`;
 document.body.append(TEAM_ADD_MENU);
 
 function teamAddAllowed(group = null) {
-  return {bot: teamAddCanBot(), existing: teamAddCanExisting(), section: orgCanGroups(), human: group === null && teamAddCanHuman()};
+  const bot = teamAddCanBot();
+  return {bot, build: bot && typeof window.teamBuildOpen === 'function', cloud: bot && typeof window.cloudAgentsOpen === 'function',
+    scratch: bot, existing: teamAddCanExisting(), section: orgCanGroups(), human: group === null && teamAddCanHuman()};
 }
 function teamAddAny(group = null) { return Object.values(teamAddAllowed(group)).some(Boolean); }
 function teamAddOpenFor(group) { return !TEAM_ADD_MENU.hidden && TEAM_ADD_GROUP === group; }
@@ -104,6 +110,9 @@ TEAM_ADD_MENU.onclick = event => {
     if (toggle.getAttribute('aria-expanded') === 'false') toggle.click();
     orgGroupEdit({add: ''});
   } else if (action === 'bot' && teamAddCanBot()) teamAddBot(group);
+  else if (action === 'build' && teamAddCanBot()) { setDrawer(false); window.teamBuildOpen?.(group); }
+  else if (action === 'cloud' && teamAddCanBot()) { setDrawer(false); window.cloudAgentsOpen?.(group); }
+  else if (action === 'scratch' && teamAddCanBot()) { setDrawer(false); recruitScratch(); }
   else if (action === 'existing' && teamAddCanExisting()) { setDrawer(false); window.connectAgent?.(); }
   else if (action === 'human' && teamAddCanHuman()) teamAddHuman();
 };
@@ -126,16 +135,15 @@ function teamAddDialog(title, body) {
   dialog.showModal();
   return dialog;
 }
-// Recruit a bot makes a Recruiting seat first, then goes through the same flow as opening a seat (ui/app/recruit.js).
-// From a group's plus the seat is in that group and reports to its head: the bot in it whose manager is outside it.
+// Post a job makes a Recruiting seat and opens its Applicants page (ui/app/recruit.js). From a group's plus the job is
+// in that group and reports to its head: the bot in it whose manager is outside it.
 function teamAddBot(group = null) {
   setDrawer(false);
-  if (group === null) { void recruitNewSeat(); return; }
+  if (group === null) { void recruitPostJob(); return; }
   const bots = (S.emps || []).filter(e => e.team === group && e.status !== 'archived' && !isHelperBot(e));
   const names = new Set(bots.map(e => 'b:' + e.name));
   const head = bots.find(e => !names.has(orgBossKey({kind: 'bot', ...e})));
-  void recruitNewSeat({team: group, reports_to: head?.name || '',
-    teamName: (S.orgGroups || []).find(g => g.id === group)?.name || ''});
+  void recruitPostJob({team: group, reports_to: head?.name || ''});
 }
 function teamAddHuman() {
   const dialog = teamAddDialog('Add human', `<form id="team-add-human">

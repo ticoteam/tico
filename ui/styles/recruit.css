@@ -1,0 +1,141 @@
+/* ui/styles/recruit.css — Post a job, a job's Applicants and one Applicant (ui/app/recruit.js).
+   Motion here is transform and opacity only; reduced motion shows each end state. */
+
+/* Post a job and Job post: labelled fields, two to a row where they pair. */
+.tmodal.recruit-post{width:min(600px,calc(100vw - 32px))}
+.recruit-post .tmodal-body{display:grid;gap:14px}
+.rp-field{display:grid;gap:6px;margin:0;min-width:0}
+.rp-field>span,.rp-label>label,.rc-main section>h2,.rc-hire h2{font-size:var(--t-xs);font-weight:600;color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
+.rp-field :is(input,select){min-height:var(--ctl)}
+.rp-pair{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.rp-pair[hidden]{display:none}
+.rp-label{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:var(--ctl-sm)}
+.rp-redraft{display:inline-flex;align-items:center;gap:6px;padding-left:6px}
+.rp-redraft .ldot{flex:none}
+.recruit-post textarea{min-height:268px;resize:vertical;line-height:var(--lh-read,1.5)}
+.recruit-post textarea[aria-busy=true]{opacity:.6;transition:opacity var(--dur) var(--ease)}
+.rp-placed{display:flex;align-items:center;gap:8px;width:100%;padding:4px 10px;border-radius:var(--r-ctl);border:0;background:none;color:var(--muted);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.rp-placed[hidden]{display:none}
+.rp-change{color:var(--ink);text-decoration:underline;text-underline-offset:2px}
+.rp-more>summary,.rc-more>summary,.rc-settings>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);width:max-content}
+.rp-more>.rp-pair{margin-top:10px}
+.rp-foot{display:flex;justify-content:flex-end;gap:8px}
+
+/* Pages */
+#main.recruit-layout{max-width:1100px}
+.recruit-page{max-width:980px;padding-top:12px}
+.recruit-page>.empty{display:flex;justify-content:center;padding:64px 0}
+.rc-back{display:inline-block;color:var(--muted);font-size:var(--t-sm);text-decoration:none;margin-bottom:10px}
+.rc-back:hover{color:var(--ink);text-decoration:none}
+.rc-phone{display:none}
+
+/* Applicants */
+.rc-head{display:flex;align-items:flex-start;gap:16px;flex-wrap:wrap}
+.rc-titles{flex:1;min-width:0}
+.rc-titles h1{display:flex;align-items:center;gap:10px;min-height:28px}
+.rc-hdot{display:inline-flex}
+.rc-titles p{margin:2px 0 0;font-size:var(--t-sm)}
+.rc-tools{display:flex;gap:8px;flex:none}
+.rc-tabs{display:flex;gap:22px;margin:18px 0 14px;border-bottom:1px solid var(--line)}
+.rc-tabs button{position:relative;padding:8px 0 10px;border:0;background:none;color:var(--muted);font:inherit;font-weight:500;cursor:pointer}
+.rc-tabs button:hover{color:var(--ink)}
+.rc-tabs button[aria-selected=true]{color:var(--ink);font-weight:600}
+.rc-tabs button[aria-selected=true]::after{content:"";position:absolute;left:0;right:0;bottom:-1px;height:2px;border-radius:2px;background:var(--ink)}
+.rc-n{margin-left:2px;color:var(--muted);font-weight:500;font-variant-numeric:tabular-nums}
+.rc-list{list-style:none;margin:0;padding:0;border:1px solid var(--line);border-radius:var(--radius,9px);background:var(--surface);overflow:hidden}
+.rc-list[hidden]{display:none}
+.rc-row{position:relative;display:grid;grid-template-columns:34px minmax(0,1fr) 92px auto;align-items:center;gap:14px;padding:12px 16px;background:var(--surface);transition:transform var(--dur) var(--ease)}
+.rc-row+.rc-row{border-top:1px solid var(--line)}
+.rc-row:hover{background:color-mix(in srgb,var(--surface2) 55%,var(--surface))}
+.rc-av{display:inline-flex;align-items:center;justify-content:center;flex:none;width:var(--rc-s);height:var(--rc-s);border-radius:8px;background:var(--rc-c);color:#fff;font-size:12px;font-weight:600;line-height:var(--lh-none)}
+.rc-who{min-width:0}
+.rc-name{display:flex;align-items:center;gap:8px;min-width:0}
+.rc-name a{color:var(--ink);font-weight:600;text-decoration:none;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-name a:hover{text-decoration:underline}
+.rc-tag{flex:none;display:inline-flex;align-items:center;height:20px;padding:0 8px;border-radius:10px;background:var(--surface2);color:var(--muted);font-size:var(--t-xs)}
+.rc-line{margin:3px 0 0;color:var(--muted);font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-match{font-size:var(--t-sm);color:var(--muted)}
+.rc-match.strong{color:var(--accent);font-weight:600}
+.rc-match.good{color:var(--g7)}
+.rc-act{display:flex;gap:8px;justify-content:flex-end;min-width:132px}
+.rc-view{display:inline-flex;align-items:center;height:var(--ctl-sm);box-sizing:border-box;padding:0 10px;border:1px solid var(--line);border-radius:var(--r-ctl);color:var(--ink);text-decoration:none}
+.rc-view:hover{background:var(--surface2);text-decoration:none}
+.rc-empty{padding:32px 0;text-align:center}
+.rc-empty[hidden],.rc-cloud[hidden]{display:none}
+.rc-foot{margin:14px 0 0;font-size:var(--t-sm)}
+.rc-foot .linkish{color:var(--muted)}
+.rc-foot .linkish:hover{color:var(--ink)}
+
+/* Hired: a dashed stamp lands on the avatar and the card lifts. */
+.rc-lift{transform:translateY(-2px)}
+.rc-who-big{position:relative}
+.rc-stamp{position:absolute;z-index:2;padding:2px 8px;border:1.5px dashed var(--accent);border-radius:999px;background:var(--surface);color:var(--accent);font-size:var(--t-xs);font-weight:700;letter-spacing:var(--track-caps);text-transform:uppercase;white-space:nowrap;pointer-events:none;transform:translate(-50%,-50%) rotate(-8deg)}
+
+/* One applicant */
+.rc-cols{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:32px;align-items:start}
+.rc-applicant:not(.can-hire) .rc-cols{grid-template-columns:minmax(0,1fr)}
+.rc-main{display:grid;gap:22px;min-width:0}
+.rc-who-big{display:flex;align-items:center;gap:14px}
+.rc-who-big h1{font-size:var(--t-xl);line-height:var(--lh-tight)}
+.rc-who-big p{margin:2px 0 0;font-size:var(--t-sm)}
+.rc-chips{display:flex;flex-wrap:wrap;gap:6px}
+.rc-chips span{display:inline-flex;align-items:center;height:22px;padding:0 9px;border-radius:11px;background:var(--surface2);color:var(--ink);font-size:var(--t-xs)}
+.rc-main section>h2{margin-bottom:10px}
+.rc-days{margin:0;padding-left:18px;display:grid;gap:6px;line-height:var(--lh)}
+.rc-needs{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.rc-need{display:grid;gap:3px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.rc-need b{font-weight:600;font-size:var(--t-sm);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.rc-need span{font-size:var(--t-xs);color:var(--muted)}
+.rc-need.connected span{color:var(--accent)}
+.rc-need.on_hire span{color:var(--wait-ink)}
+.rc-more>div{display:grid;gap:8px;margin-top:10px;color:var(--ink);font-size:var(--t-sm);line-height:var(--lh)}
+.rc-more h3{margin:6px 0 0;font-size:var(--t-xs);color:var(--muted);text-transform:uppercase;letter-spacing:var(--track-caps)}
+.rc-more p,.rc-more ul{margin:0}
+.rc-more ul{padding-left:18px}
+.rc-hire{position:sticky;top:12px;padding:16px;border:1px solid var(--line);border-radius:var(--radius,9px);background:var(--surface)}
+.rc-hire form{display:grid;gap:12px}
+.rc-hire h2{margin:0}
+.rc-hire .rc-settings .rp-field{margin-top:10px}
+.rc-hire-go{width:100%;height:var(--ctl)}
+.rc-hirebar{display:none}
+
+@media (max-width:760px){
+  .recruit-page{padding-top:0}
+  .rc-phone{display:inline-block}
+  .rc-head{gap:4px}
+  .rc-head .rc-back{margin-bottom:2px;flex-basis:100%}
+  .rc-titles h1{font-size:var(--t-lg)}
+  .rc-tools{flex-basis:100%;margin-top:8px}
+  .rc-tabs{gap:8px;margin:14px 0 12px;border:0;overflow-x:auto;scrollbar-width:none}
+  .rc-tabs button{flex:none;height:30px;padding:0 12px;border-radius:15px;background:var(--surface2);font-size:var(--t-sm)}
+  .rc-tabs button[aria-selected=true]{background:var(--ink);color:var(--surface)}
+  .rc-tabs button[aria-selected=true] .rc-n{color:inherit}
+  .rc-tabs button[aria-selected=true]::after{display:none}
+  .rc-list{display:grid;gap:10px;border:0;background:none;overflow:visible}
+  .rc-row{grid-template-columns:36px minmax(0,1fr) auto;grid-template-areas:"av who who" "line line line" "match match act";gap:10px;padding:12px;border:1px solid var(--line);border-radius:12px;cursor:pointer}
+  .rc-row+.rc-row{border-top:1px solid var(--line)}
+  .rc-row .rc-av{grid-area:av;--rc-s:36px !important}
+  .rc-who{grid-area:who;display:contents}
+  .rc-name{grid-area:who;flex-direction:column;align-items:flex-start;gap:2px}
+  .rc-tag{height:auto;padding:0;background:none;font-size:var(--t-xs)}
+  .rc-line{grid-area:line;margin:0;white-space:normal;color:var(--ink);opacity:.8;line-height:var(--lh)}
+  .rc-match{grid-area:match}
+  .rc-act{grid-area:act;min-width:0}
+  .rc-act .rc-view{display:none}
+  .rc-act button{min-width:96px;height:36px}
+  .rc-cols{grid-template-columns:minmax(0,1fr);gap:22px}
+  .rc-needs{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .rc-hire{position:static}
+  .rc-hire-go{display:none}
+  .rc-applicant.can-hire{padding-bottom:64px}
+  .rc-hirebar{position:fixed;z-index:17;left:0;right:0;bottom:calc(var(--mobile-nav-height) + env(safe-area-inset-bottom));display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--line);background:var(--surface)}
+  .rc-hirebar span{flex:1;min-width:0;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .rc-hirebar button{height:40px;padding:0 28px}
+  body.mobile-composer-focus .rc-hirebar{bottom:env(safe-area-inset-bottom)}
+  .rp-pair{grid-template-columns:minmax(0,1fr)}
+  .recruit-post textarea{min-height:200px}
+}
+@media (prefers-reduced-motion:reduce){
+  .rc-row{transition:none}
+  .recruit-post textarea[aria-busy=true]{transition:none}
+}

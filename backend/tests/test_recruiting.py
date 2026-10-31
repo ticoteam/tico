@@ -25,12 +25,6 @@ def providers(api, *enabled):
         "enabled": list(enabled), "expected_revision": current["revision"]}).status_code == 200
 
 
-def draft_tasks(api):
-    with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT id,status,owner FROM tasks WHERE owner='bot:goal-manager' "
-                                           "AND title LIKE 'Draft the job description:%'")]
-
-
 def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     models = get(api, "org-models")["models"]
     software = next(model for model in models if model["model"] == "software")
@@ -44,85 +38,73 @@ def test_org_model_recommendations_are_only_the_published_starter_catalog(api):
     assert "hub_org_models" in offered and "hub_assistant_propose" in offered
 
 
-def test_the_owner_opening_a_seat_gets_the_strategy_bots_draft_and_a_person_s_words_are_never_drafted_over(api):
-    strategy_token = strategy_bot(api)
-    seat = post(api, "seats", {"title": "Support lead", "reports_to": "human:ben"})
-    # Someone else opening it asks the Strategy Bot nothing: it works for the owner alone.
-    assert post(api, f"seats/{seat['id']}/open", {}, token="ben-test")["draft"]["state"] == "none"
-    assert draft_tasks(api) == []
-    opened = post(api, f"seats/{seat['id']}/open", {})
-    assert opened["draft"]["state"] == "drafting" and opened["can_edit"] is True
-    post(api, f"seats/{seat['id']}/open", {})                       # opening again asks once
-    assert [t["status"] for t in draft_tasks(api)] == ["open"]
+def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewrites_it_once(api, monkeypatch):
+    import time
+    started = time.monotonic()
+    drafted = post(api, "seats/draft", {"title": "Customer support lead", "team": "Support"})
+    assert time.monotonic() - started < 1
+    assert drafted["source"] == "catalog"
+    text = drafted["description"]
+    assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
+    assert post(api, "seats/draft", {"title": "Qwxz vrrb"}) == {"description": "", "source": "none"}
+    # Nothing is stored: drafting is not posting.
+    assert get(api, "seats")["seats"] == []
 
-    # Only the Strategy Bot drafts, on its own credential.
-    post(api, f"seats/{seat['id']}/draft", {"text": "Owns the support queue end to end."}, token="ben-test", expected=403)
-    drafted = api.post(f"/api/v2/seats/{seat['id']}/draft", headers=strategy_token,
-                       json={"text": "Owns the support queue end to end and keeps answers kind and fast."})
-    assert drafted.status_code == 200, drafted.text
-    shown = get(api, f"seats/{seat['id']}")
-    assert shown["draft"]["state"] == "drafted" and shown["description_by"] == "strategy_bot"
-    assert shown["description"].startswith("Owns the support queue")
-    assert [t["status"] for t in draft_tasks(api)] == ["done"]
-
-    # Anyone who may change the seat edits it; from then on the words are theirs.
-    edited = api.patch(f"/api/v2/seats/{seat['id']}", json={"description": "Runs support; reports weekly."},
-                       headers=headers("ben-test"))
-    assert edited.status_code == 200 and get(api, f"seats/{seat['id']}")["description_by"] == "person"
-
-    # A seat whose description a person wrote, or one they edit while the Strategy Bot drafts, keeps their words.
-    mine = post(api, "seats", {"title": "Bookkeeper", "description": "Keeps the books.", "reports_to": "coo"})
-    assert post(api, f"seats/{mine['id']}/open", {})["draft"]["state"] == "none"
-    chart = post(api, "seats", {"title": "Analyst", "reports_to": "coo"})
-    post(api, f"seats/{chart['id']}/open", {})
-    assert api.patch(f"/api/v2/seats/{chart['id']}", json={"description": "Mine."}, headers=headers()).status_code == 200
-    late = api.post(f"/api/v2/seats/{chart['id']}/draft", headers=as_bot(api, "goal-manager"),
-                    json={"text": "An analyst who digs into the numbers every week."})
-    assert late.status_code == 409 and "theirs stays" in late.text
-    assert get(api, f"seats/{chart['id']}")["description"] == "Mine."
-    assert sorted(t["status"] for t in draft_tasks(api)) == ["declined", "done"]
+    # Redraft asks the model once, for this title and boss; a failure, or an answer too short to use, keeps the
+    # composed text. The first draft never asks.
+    asked = []
+    def rewrite(composed, title, boss):
+        asked.append((title, boss))
+        return "Leads our support desk.\n\nWhat you'll do\n- Answer every ticket the same day"
+    monkeypatch.setattr(recruiting, "_rewrite", rewrite)
+    post(api, "seats/draft", {"title": "Customer support lead"})
+    assert asked == []
+    again = post(api, "seats/draft", {"title": "Customer support lead", "reports_to": "coo", "redraft": True})
+    assert again["source"] == "model" and again["description"].startswith("Leads our support desk.")
+    assert asked == [("Customer support lead", get(api, "bots/coo")["display_name"])]
+    for broken in (lambda *_: (_ for _ in ()).throw(TimeoutError("slow")), lambda *_: "Too short."):
+        monkeypatch.setattr(recruiting, "_rewrite", broken)
+        assert post(api, "seats/draft", {"title": "Customer support lead", "redraft": True}) == drafted
+    post(api, "seats/draft", {"title": ""}, expected=422)
 
 
-def test_an_upgrade_keeps_job_descriptions_people_wrote_before_authorship_was_recorded(api):
+def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
     from backend import lifecycle
-    strategy_token = strategy_bot(api)
     with api.app.state.store.transaction() as c:
-        # The seats table as the release before recruiting left it, with a person's text, an edited one and an empty one.
+        # The seats table as the release before recruiting left it, with a person's text: an upgrade keeps it theirs.
         c.execute("DROP TABLE seats")
         c.execute(lifecycle.SCHEMA)
-        for sid, text in (("s-old", "Keeps the books."), ("s-edited", "Runs payroll; edited."), ("s-empty", "")):
-            c.execute("INSERT INTO seats(id,title,description,reports_to,created,created_by,updated,updated_by) "
-                      "VALUES(?,?,?,'coo',?,'human:ana',?,'human:ben')", (sid, "Role " + sid, text, H.now(), H.now()))
-        lifecycle.ensure(c)
+        c.execute("INSERT INTO seats(id,title,description,reports_to,created,created_by,updated,updated_by) "
+                  "VALUES('s-old','Role','Keeps the books.','coo',?,'human:ana',?,'human:ben')", (H.now(), H.now()))
         lifecycle.ensure(c)
         owner = Identity("human:ana", "owner")
         chart = lifecycle.create_seat(api.app.state.auth, c, owner, "Analyst", "From the chart model.", "coo",
                                       description_by=recruiting.CHART)
-    for sid in ("s-old", "s-edited"):
-        opened = post(api, f"seats/{sid}/open", {})
-        assert opened["draft"]["state"] == "none" and opened["description_by"] == "person"
-        assert get(api, f"seats/{sid}")["description"] in ("Keeps the books.", "Runs payroll; edited.")
-    assert post(api, "seats/s-empty/open", {})["draft"]["state"] == "drafting"
-    assert post(api, f"seats/{chart['id']}/open", {})["draft"]["state"] == "drafting"
-    assert len(draft_tasks(api)) == 2
-    with api.app.state.store.transaction() as c:      # even with a stray draft task, the old words stay
-        c.execute("UPDATE seats SET draft_task=(SELECT draft_task FROM seats WHERE id='s-empty') WHERE id='s-old'")
-    refused = api.post("/api/v2/seats/s-old/draft", headers=strategy_token,
-                       json={"text": "A bookkeeper who closes every month on time."})
-    assert refused.status_code == 409 and get(api, "seats/s-old")["description"] == "Keeps the books."
+    mine = post(api, "seats", {"title": "Support lead", "reports_to": "coo", "description": "Answers email."})
+    assert get(api, f"seats/{mine['id']}")["description_by"] == "person"
+    assert get(api, "seats/s-old")["description_by"] == "person"
+    shown = get(api, f"seats/{chart['id']}")
+    assert shown["description_by"] == "chart" and "draft" not in shown and shown["can_edit"] is True
+    for route in (f"seats/{mine['id']}/open", f"seats/{mine['id']}/draft"):
+        assert api.post("/api/v2/" + route, headers=headers(), json={}).status_code in (404, 405)
 
 
-def test_recruit_answers_at_once_with_one_recommended_candidate_each_with_a_reason_and_a_model(api):
+def test_recruit_answers_at_once_with_up_to_eight_applicants_best_first_each_with_a_match_and_a_model(api):
     providers(api, "anthropic", "openai")
     seat = post(api, "seats", {"title": "Customer support lead", "reports_to": "coo",
                                "description": "Answers customer email and chat and keeps the help center current."})
     found = post(api, f"seats/{seat['id']}/recruit", {})
     candidates = found["candidates"]
-    assert 1 <= len(candidates) <= 3 and sum(c["recommended"] for c in candidates) == 1
-    assert candidates[0]["recommended"] and "support" in candidates[0]["template"]
+    assert 3 < len(candidates) <= recruiting.CANDIDATES == 8
+    assert "support" in candidates[0]["template"] and candidates[0]["match"] == "strong"
+    tiers = [c["match"] for c in candidates]
+    assert tiers == sorted(tiers, key=["strong", "good", ""].index)        # best first
     choices = {m["id"] for m in found["models"]}
     for c in candidates:
-        assert c["reason"] and "\n" not in c["reason"] and len(c["reason"]) <= 140
+        assert {"template", "name", "icon", "department", "line", "tags", "owns", "prerequisites", "match",
+                "source"} <= set(c) and "reason" not in c and c["source"] == "template"
+        assert c["line"] and "\n" not in c["line"] and len(c["line"]) <= 90
+        assert len(c["tags"]) <= 6 and all(n["state"] in ("connected", "on_hire", "not_set") for n in c["prerequisites"])
         assert c["model"] in choices                                 # suggested, from a provider the team turned on
     assert {m["provider"] for m in found["models"]} <= {"anthropic", "openai"}
 
@@ -133,11 +115,8 @@ def test_recruit_answers_at_once_with_one_recommended_candidate_each_with_a_reas
 
 def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_then_its_repo(api):
     providers(api, "anthropic", "openai")
-    strategy_token = strategy_bot(api)
-    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo"})
-    assert post(api, f"seats/{seat['id']}/open", {})["draft"]["state"] == "drafting"
-    assert api.post(f"/api/v2/seats/{seat['id']}/draft", headers=strategy_token, json={
-        "text": "Runs customer support and reports weekly on response times."}).status_code == 200
+    seat = post(api, "seats", {"title": "Support lead", "reports_to": "coo",
+                               "description": "Runs customer support and reports weekly on response times."})
     found = post(api, f"seats/{seat['id']}/recruit", {})
     pick = found["candidates"][0]
     other = next(m["id"] for m in found["models"] if m["id"] != pick["model"])
@@ -156,10 +135,11 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     with api.app.state.store.transaction() as c:   # a seat may report to another seat (the chart import makes these)
         c.execute("UPDATE seats SET reports_to=? WHERE id=?", ("seat:" + seat["id"], below["id"]))
 
-    hired = post(api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": other})
+    hired = post(api, f"seats/{seat['id']}/hire", {"template": pick["template"], "model": other, "name": "Support Desk"})
     slug = hired["slug"]
     bot = get(api, f"bots/{slug}")
-    assert (bot["stage"], bot["reports_to"], bot["display_name"]) == ("onboarding", "coo", "Support lead")
+    assert (bot["stage"], bot["reports_to"], bot["display_name"], hired["name"]) == (
+        "onboarding", "coo", "Support Desk", "Support Desk")
     with api.app.state.store.read() as c:
         config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
         assert H.bot(c, slug)["model"] == other
@@ -172,9 +152,8 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
     # The seat is filled: off the Recruiting list, and a second pick is refused.
     open_seats = {s["id"]: s for s in get(api, "seats")["seats"]}
     assert seat["id"] not in open_seats and open_seats[below["id"]]["reports_to"] == slug
-    assert [t["status"] for t in draft_tasks(api)] == ["done"]
     again = api.post(f"/api/v2/seats/{seat['id']}/hire", json={"template": pick["template"]}, headers=headers())
-    assert again.status_code == 409 and "Support lead" in again.text
+    assert again.status_code == 409 and "Support Desk" in again.text
 
 
 def test_a_bot_or_an_unconfirmed_assistant_never_picks_and_a_refused_pick_leaves_nothing(api, monkeypatch):

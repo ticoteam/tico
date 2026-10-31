@@ -5460,35 +5460,31 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: lifecycle.update_seat(auth, c, who, seat_id,
                                                                      body.model_dump(exclude_unset=True)))
 
+    @app.post("/api/v2/seats/draft")
+    def seat_draft(request: Request, body: M.SeatDraft):
+        """A job description for a job not posted yet, from its title: composed from the template catalog at once,
+        or with `redraft` rewritten once by the model when the server has a key (backend/recruiting.py). Stores
+        nothing."""
+        who = request.state.identity
+        auth.domain(who)
+        boss = ""
+        if body.redraft and body.reports_to:
+            with store.read() as c:
+                boss = recruiting.boss_name(c, body.reports_to)
+        return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft)
+
     @app.get("/api/v2/seats/{seat_id}")
     def seat_show(request: Request, seat_id: str):
-        """One Recruiting seat, with whether the Strategy Bot's draft of its job description is done
-        (backend/recruiting.py)."""
+        """One Recruiting seat, with whether the caller may edit it (backend/recruiting.py)."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
             return recruiting.show(auth, c, who, seat_id)
 
-    @app.post("/api/v2/seats/{seat_id}/open")
-    def seat_open(request: Request, seat_id: str, body: M.Empty):
-        """Open a seat: the owner opening it asks the Strategy Bot to draft its job description, unless a person wrote
-        it."""
-        who = request.state.identity
-        auth.domain(who)
-        return mutate(request, body, lambda c: recruiting.open_seat(auth, c, who, seat_id))
-
-    @app.post("/api/v2/seats/{seat_id}/draft")
-    def seat_draft(request: Request, seat_id: str, body: M.SeatDraft):
-        """The Strategy Bot's draft of the job description the owner asked for by opening the seat (`hub seat
-        draft`)."""
-        who = request.state.identity
-        auth.domain(who)
-        return mutate(request, body, lambda c: recruiting.draft(auth, c, who, seat_id, body.text))
-
     @app.post("/api/v2/seats/{seat_id}/recruit")
     def seat_recruit(request: Request, seat_id: str, body: M.Empty):
-        """Recruit: up to three Tico templates for the seat at once, each with a one-line reason and a suggested model,
-        exactly one recommended. Local: nothing leaves this server."""
+        """Recruit: up to eight Tico templates for the seat at once, best fit first, each with one line, what it needs,
+        how well it matches and a suggested model. Local: nothing leaves this server."""
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
