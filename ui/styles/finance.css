@@ -196,3 +196,37 @@
 /* Transactions rail: a bank row's line and tags (categorize), one Save. */
 .fin-cat .fin-foot{align-items:center}
 .fin-cat[hidden]{display:none}
+
+/* "+ Add" and "+ Source" menus: a small heading over each group. */
+.fin-menu-h{padding:6px 10px 2px;font-size:var(--t-xs);color:var(--muted)}
+/* Invoice lines: line, amount, Taxable (shown for income lines when the invoice can carry sales tax). */
+.fin-il{display:grid;grid-template-columns:minmax(0,1fr) 96px auto;gap:6px;align-items:center}
+.fin-il+.fin-il{margin-top:6px}
+.fin-form .fin-il input,.fin-form .fin-il select{min-width:0}
+.fin-form label.fin-check{flex-direction:row;align-items:center;gap:6px;color:var(--ink);white-space:nowrap}
+.fin-form label.fin-check[hidden]{display:none}
+.fin-form .fin-check input{height:auto;margin:0}
+/* Small labels: a projection's method, an imported period; marks next to a statement's controls (closed, restated). */
+.fin-tag{display:inline-block;margin-left:6px;padding:0 6px;border-radius:999px;background:var(--surface2);color:var(--muted);font-size:var(--t-xs);font-weight:400;line-height:18px;vertical-align:middle;white-space:nowrap}
+th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
+.fin-marks{display:inline-flex;gap:6px;align-items:center}
+.fin-marks:empty{display:none}
+/* Cards rail: the vendor accounts a bot card is saved on, and the picker that adds one. */
+.fin-saved{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.fin-chip-add{height:24px;padding:0 10px;font-size:var(--t-sm)}
+.fin-vpick{flex-direction:row;align-items:center;min-width:260px}
+.fin-vpick input{flex:1;min-width:0;height:var(--ctl-sm)}
+.fin-vpick button{height:var(--ctl-sm)}
+/* Import history: each sheet line mapped to a line of the chart, then what the dry run would post. */
+.fin-map:empty,.fin-preview[hidden]{display:none}
+.fin-form label.fin-map-row{display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1.2fr);gap:8px;align-items:center;color:var(--ink)}
+.fin-form .fin-map-row+.fin-map-row{margin-top:6px}
+.fin-form .fin-map-row span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fin-form .fin-map-row select{min-width:0}
+.fin-form input[type=file]{height:auto;padding:6px 0}
+@media (max-width:640px){
+  .fin-il{grid-template-columns:minmax(0,1fr) 80px}
+  .fin-il .fin-check{grid-column:1/-1}
+  .fin-vpick{min-width:0}
+  .fin-form label.fin-map-row{grid-template-columns:1fr}
+}
