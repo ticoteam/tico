@@ -1401,7 +1401,8 @@ STABLE.extend([
      "what would happen",
      "FinanceAction"),
     ("/api/v2/finance/actions/{action_id}", "get", "Finance", "getFinanceAction",
-     "An action's status, for whoever asked or whose view covers it; its reason only while that view covers it",
+     "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
+     "otherwise only while that view covers it",
      "FinanceAction"),
 ])
 SCHEMAS.update({

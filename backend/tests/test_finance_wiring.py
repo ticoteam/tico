@@ -360,3 +360,7 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     assert again["action_id"] == first["action_id"] and "1000" not in json.dumps(again)
     seen = get(api, "finance/actions/" + first["action_id"], token="ben-test")
     assert seen["status"] == first["status"] and "1000" not in json.dumps(seen)
+    get(api, "finance/actions/" + first["action_id"], token="cara-test", expected=404)
+    with store.transaction() as c:                      # cara is named to decide it: she reads what she decides
+        c.execute("UPDATE fin_actions SET approval_to='human:cara' WHERE id=?", (first["action_id"],))
+    assert "1000" in get(api, "finance/actions/" + first["action_id"], token="cara-test")["reason"]

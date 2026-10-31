@@ -109,8 +109,8 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/actions/{action_id}")
     def finance_action(request: Request, action_id: ID):
-        """An action's status, for whoever asked for it or whose current view covers what it is about. Its reason
-        shows only while the caller's view covers that."""
+        """An action's status, for whoever asked for it, the person named to decide its approval, or whoever's current
+        view covers what it is about. Its reason shows to the approver, and to others only while their view covers it."""
         who = viewer(request)
         with store.read() as c:
             found = finance_reads.action_for(c, who.actor, action_id)
