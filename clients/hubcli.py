@@ -357,8 +357,6 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub seat list                          Recruiting seats: roles on the chart with no bot yet; they hold no work
     hub seat create <title> [--description D] [--reports-to R] [--team G]
                                            add a seat under you or someone below you; update <seat> / close <seat>
-    hub seat draft <seat> (--text T | --file F)
-                                           Strategy Bot: draft the job description of a seat the owner opened
     hub org order <manager> [--set a,b,c]  a manager's direct reports in the chart's order; --set puts them in
                                            that order (the ones left out keep their places)
     hub org reports-to <bot:slug|human:id> <manager> [--on-behalf-of turn]
@@ -2560,12 +2558,6 @@ def parser():
     s.add_argument("--reports-to", dest="reports_to")
     s.add_argument("--team")
     s.set_defaults(fn="seat update")
-    s = seat.add_parser("draft", help="the Strategy Bot's draft of a seat's job description, on the task asking for it")
-    s.add_argument("seat")
-    g = s.add_mutually_exclusive_group(required=True)
-    g.add_argument("--text", help="the job description")
-    g.add_argument("--file", help="a file with the job description")
-    s.set_defaults(fn="seat draft")
     s = seat.add_parser("close", help="take a seat off the chart (a person)")
     s.add_argument("seat")
     s.set_defaults(fn="seat close")

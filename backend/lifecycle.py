@@ -31,12 +31,12 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
 
 
 # Added for recruiting a seat (backend/recruiting.py): who last wrote the job description (a person's actor, `chart` for
-# a chart model's text, the Strategy Bot's actor for its draft), when the Strategy Bot drafted it and the task that
-# asked it to, and the bot that filled the seat.
+# a chart model's text), when an earlier release's Strategy Bot drafted it and the task that asked it to, and the bot
+# that filled the seat.
 COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
            ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
-# wrote seats then, so it is kept like a person's words and the Strategy Bot never drafts over it.
+# wrote seats then, so it reads as a person's words.
 EARLIER = "earlier"
 
 
@@ -298,7 +298,7 @@ def update_seat(auth, c, who, seat_id, fields):
         values["title"] = _clean_title(fields["title"])
     if fields.get("description") is not None:
         values["description"] = str(fields["description"])[:DESCRIPTION_MAX]
-        # a person's words now: the Strategy Bot's draft never replaces them
+        # a person's words now
         values["description_by"] = who.actor
     if fields.get("team") is not None:
         values["team"] = str(fields["team"]).strip()

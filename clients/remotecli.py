@@ -296,9 +296,7 @@ def run(args, who=None):
               "brief", "pipeline", "mcp stats", "calendar list", "calendar status", "team show", "team budget", "org order", "org reports-to", "run list",
               "message list", "message mark-read", "bot recent", "agent pair show", "agent pair approve", "agent pair decline",
               "slack channel list", "slack channel add", "slack channel remove", "slack channel import",
-              "seat list", "seat create", "seat update", "seat close", "seat draft"):
-        if fn == "seat draft" and args.file:      # the Strategy Bot's draft, from a file beside it
-            return via_tool(client, args, text=Path(args.file).read_text())
+              "seat list", "seat create", "seat update", "seat close"):
         return via_tool(client, args)
     if fn == "run export":
         from clients import hubtools

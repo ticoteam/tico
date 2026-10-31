@@ -1,23 +1,27 @@
 """Recruiting a seat (docs/onboarding.md, "Recruiting a seat"; bot-lifecycle-spec.md section 2, acceptance 6 to 9).
 
-A Recruiting seat (backend/lifecycle.py) is filled in three steps, the same from the org chart and from Team > Add bot,
-which creates the seat first:
+A Recruiting seat (backend/lifecycle.py) is filled in three steps, the same from the org chart and from the Team plus
+menu's Post a job, which creates the seat first:
 
-1. **Open it.** The owner opening a seat asks the Strategy Bot to draft its job description (`open_seat`): one task for
-     the Strategy Bot, which answers with `hub seat draft` (`draft`). Until then, and for everyone else, the seat shows
-     the text it has: the chart model's, or what a person wrote. The draft never replaces a person's words: once someone
-     writes the description themselves, nothing is drafted over it. Anyone who may change the seat (lifecycle
-     `_may_place`) edits it.
-2. **Recruit.** `candidates` answers at once, on this server, from the template catalog: up to three Tico templates,
-     each with a one-line reason and a suggested model, exactly one of them recommended, and the models one may choose
-     instead. No trial task and no outside service (spec section 6 keeps those for later).
+1. **Post it.** `draft` writes a job description from the title at once, on this server: the catalog card whose name
+     and tags best fit the title, as one line from its summary, what it owns and the tools it works in. With
+     `redraft` and a Gemini key, one model call rewrites that text in under five seconds; without either, the composed
+     text is the answer. Nothing is stored until the person posts the job (`POST /v2/seats`), and anyone who may change
+     the seat edits it later (lifecycle `_may_place`).
+2. **Recruit.** `candidates` answers at once, on this server, from the template catalog: up to eight Tico templates,
+     the best fit to the seat's title and job description first, each with one line, what it does on day one, what it
+     needs and how well its name fits the title (`match`). No trial task and no outside service.
 3. **Pick.** `hire` fills the seat: the bot is created in Onboarding, in the seat's place on the chart with its
      reporting line, under the same rules as any bot the person adds (backend/settings_admin.py `create_bot`). Its
      repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
      BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
+import json
+import socket
+import threading
+import time
 from dataclasses import replace
+from urllib.request import Request, urlopen
 
-from . import strategy_bot
 from . import hubdb as H
 from . import lifecycle
 from . import models as M
@@ -25,30 +29,25 @@ from . import releases
 from . import recruit_rank as R
 from .store import Problem
 
-STRATEGY_BOT = "bot:" + strategy_bot.SLUG
-CANDIDATES = 3
-DRAFT_MAX = lifecycle.DESCRIPTION_MAX
-CHART = "chart"                         # `description_by` for a chart model's text: drafted over like no text at all
+CANDIDATES = 8
+CHART = "chart"                         # `description_by` for a chart model's text
+DRAFT_OWNS = 5                          # bullets under "What you'll do"
+REWRITE_SECONDS = 5                     # the whole rewrite: key, request and answer
+REWRITE_BYTES = 64 * 1024               # the most of the model's answer read
+REWRITE_CHUNK = 8 * 1024                # read in pieces, so the deadline is checked as the answer arrives
+_REWRITES = threading.BoundedSemaphore(2)   # rewrites at once; a third keeps the composed text instead of queueing
+REWRITE_MODEL = "gemini-3.7-flash"
+# The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
+# set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
+TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email", "calendar": "Calendar",
+               "meetings": "Meetings", "github": "GitHub", "crm": "CRM", "chat": "Chat"}
+BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
+# Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
+RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior", "chief", "director", "specialist",
+                                    "associate", "officer") for stem, _ in R._words(word))
 
 
 # ------------------------------------------------------------------ the seat as the recruiting page shows it
-def _person_wrote(row):
-    by = str(row["description_by"] or "")
-    return by.startswith("human:") or by == lifecycle.EARLIER
-
-
-def _live_task(c, task_id):
-    row = H.task(c, task_id) if task_id else None
-    return row if row and row["status"] in H.ACTIVE_STATUSES else None
-
-
-def draft_state(c, row):
-    """`drafted` once the Strategy Bot's draft is the description, `drafting` while its task is open, else `none`."""
-    if row["drafted_at"] and row["description_by"] == STRATEGY_BOT:
-        return "drafted"
-    return "drafting" if _live_task(c, row["draft_task"]) else "none"
-
-
 def _may_edit(auth, c, who, row):
     try:
         lifecycle._may_place(auth, c, who, row["reports_to"])
@@ -60,8 +59,7 @@ def _may_edit(auth, c, who, row):
 def view(auth, c, who, row):
     seat = lifecycle._seat(row)
     by = str(row["description_by"] or "")
-    seat.update(draft={"state": draft_state(c, row), "by": strategy_bot.name(c), "at": row["drafted_at"] or ""},
-                description_by="strategy_bot" if by == STRATEGY_BOT else "chart" if by in ("", CHART) else "person",
+    seat.update(description_by="person" if by.startswith("human:") or by == lifecycle.EARLIER else "chart",
                 can_edit=_may_edit(auth, c, who, row))
     return seat
 
@@ -70,81 +68,185 @@ def show(auth, c, who, seat_id):
     return view(auth, c, who, lifecycle.seat(c, seat_id))
 
 
-# ------------------------------------------------------------------ 1. the Strategy Bot's draft
-def _strategy_ready(c):
-    bot = H.bot(c, strategy_bot.SLUG)
-    return bool(bot) and bot.get("state") not in ("archived", "paused")
-
-
-def _draft_body(c, row):
-    reports = str(row["reports_to"] or "")
-    boss = ((H.human(c, reports[6:]) or {}).get("name") or reports[6:]) if reports.startswith("human:") else (
-        (H.bot(c, reports) or {}).get("display_name") or reports)
-    current = str(row["description"] or "").strip()
-    return "\n".join([
-        f'The owner opened the Recruiting seat "{row["title"]}" on the org chart. Draft its job description for them.',
-        "",
-        f"- seat: {row['id']}",
-        f"- role: {row['title']}",
-        f"- reports to: {boss}",
-        "",
-        "Write what this role owns, what good work looks like and who it works with, in plain words a candidate "
-        "would read: 80 to 250 words, no headings beyond a short list. Use what you know about the company; don't "
-        "name a template, a model or an outside service.",
-        "",
-        f"Save it with `hub seat draft {row['id']} --text \"...\"` (or `--file <path>`). That is the whole task: "
-        "it marks this task done. If someone writes the description themselves first, Tico keeps theirs and tells you.",
-        *(["", "The text the seat has now (from the org chart model):", "", current] if current else []),
-    ])
-
-
-def open_seat(auth, c, who, seat_id):
-    """The seat as its page shows it. The owner opening it, in person, asks the Strategy Bot for a draft when no person
-    has written the description and none is drafted or being drafted; nobody else's open asks the Strategy Bot anything
-    (it works for the owner alone)."""
-    row = lifecycle.seat(c, seat_id)
-    if (who.role == "owner" and not who.via and not _person_wrote(row) and draft_state(c, row) == "none"
-            and _strategy_ready(c)):
-        task = H.task_create(c, STRATEGY_BOT, "Draft the job description: " + row["title"][:200],
-                             _draft_body(c, row), STRATEGY_BOT,
-                             lane="company", lint=False, deduplicate=False)
-        c.execute("UPDATE seats SET draft_task=? WHERE id=?", (task["id"], seat_id))
-        H.event(c, who.actor, "seat.draft_requested", seat_id, {"task": task["id"]})
-        row = lifecycle.seat(c, seat_id)
-    return view(auth, c, who, row)
-
-
-def draft(auth, c, who, seat_id, text):
-    """The Strategy Bot's draft (`hub seat draft`): the seat's job description, unless a person wrote it since the owner
-    opened the seat. Only the Strategy Bot, on its own credential, while its draft task is open."""
-    if who.role != "bot" or who.actor != STRATEGY_BOT or who.via:
-        raise Problem("forbidden", f"Only the {strategy_bot.name(c)} drafts a seat's job description", 403)
-    row = lifecycle.seat(c, seat_id)
-    if _person_wrote(row):
-        raise Problem("draft", "Someone wrote this seat's job description themselves, so theirs stays; nothing to do",
-                      409)
-    task = _live_task(c, row["draft_task"])
-    if not task:
-        raise Problem("draft", "Nobody asked for a draft of this seat's job description; it is drafted when the owner "
-                      "opens the seat", 409)
-    text = str(text or "").strip()[:DRAFT_MAX]
-    if len(text) < 20:
-        raise Problem("draft", "Write the job description: a few sentences on what the role owns", 422)
-    now = H.now()
-    c.execute("UPDATE seats SET description=?,description_by=?,drafted_at=?,updated=?,updated_by=? WHERE id=?",
-              (text, STRATEGY_BOT, now, now, STRATEGY_BOT, seat_id))
-    H.task_update(c, STRATEGY_BOT, task["id"], status="done",
-                  note="Drafted the job description for " + row["title"][:200])
-    H.event(c, STRATEGY_BOT, "seat.drafted", seat_id, {"task": task["id"]})
-    return view(auth, c, who, lifecycle.seat(c, seat_id))
-
-
 def end_draft(c, row, why):
-    """Close the Strategy Bot's open draft task when there is nothing left to draft: the seat was filled or closed, or a
-    person wrote the description."""
-    task = _live_task(c, row["draft_task"])
-    if task:
-        H.task_update(c, STRATEGY_BOT, task["id"], status="declined", note=why[:500])
+    """Close a draft task an earlier release asked the Strategy Bot for, once the seat is filled, closed or written by a
+    person: nothing drafts a seat's description in the background any more."""
+    task = H.task(c, row["draft_task"]) if row["draft_task"] else None
+    if task and task["status"] in H.ACTIVE_STATUSES:
+        H.task_update(c, task["owner"], task["id"], status="declined", note=why[:500])
+
+
+# ------------------------------------------------------------------ 1. the job description, drafted from the title
+def _tool(tool):
+    return TOOL_LABELS.get(tool, tool.replace("-", " ").replace("_", " ").capitalize())
+
+
+def _best_card(cards, title, team=""):
+    """The catalog card whose name and tags best fit the title, or None when nothing does. A card in the department
+    the seat's group is named for wins a tie."""
+    words = R._words(title)
+    if not words:
+        return None
+    common = R._common(cards)
+    group = str(team or "").strip().lower()
+    best = None
+    for card in cards:
+        score, _ = R._match(card, words, common)
+        score += 3 * len(R._stems(card["name"]) & R._stems(title) - RANKS)
+        if not score:
+            continue
+        key = (score, card["department"] == group, -len(card["name"]), card["template"])
+        if best is None or key > best[0]:
+            best = (key, card)
+    return best[1] if best else None
+
+
+def compose(card):
+    """One line from the card's summary, what it owns as "What you'll do", and the tools it works in."""
+    raw = card["raw"]
+    lines = [R._first_sentence(raw["summary"] or card["summary"], 200)]
+    owns = [R._text(item, 160) for item in raw["owns"][:DRAFT_OWNS] if R._text(item, 160)]
+    if owns:
+        lines += ["", "What you'll do", *("- " + item for item in owns)]
+    tools = list(dict.fromkeys(_tool(row["tool"]) for row in raw["prerequisites"]))
+    if tools:
+        lines += ["", "Works in: " + ", ".join(tools)]
+    return "\n".join(lines).strip()[:lifecycle.DESCRIPTION_MAX]
+
+
+def boss_name(auth, c, who, reports_to):
+    """Who a draft's seat would report to, by name: a person's, a bot's or another seat's title, but only one the caller
+    could post under and, for a bot, may see. Anyone else is left out (""), so a draft never carries a name the caller
+    may not read."""
+    reports = str(reports_to or "").strip()
+    if not reports:
+        return ""
+    try:
+        reports = lifecycle._reports_to(c, reports)
+        lifecycle._may_place(auth, c, who, reports)
+    except Problem:
+        return ""
+    if reports.startswith("human:"):
+        return (H.human(c, reports[6:]) or {}).get("name") or ""
+    if reports.startswith(lifecycle.SEAT_PREFIX):
+        row = c.execute("SELECT title FROM seats WHERE id=?", (reports[len(lifecycle.SEAT_PREFIX):],)).fetchone()
+        return row["title"] if row else ""
+    if not auth.bot_accesses(c, who, [reports]).get(reports, {}).get("see"):
+        return ""
+    return (H.bot(c, reports) or {}).get("display_name") or ""
+
+
+def may_draft(who):
+    """Only a person drafts a job: whoever may post one (the owner, or a person under themselves)."""
+    if who.role not in ("owner", "human"):
+        raise Problem("forbidden", "Only a person drafts a job description", 403)
+
+
+def _rewrite_call(text, title, boss, deadline):
+    """One Gemini call that rewrites the composed description for this role, given up at `deadline` (a monotonic
+    time): no request starts once it has passed, each socket wait is at most the time left, and the answer is read in
+    pieces with the deadline checked between them. It raises when there is no key, the call fails or time is up."""
+    from clients.docs_qa import key
+    secret = key()
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the key came too late")
+    prompt = (f"Rewrite this job description for the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
+              + ". Keep its shape: one opening line, then \"What you'll do\" with three to five short bullets "
+              "starting with \"- \", then one \"Works in:\" line. Plain words, under 150 words, no other headings, and "
+              "never name a template, a model or a vendor. Answer with the text only.\n\n" + text)
+    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+    request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
+                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+    raw = b""
+    with urlopen(request, timeout=left) as response:
+        # A server that keeps trickling bytes never lets a read time out, so the connection is cut at the deadline,
+        # which ends any read waiting on it; each read also returns whatever has arrived and waits no longer than the
+        # time left.
+        sock = _socket_of(response)
+        cut = threading.Timer(max(deadline - time.monotonic(), 0), _cut, (sock,))
+        cut.daemon = True
+        cut.start()
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError("the answer came too slowly")
+                if getattr(response, "isclosed", lambda: False)():
+                    break                   # the whole body has arrived and http.client closed its reader
+                if sock is not None and sock.fileno() != -1:
+                    sock.settimeout(left)
+                want = min(REWRITE_CHUNK, REWRITE_BYTES + 1 - len(raw))
+                chunk = response.read1(want) if hasattr(response, "read1") else response.read(want)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > REWRITE_BYTES:
+                    raise ValueError("the model's answer is too long")
+        finally:
+            cut.cancel()
+    parts = json.loads(raw)["candidates"][0]["content"]["parts"]
+    return "".join(part.get("text", "") for part in parts).strip()
+
+
+def _socket_of(response):
+    """The socket under an HTTP response, when there is one (http.client keeps it in its reader)."""
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    return sock if isinstance(sock, socket.socket) else None
+
+
+def _cut(sock):
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass                                # already closed
+
+
+def _rewrite(text, title, boss):
+    """The rewrite, or "" when it fails, is not done within REWRITE_SECONDS in all (finding the key, which may wait on a
+    secret store, the request and reading the answer), or two are already running. The worker holds its place until it
+    ends, which is at most about one socket wait past the deadline, so slow calls never pile up."""
+    if not _REWRITES.acquire(blocking=False):
+        return ""
+    deadline = time.monotonic() + REWRITE_SECONDS
+    out = {}
+
+    def work():
+        try:
+            out["text"] = _rewrite_call(text, title, boss, deadline)
+        except Exception:  # noqa: BLE001 - no key, slow, failed or odd: the caller keeps the composed text
+            out["text"] = ""
+        finally:
+            _REWRITES.release()
+
+    worker = threading.Thread(target=work, name="seat-draft-rewrite", daemon=True)
+    try:
+        worker.start()
+    except RuntimeError:
+        _REWRITES.release()
+        return ""
+    worker.join(REWRITE_SECONDS)
+    return "" if worker.is_alive() else out.get("text", "")
+
+
+def draft(onboarding, title, team="", boss="", redraft=False):
+    """A job description for a seat not posted yet, in well under a second: composed from the catalog card that best
+    fits the title (`source` "catalog"), or "" when none does (`source` "none"). `redraft` asks the model to rewrite
+    the composed text once (`source` "model"); with no key, a slow or failed call, or in a rehearsal or demo (which
+    never reach a model or read a key), the composed text stands."""
+    _, cards = _recruitable(onboarding)
+    card = _best_card(cards, str(title or "")[:lifecycle.TITLE_MAX], team)
+    if not card:
+        return {"description": "", "source": "none"}
+    text = compose(card)
+    offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
+    if redraft and not offline:
+        rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss)
+        if len(rewritten) >= 40:
+            return {"description": rewritten[:lifecycle.DESCRIPTION_MAX], "source": "model"}
+    return {"description": text, "source": "catalog"}
 
 
 # ------------------------------------------------------------------ 2. candidates
@@ -179,22 +281,22 @@ def _suggested(c, onboarding, raw):
     return {"model": model, "model_name": onboarding.models[model].get("label") or model, "effort": effort}
 
 
-def _reason(card, hits, title, departments):
-    """One line on why this template fits: the job description's own words it matches, else the role title's, else
-    the first sentence of what the template does."""
-    if hits:
-        return ("Matches “" + "”, “".join(hits[:2]) + "” in the job description")[:R.WHY_LIMIT]
-    shared = [word for stem, word in R._words(title) if stem in R._stems(card["name"])]
-    if shared:
-        home = departments.get(card["department"], "")
-        return (card["name"] + " fits the role “" + title + "”" + (" in " + home if home else ""))[:R.WHY_LIMIT]
-    return R._first_sentence(card["summary"], 100) or "A general-purpose Tico template"
+def _needs(raw):
+    """What the card needs, each with its state: a built-in tool is connected, any other is set up on hire when the
+    card requires it and not set when it is optional."""
+    out = []
+    for row in raw["prerequisites"]:
+        tool = row["tool"]
+        state = "connected" if tool in BUILT_IN_TOOLS else "on_hire" if row["required"] else "not_set"
+        out.append({"tool": tool, "label": _tool(tool), "required": row["required"], "state": state})
+    return out
 
 
 def candidates(auth, onboarding, c, who, seat_id):
-    """Recruit: up to three Tico templates for the seat, the best fit to its title and job description first and
-    recommended, each with a one-line reason and a suggested model. Deterministic and local: the same seat gives the same
-    list, and nothing leaves this server."""
+    """Recruit: up to eight Tico templates for the seat, strong matches first, then good ones, each tier best first.
+    `match` is "strong" when the template's name shares a word of the work with the title (not one of rank), "good"
+    when its tags, name or summary fit the title or job description at all, else "". Deterministic and local: the same
+    seat gives the same list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
     # Listing candidates changes nothing: BotOps lists them with the rights of the person it acts for, and the pick is
     # their own tap on a card (botops_act.CONFIRM).
@@ -206,17 +308,24 @@ def candidates(auth, onboarding, c, who, seat_id):
     common = R._common(cards)
     scored = []
     for card in cards:
-        score, hits = R._match(card, words, common)
+        score, _ = R._match(card, words, common)
         named, _ = R._match(card, title, common)
-        score += 2 * named + 3 * len(R._stems(card["name"]) & R._stems(row["title"]))
-        scored.append((-score, {"default": 0, "common": 1}.get(card["suggest"], 2), card["name"].lower(), card, hits))
-    scored.sort(key=lambda item: item[:3])
+        shared = len(R._stems(card["name"]) & R._stems(row["title"]) - RANKS)
+        score += 2 * named + 3 * shared
+        match = "strong" if shared else "good" if score > 0 else ""
+        scored.append((("strong", "good", "").index(match), -score, {"default": 0, "common": 1}.get(card["suggest"], 2),
+                       card["name"].lower(), card, match))
+    scored.sort(key=lambda item: item[:4])
     out = []
-    for n, (_, _, _, card, hits) in enumerate(scored[:CANDIDATES]):
-        out.append({"template": card["template"], "name": card["name"], "summary": R._first_sentence(card["summary"]),
-                    "icon": card["icon"], "department": departments.get(card["department"], ""),
-                    "reason": _reason(card, hits, row["title"], departments), "recommended": n == 0,
-                    **_suggested(c, onboarding, card["raw"])})
+    for *_, card, match in scored[:CANDIDATES]:
+        raw = card["raw"]
+        out.append({"template": card["template"], "name": card["name"], "icon": card["icon"],
+                    "department": departments.get(card["department"], ""), "department_id": card["department"],
+                    "line": R._first_sentence(card["summary"], 90), "summary": R._text(raw["summary"], 1000),
+                    "tags": card["tags"][:6], "owns": raw["owns"][:6], "never": raw["never"][:6],
+                    "onboarding": [item["ask"] for item in raw["onboarding"] if item["ask"]][:6],
+                    "prerequisites": _needs(raw), "match": match, "source": "template", "starter": bool(raw["starter"]),
+                    **_suggested(c, onboarding, raw)})
     return {"seat": view(auth, c, who, row), "candidates": out, "models": _models(c, onboarding)}
 
 
@@ -262,13 +371,15 @@ def hire(auth, onboarding, c, who, seat_id, body):
     rendered = render(card, display_names(onboarding.settings, record), row["title"])
     description = str(row["description"] or "").strip()
     instructions = rendered["instructions"].rstrip() + ("\n\n## Job description\n" + description + "\n" if description else "")
-    slug = onboarding.admin.pick_slug(c, row["title"])
-    # The bot first, under the rules for any bot this person adds: who may create one, under whom, on which model.
+    name = (body.name or row["title"]).strip()[:100] or row["title"][:100]
+    slug = onboarding.admin.pick_slug(c, name)
+    # The bot first, under the rules for any bot this person adds: who may create one, under whom, on which model and
+    # computer.
     created = onboarding.admin.create_bot(c, who, M.BotDefinitionCreate(
-        slug=slug, display_name=row["title"][:100], description=description[:2000], status="planned",
+        slug=slug, display_name=name, description=description[:2000], status="planned",
         repo="bot-" + slug, thread_mode="personal", reports_to=row["reports_to"] or None,
         shared=bool(card.get("shared")), template=card["template"], model=model, effort=effort,
-        owners=[H.actor_id(who.actor)]))
+        owners=[H.actor_id(who.actor)], runner_id=body.runner_id or None))
     if stand_in:
         onboarding._follow_default(c, slug)
         model = ""
@@ -296,9 +407,9 @@ def hire(auth, onboarding, c, who, seat_id, body):
     if card["starter"]:
         onboarding._make_starter(c, who, slug, card["template"])
     else:
-        choice = {"template": card["template"], "display_name": row["title"][:100], "instructions": instructions,
+        choice = {"template": card["template"], "display_name": name, "instructions": instructions,
                   "description": description}
         setup_task = onboarding._setup_task(c, who, slug, choice, rendered, record["answers"])
-    return {"slug": slug, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
+    return {"slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
             "template": card["template"], "model": model, "setup_task_id": setup_task,
             "note": (created or {}).get("note") if isinstance(created, dict) else None}
