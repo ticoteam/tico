@@ -593,8 +593,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             lines += [f"Option: {o.label}\n\nThen: {o.then}" for o in picks]
         return "\n\n".join(lines)
 
-    def question_review_digest(text):
-        return hashlib.sha256(text.encode()).hexdigest()
+    def question_review_digest(text, review):
+        """What a review question's check read, sealed: the judged text and each version under review (file, version,
+        content digest), so a renamed file or a new current version under the same name no longer matches."""
+        versions = [[e["file"], e["version"], e["digest"]] for e in review or []]
+        return hashlib.sha256(json.dumps([text, versions]).encode()).hexdigest()
 
     def question_ingest(who, body):
         """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
@@ -603,7 +606,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question,
                                     "\n\n".join(filter(None, (question, body.why, body.body))), kind="task_question")
 
-    def question_replay(body, option_files, stored, review_text=""):
+    def question_replay(body, option_files, stored, review_seal=None):
         """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are
         stored already, by digest), each file's size, name and type, the digests, and what its files under review
         showed when it was checked (a digest: Send anyway refuses once that changed)."""
@@ -612,7 +615,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             if option.get("file"):
                 option["file"]["content_base64"] = "-"
         return {"body": data, "files": [list(f) if f else None for f in option_files], "stored": list(stored),
-                **({"review": question_review_digest(review_text)} if body.review else {})}
+                **({"review": review_seal} if body.review else {})}
 
     def question_write(c, who, body, option_files, stored, ingest=None, snapshots=None, rc=None, review_checked=None):
         """One task question, in its write, as the route asks it and Send anyway replays it. `option_files` is each
@@ -635,11 +638,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         if body.review:
             review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
         review_text = question_review_text(review, attachments, body)
-        if review_checked is not None and question_review_digest(review_text) != review_checked:
+        review_seal = question_review_digest(review_text, review) if body.review else None
+        if review_checked is not None and review_seal != review_checked:
             raise Problem("changed", "The files under review changed since the question was checked; ask it again",
                           409)
         rule = org_rule_check.apply(c, rc, question_text(body, review_text),
-                                    question_replay(body, option_files, stored, review_text))
+                                    question_replay(body, option_files, stored, review_seal))
         if rule and rule.get("held"):
             return org_rule_check.answer(rule)
         said_text = org_rule_check.warned_text(rule, question) if rule else question
@@ -790,7 +794,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 question_readable_by(c, who, person, question_private(c, who, body, parent), parent)
         # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
         # person asked. A held question skips ask ingest's call.
-        review_text = question_review_preflight(who, body) if rule_check else ""
+        review_text, review_seal = question_review_preflight(who, body) if rule_check else ("", None)
         rc = rule_check(who, "task_question", question_text(body, review_text),
                         lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
         # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
@@ -800,25 +804,26 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
         option_files = [(len(item[0]), item[1], item[2]) if item else None for item in decoded]
-        checked = question_review_digest(review_text) if rc and body.review else None
+        checked = review_seal if rc and body.review else None
         result = mutate(request, body, lambda c: question_write(c, who, body, option_files, stored, ingest, snapshots,
                                                                 rc, checked))
         app.state.file_metadata.wake.set()
         return result
 
     def question_review_preflight(who, body):
-        """What a review question's files show, read for the check outside the write as the write resolves them; ""
-        when it has none, or the write would refuse them anyway."""
+        """What a review question's files show, read for the check outside the write as the write resolves them, and
+        its seal (question_review_digest); ("", None) when it has none, or the write would refuse them anyway."""
         from . import file_reviews
         if not body.review:
-            return ""
+            return "", None
         with store.read() as c:
             try:
                 person, _ = question_checked(c, who, body)
                 review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
             except Problem:
-                return ""
-            return question_review_text(review, attachments, body)
+                return "", None
+            text = question_review_text(review, attachments, body)
+            return text, question_review_digest(text, review)
 
     def question_audience(c, bot, replay):
         return [H.resolve_actor(c, replay["body"]["on"])]
@@ -843,7 +848,12 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         # The bytes of option files were stored before the hold; the replay registers them by digest. `ingest` is
         # question_prepare's: ask ingest's preflight and the review gate's snapshots.
         prepared = ingest or {}
-        return question_write(c, bot, M.TaskQuestion.model_validate(replay["body"]),
+        body = M.TaskQuestion.model_validate(replay["body"])
+        if body.review and not replay.get("review"):
+            # Held without a seal of what its files showed: asking it would show files no check read.
+            raise Problem("changed", "The files under review changed since the question was checked; ask it again",
+                          409)
+        return question_write(c, bot, body,
                               [tuple(f) if f else None for f in replay.get("files") or []], replay.get("stored") or [],
                               prepared.get("ingest"), prepared.get("snapshots"), rule_checks.decided(gate),
                               replay.get("review"))

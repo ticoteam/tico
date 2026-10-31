@@ -1807,3 +1807,28 @@ def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled):
     assert shown["title"] == "Our favorite color is blue"
     assert shown["summary"].count("Warning:") == 1 and shown["summary"].startswith("Warning:")
     assert shown["summary"].endswith("\n\n" + summary)
+
+
+def test_send_anyway_refuses_a_review_question_once_its_file_has_a_new_version_under_the_same_name(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    kept, moved = upload(api, "Cut one.md", "# One"), upload(api, "Cut two.md", "# Two")
+    held = [ask(api, "Is this cut ready?", body="Our favorite color is blue.", review=[{"file": f["id"]}])["held"]["id"]
+            for f in (kept, moved)]
+    assert send_anyway(api, held[0])["hold"]["state"] == "sent"
+    v2 = upload(api, "Cut two.md", "# Two, reworked")
+    assert v2["id"] == moved["id"] and v2["version"] == moved["version"] + 1
+    assert send_anyway(api, held[1], expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, held[1])["state"] == "held"
+
+
+def test_send_anyway_refuses_a_held_review_question_with_no_seal_of_its_files(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    cut = upload(api, "Cut one.md")
+    hold = ask(api, "Is this cut ready?", body="Our favorite color is blue.", review=[{"file": cut["id"]}])["held"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE org_rule_holds SET payload_json=json_remove(payload_json, '$.replay.review') WHERE id=?",
+                  (hold,))
+    assert send_anyway(api, hold, expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, hold)["state"] == "held" and sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
