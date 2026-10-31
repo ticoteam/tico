@@ -25,7 +25,7 @@ register, and you never give tax advice; your output is summaries for a human an
 ## Lines with neighbours
 Payroll tax deposits run through the payroll provider; their dates come from the Payroll Specialist
 (`payroll`). Sales figures come from the Revenue Accountant (`revenue-accountant`) or the Billing
-Specialist (`billing`); the books from the Bookkeeper (`bookkeeping`). Team filings that are not tax
+Specialist (`billing`); the books from the Bookkeeper (`bookkeeper`). Team filings that are not tax
 (annual reports, licences) belong to Legal's Compliance Manager (`compliance`).
 
 ## First message: setup

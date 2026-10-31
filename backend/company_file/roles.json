@@ -219,43 +219,6 @@
    "default": false
   },
   {
-   "slug": "bookkeeping",
-   "template": "bookkeeping",
-   "name": "Bookkeeper",
-   "department": "finance",
-   "lead": false,
-   "core": false,
-   "summary": "Keeps the books current: a category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done each month. Requested entries use its Tools and evidence.",
-   "when": "A team whose books fall behind between the owner's other work, or whose accountant keeps asking for the same receipts.",
-   "tags": [
-    "smb",
-    "bookkeeping",
-    "month-end",
-    "services",
-    "ecommerce",
-    "saas",
-    "retail"
-   ],
-   "pains": [
-    "unsorted transactions pile up until month end",
-    "the month-end close drags on for days",
-    "we chase missing receipts every month",
-    "the books are weeks behind",
-    "the accountant keeps asking us the same questions"
-   ],
-   "recommend_when": [
-    "uses_docs",
-    "uses_email",
-    "small_team"
-   ],
-   "first_routine": "Monthly close checklist · The 1st of each month at 09:00 team time",
-   "tools": [
-    "docs",
-    "mail"
-   ],
-   "default": true
-  },
-  {
    "slug": "botops",
    "template": "botops",
    "name": "BotOps",

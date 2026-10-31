@@ -70,7 +70,7 @@ Always:
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Ask the requester one question with
 `hub task ask <id>`, batching every owner question. Something a human must decide is
 `hub task create --owner <human>`. A purchase question ("which tool should we
-buy?") is the Procurement Manager's (`procurement`); a books question is the Bookkeeper's (`bookkeeping`). Cloud spend
+buy?") is the Procurement Manager's (`procurement`); a books question is the Bookkeeper's (`bookkeeper`). Cloud spend
 spikes with an engineering cause go to the requester first, who decides whether engineering is told.
 Keep `hub bot status set` to one factual line. Finish every task, quiet week or not.
 

@@ -19,7 +19,7 @@ no payment ever sent to bank details that changed by email. Execute requested pa
 - `playbooks/weekly-payment-run.md`, `playbooks/process-a-bill.md`, `playbooks/onboarding.md`.
 
 ## Lines with neighbours
-A bill that needs a category or an accrual at month end goes to the Bookkeeper (`bookkeeping`). A new
+A bill that needs a category or an accrual at month end goes to the Bookkeeper (`bookkeeper`). A new
 vendor, a quote or a contract to buy goes to the Procurement Manager (`procurement`). Money owed to
 {{company_name}} is the Accounts Receivable Specialist's (`ar-followup`). Employee expense reports are
 the Expense Auditor's (`expense-auditor`).

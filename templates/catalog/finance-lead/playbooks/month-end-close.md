@@ -10,9 +10,9 @@ deadline with every blocker named and owned. You coordinate; the Bookkeeper keep
 
     hub task show <id>
 
-Read the close deadline in `knowledge/finance-calendar.md` and the Bookkeeper's latest
-`reports/YYYY-MM-close-status.md` (`hub file list --bot bookkeeping`). If there is no Bookkeeper,
-name who keeps the books from `knowledge/team.md`.
+Read the close deadline in `knowledge/finance-calendar.md` and the month's close checklist
+(`hub finance report close --month YYYY-MM`), which the Bookkeeper (`bookkeeper`) works through. If the books are
+kept outside Tico, name who keeps them from `knowledge/team.md`.
 
 ## 2. Check the inputs, in order
 

@@ -138,6 +138,8 @@ def _card(document, instructions):
             "team_templates": _strings(document.get("team_templates")),
             # A helper serves a person (the Inbox Manager), sits outside the org chart and is offered on its own.
             "kind": "helper" if document.get("kind") == "helper" else "role",
+            # A retired card is offered nowhere; a bot already built from it keeps it (`Onboarding.catalog`).
+            "retired": bool(document.get("retired")),
             # Checked when the wizard first shows the card, and `when` says who wants it.
             "default": bool(document.get("default")), "when": str(document.get("when") or ""),
             "summary": str(document.get("summary") or ""),
@@ -461,7 +463,7 @@ class Onboarding:
 
     # ------------------------------------------------------------------ catalog
     def catalog(self, c, rendered=True):
-        cards = read_cards(self.settings)
+        cards = [card for card in read_cards(self.settings) if not card["retired"] or H.bot(c, card["slug"])]
         if rendered:
             record = load(c)
             names = display_names(self.settings, record)

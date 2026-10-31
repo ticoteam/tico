@@ -134,3 +134,17 @@ def test_a_bill_emailed_to_the_address_lands_once_in_the_library_and_in_the_book
     (task,) = checks(api)
     assert first["items"] == 1 and "Emailed bill from ap@acme.example: Invoice 1042" in task["body"]
     assert row["file_id"] in task["body"]
+
+
+def test_the_retired_bookkeeping_template_is_offered_nowhere_but_a_bot_built_from_it_keeps_its_card(environment):
+    from backend import recruit
+    api = built(environment)
+    settings = api.app.state.store.settings
+    shutil.copytree(TEMPLATE.parent / "bookkeeping", Path(settings.catalog_dir) / "bookkeeping")
+    onboarding = api.app.state.onboarding
+    with api.app.state.store.read() as c:
+        assert "bookkeeping" not in {card["template"] for card in onboarding.catalog(c)}
+    assert "bookkeeping" not in {card["template"] for card in recruit.catalog(settings)["cards"]}
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('bookkeeping','Acme Books','active')")
+        assert "bookkeeping" in {card["template"] for card in onboarding.catalog(c)}
