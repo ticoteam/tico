@@ -28,6 +28,7 @@ from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import ap as SAP
+from .store import raw_totals as SR
 
 UNATTRIBUTED = "Unattributed"
 GROUPS = ("department", "team", "teammate", "bot", "person", "vendor", "account")
@@ -1268,6 +1269,21 @@ def _covers(ctx: Ctx, viewer: str, payload: Mapping[str, object]) -> bool | None
         seen.append(sees_scope(ctx, viewer, str(one.get("account_id") or ""), str(tagged.get("team") or ""),
                                str(tagged.get("teammate") or "")))
     return all(seen) if seen else None
+
+
+def raw_imports(c: sqlite3.Connection, viewer: str, *, limit: int = 50, at: str | None = None) -> Row:
+    """The history imports (spec §4.1), newest first: each file's basis, name, months and rows, and how many of its
+    months still stand. Only a viewer who sees everything gets the list: a month's raw totals are company-wide."""
+    s = _open(c, viewer, at)
+    if not s.view.everything:
+        return {"imports": [], "more": False}
+    most = max(1, min(int(limit), 200))
+    found = SR.batches(c, s.ctx.book.id, most + 1)
+    shown = [{"batch_id": str(r["id"]), "basis": str(r["basis"]), "source_name": str(r["source_name"]),
+              "months": int(r["periods"]), "live_months": int(r["live_months"]),
+              "live": int(r["live_months"]) == int(r["periods"]), "rows": int(r["row_count"]),
+              "created_at": str(r["created_at"]), "created_by": str(r["created_by"])} for r in found[:most]]
+    return {"imports": shown, "more": len(found) > most}
 
 
 def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, object] | None:

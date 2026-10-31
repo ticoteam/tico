@@ -1737,6 +1737,11 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase2(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=71").fetchone():
+                    # Finance history imports (spec §4.1): the fin_raw_imports table. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.raw_import(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(71,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

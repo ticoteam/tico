@@ -18,7 +18,7 @@ It sees only what its Finance view covers. The owner gets one task, "Let the Boo
 Everything in Finance → Access. Payroll's private lines stay private either way.
 
 It touches the books only through the [Finance tools](finance-tools.md), as itself. Approvals follow the company's
-rules; it never approves its own action. The owner approves a month's close.
+rules; it never approves its own action. The owner approves a month's close and each import of a spreadsheet's history.
 
 ## How work reaches it
 

@@ -19,7 +19,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match")
+       "feed_match", "import_raw_totals")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -32,7 +32,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
-        "invoice_write_off", "invoice_void", "attach", "feed_match")
+        "invoice_write_off", "invoice_void", "attach", "feed_match", "import_raw_totals")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -47,7 +47,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
-         "feed_match": (R.AP, R.AR)}
+         "feed_match": (R.AP, R.AR), "import_raw_totals": R.BOOK}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -101,12 +101,14 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 
 def default_gate(org: Org, actor: str, kind: str) -> Gate:
-    """The defaults that are not editable rules: closing or reopening a period asks the owner (unless the owner asks,
-    §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a finance admin. The other §6.4
-    defaults are seeded gate rules (gates.DEFAULTS)."""
+    """The defaults that are not editable rules: closing or reopening a period, and importing history, asks the
+    owner (unless the owner asks, §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a
+    finance admin. The other §6.4 defaults are seeded gate rules (gates.DEFAULTS)."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
+    if kind == "import_raw_totals" and not owner and actor != SYSTEM:
+        return Gate("needs_approval", "owner", "default:raw-import")
     if actor in org.bots and kind == "card_resolve":
         # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
@@ -254,6 +256,11 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "feed_match": (("feed_id", "str", "a settled bank row not yet in the books"),
                    ("settlement_ids", "list[str]", "the waiting marked-paid payments it pays (its expected list); "
                     "their amounts add up to the row's")),
+    "import_raw_totals": (
+        ("csv", "str", "a CSV with a header: month (YYYY-MM), line, amount (whole cents), and optionally team"),
+        ("basis", "cash|accrual", "the basis the figures were reported on"),
+        ("mapping", "obj", "each sheet line name to an account id or code"),
+        ("source_name?", "str", "what the file was called, for the record")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -291,6 +298,7 @@ WORDS: dict[str, str] = {
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
     "attach": "Attach receipts or documents to an entry, a bank or card row, a bill or an invoice.",
     "feed_match": "Link a bank row to the payments marked paid it is the bank side of (the bank moves once).",
+    "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
 }
 
 
