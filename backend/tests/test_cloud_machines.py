@@ -153,7 +153,7 @@ def events(cloud, action):
 # ----------------------------------------------------------------------------- the policy, pure
 def facts(**kw):
     return {"active": True, "turns": False, "activity": 0, "want": None, "want_at": 0, "frozen": False,
-            "retry_now": False, "updating": False, **kw}
+            "retry_now": False, "update": None, "updating": False, **kw}
 
 
 def machine_row(**kw):
@@ -247,14 +247,32 @@ def test_decide_makes_a_failed_machine_again_and_never_starts_it():
 
 
 def test_decide_wakes_a_stopped_machine_once_per_server_release_to_update():
-    behind = facts(want="update:0.5.21")
+    behind = facts(update="update:0.5.21")
     assert CM.decide(machine_row(), behind, 1000, 300) == ("start", None)
-    assert CM.decide(machine_row(), facts(want="update:0.5.21", frozen=True), 1000, 300) == (None, "out_of_credit")
+    assert CM.decide(machine_row(), facts(update="update:0.5.21", frozen=True), 1000, 300) == (None, "out_of_credit")
     # Woken for this release and its runner never reported it: not again for it, and nothing is flagged stuck.
     woke = machine_row(wake_key="update:0.5.21", woke_at=1000)
     assert CM.decide(woke, behind, 2000, 300) == (None, None)
-    assert CM.decide(woke, facts(want="update:0.5.22"), 2000, 300) == ("start", None)
+    assert CM.decide(woke, facts(update="update:0.5.22"), 2000, 300) == ("start", None)
     assert CM.decide(woke, facts(want="job:a"), 2000, 300) == ("start", None)
+    # Work comes first: an update only stands in when there is none, or its wake is spent.
+    assert CM.wake_for(machine_row(), facts(want="job:a", update="update:0.5.21")) == ("job:a", False)
+
+
+def test_decide_lets_an_update_stand_in_for_work_whose_wake_is_spent_once():
+    # Woken for a job its old runner could not take: the server's newer release wakes it once to update, and the
+    # wake names the job, so neither wakes it again while nothing runs.
+    stuck = machine_row(wake_key="job:a", woke_at=1000)
+    behind = facts(want="job:a", update="update:0.5.21")
+    assert CM.decide(stuck, facts(want="job:a"), 2000, 300) == (None, "stuck")
+    assert CM.wake_for(stuck, behind) == ("update:0.5.21 job:a", False)
+    assert CM.decide(stuck, behind, 2000, 300) == ("start", None)
+    spent = machine_row(wake_key="update:0.5.21 job:a", woke_at=2000)
+    assert CM.decide(spent, behind, 3000, 300) == (None, "stuck")
+    assert CM.decide(spent, facts(want="job:a"), 3000, 300) == (None, "stuck")
+    assert CM.decide(spent, facts(want="job:b", update="update:0.5.21"), 3000, 300) == ("start", None)
+    assert CM.decide(spent, facts(want="job:a", update="update:0.5.22"), 3000, 300) == ("start", None)
+    assert CM.decide(spent, behind | {"activity": 2500}, 3000, 300) == ("start", None)
 
 
 def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
@@ -1178,11 +1196,11 @@ def test_a_slow_look_still_reserves_the_stop_for_its_full_hold(cloud, monkeypatc
 
 
 # ----------------------------------------------------------------------------- waking a computer behind the server
-def reported(cloud, computer, release="", update=None):
+def reported(cloud, computer, release="", update=None, target=""):
     """The computer's heartbeat as its runner sends it: its release (none when blank) and how its self-update stands."""
     body = {"version": "test", "platform": "test", "release": release, "kind": "linux"}
     if update:
-        body["update"] = {"state": update}
+        body["update"] = {"state": update, "target": target}
     return post(cloud.api, "runners/heartbeat", body, token=computer["token"])
 
 
@@ -1237,6 +1255,18 @@ def test_a_computer_that_will_not_follow_the_server_is_not_woken_to_update(cloud
     reported(cloud, computer, "0.5.20", update=update)
     stopped_when_idle(cloud)
     assert cloud.tick(600) == [] and cloud.row()["state"] == "stopped"
+
+
+@pytest.mark.parametrize("update", ["failed", "rolled_back"])
+def test_an_update_that_failed_for_this_release_wakes_nothing_until_a_newer_one(cloud, monkeypatch, update):
+    """Its runner waits hours before it tries the same release again: a wake now would spend this release's one."""
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20", update=update, target="0.5.21")
+    stopped_when_idle(cloud)
+    assert cloud.tick(600) == [] and cloud.row()["state"] == "stopped" and cloud.row()["problem"] == ""
+    monkeypatch.setenv("TICO_VERSION", "0.5.22")
+    assert cloud.tick(10) == ["start"] and cloud.row()["wake_key"] == "update:0.5.22"
 
 
 def test_out_of_credit_starts_nothing_to_update_until_open_again(cloud, monkeypatch):

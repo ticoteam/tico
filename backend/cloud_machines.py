@@ -528,9 +528,9 @@ def facts(c, settings, current, at):
     """What `decide` needs about machine `current` (a bot's own, or the shared one), read from the hub: whether any
     bot of it should be on it at all, whether a turn is out on it, the last attempt or watcher activity on it (epoch
     seconds), its first want (a stable key, or None): the newest claimable job of any of its bots, else a bot
-    waiting to move here, else a watcher due, else an update to this server's release (`runner_behind`), and `want_at`,
-    the latest moment any of its bots' wants arose (epoch seconds; 0 for none, or a move). `updating`: its runner is
-    part-way through an update (`runner_updating`)."""
+    waiting to move here, else a watcher due, and `want_at`, the latest moment any of its bots' wants arose (epoch
+    seconds; 0 for none, or a move). `update`: a stopped machine's want to update to this server's release
+    (`runner_behind`), or None; `updating`: its runner is part-way through an update (`runner_updating`)."""
     key, runner_id = current["bot"], current["runner_id"]
     bots = hosted(c, key)
     # Turns and activity on its computer: its bots', and a bot's that just left with a turn still out there.
@@ -546,7 +546,7 @@ def facts(c, settings, current, at):
                         (bot, runner_id)).fetchone()[0]
         activity = max([activity] + [t for t in (epoch(latest), epoch(ran)) if t])
     out = {"active": False, "turns": turns, "activity": activity, "want": None, "want_at": 0,
-           "frozen": cloud_access.frozen(c), "retry_now": False, "updating": False}
+           "frozen": cloud_access.frozen(c), "retry_now": False, "update": None, "updating": False}
     if current["problem"] == "out_of_credit" and not out["frozen"]:
         said = cloud_access.state(c) or {}
         out["retry_now"] = bool(said.get("checked") and current["problem_at"] and said["checked"] > current["problem_at"])
@@ -558,20 +558,46 @@ def facts(c, settings, current, at):
         if want and (best is None or rank > best[0]):
             best = (rank, want)
     out["want"] = best[1] if best else None
-    if out["want"] is None and out["active"] and runner_id and current["state"] == "stopped" and current["machine_id"] \
+    if out["active"] and runner_id and current["state"] == "stopped" and current["machine_id"] \
             and runner_behind(c, runner_id):
-        out["want"] = UPDATE_WANT + releases.version()
+        out["update"] = UPDATE_WANT + releases.version()
     out["updating"] = bool(runner_id) and runner_updating(c, runner_id, at)
     return out
 
 
 def runner_behind(c, runner_id):
     """Whether computer `runner_id` reports a release older than this server's and will follow the server's: not one its
-    owner pinned, or one blocked from updating (the runner says so). A blank or unparsed release, and a development
-    server, are never behind: nothing is woken for what cannot be compared."""
-    found = c.execute("SELECT release,update_state FROM runner_versions WHERE runner_id=?", (runner_id,)).fetchone()
+    owner pinned, or one blocked from updating (the runner says so), nor one whose update to this same release failed
+    (the runner waits hours before it tries that again: a wake now would be spent on nothing). A blank or unparsed
+    release, and a development server, are never behind: nothing is woken for what cannot be compared."""
+    found = c.execute("SELECT release,update_state,update_target FROM runner_versions WHERE runner_id=?",
+                      (runner_id,)).fetchone()
     have, want = releases.parse(found["release"]) if found else None, releases.parse(releases.version())
-    return bool(have and want and have < want and found["update_state"] not in ("pinned", "blocked"))
+    if not (have and want and have < want) or found["update_state"] in ("pinned", "blocked"):
+        return False
+    return not (found["update_state"] in ("failed", "rolled_back") and releases.parse(found["update_target"]) == want)
+
+
+def covers(woke_for, key):
+    """Whether a machine woken for `woke_for` was woken for `key`: an update wake names the work want it stood in for
+    ("update:0.5.21 job:..."), so neither is woken for again while nothing runs."""
+    return bool(key) and key in (woke_for or "").split(" ")
+
+
+def wake_for(current, found):
+    """(key, stuck) for a stopped machine: what to wake it for, or None, and whether its bots' work waits on a wake
+    already spent. Always on first, then its work, then an update. Work woken for once with nothing run is not woken
+    for again; an update can still stand in for it (its runner may be too old to take the work), once per release."""
+    if current["always_on"]:
+        return "always_on", False
+    fresh = (found["activity"] or 0) > (current["woke_at"] or 0)
+    spent = lambda k: covers(current["wake_key"], k) and current["state"] not in DEAD and not fresh   # noqa: E731
+    want, update = found["want"], found.get("update")
+    if want and not spent(want):
+        return want, False
+    if update and not spent(update):
+        return (update + " " + want) if want else update, False
+    return None, bool(want)
 
 
 def runner_updating(c, runner_id, at):
@@ -641,13 +667,10 @@ def decide(current, found, at, idle_s):
         if at - (current["heartbeat_at"] or 0) >= HEARTBEAT:
             return "heartbeat", None
         return None, None
-    key = "always_on" if current["always_on"] else found["want"]
+    key, stuck = wake_for(current, found)
     if not key:
-        return None, None
-    if key not in ("always_on",) and key == current["wake_key"] and current["state"] not in DEAD and not (
-            (found["activity"] or 0) > (current["woke_at"] or 0)):
-        # Woken for this once already, and nothing ran. An update wake flags nothing: no bot's work waits on it.
-        return None, (None if key.startswith(UPDATE_WANT) else "stuck")
+        # Woken for this once already, and nothing ran. A spent update flags nothing: no bot's work waits on it.
+        return None, ("stuck" if stuck else None)
     # (A dead machine never ran it: the next is made, and enroll_fails caps how many.)
     if not current["machine_id"] or current["state"] in DEAD:
         if current["enroll_fails"] >= ENROLL_TRIES:
@@ -835,7 +858,8 @@ class Manager:
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
                 save(c, key, problem=problem, problem_at=H.now())
-        elif problem is None and not action and current["problem"] == "stuck" and found["want"] != current["wake_key"]:
+        elif problem is None and not action and current["problem"] == "stuck" \
+                and not covers(current["wake_key"], found["want"]):
             with self.store.transaction() as c:
                 save(c, key, problem="", problem_at=None)
         if action:
@@ -890,7 +914,7 @@ class Manager:
         if action == "create" and machine["state"] == "failed":
             fields.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1)   # as when HQ's list says so
         elif action in ("create", "start"):
-            woke_for = "always_on" if current["always_on"] else found["want"]
+            woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
             save(c, key, **fields, failures=0, next_try=None, problem="", problem_at=None, stop_until=None)
