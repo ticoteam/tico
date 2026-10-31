@@ -384,8 +384,13 @@ def _pointer(c, poster, title):
            f"([read]({BRIEFING_LINK}))"
     row = c.execute("SELECT body FROM updates WHERE bot=? AND kind='daily' AND day=?",
                     (poster, updates.today())).fetchone()
-    kept = [x for x in str(row["body"] if row else "").splitlines() if x.strip() and not x.startswith("- Market briefing:")]
-    return "\n".join(kept[-(updates.BULLETS_MAX - 1):] + [line])
+    # A warned daily's warn line stays its own paragraph on top (unwarned), out of the bullets kept.
+    from .org_rule_check import unwarned
+    body = str(row["body"] if row else "")
+    bare = unwarned(body)
+    warned = body[:len(body) - len(bare)]
+    kept = [x for x in bare.splitlines() if x.strip() and not x.startswith("- Market briefing:")]
+    return warned + "\n".join(kept[-(updates.BULLETS_MAX - 1):] + [line])
 
 
 def _webhook(c, auto, kind, hook, data):

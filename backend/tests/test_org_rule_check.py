@@ -1943,3 +1943,15 @@ def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkey
     post(api, f"automations/{aid}/run", {})
     body = sql(api, "SELECT body FROM updates WHERE bot='ops'")[0]["body"]
     assert body.startswith("Warning:") and body.endswith("\n\n- Our favorite color is blue."), body
+
+
+def test_the_market_pointer_keeps_a_warned_daily_line_on_top(ruled, monkeypatch):
+    from backend import automation_actions as AA, hubdb
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
+    daily = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
+    line = daily["update"]["body"].split("\n\n")[0]
+    with api.app.state.store.transaction() as c:
+        pointed = AA._pointer(c, "ops", "Northwind moved")
+    assert pointed.startswith(line + "\n\n- Our favorite color is blue.\n- Market briefing:"), pointed
