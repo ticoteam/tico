@@ -104,7 +104,7 @@ def main(argv):
             continue
         try:
             text = fetch(url)
-        except Exception as exc:  # network: report and move on, the corpus is refreshed by hand
+        except Exception as exc:  # noqa: BLE001 - network: report and move on, the corpus is refreshed by hand
             failed.append((slug, str(exc)))
             print(f"{slug}: FAILED {exc}")
             continue
