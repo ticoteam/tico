@@ -476,8 +476,10 @@ def attach(c, who, files, blobs, items, *, task_id=None, conversation_id=None):
     Each is a version of a file on that task (task_review.comment_file's rule) or in that conversation. A page or SVG
     whose bytes would still load something from elsewhere gets a cleaned new version, and that version is the one
     posted. Over a size limit or of another type it is attached as a plain file (kind "file"), never a visual."""
+    from .counsel import no_attachments
     from .store import H, Problem
     from .task_review import comment_file
+    no_attachments(who, items)
     out, report = [], []
     for item in items:
         fid, number, title = parse(item)
@@ -545,6 +547,10 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
     # bare bot does not, a chat's file among them, gets no address: a file chip, not a link that always 404s.
     # A token names one reader: the caller itself, even when it acts for someone else (task_privacy.actor is then a pair).
     route = token_reader(c, files.auth, who.actor) if who.role == "bot" else who
+    # Counsel sees each file a message carries as its plain ref, never an address or what the file is: what it reads is
+    # the one version its run was asked to read (backend/counsel.py run_read), through its own tool.
+    from .counsel import is_counsel
+    plain = is_counsel(who)
     for message in messages:
         items = ((message or {}).get("refs") or {}).get("attachments") or []
         if not any(isinstance(a, dict) and a.get("file_id") for a in items):
@@ -553,6 +559,9 @@ def decorate(c, who, files, key, base, messages, full=True, hosted=None):
         for a in items:
             if not isinstance(a, dict) or not a.get("file_id"):
                 fresh.append(a)
+                continue
+            if plain:
+                fresh.append({k: a[k] for k in ("id", "file_id", "version", "ref", "kind") if k in a})
                 continue
             fid, number = a["file_id"], int(a.get("version") or 0)
             if fid not in rows:
@@ -645,8 +654,8 @@ def token_reader(c, auth, actor):
     run (a token outlives the turn it was minted in), or None when neither exists."""
     from .auth import Identity
     from .store import H, Problem
-    if not isinstance(actor, str):
-        return None
+    if not isinstance(actor, str) or actor == H.bot_actor(H.COUNSEL):
+        return None             # Counsel reads no visual: its grant is its run's, which a token does not carry
     try:
         if actor.startswith("human:"):
             return auth.identity_for_actor(c, actor)

@@ -35,6 +35,7 @@ import json
 import logging
 import re
 import secrets
+import sqlite3
 import threading
 import time
 import weakref
@@ -159,6 +160,18 @@ def watched(c, bot):
         return any(R._hits(row["who"], key) for row in R._active(c))
     except Exception:  # noqa: BLE001 - no tables yet (an old copy): nothing to hide
         return False
+
+
+def watched_bots(c):
+    """The slugs of the bots `watched` is true for, read once: for a reader that filters many runs together (SQL)."""
+    try:
+        if not R.any_active(c) or not on(c):
+            return []
+        rules, ctx = R._active(c), R._ctx(c)
+        return [row["slug"] for row in H.bots(c)
+                if any(R._hits(rule["who"], R.who_key(c, "bot:" + row["slug"], ctx)) for rule in rules)]
+    except sqlite3.OperationalError:    # no tables yet (an old copy): nothing to hide
+        return []
 
 
 # A run in these states has not handed in its reply yet: nothing it said is checked.

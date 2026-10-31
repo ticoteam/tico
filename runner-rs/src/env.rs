@@ -125,9 +125,15 @@ impl Vault {
     /// a leased turn runs such a harness as its own user, with private copies of its file credentials, its own HOME and
     /// TMPDIR. Any other harness keeps owner-only sign-in files in the bot's home (Claude Code, Codex and the rest), so
     /// it runs as `bot` with the files in the bot's turn directory, lease or not.
+    /// A Tico model needs the relay, and under isolation its own user too; on a cloud machine (gateway_relay.rs
+    /// `Separation::TrustGroup`) it runs on the relay alone, as this runner's user.
     pub fn for_model(&mut self, env: &mut Env, model: Option<&str>, isolated: bool) -> Result<Option<(u32, u32)>, String> {
+        self.for_model_under(env, model, isolated, crate::isolation::enabled())
+    }
+
+    pub(crate) fn for_model_under(&mut self, env: &mut Env, model: Option<&str>, isolated: bool, isolation: bool) -> Result<Option<(u32, u32)>, String> {
         let gateway = crate::hosts::pi::is_gateway(model);
-        if gateway && (self.turn_user.is_none() || self.relay.is_none()) {
+        if gateway && (self.relay.is_none() || isolation && self.turn_user.is_none()) {
             return Err("Tico model turn has no private user and relay (not_isolated)".into());
         }
         if !gateway {

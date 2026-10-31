@@ -18,9 +18,10 @@ const PHONE = {
 };
 const DESKTOP = {viewport: {width: 1440, height: 900}};
 
-// Starts a hub with these seeds (default ['org']). Resolves to {url, seeds, skipped, tokens, stop}: `tokens` maps each
-// teammate id ("ana", "chris", "engineering-lead", ...) to its Bearer token, and `skipped` names seeds that waited
-// for a route the app does not have yet. `stop()` kills the hub process this call started, by its pid.
+// Starts a hub with these seeds (default ['org']). Resolves to {url, seeds, skipped, tokens, runner, stop}: `tokens` maps
+// each teammate id ("ana", "chris", "engineering-lead", ...) to its Bearer token, `runner` is the world's runner token
+// (to claim a bot's run as its computer would), and `skipped` names seeds that waited for a route the app does not
+// have yet. `stop()` kills the hub process this call started, by its pid.
 function startHub({seeds = ['org'], env = {}} = {}) {
   const child = spawn(PYTHON, ['ui/tests/support/real_hub_server.py', '--seed', seeds.join(',')],
     {cwd: ROOT, env: {...process.env, ...env}, stdio: ['ignore', 'pipe', 'pipe']});
@@ -44,7 +45,7 @@ function startHub({seeds = ['org'], env = {}} = {}) {
       let ready;
       try { ready = JSON.parse(line); } catch { return; }
       clearTimeout(timer);
-      resolve({url: ready.url, seeds: ready.seeds, skipped: ready.skipped, tokens: ready.tokens, stop});
+      resolve({url: ready.url, seeds: ready.seeds, skipped: ready.skipped, tokens: ready.tokens, runner: ready.runner, stop});
     });
   });
 }

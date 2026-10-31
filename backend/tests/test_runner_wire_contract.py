@@ -372,6 +372,19 @@ def test_the_check_refuses_what_breaks_a_runner_or_server_in_either_direction():
         wire["gated"]["claim.request.urgent_only"] = "sent once the heartbeat answer says urgent_only"
     assert changed(gated_new_request_field) == []
 
+    # A field of an optional value (the heartbeat's readiness is `anyOf` object/null): gated by its own path, while a
+    # field beside it that is not gated still breaks.
+    def gated_readiness_field(answers, requests, wire):
+        requests["StructuredReadiness"]["properties"]["sleepy"] = {"type": "boolean"}
+        wire["gated"]["heartbeat.request.readiness.sleepy"] = "sent once the config answer says readiness_sleepy"
+    assert changed(gated_readiness_field) == []
+
+    def gated_and_ungated_readiness_fields(answers, requests, wire):
+        gated_readiness_field(answers, requests, wire)
+        requests["StructuredReadiness"]["properties"]["dozy"] = {"type": "boolean"}
+    found = changed(gated_and_ungated_readiness_fields)
+    assert found and all("readiness.dozy" in p for p in found), found
+
     def server_requires_a_request_field(answers, requests, wire):
         requests["Claim"]["properties"]["urgent_only"] = {"type": "boolean"}
         requests["Claim"].setdefault("required", []).append("urgent_only")

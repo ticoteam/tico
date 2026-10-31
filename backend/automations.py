@@ -220,10 +220,28 @@ def _next_n(c, aid):
     return (row[0] or 0) + 1
 
 
+def _due_link(flow):
+    trigger = (flow or {}).get("trigger")
+    return str(trigger.get("rule_due_id") or "") if isinstance(trigger, dict) else ""
+
+
+def _check_due_link(c, aid, flow, before):
+    """A trigger's `rule_due_id` is its due date's own routine's alone (backend/rule_due_routine.py links it): a save,
+    proposal or restore that names a due date this automation is not the routine of is refused, so no automation opens
+    tasks that count toward someone else's due date. A link it already had is left as it is (a rename or pause)."""
+    due_id = _due_link(flow)
+    if not due_id or due_id == _due_link(before):
+        return
+    from . import rule_due
+    if not (H._has_table(c, "rule_due_dates") and rule_due.links(c, due_id, aid)):
+        raise Problem("forbidden", "Only the routine a rule's due date links may name it in rule_due_id", 403)
+
+
 def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_version=False, via=None, audit=True):
     """Write the automation, with its audit row (`audit`: a bot's new draft has none). A change to what it does
     (trigger, steps, batch) is a new version; a rename, pause or cap is not. `current` makes that pending version the
     current one instead; `new_version` writes one even when nothing it does changed (restoring an old version)."""
+    _check_due_link(c, aid, flow, before)
     now, prior = H.now(), c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()
     n = prior["version"] if prior else None
     if current is not None:
@@ -312,6 +330,7 @@ def regroup(c, old, new):
 
 def _propose(c, actor, aid, flow, before, summary):
     """A bot's change it may not make itself: kept as a pending version that a person with edit rights restores."""
+    _check_due_link(c, aid, flow, before)
     n = _next_n(c, aid)
     c.execute("INSERT INTO automation_versions(automation_id,n,actor,at,flow_json,status,summary) "
               "VALUES(?,?,?,?,?,'pending',?)", (aid, n, actor, H.now(), json.dumps(_versioned(flow), sort_keys=True),

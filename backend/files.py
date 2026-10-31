@@ -145,28 +145,34 @@ def prime_visible(c, rows):
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
-def asked_to_read(c, who, row, version=None):
-    """A file a person asked Counsel to read (POST /api/v2/rules/read, backend/counsel.py `rule_reads`): Counsel reads
-    that file, whichever bot's it is. `version` narrows it to the exact version that was asked. The person had to be able
-    to read it when they asked. Nothing else widens Counsel's view."""
-    if who.role != "bot" or H.actor_id(who.actor) != H.COUNSEL:
+def asked_to_read(c, who, file_id, version=None, cache=None):
+    """Whether this call is Counsel's run on a document's read (backend/counsel.py `run_read`: the `rule_reads` row of
+    the read task it runs on) and names that read's file, and with `version` that read's version. That run reads the
+    file, whichever bot's or task's it is: the person had to be able to read it when they asked. No other Counsel run,
+    file or version gets anything from `rule_reads`, and nothing else widens Counsel's view."""
+    if who.role != "bot" or H.actor_id(who.actor) != H.COUNSEL or not who.attempt_id:
         return False
-    sql, args = "SELECT 1 FROM rule_reads WHERE file_id=?", [row["id"]]
-    if version is not None:
-        sql += " AND version=?"
-        args.append(int(version))
-    return c.execute(sql + " LIMIT 1", args).fetchone() is not None
+    key = ("counsel_read", who.attempt_id)
+    if cache is not None and key in cache:
+        read = cache[key]
+    else:
+        from . import counsel
+        read = counsel.run_read(c, who)
+        if cache is not None:
+            cache[key] = read
+    return bool(read) and read["file_id"] == file_id and (version is None or int(version) == read["version"])
 
 
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
-    team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened."""
+    team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
+    to the Counsel run a person asked to read it (asked_to_read)."""
     if who.role not in ("owner", "human", "bot"):
         return False
+    if asked_to_read(c, who, row["id"], cache=cache):
+        return True
     if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
         return False
-    if asked_to_read(c, who, row):
-        return True
     # `cache` lives for one read: a run's tasks are read once, however many files it made.
     for version in read_cache.rows(c, VERSIONS_SQL, (row["id"],)):
         if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):
@@ -830,6 +836,8 @@ class Files:
             row = self.visible_file(c, who, fid)
             # Adopted legacy blob IDs keep their original bytes at an unversioned URL.
             number = (row["current_version"] if is_file_id(fid) else 1) if version is None else version
+            if asked_to_read(c, who, fid) and not asked_to_read(c, who, fid, number):
+                raise Problem("not_found", "File not found", 404)    # Counsel's read names one version of it
             v = c.execute("SELECT v.*,b.digest AS blob_digest,b.content_type FROM bot_file_versions v "
                           "JOIN blobs b ON b.id=v.blob_id WHERE v.file_id=? AND v.version=?", (fid, number)).fetchone()
             if not v or row["locator"] != "tico_blob":

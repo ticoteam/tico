@@ -14,16 +14,18 @@ const {startHub, pageAs} = require('./support/real-hub.cjs');
 const {t} = require('./support/load.cjs');
 
 const QUOTE = 'Keep a record of each consent for five years.';
-// One API call as a teammate, by token: Counsel writes its suggestions this way, as its runner would.
+const OPT_OUT = 'Customer messages must include an opt-out line in every send.';
+// One API call as a teammate, by token (or a run's own token, {token}): Counsel's run writes its suggestions this way.
 async function send(hub, teammate, method, p, body) {
-  const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + hub.tokens[teammate],
+  const token = typeof teammate === 'string' ? hub.tokens[teammate] : teammate.token;
+  const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + token,
     'content-type': 'application/json', ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})},
     body: body === undefined ? undefined : JSON.stringify(body)});
   return {status: r.status, json: await r.json().catch(() => ({}))};
 }
 async function call(hub, teammate, method, p, body) {
   const {status, json} = await send(hub, teammate, method, p, body);
-  assert.ok(status < 300, `${method} ${p} as ${teammate}: ${status} ${JSON.stringify(json)}`);
+  assert.ok(status < 300, `${method} ${p} as ${teammate.who || teammate}: ${status} ${JSON.stringify(json)}`);
   return json;
 }
 const ready = page => page.waitForFunction(() => {
@@ -36,9 +38,19 @@ const closed = async page => {
   await page.locator('#ru-side').waitFor({state: 'hidden', timeout: t(15000)});
   assert.ok(!page.url().includes('rule='), 'the address drops the rule');
 };
-// Counsel's suggestion on the terms it was asked to read, citing that version.
-const suggest = (hub, read, text, who, cite) => call(hub, 'tico-counsel', 'POST', '/v2/rules', {kind: 'external', text,
-  who, source_id: read.source.id, ...(cite ? {cite: {file_id: read.file.id, version: read.file.version, ...cite}} : {})});
+// Counsel's run on its read task, claimed and started as its computer would (backend/tests/test_counsel.py
+// counsel_run): only that run cites the document it was asked to read.
+async function counselRun(hub) {
+  const runner = {token: hub.runner, who: 'the runner'};
+  const {attempt} = await call(hub, runner, 'POST', '/v2/jobs/claim', {bot: 'tico-counsel', start_places: true});
+  assert.ok(attempt, 'Counsel has a run to claim');
+  await call(hub, runner, 'POST', `/v2/attempts/${attempt.id}/started`, {thread_id: 'local-thread'});
+  return {token: attempt.token, who: 'Counsel run'};
+}
+// Counsel's suggestion on the terms it was asked to read, citing that version (its opt-out line unless named).
+const suggest = (hub, read, text, who, cite = {section: '4. Messaging', quote: OPT_OUT}) => call(hub, read.run, 'POST',
+  '/v2/rules', {kind: 'external', text, who, source_id: read.source.id,
+                cite: {file_id: read.file.id, version: read.file.version, ...cite}});
 
 (async () => {
   const hub = await startHub({seeds: ['org', 'groups', 'toured', 'counsel']});
@@ -114,7 +126,8 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'tico-counsel', 'POST'
 
     // Counsel suggests three rules: one with no Who (no department holds Northwind's access), two with one.
     const read = {source: (await call(hub, 'dana', 'GET', '/v2/rule-sources')).sources.find(s => s.name === 'Northwind'),
-                  file: {id: (await call(hub, 'dana', 'GET', '/v2/files?limit=50')).files.find(f => f.title === 'Northwind Messaging Terms').id, version: 1}};
+                  file: {id: (await call(hub, 'dana', 'GET', '/v2/files?limit=50')).files.find(f => f.title === 'Northwind Messaging Terms').id, version: 1},
+                  run: await counselRun(hub)};
     const open = await suggest(hub, read, 'Keep a consent record for five years.', {}, {section: '4. Messaging', quote: QUOTE});
     const logs = await suggest(hub, read, 'Delete raw logs after 30 days.', {bots: ['engineering-lead']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
     const optout = await suggest(hub, read, 'Every customer text has an opt-out line.', {bots: ['engineering-lead']});

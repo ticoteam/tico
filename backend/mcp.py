@@ -10,10 +10,12 @@ notification such as `notifications/initialized` is accepted with 202 and no bod
 """
 import asyncio
 import base64
+import hashlib
 import json
 import time
 from email.message import Message
 from pathlib import PurePosixPath
+from urllib.parse import parse_qsl
 
 import httpx
 from fastapi import Request
@@ -55,7 +57,7 @@ class ApiProblem(Exception):
 
 
 class InProcessApi:
-    """`api.get` / `api.post` / `api.patch` for `hubtools`, answered by this application in-process.
+    """`api.get` / `api.post` / `api.patch` / `api.request` for `hubtools`, answered by this application in-process.
 
     Runs on a worker thread; each call is a coroutine handed to the server's event loop.
     """
@@ -67,7 +69,8 @@ class InProcessApi:
         self.headers = {"Authorization": authorization, "Accept": "application/json",
                         "User-Agent": "Tico-MCP/" + hubtools.SERVER_INFO["version"]}
 
-    def _run(self, method, path, body=None, key=None, query=None, delegate=False):
+    def _send(self, method, path, body=None, key=None, query=None, delegate=False):
+        """One request through the app (its middleware and routes, with the caller's own Authorization), as a response."""
         path = "/api/v2/" + path.replace("#", "%23")
         timeout = inbound_wait_timeout(method, path, body, INTERNAL_TIMEOUT_S, query=query)
         async def go():
@@ -88,6 +91,10 @@ class InProcessApi:
             future.cancel()
             raise ApiProblem("unavailable", "Tico did not answer before the request deadline", 504,
                              retryable=True, operation_id=key) from None
+        return response
+
+    def _run(self, method, path, body=None, key=None, query=None, delegate=False):
+        response = self._send(method, path, body, key, query, delegate)
         if response.headers.get("content-disposition"):
             payload = response_content(response)
         else:
@@ -96,13 +103,32 @@ class InProcessApi:
             except ValueError:
                 payload = response_content(response)
         if response.status_code >= 400:
-            error = payload.get("error", {}) if isinstance(payload, dict) else {}
-            if not isinstance(error, dict):
-                error = {}
-            raise ApiProblem(error.get("code", "http_error"), error.get("detail") or f"HTTP {response.status_code}",
-                             response.status_code, response.status_code == 429 or response.status_code >= 500,
-                             key)
+            raise problem(payload, response.status_code, key)
         return payload
+
+    def request(self, method, path, body=None, key=None, binary=False, delegate=False):
+        """`Client.request` (clients/tico.py) for a tool that needs it: a file's bytes (`binary`, hub_file_read) or a
+        JSON call on a full /api/v2/ path, answered through the same app and middleware as every other call here."""
+        if not path.startswith("/api/v2/"):
+            raise ValueError("Use a versioned Tico API path")
+        path, _, query = path[len("/api/v2/"):].partition("?")
+        if not binary:
+            return self.call(method, path, body, key, dict(parse_qsl(query)), delegate)
+        response = self._send(method.upper(), path, body, key, dict(parse_qsl(query)) or None, delegate)
+        if response.status_code >= 400:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            raise problem(payload, response.status_code, key)
+        if response.status_code != 200:
+            # A picture, video or audio file sent on a link to Tico file hosting (file_delivery.serve): not text.
+            raise ApiProblem("file_integrity", "This file is a picture, video or audio file: it is not read as text",
+                             415)
+        data = response.content
+        if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != response.headers.get("X-Content-SHA256"):
+            raise ApiProblem("file_integrity", "Tico file response failed its size or integrity check", 502)
+        return data
 
     def get(self, path, **query):
         return self._run("GET", path, query={k: v for k, v in query.items() if v is not None})
@@ -117,6 +143,15 @@ class InProcessApi:
         method = method.upper()
         return self._run(method, path.lstrip("/"), body=body if body is not None or method != "GET" else None,
                          key=key, query={k: v for k, v in (query or {}).items() if v is not None}, delegate=delegate)
+
+
+def problem(payload, status, key):
+    """An error response's body as an ApiProblem."""
+    error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    return ApiProblem(error.get("code", "http_error"), error.get("detail") or f"HTTP {status}", status,
+                      status == 429 or status >= 500, key)
 
 
 def caller_kind(auth, who):

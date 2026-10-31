@@ -101,7 +101,7 @@ pub async fn doctor(config: &Config, client: &Client) -> Result<(Value, bool), R
     if let Some(tools) = crate::harness_tools::shared() {
         let runtimes = crate::relays::harness_runtimes(&assignments);
         let company = client.get("config").await.unwrap_or(Value::Null);
-        let default = crate::relays::harness_defaults(&runtimes, &company, crate::isolation::enabled());
+        let default = crate::relays::harness_defaults(&runtimes, &company, crate::gateway_relay::runs_gateway());
         let runtimes: Vec<String> = runtimes.into_iter().collect();
         tools.lock().unwrap().want(&runtimes, &default);
     }
