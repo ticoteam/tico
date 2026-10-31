@@ -6,8 +6,8 @@
    Receivables: invoices the same way; the rail marks one paid or writes it off (and sends a draft). Neither draws the
    route's open total: no totals row. Bookkeeper chases late invoices; the page shows no chase history.
    Every decision is a dry run first: one the rules send for approval says to whom, and a second press sends it.
-   Reads: GET /api/v2/finance/bills[/{id}], /finance/invoices[/{id}], /finance/contacts, and for the forms the lines and
-   money accounts the viewer sees (/finance/pnl, /finance/balance-sheet).
+   Reads: GET /api/v2/finance/bills[/{id}], /finance/invoices[/{id}], /finance/contacts, and for the forms the lines
+   the viewer may post to (/finance/chart) and the bank accounts they may pay from (/finance/pay-from).
    Writes (POST /api/v2/finance/actions): bill_create, bill_approve, bill_schedule, bill_mark_paid, bill_void,
    invoice_create, invoice_send, invoice_record_payment, invoice_write_off, journal, contact_create.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -15,10 +15,10 @@
 
 const FIN_DOC = {
   bill: {list: 'bills', contact: 'vendor', contactKind: 'vendor', right: 'finance.ap', label: 'Bill', who: 'Vendor',
-    search: 'Search vendors, bills', lineType: 'expense',
+    search: 'Search vendors, bills',
     filters: [['unpaid', 'Open'], ['draft', 'Draft'], ['scheduled', 'Scheduled'], ['paid', 'Paid'], ['', 'All']]},
   invoice: {list: 'invoices', contact: 'customer', contactKind: 'customer', right: 'finance.ar', label: 'Invoice', who: 'Customer',
-    search: 'Search customers, invoices', lineType: 'income',
+    search: 'Search customers, invoices',
     filters: [['unpaid', 'Open'], ['draft', 'Draft'], ['paid', 'Paid'], ['', 'All']]},
 };
 const FIN_DOC_F = {bill: {q: '', status: 'unpaid'}, invoice: {q: '', status: 'unpaid'}};
@@ -67,6 +67,9 @@ function finDecideDialog(title, body, label, build, done) {
       return false;
     }
     if (r.status === 'committed') toast(done);
+    // A new bill or invoice opens in the rail when its tab is the one showing it.
+    const made = r.result?.bill_id ? ['bill', r.result.bill_id] : r.result?.invoice_id ? ['invoice', r.result.invoice_id] : null;
+    if (made && FIN?.doc?.kind === made[0]) FIN.doc.sel = String(made[1]);
     finDocsReload();
   });
   const form = dlg.querySelector('form');
@@ -180,7 +183,9 @@ function finDocRail(d, full) {
 function finDocActs(d) {
   const kind = FIN.doc.kind;
   if (!finCaps()?.may(FIN_DOC[kind].right)) return [];
-  if (kind === 'bill') return {draft: [['void', 'Void'], ['approve', 'Approve']], open: [['void', 'Void'], ['paid', 'Mark paid'], ['schedule', 'Schedule']],
+  // Scheduling sends money, so it also needs finance.pay.
+  const pay = finCaps().may('finance.pay') ? [['schedule', 'Schedule']] : [];
+  if (kind === 'bill') return {draft: [['void', 'Void'], ['approve', 'Approve']], open: [['void', 'Void'], ['paid', 'Mark paid'], ...pay],
     scheduled: [['void', 'Void'], ['paid', 'Mark paid']]}[d.status] || [];
   return {draft: [['send', 'Send']], sent: [['writeoff', 'Write off'], ['paid', 'Mark paid']], partial: [['writeoff', 'Write off'], ['paid', 'Mark paid']]}[d.status] || [];
 }
@@ -226,53 +231,53 @@ async function finDocRun(kind, payload, done, btn) {
 }
 
 // ----------------------------------------------------------------- what the forms pick from
-// The lines the viewer sees (the P&L's, and the balance sheet's for those who see it) and the money accounts behind
-// the balance sheet's cash and card lines. Read once per page.
-async function finChart() {
-  if (FIN.chart) return FIN.chart;
-  const caps = finCaps(), [a, z] = finPnlRange('month');
-  const [p, b] = await Promise.allSettled([
-    get(`/v2/finance/pnl?start=${a}&end=${z}&period=month&basis=accrual&view=${caps.company ? 'company' : 'expenses'}${finAs()}`, {fresh: true}),
-    caps.balance ? get('/v2/finance/balance-sheet' + finAs('?'), {fresh: true}) : Promise.resolve(null)]);
-  const lines = [], money = [];
-  for (const r of p.status === 'fulfilled' ? p.value?.rows || [] : []) if (r.account_id && !r.private) lines.push({id: r.account_id, code: r.code, name: r.name, type: r.type});
-  const bs = b.status === 'fulfilled' ? b.value : null;
-  for (const [sec, type] of [['assets', 'asset'], ['liabilities', 'liability'], ['equity', 'equity']]) for (const r of bs?.[sec] || []) {
-    if (!r.account_id) continue;
-    lines.push({id: r.account_id, code: r.code, name: r.name, type});
-    for (const s of r.sources || []) if (s.money_account_id && !money.some(m => m.id === s.money_account_id))
-      money.push({id: s.money_account_id, account_id: r.account_id, name: `${s.name || s.provider || r.name}${s.last4 ? ' ••' + s.last4 : ''}`});
-    if (sec === 'liabilities' && r.subtype === 'card' && !money.some(m => m.account_id === r.account_id)) money.push({id: '', account_id: r.account_id, name: r.name});
-  }
-  lines.sort((x, y) => String(x.code).localeCompare(String(y.code)));
-  return FIN.chart = {lines, money};
+// The lines the viewer may post to for a bill, an invoice or a journal entry. Read once per page per form.
+async function finChart(use) {
+  FIN.chart ||= {};
+  if (FIN.chart[use]) return FIN.chart[use];
+  const r = await get(`/v2/finance/chart?for=${use}${finAs()}`, {fresh: true});
+  return FIN.chart[use] = r?.accounts || [];
+}
+// The bank accounts the viewer may pay a bill from (finance.pay).
+async function finPayFrom() {
+  if (FIN.payFrom) return FIN.payFrom;
+  const r = await get('/v2/finance/pay-from' + finAs('?'), {fresh: true});
+  return FIN.payFrom = (r?.accounts || []).map(a => ({id: a.id, name: `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`}));
+}
+// The money lines a payment moves through: bank (and card, for bills) lines, else any asset or liability line other
+// than payables and receivables.
+async function finMoneyLines(bill) {
+  const all = (await finChart('journal')).filter(a => (a.type === 'asset' || (bill && a.type === 'liability')) &&
+    !['payable', 'receivable'].includes(a.subtype || ''));
+  const money = all.filter(a => ['bank', 'cash', 'card'].includes(a.subtype || ''));
+  return money.length ? money : all;
 }
 const finOpts = (rows, val = '') => rows.map(r => `<option value="${esc(r.id)}"${r.id === val ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
-// A money line select ("From", "To"), left out when the viewer sees none: the action's default applies.
-const finMoneySelect = (label, money) => {
-  const rows = money.filter(m => m.account_id);
-  return rows.length ? `<label>${label}<select name="account"><option value="">—</option>${rows.map(m => `<option value="${esc(m.account_id)}">${esc(m.name)}</option>`).join('')}</select></label>` : '';
-};
 
 // ----------------------------------------------------------------- decisions with a form
 async function finBillSchedule(d) {
-  const {money} = await finChart(), banks = money.filter(m => m.id), today = finToday();
-  const on = d.due_date && d.due_date > today ? d.due_date : today;
+  let banks;
+  try { banks = await finPayFrom(); } catch (e) { toast(e.message, true); return; }
+  const today = finToday(), on = d.due_date && d.due_date > today ? d.due_date : today;
   finDecideDialog('Schedule', `<label>Pay on<input type="date" name="on" required value="${on}" min="${today}"></label>
     <label>From<select name="from" required>${finOpts(banks)}</select></label>`, 'Schedule', form => {
     const pay_on = form.elements.on.value, from = form.elements.from.value;
     if (!pay_on) throw new Error('Pick a day');
-    if (!from) throw new Error('No bank account in your view');
+    if (!from) throw new Error('No bank account to pay from');
     return ['bill_schedule', {bill_id: d.id, pay_on, money_account_id: from}];
   }, 'Scheduled');
 }
 async function finDocMarkPaid(d) {
-  const bill = FIN.doc.kind === 'bill', {money} = await finChart();
+  const bill = FIN.doc.kind === 'bill';
+  let lines;
+  try { lines = await finMoneyLines(bill); } catch (e) { toast(e.message, true); return; }
   finDecideDialog('Mark paid', `<label>Amount<input name="amount" inputmode="decimal" required autocomplete="off" value="${finCentsValue(d.remaining)}"></label>
-    <label>Date<input type="date" name="date" required value="${finToday()}"></label>${finMoneySelect(bill ? 'From' : 'To', money)}`, 'Mark paid', form => {
-    const amount = finParseCents(form.elements.amount.value), date = form.elements.date.value, account = form.elements.account?.value || '';
+    <label>Date<input type="date" name="date" required value="${finToday()}"></label>
+    <label>${bill ? 'From' : 'To'}<select name="account" required>${finOpts(lines)}</select></label>`, 'Mark paid', form => {
+    const amount = finParseCents(form.elements.amount.value), date = form.elements.date.value, account = form.elements.account.value;
     if (!amount) throw new Error('A dollar amount, like 500');
-    const payload = {[bill ? 'bill_id' : 'invoice_id']: d.id, amount, ...(date ? {date} : {}), ...(account ? {account_id: account} : {})};
+    if (!account) throw new Error('No money line in your view');
+    const payload = {[bill ? 'bill_id' : 'invoice_id']: d.id, amount, ...(date ? {date} : {}), account_id: account};
     return [bill ? 'bill_mark_paid' : 'invoice_record_payment', payload];
   }, 'Marked paid');
 }
@@ -284,8 +289,9 @@ async function finContacts(kind) {
 // A bill or invoice: its contact (or a new one), number, dates, one line and its amount, memo.
 async function finDocAdd(kind) {
   const k = FIN_DOC[kind], bill = kind === 'bill';
-  const [contacts, chart] = await Promise.all([finContacts(k.contactKind), finChart()]);
-  const lines = chart.lines.filter(l => l.type === k.lineType);
+  let contacts, lines;
+  try { [contacts, lines] = await Promise.all([finContacts(k.contactKind), finChart(kind)]); }
+  catch (e) { toast(e.message, true); return; }
   let made = null;   // a new contact made by an earlier Save, so a second Save does not make it twice
   const dlg = finDecideDialog(k.label, `<label>${k.who}<select name="contact" required>${finOpts(contacts)}<option value="+">New ${k.who.toLowerCase()}</option></select></label>
     <label data-fin-new hidden>Name<input name="name" maxlength="120" autocomplete="off"></label>
@@ -318,19 +324,16 @@ async function finDocAdd(kind) {
   const sync = () => { form.querySelector('[data-fin-new]').hidden = pick.value !== '+'; };
   pick.addEventListener('change', sync); sync();
 }
-// A new vendor or customer; its id is the action's result, else found by name.
+// A new vendor or customer; its id is the action's result.
 async function finContactCreate(name, kind) {
   const r = await finAct('contact_create', {name, kind});
-  if (r.status !== 'committed') throw new Error('The new contact waits for approval');
-  const id = r.result?.contact_id || r.result?.id;
-  if (id) return String(id);
-  const found = (await finContacts(kind)).find(c => c.name === name);
-  if (!found) throw new Error('The new contact did not load');
-  return found.id;
+  if (r.status !== 'committed' || !r.result?.contact_id) throw new Error('The new contact waits for approval');
+  return String(r.result.contact_id);
 }
 // A journal entry: a date, a memo and balanced lines (a debit or a credit each).
 async function finJournalAdd() {
-  const {lines} = await finChart();
+  let lines;
+  try { lines = await finChart('journal'); } catch (e) { toast(e.message, true); return; }
   const row = () => `<div class="fin-jl"><select name="acct" aria-label="Line"><option value=""></option>${finOpts(lines)}</select>
     <input name="dr" inputmode="decimal" autocomplete="off" aria-label="Debit"><input name="cr" inputmode="decimal" autocomplete="off" aria-label="Credit"></div>`;
   const dlg = finDecideDialog('Journal entry', `<label>Date<input type="date" name="date" required value="${finToday()}"></label>

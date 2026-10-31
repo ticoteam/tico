@@ -38,7 +38,7 @@ const MATES = [
     grants: [{id: 'g3', subject_kind: 'teammate', subject: 'bot:bookkeeper', what: 'everything', whose: 'company', whose_team: null, account_ids: [],
       new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
 ];
-function access(viewer, apGrant = false) {
+function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
   if (viewer === 'ana') return {...base, teammates: MATES, can_view_as: true, can_edit_defaults: true};
@@ -46,7 +46,7 @@ function access(viewer, apGrant = false) {
   const payables = {id: 'g4', subject_kind: 'teammate', subject: 'human:cara', what: 'payables', whose: 'company', whose_team: null, account_ids: [],
     new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true};
   return {...base, teams: teams.filter(t => ['eng', 'platform'].includes(t.id)), private_lines: [],
-    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables]} : m),
+    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables], rights: apRights} : m),
     can_view_as: false, can_edit_defaults: false};
 }
 
@@ -198,7 +198,15 @@ const listDocs = (rows, url) => {
 };
 
 // ----------------------------------------------------------------- the fake hub
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false} = {}) {
+// GET /v2/finance/chart: bills post to expense and asset lines, invoices to income lines, journals to any line.
+const CHART = [['a-1010', '1010', 'Checking', 'asset', 'bank'], ['a-1020', '1020', 'Savings', 'asset', 'bank'], ['a-1200', '1200', 'Accounts receivable', 'asset', 'receivable'],
+  ['a-1300', '1300', 'Prepaid expenses', 'asset', 'prepaid'], ['a-2000', '2000', 'Accounts payable', 'liability', 'payable'], ['a-2100', '2100', 'Card balance', 'liability', 'card'],
+  ['a-4200', '4200', 'Services', 'income', ''], ['a-6100', '6100', 'Software', 'expense', '']]
+  .map(([id, number, name, type, subtype]) => ({id, number, name, type, subtype, parent_id: null, company_wide: true}));
+const chartFor = use => CHART.filter(a => use === 'bill' ? ['expense', 'asset'].includes(a.type) && !['payable', 'receivable'].includes(a.subtype)
+  : use === 'invoice' ? a.type === 'income' : true);
+
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false, apRights = []} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
@@ -226,7 +234,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0', count: 0, next: null});
     if (p === '/api/v2/conversations') return json({conversations: []});
     const denied = () => json({error: {code: 'denied', detail: 'Not in your view'}}, 403);
-    if (p === '/api/v2/finance/access') return json(access(viewer, apGrant));
+    if (p === '/api/v2/finance/access') return json(access(viewer, apGrant, apRights));
     // Payables for the owner and a payables grant; receivables for the owner only (backend/finance/tab_ap.py).
     const seesAp = viewer === 'ana' || apGrant, seesAr = viewer === 'ana';
     if (p === '/api/v2/finance/bills') return seesAp ? json({bills: listDocs(BILLS, url), next_cursor: null, currency: 'USD', view_version: 'v1', bills_email: 'bills@acme.example',
@@ -238,6 +246,13 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       return r ? json(docDetail(r)) : json({error: {code: 'not_found', detail: 'no such document in your view'}}, 404);
     }
     if (p === '/api/v2/finance/contacts') return json({contacts: CONTACTS.filter(c => !url.searchParams.get('kind') || c.kind === url.searchParams.get('kind')), next_cursor: null, view_version: 'v1'});
+    // The form pickers: the chart for teammates who write to the books, the bank accounts for finance.pay.
+    const rights = viewer === 'ana' ? ALL_RIGHTS : apRights;
+    if (p === '/api/v2/finance/chart') return ['finance.book', 'finance.ap', 'finance.ar'].some(r => rights.includes(r))
+      ? json({accounts: chartFor(url.searchParams.get('for')), more: false, view_version: 'v1'}) : denied();
+    if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
+      ? json({accounts: [{id: 'm1', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000}, {id: 'm2', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000}],
+        currency: 'USD', view_version: 'v1'}) : denied();
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
     if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
@@ -253,7 +268,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       : {status: 'committed', kind: body.kind, action_id: '', approver: null, reason: '', dry_run: true, result: {}, impact: {}});
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind,
       status: body.kind === 'bill_schedule' ? 'needs_approval' : 'committed', code: null, reason: null, approver: null,
-      result: body.kind === 'contact_create' ? {contact_id: 'v-new'} : {}});
+      result: {contact_create: {contact_id: 'v-new'}, bill_create: {bill_id: 'bill-2'}, invoice_create: {invoice_id: 'inv-9'}}[body.kind] || {}});
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + hash);
@@ -570,6 +585,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-doc="bill-2"]').click();
       await page.locator('#fin-rail [data-fin-do="schedule"]').click();
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="from"] option').allInnerTexts(), ['Checking ••0001', 'Savings ••0002'], tag + ': the accounts to pay from');
       const payOn = await page.locator('dialog.fin-dlg input[name="on"]').inputValue();
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.locator('dialog.fin-dlg [data-ask]:not([hidden])').waitFor();
@@ -582,9 +598,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('tr[data-fin-doc="bill-4"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="account"] option').allInnerTexts(), ['Checking', 'Savings', 'Card balance'], tag + ': paid from a bank or card line');
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
-      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_mark_paid', payload: {bill_id: 'bill-4', amount: 139000, date: today}}, tag + ': bill_mark_paid');
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_mark_paid', payload: {bill_id: 'bill-4', amount: 139000, date: today, account_id: 'a-1010'}}, tag + ': bill_mark_paid');
       await page.locator('tr[data-fin-doc="bill-3"]').click();
       await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
       assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': a scheduled bill is paid or voided, not scheduled again');
@@ -593,6 +610,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');
       await page.locator('dialog.fin-dlg input[name="name"]').fill('Acme Paper');
       await page.locator('dialog.fin-dlg input[name="number"]').fill('AP-1');
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="line"] option').allInnerTexts(), ['Checking', 'Savings', 'Prepaid expenses', 'Software'], tag + ': a bill\'s lines');
       await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
       await page.locator('dialog.fin-dlg input[name="amount"]').fill('45.50');
       await page.locator('dialog.fin-dlg [type=submit]').click();
@@ -600,6 +618,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(sent(writes).slice(-2), [{kind: 'contact_create', payload: {name: 'Acme Paper', kind: 'vendor'}},
         {kind: 'bill_create', payload: {vendor_id: 'v-new', bill_date: today, lines: [{account_id: 'a-6100', amount: 4550}], number: 'AP-1', origin: 'manual'}}],
         tag + ': contact_create, then bill_create');
+      await page.waitForFunction(() => FIN.doc.sel === 'bill-2' && document.querySelector('tr.fin-on[data-fin-doc="bill-2"]'));
       // Receivables.
       await go(page, '#/finance/receivables', READY.receivables);
       assert.deepEqual(await heads(), ['CUSTOMER', 'INVOICE', 'DUE', 'AGING', 'AMOUNT', 'STATUS'], tag + ': the invoice columns');
@@ -609,7 +628,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail [data-fin-do="paid"]').click();
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
-      assert.deepEqual(sent(writes).at(-1), {kind: 'invoice_record_payment', payload: {invoice_id: 'inv-2', amount: 150000, date: today}}, tag + ': Mark paid records the payment');
+      assert.deepEqual(sent(writes).at(-1), {kind: 'invoice_record_payment', payload: {invoice_id: 'inv-2', amount: 150000, date: today, account_id: 'a-1010'}}, tag + ': Mark paid records the payment');
       await page.locator('tr[data-fin-doc="inv-3"]').click();
       await page.locator('#fin-rail [data-fin-do="writeoff"]').waitFor();
       assert.match(await page.locator('#fin-rail').innerText(), /Left\s+\$2,200[\s\S]*Payments\s+Oct 25 · Bank row\s+\$1,000/i, tag + ': what is left and what was paid');
@@ -657,6 +676,21 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await go(page, '#/finance/balance', '.fin-pl');
       assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/invoices')), tag + ': invoices never read');
       assert.equal(writes.length, 0, tag + ': nothing written');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // finance.ap without finance.pay: bills are approved, paid and voided, never scheduled; no bank list is read.
+    {
+      const tag = 'ap right';
+      const {page, errors, reads} = await open(browser, {viewer: 'cara', apGrant: true, apRights: ['finance.ap'], hash: '#/finance/payables'});
+      await page.locator('#fin-rail [data-fin-do="approve"]').waitFor();
+      await page.locator('tr[data-fin-doc="bill-2"]').click();
+      await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': no Schedule without finance.pay');
+      await page.locator('[data-fin-doc-add]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="line"] option[value="a-6100"]').waitFor({state: 'attached'});
+      assert.ok(reads.includes('/api/v2/finance/chart?for=bill'), tag + ': the bill form reads the chart for bills');
+      assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/pay-from')), tag + ': pay-from never read');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
