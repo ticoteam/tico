@@ -5,7 +5,8 @@ re-categorizing it, and reconciling an account to its statement.
 Posting a feed row:
 - An IO card charge is a liability: Dr expense (the card's budget line, else Other expenses; the holder as teammate,
   the counterparty as vendor) / Cr the card program's liability. Pending is the authorization: a hold. Its posted
-  update settles the hold into the entry (hold_ids), so it counts once. A refund posts the other way.
+  update settles the hold into the entry (hold_ids), so it counts once. A refund posts the other way. What a card
+  used is read from these entries (store/budgets.card_used), reversals and replacements at their own dates.
 - Money moving between two of our accounts (paying the card bill, a sweep to savings) is one transfer entry for both
   rows, posted when the second side is seen.
 - A bank debit that pays a Finance payment posts Dr the payment's line / Cr bank and settles the payment's hold.
@@ -335,7 +336,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         entry = _post(ctx, fid, t, [_line(account, -t.amount, tags, t.counterparty), _line(gl.id, t.amount)], holds)
         _posted(ctx, [fid], entry)
         if card is not None:
-            _card_used(ctx, row, card, -t.amount, entry)
+            _card_used(ctx, row, -t.amount, entry)
         return
     if t.amount < 0:
         spend = by_code(ctx, OTHER)
@@ -400,51 +401,13 @@ def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:
     return account.id, tags
 
 
-def _card_used(ctx: Ctx, row: Any, card: Any, amount: int, entry_id: str) -> None:
-    """A settled card transaction uses the card's allocation at its actual amount (a refund gives some back): its
-    authorization hold settles at that amount, or, with none (first seen settled, as in a backfill), a settled hold
-    records it, so the allocation never stays reserved beside the actual."""
+def _card_used(ctx: Ctx, row: Any, amount: int, entry_id: str) -> None:
+    """A settled card transaction. What a card used is read from the ledger (store/budgets.card_used: every entry for
+    its rows, reversals and replacements at their own dates), so the books alone decide it; its authorization hold,
+    if still held, only settles here (taken in, it no longer counts)."""
     hold = SB.hold(ctx.c, str(row["hold_id"])) if row["hold_id"] else None
-    entry = SL.entry_row(ctx.c, entry_id)
-    day = str(entry["entry_date"]) if entry is not None else str(row["txn_date"])
     if hold is not None and str(hold["status"]) == "held":
         SB.settle(ctx.c, str(hold["id"]), amount, entry_id, ctx.at)
-        SB.relink(ctx.c, str(hold["id"]), amount, entry_id, day)
-        return
-    if hold is not None and str(hold["status"]) == "settled":
-        _card_moved(ctx, row, hold, amount, entry_id, day)
-        return
-    b = ctx.budgets().get(str(card["budget_id"] or ""))
-    if b is None or not b.active:
-        return
-    hid = SB.insert_hold(ctx.c, budget_id=b.id, amount=abs(amount), currency=ctx.book.base_currency, source="card",
-                         source_id=f"{row['id']}:settled", target=f"card:{card['id']}", held_on=day,
-                         expires_at=None, by=SYSTEM, at=ctx.at)
-    SB.settle(ctx.c, hid, amount, entry_id, ctx.at)
-    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": hid})
-
-
-def _card_moved(ctx: Ctx, row: Any, hold: Any, amount: int, entry_id: str, day: str) -> None:
-    """A settled charge the bank corrected, re-dated or reversed: its use follows the net posting in each period. Use
-    in a closed period stays (that month's rollup keeps the original); the open period gets only the rest, on the
-    main record when its period is open, else on one `<feed id>:adj` record, so the card's allocation is never freed
-    by more than the books moved. Every record follows the live entry, so each keeps counting."""
-    records = [hold, *(r for r in SB.adjustments(ctx.c, f"{row['id']}:adj") if str(r["id"]) != str(hold["id"]))]
-    closed = [r for r in records if SL.closed_on(ctx.c, ctx.book.id, str(r["held_on"]))]
-    for r in closed:
-        SB.relink(ctx.c, str(r["id"]), int(r["settled_amount"]), entry_id, str(r["held_on"]))
-    rest = amount - sum(int(r["settled_amount"]) for r in closed)
-    shut = {str(r["id"]) for r in closed}
-    open_records = [r for r in records if str(r["id"]) not in shut]
-    if open_records:
-        SB.relink(ctx.c, str(open_records[0]["id"]), rest, entry_id, day)
-        for r in open_records[1:]:
-            SB.void_settled(ctx.c, str(r["id"]), ctx.at)
-    elif rest:
-        hid = SB.insert_hold(ctx.c, budget_id=str(hold["budget_id"]), amount=abs(rest), currency=str(hold["currency"]),
-                             source="card", source_id=f"{row['id']}:adj", target=str(hold["target"]), held_on=day,
-                             expires_at=None, by=SYSTEM, at=ctx.at)
-        SB.settle(ctx.c, hid, rest, entry_id, ctx.at)
 
 
 def _card_hold(ctx: Ctx, row: Any, card: Any, amount: int) -> None:
@@ -520,24 +483,13 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
 
 
 def undo(ctx: Ctx, row: Any) -> None:
-    """A row the provider cancelled, failed or reversed: its hold is released (a settled one too: the charge no longer
-    uses the card's allocation) and its entry reversed."""
-    hold = SB.hold(ctx.c, str(row["hold_id"])) if row["hold_id"] else None
-    entry_id = str(row["entry_id"] or "")
+    """A row the provider cancelled, failed or reversed: its hold is released and its entry reversed (for a card, the
+    reversal gives its use back in the period it posts in, as the books do)."""
     if row["hold_id"]:
         budgeting.release(ctx, str(row["hold_id"]))
-    if entry_id:
+        SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
+    if row["entry_id"]:
         _unpost(ctx, row, "the bank cancelled this transaction")
-    reversal = SL.reversal_of(ctx.c, entry_id) if entry_id else None
-    if hold is not None and str(hold["status"]) == "settled":
-        if reversal is not None:
-            # Use a closed month keeps is given back in the period the reversal posts in, as the books do.
-            _card_moved(ctx, row, hold, 0, str(reversal["id"]), str(reversal["entry_date"]))
-        for r in [hold, *SB.adjustments(ctx.c, f"{row['id']}:adj")]:
-            now = SB.hold(ctx.c, str(r["id"]))
-            if reversal is None or (not int(now["settled_amount"] or 0)
-                                    and not SL.closed_on(ctx.c, ctx.book.id, str(now["held_on"]))):
-                SB.void_settled(ctx.c, str(r["id"]), ctx.at)
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "updated_at": ctx.at})
 
 
@@ -623,9 +575,6 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         entry = _post(ctx, str(row["id"]), t, [_line(account.id, -amount, tags, t.counterparty),
                                                _line(gl.id, amount)], holds)
         _posted(ctx, [str(row["id"])], entry)
-        card = SK.get(ctx.c, "fin_cards", str(row["card_id"])) if row["card_id"] else None
-        if card is not None and row["hold_id"]:
-            _card_used(ctx, row, card, -amount, entry)     # its use follows the new entry, so it keeps counting
         return {"feed_id": str(row["id"]), "entry_id": entry}
     return Plan(K.default_gate(ctx.org, who, "categorize", total=abs(amount)),
                 f"Post a feed row to {account.code} {account.name}", apply,

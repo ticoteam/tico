@@ -96,8 +96,9 @@ def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[
 
 def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> list[tuple[str, str, int]]:
     """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
-    target used under it, never below zero. A target's use (its holds, settled holds, and for a teammate their posted
-    lines) draws down only the nearest allocation for that target above it, never every one up the tree."""
+    target used under it, never below zero. A target's use (its holds, settled holds, for a teammate their posted
+    lines, for a card its entries in the ledger) draws down only the nearest allocation for that target above it,
+    never every one up the tree."""
     budgets = ctx.budgets()
     by_target: dict[str, list[tuple[str, int]]] = {}
     for row in SB.allocations(ctx.c, budget_ids):

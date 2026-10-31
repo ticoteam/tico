@@ -128,6 +128,13 @@ def _entries(c, source):
     return c.execute("SELECT count(*) FROM fin_entries WHERE source=?", (source,)).fetchone()[0]
 
 
+def _card_use(c, card_id, month):
+    """What a card used in a month, as the allocation reserve reads it (the ledger, plus authorizations held)."""
+    from backend.finance.store import budgets as SB
+    budget = str(c.execute("SELECT budget_id FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0])
+    return SB.target_used(c, [budget], f"{month}-01", f"{month}-31", f"card:{card_id}", True)
+
+
 def _card_holds(c):
     return [tuple(r) for r in c.execute("SELECT amount, status FROM fin_holds WHERE source='card'")]
 
@@ -307,9 +314,7 @@ def test_a_settled_card_charge_uses_its_allocation_at_its_actual_amount(books):
         c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")             # backfill again
     sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
     with books.read() as c:
-        used = c.execute("SELECT sum(settled_amount) FROM fin_holds WHERE target=? AND status='settled'",
-                         (f"card:{card_id}",)).fetchone()[0]
-        assert used == 4_000
+        assert _card_use(c, card_id, "2026-10") == 4_000
         assert FA.budget_state(c, budget_id, AT).held == 20_000 - 4_000                      # reserve less the use
 
 
@@ -394,17 +399,14 @@ def test_an_adjusted_or_voided_settled_card_charge_keeps_one_use_record(books):
     _arrives(fake, {**raw, "amount": -90.0}, 2, "evt-c9-2")                     # the bank adjusts it
     sync_once(books, fake, "2026-10-15T15:00:00.000000Z")
 
-    def used(c):
-        return c.execute("SELECT count(*), sum(settled_amount) FROM fin_holds WHERE target=? AND status='settled' "
-                         "AND source='card'", (f"card:{card_id}",)).fetchone()
     with books.read() as c:
-        assert tuple(used(c)) == (1, 9_000)
+        assert _card_use(c, card_id, "2026-10") == 9_000
         assert FA.budget_state(c, budget_id, AT).held == 20_000 - 9_000
         assert _entries(c, "card") == 3                                          # post, reversal, repost
     _arrives(fake, {**raw, "amount": -90.0, "status": "cancelled"}, 3, "evt-c9-3")
     sync_once(books, fake, "2026-10-15T16:00:00.000000Z")
     with books.read() as c:
-        assert used(c)[0] == 0
+        assert _card_use(c, card_id, "2026-10") == 0
         assert FA.budget_state(c, budget_id, AT).held == 20_000                  # the whole slice is back
 
 
@@ -537,9 +539,7 @@ def test_a_re_dated_settled_card_charge_moves_its_use_to_the_new_month(books):
     _arrives(fake, {**raw, "createdAt": "2026-11-02T10:00:00Z", "postedAt": "2026-11-02T10:00:00Z"}, 2, "evt-c7-2")
     sync_once(books, fake, NEXT_DAY)
     with books.read() as c:
-        rows = c.execute("SELECT held_on, settled_amount FROM fin_holds WHERE target=? AND status='settled'",
-                         (f"card:{card_id}",)).fetchall()
-        assert [tuple(r) for r in rows] == [("2026-11-02", 8_000)]
+        assert (_card_use(c, card_id, "2026-10"), _card_use(c, card_id, "2026-11")) == (0, 8_000)
         assert FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z").held == 20_000      # October: all free
         assert FA.budget_state(c, budget_id, "2026-11-20T12:00:00.000000Z").held == 20_000 - 8_000
 
@@ -565,8 +565,7 @@ def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month
         return s.actual, s.held, s.remaining
 
     def uses(c):
-        return sorted(tuple(r) for r in c.execute("SELECT held_on, settled_amount FROM fin_holds WHERE target=? AND "
-                                                  "status='settled'", (f"card:{card_id}",)))
+        return [_card_use(c, card_id, m) for m in ("2026-09", "2026-10")]
     with books.read() as c:
         assert october(c) == (0, 20_000, 80_000)
     _arrives(fake, {**charge, "amount": -120.0}, 2, "evt-c10-2")                              # 100.00 -> 120.00
@@ -574,18 +573,23 @@ def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month
     sync_once(books, fake, NEXT_DAY)
     with books.read() as c:
         # October nets +20.00 (reversal and repost) and 0 for the re-date; only those count against the allocation.
-        assert uses(c) == [("2026-09-20", 10_000), ("2026-09-21", 5_000), ("2026-10-16", 2_000)]
+        assert uses(c) == [15_000, 2_000]
         assert october(c) == (2_000, 18_000, 80_000)
     _arrives(fake, {**charge, "amount": -130.0}, 3, "evt-c10-3")                              # again, same month
     sync_once(books, fake, "2026-10-17T12:30:00.000000Z")
     with books.read() as c:
-        assert uses(c) == [("2026-09-20", 10_000), ("2026-09-21", 5_000), ("2026-10-17", 3_000)]
+        assert uses(c) == [15_000, 3_000]
         assert october(c) == (3_000, 17_000, 80_000)
     _arrives(fake, {**charge, "amount": -130.0, "status": "cancelled"}, 4, "evt-c10-4")         # the bank cancels it
     sync_once(books, fake, "2026-10-18T12:30:00.000000Z")
     with books.read() as c:
-        assert uses(c) == [("2026-09-20", 10_000), ("2026-09-21", 5_000), ("2026-10-17", -10_000)]
+        assert uses(c) == [15_000, -10_000]
         assert october(c) == (-10_000, 30_000, 80_000)
+    # Codex round 5 (a): a later update of the cancelled charge changes nothing the books did not.
+    _arrives(fake, {**charge, "amount": -130.0, "status": "cancelled", "note": "x"}, 5, "evt-c10-5")
+    sync_once(books, fake, "2026-10-18T12:30:00.000000Z")
+    with books.read() as c:
+        assert uses(c) == [15_000, -10_000] and october(c) == (-10_000, 30_000, 80_000)
 
 
 def test_a_re_categorized_card_charge_still_uses_the_cards_allocation(books):
@@ -601,3 +605,40 @@ def test_a_re_categorized_card_charge_still_uses_the_cards_allocation(books):
         fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-c12'").fetchone()[0])
         assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")}).status == "committed"
         assert FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z").held == 20_000 - 4_000
+
+
+def test_card_use_follows_the_ledger_across_open_months_and_a_reopened_month(books):
+    """Codex round 5 (b) and (c): Sept 100.00 closed, corrected to 120.00 in October, then to 130.00 in November with
+    October still open: the books hold Sept +100, Oct -100 (+120 -120), Nov +130, and the card's use is exactly that,
+    so November has 70.00 reserved, not 0. Reopening September and correcting again counts where the books post."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)                       # budget 1,000.00; card allocation 200.00
+    sync_once(books, fake)
+    charge = _txn("txn-c13", "credit-io", -100.0, "creditCardTransaction", day="2026-09-20", cardId="card-eve")
+    _arrives(fake, charge, 1, "evt-c13-1")
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    _arrives(fake, {**charge, "amount": -120.0}, 2, "evt-c13-2")
+    sync_once(books, fake, NEXT_DAY)
+    _arrives(fake, {**charge, "amount": -130.0}, 3, "evt-c13-3")
+    sync_once(books, fake, "2026-11-02T12:30:00.000000Z")
+
+    def months(c):
+        return [_card_use(c, card_id, m) for m in ("2026-09", "2026-10", "2026-11")]
+
+    def remaining(c, at):
+        s = FA.budget_state(c, budget_id, at)
+        return s.actual, s.held, s.remaining
+    with books.read() as c:
+        assert months(c) == [10_000, -10_000, 13_000]
+        assert remaining(c, "2026-11-20T12:00:00.000000Z") == (13_000, 7_000, 80_000)
+    with books.transaction() as c:
+        assert act(c, OWNER, "reopen_period", {"month": "2026-09"}).status == "committed"
+    _arrives(fake, {**charge, "amount": -90.0}, 4, "evt-c13-4")             # September is open again
+    sync_once(books, fake, "2026-11-03T12:30:00.000000Z")
+    with books.read() as c:
+        # The November entry is reversed in November and the charge reposts on its own September day.
+        assert months(c) == [19_000, -10_000, 0]
+        assert remaining(c, "2026-11-20T12:00:00.000000Z") == (0, 20_000, 80_000)
