@@ -19,6 +19,12 @@ def ref_for_local(c: sqlite3.Connection, cid: str, local_table: str, local_id: s
                      "ORDER BY created_at LIMIT 1", (cid, local_table, local_id)).fetchone()
 
 
+def refs_holding(c: sqlite3.Connection, cid: str, local_table: str, local_id: str) -> list[Any]:
+    """The refs whose local id (a comma-separated list of ids, for an application) names `local_id`."""
+    return c.execute("SELECT * FROM fin_external_refs WHERE connection_id=? AND local_table=? AND "
+                     "(',' || local_id || ',') LIKE ?", (cid, local_table, f"%,{local_id},%")).fetchall()
+
+
 def ref_insert(c: sqlite3.Connection, *, cid: str, local_table: str, local_id: str, kind: str, external_id: str,
                revision: str, status: str, at: str, by: str) -> None:
     c.execute("INSERT INTO fin_external_refs(id, connection_id, local_table, local_id, external_id, kind, revision, "
@@ -115,9 +121,23 @@ def unlink_feed(c: sqlite3.Connection, entry_id: str, at: str) -> None:
 
 
 def writes_for_feed(c: sqlite3.Connection, feed_id: str) -> list[Any]:
-    """Writes out for a bank row not yet confirmed (pending, or claimed for a send)."""
-    return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND json_extract(payload_json, '$.feed_id')=?",
-                     (feed_id,)).fetchall()
+    """Writes out for a bank row not yet confirmed: pending (or claimed for a send), or unknown, which may have landed at
+    the provider and so is never sent again."""
+    return c.execute("SELECT * FROM fin_outbox WHERE (status='pending' OR (status='failed' AND unknown=1)) "
+                     "AND json_extract(payload_json, '$.feed_id')=?", (feed_id,)).fetchall()
+
+
+def outbox_counts(c: sqlite3.Connection, cid: str) -> dict[str, int]:
+    """A connection's writes out by state: pending, failed (refused by the provider), unknown (it cannot tell whether
+    the write landed), withheld (held back in rehearsal)."""
+    out = {"pending": 0, "failed": 0, "unknown": 0, "withheld": 0}
+    for status, unknown, n in c.execute("SELECT status, unknown, COUNT(*) FROM fin_outbox WHERE connection_id=? "
+                                        "GROUP BY status, unknown", (cid,)).fetchall():
+        if status == "failed" and unknown:
+            out["unknown"] += int(n)
+        elif status in out:
+            out[str(status)] += int(n)
+    return out
 
 
 def cancel_feed_writes(c: sqlite3.Connection, feed_id: str, why: str, at: str) -> None:
@@ -247,9 +267,10 @@ def books_status(c: sqlite3.Connection, cid: str) -> str:
 
 
 def pending_writes(c: sqlite3.Connection, cid: str) -> list[Any]:
-    """This connection's writes not yet answered, oldest first: one of them may already be at the provider."""
-    return c.execute("SELECT * FROM fin_outbox WHERE connection_id=? AND status='pending' ORDER BY created_at, id",
-                     (cid,)).fetchall()
+    """This connection's writes not answered, oldest first: one of them may already be at the provider (an unknown one
+    too, until the provider's record shows up)."""
+    return c.execute("SELECT * FROM fin_outbox WHERE connection_id=? AND (status='pending' OR (status='failed' AND "
+                     "unknown=1)) ORDER BY created_at, id", (cid,)).fetchall()
 
 
 def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:
@@ -262,3 +283,38 @@ def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:
 def connection_owner(c: sqlite3.Connection, cid: str) -> str:
     row = c.execute("SELECT created_by FROM fin_connections WHERE id=?", (cid,)).fetchone()
     return str(row[0]) if row else ""
+
+
+def credit_refunds_of_refund(c: sqlite3.Connection, refund_entry_id: str) -> list[Any]:
+    """The live refunds a refund entry made against a credit memo or supplier's credit."""
+    return c.execute("SELECT * FROM fin_credit_refunds WHERE refund_entry_id=? AND voided_at IS NULL ORDER BY created_at, id",
+                     (refund_entry_id,)).fetchall()
+
+
+def credit_refunds_of_credit(c: sqlite3.Connection, credit_entry_id: str) -> list[Any]:
+    """The live refunds made against a credit memo or supplier's credit entry."""
+    return c.execute("SELECT * FROM fin_credit_refunds WHERE credit_entry_id=? AND voided_at IS NULL ORDER BY created_at, id",
+                     (credit_entry_id,)).fetchall()
+
+
+def credit_refunded(c: sqlite3.Connection, credit_entry_id: str) -> int:
+    """What has been refunded against a credit memo or supplier's credit entry, in minor units."""
+    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_credit_refunds WHERE credit_entry_id=? AND voided_at IS NULL",
+                    (credit_entry_id,)).fetchone()
+    return int(row[0])
+
+
+def credit_refund_insert(c: sqlite3.Connection, *, book_id: str, credit_entry_id: str, refund_entry_id: str, amount: int,
+                         day: str, at: str, by: str) -> None:
+    c.execute("INSERT INTO fin_credit_refunds(id, book_id, credit_entry_id, refund_entry_id, amount, day, created_at, "
+              "created_by) VALUES(?,?,?,?,?,?,?,?)",
+              (new_id(), book_id, credit_entry_id, refund_entry_id, amount, day, at, by))
+
+
+def credit_refund_void(c: sqlite3.Connection, row_id: str, at: str) -> None:
+    c.execute("UPDATE fin_credit_refunds SET voided_at=? WHERE id=? AND voided_at IS NULL", (at, row_id))
+
+
+def credit_refund_move(c: sqlite3.Connection, row_id: str, credit_entry_id: str) -> None:
+    c.execute("UPDATE fin_credit_refunds SET credit_entry_id=? WHERE id=?", (credit_entry_id, row_id))
+

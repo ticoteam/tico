@@ -285,6 +285,11 @@ CREATE TABLE IF NOT EXISTS fin_cash_rollups (
   team TEXT NOT NULL DEFAULT '', teammate TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
   amount BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (book_id, day, account_id, tagset));
 
+CREATE TABLE IF NOT EXISTS fin_credit_refunds (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  credit_entry_id TEXT NOT NULL, refund_entry_id TEXT NOT NULL, amount BIGINT NOT NULL, day TEXT NOT NULL,
+  voided_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS fin_view_grants (
   id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL CHECK (subject_kind IN ('teammate','team')), subject TEXT NOT NULL,
   new_members INTEGER NOT NULL DEFAULT 0, members_json TEXT NOT NULL DEFAULT '[]',
@@ -375,6 +380,8 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_account ON fin_feed_txns(money_account_
 CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_link ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.link'));
+CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_account_id, json_extract(raw_json, '$.source'));
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
 CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
@@ -388,6 +395,8 @@ CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, crea
 CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
 CREATE INDEX IF NOT EXISTS fin_settlements_to ON fin_settlements(to_kind, to_id);
 CREATE INDEX IF NOT EXISTS fin_settlements_from ON fin_settlements(from_kind, from_id);
+CREATE INDEX IF NOT EXISTS fin_credit_refunds_credit ON fin_credit_refunds(credit_entry_id);
+CREATE INDEX IF NOT EXISTS fin_credit_refunds_refund ON fin_credit_refunds(refund_entry_id);
 CREATE INDEX IF NOT EXISTS fin_attachments_subject ON fin_attachments(subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_bills_pay_on ON fin_bills(status, pay_on);
@@ -448,6 +457,9 @@ ADDED = (
     ("fin_feed_txns", "hold_id", "TEXT"), ("fin_feed_txns", "reconciliation_id", "TEXT"),
     ("fin_feed_txns", "version", "INTEGER NOT NULL DEFAULT 0"), ("fin_feed_txns", "request_id", "TEXT"),
     ("fin_feed_txns", "raw_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_outbox", "unknown", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_bill_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_invoice_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
     ("fin_reconciliations", "cleared_total", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_reconciliations", "statement_id", "TEXT"), ("fin_reconciliations", "action_id", "TEXT"),
     ("fin_reconciliations", "undone_at", "TEXT"), ("fin_reconciliations", "undone_by", "TEXT"),
@@ -476,6 +488,8 @@ ADDED = (
     # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
     ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
     ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
+    # the provider's id for a journal or credit memo line, so its tags follow the line across a revision
+    ("fin_lines", "external_line", "TEXT NOT NULL DEFAULT ''"),
 )
 
 
@@ -535,8 +549,15 @@ def phase2(c: sqlite3.Connection) -> None:
 
 
 def phase4(c: sqlite3.Connection) -> None:
-    """Cloud migration 68: the mirror's tables and columns (external refs with their kind, revision and status, and the
-    restatements a closed month takes), on an install made before them. The same statements as `create`, which skips
+    """Cloud migration 68: the mirror's tables and columns (external refs with their kind, revision and status, the
+    restatements a closed month takes, and each entry line's provider id), on an install made before them. The same
+    statements as `create`, which skips whatever exists."""
+    create(c)
+
+
+def stripe(c: sqlite3.Connection) -> None:
+    """Cloud migration 69: the indexes the Stripe lookups search by, the charge link and the source id each Stripe row
+    carries in its raw json (a refund's charge total is one of them). The same statements as `create`, which skips
     whatever exists."""
     create(c)
 

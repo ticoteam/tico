@@ -433,6 +433,12 @@ def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
     return int(row[0])
 
 
+def repoint_credit(c: sqlite3.Connection, old: str, new: str) -> None:
+    """The credit applications a credit memo's entry made now come from its replacement entry, still applied."""
+    c.execute("UPDATE fin_settlements SET from_id=?, entry_id=? WHERE from_kind='credit' AND from_id=? "
+              "AND voided_at IS NULL", (new, new, old))
+
+
 def open_owing(c: sqlite3.Connection, kind: str, book_id: str, left: int, most: int = 20) -> list[Any]:
     """Open documents that still owe exactly `left`, with `contact_name` (what a new feed row may be paying). A
     scheduled bill counts (the vendor may pull it before its day); one with a live Finance payment does not (that

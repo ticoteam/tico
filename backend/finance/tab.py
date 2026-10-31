@@ -12,11 +12,12 @@ from .core import dates
 from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
-from .core.ledger import PNL_TYPES, Account, descendants
+from .core.ledger import PNL_TYPES, Account, Book, descendants
 from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
+from .store import mirror as SX
 
 Row = dict[str, object]
 MAX_PAGE = 200
@@ -511,6 +512,17 @@ def _sync(conn: Any | None) -> Row | None:
             "egress_ip": settings.get("egress_ip")}
 
 
+def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> str:
+    """Where a books connection stands: `reconnect` while its grant is not working, `native` unless it is the book's
+    mirror, and `exporting` until the book's export has gone out."""
+    if status == "reconnect":
+        return "reconnect"
+    if book.mode != "mirror" or book.mirror_connection_id != cid:
+        return "native"
+    export = SX.as_map(SX.mirror_state(c, cid).get("export"))
+    return "mirror" if not export or export.get("done") else "exporting"
+
+
 def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at: str | None = None) -> Row:
     """Every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
     manual) with a count per group, so a card program with 500 cards is one row. Each source shows its account
@@ -555,9 +567,11 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at:
                                                   "direct_send": bool(s.get("direct_send")),
                                                   "why_not": s.get("approval_note")}})
         elif str(r["purpose"]) == "books":
-            rows["accounting"].append({"id": str(r["id"]), "kind": "connection", "name": str(r["name"] or
-                                                                                              r["provider"]),
-                                       "provider": str(r["provider"]), "sync": _sync(r)})
+            cid = str(r["id"])
+            rows["accounting"].append({"id": cid, "kind": "connection", "name": str(r["name"] or r["provider"]),
+                                       "provider": str(r["provider"]), "sync": _sync(r),
+                                       "mirror": _books_mirror(c, ctx.book, cid, str(r["status"])),
+                                       "outbox": SX.outbox_counts(c, cid)})
     usage = {k: entries.get(k, 0) for k in ("usage",)}
     if usage["usage"]:
         rows["tico"].append({"id": "tico-usage", "kind": "usage", "name": "AI services and video (Gateway meter)",

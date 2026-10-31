@@ -31,7 +31,7 @@ GONE = "gone"           # deleted at the provider and never in the books: nothin
 BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
     "quickbooks": ("accounts", "parties", "documents", "payments", "entries"),
     "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
-             "bank_transactions", "bank_transfers"),
+             "bank_transactions", "bank_transfers", "overpayments", "prepayments"),
 }
 
 
@@ -44,6 +44,7 @@ class Ext:
     revision: str
     deleted: bool = False
     reference: str = ""
+    currency: str = ""      # the record's currency code ("" when the provider names none)
 
     @property
     def key(self) -> str:
@@ -77,6 +78,7 @@ class EntryLine:
     party: str = ""     # the provider's key for the vendor or customer ("Vendor:9"), "" for none
     description: str = ""
     rounding: bool = False  # the provider's rounding on a document: the one line that may be negative
+    key: str = ""       # the provider's id for the line: it stays the same when the line's amount changes
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,7 @@ class Journal:
     lines: tuple[EntryLine, ...]
     basis: str = "both"     # "accrual" when the provider keeps the entry out of its cash-basis reports
     currency: str = ""      # the provider's currency code; "" when the provider names none (the books' own)
+    refund_of: str = ""     # the credit memo or supplier's credit this refunds money for ("" for none)
 
 
 @dataclass(frozen=True)
@@ -107,6 +110,7 @@ class Document:
     links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
     tax: int = 0                                # the sales tax in its total, posted on TAX_ACCOUNT
     currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
+    control: str = ""                           # the provider's payable or receivable account ("Account:33")
 
 
 @dataclass(frozen=True)
@@ -242,12 +246,13 @@ def encode(r: Record) -> dict[str, Any]:
 
 def _ext(d: Mapping[str, Any]) -> Ext:
     return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)),
-               str(d.get("reference", "")))
+               str(d.get("reference", "")), str(d.get("currency", "")))
 
 
 def _lines(raw: Any) -> tuple[EntryLine, ...]:
     return tuple(EntryLine(str(x["account"]), int(x["amount"]), str(x.get("party", "")),
-                           str(x.get("description", "")), bool(x.get("rounding", False))) for x in raw)
+                           str(x.get("description", "")), bool(x.get("rounding", False)),
+                           key=str(x.get("key", ""))) for x in raw)
 
 
 def _pairs(raw: Any) -> tuple[tuple[str, int], ...]:
@@ -268,11 +273,13 @@ def decode(d: Mapping[str, Any]) -> Record:
                      tuple(str(x) for x in d.get("emails", [])))
     if kind == "Journal":
         return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]),
-                       str(d.get("basis", "both")), str(d.get("currency", "")))
+                       str(d.get("basis", "both")), str(d.get("currency", "")),
+                       refund_of=str(d.get("refund_of", "")))
     if kind == "Document":
         return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
                         _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),
-                        int(d.get("tax", 0)), str(d.get("currency", "")))
+                        int(d.get("tax", 0)), str(d.get("currency", "")),
+                        control=str(d.get("control", "")))
     if kind == "Settlement":
         return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
                           _pairs(d.get("links", [])), _pairs(d.get("credits", [])), str(d.get("currency", "")))

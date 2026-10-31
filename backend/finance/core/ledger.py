@@ -51,6 +51,7 @@ class Line:
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
     role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+    external_line: str = ""  # the provider's id for the line, so its tags follow it across a revision
 
 
 NAME_MAX = 80               # a vendor name's length: names are capped to it before they are keyed, never keys after
@@ -148,9 +149,11 @@ def entry(raw: object, book: Book) -> Entry:
                  basis=V.choice(p, "basis", BASES, "both"))
 
 
-def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, reversing: bool = False) -> None:
+def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, reversing: bool = False,
+          importing: bool = False) -> None:
     """Invariants 1, 3 and 4 for an entry about to post. `closed` says whether its date is in a closed period. A
-    reversal may post to an account deactivated since the original, or the original could never be undone."""
+    reversal may post to an account deactivated since the original, or the original could never be undone; a provider's
+    history may name an account it retired, which is taken in as it was (`importing`)."""
     if e.source not in SOURCES:
         raise invalid(f"a source is {'|'.join(SOURCES)}")
     if e.basis not in BASES:
@@ -165,7 +168,7 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
         account = accounts.get(item.account_id)
         if account is None or account.book_id != e.book_id:
             raise invalid("a line's account is not in this book")
-        if not account.active and not reversing:
+        if not account.active and not (reversing or importing):
             raise invalid(f"account {account.code} {account.name} is inactive")
         money.minor(item.amount)
         if item.currency != book.base_currency:

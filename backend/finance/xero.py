@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from decimal import Decimal
 from email.utils import format_datetime
 from typing import Any
@@ -42,11 +43,12 @@ MAX_PAGES = 200                       # a change window longer than this (20,000
 FIND_PAGES = 50                       # a lookup for a write reads this many pages (5,000 rows); past them it cannot tell
 CHANGE_EVERY = 240                    # seconds between change-feed reads: a change is seen within five minutes (§10)
 ORDER = "UpdatedDateUTC DESC"         # newest first, so rows edited during a read move to the front (re-read, not skipped)
+CHANGE_ORDER = "UpdatedDateUTC ASC"   # oldest first: a list cut at the cap is complete to its last row read
 EXTRA = {"parties": {"includeArchived": "true"}, "bank_transfers": {"includeDeleted": "true"}}
 UNPAGED = ("accounts", "bank_transfers")   # Xero returns these whole, with no page parameter
 ENDPOINTS = {"accounts": "Accounts", "parties": "Contacts", "invoices": "Invoices", "credit_notes": "CreditNotes",
              "payments": "Payments", "manual_journals": "ManualJournals", "bank_transactions": "BankTransactions",
-             "bank_transfers": "BankTransfers"}
+             "bank_transfers": "BankTransfers", "overpayments": "Overpayments", "prepayments": "Prepayments"}
 WRAPPER = {"Account": "Accounts", "Contact": "Contacts", "Invoice": "Invoices", "Bill": "Invoices",
            "Payment": "Payments", "BillPayment": "Payments", "CreditMemo": "CreditNotes",
            "ManualJournal": "ManualJournals", "BankTransaction": "BankTransactions"}     # a write's kind -> its list
@@ -142,11 +144,17 @@ def _fault(reply: Reply) -> str:
     return text[:MAX_TEXT] or f"Xero answered {reply.status}"
 
 
+def _latest(rows: list[dict[str, Any]]) -> datetime | None:
+    """The newest UpdatedDateUTC among rows, None when no row has one."""
+    stamps = [M.parse(text) for text in (X.stamp(row.get("UpdatedDateUTC")) for row in rows) if text]
+    return max(stamps, default=None)
+
+
 def _lookup_failure(reply: Reply) -> Sent:
     """A lookup that got no list back: a retry asks again, and a refusal says the write's fate is unknown."""
     if reply.status in (0, 429) or reply.status >= 500:
         return Sent(False, error="Xero did not answer the lookup")
-    return Sent(False, error=f"UNKNOWN: {_fault(reply)}"[:MAX_TEXT], final=True)
+    return Sent(False, error=f"UNKNOWN: {_fault(reply)}"[:MAX_TEXT], final=True, unknown=True)
 
 
 def _marker(key: str) -> str:
@@ -185,11 +193,11 @@ def _has_counterparty(body: Mapping[str, Any]) -> bool:
     return False
 
 
-def _query(entity: str, page: int) -> dict[str, str]:
-    """The query a list of an entity is read with: a page, newest first. A whole list takes only its own extras."""
+def _query(entity: str, page: int, order: str = ORDER) -> dict[str, str]:
+    """The query a list of an entity is read with: a page, in `order`. A whole list takes only its own extras."""
     if entity in UNPAGED:
         return dict(EXTRA.get(entity, {}))
-    return {"page": str(page), "order": ORDER, **EXTRA.get(entity, {})}
+    return {"page": str(page), "order": order, **EXTRA.get(entity, {})}
 
 
 def _write_of(op: str, body: Mapping[str, Any]) -> tuple[str | None, str, str, Any]:
@@ -231,6 +239,9 @@ class Xero:
     rate limit that outlasts the pass's budget stops every later call in it, and `hold` says how long the books wait."""
 
     entities: tuple[str, ...] = M.BOOK_ENTITIES["xero"]
+    # One cursor per entity with a change time (bills come from the invoices list); bank transfers have none.
+    feeds: tuple[str, ...] = ("accounts", "parties", "invoices", "credit_notes", "payments", "overpayments",
+                              "prepayments", "bank_transactions", "manual_journals")
 
     def __init__(self, tenant: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -280,10 +291,10 @@ class Xero:
                 self.hold = max(self.hold, reply.retry_after or HOLD_DEFAULT)
             return reply
 
-    def _rows(self, entity: str, page: int, since: str = "") -> tuple[list[dict[str, Any]], Reply]:
+    def _rows(self, entity: str, page: int, since: str = "", order: str = ORDER) -> tuple[list[dict[str, Any]], Reply]:
         """One list's rows as Xero gave them, and the answer; no rows when the answer is not a list."""
         name = ENDPOINTS[entity]
-        reply = self._call("GET", name, query=_query(entity, page),
+        reply = self._call("GET", name, query=_query(entity, page, order),
                            headers={"If-Modified-Since": since} if since else None)
         if reply.status != 200:
             return [], reply
@@ -335,28 +346,58 @@ class Xero:
             number += 1
         return self._taken(entity, rows[skip:skip + size])
 
-    def changed(self, since: str) -> Read:
-        """Every row of every entity changed since the time, page by page (a short page ends a list). Bank transfers are
-        read whole with no change time, since Xero stamps none on them."""
-        stamp = format_datetime(M.parse(since), usegmt=True)     # If-Modified-Since is an HTTP date
+    def changed(self, since: Mapping[str, str]) -> Read:
+        """The change feed, one cursor per entity (see feeds), each read from its own stamp, oldest change first. Each
+        page asks for the changes after the newest one the page before brought in (keyset paging), so an edit between
+        pages cannot move a row past the read. A feed cut at the page cap is complete to `through`: the stamp just
+        before the newest change read, which is kept exactly and read again from. Bank transfers have no change time:
+        read whole."""
         out: list[Record] = []
-        for entity in self.entities:
+        through: list[tuple[str, str]] = []
+        for entity in self.feeds:
+            if entity not in since:
+                continue
             if entity in UNPAGED:
-                got = self._read(entity, 1, "" if entity == "bank_transfers" else stamp)
+                got = self._read(entity, 1, format_datetime(M.parse(since[entity]), usegmt=True))  # an HTTP date
                 if not got.ok:
                     return got
                 out += got.records
                 continue
-            for number in range(1, MAX_PAGES + 1):
-                got = self._read(entity, number, stamp)
+            start = M.parse(since[entity])
+            ims, newest, page = start, start, 1
+            seen: set[tuple[str, str]] = set()
+            for _ in range(MAX_PAGES):
+                rows, reply = self._rows(entity, page, format_datetime(ims, usegmt=True), CHANGE_ORDER)
+                if reply.status != 200:
+                    return Read(False, error=_fault(reply) if reply.status else reply.note)
+                got = self._taken(entity, rows)
                 if not got.ok:
                     return got
-                out += got.records
-                if got.seen < PAGE:
+                for record in got.records:
+                    ext = record if isinstance(record, M.Ext) else record.ext
+                    if (ext.key, ext.revision) not in seen:
+                        seen.add((ext.key, ext.revision))
+                        out.append(record)
+                if len(rows) < PAGE:
                     break
+                last = _latest(rows)
+                if last is not None and last > newest:
+                    # Every change before `last` is read by now, so the next page starts at the whole second before
+                    # it: a row at `last` is after that second, and a row a second earlier is read again, not missed.
+                    newest = last
+                    moved = max(ims, (last - timedelta(microseconds=1)).replace(microsecond=0))
+                    ims, page = (moved, 1) if moved != ims else (ims, page + 1)
+                else:
+                    page += 1       # the rows of one timestamp fill the page: the next page of that same second
             else:
-                return Read(False, error=f"Xero's {ENDPOINTS[entity]} changed too much to read in one pass")
-        return Read(True, tuple(out))
+                cut = max(start, newest - timedelta(milliseconds=1))
+                through.append((entity, cut.strftime("%Y-%m-%dT%H:%M:%S.%fZ")))
+        if "bank_transfers" in self.entities:
+            got = self._read("bank_transfers", 1)
+            if not got.ok:
+                return got
+            out += got.records
+        return Read(True, tuple(out), through=tuple(through))
 
     def _lookup(self, entity: str, kind: str, hit: Callable[[Mapping[str, Any]], bool]) -> Sent | None:
         """The first live row of an entity that `hit` takes, newest first, through every page Xero holds; None when no row
@@ -369,10 +410,19 @@ class Xero:
             for row in rows:
                 if row.get(id_key) and _live(entity, row) and hit(row):
                     return Sent(True, kind=kind, external_id=str(row[id_key]),
-                                revision=X.stamp(row.get("UpdatedDateUTC")))
+                                revision=X.stamp(row.get("UpdatedDateUTC")), record=self._found(entity, row))
             if entity in UNPAGED or len(rows) < PAGE:
                 return None
-        return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True)
+        return Sent(False, error="UNKNOWN: too many rows to tell whether Xero holds the write", final=True,
+                    unknown=True)
+
+    def _found(self, entity: str, row: dict[str, Any]) -> M.Document | M.Journal | M.Settlement | None:
+        """The record a found row reads as, for the books to check the write it answers against."""
+        got = self._taken(entity, [row])
+        for record in (got.records if got.ok else ()):
+            if isinstance(record, (M.Document, M.Journal, M.Settlement)):
+                return record
+        return None
 
     def _allocated(self, body: Mapping[str, Any]) -> Sent | None:
         """The allocation of a credit note to an invoice for the amount, when Xero holds it: the write may have landed."""
@@ -439,7 +489,7 @@ class Xero:
         if op in ("account.create", "party.create"):
             name = str(body.get("name") or "").casefold()
             if not name:
-                return Sent(False, error="UNKNOWN: no name to find the write by", final=True)
+                return Sent(False, error="UNKNOWN: no name to find the write by", final=True, unknown=True)
             if op == "account.create":
                 return self._lookup("accounts", "Account", lambda r: str(r.get("Name") or "").casefold() == name)
             return self._lookup("parties", "Contact", lambda r: str(r.get("Name") or "").casefold() == name)

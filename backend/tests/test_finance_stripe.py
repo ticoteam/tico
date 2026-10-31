@@ -637,6 +637,30 @@ def test_a_refund_of_an_invoice_paid_sale_takes_its_share_off_what_the_invoice_h
     assert _invoice_row(books, iid) == (6_000, "partial")
 
 
+def test_a_held_sale_applied_in_full_by_hand_cannot_be_categorized_again(books):
+    """A $100 sale with a $3 fee applied in full to a $100 invoice: the books hold it in AR, so categorizing it again
+    would post its money a second time. The row is refused as applied in full and nothing posts."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 10_000)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
+                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    stripe.add("charge", 10_000, 300, "Acme Hold")
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        held = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": held, "amount": 10_000})
+        assert made.status == "committed", made
+    with books.transaction() as c:
+        again = act(c, OWNER, "categorize", {"feed_id": held, "account_id": account(c, "4000")})
+        assert again.status != "committed" and again.code == "conflict"
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "6200")) == (0, -10_000, 300)
+        assert _every_entry_balances(c)
+
+
 def test_a_refund_gives_back_no_more_than_each_settlement_received_and_the_rest_is_a_plain_refund(books):
     """A $100 sale a person applied $50 of to an invoice: the full refund gives the invoice its $50 back, and the rest
     of the refund is paid out of the customer's credit. The invoice never owes a negative amount."""

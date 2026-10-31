@@ -35,7 +35,7 @@ def with_team(ctx: Ctx, tags: Mapping[str, str]) -> dict[str, str]:
 
 
 def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str = "",
-         reversing: bool = False, touch: bool = True) -> tuple[str, list[str]]:
+         reversing: bool = False, touch: bool = True, importing: bool = False) -> tuple[str, list[str]]:
     """Check and post one entry. The entry id and its line ids. `touch=False` leaves the budget crossings to the
     caller, for once everything that goes with the entry is written."""
     # A plain vendor name is keyed folded (L.name_key; a contact's id is its own key) and keeps its text as the key's
@@ -47,7 +47,7 @@ def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str
     e = replace(e, lines=tuple(replace(x, tags=with_team(ctx, x.tags), contact_id=x.contact_id if reversing else
                                        L.name_key(x.contact_id[:L.NAME_MAX])) for x in e.lines))
     closed = SL.closed_on(ctx.c, ctx.book.id, e.entry_date)
-    L.check(e, ctx.book, ctx.accounts, closed, reversing)
+    L.check(e, ctx.book, ctx.accounts, closed, reversing, importing)
     period_id = ensure_period(ctx, e.entry_date)
     entry_id = SL.new_id()
     line_ids = SL.insert_entry(ctx.c, e, entry_id=entry_id, period_id=period_id, action_id=action_id,
