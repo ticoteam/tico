@@ -419,6 +419,13 @@ def restore_tasks(c, ids, actor=None):
         for row in relations:
             if TR.restore_row(c, row) is False:
                 unlinked.setdefault(tid, []).append(row["kind"])
+    for e in entries:
+        # A task under a private parent is private (task_relations.set_parent's rule): a subtask left public while
+        # its parent sat in the trash goes private with the parent's return.
+        if H.task_private(c, {"id": e["task_id"]}):
+            for below in H.descendants(c, e["task_id"]):
+                if not H.task_private(c, below):
+                    H._made_private(c, actor, below["id"])
     for e, snap in snapshots:
         task = snap["rows"]["tasks"][0]
         links = {}

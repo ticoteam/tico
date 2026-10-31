@@ -429,8 +429,11 @@ def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
     service(api).tick()
     drain(api)
     task_id = items(api)["441"]["task_id"]
+    with api.app.state.store.transaction() as c:
+        sub = H.task_create(c, H.KEEPER, "Pay it", "", "bot:finance", parent_id=task_id, lint=False,
+                            deduplicate=False)["id"]
     with api.app.state.store.transaction() as c:          # filed public by the build before V2, then deleted
-        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id=?", (task_id,))
+        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id IN (?,?)", (task_id, sub))
         assert task_delete.delete_tasks(c, [task_id], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
         c.execute("DELETE FROM mail_private_backfill")
         H._apply(c, postal_mail_schema.V3)
@@ -438,3 +441,4 @@ def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
     with api.app.state.store.transaction() as c:
         assert task_delete.restore_tasks(c, [task_id])["restored"] == [task_id]
     assert (task(api, task_id)["private"], task(api, task_id)["visibility"]) == (1, "private")
+    assert task(api, sub)["private"] == 1                 # its subtask, kept live, goes private with it
