@@ -127,7 +127,7 @@ def watched(c, bot):
             return False
         key = R.who_key(c, "bot:" + slug)
         return any(R._hits(row["who"], key) for row in R._active(c))
-    except Exception:            # no tables yet (an old copy): nothing to hide
+    except Exception:  # noqa: BLE001 - no tables yet (an old copy): nothing to hide
         return False
 
 
@@ -207,7 +207,7 @@ def _ask(engine, state, questions, label, level):
             box["result"] = B.ask(engine, state, questions, label, level)
         except J.JudgeError as exc:
             box["error"] = exc.code or "error"
-        except Exception as exc:    # a fake, a provider bug: the write never breaks on it
+        except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the write never breaks on it
             LOG.warning("Rule check call failed: %s", type(exc).__name__)
             box["error"] = "error"
     worker = threading.Thread(target=work, name="org-rule-check", daemon=True)
@@ -297,7 +297,7 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
         if broken is None:
             return {**verdict, "outcome": "unchecked", "error": error or "shape", "call": call["id"]}
         return {**verdict, "broken": broken, "outcome": "broken" if broken else "pass", "call": call["id"]}
-    except Exception as exc:          # the check never stops the write
+    except Exception as exc:  # noqa: BLE001 - the check never stops the write
         LOG.warning("Rule check preflight failed: %s", type(exc).__name__)
         if verdict is not None:
             return {**verdict, "outcome": "unchecked", "error": "error"}
@@ -958,7 +958,7 @@ def health_findings(c, settings):
         if not on(c):
             return []
         s = stats(c, settings)
-    except Exception:
+    except Exception:  # noqa: BLE001 - a Health check never fails the scan
         return []
     total = s["checks_today"] + s["unchecked_today"]
     if total < UNCHECKED_MIN or s["unchecked_today"] / total < UNCHECKED_SHARE:
@@ -1096,7 +1096,7 @@ def install(app, store, auth, mutate):
                 stored = json.loads(hold["payload_json"] or "{}")
                 try:
                     ingest = prepare[hold["operation"]](store, bot_identity(hold), stored.get("replay") or {})
-                except Exception as exc:          # ask ingest's own preflight never stops the send
+                except Exception as exc:  # noqa: BLE001 - ask ingest's own preflight never stops the send
                     LOG.warning("Hold replay preflight failed: %s", type(exc).__name__)
         return mutate(request, body, lambda c: send(c, who, hold_id, body.nonce, ingest, table, check, auth, audience))
 

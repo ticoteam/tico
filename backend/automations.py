@@ -1589,7 +1589,8 @@ class HubServices:
         for _ in range(RULE_TRIES):
             rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
             try:
-                result = self._once(ctx, lambda c: self._ruled(c, rule, do, args, ctx["values"], step=ctx.get("step")))
+                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"],
+                                                                         step=ctx.get("step")))
                 break
             except TaskMoved:
                 continue                   # rolled back, nothing written or recorded: check it as it is now
