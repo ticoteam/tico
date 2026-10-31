@@ -639,6 +639,22 @@ impl Drove {
 
 /// Err when the turn was stopped before it acknowledged its start (a person's Stop, or its task done or closed while it
 /// waited for its login): it ends unstarted, so its job ends with nothing run, not as an uncertain turn the drive stops.
+/// Mask `secrets` in all the turn leaves from now on (a sign-in file found in place or refreshed mid-turn).
+fn mask(aid: &str, redactor: &mut Option<Arc<Redactor>>, vault: &mut Vault, secrets: Vec<String>) {
+    if secrets.is_empty() {
+        return;
+    }
+    match redactor {
+        Some(r) => r.add(&secrets),
+        None => {
+            let r = Arc::new(Redactor::new(&secrets));
+            redact::register(aid, r.clone());
+            *redactor = Some(r);
+        }
+    }
+    vault.values.extend(secrets);
+}
+
 fn unstopped(flags: &Flags) -> Result<(), Fail> {
     if flags.stopped.load(Ordering::SeqCst) {
         return Err(Fail::runtime("Execution interrupted after stop before the turn started"));
@@ -1324,8 +1340,12 @@ impl Runner {
             }
             // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
             let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
-            // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py).
-            crate::model_subscriptions::point_homes(&vault.subscriptions, &mut env);
+            // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py),
+            // when it will run: a busy or held login's turn goes to its fallback, which is signed in when it starts.
+            if busy.is_none() && held.is_none() {
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env);
+                vault.values.extend(placed);
+            }
             if let (Some(d), Some(s)) = (crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
                 s.billing = d.billing;
             }
@@ -1841,6 +1861,11 @@ impl Runner {
                         profile: requested, runtime: hop.runtime.clone(),
                     }));
                 }
+                // Signed in with its own subscription only: the primary's leaves the copied environment, and its home
+                // is let go now that its host has stopped.
+                let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env);
+                mask(&aid, &mut redactor, &mut vault, placed);
                 segments.push(Segment {
                     meter: Meter::default(),
                     config: hop_config.clone(),
@@ -1848,8 +1873,6 @@ impl Runner {
                     billing: crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime)
                         .map_or_else(|| self.billing(&hop.runtime, selected.as_ref()), |d| d.billing),
                 });
-                let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
-                crate::model_subscriptions::point_homes(&vault.subscriptions, &mut hop_env);
                 let own = crate::harness_tools::caps(&hop.runtime, &hop.harness).isolated_user;
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
                     // Leased only now, so a primary that runs as `bot` costs no lease and cleanup sweep. The turn has
@@ -2156,17 +2179,7 @@ impl Runner {
         // The subscription homes' sign-in files go now; a login Codex refreshed is masked in all that follows (the
         // reply, the changes, the result) before it is sent back.
         let refreshed = crate::model_subscriptions::finish(&mut vault.subscriptions);
-        if !refreshed.is_empty() {
-            match &redactor {
-                Some(r) => r.add(&refreshed),
-                None => {
-                    let r = Arc::new(Redactor::new(&refreshed));
-                    redact::register(&aid, r.clone());
-                    redactor = Some(r);
-                }
-            }
-            vault.values.extend(refreshed);
-        }
+        mask(&aid, &mut redactor, &mut vault, refreshed);
         let user = vault.turn_user.take();
         let _ = tokio::task::spawn_blocking(move || drop(user)).await;
         if self.drain.returning(&aid) {
