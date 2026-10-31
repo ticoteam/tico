@@ -196,6 +196,8 @@ function finDialog(title, body, saveLabel, onSave) {
 function pageFinance() {
   const [path, query] = (S.route || '').split('?');
   const parts = path.slice(FIN_ROUTE.length + 1).split('/').filter(Boolean);
+  // A dialog belongs to the page it opened on: a Finance route change (Back, Forward, a link) closes it.
+  document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close());
   FIN = {load: (FIN?.load || 0) + 1, tab: parts[0] || '', arg: decodeURIComponent(parts[1] || ''),
     q: new URLSearchParams(query || ''), acc: FIN_ACCESS};
   FIN_VIEW_AS = FIN.q.get('view_as') || '';
