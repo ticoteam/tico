@@ -77,7 +77,8 @@ def feed_scope(ctx: Ctx, view: VW.View) -> tuple[list[str], list[str]]:
 # ------------------------------------------------------------------------------------------------ balance sheet
 def imported_months(c: sqlite3.Connection, ctx: Ctx, view: VW.View, first: str, last: str, basis: str) -> list[Row]:
     """The months from first to last (YYYY-MM) that hold a standing history import stating a basis other than
-    `basis`: the cells a report labels as imported (§4.1). Owner-visible only, as the imports list is."""
+    `basis`: the cells a report labels as imported (§4.1). Anyone whose view covers everything gets them, since they
+    read the same report lines and need the label to read the numbers; it carries months and bases, never amounts."""
     if not view.everything:
         return []
     return [{"month": str(r["month"]), "basis": str(r["basis"])}

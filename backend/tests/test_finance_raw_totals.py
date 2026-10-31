@@ -164,8 +164,43 @@ def test_reports_mark_the_months_an_import_states_on_another_basis(books):
         assert FR.pnl(c, OWNER, "2026-02-01", "2026-02-28", basis="accrual", at=AT)["imported"] == [months[1]]
         assert FR.pnl(c, OWNER, "2026-01-01", "2026-03-31", basis="cash", at=AT)["imported"] == []
         assert FR.pnl(c, "human:cara", "2026-01-01", "2026-03-31", basis="accrual", at=AT)["imported"] == []
+        act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"})
+        assert FR.pnl(c, "human:dan", "2026-01-01", "2026-03-31", basis="accrual", at=AT)["imported"] == months
         # The sheet and the budgets have no basis of their own: they are stated in the book's.
         assert FR.balance_sheet(c, OWNER, as_of="2026-03-31", at=AT)["imported"] == []
         c.execute("UPDATE fin_books SET basis='accrual'")
         assert FR.balance_sheet(c, OWNER, as_of="2026-03-31", at=AT)["imported"] == months
         assert FR.budget_vs_actual(c, OWNER, "2026-02-01", "2026-02-28", at=AT)["imported"] == [months[1]]
+
+
+def test_a_grantee_without_payroll_detail_learns_nothing_from_an_import(books):
+    payroll = "month,line,amount\n2026-{m},Payroll salaries,{a}\n"
+    mapping = {"Payroll salaries": "6200"}
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                "parent_id": account(c, "6000")})
+        pay = str(made.result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        jan = {"csv": payroll.format(m="01", a=500_000), "basis": "cash", "mapping": mapping, "source_name": "Payroll"}
+        first = act(c, OWNER, "import_raw_totals", jan)
+        assert first.status == "committed", first.reason
+        batch, jan_entry = str(first.result["batch_id"]), str(first.result["months"][0]["entry_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        # Everything, but no payroll detail: each refusal is the one a fresh import of payroll gets.
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"}).status == "committed"
+        fresh = act(c, "human:dan", "import_raw_totals", {**jan, "csv": payroll.format(m="02", a=500_000)}, "dan-feb")
+        assert fresh.code == DENIED and fresh.reason == OUTSIDE
+        replay = act(c, "human:dan", "import_raw_totals", jan, "dan-replay")
+        assert replay.code == DENIED and replay.reason == OUTSIDE and batch not in str(replay.as_dict())
+        guessed = act(c, "human:dan", "import_raw_totals", {**jan, "csv": payroll.format(m="01", a=500_001)},
+                      "dan-guess")
+        assert guessed.code == DENIED and guessed.reason == OUTSIDE and jan_entry not in str(guessed.as_dict())
+        # Positive control: a line she can see, in an open month, passes the view check and asks for approval.
+        software = {"csv": "month,line,amount\n2026-04,Software subscriptions,9000\n", "basis": "cash",
+                    "mapping": {"Software subscriptions": "6100"}}
+        assert act(c, "human:dan", "import_raw_totals", software, "dan-april").status == "needs_approval"
+        # Full detail for her turns the same replay into already_imported, which names the batch.
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals",
+                                                   "full_detail": ["human:dan"]}).status == "committed"
+        again = act(c, "human:dan", "import_raw_totals", jan, "dan-replay-detail")
+        assert again.result["already_imported"] is True and again.result["batch_id"] == batch

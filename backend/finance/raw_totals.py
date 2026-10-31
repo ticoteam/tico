@@ -2,6 +2,7 @@
 total per line, maps the sheet's lines to accounts, and posts one balanced entry per month against Opening balance
 equity. The same file posts nothing again; a month that already holds raw totals is refused until its entry is
 reversed. Every refusal that could name a figure or an entry checks the caller's view first."""
+from collections.abc import Mapping
 from typing import Any
 
 from .context import Ctx
@@ -58,9 +59,17 @@ def _mapping(ctx: Ctx, raw: object) -> dict[str, L.Account]:
     return out
 
 
+def _sees(ctx: Ctx, who: str, account_id: str, tags: Mapping[str, str]) -> bool:
+    """Whether `who` sees this line in the reads and may write it. A private account's line shows only to a viewer with
+    its detail (§7.5), so one they lack the detail of is refused like a line outside the view."""
+    if account_id in ctx.private() and account_id not in ctx.view(who).full_detail:
+        return False
+    return may_write(ctx, who, account_id, tags)
+
+
 def _covered(ctx: Ctx, who: str, lines: list[tuple[str, dict[str, str]]]) -> bool:
-    """Whether `who` may write every one of these (account, tags) lines."""
-    return all(may_write(ctx, who, account_id, tags) for account_id, tags in lines)
+    """Whether `who` sees every one of these (account, tags) lines."""
+    return all(_sees(ctx, who, account_id, tags) for account_id, tags in lines)
 
 
 def _check_month(ctx: Ctx, who: str, month: str) -> None:
@@ -96,8 +105,8 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid(f"no team on the org chart for: {_names(teams)}")
     months = RT.lines_by_month(sheet, by_key, _opening(ctx), ctx.book.base_currency)
     # The view comes first: a replay, a closed month and an occupied month all reveal something, so none of them
-    # answers a caller who cannot write every line of the file.
-    if not all(may_write(ctx, who, x.account_id, x.tags) for lines in months.values() for x in lines):
+    # answers a caller who cannot see every line of the file.
+    if not all(_sees(ctx, who, x.account_id, x.tags) for lines in months.values() for x in lines):
         raise denied(OUTSIDE)
     prior = SR.live_by_digest(ctx.c, ctx.book.id, sheet.digest)
     if prior is not None:
