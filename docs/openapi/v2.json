@@ -4701,6 +4701,118 @@
         ]
       }
     },
+    "/api/v2/cloud-agents": {
+      "get": {
+        "summary": "The cloud coding agents: the supported ones are added to the team, the others are requested from Tico",
+        "operationId": "listCloudAgents",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudAgentList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/cloud-agents/{agent_id}/request": {
+      "post": {
+        "summary": "Request an agent Tico does not connect yet: a seat for it goes on the chart now and Tico's team builds the connection. `other` takes the agent's name or website in `name`",
+        "operationId": "requestCloudAgent",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudAgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seat"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/company": {
       "get": {
         "summary": "The team's Vision and Description (the Company section at the top of Goals), and whether the caller may edit them. The Vision is the strategy's: the draft's for the owner, the published one for everyone else",
@@ -23056,6 +23168,129 @@
         ]
       }
     },
+    "/api/v2/seats/{seat_id}/request": {
+      "get": {
+        "summary": "A seat's cloud agent: where its request stands (requested, building, ready) and the first task waiting for it",
+        "operationId": "getSeatAgent",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatAgent"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/seats/{seat_id}/request-agent": {
+      "post": {
+        "summary": "Request a cloud agent for a seat that has none: the seat keeps its role and holds its place until the agent connects",
+        "operationId": "requestSeatAgent",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SeatAgentRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Seat"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/service-keys": {
       "get": {
         "summary": "Service keys, never the secret (owner and admins)",
@@ -35522,6 +35757,91 @@
           "ask"
         ],
         "title": "ClarifyAsk"
+      },
+      "CloudAgent": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "maker": {
+            "type": "string"
+          },
+          "site": {
+            "type": "string"
+          },
+          "line": {
+            "type": "string"
+          },
+          "supported": {
+            "type": "boolean"
+          },
+          "connect_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "connect_id",
+          "id",
+          "line",
+          "maker",
+          "name",
+          "site",
+          "supported"
+        ],
+        "additionalProperties": true
+      },
+      "CloudAgentList": {
+        "type": "object",
+        "properties": {
+          "agents": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CloudAgent"
+            }
+          }
+        },
+        "required": [
+          "agents"
+        ],
+        "additionalProperties": true
+      },
+      "CloudAgentRequest": {
+        "properties": {
+          "team": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Team",
+            "default": ""
+          },
+          "reports_to": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Reports To",
+            "default": ""
+          },
+          "first_task": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "First Task",
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CloudAgentRequest"
       },
       "CommentDelivery": {
         "type": "object",
@@ -48944,17 +49264,102 @@
           },
           "org_parent": {
             "type": "string"
-          }
+          },
+          "agent": "s",
+          "agent_name": "s",
+          "request_state": "s"
         },
         "required": [
+          "agent",
+          "agent_name",
           "description",
           "id",
           "kind",
           "reports_to",
+          "request_state",
           "stage",
           "title"
         ],
         "additionalProperties": true
+      },
+      "SeatAgent": {
+        "type": "object",
+        "properties": {
+          "seat": {
+            "$ref": "#/components/schemas/Seat"
+          },
+          "agent": {
+            "$ref": "#/components/schemas/CloudAgent"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "requested",
+                "building",
+                "ready"
+              ]
+            }
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "title": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "status",
+                "title"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "agent",
+          "seat",
+          "steps",
+          "tasks"
+        ],
+        "additionalProperties": true
+      },
+      "SeatAgentRequest": {
+        "properties": {
+          "agent": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "title": "Agent"
+          },
+          "first_task": {
+            "type": "string",
+            "maxLength": 8000,
+            "title": "First Task",
+            "default": ""
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "title": "Name",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "agent"
+        ],
+        "title": "SeatAgentRequest"
       },
       "SeatBatch": {
         "type": "object",

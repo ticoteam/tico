@@ -34,7 +34,12 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
 # a chart model's text), when an earlier release's Strategy Bot drafted it and the task that asked it to, and the bot
 # that filled the seat.
 COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
-           ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
+           ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"),
+           # A cloud agent this seat asks Tico to connect (backend/cloud_agents.py): its id, its name for `other`, where
+           # the request stands, the support ticket that asked, and the first task waiting for the agent.
+           ("agent", "TEXT NOT NULL DEFAULT ''"), ("agent_name", "TEXT NOT NULL DEFAULT ''"),
+           ("request_state", "TEXT NOT NULL DEFAULT ''"), ("request_ticket", "TEXT NOT NULL DEFAULT ''"),
+           ("first_task", "TEXT NOT NULL DEFAULT ''"))
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
 # wrote seats then, so it reads as a person's words.
 EARLIER = "earlier"
@@ -150,7 +155,8 @@ def ready_of(config_json):
 def _seat(row):
     return {"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
             "description": row["description"], "reports_to": row["reports_to"], "team": row["team"],
-            "created": row["created"], "created_by": row["created_by"], "updated": row["updated"]}
+            "created": row["created"], "created_by": row["created_by"], "updated": row["updated"],
+            "agent": row["agent"], "agent_name": row["agent_name"], "request_state": row["request_state"]}
 
 
 def seats(c):
@@ -183,6 +189,19 @@ def _reports_to(c, value, seat_id=""):
     if not bot or bot.get("state") == "archived":
         raise Problem("not_found", "Reports-to bot was not found", 404)
     return slug
+
+
+def placement(auth, c, who, reports_to, seat_id=""):
+    """The reporting line a seat would take, checked the way create_seat and update_seat check it, so a caller can
+    refuse before anything outside the database is done."""
+    reports_to = _reports_to(c, reports_to or who.actor, seat_id)
+    _may_place(auth, c, who, reports_to)
+    return reports_to
+
+
+def seat_view(c, seat_id):
+    """One open seat as the API shows it."""
+    return _seat(seat(c, seat_id))
 
 
 def _seat_chain(c, seat_id):

@@ -232,6 +232,12 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   a task for it is refused with the name of the manager it reports to, it is never woken and it has no routines. The owner
   places a seat anywhere; anyone else under themselves or someone below them.
 - A seat is filled by recruiting it ([Recruiting a seat](#recruiting-a-seat)); the bot it gets starts Onboarding.
+- **A cloud agent** Tico does not connect yet is a request, not a bot: `POST /api/v2/cloud-agents/{id}/request` (or
+  `POST /api/v2/seats/{id}/request-agent` for a seat that has none) keeps a seat with `agent` and `request_state`
+  (`requested`; nothing moves it past that yet), and files the request with Tico's team through support as a feedback
+  ticket carrying only its message, with no install ID. The first task waits on the seat as a task its person owns;
+  `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. Closing the seat cancels the request. Claude Code
+  and Codex connect directly instead (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in

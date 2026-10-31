@@ -2547,7 +2547,8 @@ def create_app(settings=None):
                 parent = parents[seat["id"]]
                 if (person or team) and not shown_here(parent):
                     continue
-                shown = {k: v for k, v in dict(seat).items() if k in ("id", "title", "description", "team", "created")}
+                shown = {k: v for k, v in dict(seat).items()
+                         if k in ("id", "title", "description", "team", "created", "agent", "agent_name", "request_state")}
                 reports = seat["reports_to"]
                 if reports and not reports.startswith("human:") and not access.get(reports, auth.FULL)["see"]:
                     reports = parent[2:] if parent.startswith("b:") else (
@@ -7943,6 +7944,8 @@ def create_app(settings=None):
     install_settings_catalog(app, store, auth, settings)
     from .support import install as install_support
     install_support(app, store, settings, census)
+    from .cloud_agents import install as install_cloud_agents
+    install_cloud_agents(app, store, auth, settings)
     from .inbound import install as install_inbound
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
