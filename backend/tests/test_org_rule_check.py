@@ -406,3 +406,20 @@ def test_no_engine_call_happens_under_the_write_lock(ruled):
     post(api, f"tasks/{task['id']}", {"version": task["version"], "note": "Favorite color is red"}, token="ops-test")
     post(api, "rules/check", {"text": "Something else entirely.", "to": "ana"}, token="ops-test")
     assert len(judge.locked) >= 4 and not any(judge.locked)
+
+
+def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
+    from backend.tests.test_org_rules_surfaces import cli, mcp
+    from clients import hubcli, remotecli
+    from backend.tests.test_automation_cli import Client
+    api, judge = ruled
+    color_rule(api, reviewer="ben")
+    checked = cli(api, "ops-test", "check", "Our favorite color is gold", "--to", "ana")
+    assert checked["outcome"] == "broken" and checked["rules"][0]["text"] == COLOR
+    held = say(api, "Our favorite color is gold")["held"]
+    assert len(judge.calls) == 1
+    args = hubcli.parser().parse_args(["rules", "appeal", held["id"], "Gold is on our public site."])
+    appealed = remotecli.via_tool(Client(api, "ops-test"), remotecli._rules_args(args))
+    assert appealed["task_id"]
+    error, _ = mcp(api, "hub_rules_check", {"text": "Hello", "to": "ana"}, token="ops-test")
+    assert not error
