@@ -55,6 +55,9 @@ STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
 RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check"})
+# Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach the approval, where
+# requesters and approvers read it. Drift still compares it, from the stored body.
+SERVER_ONLY_KEYS = frozenset({"raise_check"})
 
 
 @dataclass(frozen=True)
@@ -101,8 +104,8 @@ def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
 
 
 def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], what: str) -> dict[str, object]:
-    out: dict[str, object] = {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what,
-                              "payload": dict(payload)}
+    shown = {k: v for k, v in payload.items() if k not in SERVER_ONLY_KEYS}
+    out: dict[str, object] = {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what, "payload": shown}
     if kind in K.SPEND:
         # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
         out["amount"] = payload.get("amount")
@@ -173,7 +176,7 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
     plan = PLANNERS[kind](ctx, p.who, payload)
     gate = by_right or plan.gate
     if by_right is not None:
-        gate = gating.combine(by_right, plan.gate)
+        gate = gating.combine(by_right, plan.gate, p.who)
     judged = gating.judge(ctx, p, kind, gate, plan, action_id)
     return judged.gate, judged.plan
 

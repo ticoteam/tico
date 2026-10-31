@@ -79,10 +79,11 @@ def stricter(gate: K.Gate, verdict: G.Verdict) -> K.Gate:
     return K.Gate("needs_approval", verdict.who, verdict.rule)
 
 
-def combine(right: K.Gate, planned: K.Gate) -> K.Gate:
+def combine(right: K.Gate, planned: K.Gate, requester: str) -> K.Gate:
     """A missing right's gate and the planner's gate together. The higher approver decides, and the person the planner
-    named (a parent budget's owner) goes with it; a tie keeps the right's gate."""
-    if planned.outcome != "needs_approval" or planned.who == right.who:
+    named (a parent budget's owner) goes with it, unless that person is the requester: nobody approves their own ask,
+    so the right's gate (their manager) stands. A tie keeps the right's gate."""
+    if planned.outcome != "needs_approval" or planned.who == right.who or planned.person == requester:
         return right
     return planned if G.higher(right.who, planned.who) == planned.who else right
 

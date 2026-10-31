@@ -106,6 +106,19 @@ def test_a_parent_raise_asks_the_parent_owner_over_the_asker_s_manager(books):
         assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
 
 
+def test_a_requester_who_owns_the_parent_is_asked_their_manager_not_themselves(books):
+    # Cara owns Software and lacks finance.budgets: she cannot approve her own raise, so Ben (her manager) decides it.
+    with books.transaction() as c:
+        pid, kids = _tree(c)
+        assert act(c, OWNER, "budget_update", {"budget_id": pid, "owner": "human:cara"}).status == "committed"
+        grow = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert (grow.status, grow.approver) == ("needs_approval", "human:ben")
+        H.approval_decide(c, "human:ben", grow.approval_id, "approved")
+        done = FA.approval_decided(c, grow.approval_id, AT)
+        assert done is not None and done.status == "committed"
+        assert (_latest(c, kids["web"]).amount, _latest(c, pid).amount) == (6_500, 10_500)
+
+
 def test_a_raise_that_would_pass_the_grandparent_waits_for_that_raise(books):
     with books.transaction() as c:
         company = act(c, OWNER, "budget_create", {"name": "Company", "account_id": account(c, "6000"),
@@ -197,7 +210,8 @@ def test_a_scoped_requesters_approval_never_carries_the_raise_amount(books):
         assert grow.status == "needs_approval"
         # The raise is 10,500, and 10,500 less Cara's 6,500 would show sales' 4,000. Neither she nor Dan's view holds it.
         payload = json.dumps(H.approval(c, grow.approval_id)["payload"])
-        assert "raise_to" not in payload and "10500" not in payload and "105.00" not in payload
+        assert "raise_to" not in payload and "raise_check" not in payload
+        assert "10500" not in payload and "105.00" not in payload
 
 
 def test_a_grandparent_refusal_names_no_budget_a_scoped_asker_cannot_see(books):
@@ -208,6 +222,22 @@ def test_a_grandparent_refusal_names_no_budget_a_scoped_asker_cannot_see(books):
         refused = act(c, "human:cara", "budget_update", {"budget_id": kids["web"], "amount": 6_500})
         assert refused.status == "failed" and "Company" not in refused.reason
         owner = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_500})
+        assert owner.status == "failed" and "raise Company first" in owner.reason
+
+
+def test_a_grandparent_hidden_by_private_lines_is_not_named_when_the_rest_is_visible(books):
+    with books.transaction() as c:
+        pay = str(act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                   "parent_id": account(c, "6000")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        company = act(c, OWNER, "budget_create", {"name": "Company", "account_id": account(c, "6000"),
+                                                  "amount": 10_000, "at_limit": "decline"})
+        _, kids = _tree(c, under=str(company.result["budget_id"]))
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"}).status == "committed"
+        # Dan sees Software and its teams, but Company covers the private payroll line, so its name stays out.
+        refused = act(c, "human:dan", "budget_update", {"budget_id": kids["web"], "amount": 6_001})
+        assert refused.status == "failed" and refused.reason == "it does not fit: not enough left"
+        owner = act(c, OWNER, "budget_update", {"budget_id": kids["web"], "amount": 6_001})
         assert owner.status == "failed" and "raise Company first" in owner.reason
 
 

@@ -376,8 +376,8 @@ def _route(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], effective: st
     try:
         _under_parent(ctx, parent, raised, effective)
     except FinanceError:
-        grand = ctx.budgets()[parent.parent_id].name
-        raise _refusal(ctx, who, near, invalid(f"raise {grand} first")) from None
+        above = ctx.budgets()[parent.parent_id]
+        raise _refusal(ctx, who, [*near, above], invalid(f"raise {above.name} first")) from None
     return _Route(parent.owner, parent, raise_to, all(shows_numbers(ctx, who, x) for x in near))
 
 
@@ -420,8 +420,8 @@ def _raise_parent(ctx: Ctx, route: _Route, effective: str, who: str) -> None:
 
 
 def _raise_check(ctx: Ctx, raise_to: int | None) -> str | None:
-    """A keyed fingerprint of the parent raise a change needs. The approval payload keeps this, not the amount: the
-    requester and approver can read it, and the raise less the child's amount would show a hidden sibling total."""
+    """A keyed fingerprint of the parent raise a change needs, so a waiting change is judged again when the total moves.
+    It is stored with the action only (actions.SERVER_ONLY_KEYS): a readable value would show a hidden sibling total."""
     return None if raise_to is None else tico.fingerprint(ctx.c, "budget-raise", str(raise_to))
 
 

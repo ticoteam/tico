@@ -241,3 +241,20 @@ def test_a_team_override_leaves_the_other_teams_defaults_standing(books):
                                                 "team": "web"}).status == "committed"
         # Web's override replaces Web's default; Sales keeps its own.
         assert FR.line_detail(c, OWNER, soft, at=AT)["next_month"]["projection"] == 3_500
+
+
+def test_a_trend_default_is_fitted_to_the_line_and_split_only_under_a_stored_projection(books):
+    with books.transaction() as c:
+        revenue = account(c, "4000")
+        for n in range(6):      # April to September: web's revenue rises, sales' falls to nothing, eng holds flat
+            day = f"2026-{4 + n:02d}-10"
+            spend(c, "4000", -100 * (n + 1), day=day, team="web")
+            spend(c, "4000", -100 * (6 - n), day=day, team="sales")
+            spend(c, "4000", -300, day=day, team="eng")
+        # The line is flat at 1,000 a month. Clamping sales' falling trend on its own would give 1,100.
+        assert FR.line_detail(c, OWNER, revenue, at=AT)["next_month"] == {
+            "month": "2026-11", "projection": 1_000, "projection_method": "trend"}
+        assert act(c, OWNER, "projection_set", {"account_id": revenue, "month": "2026-11", "amount": 1_000,
+                                                "team": "web"}).status == "committed"
+        # Web's stored projection stands; sales and eng keep their own defaults, 0 and 300.
+        assert FR.line_detail(c, OWNER, revenue, at=AT)["next_month"]["projection"] == 1_300

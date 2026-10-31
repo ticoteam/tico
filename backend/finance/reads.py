@@ -300,7 +300,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                     cols[n] += money.prorate(int(r["amount"]), share, dates.days(*span))
         # A month nobody projected gets the line's default from its posted history.
         for (account_id, month, team, teammate), (amount, method) in _defaults(
-                s, pnl_ids, _months(buckets[0][0], buckets[-1][1]), basis, f).items():
+                s, pnl_ids, _months(buckets[0][0], buckets[-1][1]), basis, f, stored).items():
             if _covered(stored.get((account_id, month), []), team, teammate):
                 continue
             first = dates.month(month)
@@ -515,18 +515,18 @@ def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
         return {"month": month, "projection": None, "projection_method": None}
     total, found = 0, False
     methods: set[str] = set()
-    stored: dict[str, list[tuple[str, str]]] = {}
+    stored: dict[tuple[str, str], list[tuple[str, str]]] = {}
     for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
         account = s.ctx.accounts.get(r["account_id"])
         if account is None or account.id not in ids or \
                 not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
                 (f is not None and f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
             continue
-        stored.setdefault(account.id, []).append((str(r["team"] or ""), str(r["teammate"] or "")))
+        stored.setdefault((account.id, month), []).append((str(r["team"] or ""), str(r["teammate"] or "")))
         methods.add(str(r["method"]))
         total, found = total + int(r["amount"]), True
-    for (account_id, _, team, teammate), (amount, method) in _defaults(s, ids, [nxt], "accrual", f).items():
-        if _covered(stored.get(account_id, []), team, teammate):
+    for (account_id, _, team, teammate), (amount, method) in _defaults(s, ids, [nxt], "accrual", f, stored).items():
+        if _covered(stored.get((account_id, month), []), team, teammate):
             continue
         methods.add(method)
         total, found = total + amount, True
@@ -546,12 +546,15 @@ def _method(found: set[str] | None) -> str | None:
     return next(iter(found)) if len(found) == 1 else "mixed"
 
 
-def _defaults(s: _Seen, ids: Iterable[str], months: Sequence[date], basis: str, f: _Filter | None
+def _defaults(s: _Seen, ids: Iterable[str], months: Sequence[date], basis: str, f: _Filter | None,
+              stored: Mapping[tuple[str, str], Sequence[tuple[str, str]]]
               ) -> dict[tuple[str, str, str, str], tuple[int, str]]:
     """The default projection per line, month (`YYYY-MM`), team and teammate, from the posted history this viewer sees,
-    for the months that are this one or later. Each scope of history gets its own default, so a stored projection for
-    one scope leaves the others standing. A line with no history, or one this viewer sees no full detail of, gets
-    none."""
+    for the months that are this one or later. A line month with no stored projection gets one default for the whole
+    line, its trend fitted to the line's total history: clamping each team's trend alone would count a falling team as
+    nothing and overstate the line. Only where stored projections cover some of its scopes is the line split, each
+    uncovered scope taking its own default, so a stored one leaves the others standing. A line with no history, or one
+    this viewer sees no full detail of, gets none."""
     today = dates.day(s.ctx.today)
     cur = today.replace(day=1)
     targets = [m for m in months if m >= cur]
@@ -566,8 +569,11 @@ def _defaults(s: _Seen, ids: Iterable[str], months: Sequence[date], basis: str, 
     sup = _suppress(s, cells, f is not None and f.narrow(s.ctx.org), first, today)
     scoped = [x for x in sup.cells if x.account_id not in sup.hidden]
     keys = sorted({(x.account_id, x.team or "", x.teammate or "") for x in scoped})
+    names = sorted({k[0] for k in keys})
     monthly = {k: [0] * PJ.TREND_MONTHS for k in keys}
     recent = dict.fromkeys(keys, 0)
+    line_monthly = {i: [0] * PJ.TREND_MONTHS for i in names}
+    line_recent = dict.fromkeys(names, 0)
     for cell in scoped:
         key = (cell.account_id, cell.team or "", cell.teammate or "")
         account = s.ctx.accounts[cell.account_id]
@@ -575,18 +581,31 @@ def _defaults(s: _Seen, ids: Iterable[str], months: Sequence[date], basis: str, 
         day = dates.day(cell.day)
         if day >= recent_from:
             recent[key] += amount
+            line_recent[cell.account_id] += amount
         if day < cur:
-            monthly[key][(day.year - first.year) * 12 + day.month - first.month] += amount
+            index = (day.year - first.year) * 12 + day.month - first.month
+            monthly[key][index] += amount
+            line_monthly[cell.account_id][index] += amount
     out: dict[tuple[str, str, str, str], tuple[int, str]] = {}
-    for key in keys:
-        i, team, teammate = key
+    for i in names:
         account = s.ctx.accounts[i]
         method = PJ.default_method(account.type, account.subtype)
         for m in targets:
+            month = m.isoformat()[:7]
             ahead = (m.year - cur.year) * 12 + m.month - cur.month + 1
-            value = PJ.estimate(method, monthly[key], recent[key], dates.days(m, dates.month_end(m)), ahead)
-            if value is not None:
-                out[(i, m.isoformat()[:7], team, teammate)] = (value, method)
+            span_days = dates.days(m, dates.month_end(m))
+            scopes = stored.get((i, month), [])
+            if not scopes:
+                value = PJ.estimate(method, line_monthly[i], line_recent[i], span_days, ahead)
+                if value is not None:
+                    out[(i, month, "", "")] = (value, method)
+                continue
+            for key in keys:
+                if key[0] != i or _covered(scopes, key[1], key[2]):
+                    continue
+                value = PJ.estimate(method, monthly[key], recent[key], span_days, ahead)
+                if value is not None:
+                    out[(i, month, key[1], key[2])] = (value, method)
     return out
 
 
@@ -634,33 +653,46 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     if account is None or not s.view.sees_account(account):
         raise FinanceError(NOT_FOUND, "no such account")
     f = _org_filter(s, teams, teammates, who, unattributed)
-    # Each month counts the line and the lines under it on the tree it closed with (the live tree while it is open).
-    cells: list[VW.Cell] = []
+    if vendor is not None:
+        vendor = SAP.vendor_resolved(c, s.ctx.book.id, vendor)
+    narrow = vendor is not None or f.narrow(s.ctx.org)
+    # Each month counts the line and the lines under it on the tree it closed with (the live tree while it is open), and
+    # is suppressed on that tree alone, as a read of that month is. A private month's cells come from its whole fiscal
+    # quarters, so suppressing the window at once would count them once for each month that reads them.
     spans: list[tuple[str, str, set[str]]] = []
+    whole_cells: list[VW.Cell] = []
+    split_cells: list[VW.Cell] = []
+    whole_hidden: set[str] = set()
+    hidden: set[str] = set()
+    excluded = False
     for sa, sz in _segments(a, z):
         tree = _closed(s, viewer, sa, sz)[0]
         mine = set(descendants(tree.ctx.accounts, account_id))
         spans.append((sa.isoformat(), sz.isoformat(), mine))
-        cells += _cells(tree, sa, sz, sorted(mine))
+        cells = _cells(tree, sa, sz, sorted(mine))
+        if vendor is not None:
+            cells = [x for x in cells if x.vendor == vendor]
+        if f.any:
+            cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+        whole = _suppress(tree, cells, narrow, sa, sz)
+        split = _suppress(tree, cells, True, sa, sz)
+        whole_cells += whole.cells
+        split_cells += split.cells
+        whole_hidden |= whole.hidden
+        hidden |= whole.hidden | split.hidden
+        excluded = excluded or split.excluded
     ids = sorted({i for _, _, mine in spans for i in mine})
     now_ids = sorted(descendants(s.ctx.accounts, account_id))
-    if vendor is not None:
-        vendor = SAP.vendor_resolved(c, s.ctx.book.id, vendor)
-        cells = [x for x in cells if x.vendor == vendor]
-    if f.any:
-        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
-    whole = _suppress(s, cells, vendor is not None or f.narrow(s.ctx.org), a, z)
-    split = _suppress(s, cells, True, a, z)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
-                "total": None if account_id in whole.hidden else sum(x.amount for x in whole.cells),
-                "excluded": split.excluded, "hidden": _hidden_labels(s, split.hidden | whole.hidden),
+                "total": None if account_id in whole_hidden else sum(x.amount for x in whole_cells),
+                "excluded": excluded, "hidden": _hidden_labels(s, hidden),
                 "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
                                              "unattributed": f.unattributed},
                 "next_month": _next_month(s, now_ids, f)}
     for by in ("vendor", "team", "teammate"):
         sums: dict[str, int] = {}
-        for cell in split.cells:
+        for cell in split_cells:
             key = _key(s, cell, by) or ""
             if key == "" and by != "vendor" and not s.view.company_wide(account):
                 continue
@@ -673,11 +705,15 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     private = any(i in s.private and i not in s.view.full_detail for i in ids)
     if not private:
         most = max(1, min(int(limit), 500))
-        rows = SL.entries_on(c, s.ctx.book.id, ids, a.isoformat(), z.isoformat(), most * 4 + 1,
-                             None if vendor is None else SAP.vendor_keys(c, s.ctx.book.id, vendor) or [""])
-        # An entry counts on the tree of the month it is dated in.
-        rows = [r for r in rows if any(lo <= str(r["entry_date"]) <= hi and r["account_id"] in mine
-                                       for lo, hi, mine in spans)]
+        keys = None if vendor is None else SAP.vendor_keys(c, s.ctx.book.id, vendor) or [""]
+        # Each month asks for its own newest entries on its own tree, so a newer month's lines never crowd them out.
+        rows: list[Any] = []
+        for lo, hi, mine in spans:
+            if mine:
+                rows += SL.entries_on(c, s.ctx.book.id, sorted(mine), lo, hi, most * 4 + 1, keys)
+        rows.sort(key=lambda r: str(r["line_id"]))
+        rows.sort(key=lambda r: str(r["entry_date"]), reverse=True)
+        rows = rows[:most * 4 + 1]
         tags = SL.line_tags(c, [r["line_id"] for r in rows])
         seen: list[Row] = []
         for r in rows:
@@ -763,7 +799,8 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     trees = [(sa, sz, _closed(base, viewer, sa, sz)[0].ctx) for sa, sz in _segments(a, z)]
     rows: list[Row] = []
     for b in seen[:most]:
-        cut = _private_scope(s, b)
+        # Judged on each month's own tree: a private line can sit under this budget in a closed month and not now.
+        cut = any(private_scope(ctx, viewer, b) for _, _, ctx in trees)
         rows.append({**_budget_row(b),
                      "budget": [B.in_window(b, versions[b.id], q, s.ctx.book.fiscal_year_start) for q in buckets],
                      "actual": None if cut else [_spent(trees, b, p, q) for p, q in buckets]})

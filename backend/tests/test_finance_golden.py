@@ -113,3 +113,40 @@ def test_a_report_over_several_months_reads_each_closed_month_as_it_closed(books
         assert FR.line_detail(c, OWNER, account(c, "6100"), *SEP, at=AT)["total"] == 1_100
         drill = FR.line_detail(c, OWNER, account(c, "6100"), *both, at=AT)
         assert drill["total"] == 1_100 and sorted(e["amount"] for e in drill["entries"]) == [300, 800]
+
+
+def test_a_window_across_a_closed_month_hides_private_spend_as_that_month_does(books):  # noqa: F811
+    # Payroll sits under Other expenses when September closes and moves out of it after. Dan sees the budget but not
+    # the payroll detail, so September's payroll stays hidden in the single-month report and in a window over it.
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                "parent_id": account(c, "6900")})
+        assert made.status == "committed", made
+        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6200"),
+                                                   "others_see": "totals"}).status == "committed"
+        spend(c, "6200", 3_000, day="2026-09-15")
+        assert act(c, OWNER, "budget_create", {"name": "Other", "account_id": account(c, "6900"), "amount": 5_000,
+                                               "effective_from": "2026-09-01"}).status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything"}).status == "committed"
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6200"),
+                                                "parent_id": account(c, "6000")}).status == "committed"
+
+        def other(a, z):
+            return next(r for r in FR.budget_vs_actual(c, "human:dan", a, z, "month", at=AT)["budgets"]
+                        if r["name"] == "Other")["actual"]
+        assert other(*SEP) is None
+        assert other("2026-09-01", "2026-10-31") is None
+
+
+def test_a_drill_down_over_a_closed_month_lists_the_entries_its_total_counts(books):  # noqa: F811
+    with books.transaction() as c:
+        _acme(c)
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"),
+                                                "parent_id": account(c, "6900")}).status == "committed"
+        for n in range(1, 6):       # newer October lines on seats, which no longer sits under software
+            spend(c, "6110", 100, day=f"2026-10-0{n}")
+        drill = FR.line_detail(c, OWNER, account(c, "6100"), "2026-09-01", "2026-10-31", limit=1, at=AT)
+        assert drill["total"] == 1_100
+        assert [(e["date"], e["amount"]) for e in drill["entries"]] == [("2026-09-12", 300)]
+        assert drill["more"] is True
