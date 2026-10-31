@@ -250,8 +250,7 @@ Pending proposals appear under **Needs you** on the Goals page for the human who
 waits on its goal. To confirm a Why with your own words, send `why` with the decision:
 `{"decision": "confirm", "why": "..."}`.
 
-After **No, leave it**, the card offers one optional line, "Tell the Strategy Bot why?": the Strategy Bot reads it before it suggests
-again, and it is shown only to people who may read the goal's bot (and the measure's).
+After **No, leave it**, the card offers one optional line: "Left as it is. Tell it why? (optional)". The CEO Bot reads the reason before it suggests again. Only people who may read the goal's bot and the measure's can see it.
 
 ### What needs a person is a task
 
