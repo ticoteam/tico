@@ -206,8 +206,9 @@ The previous files are kept in `.bundle-previous/`. A download or checksum failu
 changes; a release that does not turn healthy is rolled back, image and bundle together. Slack and the front door are
 recreated from the new file when it changes them. While the server restarts, the front door holds requests for up to
 30 seconds and then answers them normally ([Update](install.md#update)); with a tunnel that is the `hold` service, which
-an update leaves running. The update that adds `hold` also recreates cloudflared once, after `hold` is up, so it reads
-its new route (`/tunnel/ingress.yml`); one that rolls back leaves cloudflared on its old route straight to the server.
+an update leaves running. The update that adds `hold` also recreates cloudflared once, after `hold` is up and answering,
+so it reads its new route (`/tunnel/ingress.yml`); if `hold` cannot be pulled or does not answer, the update rolls back
+and cloudflared stays on its old route straight to the server.
 
 A cell company ([cell mode](cell.md#updates)) has no sidecar: the host's cell updater answers the same contract for it,
 so it has Update now too. It runs the cell's own `update` (no bundle to replace, since the company's `compose.yaml` is
