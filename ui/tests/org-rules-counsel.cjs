@@ -171,6 +171,7 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     // The same for a row's Skip and for Add all, each with its rule's panel open.
     const skipped = await suggest(hub, read, 'Send texts only from the approved short code.', {bots: ['engineering-lead']});
     const bulk = await suggest(hub, read, 'Stop texting a number that replies STOP.', {bots: ['engineering-lead']});
+    const bulk2 = await suggest(hub, read, 'Name the business in every text.', {bots: ['engineering-lead']});
     await go(page, '#/rules/external');
     await go(page, '#/rules/suggested');
     await group.locator(`.ru-prop[data-rule="${skipped.id}"] .ru-pt`).click();
@@ -180,9 +181,9 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     assert.notEqual((await call(hub, 'dana', 'GET', '/v2/rules/' + skipped.id)).status, 'suggested');
     await group.locator(`.ru-prop[data-rule="${bulk.id}"] .ru-pt`).click();
     await page.locator(`#ru-side form[data-rule="${bulk.id}"]`).waitFor({timeout: t(10000)});
-    await group.locator('[data-ru-add-all]', {hasText: 'Add all 1'}).click();
+    await group.locator('[data-ru-add-all]', {hasText: 'Add all 2'}).click();
     await closed(page);
-    assert.equal((await call(hub, 'dana', 'GET', '/v2/rules/' + bulk.id)).status, 'active');
+    for (const r of [bulk, bulk2]) assert.equal((await call(hub, 'dana', 'GET', '/v2/rules/' + r.id)).status, 'active');
 
     // The external rule's panel shows the quote, and its link opens that version in the viewer.
     await go(page, `#/rules/external?rule=${open.id}`);
