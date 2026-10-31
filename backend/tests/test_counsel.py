@@ -272,7 +272,7 @@ def test_only_the_run_asked_reads_a_file_and_no_other_counsel_run_does(api):
     attempt = next_counsel_run(api, r)
     for fid in (first, second):
         assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers(attempt["token"])).status_code == 403
-        assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers("counsel-test")).status_code == 404
+        assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers("counsel-test")).status_code == 403
 
 
 def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
@@ -294,7 +294,7 @@ def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
         assert "hub file read" in c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
     got = api.get(f"/api/v2/files/{row['id']}/versions/1", headers=read_run(api))
     assert got.status_code == 200 and len(got.content) == len(data)
-    assert api.get(f"/api/v2/files/{row['id']}/versions/1", headers=headers("counsel-test")).status_code == 404
+    assert api.get(f"/api/v2/files/{row['id']}/versions/1", headers=headers("counsel-test")).status_code == 403
 
 
 def test_counsel_reads_no_sql_in_a_run_or_out_of_one(api):
@@ -344,6 +344,27 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
     # A person still reads the run list and the file's versions.
     for path in ("bots/tico-counsel/turns", f"files/{file_id}/versions"):
         assert api.get("/api/v2/" + path, headers=headers("ana-test")).status_code == 200, path
+
+
+def test_counsel_outside_a_run_calls_nothing_but_me(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    task_id = read_document(api, file_id)["task_id"]
+    standing = headers("counsel-test")
+    assert api.get("/api/v2/me", headers=standing).status_code == 200
+    for method, path in (("GET", f"tasks/{task_id}"), ("GET", "tasks/mine"), ("GET", "tasks"), ("GET", "rules"),
+                         ("GET", f"rules/{task_id}"), ("POST", f"tasks/{task_id}/comments"), ("POST", "rules"),
+                         ("GET", f"files/{file_id}"), ("GET", "credential-runtime"), ("POST", "mcp")):
+        got = api.request(method, "/api/v2/" + path, headers=standing, json={} if method == "POST" else None)
+        assert got.status_code == 403 and counsel.STANDING_REFUSED in got.text, (path, got.text)
+    # Its run reads its read task, never a collection route under tasks/.
+    run = read_run(api)
+    assert api.get(f"/api/v2/tasks/{task_id}", headers=run).status_code == 200
+    for path in ("tasks/mine", "tasks/flow", "tasks/labels", "tasks/stuck", f"tasks/{task_id}/answers",
+                 f"tasks/{task_id}/tree"):
+        assert api.get("/api/v2/" + path, headers=run).status_code == 403, path
+    assert api.post("/api/v2/tasks/dry-run", headers=run, json={}).status_code == 403
 
 
 def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monkeypatch):
@@ -489,7 +510,7 @@ def test_counsel_cannot_cite_a_file_nobody_asked_it_to_read(api):
     r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
         "cite": {"file_id": unasked, "quote": "Keep a record of each consent for five years."}})
-    assert r.status_code == 404, r.text
+    assert r.status_code == 403, r.text
 
 
 def test_the_read_event_must_name_counsel(api):
@@ -501,7 +522,7 @@ def test_the_read_event_must_name_counsel(api):
     r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
         "cite": {"file_id": file_id, "quote": "Keep a record of each consent for five years."}})
-    assert r.status_code == 404, r.text
+    assert r.status_code == 403, r.text
 
 
 def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
@@ -634,7 +655,7 @@ def test_counsel_cites_only_the_version_it_was_asked_to_read(api):
     assert ok.status_code == 200 and ok.json()["cite"]["version"] == first
     assert suggest(api, file_id, CONSENT, token=token).status_code == 403
     # Counsel outside that run cites nothing.
-    assert suggest(api, file_id, CONSENT, version=first).status_code == 404
+    assert suggest(api, file_id, CONSENT, version=first).status_code == 403
 
 
 def test_counsel_must_name_the_version_when_more_than_one_was_read(api, monkeypatch):
@@ -949,7 +970,7 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
     assert api.get(f"/api/v2/tasks/{task_id}", headers=headers("cara-test")).status_code == 404
     assert api.get(f"/api/v2/files/{file_id}/versions/1", headers=headers("ana-test")).status_code == 200
     assert api.get(f"/api/v2/files/{file_id}/versions/1", headers=headers("cara-test")).status_code == 404
-    assert api.get(f"/api/v2/files/{file_id}/versions/1", headers=headers("counsel-test")).status_code == 200
+    assert api.get(f"/api/v2/files/{file_id}/versions/1", headers=headers("counsel-test")).status_code == 403
     # The same text read again is no new version: the cite stays on the version already held.
     again = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert again["existing"] is True and again["task_id"] == r["task_id"]
@@ -1021,10 +1042,12 @@ def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_
         r = api.request(method, path, headers=token, json=body)
         assert r.status_code == 403, (path, r.text)
         assert "not its to make" in r.text
-    # A comment on a task that is not Counsel's own is refused; on its own read task it is not.
+    # A comment on a task that is not Counsel's own is refused; on its own read task, from its run, it is not.
     other = post(api, "tasks", {"owner": "ops", "title": "Ops work", "body": "Ordinary work."})
     assert api.post(f"/api/v2/tasks/{other['id']}/comments", headers=token, json={"body": "hi"}).status_code == 403
     read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    token = read_run(api)
+    assert api.post(f"/api/v2/tasks/{other['id']}/comments", headers=token, json={"body": "hi"}).status_code == 403
     own = api.post(f"/api/v2/tasks/{read['task_id']}/comments", headers=token, json={"body": "Progress."})
     assert own.status_code != 403, own.text
     # A person is not held to it.
