@@ -388,6 +388,13 @@ async function owner(browser) {
   await page.locator('#tree .dept-label', {hasText: /^EMEA$/}).waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'groups', {name: 'EMEA', parent: 'sales'}]);
 
+  // On a narrow rail the tools never push the fold off the row: a long name shortens instead.
+  await page.evaluate(() => document.documentElement.style.setProperty('--rail-left', '190px'));
+  await row(page, 'Sales').hover();
+  const fold = await row(page, 'Sales').evaluate(el => { const b = x => x.getBoundingClientRect();
+    return {chev: b(el.querySelector('.chev')).right, side: b(document.querySelector('#side')).right, tools: b(el.querySelector('.org-group-tools')).width}; });
+  assert.ok(fold.tools > 0 && fold.chev <= fold.side - 4, `the fold stays on the row: ${JSON.stringify(fold)}`);
+  await page.evaluate(() => document.documentElement.style.removeProperty('--rail-left'));
   // Rename.
   await row(page, 'Sales').hover();
   await page.locator('[data-group-rename=sales]').click();

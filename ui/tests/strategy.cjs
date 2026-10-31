@@ -485,31 +485,14 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The team chart: the owner gives a group a bet from the flag on its row.
+    // The team chart: a group's row has add, rename and delete, and no Bet flag, for the owner too.
     {
-      const {page, errors, sent} = await open(browser);
+      const {page, errors} = await open(browser);
       const row = page.locator('#tree li.org-group > .noderow', {hasText: 'Operations'});
       await row.waitFor();
       await row.hover();
-      await row.locator('[data-group-bet="ops"]').click();
-      const select = page.locator('#tree [data-group-bet-select="ops"]');
-      await select.waitFor();
-      assert.equal(await page.locator('#tree .org-bet-f > span').innerText(), 'Bet');
-      assert.deepEqual(await select.locator('option').allInnerTexts(), ['None', bets()[0].statement, bets()[1].statement]);
-      await shot(page, 'group-picker');
-      if (shots) {
-        await page.setViewportSize(PHONE);
-        await page.evaluate(() => setDrawer(true));
-        await select.scrollIntoViewIfNeeded();
-        await shot(page, 'group-picker-phone', ['dark']);
-        await page.evaluate(() => setDrawer(false));
-        await page.setViewportSize(DESKTOP);
-      }
-      await select.selectOption('b-price');
-      await select.waitFor({state: 'detached'});
-      assert.deepEqual(sent.find(x => x[1] === '/groups/ops'), ['PATCH', '/groups/ops', {bet_id: 'b-price'}]);
-      await row.hover();
-      assert.match(await row.locator('[data-group-bet="ops"]').getAttribute('class'), /\bon\b/, 'the flag stays lit');
+      await row.locator('[data-group-rename="ops"]').waitFor();
+      assert.equal(await page.locator('[data-group-bet], .org-bet-pop').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -709,14 +692,6 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
         assert.deepEqual(old.errors, []);
         await old.page.close();
       }
-    }
-    // A member has no Bet flag on a group.
-    {
-      const {page, errors} = await open(browser, {role: 'member'});
-      await page.locator('.strat-summary').waitFor();
-      assert.equal(await page.locator('[data-group-bet]').count(), 0);
-      assert.deepEqual(errors, []);
-      await page.close();
     }
     console.log('strategy: ok');
   } finally {
