@@ -413,6 +413,7 @@ def test_a_card_change_reaches_mercury_on_commit_without_waiting_for_a_sweep_or_
         with books.transaction() as c:
             assert act(c, OWNER, "card_freeze", {"card_id": card_id}).status == "committed"
             assert c.execute("SELECT sync_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "pending"
+            assert sync.BELL.rung == rung                             # not before the commit
         assert sync.BELL.rung > rung                                  # rung by the commit, not left to the sweep
         deadline = time.monotonic() + 15
         confirmed = None
@@ -425,3 +426,25 @@ def test_a_card_change_reaches_mercury_on_commit_without_waiting_for_a_sweep_or_
         assert confirmed == ("ok", "frozen")
     finally:
         sync.stop()
+
+
+def test_an_undone_card_change_does_not_ring_the_bank_worker(books, monkeypatch):
+    """A card action that fails after queueing its ring is undone to its savepoint, ring included, even though the
+    transaction still commits (the failure's receipt)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _, card_id = _card(books)
+    sync_once(books, fake, HOURS[0])
+    import backend.finance.actions as A
+    real = A._audit
+
+    def fail_on_commit(c, p, action_id, kind, status, *a, **k):
+        if status == "committed":
+            raise A.tico.Refused("audit write failed")
+        return real(c, p, action_id, kind, status, *a, **k)
+    monkeypatch.setattr(A, "_audit", fail_on_commit)
+    rung = sync.BELL.rung
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": card_id}).status == "failed"
+        assert c.execute("SELECT status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "active"
+    assert sync.BELL.rung == rung

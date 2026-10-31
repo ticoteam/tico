@@ -177,7 +177,8 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
         assert [g["subject"] for g in eve["teammates"][0]["grants"]] == ["human:eve"]
         assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
         fay = {m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]}
-        assert {"human:ana", "human:gus", "bot:coder"} <= fay              # a finance admin sees the whole roster
+        owner = {m["teammate"] for m in FR.access(c, OWNER, at=AT)["teammates"]}
+        assert fay == owner and {"human:ana", "human:gus", "bot:coder"} <= fay   # a finance admin sees the whole roster
         assert FR.view_as(c, OWNER, "human:cara", at=AT) == "human:cara"
         with pytest.raises(FinanceError):
             FR.view_as(c, "human:ben", "human:cara", at=AT)
