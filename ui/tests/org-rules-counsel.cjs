@@ -172,7 +172,9 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     const skipped = await suggest(hub, read, 'Send texts only from the approved short code.', {bots: ['engineering-lead']});
     const bulk = await suggest(hub, read, 'Stop texting a number that replies STOP.', {bots: ['engineering-lead']});
     const bulk2 = await suggest(hub, read, 'Name the business in every text.', {bots: ['engineering-lead']});
+    // Away and back, each tab drawn before the next, so Suggested reads the new rows.
     await go(page, '#/rules/external');
+    await page.locator('.ru-tabs a.cur[data-ru-tab="external"]').waitFor({timeout: t(10000)});
     await go(page, '#/rules/suggested');
     await group.locator(`.ru-prop[data-rule="${skipped.id}"] .ru-pt`).click();
     await page.locator(`#ru-side form[data-rule="${skipped.id}"]`).waitFor({timeout: t(10000)});
