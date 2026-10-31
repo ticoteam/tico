@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import cast
 
-from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting, runs
+from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, mirror, payments, posting, runs
 from . import setup as setup_mod
 from . import rights, sync, usage
 from .context import Ctx, load
@@ -45,7 +45,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
-    **documents.PLANNERS}
+    **documents.PLANNERS, **mirror.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -168,6 +168,8 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
           action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
+    if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
+        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")

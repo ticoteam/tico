@@ -89,7 +89,8 @@ class Book:
     base_currency: str
     basis: str = "cash"
     fiscal_year_start: int = 1
-    mode: str = "native"
+    mode: str = "native"                # native: Tico is the books; mirror: a provider's books are (spec §10)
+    mirror_connection_id: str = ""
 
 
 def tags(raw: object) -> dict[str, str]:

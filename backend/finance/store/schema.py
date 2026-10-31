@@ -223,10 +223,22 @@ CREATE TABLE IF NOT EXISTS fin_connections (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, name TEXT NOT NULL DEFAULT '',
   settings_json TEXT NOT NULL DEFAULT '{}', events_cursor TEXT, last_sync_at TEXT, next_sync_at TEXT);
 
+-- Which provider record each mirrored local row is (spec §4.1). external_id is the provider's kind and id ("Vendor:9"),
+-- revision its version (QuickBooks SyncToken), status active, deleted or unmapped (taken in later, when its references are).
 CREATE TABLE IF NOT EXISTS fin_external_refs (
   id TEXT PRIMARY KEY, connection_id TEXT NOT NULL REFERENCES fin_connections(id), local_table TEXT NOT NULL,
   local_id TEXT NOT NULL, external_id TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  UNIQUE (connection_id, local_table, external_id));
+  kind TEXT NOT NULL DEFAULT '', revision TEXT NOT NULL DEFAULT '', status TEXT NOT NULL DEFAULT 'active',
+  updated_at TEXT, UNIQUE (connection_id, local_table, external_id));
+
+-- A closed month a provider change restated: the change posted in the open period (reversal and replacement, or a
+-- new entry), and this row names the closed period it changed. The period itself is never reopened.
+CREATE TABLE IF NOT EXISTS fin_restatements (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), period_id TEXT NOT NULL REFERENCES fin_periods(id),
+  day TEXT NOT NULL, change TEXT NOT NULL CHECK (change IN ('added','replaced','deleted')),
+  entry_id TEXT REFERENCES fin_entries(id), reversal_id TEXT REFERENCES fin_entries(id),
+  connection_id TEXT REFERENCES fin_connections(id), external_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
 CREATE TABLE IF NOT EXISTS fin_outbox (
   id TEXT PRIMARY KEY, connection_id TEXT REFERENCES fin_connections(id), action_id TEXT, op TEXT NOT NULL,
@@ -388,6 +400,8 @@ CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
 CREATE INDEX IF NOT EXISTS fin_vendor_aliases_contact ON fin_vendor_aliases(contact_id);
 CREATE INDEX IF NOT EXISTS fin_vendor_legacy_key ON fin_vendor_legacy(book_id, name_key);
 CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
+CREATE INDEX IF NOT EXISTS fin_external_refs_local ON fin_external_refs(connection_id, local_table, local_id);
+CREATE INDEX IF NOT EXISTS fin_restatements_period ON fin_restatements(period_id);
 """
 
 # Invariants 2 and 3 again in the database, so no statement (Finance's or anyone's) can break them. SQLite syntax: a
@@ -459,6 +473,9 @@ ADDED = (
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
     ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
+    # phase 4: the mirror's external refs (kind, revision, status) on installs made before them (migration 68)
+    ("fin_external_refs", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_external_refs", "revision", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_external_refs", "status", "TEXT NOT NULL DEFAULT 'active'"), ("fin_external_refs", "updated_at", "TEXT"),
 )
 
 
@@ -515,6 +532,13 @@ def phase2(c: sqlite3.Connection) -> None:
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def phase4(c: sqlite3.Connection) -> None:
+    """Cloud migration 68: the mirror's tables and columns (external refs with their kind, revision and status, and the
+    restatements a closed month takes), on an install made before them. The same statements as `create`, which skips
+    whatever exists."""
+    create(c)
 
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:

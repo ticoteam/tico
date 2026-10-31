@@ -40,12 +40,20 @@ def book(c: sqlite3.Connection) -> Book | None:
     if row is None:
         return None
     return Book(id=row["id"], name=row["name"], base_currency=row["base_currency"], basis=row["basis"],
-                fiscal_year_start=int(row["fiscal_year_start"]), mode=row["mode"])
+                fiscal_year_start=int(row["fiscal_year_start"]), mode=row["mode"],
+                mirror_connection_id=row["mirror_connection_id"] or "")
 
 
 def insert_book(c: sqlite3.Connection, b: Book, by: str, at: str) -> None:
-    c.execute("INSERT INTO fin_books(id, name, base_currency, basis, fiscal_year_start, mode, created_at, created_by) "
-              "VALUES(?,?,?,?,?,?,?,?)", (b.id, b.name, b.base_currency, b.basis, b.fiscal_year_start, b.mode, at, by))
+    c.execute("INSERT INTO fin_books(id, name, base_currency, basis, fiscal_year_start, mode, mirror_connection_id, "
+              "created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?)",
+              (b.id, b.name, b.base_currency, b.basis, b.fiscal_year_start, b.mode, b.mirror_connection_id or None,
+               at, by))
+
+
+def set_book_mode(c: sqlite3.Connection, book_id: str, mode: str, connection_id: str) -> None:
+    """Switch a book between native and mirror (and which connection's books it copies)."""
+    c.execute("UPDATE fin_books SET mode=?, mirror_connection_id=? WHERE id=?", (mode, connection_id or None, book_id))
 
 
 def _account(row: Any) -> Account:

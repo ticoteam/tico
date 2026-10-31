@@ -282,7 +282,7 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
     was_settled = row is not None and not int(row["pending"]) and str(row["provider_status"] or "") not in (
         *F.VOID, F.REVERSED)
-    if not t.pending and not (t.void or t.reversed) and not was_settled:
+    if not t.pending and not (t.void or t.reversed) and not was_settled and ctx.book.mode != "mirror":
         _before_opening(ctx, money, t.amount, t.txn_date)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
     return fid
@@ -290,6 +290,10 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
 
 def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     fid = str(row["id"])
+    if ctx.book.mode == "mirror":
+        from .mirror import settle_row
+        settle_row(ctx, row, money, t)
+        return
     program = str(money["kind"]) == "card_program"
     if t.void or t.reversed:
         undo(ctx, row)
@@ -672,9 +676,17 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
     amount = int(row["amount"])
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    mirrored = ctx.book.mode == "mirror"
+    if mirrored:
+        from .mirror import check_feed
+        check_feed(ctx, row, ignore=V.flag(p, "ignore"))
     if V.flag(p, "ignore"):
         def ignore(aid: str) -> Result:
-            undo(ctx, row)
+            if mirrored:
+                from .mirror import ignore_feed
+                ignore_feed(ctx, row)
+            else:
+                undo(ctx, row)
             return {"feed_id": str(row["id"]), "status": "ignored"}
         return Plan(K.default_gate(ctx.org, who, "categorize"), "Ignore a feed row", ignore,
                     facts={"amount": abs(amount), "counterparty": str(row["counterparty"])})
@@ -692,6 +704,9 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                   description=str(row["description"]), card_id=str(row["card_id"] or ""))
 
     def apply(aid: str) -> Result:
+        if mirrored:
+            from .mirror import write_feed
+            return write_feed(ctx, row, account, tags, gl, by=who, action_id=aid)
         if row["entry_id"]:
             _unpost(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []

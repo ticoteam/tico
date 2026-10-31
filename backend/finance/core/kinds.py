@@ -19,7 +19,7 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
-       "feed_match")
+       "feed_match", "mirror_start", "mirror_stop", "mirror_tags")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -32,7 +32,9 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
-        "invoice_write_off", "invoice_void", "attach", "feed_match")
+        "invoice_write_off", "invoice_void", "attach", "feed_match",
+        # mirror mode (spec §10): a provider's books are the books
+        "mirror_start", "mirror_stop", "mirror_tags")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -47,12 +49,12 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
-         "feed_match": (R.AP, R.AR)}
+         "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
-OWNER_ONLY = ("payment_settings", "view_defaults_set")
+OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
 SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)
@@ -107,6 +109,8 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
+    if kind in ("mirror_start", "mirror_stop") and not owner and actor != SYSTEM:
+        return Gate("needs_approval", "owner", "default:mirror")
     if actor in org.bots and kind == "card_resolve":
         # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
@@ -171,6 +175,10 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "view_revoke": (("grant_id", "str", ""),),
     "private_lines_set": (("account_id", "str", ""), ("private", "bool", ""), ("others_see?", "totals|hidden", ""),
                           ("full_detail?", "list[str]", "")),
+    "mirror_start": (("connection_id", "str", "the books connection to mirror"),),
+    "mirror_stop": (),
+    "mirror_tags": (("enabled", "bool", "send tags as provider classes"),
+                    ("map?", "obj", "{tag kind: {tag value: provider class id}}")),
     "view_defaults_set": (("manager?", "str", ""), ("member?", "str", ""), ("manager_payroll?", "totals|hidden", "")),
     "right_grant": (("teammate", "str", ""), ("right", "str", "finance.book|ap|ar|pay|cards|budgets|rules|admin"),
                     ("expires_at?", "str", "")),
@@ -266,6 +274,9 @@ WORDS: dict[str, str] = {
     "view_grant": "Let a teammate or team see more of Finance.", "view_revoke": "Take a view grant back.",
     "private_lines_set": "Make a line private (payroll) and say who sees its detail.",
     "view_defaults_set": "Set what managers and members see by default.",
+    "mirror_start": "Switch the books to a provider's books (preview first).",
+    "mirror_stop": "Switch a mirrored book back to native.",
+    "mirror_tags": "Send tags to the provider as its classes (off by default).",
     "right_grant": "Give a teammate a Finance right.", "right_revoke": "Take a Finance right back.",
     "reconcile": "Match a statement to the feed and lock it.", "reconcile_undo": "Unlock a reconciliation.",
     "connection_create": "Connect a bank or Stripe.", "connection_sync": "Sync a connection now.",

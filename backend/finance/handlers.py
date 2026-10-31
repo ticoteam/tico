@@ -154,6 +154,9 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             _need_line(ctx, who, item.account_id, item.tags)
         if row["status"] != "posted" or row["reverses_id"]:
             raise FinanceError(CONFLICT, "that entry is already reversed or is a reversal")
+        if ctx.book.mode == "mirror":
+            from .mirror import check_reversal
+            check_reversal(ctx, entry_id)
         # A reclassification of a reconciled row's spend is locked with that row's own entry (banking._reclass).
         moved = SK.get(ctx.c, "fin_feed_txns", F.reclass_of(str(row["source"]), str(row["source_id"])) or "-")
         if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)) or \
@@ -164,6 +167,9 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         total = sum(x.amount for x in lines if x.amount > 0)
 
         def undo(aid: str) -> Result:
+            if ctx.book.mode == "mirror":
+                from .mirror import write_reversal
+                return write_reversal(ctx, entry_id, day=when, memo=memo, by=who, action_id=aid)
             from .documents import entry_reversed
             out: Result = {"entry_id": posting.reverse(ctx, entry_id, day=when, memo=memo, by=who, action_id=aid),
                            "reverses": entry_id}
@@ -180,6 +186,9 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         _need_line(ctx, who, item.account_id, item.tags, new=True)
 
     def apply(aid: str) -> Result:
+        if ctx.book.mode == "mirror":
+            from .mirror import write_entry
+            return write_entry(ctx, e, by=who, action_id=aid)
         entry_id, line_ids = posting.post(ctx, e, by=who, action_id=aid)
         return {"entry_id": entry_id, "line_ids": line_ids}
     total = sum(x.amount for x in e.lines if x.amount > 0)
