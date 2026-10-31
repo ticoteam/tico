@@ -188,7 +188,7 @@ def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
 
 def vendor_keys(c: sqlite3.Connection, key: str) -> list[str]:
     """Every key a vendor's lines carry: its own, and for a contact its name too (a line posted before the contact
-    existed keeps the name it had; lines never change)."""
+    existed keeps the name it had, in whatever case; lines never change). Compared in any case (SL.rollup_sum)."""
     if not key:
         return []
     row = c.execute("SELECT name FROM fin_contacts WHERE id=?", (key,)).fetchone()

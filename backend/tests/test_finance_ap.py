@@ -599,3 +599,35 @@ def test_a_vendor_has_one_key_across_its_bills_and_card_rows(books):
         assert budgeting.budget_state(c, str(by_name.result["budget_id"]), AT).actual == 24_500
         rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
         assert [(r["key"], r["label"], r["amount"]) for r in rows] == [(vendor, "Acme Cloud", 24_500)]
+
+
+def test_vendor_budgets_match_names_in_any_case_and_a_contact_never_makes_two_count_one_spend(books):
+    """A vendor budget made on a plain name keeps what was posted under that name (any case) once a contact with the
+    name takes it over; sibling budgets on one name in two cases overlap; and a contact whose name would make two
+    sibling budgets count the same spend is refused."""
+    from backend.finance import budgeting
+    from backend.tests.test_finance_fixtures import spend
+    with books.transaction() as c:
+        line = account(c, "6100")
+        root = str(act(c, OWNER, "budget_create", {"name": "Cloud", "account_id": line, "amount": 100_000}
+                       ).result["budget_id"])
+        plain = act(c, OWNER, "budget_create", {"name": "Acme", "account_id": line, "vendor": "acme cloud",
+                                                "parent_id": root, "amount": 50_000})
+        assert plain.status == "committed", plain
+        twin = act(c, OWNER, "budget_create", {"name": "Twin", "account_id": line, "vendor": "Acme Cloud",
+                                               "parent_id": root, "amount": 10_000})
+        assert (twin.status, twin.reason) == ("failed", "it overlaps budget Acme")
+        spend(c, "6100", 10_000, vendor="ACME CLOUD")
+        bid = str(plain.result["budget_id"])
+        assert budgeting.budget_state(c, bid, AT).actual == 10_000
+        north = _vendor(c, "Northwind")
+        on_north = act(c, OWNER, "budget_create", {"name": "North", "account_id": line, "vendor": "northwind",
+                                                   "parent_id": root, "amount": 10_000})
+        assert on_north.status == "committed"
+        assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (on_north.result["budget_id"],)).fetchone()[0] \
+            == north                                                     # stored as the contact's id
+        renamed = act(c, OWNER, "contact_update", {"contact_id": north, "name": "Acme Cloud"})
+        assert (renamed.status, renamed.code) == ("failed", "conflict") and "Acme and North" in renamed.reason
+        vendor = _vendor(c, "Acme Cloud")
+        assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0] == vendor
+        assert budgeting.budget_state(c, bid, AT).actual == 10_000       # what was posted under the name still counts

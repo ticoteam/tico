@@ -10,19 +10,15 @@ from .ledger import new_id
 
 def _budget(r: Any) -> Budget:
     return Budget(id=r["id"], book_id=r["book_id"], name=r["name"], period=r["period"], account_id=r["account_id"] or "",
-                  catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor_key"],
+                  catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor"],
                   parent_id=r["parent_id"] or "", owner=r["owner"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
                   rollover=r["rollover"], active=bool(r["active"]), created_at=r["created_at"])
 
 
 def budgets(c: sqlite3.Connection, book_id: str) -> dict[str, Budget]:
-    """Every budget in the book, active or not (a tree is small: dozens of rows). A vendor budget made on a plain name
-    goes by the contact's id once a vendor contact has that name (store/ap.vendor_key), so it matches its lines."""
-    return {r["id"]: _budget(r) for r in c.execute(
-        "SELECT b.*, COALESCE((SELECT k.id FROM fin_contacts k WHERE b.vendor<>'' AND k.book_id=b.book_id AND "
-        "lower(k.name)=lower(b.vendor) AND k.active=1 AND k.kind IN ('vendor','both') ORDER BY k.created_at, k.id "
-        "LIMIT 1), b.vendor) AS vendor_key FROM fin_budgets b WHERE b.book_id=? ORDER BY b.created_at, b.id",
-        (book_id,))}
+    """Every budget in the book, active or not (a tree is small: dozens of rows)."""
+    return {r["id"]: _budget(r) for r in c.execute("SELECT * FROM fin_budgets WHERE book_id=? ORDER BY created_at, id",
+                                                    (book_id,))}
 
 
 def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
@@ -31,6 +27,12 @@ def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
               "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
               (b.id, b.book_id, b.name, b.owner, b.period, b.account_id or None, int(b.catch_all), b.team, b.teammate,
                b.vendor, b.parent_id or None, b.warn_pct, b.at_limit, b.rollover, int(b.active), at, by, at))
+
+
+def move_vendor(c: sqlite3.Connection, budget_ids: Sequence[str], contact_id: str, at: str) -> None:
+    """Vendor budgets made on a plain name go by the contact's id once a vendor contact has that name."""
+    for bid in budget_ids:
+        c.execute("UPDATE fin_budgets SET vendor=?, updated_at=? WHERE id=?", (contact_id, at, bid))
 
 
 def update_budget(c: sqlite3.Connection, b: Budget, at: str) -> None:
