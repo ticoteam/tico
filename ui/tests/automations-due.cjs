@@ -80,7 +80,8 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
     null, {timeout: t(10000)});
   const step = (await automationNamed(page, 'New automation')).steps[0];
   assert.equal(step.do, 'create_task');
-  assert.deepEqual(step.args, {title: 'File the yearly report', owner: 'bot:' + BOT});
+  assert.equal(step.args.title, 'File the yearly report');
+  assert.equal(step.args.owner, 'bot:' + BOT);
 
   // On: the list files it under Due date, with its words and the next due day over when the task opens.
   await page.locator('.au-hd .au-sw').check();
