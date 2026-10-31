@@ -3215,20 +3215,21 @@ def create_app(settings=None):
         rule = org_rule_check.apply(c, rc, update_text(body), {"body": body.model_dump(mode="json")})
         if rule and rule.get("held"):
             return org_rule_check.answer(rule)
-        text = body.body
-        if rule and rule.get("warn"):
-            if update_kind(body) == "weekly":
-                slides = {**(slides or {}), "goal": org_rule_check.warned_text(rule, (slides or {}).get("goal") or "")}
-            else:
-                text = org_rule_check.warned_text(rule, text)
-        return {"update": updates.post(c, author, text, kind=body.kind, day=body.day, slides=slides,
-                                       replace_draft=body.replace_draft, reader=updates.meeting_reader(who)),
+        # The warn line goes on after the update's own words pass the writing checks (updates.post's `warning`).
+        return {"update": updates.post(c, author, body.body, kind=body.kind, day=body.day, slides=slides,
+                                       replace_draft=body.replace_draft, reader=updates.meeting_reader(who),
+                                       warning=org_rule_check.warn_line(rule)),
                 **org_rule_check.answer(rule)}
 
     def update_fixed(body):
         """The update a post means, its day and kind named, before anything is checked: a hold keeps them, so Send
         anyway posts that day's update of that kind, never today's or a week in review a Friday would make it."""
+        from datetime import date
         day = body.day or updates.today()
+        try:
+            date.fromisoformat(day)
+        except ValueError:
+            raise Problem("day", "An update is for today, or for the day Tico asked you to redo", 422) from None
         return body.model_copy(update={"day": day, "kind": updates.effective_kind(body.kind, body.slides, day)})
 
     @app.post("/api/v2/updates")

@@ -1906,3 +1906,27 @@ def test_a_review_file_the_check_could_not_read_is_refused_once_it_resolves_in_t
     [checked] = [call["state"]["output"] for call in judge.calls if "output" in call["state"]]
     assert "Our favorite color is blue" not in checked
     assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+
+
+def test_a_warned_update_passes_refusing_writing_checks_and_keeps_its_line(ruled, monkeypatch):
+    from backend import hubdb, updates
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
+    daily = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue."}, token="ops-test")
+    assert daily["rule_warning"] and daily["update"]["body"].startswith("Warning:")
+    assert daily["update"]["body"].endswith("\n\n- Our favorite color is blue.")
+    # The hub's start-up sweep lints the update's own words, so the line does not get it deleted.
+    with api.app.state.store.transaction() as c:
+        assert updates.purge_rejected(c) == []
+    weekly = {"goal": "Our favorite color is blue", "done": ["Launched"], "focus": ["Launch"], "blockers": ["None"]}
+    got = post(api, "updates", {"kind": "weekly", "slides": weekly}, token="ops-test")
+    assert got["rule_warning"] and got["update"]["slides"]["goal"].startswith("Warning:")
+    assert sql(api, "SELECT count(*) AS n FROM updates WHERE bot='ops'")[0]["n"] == 2
+
+
+def test_an_impossible_update_day_is_refused_as_a_day(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    r = api.post("/api/v2/updates", json={"day": "2026-02-30", "body": "- x"}, headers=headers("ops-test"))
+    assert r.status_code == 422 and r.json()["error"]["code"] == "day", r.text
