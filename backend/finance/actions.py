@@ -10,7 +10,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import Any, cast
 
 from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting, runs
 from . import setup as setup_mod
@@ -90,6 +90,25 @@ def _canonical(payload: object) -> dict[str, object]:
     except (TypeError, ValueError):
         raise FinanceError(INVALID, "payload is plain JSON") from None
     return dict(cast(dict[str, object], loaded))
+
+
+def _replayed_reason(c: sqlite3.Connection, p: O.Principal, row: Mapping[str, object], at: str | None) -> str:
+    """The reason a replay returns. A refusal that named budgets gets the names back only for a caller who may see
+    each of them now; otherwise the fallback its record kept, which names nothing (spec §7.5)."""
+    fallback = str(row["reason"] or "")
+    recorded = cast(dict[str, Any], json.loads(str(row["result_json"] or "{}"))).get("named")
+    if not recorded:
+        return fallback
+    try:
+        ctx = load(c, at)
+    except FinanceError:
+        return fallback
+    budgets = ctx.budgets()
+    shown = [budgets[str(bid)] for bid in recorded["budgets"] if str(bid) in budgets]
+    if len(shown) != len(recorded["budgets"]) or \
+            not handlers.named_visible(ctx, p.who, shown, bool(recorded["numbers"])):
+        return fallback
+    return str(recorded["template"]).format(*[b.name for b in shown])
 
 
 def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
@@ -204,7 +223,7 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
                     prior["actor"] != p.actor:
                 return ActionResult(status="failed", kind=kind, code=CONFLICT,
                                     reason="that idempotency key was used for a different request")
-            return replace(_stored(prior), replayed=True)
+            return replace(_stored(prior), reason=_replayed_reason(c, p, prior, at), replayed=True)
     action_id = tico.new_id()
     try:
         if kind not in K.ALL:
@@ -276,6 +295,14 @@ def receipt_payload(c: sqlite3.Connection, kind: str, payload: Mapping[str, obje
     return {"refused": CARD_NUMBER_REFUSED} if V.has_card_number(body) else body
 
 
+def _recorded(e: FinanceError) -> dict[str, object]:
+    """What a refusal keeps of the budgets it names: their ids and the sentence, never a name."""
+    if e.named is None:
+        return {}
+    n = e.named
+    return {"named": {"budgets": list(n.budgets), "template": n.template, "numbers": n.numbers}}
+
+
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,
                     action_id: str, e: FinanceError, dry_run: bool, at: str | None) -> ActionResult:
     """A denial or failure is recorded under its key too, so a retry gets the same answer. Bank details it sealed
@@ -286,8 +313,8 @@ def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapp
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
     SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-              rule_id=p.rule, key=key, rules=[], status=status, result={}, code=e.code, reason=e.message, by=p.actor,
-              at=when)
+              rule_id=p.rule, key=key, rules=[], status=status, result=_recorded(e), code=e.code,
+              reason=e.named.fallback if e.named else e.message, by=p.actor, at=when)
     _audit(c, p, action_id, kind, status, e.code)
     return ActionResult(status=status, kind=kind, action_id=action_id, code=e.code, reason=e.message)
 

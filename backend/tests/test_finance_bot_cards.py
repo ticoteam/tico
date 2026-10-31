@@ -553,6 +553,35 @@ def test_an_unfreeze_refusal_names_only_budgets_the_asker_can_see(books):
         assert "Tools budget is used up" in act(c, OWNER, "card_unfreeze", {"card_id": kid}).reason
 
 
+def test_a_refusal_that_named_a_budget_replays_without_the_name_once_the_asker_cannot_see_it(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00, decline; coder and seller hold 40.00 of it
+    with books.transaction() as c:
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
+        ctx = load(c, AT)
+        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="cutoff-replay", expires_at=None)
+        assert held.allowed
+        FA.drain_events(c, AT)
+        assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
+        grant = act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
+        assert grant.status == "committed"
+        # The bot sees Tools now, so the refusal names it; the record keeps only the fallback, never the name.
+        refused = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-replay")
+        assert (refused.status, refused.reason) == ("denied", "the Tools budget is used up; raise it before unfreezing")
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (refused.action_id,)).fetchone()[0]
+        assert stored == "a budget above this one is used up; raise it before unfreezing"
+        # Its view is taken back: the same key replays without the name.
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        replay = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-replay")
+        assert replay.replayed and replay.reason == "a budget above this one is used up; raise it before unfreezing"
+        # Given back, the same key names it again.
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"}).status == "committed"
+        again = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-replay")
+        assert again.replayed and again.reason == "the Tools budget is used up; raise it before unfreezing"
+
+
 def test_a_warn_budget_paused_at_zero_keeps_its_cards_frozen_through_the_sweep(books):
     fake = FakeMercury()
     budget, coder, seller = _world(books, fake)

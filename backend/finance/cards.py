@@ -21,7 +21,7 @@ from .context import Ctx
 from .core import kinds as K
 from .core.budgets import amount_at
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
+from .core.errors import CONFLICT, DENIED, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named, invalid, named_refusal
 from .core.org import SYSTEM
 from .handlers import Plan, Result
 from .store import ap as SAP
@@ -400,7 +400,7 @@ def _state(kind: str) -> handlers.Planner:
             leaf = str(cards[0]["budget_id"] or "")
             blocker = blocking_budget(ctx, leaf, dates.day(ctx.today))
             if blocker:
-                raise denied(_unfreeze_refusal(ctx, who, leaf, blocker))
+                raise _unfreeze_refusal(ctx, who, leaf, blocker)
 
         def apply(aid: str) -> Result:
             for card in cards:
@@ -496,15 +496,14 @@ def _paused(ctx: Ctx, budget_id: str, at: date) -> bool:
     return amount_at(SB.versions(ctx.c, [budget_id])[budget_id], at) == 0
 
 
-def _unfreeze_refusal(ctx: Ctx, who: str, leaf: str, blocker: str) -> str:
-    """Why a card cannot be unfrozen yet. The blocking budget is named only where `who` may see it (§7.5): a budget
-    above the card's own that `who` cannot see is not named."""
+def _unfreeze_refusal(ctx: Ctx, who: str, leaf: str, blocker: str) -> FinanceError:
+    """Why a card cannot be unfrozen yet. The blocking budget is named only where `who` may see it (§7.5); the record
+    keeps no name, so a replay names it again only while `who` may still see it."""
     b = ctx.budgets()[blocker]
-    if handlers.sees_budget(ctx, who, b):
-        return f"the {b.name} budget is used up; raise it before unfreezing"
-    if blocker == leaf:
-        return "this card's budget is used up; raise it before unfreezing"
-    return "a budget above this one is used up; raise it before unfreezing"
+    fallback = ("this card's budget is used up; raise it before unfreezing" if blocker == leaf
+                else "a budget above this one is used up; raise it before unfreezing")
+    named = Named((blocker,), "the {0} budget is used up; raise it before unfreezing", fallback)
+    return named_refusal(DENIED, named, [b.name], handlers.sees_budget(ctx, who, b))
 
 
 def check_lower(ctx: Ctx, card: Any, amount: int) -> None:

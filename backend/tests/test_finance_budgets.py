@@ -3,9 +3,15 @@ settle and release that never count twice, settlement that never fails for budge
 the last dollars."""
 import random
 import threading
+from dataclasses import replace
+
+import pytest
 
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance.context import load
+from backend.finance.core import budgets as B
+from backend.finance.core.errors import FinanceError
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
@@ -266,3 +272,36 @@ def test_period_hold_sums_search_the_budget_index_by_period(books):
         for q in sums:
             plan = " ".join(str(r[3]) for r in c.execute("EXPLAIN QUERY PLAN " + q))
             assert "fin_holds_budget (budget_id=? AND status=? AND held_on>? AND held_on<?)" in plan, plan
+
+
+def test_an_overlap_refusal_names_a_sibling_only_where_the_asker_may_see_it(books):
+    with books.transaction() as c:
+        acct = account(c, "6100")
+        tools = {"name": "Tools", "account_id": acct, "amount": 50_000}
+        root = str(act(c, OWNER, "budget_create", tools).result["budget_id"])
+        eng = str(act(c, OWNER, "budget_create", {"name": "Eng tools", "account_id": acct, "team": "eng",
+                                                  "parent_id": root, "amount": 10_000}).result["budget_id"])
+        ctx = load(c, AT)
+        budgets = ctx.budgets()
+        twin = replace(budgets[eng], id="twin", name="Twin")          # the same scope under the same parent
+        with pytest.raises(FinanceError) as hidden:
+            B.check(twin, budgets, ctx.accounts, ctx.org)
+        assert hidden.value.message == "it overlaps another budget"
+        with pytest.raises(FinanceError) as shown:
+            B.check(twin, budgets, ctx.accounts, ctx.org, seen=lambda b: True)
+        assert shown.value.message == "it overlaps budget Eng tools"
+
+
+def test_a_fit_refusal_keeps_no_amounts_and_a_replay_gives_the_viewer_its_sentence_back(books):
+    with books.transaction() as c:
+        acct = account(c, "6100")
+        tools = {"name": "Tools", "account_id": acct, "amount": 50_000}
+        root = str(act(c, OWNER, "budget_create", tools).result["budget_id"])
+        eng = str(act(c, OWNER, "budget_create", {"name": "Eng tools", "account_id": acct, "team": "eng",
+                                                  "parent_id": root, "amount": 10_000}).result["budget_id"])
+        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 60_000}, key="too-big")
+        assert refused.status == "failed" and "Tools" in refused.reason and "60000" in refused.reason, refused
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (refused.action_id,)).fetchone()[0]
+        assert stored == "it does not fit: not enough left"
+        replay = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 60_000}, key="too-big")
+        assert replay.replayed and replay.reason == refused.reason

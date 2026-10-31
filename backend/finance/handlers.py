@@ -1,7 +1,7 @@
 """One planner per live action kind. A planner reads the payload, checks it against the books, the org chart and the
 asker's view, and returns a Plan: the default gate it meets, its budget impact, and the write to run when it commits.
 Planning writes nothing, so a dry run and an approval's re-check run the same code as the real thing."""
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any
 
@@ -14,7 +14,9 @@ from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
 from .core import view as VW
-from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
+from .core.errors import (
+    CONFLICT, INVALID, NOT_FOUND, PERIOD_CLOSED, FinanceError, Named, brace, denied, invalid, named_refusal,
+)
 from .core.org import SYSTEM
 from .store import access as SA
 from .store import ap as SAP
@@ -112,6 +114,11 @@ def private_scope(ctx: Ctx, who: str, b: B.Budget) -> bool:
 def shows_numbers(ctx: Ctx, who: str, b: B.Budget) -> bool:
     """Whether `who` may see a budget's remaining, spend and holds: in their view and over no private lines."""
     return sees_budget(ctx, who, b) and not private_scope(ctx, who, b)
+
+
+def named_visible(ctx: Ctx, who: str, budgets: Sequence[B.Budget], numbers: bool) -> bool:
+    """Whether `who` may see every budget a refusal names: each name, and its numbers where the sentence has amounts."""
+    return all(shows_numbers(ctx, who, b) if numbers else sees_budget(ctx, who, b) for b in budgets)
 
 
 def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> list[Result]:
@@ -249,6 +256,21 @@ def account_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 f"Add account {new.code} {new.name} ({new.type})", apply)
 
 
+def _breaks(ctx: Ctx, who: str, b: B.Budget, e: FinanceError) -> FinanceError:
+    """The refusal for a move that breaks budget `b`. Its name goes in the message only where `who` may see it, and what
+    the inner refusal named stays named only for an asker who may see that budget too."""
+    budgets = ctx.budgets()
+    if e.named is None:
+        named = Named((b.id,), f"moving it breaks budget {{0}}: {brace(e.message)}",
+                      f"moving it breaks a budget you cannot see: {e.message}")
+    else:
+        inner = e.named
+        named = Named((b.id, *inner.budgets), "moving it breaks budget {0}: " + inner.template.replace("{0}", "{1}"),
+                      f"moving it breaks a budget you cannot see: {inner.fallback}", inner.numbers)
+    seen = [budgets[bid] for bid in named.budgets]
+    return named_refusal(INVALID, named, [x.name for x in seen], named_visible(ctx, who, seen, named.numbers))
+
+
 def account_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("account_id", "code", "name", "subtype", "parent_id", "active"))
     old = _account(ctx, V.text(p, "account_id", 80))
@@ -285,9 +307,9 @@ def _may_move(ctx: Ctx, who: str, old: L.Account, new: L.Account) -> None:
     for b in budgets.values():
         if b.active:
             try:
-                B.check(b, budgets, after, ctx.org)
+                B.check(b, budgets, after, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
             except FinanceError as e:
-                raise invalid(f"moving it breaks budget {b.name}: {e.message}") from None
+                raise _breaks(ctx, who, b, e) from None
 
 
 def _month(ctx: Ctx, p: V.Payload) -> tuple[str, str]:
@@ -482,7 +504,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         vendor=SAP.vendor_resolved(ctx.c, ctx.book.id, V.opt_text(p, "vendor", 80) or ""),
         parent_id=V.opt_text(p, "parent_id", 80) or "", owner=who,
         created_at=ctx.at))
-    B.check(new, ctx.budgets(), ctx.accounts, ctx.org)
+    B.check(new, ctx.budgets(), ctx.accounts, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
     _need_budget_view(ctx, who, new)
     amount = V.opt_amount(p)
     if amount is not None and amount < 0:
@@ -518,7 +540,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     _need_budget_view(ctx, who, old)
     new = replace(_budget_fields(p, old), active=V.flag(p, "active", old.active))
     if new.active:
-        B.check(new, ctx.budgets(), ctx.accounts, ctx.org)
+        B.check(new, ctx.budgets(), ctx.accounts, ctx.org, seen=lambda x: sees_budget(ctx, who, x))
     elif any(b.parent_id == old.id and b.active for b in ctx.budgets().values()):
         raise invalid("end the budgets under it first")
     amount = V.opt_amount(p)
@@ -591,9 +613,9 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         for one in B.chain(ctx.budgets(), b.id):
             s = budgeting.state(ctx, one.id, at)
             if s.remaining is not None and grow > s.remaining:
-                if shows_numbers(ctx, who, one):
-                    raise invalid(f"it does not fit: {one.name} has {s.remaining} left")
-                raise invalid("it does not fit: not enough left")
+                named = Named((one.id,), f"it does not fit: {{0}} has {s.remaining} left",
+                              "it does not fit: not enough left", numbers=True)
+                raise named_refusal(INVALID, named, [one.name], shows_numbers(ctx, who, one))
     lowered = kind == "card" and grow < 0
 
     def apply(aid: str) -> Result:
