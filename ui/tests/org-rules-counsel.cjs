@@ -15,12 +15,15 @@ const {t} = require('./support/load.cjs');
 
 const QUOTE = 'Keep a record of each consent for five years.';
 // One API call as a teammate, by token: Counsel writes its suggestions this way, as its runner would.
-async function call(hub, teammate, method, p, body) {
+async function send(hub, teammate, method, p, body) {
   const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + hub.tokens[teammate],
     'content-type': 'application/json', ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})},
     body: body === undefined ? undefined : JSON.stringify(body)});
-  const json = await r.json().catch(() => ({}));
-  assert.ok(r.status < 300, `${method} ${p} as ${teammate}: ${r.status} ${JSON.stringify(json)}`);
+  return {status: r.status, json: await r.json().catch(() => ({}))};
+}
+async function call(hub, teammate, method, p, body) {
+  const {status, json} = await send(hub, teammate, method, p, body);
+  assert.ok(status < 300, `${method} ${p} as ${teammate}: ${status} ${JSON.stringify(json)}`);
   return json;
 }
 const ready = page => page.waitForFunction(() => {
@@ -28,6 +31,11 @@ const ready = page => page.waitForFunction(() => {
   return who !== '' && who !== 'Signing in…' && document.querySelector('#main')?.children.length > 0;
 }, null, {timeout: t(20000)});
 const go = async (page, hash) => { await page.evaluate(h => { location.hash = h; }, hash); };
+// The rule panel has closed and the address no longer names a rule.
+const closed = async page => {
+  await page.locator('#ru-side').waitFor({state: 'hidden', timeout: t(15000)});
+  assert.ok(!page.url().includes('rule='), 'the address drops the rule');
+};
 // Counsel's suggestion on the terms it was asked to read, citing that version.
 const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v2/rules', {kind: 'external', text, who,
   source_id: read.source.id, ...(cite ? {cite: {file_id: read.file.id, version: read.file.version, ...cite}} : {})});
@@ -75,6 +83,35 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     await modal.locator(`.ru-done[data-ru-read="${taskId}"]`, {hasText: 'already'}).waitFor({timeout: t(15000)});
     await modal.locator('[data-ru-close]').first().click();
 
+    // Screening holds a document: the dialog says so and links the task, with no "reading" and no long-document line.
+    const receipt = await call(hub, 'dana', 'GET', '/v2/rule-sources');
+    const northwind = receipt.sources.find(s => s.name === 'Northwind');
+    await page.route('**/api/v2/rules/read', route => route.fulfill({json: {task_id: taskId,
+      source: {id: northwind.id, name: northwind.name, kind: northwind.kind},
+      file: {id: 'file-held', version: 1, title: 'Northwind Messaging Terms'}, suggested_who: {groups: []},
+      truncated: true, screening: 'hold', existing: false}}));
+    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
+    await modal.locator('select[name=source]').selectOption({label: 'Northwind'});
+    await modal.locator('button[type=submit]').click();
+    await modal.locator(`.ru-held[data-ru-read="${taskId}"]`).waitFor({timeout: t(15000)});
+    assert.equal(await modal.locator('.ru-done, .ru-warn').count(), 0, 'a held document is not being read');
+    assert.match(await modal.locator('[data-ru-task]').getAttribute('href'), new RegExp(taskId));
+    await modal.locator('[data-ru-close]').first().click();
+    await page.unroute('**/api/v2/rules/read');
+
+    // A link the server refuses: the dialog shows the server's reason, and stays open to fix it.
+    const link = 'http://127.0.0.1/terms';
+    const refused = await send(hub, 'dana', 'POST', '/v2/rules/read', {url: link, source_id: northwind.id});
+    assert.equal(refused.json.error?.code, 'fetch');
+    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await modal.locator('input[name=find]').fill(link);
+    await modal.locator('select[name=source]').selectOption({label: 'Northwind'});
+    await modal.locator('button[type=submit]').click();
+    await page.waitForFunction(want => document.querySelector('#ru-doc .ru-status')?.textContent === want,
+      refused.json.error.detail, {timeout: t(15000)});
+    await modal.locator('[data-ru-close]').first().click();
+
     // Counsel suggests three rules: one with no Who (no department holds Northwind's access), two with one.
     const read = {source: (await call(hub, 'dana', 'GET', '/v2/rule-sources')).sources.find(s => s.name === 'Northwind'),
                   file: {id: (await call(hub, 'dana', 'GET', '/v2/files?limit=50')).files.find(f => f.title === 'Northwind Messaging Terms').id, version: 1}};
@@ -89,6 +126,10 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     const row = group.locator(`.ru-prop[data-rule="${open.id}"]`);
     await row.waitFor({timeout: t(15000)});
     assert.ok(await row.locator('[data-ru-accept]').isDisabled(), 'Add waits for a Who');
+    // Counsel is a helper, never a Who: not among the row's choices.
+    const whoChoices = await row.locator('[data-ru-who] option').evaluateAll(os => os.map(o => o.value + ' ' + o.textContent));
+    assert.ok(whoChoices.some(v => v.includes('engineering-lead')), 'bots are offered');
+    assert.ok(!whoChoices.some(v => /counsel/i.test(v)), 'Counsel is not offered as Who');
     const groupText = await group.textContent();
     assert.ok(!groupText.includes(QUOTE) && !groupText.includes('Northwind Messaging Terms'), 'no quote or document on the rows');
 
@@ -98,29 +139,70 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     await quote.waitFor({timeout: t(10000)});
     assert.ok((await quote.textContent()).includes(QUOTE));
     assert.equal(await quote.locator('.ru-qsrc').textContent(), '4. Messaging');
-    assert.match(await quote.locator('.ru-qsrc').getAttribute('href'), new RegExp(`/api/v2/files/${read.file.id}\\?v=1$`));
+    const fileHref = `/api/v2/files/${read.file.id}?v=${read.file.version}`;
+    assert.ok((await quote.locator('.ru-qsrc').getAttribute('href')).endsWith(fileHref), 'the quote links the version it cites');
     assert.ok(await page.locator('#ru-side [data-ru-accept-one]').isDisabled(), "the panel's Add waits for a Who too");
+    const panelChoices = await page.locator('#ru-side [data-scope="who"]').evaluate(async el => {
+      el.querySelector('[data-seg="bots"]').click();
+      await new Promise(r => setTimeout(r, 0));
+      return [...el.querySelectorAll('.ru-addsel option')].map(o => o.value + ' ' + o.textContent);
+    });
+    assert.ok(panelChoices.some(v => v.includes('engineering-lead')) && !panelChoices.some(v => /counsel/i.test(v)),
+      "Counsel is not offered in the panel's Who");
 
-    // Add all adds the two rows with a Who and leaves the one without waiting.
+    // Add all adds the two rows with a Who and leaves the one without waiting; its panel stays on it.
     await group.locator('[data-ru-add-all]', {hasText: 'Add all 2'}).click();
     await group.locator(`.ru-prop[data-rule="${logs.id}"]`).waitFor({state: 'detached', timeout: t(15000)});
     await group.locator(`.ru-prop[data-rule="${optout.id}"]`).waitFor({state: 'detached', timeout: t(15000)});
     assert.equal((await call(hub, 'dana', 'GET', '/v2/rules/' + open.id)).status, 'suggested');
+    await page.locator(`#ru-side form[data-rule="${open.id}"]`).waitFor({timeout: t(5000)});
 
-    // Pick a Who, and Add works.
+    // Pick a Who, and the row's Add works; the open panel on that rule closes rather than show the old suggestion.
     await row.locator('[data-ru-who]').selectOption('bots:engineering-lead');
     assert.ok(await row.locator('[data-ru-accept]').isEnabled());
     await row.locator('[data-ru-accept]').click();
     await group.waitFor({state: 'detached', timeout: t(15000)});
+    await closed(page);
     const added = await call(hub, 'dana', 'GET', '/v2/rules/' + open.id);
     assert.equal(added.status, 'active');
     assert.deepEqual(added.who.bots.map(b => b.id), ['engineering-lead']);
     assert.equal(added.cite.quote, QUOTE);
 
-    // The external rule's panel shows the quote.
+    // The same for a row's Skip and for Add all, each with its rule's panel open.
+    const skipped = await suggest(hub, read, 'Send texts only from the approved short code.', {bots: ['engineering-lead']});
+    const bulk = await suggest(hub, read, 'Stop texting a number that replies STOP.', {bots: ['engineering-lead']});
+    await go(page, '#/rules/external');
+    await go(page, '#/rules/suggested');
+    await group.locator(`.ru-prop[data-rule="${skipped.id}"] .ru-pt`).click();
+    await page.locator(`#ru-side form[data-rule="${skipped.id}"]`).waitFor({timeout: t(10000)});
+    await group.locator(`.ru-prop[data-rule="${skipped.id}"] [data-ru-skip]`).click();
+    await closed(page);
+    assert.notEqual((await call(hub, 'dana', 'GET', '/v2/rules/' + skipped.id)).status, 'suggested');
+    await group.locator(`.ru-prop[data-rule="${bulk.id}"] .ru-pt`).click();
+    await page.locator(`#ru-side form[data-rule="${bulk.id}"]`).waitFor({timeout: t(10000)});
+    await group.locator('[data-ru-add-all]', {hasText: 'Add all 1'}).click();
+    await closed(page);
+    assert.equal((await call(hub, 'dana', 'GET', '/v2/rules/' + bulk.id)).status, 'active');
+
+    // The external rule's panel shows the quote, and its link opens that version in the viewer.
     await go(page, `#/rules/external?rule=${open.id}`);
-    await page.locator(`#ru-side form[data-rule="${open.id}"] .ru-quote`).waitFor({timeout: t(15000)});
+    const extQuote = page.locator(`#ru-side form[data-rule="${open.id}"] .ru-quote`);
+    await extQuote.waitFor({timeout: t(15000)});
+    const [viewed] = await Promise.all([page.waitForRequest(r => r.url().endsWith(fileHref), {timeout: t(10000)}),
+      extQuote.locator('.ru-qsrc').click()]);
+    assert.ok(viewed);
+    await page.keyboard.press('Escape');
     await page.context().close();
+
+    // A teammate who can't read the file (the Release Manager, a bot with no access to the Engineering Lead's files)
+    // sees the rule but not its quote.
+    assert.deepEqual((await call(hub, 'release-manager', 'GET', '/v2/rules/' + open.id)).cite, {hidden: true});
+    const other = await pageAs(browser, hub, 'release-manager');
+    await other.locator('#main').waitFor({timeout: t(20000)});
+    await go(other, `#/rules/external?rule=${open.id}`);
+    await other.locator(`#ru-side form[data-rule="${open.id}"]`).waitFor({timeout: t(20000)});
+    assert.equal(await other.locator('#ru-side .ru-quote, #ru-side .ru-qsrc').count(), 0, 'no quote for a teammate who cannot read the file');
+    await other.context().close();
 
     if (process.env.RULES_SHOTS) await shots(browser, hub, read, open.id);
     console.log('org-rules-counsel: ok');

@@ -146,8 +146,9 @@ a.ru-row:hover *{text-decoration:none}
 .ru-pick-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .ru-pick-m{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-xs)}
 .ru-pick-none{margin:0;padding:10px 12px;color:var(--muted);font-size:var(--t-sm)}
-.ru-done{margin:4px 0 0;font-size:var(--t-md)}
-.ru-done b{font-weight:600;overflow-wrap:anywhere}
+.ru-done,.ru-held{margin:4px 0 0;font-size:var(--t-md)}
+.ru-done b,.ru-held b{font-weight:600;overflow-wrap:anywhere}
+.ru-held{padding:8px 10px;border-radius:var(--r-ctl);background:color-mix(in srgb,var(--wait) 14%,transparent);color:var(--ink)}
 .ru-warn{margin:0;padding:8px 10px;border-radius:var(--r-ctl);background:color-mix(in srgb,var(--wait) 14%,transparent);color:var(--ink);font-size:var(--t-sm)}
 .ru-foot [data-ru-task]{font-size:var(--t-sm)}
 

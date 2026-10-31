@@ -366,29 +366,39 @@ function ruSettingGo(link, ev) {
   setTimeout(() => $('#bot-access-card')?.scrollIntoView({block: 'start'}), 300);
 }
 async function ruAccept(props) {
+  const written = [];
   for (const prop of props) {
     const r = RU.suggested.find(x => x.id === prop.dataset.rule);
     if (!r) continue;
     const who = ruWhoFromOption(prop.querySelector('[data-ru-who]').value);
     prop.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    written.push(r.id);
     try { await post('/v2/rules/' + encodeURIComponent(r.id) + '/accept', {version: r.version, ...(who ? {who} : {})}); }
     catch (e) { toast(ruError(e), true); break; }
   }
-  await ruReload();
+  await ruReload(written);
 }
 async function ruSkip(prop) {
   const r = RU.suggested.find(x => x.id === prop.dataset.rule);
   if (!r) return;
   try { await post('/v2/rules/' + encodeURIComponent(r.id) + '/skip', {version: r.version}); }
   catch (e) { toast(ruError(e), true); }
-  await ruReload();
+  await ruReload([r.id]);
 }
-// After a write: the open tab and the counts read again; the other tabs read again when shown.
-async function ruReload() {
+// After a write: the open tab and the counts read again; the other tabs read again when shown. `written` names rules
+// a list row wrote: when the open panel shows one of them, it reads that rule again, and on Suggested it closes once
+// the rule is no longer a suggestion (a row's Add, Skip or Add all leaves the panel's copy stale otherwise).
+async function ruReload(written = []) {
   if (!RU) return;
   RU.loaded = new Set([RU.tab]);
   RU.settings = [];
-  if (await ruLoad(RU.tab)) { ruDraw(); ruDrawPanel(); }
+  if (!await ruLoad(RU.tab)) return;
+  const open = RU.tab === 'due' ? '' : ruQuery().get('rule'), side = $('#ru-side');
+  if (open && written.includes(open)) {
+    if (side) side.dataset.open = '';
+    if (RU.tab === 'suggested' && !RU.suggested.some(r => r.id === open)) { location.hash = ruHref(RU.tab); return; }
+  }
+  ruDraw(); ruDrawPanel();
 }
 document.addEventListener('keydown', ev => {
   if (ev.key !== 'Escape' || !RU || !document.body.contains(RU.root) || $('dialog[open]')) return;
@@ -768,17 +778,15 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
 // ----------------------------------------------------------------- Add document
 // One file from Files (one the viewer can read) or a public link, From (an existing one, or a new name with its kind),
 // and an optional description. POST /rules/read opens Counsel's task; the dialog then says Counsel is reading it and
-// links the task. Asked again while that task is open, the server returns it (`existing`), and the dialog says so.
+// links the task. Asked again while that task is open, the server returns it (`existing`), and the dialog says so. When
+// screening holds the document (`screening: "hold"`), Counsel is given none of its text, and the dialog says that instead.
 const RU_DOC_SKIP = new Set(['image', 'media']);   // Files kinds Counsel reads no text from
 const RU_DOC_PICKS = 6;
 const ruIsLink = v => /^https?:\/\/\S+$/i.test(v);
-// A refusal as one line: Counsel off, a file it can't read, a link that didn't open, a file the viewer can't read.
+// A refusal as one line: Counsel off, or the server's own reason (a file Counsel can't read and why, a link that didn't
+// open and why, a file or From that isn't there), which is already one line for the person.
 function ruDocError(e) {
-  const code = e?.body?.error?.code;
-  if (code === 'counsel_off') return 'Counsel is off.';
-  if (code === 'unreadable') return "Counsel can't read this file.";
-  if (code === 'fetch') return "Couldn't open that link.";
-  if (e?.status === 404) return "That file isn't one you can read.";
+  if (e?.body?.error?.code === 'counsel_off') return 'Counsel is off.';
   return ruError(e);
 }
 async function ruDocOpen() {
@@ -871,8 +879,10 @@ async function ruDocOpen() {
     if (RU) RU.sources = [];
     const title = esc(out.file?.title || pick?.title || link);
     form.innerHTML = `${head}
-      <p class="ru-done" data-ru-read="${esc(out.task_id)}">${out.existing ? `Counsel is already reading <b>${title}</b>.` : `Counsel is reading <b>${title}</b>.`}</p>
-      ${out.truncated ? '<p class="ru-warn">Long document: Counsel reads only the start.</p>' : ''}
+      ${out.screening === 'hold'
+        ? `<p class="ru-held" data-ru-read="${esc(out.task_id)}">Screening held <b>${title}</b>. Counsel won't suggest rules from it.</p>`
+        : `<p class="ru-done" data-ru-read="${esc(out.task_id)}">${out.existing ? `Counsel is already reading <b>${title}</b>.` : `Counsel is reading <b>${title}</b>.`}</p>
+      ${out.truncated ? '<p class="ru-warn">Long document: Counsel reads only the start.</p>' : ''}`}
       <div class="ru-foot"><a href="#/task/${encodeURIComponent(out.task_id)}" data-ru-task>Open task ›</a><span class="spacer"></span><button class="primary" type="button" data-ru-close>Done</button></div>`;
     form.querySelectorAll('[data-ru-close], [data-ru-task]').forEach(b => { b.addEventListener('click', () => dlg.close()); });
   };
