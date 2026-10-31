@@ -49,7 +49,7 @@ def test_random_holds_never_let_children_pass_the_parent(books):
     rng = random.Random(7)
     with books.transaction() as c:
         pid, kids = _tree(c, 10_000, (("web", None), ("sales", 6_000)))   # web is bounded only by its parent
-        live: dict[str, int] = {}
+        live: dict[str, int] = {}   # in the order placed: hold ids are random, so the seed alone fixes the run
         allowed = refused = 0
         for n in range(200):
             roll = rng.random()
@@ -65,10 +65,10 @@ def test_random_holds_never_let_children_pass_the_parent(books):
                     assert d.action == "decline"
                     refused += 1
             elif roll < 0.8:
-                hid = rng.choice(sorted(live))
+                hid = rng.choice(list(live))
                 FA.hold_settle(c, hid, rng.randint(0, live.pop(hid)), at=AT)   # at most what was held
             else:
-                hid = rng.choice(sorted(live))
+                hid = rng.choice(list(live))
                 del live[hid]
                 assert FA.hold_release(c, hid, at=AT)
             parent = FA.budget_state(c, pid, AT)
