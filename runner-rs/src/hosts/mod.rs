@@ -383,6 +383,12 @@ pub fn new_group(command: &mut tokio::process::Command) -> &mut tokio::process::
     command
 }
 
+/// Whether any process of group `group` is left (one this runner may signal).
+fn group_left(group: i32) -> bool {
+    // SAFETY: signal 0 only checks.
+    unsafe { libc::kill(-group, 0) == 0 }
+}
+
 /// Hand `child` to a task of its own that waits for it and carries out `Stopper` requests. The receiver gets the
 /// exit status. Take the child's pipes before calling this.
 ///
@@ -441,12 +447,21 @@ pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::
                 }
             }
         };
-        if let (Some(g), true) = (group, termed) {
-            // SAFETY: the group's number stays taken while any process of it is left, and it was reaped a moment
-            // ago: with none left, this finds nothing.
-            unsafe { libc::kill(-g, libc::SIGKILL) };
-        }
         let _ = done.send(status);
+        if let (Some(g), true) = (group, termed) {
+            // What the harness started keeps the rest of the grace its SIGTERM gave it, then gets SIGKILL. The
+            // group's number stays taken only while a process of it is left, so the group is checked just before the
+            // signal: one that emptied (whose number could go to another group) is never signalled.
+            let until = kill_at.unwrap_or_else(tokio::time::Instant::now);
+            while group_left(g) {
+                if tokio::time::Instant::now() >= until {
+                    // SAFETY: a group of this harness's, found a moment ago.
+                    unsafe { libc::kill(-g, libc::SIGKILL) };
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+            }
+        }
     });
     (Stopper(tx), exited)
 }
@@ -832,6 +847,35 @@ mod tests {
         // SAFETY: the child this test started, and its group.
         unsafe { libc::kill(-group, libc::SIGKILL) };
         assert!(kept, "a kill reached the harness's child");
+    }
+
+    #[tokio::test]
+    async fn what_a_stopped_harness_started_keeps_its_grace_after_the_harness_exits() {
+        use tokio::io::AsyncBufReadExt;
+        let file = std::env::temp_dir().join(format!("tico-group-grace-{}", uuid::Uuid::new_v4().simple()));
+        // The harness exits at once on SIGTERM; its tool (which says when its trap is set) takes 300 ms to clean up.
+        let script = format!(
+            "sh -c 'trap \"sleep 0.3; echo done > {}; exit 0\" TERM; echo ready; while :; do sleep 0.05; done' </dev/null 2>/dev/null & \
+             trap 'exit 0' TERM; while :; do sleep 0.05; done",
+            file.display()
+        );
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", &script]).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped());
+        let mut child = new_group(&mut command).spawn().unwrap();
+        let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        lines.next_line().await.unwrap().unwrap();
+        let group = child.id().unwrap() as i32;
+        let (stopper, exited) = own(child);
+        stopper.terminate(std::time::Duration::from_secs(5));
+        tokio::time::timeout(std::time::Duration::from_secs(5), exited).await.unwrap().unwrap().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !group_gone(group) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        let wrote = std::fs::read_to_string(&file).unwrap_or_default();
+        let _ = std::fs::remove_file(&file);
+        assert!(group_gone(group), "the harness's tool outlived the stop");
+        assert_eq!(wrote.trim(), "done", "the tool was killed before its cleanup finished");
     }
 
     #[test]
