@@ -18,6 +18,7 @@ const emps = [['eng-lead', 'Engineering Lead', 'eng'], ['builder', 'Builder', 'p
   ['writer', 'Writer', 'content'], ['bookkeeper', 'Bookkeeper', '']].map(([name, display_name, team]) =>
   ({name, display_name, role: display_name, team, status: 'active', host: 'keeper', can_chat: true}));
 const teams = [{id: 'eng', name: 'Engineering', parent: '', lead: 'human:cara'}, {id: 'platform', name: 'Platform', parent: 'eng', lead: 'bot:eng-lead'},
+  {id: 'web', name: 'Web', parent: 'eng', lead: 'bot:eng-lead'},
   {id: 'mkt', name: 'Marketing', parent: '', lead: 'bot:mkt-lead'}, {id: 'content', name: 'Content', parent: 'mkt', lead: 'bot:mkt-lead'}];
 const ALL_RIGHTS = ['finance.book', 'finance.ap', 'finance.ar', 'finance.pay', 'finance.cards', 'finance.budgets', 'finance.rules', 'finance.admin'];
 const mate = (teammate, kind, team, def, extra = {}) => ({teammate, kind, team, reports_to: '', default: def, grants: [], rights: [], ...extra});
@@ -49,7 +50,7 @@ const LINES = [
   ['a-4100', '4100', 'Subscriptions', 'income', 'a-4000', 4200000, 4000000],
   ['a-4200', '4200', 'Services', 'income', 'a-4000', 800000, 1000000],
   ['a-5000', '5000', 'Cost of revenue', 'expense', null, 0, null],
-  ['a-5100', '5100', 'Hosting', 'expense', 'a-5000', 410000, 400000],
+  ['a-5100', '5100', 'Hosting', 'expense', 'a-5000', 410000, 400050],
   ['a-5200', '5200', 'AI services', 'expense', 'a-5000', 520000, null],
   ['a-6000', '6000', 'Operating expenses', 'expense', null, 0, null],
   ['a-6100', '6100', 'Software', 'expense', 'a-6000', 294000, 300000],
@@ -88,9 +89,14 @@ function pnl(url, me) {
 const budget = (id, name, account_id, amount, extra = {}) => ({id, name, period: 'month', account_id, catch_all: false, team: null, teammate: null, vendor: null,
   parent_id: null, owner: 'human:ana', warn_pct: 80, at_limit: 'ask', rollover: false, active: true,
   state: {amount, actual: Math.round(amount * 0.8), held: 0, remaining: Math.round(amount * 0.2), pct: 80, crossed_warn: true, at_limit: false}, ...extra});
-const BUDGETS = [budget('b-software', 'Software', 'a-6100', 300000), budget('b-hosting', 'Hosting', 'a-5100', 400000),
+const BUDGETS = [budget('b-software', 'Software', 'a-6100', 300000), budget('b-hosting', 'Hosting', 'a-5100', 400050),
   budget('b-figma', 'Figma', 'a-6100', 45000, {vendor: 'Figma', parent_id: 'b-software', at_limit: 'decline'}),
-  budget('b-github', 'GitHub', 'a-6100', 90000, {vendor: 'GitHub', parent_id: 'b-software'})];
+  budget('b-github', 'GitHub', 'a-6100', 90000, {vendor: 'GitHub', parent_id: 'b-software'}),
+  // Team budgets: one under Software (Engineering), two under Contractors (Platform and Web, both inside Engineering).
+  budget('b-software-eng', 'Software · Engineering', 'a-6100', 120000, {team: 'eng', parent_id: 'b-software'}),
+  budget('b-contr', 'Contractors', 'a-6300', 500000),
+  budget('b-contr-platform', 'Contractors · Platform', 'a-6300', 200000, {team: 'platform', parent_id: 'b-contr'}),
+  budget('b-contr-web', 'Contractors · Web', 'a-6300', 150000, {team: 'web', parent_id: 'b-contr'})];
 function line(id) {
   const l = LINES.find(x => x[0] === id) || LINES[7];
   return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, total: l[5], excluded: 0, hidden: 0,
@@ -242,6 +248,15 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
       assert.deepEqual(actions(writes).at(-1), {kind: 'budget_create', payload: {name: 'AI services', period: 'month', account_id: 'a-5200', amount: 600000, effective_from: cols[future].start}},
         tag + ': budget_create for a line without one');
+      // An untouched $4,000.50 shows its cents and posts nothing on blur.
+      await page.locator(`td[data-fin-cell="a-5100|${future}"]`).click();
+      await page.locator('td[data-fin-budget="a-5100"]').dblclick();
+      assert.equal(await page.locator('.fin-cell-in').inputValue(), '4000.50', tag + ': the editor seeds exact cents');
+      const before = actions(writes).length;
+      await page.locator('#fin-head').click();
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      await page.waitForTimeout(100);
+      assert.equal(actions(writes).length, before, tag + ': blur on an untouched budget posts nothing');
       const keys = writes.map(w => w[3]);
       assert.ok(keys.every(Boolean) && new Set(keys).size === keys.length, tag + ': a fresh Idempotency-Key per write');
       await page.locator(`td[data-fin-cell="a-6100|${cols.findIndex(c => c.state === 'current')}"]`).click();
@@ -252,14 +267,26 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('[data-fin-key="GitHub"]').waitFor();
       assert.deepEqual(await page.locator('#fin-line thead th').allInnerTexts().then(t => t.slice(0, 2)), ['VENDOR', 'TEAM'].map(s => s), tag + ': vendor rows');
       assert.equal(await page.locator('#fin-line tbody tr').count(), 4, tag + ': one row per vendor and Other, no totals row');
+      assert.equal(await page.locator('input[data-fin-vb]').count(), 0, tag + ': this month\'s vendor budgets are read only');
+      const next = cols[future].start.slice(0, 7);
+      await page.locator('[data-fin-month]').fill(next);
+      await page.locator('input[data-fin-vb="GitHub"]').waitFor();
+      await page.locator('input[data-fin-vb="GitHub"]').fill('950');
+      await page.locator('input[data-fin-vb="GitHub"]').press('Enter');
+      await page.waitForTimeout(150);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-github', amount: 95000, effective_from: next + '-01'}},
+        tag + ': a vendor budget changes from the month shown');
       await page.locator('input[data-fin-vb="Notion"]').fill('400');
       await page.locator('input[data-fin-vb="Notion"]').press('Enter');
-      await page.waitForFunction(n => document.querySelectorAll('tr').length && n, 1);
-      await page.waitForTimeout(100);
-      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_create', payload: {name: 'Notion', period: 'month', account_id: 'a-6100', vendor: 'Notion', amount: 40000, parent_id: 'b-software'}},
-        tag + ': a vendor budget under the line\'s');
+      await page.waitForTimeout(150);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_create', payload: {name: 'Notion', period: 'month', account_id: 'a-6100', vendor: 'Notion', parent_id: 'b-software', amount: 40000, effective_from: next + '-01'}},
+        tag + ': a vendor budget under the line\'s, from the month shown');
       assert.match(await page.locator('#fin-rail .fin-more').getAttribute('href'), /#\/finance\/transactions\?account_id=a-6100&q=GitHub/, tag + ': All GitHub transactions');
       await shot(page, 'line-desktop');
+      // A line with no budget of its own offers a line budget first, not a vendor one.
+      await go(page, '#/finance/line/a-5200', '[data-fin-key="GitHub"]');
+      await page.locator('[data-fin-line-add]').waitFor();
+      assert.equal(await page.locator('[data-fin-vendor-add]').count(), 0, tag + ': no vendor budget without a line budget');
       // Expenses view.
       await go(page, '#/finance/pnl?view=expenses', '.fin-pl');
       await page.locator('.fin-tm').waitFor();
@@ -268,6 +295,17 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('[data-fin-pick="team:eng"]').check();
       await page.waitForFunction(() => /team=eng/.test(JSON.stringify(FIN.pnl?.data ? 1 : 0)) || document.querySelector('.fin-chip'));
       assert.match(await page.locator('#fin-filters .fin-chip').innerText(), /Engineering/, tag + ': the filter chip');
+      await page.keyboard.press('Escape');
+      await page.locator(`td[data-fin-cell="a-6100|${future}"]`).click();
+      await page.locator('td[data-fin-budget="a-6100"]').dblclick();
+      await page.locator('.fin-cell-in').fill('9000');
+      await page.locator('.fin-cell-in').press('Enter');
+      await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'budget_update', payload: {budget_id: 'b-software-eng', amount: 900000, effective_from: cols[future].start}},
+        tag + ': filtered to a team, the cell edits that team\'s budget');
+      assert.equal(await page.locator('td[data-fin-budget="a-6300"]').count(), 0, tag + ': no editor on a cell summing two team budgets');
+      assert.equal(await page.locator('td[data-fin-budget="a-5100"]').count(), 0, tag + ': no editor where the team has no budget');
       // Balance sheet, cards (freeze), transactions, sources, access.
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();
@@ -368,6 +406,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('.fin-pl').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': the manager\'s tabs (Access is the owner\'s own)');
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
+      assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
+      await page.goBack();
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 6);
+      await page.goForward();
+      await page.locator('.fin-as').waitFor();
+      assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
       await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 6);
       assert.deepEqual(errors, [], tag + ': no page errors');

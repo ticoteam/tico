@@ -15,7 +15,7 @@ const FIN_TABS = [['pnl', 'P&L'], ['balance', 'Balance sheet'], ['cards', 'Cards
 let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
 let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE = null;     // the sidebar's one read per visit
-let FIN_VIEW_AS = '';     // the owner viewing Finance as a teammate (read only), for this visit
+let FIN_VIEW_AS = '';     // the owner viewing Finance as a teammate (read only): ?view_as=… in the address
 
 // ----------------------------------------------------------------- who sees what
 const finMe = () => S.me?.id ? 'human:' + S.me.id : '';
@@ -48,6 +48,13 @@ const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps
   : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
+// A Finance address that keeps "View as": the view is in the address, so Back and Forward carry it.
+function finHref(path, params = {}) {
+  const q = new URLSearchParams(Object.entries(params).filter(([, v]) => v != null && v !== ''));
+  if (FIN_VIEW_AS) q.set('view_as', FIN_VIEW_AS);
+  const qs = q.toString();
+  return FIN_ROUTE + path + (qs ? '?' + qs : '');
+}
 
 // ----------------------------------------------------------------- the sidebar
 // Finance shows in the rail once Finance is set up and the viewer sees something in it; it sits under Strategy.
@@ -189,6 +196,7 @@ function pageFinance() {
   const parts = path.slice(FIN_ROUTE.length + 1).split('/').filter(Boolean);
   FIN = {load: (FIN?.load || 0) + 1, tab: parts[0] || '', arg: decodeURIComponent(parts[1] || ''),
     q: new URLSearchParams(query || ''), acc: FIN_ACCESS};
+  FIN_VIEW_AS = FIN.q.get('view_as') || '';
   const main = $('#main');
   main.classList.add('strategy-layout', 'finance-layout');
   main.innerHTML = finHeadHtml() + `<div id="fin-body" class="fin-body">${skelRows(6, {dot: false})}</div>`;
@@ -208,7 +216,7 @@ function finShow(state) {
   if (!caps?.any) { finHeadDraw(); $('#fin-body').innerHTML = finNote('Nothing in Finance is in your view.'); return; }
   const tab = state.tab === 'line' ? 'pnl' : state.tab;
   if (!tab || !finTabShown(tab, caps, acc)) {
-    location.replace(FIN_ROUTE + '/pnl' + (caps.company ? '' : '?view=expenses'));
+    location.replace(finHref('/pnl', {view: caps.company ? '' : 'expenses'}));
     return;
   }
   finHeadDraw();
@@ -226,19 +234,19 @@ function finHeadHtml() {
   const viewing = caps?.viewing ? `<span class="fin-as">Viewing as ${esc(finWho(caps.who))}<button type="button" class="ghost" data-fin-as-end aria-label="Stop viewing as ${esc(finWho(caps.who))}">✕</button></span>` : '';
   return `<div class="strat-head rd-strat-head fin-head" id="fin-head"><h1>Finance</h1>
     <nav class="tabs slim strat-tabs" aria-label="Finance">${tabs.map(([id, label]) =>
-      `<a href="${FIN_ROUTE}/${id}" data-fin-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>
+      `<a href="${finHref('/' + id)}" data-fin-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>
     <span class="spacer"></span>${viewing}</div>`;
 }
 function finHeadDraw() {
   const head = $('#fin-head'); if (!head) return;
   head.outerHTML = finHeadHtml();
   const end = $('#fin-head [data-fin-as-end]');
-  if (end) end.onclick = () => { FIN_VIEW_AS = ''; route(); };
+  if (end) end.onclick = () => { FIN_VIEW_AS = ''; location.hash = finHref('/' + (FIN?.tab === 'line' ? 'pnl' : FIN?.tab || 'pnl')); };
 }
 // The owner views Finance as a teammate sees it: every tab reads as them, and nothing can be changed meanwhile.
 function finViewAs(who) {
   FIN_VIEW_AS = who || '';
-  if (location.hash.split('?')[0] === FIN_ROUTE + '/pnl') route(); else location.hash = FIN_ROUTE + '/pnl';
+  location.hash = finHref('/pnl');
 }
 function financeStop() { if (FIN && !rdUnder(S.route || '', FIN_ROUTE)) { FIN = null; document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close()); } }
 

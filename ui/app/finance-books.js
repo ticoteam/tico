@@ -173,13 +173,18 @@ async function finCardAdd() {
   try { budgets = (await get('/v2/finance/budgets', {fresh: true}))?.budgets || []; } catch { /* a card can go without one */ }
   const people = (FIN.acc?.teammates || []);
   finDialog('Card', `<label>Holder<select name="holder" required>${people.map(t => `<option value="${esc(t.teammate)}">${esc(finWho(t.teammate))}</option>`).join('')}</select></label>
-    <label>Budget<select name="budget"><option value="">None</option>${budgets.filter(b => b.active).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}</select></label>
+    <label>Budget<select name="budget" required>${budgets.filter(b => b.active && !b.catch_all).map(b => `<option value="${esc(b.id)}">${esc(b.name)}</option>`).join('')}</select></label>
     <label>Limit / mo<input name="amount" inputmode="decimal" required autocomplete="off"></label>
-    <label>Name<input name="nickname" maxlength="60" autocomplete="off"></label>`, 'Create', async form => {
+    <label>Name<input name="nickname" maxlength="50" autocomplete="off"></label>
+    <label>Mercury user ID<input name="user" required maxlength="120" autocomplete="off" spellcheck="false"></label>`, 'Create', async form => {
+    // backend/finance/cards.py card_create: a budget the card's monthly limit comes out of, and the Mercury user it is
+    // issued to (Mercury issues cards to its own users).
     const cents = finParseCents(form.elements.amount.value);
-    if (cents == null) throw new Error('A dollar amount, like 500');
-    const payload = {holder: form.elements.holder.value, amount: cents};
-    if (form.elements.budget.value) payload.budget_id = form.elements.budget.value;
+    if (cents == null || cents <= 0) throw new Error('A dollar amount, like 500');
+    if (!form.elements.budget.value) throw new Error('Pick a budget');
+    const user = form.elements.user.value.trim();
+    if (!user) throw new Error('Add the Mercury user ID');
+    const payload = {holder: form.elements.holder.value, budget_id: form.elements.budget.value, amount: cents, provider_user_id: user};
     if (form.elements.nickname.value.trim()) payload.nickname = form.elements.nickname.value.trim();
     const r = await finAct('card_create', payload);
     if (r.status === 'committed') toast('Card created');
@@ -268,7 +273,14 @@ function finTxRail() {
   if (!r) { finRail(''); return; }
   const lines = r.kind === 'feed' ? (r.lines || []) : r.entry_id && r.id ? [{line_id: r.id, account: r.account, amount: r.amount, vendor: r.vendor, tags: r.tags || {}}] : [];
   const may = finCaps().may('finance.book') && lines.length > 0;
-  const {tags} = finTxTags(r), acc = FIN.acc || {};
+  const acc = FIN.acc || {};
+  // What each field shows: the lines' common value, or Mixed when a split transaction's lines differ.
+  const FIN_MIXED = '*';
+  const shown = Object.fromEntries(['teammate', 'team', 'project'].map(k => {
+    const vals = new Set(lines.map(l => l.tags?.[k] || ''));
+    return [k, vals.size > 1 ? FIN_MIXED : [...vals][0] || ''];
+  }));
+  const mixed = k => shown[k] === FIN_MIXED ? `<option value="${FIN_MIXED}" selected>Mixed</option>` : '';
   const title = r.kind === 'feed' ? r.counterparty || r.description || '' : r.description || r.memo || '';
   const opt = (v, l, cur) => `<option value="${esc(v)}"${v === (cur || '') ? ' selected' : ''}>${esc(l)}</option>`;
   finRail(`<div class="fin-rail-title"><h2>${esc(title)}</h2><span class="fin-big">${finUsd(r.amount)}</span></div>
@@ -276,17 +288,20 @@ function finTxRail() {
     ${r.kind === 'feed' ? finKv('Account', esc(`${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}`)) + (r.description && r.description !== title ? finKv('Description', esc(r.description)) : '') : finKv('Source', esc(r.source || ''))}
     ${r.memo ? finKv('Memo', esc(r.memo)) : ''}
     ${lines.length ? `<h3 class="fin-h">Lines</h3>${lines.map(l => finKv(l.account || '', finCents(l.amount))).join('')}` : ''}
-    ${may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${opt('', '—', tags.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), tags.teammate)).join('')}</select></label>
-      <label>Team<select name="team">${opt('', '—', tags.team)}${(acc.teams || []).map(t => opt(t.id, t.name, tags.team)).join('')}</select></label>
-      <label>Project<input name="project" maxlength="80" autocomplete="off" value="${esc(tags.project || '')}"></label>
+    ${may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', shown.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), shown.teammate)).join('')}</select></label>
+      <label>Team<select name="team">${mixed('team')}${opt('', '—', shown.team)}${(acc.teams || []).map(t => opt(t.id, t.name, shown.team)).join('')}</select></label>
+      <label>Project<input name="project" maxlength="80" autocomplete="off" value="${shown.project === FIN_MIXED ? '' : esc(shown.project)}"${shown.project === FIN_MIXED ? ' placeholder="Mixed"' : ''}></label>
       <div class="fin-foot"><button type="submit" class="primary">Save</button></div></form>` : ''}`);
   const form = $('#fin-rail [data-fin-tag]');
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
-    // Each line keeps its other tags (budget, custom); the three here are set or cleared.
+    // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
+    const changed = ['teammate', 'team', 'project'].map(k => [k, form.elements[k].value.trim()])
+      .filter(([k, v]) => v !== FIN_MIXED && v !== (shown[k] === FIN_MIXED ? '' : shown[k]));
+    if (!changed.length) return;
     const pick = l => {
       const next = {...(l.tags || {})};
-      for (const k of ['teammate', 'team', 'project']) { const v = form.elements[k].value.trim(); if (v) next[k] = v; else delete next[k]; }
+      for (const [k, v] of changed) { if (v) next[k] = v; else delete next[k]; }
       return next;
     };
     const btn = form.querySelector('[type=submit]'); btn.disabled = true;

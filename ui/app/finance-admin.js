@@ -98,21 +98,30 @@ function finSrcRail() {
     ${access.length ? `<h3 class="fin-h">Access</h3>${access.map(a => finKv(finWho(a.who), esc(a.via === 'default' ? 'Default' : a.via || ''))).join('')}` : ''}`);
 }
 // Connect Mercury: the token goes into the credential vault, then the connection is made from the stored credential
-// (POST /api/v2/finance/connections tests it and maps the accounts). The token is never read back.
+// (POST /api/v2/finance/connections tests it and maps the accounts). The token is never read back. A retry after a
+// failed connect reuses the stored credential (updating its value if the token was changed), so one try stores one.
 function finConnectMercury() {
+  let cred = null, stored = '';
   finDialog('Connect Mercury', `<label>API token<input name="token" type="password" required autocomplete="off" spellcheck="false"></label>
     <label>Approver email<input name="approver" type="email" autocomplete="off" spellcheck="false"></label>`, 'Connect', async form => {
     const token = form.elements.token.value.trim();
     if (!token) throw new Error('Paste the token');
-    const cred = await post('/v2/credentials', {name: 'Mercury', kind: 'token', secret: token, username: '', env: '', source: 'finance'});
-    form.elements.token.value = '';
-    if (!cred?.id) throw new Error('The token was not stored');
+    if (!cred) {
+      cred = await post('/v2/credentials', {name: 'Mercury', kind: 'token', secret: token, username: '', env: '', source: 'finance'});
+      if (!cred?.id) { cred = null; throw new Error('The token was not stored'); }
+      stored = token;
+    } else if (token !== stored) {
+      cred = await post('/v2/credentials/' + encodeURIComponent(cred.id), {name: 'Mercury', kind: 'token', secret: token, username: '', env: '',
+        source: 'finance', ...(cred.revision ? {expected_revision: cred.revision} : {})}) || cred;
+      stored = token;
+    }
     const body = {credential_id: cred.id, name: 'Mercury'};
     if (form.elements.approver.value.trim()) body.approver_email = form.elements.approver.value.trim();
     const r = await post('/v2/finance/connections', body);
     if (r?.status === 'needs_approval') toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval');
     else if (r?.status !== 'committed') throw new Error(r?.reason || 'Not connected');
     else toast('Mercury connected');
+    form.elements.token.value = '';
     if (FIN?.src) void finSrcLoad();
     if (FIN?.bs) void finBsLoad();
   });
