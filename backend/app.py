@@ -1720,6 +1720,15 @@ def create_app(settings=None):
         if not key:
             raise Problem("gateway_not_connected", "The Tico AI Gateway is not connected; the owner saves a gateway key in "
                           "Settings > Computers", 409)
+        cut = None
+        try:                                           # a fault in Finance refuses nothing (backend/finance/limits.py)
+            from .finance import reads as finance_reads
+            with store.read() as c:
+                cut = finance_reads.video_cutoff(c, who.actor)
+        except Exception as exc:
+            telemetry.capture("finance_video_cutoff", exc)
+        if cut is not None:
+            raise Problem("video_budget_reached", f"{cut.name} budget reached: no new images until it is raised", 409)
         if not app.state.image_slots.acquire(blocking=False):
             return JSONResponse({"error": {"code": "gateway_images_busy", "detail": "Image making is busy; try again shortly",
                                            "retryable": True}}, status_code=429, headers={"Retry-After": "10"})
