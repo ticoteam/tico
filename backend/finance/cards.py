@@ -371,7 +371,9 @@ def _state(kind: str) -> handlers.Planner:
             if b is not None and b.at_limit == "decline":
                 left = state(ctx, b.id, dates.day(ctx.today)).remaining
                 if left is not None and left <= 0:
-                    raise denied(f"the {b.name} budget is used up; raise it before unfreezing")
+                    if who == SYSTEM or handlers.sees_budget(ctx, who, b):
+                        raise denied(f"the {b.name} budget is used up; raise it before unfreezing")
+                    raise denied("that card cannot be unfrozen right now; ask someone who sees its budget")
 
         def apply(aid: str) -> Result:
             for card in cards:
