@@ -423,3 +423,9 @@ def test_hub_rules_check_and_appeal_over_the_cli_and_mcp(ruled):
     assert appealed["task_id"]
     error, _ = mcp(api, "hub_rules_check", {"text": "Hello", "to": "ana"}, token="ops-test")
     assert not error
+
+
+def test_rule_check_eval_cases_build_valid_requests():
+    from evals.rule_check import run as E
+    assert E.main([]) == 0
+    assert E.engines(["low"], env={}) == []
