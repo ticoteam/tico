@@ -158,39 +158,38 @@ listed computers** ([Shared keys](#api-keys-on-a-computer)).
 
 ### Which connection a bot runs on
 
-A bot runs its tool on its computer's login for that tool (a key it is given counts as that login), unless a person's
-subscription is picked for it ([Your subscriptions](#your-subscriptions)). The bot editor shows which under the model:
-"Runs on *tool* · Computer's login on *computer*", or the subscription and where it was picked. To put a bot on a
-different account without a subscription, move it to a computer signed in to that account. When a plan runs out, a bot
-can move to its fallback model; that is set in Models and per bot ([How it works](how-it-works.md)), not here.
+A bot runs its tool with its computer's subscription for that tool, if the computer was given one
+([Company subscriptions](#company-subscriptions)), else the computer's own login for that tool (a key it is given counts
+as that login), else the Tico AI Gateway when the company's models choice allows it; with none, the turn waits. To put
+a bot on a different account, give its computer another subscription or move the bot to another computer. When a plan
+runs out, a bot can move to its fallback model; that is set in Models and per bot ([How it works](how-it-works.md)),
+not here.
 
-### Your subscriptions
+### Company subscriptions
 
-A **subscription** is your own model login or key, saved once in Tico rather than on a computer: a Claude setup-token
-(from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is signed in,
-usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. Add, rename, reconnect or remove them under
-**Subscriptions** on your own person page. The list shows each one's name, kind, status and the bots, teams and tasks
-that use it; the value is never shown again.
+A **subscription** is one of the company's model logins or keys, saved once in Tico rather than on a computer: a
+Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
+signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. It belongs to the company; the list says
+who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
+page sees the list (name, kind, status, computers, usage), never a value.
 
-Pick one for a tool in three places: on a **task** (that task's turns only), on a **bot** (bot settings), or on a
-**team** (every bot on that team and the teams below it). A turn uses the first of: the task's pick, the bot's pick,
-its team's pick, the team above's, and so on; with none it runs on the computer's login, else the Tico AI Gateway
-under the company's models choice. Each picker shows what is in effect and where it comes from.
+Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
+computers. Every bot on that computer then runs that tool on it.
 
-- You can pick only your own subscriptions, and only for a bot you manage, a task whose bot you manage, or a team you
-  lead (an owner or admin: any team). A pick can be taken off by anyone who could set it, and always by the
-  subscription's owner.
-- A subscription works on any computer the bot runs on, a new cloud machine included: nobody signs in there. The turn
-  reads it from Tico with its own run token, next to its credentials; it is never written into the bot's repository.
-  A Claude token or Anthropic key is set in that turn's environment. A ChatGPT login or OpenAI key gets a Codex home
-  of its own on that computer; when Codex refreshes the login there, the refreshed login is sent back to Tico.
-- If the provider refuses it, it shows **Needs reconnect**, the computer's own login is left alone, and its picks are
-  passed over until you paste a new value with **Reconnect**. A pick whose owner has left is passed over too.
+- Giving, switching or taking off a computer's subscription, or removing one in use, restarts that tool there: its
+  running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
+  instead), and every session of that tool on that computer starts fresh. The page asks first and says how many.
+- It works on any computer it is given to, a new cloud machine included: nobody signs in there. The turn reads it from
+  Tico with its own run token, next to its credentials; it is never written into the bot's repository. A Claude token
+  or Anthropic key is set in that turn's environment. A ChatGPT login or OpenAI key gets a Codex home of its own on
+  that computer; when Codex refreshes the login there, the refreshed login is sent back to Tico.
+- A usage limit met on a subscription holds it on every computer it is given to until the reset.
+- If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
+  Gateway) until someone pastes a new value with **Reconnect**. The computer's own login is left alone.
 - A computer on an older runner does not take subscriptions; its bots run as before until it updates.
 
 One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
-while a turn runs on your subscription, another bot's turn on the same computer could read it. To keep a subscription
-to one bot, give that bot a computer of its own.
+while a turn runs on a subscription, another bot's turn on the same computer could read it.
 
 ### Bots sharing one ChatGPT sign-in run side by side
 

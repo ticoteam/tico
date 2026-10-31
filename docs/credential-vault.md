@@ -143,11 +143,12 @@ unreachable), filing a ticket is refused with `vault_unavailable` before anythin
 that this server could not keep. Secrets an older release kept in plaintext are sealed when the server starts; that is
 idempotent, and when the vault cannot be opened at start they are sealed on the next start or the next use.
 
-**People's model subscriptions.** A Claude setup-token, ChatGPT login or model API key a person saves under
-Subscriptions ([Computers](computers.md#your-subscriptions)) is sealed the same way (`model_subscriptions.sealed`,
-bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. Only a
-run its claim handed the subscription reads the value, from `credential-runtime` with its run token, while that run is
-live; each read is recorded (`subscription.sent_to_computer`).
+**Company model subscriptions.** A Claude setup-token, ChatGPT login or model API key an owner or admin saves in
+Settings > Models ([Computers](computers.md#company-subscriptions)) is sealed the same way (`model_subscriptions.sealed`,
+bound to the subscription), saved through the vault's keyed request fingerprint, and never returned by a list. Bots, the
+Assistant or BotOps acting for a person, and support sessions cannot save one. Only a run its claim handed the
+subscription (its computer's, recorded in `attempt_subscriptions`) reads the value, from `credential-runtime` with its
+run token, while that run is live; each read is recorded (`subscription.sent_to_computer`).
 
 **A pairing's agent credential is not in the vault.** From approval until the Hermes or OpenClaw profile collects it, the
 minted credential waits in `agent_pairings.token` sealed to a public key derived from the pairing secret, which only the
