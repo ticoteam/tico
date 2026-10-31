@@ -962,6 +962,24 @@ def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by
     assert mode == "approval_queue" and status not in ("failed", "cancelled"), (mode, status)
 
 
+def test_a_rule_on_direct_payments_added_after_queueing_cancels_the_send(books):
+    """Codex P1: the send-time recheck builds the same facts as the create did, mode included, so a deny on direct
+    payments added after the payment was queued cancels it, and no direct transaction is made."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+    dpid = _direct(books, rid)
+    with books.transaction() as c:
+        _rule(c, OWNER, "No direct pays", {"kind": "payment_create", "mode": "direct"}, {"outcome": "deny"},
+              [{"input": {"kind": "payment_create", "mode": "direct"}, "expect": "deny"}])
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "cancelled"
+
+
 def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold_is_released(books):
     """Item 8: a direct send has no request id, so its own Mercury transaction id ends it when the bank voids the row."""
     fake = FakeMercury()

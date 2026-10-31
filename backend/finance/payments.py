@@ -570,8 +570,10 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])
+    # The same facts create gave the action, mode included (the mode the send now uses, after any switch above).
     found = gating.send_facts(ctx, who, "payment_create",
-                              _facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money))
+                              {**_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money),
+                               "mode": str(pay["mode"])})
     mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
