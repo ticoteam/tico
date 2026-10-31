@@ -447,8 +447,11 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
         "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
         "version": row["version"], "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"]} for d in dues[:DUE_PER_RULE]],
+        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"]}
+                for d in dues[:DUE_PER_RULE]],
         "due_more": max(0, len(dues) - DUE_PER_RULE),
+        # Whether this caller may accept, edit, retire or add due dates (the UI hides what it can't use).
+        "can_edit": row["status"] != "retired" and may_manage(c, auth, who, row["who"], ctx),
     }
     if row.get("cite"):
         out["cite"] = _cite(c, auth, who, row["cite"]) if quote else {"pending": True}
@@ -936,10 +939,14 @@ def due_list(c, auth, who, args):
         if found["status"] != "overdue" and D.parse_date(found["due_on"]) > today + timedelta(days=horizon):
             continue
         rule = active[found["rule_id"]]
+        manage = may_manage(c, auth, who, rule["who"], ctx)
         rows.append({"id": found["id"], "rule": {"id": rule["id"], "text": rule["text"], "kind": rule["kind"],
                                                  "source": ctx["sources"].get(rule["source_id"])},
                      "due_on": found["due_on"], "repeats": found["repeats"], "owner": found["owner"],
-                     "routine_id": found["routine_id"], "status": found["status"], "history": found["history"]})
+                     "first_due": found["first_due"], "timezone": found["timezone"],
+                     "routine_id": found["routine_id"], "status": found["status"], "open": found["open"],
+                     "history": found["history"],
+                     "can_edit": manage, "can_satisfy": manage or who.actor == found["owner"]})
     rows.sort(key=lambda r: (r["due_on"], r["id"]))
     page, nxt = _page(rows, args.get("cursor"), _limit(args.get("limit"), 100, DUE_LIST_MAX))
     return {"due": page, "next_cursor": nxt}
@@ -960,11 +967,10 @@ def counts(c, auth, who):
     auth.domain(who)
     rows = _active(c)
     active = {r["id"] for r in rows}
-    open_due = [d for d in D.views(c, [r for r in D.live_rows(c) if r["rule_id"] in active])
-                if d["status"] in ("overdue", "due_soon")]
+    dues = [r for r in D.live_rows(c) if r["rule_id"] in active]
     return {"internal": sum(1 for r in rows if r["kind"] == "internal"),
             "external": sum(1 for r in rows if r["kind"] == "external"),
-            "due": len(open_due),
+            "due": len(dues),
             "suggested": c.execute("SELECT count(*) FROM org_rules WHERE status='suggested'").fetchone()[0]}
 
 
@@ -1055,7 +1061,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/rules/counts")
     def rules_counts(request: Request):
-        """The tab counts: internal and external rules in force, the due dates open or due soon, the suggestions waiting."""
+        """The tab counts: internal and external rules in force, the due dates kept, the suggestions waiting."""
         with store.read() as c:
             return counts(c, auth, request.state.identity)
 
