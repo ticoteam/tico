@@ -8,6 +8,19 @@ below word for word as its notes.
 
 ## [Unreleased]
 
+## [0.5.21] - 2026-10-31
+
+### Added
+- **Give computers company subscriptions.** Save a Claude or ChatGPT plan or API key once, assign it to computers, and choose which subscription each computer uses. Manage subscriptions and defaults in **Settings → Models** ([Computers](https://github.com/ticoteam/tico/blob/v0.5.21/docs/computers.md)).
+- **Manage company finances in Tico.** Connect Mercury to review bank activity, manage budgets, issue and manage cards, and prepare payments for Mercury's approval queue. The Finance tab also supports categorizing transactions and managing access ([Finance API](https://github.com/ticoteam/tico/blob/v0.5.21/docs/openapi/v2.json), [Usage and budgets](https://github.com/ticoteam/tico/blob/v0.5.21/docs/usage.md)).
+- **Turn documents into suggested rules.** General Counsel can read a document and suggest obligations with quotes and source references for a person to review ([Rules plan](https://github.com/ticoteam/tico/blob/v0.5.21/docs/rules-plan.md)).
+- **Run Tico Gateway models on cloud machines.** Bots on Tico cloud machines can use Tico models, with a separate pass for each turn's model calls ([Cloud machines](https://github.com/ticoteam/tico/blob/v0.5.21/docs/cloud-machines.md), [AI Gateway](https://github.com/ticoteam/tico/blob/v0.5.21/docs/ai-gateway.md)).
+
+### Fixed
+- **Stopping a run stops its child processes.** The runner now stops the harness and the processes it started when a turn stops ([How it works](https://github.com/ticoteam/tico/blob/v0.5.21/docs/how-it-works.md)).
+- **Video budgets no longer pause a bot.** Reaching the Video production budget stops new image generation for covered users while their bot runs continue ([Usage and budgets](https://github.com/ticoteam/tico/blob/v0.5.21/docs/usage.md)).
+
+
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
