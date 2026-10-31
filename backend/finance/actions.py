@@ -427,6 +427,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
     mark = _savepoint(c, "fin_decide")
     try:
+        ctx.deciding = True
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _approver(ctx, gate, p.who)
         if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):
@@ -464,6 +465,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     """The approved payload is not the one about to run, so that approval is void. The change is planned again and asked
     again for the payload it would now run, of the person who decides it now. Never the requester."""
     action_id = str(row["id"])
+    ctx.deciding = True                       # the recheck runs on the true figures (figure_route)
     try:
         gate, plan = _plan(ctx, p, kind, body, action_id)
         approver = _approver(ctx, gate, p.who)

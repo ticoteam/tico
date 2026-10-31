@@ -1662,14 +1662,15 @@ def raw_imports(c: sqlite3.Connection, viewer: str, *, limit: int = 50, at: str 
     return {"imports": shown, "more": len(found) > most}
 
 
-def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, object] | None:
-    """An action's status for `viewer`, read now: None unless they asked for it, are the one to decide its approval, or
-    their current view covers what it is about. Its reason (which may carry amounts) for the approver, and otherwise
-    only while the viewer's view covers that; else its code alone."""
+def action_for(c: sqlite3.Connection, viewer: str, action_id: str, at: str | None = None) -> dict[str, object] | None:
+    """An action's status for `viewer`, read at `at` (default now): None unless they asked for it, are the one to decide
+    its approval, or their current view covers what it is about. Its reason (which may carry amounts) for the approver,
+    and otherwise only while the viewer's view covers that; else its code alone. A refused figure is stored without its
+    amount and rendered here per reader (named_reason)."""
     row = SX.by_id(c, action_id)
     if row is None:
         return None
-    ctx = load(c)
+    ctx = load(c, at)
     try:
         payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
     except ValueError:

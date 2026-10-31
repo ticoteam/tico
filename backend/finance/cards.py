@@ -21,7 +21,7 @@ from .context import Ctx
 from .core import kinds as K
 from .core.budgets import amount_at
 from .core import validate as V
-from .core.errors import CONFLICT, DENIED, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named, invalid, named_refusal
+from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named, invalid, named_refusal
 from .core.org import SYSTEM
 from .handlers import Plan, Result
 from .store import ap as SAP
@@ -320,9 +320,10 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount <= 0:
         raise invalid("a card's monthly limit is more than 0")
     card_id = SL.new_id()
-    alloc = handlers.allocation_plan(ctx, who, {"budget_id": V.text(p, "budget_id", 80), "target_kind": "card",
-                                                "target_id": card_id, "amount": amount})
     budget_id = V.text(p, "budget_id", 80)
+    route = handlers.figure_route(ctx, who, budget_id)
+    alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card", "target_id": card_id,
+                                                "amount": amount}, route)
     nickname = V.opt_text(p, "nickname", 50) or holder.split(":", 1)[-1]
     user = V.text(p, "provider_user_id", 120)
 
@@ -336,7 +337,8 @@ def card_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         queue(ctx, SK.get(ctx.c, "fin_cards", card_id), "card_create",
               {"user_id": user, "nickname": nickname, "monthly": amount}, f"card-create-{card_id}", aid, who)
         return {"card_id": card_id, "sync_status": "pending"}
-    return Plan(K.default_gate(ctx.org, who, "card_create"),
+    gate = alloc.gate if route else K.default_gate(ctx.org, who, "card_create")
+    return Plan(gate,
                 f"Issue a {kind} card to {holder} with {amount / 100:.2f} a month from {ctx.budgets()[budget_id].name}",
                 apply,
                 facts={"amount": amount, "holder": holder, "budget_id": budget_id, "card.kind": kind,
@@ -352,15 +354,18 @@ def card_update_limit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     amount = V.amount(p)
     if amount <= 0:
         raise invalid("a card's monthly limit is more than 0; freeze or cancel it instead")
-    check_lower(ctx, card, amount)
-    alloc = handlers.allocation_plan(ctx, who, {"budget_id": str(card["budget_id"]), "target_kind": "card",
-                                                "target_id": str(card["id"]), "amount": amount})
+    budget_id = str(card["budget_id"] or "")
+    route = handlers.figure_route(ctx, who, budget_id, card)
+    if not route:
+        check_lower(ctx, card, amount, who)
+    alloc = handlers.allocation_plan(ctx, who, {"budget_id": budget_id, "target_kind": "card",
+                                                "target_id": str(card["id"]), "amount": amount}, route)
 
     def apply(aid: str) -> Result:
         alloc.apply(aid)                            # the limit follows the allocation (`limit_follows`)
         return {"card_id": str(card["id"]), "limit": amount}
-    return Plan(K.default_gate(ctx.org, who, "card_update_limit"),
-                f"Set card ••{card['last4'] or '----'}'s limit to {amount / 100:.2f} a month", apply,
+    gate = handlers.HIDDEN_GATE if route else K.default_gate(ctx.org, who, "card_update_limit")
+    return Plan(gate, f"Set card ••{card['last4'] or '----'}'s limit to {amount / 100:.2f} a month", apply,
                 facts={"amount": amount, "holder": str(card["holder"]), "budget_id": str(card["budget_id"] or "")})
 
 
@@ -506,11 +511,28 @@ def _unfreeze_refusal(ctx: Ctx, who: str, leaf: str, blocker: str) -> FinanceErr
     return named_refusal(DENIED, named, [b.name], handlers.sees_budget(ctx, who, b))
 
 
-def check_lower(ctx: Ctx, card: Any, amount: int) -> None:
-    """A card's limit can't go below what it has already used this period (holds and settled spend)."""
+LIMIT_FALLBACK = "the card has used more than that this period; its limit can't go below that"
+
+
+def check_lower(ctx: Ctx, card: Any, amount: int, who: str) -> None:
+    """A card's limit can't go below what it has already used this period (holds and settled spend). The refusal is a
+    Named record: its figure shows only to a reader who sees the card and whose own figure is the true one (named_reason)."""
     have = used(ctx, card)
     if 0 < amount < have:
-        raise invalid(f"the card has used {have / 100:.2f} this period; its limit can't go below that")
+        named = Named((), f"the card has used {have / 100:.2f} this period; its limit can't go below that",
+                      LIMIT_FALLBACK, numbers=True, cards=(str(card["id"]),))
+        shown = sees(ctx, who, card) and not figure_hidden(ctx, who, card)
+        raise named_refusal(INVALID, named, [], shown)
+
+
+def figure_hidden(ctx: Ctx, who: str, card: Any) -> bool:
+    """Whether `who`'s figure for the card's spend differs from the true one (a settled private part is netted out)."""
+    from .budgeting import Netted, period_window, settled_used, subtree
+    bid = str(card["budget_id"] or "")
+    start, end = period_window(ctx, bid)
+    netted = Netted(ctx.view(who))
+    settled_used(ctx, netted, subtree(ctx, bid), start, end, f"card:{card['id']}", absorbed=True)
+    return netted.excluded
 
 
 def limit_follows(ctx: Ctx, card_id: str, amount: int, aid: str, by: str, lowered: bool) -> None:

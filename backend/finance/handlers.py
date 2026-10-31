@@ -149,10 +149,12 @@ def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], d
                             and all(sees_card(ctx, who, card) for card in cards)):
         return fallback
     names = [b.name for b in shown]
-    if recorded["numbers"] and not decider and not all(_figures_agree(ctx, who, b) for b in shown):
-        # The reader's own figure is not the true one now: the sentence names the budget and carries no amount.
-        plain = str(recorded.get("plain") or "")
-        return plain.format(*names) if plain else fallback
+    if recorded["numbers"] and not decider:
+        from .cards import figure_hidden
+        if not all(_figures_agree(ctx, who, b) for b in shown) or any(figure_hidden(ctx, who, card) for card in cards):
+            # The reader's own figure is not the true one now: the sentence names the budget and carries no amount.
+            plain = str(recorded.get("plain") or "")
+            return plain.format(*names) if plain else fallback
     return str(recorded["template"]).format(*names, *[_card_label(card) for card in cards])
 
 
@@ -734,14 +736,19 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and reactivates and dates.day(effective) > dates.day(ctx.today):
         raise invalid("a budget that comes back active takes its amount from today: leave effective_from out")
     fit_from = effective if amount is not None else dates.day(ctx.today).isoformat()
-    if reactivates:
+    # A figure the actor cannot check must not tell them anything about the amount: every amount gets one outcome, an
+    # owner decides it on the true figures at approval (figure_route). So nothing is checked up front for them.
+    hidden = bool(figure_route(ctx, who, old.id)) if amount is not None else False
+    if hidden:
+        route = None
+    elif reactivates:
         _reactivate_fit(ctx, who, old, fit_from, amount)     # refused, never routed (a child coming back active)
         route = None
     else:
         route = _fit(ctx, who, old, effective, amount, route=True) if amount is not None else None
     words, impact = _raise_note(ctx, route, fit_from) if route is not None else ("", {})
     raise_to = route.raise_to if route is not None else None
-    if amount is not None and not reactivates:
+    if amount is not None and not reactivates and not hidden:
         _cards_fit(ctx, who, old, effective, amount)
         if old.parent_id:
             _cards_fit_child(ctx, who, old.id, ctx.budgets()[old.parent_id], effective, amount, raise_to)
@@ -760,7 +767,12 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             from .cards import unfreeze_with_room      # a raise that leaves room lifts the freezes under it
             unfreeze_with_room(ctx, old.id, aid)
         return {"budget_id": old.id, "version": version}
-    gate = K.default_gate(ctx.org, who, "budget_update") if route is None else _budget_owner_gate(route)
+    if hidden:
+        gate = HIDDEN_GATE
+    elif route is None:
+        gate = K.default_gate(ctx.org, who, "budget_update")
+    else:
+        gate = _budget_owner_gate(route)
     head = f"Change budget {old.name}" + \
         (f" to {amount / 100:.2f} {ctx.book.base_currency} from {effective}" if amount is not None else "")
     return Plan(gate, head + words,
@@ -769,12 +781,39 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 if amount is not None or route is not None else {})
 
 
+# The gate for an amount whose outcome must not depend on a figure the actor cannot check (see figure_route): an owner
+# decides it on the true figures at approval.
+HIDDEN_GATE = K.Gate("needs_approval", "owner", "default:figures-hidden")
+
+
+def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None) -> str:
+    """How an amount the actor asks for on a budget (a set-aside, a card, a budget change) is decided. Where their figure
+    for the budget or a parent (or, for a card, its own spend) is the true one, "" (decided here, as before). Where it is
+    not, the amount must not tell them the difference, so every amount gets one outcome: "hidden" (an approver decides
+    on the true figures) or "request" (they lack finance.budgets, so the gate sends it to their manager)."""
+    b = ctx.budgets().get(budget_id)
+    if b is None or ctx.deciding:
+        return ""
+    day = dates.day(ctx.today)
+    from .cards import figure_hidden
+    hidden = card is not None and figure_hidden(ctx, who, card)
+    for one in B.chain(ctx.budgets(), b.id) if not hidden else ():
+        true = budgeting.state(ctx, one.id, day).remaining
+        if budgeting.state(ctx, one.id, day, read=budgeting.Netted(ctx.view(who))).remaining != true:
+            hidden = True
+            break
+    if not hidden:
+        return ""
+    return "request" if K.authority(ctx.org, who, "allocation_set", ctx.rights(who)) is not None else "hidden"
+
+
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set aside part of a budget for one card, Gateway key or teammate. It must fit what the budget and every parent
     have left; 0 ends it. A card's allocation is on the card's own budget, by someone who sees the card."""
     V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
+    card = None
     if p.get("target_kind") == "card":
-        from .cards import check_lower, sees as sees_card
+        from .cards import sees as sees_card
         card = SK.get(ctx.c, "fin_cards", V.text(p, "target_id", 120))
         if card is None or not sees_card(ctx, who, card):
             raise FinanceError(NOT_FOUND, "no such card")
@@ -782,11 +821,14 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             raise invalid("a card's allocation is on its own budget")
         if str(card["status"]) == "cancelled":
             raise FinanceError(CONFLICT, "that card is cancelled")
-        check_lower(ctx, card, V.amount(p))
-    return allocation_plan(ctx, who, p)
+    route = figure_route(ctx, who, str(p.get("budget_id") or ""), card)
+    if card is not None and not route:
+        from .cards import check_lower
+        check_lower(ctx, card, V.amount(p), who)
+    return allocation_plan(ctx, who, p, route)
 
 
-def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     """The allocation itself (card_create and card_update_limit come here with their own card checks). A card's lower
     allocation keeps the old reservation until Mercury confirms the lower limit (cards.limit_follows)."""
     V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
@@ -801,7 +843,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     row = SB.allocation(ctx.c, b.id, kind, target)
     grow = amount - (int(row["amount"]) if row else 0)
     at = dates.day(ctx.today)
-    if grow > 0:
+    if grow > 0 and route not in ("hidden", "request"):
         for one in B.chain(ctx.budgets(), b.id):
             s = budgeting.state(ctx, one.id, at)
             if s.remaining is not None and grow > s.remaining:
@@ -825,8 +867,13 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             from .cards import limit_follows          # a card's provider limit is its allocation (§8.2)
             limit_follows(ctx, target, amount, aid, who, lowered)
         return {"allocation_id": made}
-    return Plan(K.default_gate(ctx.org, who, "allocation_set"), f"Set aside {amount / 100:.2f} of {b.name} for "
-                f"{kind} {target}", apply)
+    if route == "hidden":
+        gate = HIDDEN_GATE
+    elif route == "request":
+        gate = K.Gate("needs_approval", "manager", "default:budget-request")
+    else:
+        gate = K.default_gate(ctx.org, who, "allocation_set")
+    return Plan(gate, f"Set aside {amount / 100:.2f} of {b.name} for {kind} {target}", apply)
 
 
 def projection_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:

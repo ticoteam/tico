@@ -217,3 +217,21 @@ def test_a_recheck_refusal_that_named_a_sibling_hides_its_name_once_the_asker_ca
         again = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
                                                       "parent_id": parent}, "eng-ask")
         assert again.replayed and "Payroll" in again.reason
+
+
+def test_an_approval_that_no_longer_fits_stores_no_figure(books):
+    """A set-aside a teammate without finance.budgets asks for is decided when its manager approves. If the budget was
+    cut meanwhile, the refusal is stored without the figure; the owner reads the figure from the budget's name."""
+    with books.transaction() as c:
+        parent = _software(c)
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "pnl"}, "coder-view").status == "committed"
+        asked = act(c, "bot:coder", "allocation_set", {"budget_id": parent, "target_kind": "teammate",
+                                                       "target_id": "bot:coder", "amount": 5_000}, "coder-set")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:cara"), asked
+        assert act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 1_000}, "cut").status == "committed"
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status in ("failed", "denied") and done.code == "invalid", done
+        stored = FA.action(c, str(asked.action_id)).reason
+        assert not any(ch.isdigit() for ch in stored), stored
+        assert "Software" in FR.action_for(c, OWNER, asked.action_id)["reason"]
