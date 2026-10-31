@@ -57,7 +57,7 @@ READS = [
      "SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events WHERE ts>=? AND action='judge.spend'",
      ("2026-10-01",), "events_action_ts (action=? AND ts>?)"),
     # The rows since the month's running total was last counted (judge.spent_this_month): the rowid range, not the month.
-    ("judge month since last count", B.NEW_SPEND_SQL, (0, "2026-10-01"), "INTEGER PRIMARY KEY (rowid>?)"),
+    ("judge month since last count", B.NEW_SPEND_SQL, (0, "2026-10-01", "judge.spend"), "INTEGER PRIMARY KEY (rowid>?)"),
     ("asks expired",
      "SELECT count(*) FROM events WHERE ts>=? AND action IN ('ask.expired','ask.went_ahead')", ("2026-10-01",),
      "events_action_ts (action=? AND ts>?)"),

@@ -463,6 +463,30 @@ def _default_hub_get(path):
 HUB_GET = _default_hub_get
 
 
+def _default_hub_post(path, body):
+    """One Tico POST. Tests replace `HUB_POST`. None means: no cloud credential, or the server did not answer."""
+    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    if not url or not token:
+        return None
+    try:
+        from clients.tico import Client
+        return Client(url, token, timeout=20, retries=1).post(path, body)
+    except Exception:
+        return None
+
+
+HUB_POST = _default_hub_post
+
+
+def rule_check(slug, to, cc, subject, body):
+    """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
+    {"outcome": "pass" | "held" | "warn" | "unchecked", ...}. None when Tico cannot be asked: the send goes on, as
+    every other failure of the check lets an output through."""
+    answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
+                                                  "subject": subject or "", "body": body or ""})
+    return answer if isinstance(answer, dict) else None
+
+
 def _hub_row(kind, n):
     row = HUB_GET(f"{kind}/{n}")
     return row if isinstance(row, dict) and row.get("id") else None

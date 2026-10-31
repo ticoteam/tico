@@ -373,6 +373,11 @@ def install(app, store, auth):
             events = [(r["kind"], json.loads(r["payload_json"]), r["created"]) for r in c.execute(
                 f"SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? AND {STEP_EVENTS} ORDER BY seq",
                 (aid,)) if privacy.content_readable(c, privacy.actor(who), dict(r))]
+            # A live run of a bot org rules apply to keeps what it says out until its reply is checked and delivered
+            # (backend/org_rule_check.py): its tool steps only, as the room's live view shows it.
+            from .org_rule_check import hides_run
+            if hides_run(c, row):
+                events = [e for e in events if e[0] == "tool"]
             steps = build_steps(events)
             return {"turn_id": aid, "started": row["started"], "finished": row["finished"],
                     "took_s": seconds(row["started"], row["finished"]),

@@ -6070,6 +6070,25 @@ def rules_due_satisfied(api, args):
                                 key=_key(args))
 
 
+@tool("hub_rules_check", "Check a draft against the org rules that apply to you, as the write it will be (as: message, "
+      "comment, task, assign). Answers pass, broken (with the rules) or unchecked. Sending that exact draft to the same "
+      "teammate then costs no second check.",
+      {"text": _s("The draft, whole"), "to": _s("The teammate it goes to"),
+       "as": {"type": "string", "enum": ["message", "comment", "task", "assign"]}},
+      required=("text", "to"), writes=True)
+def rules_check(api, args):
+    body = _present({"text": args.get("text"), "to": args.get("to"), "as": args.get("as") or args.get("as_")})
+    return api.post("rules/check", body, key=_key(args))
+
+
+@tool("hub_rules_appeal", "Ask the reviewer to look at your held output: they get a review task with your reason and "
+      "may send it anyway. Never checked by a rule.",
+      {"id": _s("The hold's id, from the held answer"), "why": _s("Why the rule does not apply")},
+      required=("id",), writes=True)
+def rules_appeal(api, args):
+    return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
+
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
@@ -6140,6 +6159,8 @@ AUDIENCE = {
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
+    # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
+    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,

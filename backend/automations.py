@@ -1367,6 +1367,139 @@ def _held(c, aid, rid):
     return out
 
 
+# The automation steps whose words go to someone, and the arguments that hold them, checked against org rules
+# (backend/org_rule_check.py) when the automation acts as a bot.
+RULE_CHECKED = {"create_task": ("title", "body"), "assign": ("text", "note"), "label": ("text", "note"),
+                "note": ("text", "note"), "wake_bot": ("text", "prompt"), "post_update": ("text", "body"),
+                "send_reply": ("body", "text")}
+
+
+def _rule_key(do, args):
+    """The argument a warned step's reader gets, which its warning line goes on: the first checked argument the step
+    sets; a new task, its body (a title is kept whole); a post of the turn's own output, its `text` (what
+    `_post_update` posts); an assign, its hand-off `note`."""
+    if do == "create_task":
+        return "body"
+    keys = RULE_CHECKED.get(do) or ()
+    key = next((k for k in keys if args.get(k)), None)
+    if key:
+        return key
+    if do == "post_update":
+        return "text"
+    if do == "assign" and args.get("owner"):
+        return "note"
+    return None
+
+
+def _reply_addresses(values):
+    """The addresses a mail reply goes to: the message's sender and the others it was sent to."""
+    message = A._message(values) or {}
+    if message.get("source") == "slack":
+        return []
+    mailbox = str(message.get("mailbox") or "").strip().lower()
+    found = [str(a).strip().lower() for a in [message.get("from"), *(message.get("to") or []), *(message.get("cc") or [])]
+             if a and "@" in str(a)]
+    return sorted({a for a in found if a != mailbox})
+
+
+def _reply_audience(c, auto, args, values):
+    """Who a reply step's words reach. In Slack: the room its bot posts in (the operator, or a shared room's people)
+    and the person who wrote. By mail: the roster people it is addressed to."""
+    from . import org_rule_check
+    message = A._message(values) or {}
+    if message.get("source") != "slack":
+        return org_rule_check.mail_recipients(c, _reply_addresses(values))
+    out = [str(message.get("from") or "").replace("person:", "human:")]
+    bot = A.R._slug(args.get("bot")) or A._owner_bot(c, auto)
+    if bot:
+        from . import rooms
+        if rooms.thread_mode(c, bot) == rooms.SHARED:
+            room = c.execute("SELECT id FROM conversations WHERE scope='shared' AND room_key=? AND closed_at IS NULL "
+                             "ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (bot,)).fetchone()
+            out += (H.conversation(c, room["id"]) or {}).get("participants") or [] if room else []
+        operator = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if operator and operator["operator"]:
+            out.append(H.human_actor(operator["operator"]))
+    return out
+
+
+def _rule_audience(c, auto, do, args, values):
+    """Who a step's words reach, for a rule's With: a new task's owner, the run's task's owner and requester, the bot
+    a note or wake goes to, a reply's people, and the whole company for an update."""
+    from . import org_rule_check
+    out = []
+    try:
+        task = A.task_of(c, auto, values)
+    except ValueError:
+        task = None
+    if do == "send_reply":
+        out += _reply_audience(c, auto, args, values)
+    if do == "post_update":
+        out += org_rule_check.company(c)
+    if do in ("create_task", "assign") and args.get("owner"):
+        owner = str(args["owner"]).replace("person:", "human:")
+        out.append(H.resolve_actor(c, owner) or (owner if ":" in owner else "bot:" + owner))
+    if do in ("assign", "label", "note") and task:
+        out += [task["owner"], task["requester"]]
+    if do in ("note", "wake_bot") and args.get("bot"):
+        out.append("bot:" + str(args["bot"]).removeprefix("bot:"))
+    if do == "wake_bot" and not args.get("bot") and A._owner_bot(c, auto):
+        out.append("bot:" + A._owner_bot(c, auto))
+    return sorted({a for a in out if a and a not in ("human:", "bot:")})
+
+
+def _warned_args(c, auto, gate, do, args, key, values):
+    """A warned step's arguments: the warning line on the argument its reader gets (`key`, from `_rule_key`): a post
+    of the turn's output posts that output with the line first; an assign with no note of its own puts the line
+    before the note the task already has, which stays whole."""
+    from . import org_rule_check
+    if not (gate and gate.get("warn") and key):
+        return args
+    said = args.get(key)
+    if not said and do == "post_update":
+        said = A._turn_output(values).get("text")
+    if not said and do == "assign":
+        try:
+            note = A.task_of(c, auto, values).get("note") or ""
+        except ValueError:
+            note = ""
+        return {**args, key: org_rule_check.warned_note(gate, note)}
+    return {**args, key: org_rule_check.warned_text(gate, str(said or "")).rstrip()}
+
+
+class TaskMoved(Exception):
+    """The task a step was checked on changed before its write: nothing is written, and the step checks again."""
+
+
+RULE_TRIES = 3          # checks of one step whose task keeps changing under it, before the step fails
+
+
+def replay_step(c, bot, hold, replay, ingest, gate=None):
+    """Send anyway on a held automation step: the step runs once, as its automation acts now, with no second check of
+    the rules it was held on (a newer rule's Warn, `gate`, goes on the step's text)."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (replay["automation"],)).fetchone()
+    if not row:
+        raise Problem("not_found", "The automation is gone", 409)
+    auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    args = _warned_args(c, auto, gate, replay["do"], replay["args"], _rule_key(replay["do"], replay["args"]),
+                        replay["values"])
+    chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
+    try:
+        return A.run(c, auto, replay["run"], replay["do"], args, replay["values"], step=replay.get("step"))
+    finally:
+        H.VIA.reset(via)
+        CHAIN.reset(chain)
+
+
+def replay_audience(c, bot, replay):
+    """Who a held step would reach now (org_rule_check._same_audience), counted as its check counted them."""
+    row = c.execute("SELECT * FROM automations WHERE id=?", (replay["automation"],)).fetchone()
+    if not row:
+        raise Problem("not_found", "The automation is gone", 409)
+    auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    return _rule_audience(c, auto, replay["do"], replay["args"], replay["values"])
+
+
 class HubServices:
     """The executor's services in the hub. Each call with an effect takes its own short transaction, acting as the
     automation's owner with `via: automation:<id>` on what it logs and its chain on what it writes."""
@@ -1453,13 +1586,84 @@ class HubServices:
             found = self._screened(bot, ctx["values"]) if bot else None
             if found and found["action"] != "pass":
                 args = self._screened_task(found, bot, args, ctx["values"])
-        result = self._once(ctx, lambda c: A.run(c, self.auto, self.run_id, do, args, ctx["values"],
-                                                 step=ctx.get("step")))
+        for _ in range(RULE_TRIES):
+            rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
+            try:
+                result = self._once(ctx, lambda c, rule=rule: self._ruled(c, rule, do, args, ctx["values"],
+                                                                         step=ctx.get("step")))
+                break
+            except TaskMoved:
+                continue                   # rolled back, nothing written or recorded: check it as it is now
+        else:
+            raise RuntimeError("The task kept changing while this step's rule check ran; nothing was done")
         if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
             from . import screening
             self._write(lambda c: screening.note(c, found, "webhook", result["task"], bot=bot,
                                                  to=args.get("owner") if found["action"] == "hold" else None))
         return result
+
+    def _rule_text(self, c, do, args, values):
+        """What a step says, as the rule check reads it, and the argument a warning line goes on. A task handed to a
+        new owner (`assign`) says its title and body to them, with or without a note."""
+        keys = RULE_CHECKED.get(do)
+        if not keys:
+            return "", None
+        text = "\n\n".join(str(args[k]) for k in keys if args.get(k))
+        if do == "post_update" and not text:
+            text = str(A._turn_output(values).get("text") or "")
+        if do == "assign" and args.get("owner"):
+            try:
+                task = A.task_of(c, self.auto, values)
+            except ValueError:
+                task = None
+            if task:
+                text = "\n\n".join(filter(None, (text, f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip())))
+        return text, _rule_key(do, args)
+
+    def _rule_check(self, do, args, values, step=None):
+        """The org rule check of what this step writes, when the automation acts as a bot (backend/org_rule_check.py):
+        outside every transaction, as Decide's own calls are. A person's automation is never checked."""
+        from . import org_rule_check
+        from .auth import Identity
+        store = self.hub.store
+        with store.read() as c:
+            text, _ = self._rule_text(c, do, args, values)
+            if not text:
+                return None
+            author = A.acts_as(c, self.auto)
+            if not author or not H.is_bot(author):
+                return None
+            recipients = _rule_audience(c, self.auto, do, args, values)
+            task = None
+            if do == "assign":
+                try:
+                    task = A.task_of(c, self.auto, values)
+                except ValueError:
+                    pass
+        addresses = _reply_addresses(values) if do == "send_reply" else []
+        context = {"automation": self.flow.get("name") or self.row["id"], "step": do, "step_id": step or "",
+                   **({"to": addresses} if addresses else {})}
+        return org_rule_check.preflight(store, self.hub.app.state.judge, Identity(author, "bot"), "automation", text,
+                                        recipients, context=context,
+                                        obj=f"{task['id']}@{task['version']}" if task else "")
+
+    def _ruled(self, c, rule, do, args, values, step=None):
+        """The step inside its write: held by a rule, nothing is done and the run goes on with the step failed. A task
+        an assign was checked on that changed since (its version) is still held by a verdict that held; any other
+        verdict is stale, so nothing is written (`TaskMoved`) and `act` checks the task again outside the write."""
+        if rule:
+            from . import org_rule_check
+            text, key = self._rule_text(c, do, args, values)
+            gate = org_rule_check.apply(c, rule, text, {"automation": self.row["id"], "run": self.run_id, "do": do,
+                                                        "args": args, "values": _trim(values), "step": step,
+                                                        "chain": list(self.chain)}, tell=True,
+                                        obj_now=org_rule_check.current_obj(c, rule.get("obj")))
+            if gate and gate.get("moved"):
+                raise TaskMoved()
+            if gate and gate.get("held"):
+                return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
+            args = _warned_args(c, self.auto, gate, do, args, key, values)
+        return A.run(c, self.auto, self.run_id, do, args, values, step=step)
 
     def _screened_task(self, found, bot, args, values):
         """A create_task step's arguments after screening: held for a person, or with the warning line first."""
