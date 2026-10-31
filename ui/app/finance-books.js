@@ -392,7 +392,11 @@ async function finTxExpected(r) {
       state.busy = false;
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
-    finally { state.busy = false; }
+    finally {
+      state.busy = false;
+      // Categorize, edited while this ran, drew its Save off (finTxCatDraw): draw it again with Save back on.
+      if (FIN?.tx === state) finTxCatRedraw();
+    }
   };
 }
 
