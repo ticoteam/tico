@@ -412,7 +412,7 @@ def why(met):
 def over(c, bot, at=None, default=None):
     """The limit a bot is held by, for the pages and the hub tools: {period, spent, limit, until, scope, name}, else
     None. `scope` is `bot`, `company`, `group:<id>` or `budget` (a Finance budget at its cutoff, with no amounts);
-    `name` names a pool or budget; `until` is when the period turns over (UTC)."""
+    `name` names a pool or budget; `until` is when the period turns over (UTC; "" for a one-time budget)."""
     found = state(c, bot, at, default)
     met = found["blocked_by"]
     if not met:
@@ -443,6 +443,8 @@ def warning(c, actor, at=None):
     if not met:
         return None
     name = (H.bot(c, bot) or {}).get("display_name") or bot
+    if met["scope"] == "budget" and not met["until"]:
+        return f"{name} is waiting: the {met['name']} budget is used up; it starts again when a person raises it."
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
     if met["scope"] == "budget":
         return (f"{name} is waiting: the {met['name']} budget is used up for this period; it starts again on "

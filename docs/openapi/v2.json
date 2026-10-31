@@ -45147,16 +45147,19 @@
               "daily",
               "weekly",
               "monthly",
+              "quarterly",
+              "yearly",
+              "budget",
               null
             ],
-            "description": "Set while a limit is met, the bot's own or a pool's: the bot takes no new job"
+            "description": "Set while a limit is met, the bot's own, a pool's or a Finance budget's (quarterly, yearly, or budget for a one-time budget): the bot takes no new job"
           },
           "blocked_by": {
             "type": [
               "object",
               "null"
             ],
-            "description": "Whose limit holds the bot: scope (bot, company or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and administrators only)",
+            "description": "Whose limit holds the bot: scope (bot, company, group:<id> or budget), name (a pool's or budget's), period, until for a budget (\"\" when it never turns over), and spent and limit (a pool's to the owner and administrators only)",
             "additionalProperties": true
           },
           "own_per_30m_usd": {

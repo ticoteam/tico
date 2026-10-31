@@ -3597,7 +3597,7 @@ export type UsageLimit = {
 };
 
 export type UsageLimitView = {
-  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | null;
+  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | "budget" | null;
   blocked_by: Record<string, unknown> | null;
   daily_usd: number | null;
   day_spent: number | null;

@@ -563,3 +563,4 @@ def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
         met = usage_limits.over(c, "coder", at=NOON)
         assert met["scope"] == "budget" and met["until"] == ""
         assert usage_limits.why(met) == "Paused: AI services budget reached"
+        assert "used up; it starts again when a person raises it" in usage_limits.warning(c, "bot:coder", at=NOON)
