@@ -22,6 +22,7 @@ import urllib.request
 import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
+from datetime import timedelta
 from decimal import Decimal
 from email.utils import format_datetime
 from typing import Any
@@ -42,6 +43,7 @@ MAX_PAGES = 200                       # a change window longer than this (20,000
 FIND_PAGES = 50                       # a lookup for a write reads this many pages (5,000 rows); past them it cannot tell
 CHANGE_EVERY = 240                    # seconds between change-feed reads: a change is seen within five minutes (§10)
 ORDER = "UpdatedDateUTC DESC"         # newest first, so rows edited during a read move to the front (re-read, not skipped)
+CHANGE_ORDER = "UpdatedDateUTC ASC"   # oldest first: a list cut at the cap is complete to its last row read
 EXTRA = {"parties": {"includeArchived": "true"}, "bank_transfers": {"includeDeleted": "true"}}
 UNPAGED = ("accounts", "bank_transfers")   # Xero returns these whole, with no page parameter
 ENDPOINTS = {"accounts": "Accounts", "parties": "Contacts", "invoices": "Invoices", "credit_notes": "CreditNotes",
@@ -185,11 +187,11 @@ def _has_counterparty(body: Mapping[str, Any]) -> bool:
     return False
 
 
-def _query(entity: str, page: int) -> dict[str, str]:
-    """The query a list of an entity is read with: a page, newest first. A whole list takes only its own extras."""
+def _query(entity: str, page: int, order: str = ORDER) -> dict[str, str]:
+    """The query a list of an entity is read with: a page, in `order`. A whole list takes only its own extras."""
     if entity in UNPAGED:
         return dict(EXTRA.get(entity, {}))
-    return {"page": str(page), "order": ORDER, **EXTRA.get(entity, {})}
+    return {"page": str(page), "order": order, **EXTRA.get(entity, {})}
 
 
 def _write_of(op: str, body: Mapping[str, Any]) -> tuple[str | None, str, str, Any]:
@@ -231,7 +233,9 @@ class Xero:
     rate limit that outlasts the pass's budget stops every later call in it, and `hold` says how long the books wait."""
 
     entities: tuple[str, ...] = M.BOOK_ENTITIES["xero"]
-    feeds: tuple[str, ...] = ("changes",)       # one pass reads every entity from one stamp, so one cursor
+    # One cursor per entity with a change time (bills come from the invoices list); bank transfers have none.
+    feeds: tuple[str, ...] = ("accounts", "parties", "invoices", "credit_notes", "payments", "overpayments",
+                              "prepayments", "bank_transactions", "manual_journals")
 
     def __init__(self, tenant: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -281,10 +285,10 @@ class Xero:
                 self.hold = max(self.hold, reply.retry_after or HOLD_DEFAULT)
             return reply
 
-    def _rows(self, entity: str, page: int, since: str = "") -> tuple[list[dict[str, Any]], Reply]:
+    def _rows(self, entity: str, page: int, since: str = "", order: str = ORDER) -> tuple[list[dict[str, Any]], Reply]:
         """One list's rows as Xero gave them, and the answer; no rows when the answer is not a list."""
         name = ENDPOINTS[entity]
-        reply = self._call("GET", name, query=_query(entity, page),
+        reply = self._call("GET", name, query=_query(entity, page, order),
                            headers={"If-Modified-Since": since} if since else None)
         if reply.status != 200:
             return [], reply
@@ -337,31 +341,44 @@ class Xero:
         return self._taken(entity, rows[skip:skip + size])
 
     def changed(self, since: Mapping[str, str]) -> Read:
-        """The change feed's one cursor (see feeds) as the pass reads it."""
-        return self._changed(since["changes"])
-
-    def _changed(self, since: str) -> Read:
-        """Every row of every entity changed since the time, page by page (a short page ends a list). Bank transfers are
-        read whole with no change time, since Xero stamps none on them."""
-        stamp = format_datetime(M.parse(since), usegmt=True)     # If-Modified-Since is an HTTP date
+        """The change feed, one cursor per entity (see feeds), each read from its own stamp, oldest change first. An
+        entity cut at the page cap is complete only to one second before the newest change it read, so the rest of its
+        changes are read next time and no other entity waits on it. Bank transfers have no change time: read whole."""
         out: list[Record] = []
-        for entity in self.entities:
+        through: list[tuple[str, str]] = []
+        for entity in self.feeds:
+            if entity not in since:
+                continue
+            stamp = format_datetime(M.parse(since[entity]), usegmt=True)     # If-Modified-Since is an HTTP date
             if entity in UNPAGED:
-                got = self._read(entity, 1, "" if entity == "bank_transfers" else stamp)
+                got = self._read(entity, 1, stamp)
                 if not got.ok:
                     return got
                 out += got.records
                 continue
+            newest = ""
             for number in range(1, MAX_PAGES + 1):
-                got = self._read(entity, number, stamp)
+                rows, reply = self._rows(entity, number, stamp, CHANGE_ORDER)
+                if reply.status != 200:
+                    return Read(False, error=_fault(reply) if reply.status else reply.note)
+                got = self._taken(entity, rows)
                 if not got.ok:
                     return got
                 out += got.records
-                if got.seen < PAGE:
+                newest = max([newest, *(X.stamp(row.get("UpdatedDateUTC")) for row in rows)])
+                if len(rows) < PAGE:
                     break
             else:
-                return Read(False, error=f"Xero's {ENDPOINTS[entity]} changed too much to read in one pass")
-        return Read(True, tuple(out))
+                # Without a change time on any row there is nothing to move to, so the cursor stays where it was.
+                complete = (M.parse(newest) - timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ") if newest \
+                    else since[entity]
+                through.append((entity, complete))
+        if "bank_transfers" in self.entities:
+            got = self._read("bank_transfers", 1)
+            if not got.ok:
+                return got
+            out += got.records
+        return Read(True, tuple(out), through=tuple(through))
 
     def _lookup(self, entity: str, kind: str, hit: Callable[[Mapping[str, Any]], bool]) -> Sent | None:
         """The first live row of an entity that `hit` takes, newest first, through every page Xero holds; None when no row

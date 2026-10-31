@@ -768,14 +768,17 @@ def test_a_backfill_that_meets_an_edit_mid_way_reads_every_contact_once(books):
     assert {c["query"]["order"] for c in reads} == {xero.ORDER}
 
 
-def test_a_change_window_longer_than_the_page_cap_is_reported_not_read_short(monkeypatch):
+def test_a_change_window_longer_than_the_page_cap_is_cut_to_the_changes_read(monkeypatch):
     monkeypatch.setattr(xero, "MAX_PAGES", 2)
     xbooks = XeroBooks()
     _chart(xbooks)
     xbooks.rows["Contacts"] = [{"ContactID": f"contact-{n:03d}", "Name": f"Acme Contact {n:03d}", "IsCustomer": True,
-                                "ContactStatus": "ACTIVE", "UpdatedDateUTC": ms(_now())} for n in range(250)]
-    read = _client(xbooks).changed({"changes": "2026-10-15T11:55:00Z"})
-    assert not read.ok and "changed too much" in read.error
+                                "ContactStatus": "ACTIVE",
+                                "UpdatedDateUTC": ms(f"2026-10-15T12:{n // 60:02d}:{n % 60:02d}Z")}
+                               for n in range(250)]
+    read = _client(xbooks).changed({"parties": "2026-10-15T11:55:00Z"})
+    assert read.ok and len(read.records) == 200
+    assert read.through == (("parties", "2026-10-15T12:03:18Z"),)
 
 
 def test_archived_contacts_are_read_with_the_archived_ones_and_kept_inactive(books):
@@ -1577,3 +1580,29 @@ def test_a_deleted_allocation_of_an_overpayment_applies_nothing(books):
     with books.read() as c:
         assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 10000
         assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-2'").fetchone()[0] == 0
+
+
+def test_one_entitys_page_cap_does_not_hold_back_another_entitys_changes(books, monkeypatch):
+    monkeypatch.setattr(xero, "MAX_PAGES", 2)
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.rows["Contacts"] = [{"ContactID": f"contact-{n:03d}", "Name": f"Acme Contact {n:03d}", "IsCustomer": True,
+                                "ContactStatus": "ACTIVE",
+                                "UpdatedDateUTC": ms(f"2026-10-15T12:{n // 60:02d}:{n % 60:02d}Z")}
+                               for n in range(250)]
+    xbooks.rows["Invoices"] = [_invoice("inv-x", updated="2026-10-15T12:30:00Z")]
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_invoices WHERE number='INV-inv-x'").fetchone()[0] == 1
+        assert c.execute("SELECT COUNT(*) FROM fin_contacts WHERE name LIKE 'Acme Contact %'").fetchone()[0] == 200
+        cursors = SX.mirror_state(c, cid)["cursors"]
+    # The capped entity is complete only to the last change it read, one second before it; the other moves on to now.
+    assert cursors["parties"] == "2026-10-15T12:03:18Z"
+    assert cursors["invoices"] == LATER
+    monkeypatch.setattr(xero, "MAX_PAGES", 200)
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=3) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_contacts WHERE name LIKE 'Acme Contact %'").fetchone()[0] == 250
