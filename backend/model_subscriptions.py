@@ -30,9 +30,10 @@ list (never a value). A bot, a run or a Tico support session never saves a value
 Delivery: the claim records what it handed each attempt (`attempt_subscriptions`) and names it in the attempt
 (`subscriptions`, ids and kinds only). The run reads values with its own run token from `GET credential-runtime`. An
 environment subscription (a token or Anthropic key) is set in the turn's environment for that CLI; a home subscription
-(a ChatGPT login or OpenAI key for Codex) becomes `auth.json` in a home of its own per subscription on that computer
-(runner-rs/src/model_subscriptions.rs). Codex refreshes a ChatGPT login in that file; the runner sends the refreshed file
-back (`POST runner-model-subscription-refresh`) so the next computer starts from it.
+(a ChatGPT login or OpenAI key for Codex) becomes `auth.json` in a home of its own per subscription on that computer,
+there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). Codex refreshes a ChatGPT login in that
+file; the runner sends the refreshed file back (`POST runner-model-subscription-refresh`) so the next computer starts
+from it.
 
 Only a runner that says it can (`CAPABILITY`) is handed subscriptions; an older one runs as before and the page says it
 needs an update. One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
