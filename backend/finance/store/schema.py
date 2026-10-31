@@ -216,6 +216,11 @@ CREATE TABLE IF NOT EXISTS fin_events (
   payload_json TEXT NOT NULL DEFAULT '{}', drained_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   UNIQUE (name, subject, period_key));
 
+CREATE TABLE IF NOT EXISTS fin_usage_snapshots (
+  id TEXT PRIMARY KEY, month TEXT NOT NULL, as_of TEXT NOT NULL, ai_nano BIGINT NOT NULL DEFAULT 0,
+  video_nano BIGINT NOT NULL DEFAULT 0, rows_json TEXT NOT NULL DEFAULT '[]', posted_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (month, as_of));
+
 CREATE TABLE IF NOT EXISTS fin_rights (
   id TEXT PRIMARY KEY, teammate TEXT NOT NULL, right_name TEXT NOT NULL, granted_by TEXT NOT NULL, expires_at TEXT,
   revoked_at TEXT, revoked_by TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
@@ -265,6 +270,7 @@ CREATE INDEX IF NOT EXISTS fin_holds_target ON fin_holds(target, status);
 CREATE INDEX IF NOT EXISTS fin_actions_approval ON fin_actions(approval_id);
 CREATE INDEX IF NOT EXISTS fin_actions_status ON fin_actions(status, created_at);
 CREATE INDEX IF NOT EXISTS fin_events_drain ON fin_events(drained_at, created_at);
+CREATE INDEX IF NOT EXISTS fin_usage_snapshots_open ON fin_usage_snapshots(posted_at, month);
 CREATE INDEX IF NOT EXISTS fin_rights_teammate ON fin_rights(teammate, right_name);
 CREATE INDEX IF NOT EXISTS fin_view_grants_subject ON fin_view_grants(subject_kind, subject, status);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_status ON fin_feed_txns(status, txn_date);
@@ -329,3 +335,5 @@ def create(c: sqlite3.Connection) -> None:
     for script in (TABLES, INDEXES, TRIGGERS):
         for statement in statements(script):
             c.execute(statement)
+    from . import tico
+    tico.watch_org(c)

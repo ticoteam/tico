@@ -2,7 +2,7 @@
 owner, the company's usage cap, the audit log and approvals. Every function takes the caller's connection."""
 import json
 import sqlite3
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from typing import Any, cast
 
 from ... import hubdb as _hubdb
@@ -157,3 +157,121 @@ def known_actor(c: sqlite3.Connection, actor: str) -> bool:
     if kind == "bot":
         return c.execute("SELECT 1 FROM bots WHERE slug=?", (ident,)).fetchone() is not None
     return False
+
+
+# ------------------------------------------------------------------------------------------------ Gateway-billed usage
+# A run is Gateway-billed when it ran on a Tico model (`gateway_connection.is_tico`) and not on a subscription. Costs
+# come back as decimal text (SQLite's printf), so no float reaches Finance.
+_GATEWAY = "model LIKE 'tico-%' AND coalesce(billing, 'api') != 'subscription'"
+
+
+def _runs() -> str:
+    from ... import usage_records
+    return str(cast(Any, usage_records).RUNS)
+
+
+def gateway_run_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
+    """{bot slug: USD as decimal text} for Gateway-billed runs that finished in (after, through]."""
+    rows = c.execute(f"SELECT bot, printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
+                     "AND finished > ? AND finished <= ? GROUP BY bot", (after, through)).fetchall()
+    return {str(r[0] or ""): str(r[1]) for r in rows}
+
+
+def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
+    """{caller actor: USD as decimal text} for decision calls on the Gateway's model in (after, through], from the
+    judge audit (`judge.call` rows name who asked)."""
+    rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail_json, '$.cost_usd'), 0))) "
+                     "FROM events WHERE action='judge.call' AND ts > ? AND ts <= ? "
+                     "AND json_extract(detail_json, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
+    return {str(r[0] or ""): str(r[1]) for r in rows}
+
+
+def run_gateway_cost(c: sqlite3.Connection, turn_id: str) -> str | None:
+    """What one run cost on the Gateway (USD as decimal text), or None when no part of it was Gateway-billed."""
+    row = c.execute(f"SELECT count(*), printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE id=? "
+                    f"AND {_GATEWAY}", (turn_id,)).fetchone()
+    return str(row[1]) if row and int(row[0]) else None
+
+
+def bot_average_run(c: sqlite3.Connection, bot: str, since: str, most: int) -> str | None:
+    """A bot's average Gateway-billed cost per run over its last `most` such runs started since `since`, or None."""
+    row = c.execute(f"SELECT count(*), printf('%.9f', avg(cost)) FROM (SELECT id, sum(coalesce(est_cost_usd, 0)) AS cost "
+                    f"FROM {_runs()} WHERE bot=? AND started >= ? AND finished IS NOT NULL AND {_GATEWAY} GROUP BY id "
+                    "ORDER BY max(started) DESC LIMIT ?)", (bot, since, most)).fetchone()
+    return str(row[1]) if row and int(row[0]) else None
+
+
+def attempt_job(c: sqlite3.Connection, attempt_id: str) -> str | None:
+    row = c.execute("SELECT job_id FROM attempts WHERE id=?", (attempt_id,)).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
+# ------------------------------------------------------------------------------------------------ telling people
+def notice(c: sqlite3.Connection, person: str, text: str) -> None:
+    """A keeper notice to one person, the kind usage limits send."""
+    _H.say(c, _H.KEEPER, person, text, kind="notice")
+
+
+def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, object]) -> None:
+    """A Finance event to Tico's rules (a sourceless `judge_event`) and automations, with ids only."""
+    from ... import rules
+    R: Any = rules
+    facts = dict(data)
+    R.judge_event(c, name, {"subject": subject, "delivery": str(facts.get("event_id") or subject), "data": facts})
+    _H.hook(c, name, subject, lambda: facts, _H.KEEPER)
+
+
+def person_by_email(c: sqlite3.Connection, email: str) -> str:
+    row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email.strip().lower(),)).fetchone() if email else None
+    return "human:" + str(row[0]) if row else ""
+
+
+# ------------------------------------------------------------------------------------------------ the Gateway link
+def gateway_connected(c: sqlite3.Connection, settings: object) -> bool:
+    from ... import gateway_connection
+    return bool(cast(Any, gateway_connection).connected(c, settings))
+
+
+def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tuple[str, str]:
+    """(key, base URL) for a call to the Gateway; key '' when none is set. Never logged."""
+    from ... import gateway_connection
+    secret, base, _ = cast(tuple[str, str, object], cast(Any, gateway_connection).target(c, vault, settings))
+    return str(secret or ""), str(base or "")
+
+
+def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
+    """Run `fn` once the caller's transaction commits (a doorbell); at once on a connection that has no such list."""
+    pending = cast(list[Callable[[], None]] | None, getattr(c, "after_commit", None))
+    if pending is None:
+        fn()
+    elif fn not in pending:
+        pending.append(fn)
+
+
+# ------------------------------------------------------------------------------------------------ the view version
+# Who sees what follows the org chart, so a change to it moves `fin_view_versions` (what cached views key on). SQLite
+# triggers catch every writer: the roster document (groups, teams, people's managers), a bot's manager or team, a bot
+# joining, leaving or being archived. A roster edit that changes none of these moves it too; that only costs a cache.
+_BUMP = ("UPDATE fin_view_versions SET version=version+1, reason='{why}', "
+         "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
+_TEAM = ("CASE WHEN json_valid(OLD.config_json) AND json_valid(NEW.config_json) "
+         "THEN json_extract(OLD.config_json, '$.team') IS NOT json_extract(NEW.config_json, '$.team') "
+         "OR json_extract(OLD.config_json, '$.reports_to') IS NOT json_extract(NEW.config_json, '$.reports_to') "
+         "ELSE OLD.config_json IS NOT NEW.config_json END")
+ORG_TRIGGERS = (
+    ("fin_view_roster_insert", "AFTER INSERT ON registry_metadata WHEN NEW.key = 'people'", "roster"),
+    ("fin_view_roster_update", "AFTER UPDATE OF value_json ON registry_metadata WHEN NEW.key = 'people' "
+     "AND OLD.value_json IS NOT NEW.value_json", "roster"),
+    ("fin_view_bot_insert", "AFTER INSERT ON bot_config", "bot added"),
+    ("fin_view_bot_delete", "AFTER DELETE ON bot_config", "bot removed"),
+    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config_json ON bot_config WHEN "
+     f"OLD.reports_to IS NOT NEW.reports_to OR {_TEAM}", "reports to"),
+    ("fin_view_bot_archive", "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT "
+     "(NEW.state = 'archived')", "bot archived"),
+)
+
+
+def watch_org(c: sqlite3.Connection) -> None:
+    """Make the org-chart triggers that move the view version. Idempotent."""
+    for name, when, why in ORG_TRIGGERS:
+        c.execute(f"CREATE TRIGGER IF NOT EXISTS {name} {when} BEGIN {_BUMP.format(why=why)}; END")

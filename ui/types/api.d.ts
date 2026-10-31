@@ -1030,6 +1030,30 @@ export type FilterIn = {
   task_types?: Array<string>;
 };
 
+export type FinanceAction = {
+  action_id?: string | null;
+  code?: string;
+  kind: string;
+  reason?: string;
+  status: string;
+};
+
+export type FinanceActionRequest = {
+  dry_run?: boolean;
+  kind: string;
+  payload?: Record<string, unknown>;
+};
+
+export type FinanceBudgets = {
+  budgets: Array<Record<string, unknown>>;
+  more: boolean;
+  view_version: number;
+};
+
+export type FinanceReport = {
+  view_version: number;
+};
+
 export type Goal = {
   body: string;
   created: string;
@@ -4655,6 +4679,47 @@ export type GetFileVersionParams = {
 export type GetFileVersionBody = never;
 export type GetFileVersionResponse = string;
 
+/** GET /api/v2/finance/actions/{action_id} */
+export type GetFinanceActionParams = {
+  action_id: string;
+};
+export type GetFinanceActionBody = never;
+export type GetFinanceActionResponse = FinanceAction;
+
+/** GET /api/v2/finance/expenses */
+export type GetFinanceExpensesParams = {
+  account_id?: string | null;
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  end?: string | null;
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  top_n?: number;
+};
+export type GetFinanceExpensesBody = never;
+export type GetFinanceExpensesResponse = FinanceReport;
+
+/** GET /api/v2/finance/lines/{account_id} */
+export type GetFinanceLineParams = {
+  account_id: string;
+  end?: string | null;
+  limit?: number;
+  start?: string | null;
+  top_n?: number;
+};
+export type GetFinanceLineBody = never;
+export type GetFinanceLineResponse = FinanceReport;
+
+/** GET /api/v2/finance/pnl */
+export type GetFinancePnlParams = {
+  basis?: "cash" | "accrual";
+  end?: string | null;
+  period?: "month" | "quarter" | "year";
+  start?: string | null;
+};
+export type GetFinancePnlBody = never;
+export type GetFinancePnlResponse = FinanceReport;
+
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
   gid: string;
@@ -5238,6 +5303,14 @@ export type ListFilesParams = {
 };
 export type ListFilesBody = never;
 export type ListFilesResponse = FileLibrary;
+
+/** GET /api/v2/finance/budgets */
+export type ListFinanceBudgetsParams = {
+  include_inactive?: boolean;
+  limit?: number;
+};
+export type ListFinanceBudgetsBody = never;
+export type ListFinanceBudgetsResponse = FinanceBudgets;
 
 /** GET /api/v2/goals/{gid}/checkins */
 export type ListGoalCheckinsParams = {
@@ -6007,6 +6080,13 @@ export type RequestApprovalParams = {
 };
 export type RequestApprovalBody = ApprovalCreate;
 export type RequestApprovalResponse = ApprovalRequested;
+
+/** POST /api/v2/finance/actions */
+export type RequestFinanceActionParams = {
+  "Idempotency-Key": string;
+};
+export type RequestFinanceActionBody = FinanceActionRequest;
+export type RequestFinanceActionResponse = FinanceAction;
 
 /** POST /api/v2/inbound/phone-requests */
 export type RequestInboundPhoneParams = {

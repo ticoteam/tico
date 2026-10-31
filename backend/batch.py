@@ -474,6 +474,9 @@ def _apply_decide(c, auth, who, item, r):
                 raise Problem("forbidden", "Say yes to a support report in Tico itself", 403) from None
         verdict = "approved" if decision == "approve" else "declined"
         H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
+        if row["kind"] in ("finance", "spend"):
+            from .finance import actions as finance
+            finance.approval_decided(c, ident)                   # Finance acts on it in the same transaction
         return f"{verdict.capitalize()}: {item['title']}"
     row = auth.task(c, who, ident)
     if item["kind"] == "waiting" and decision in ("done", "answer"):

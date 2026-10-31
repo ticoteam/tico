@@ -18,7 +18,7 @@ from .store import ledger as SL
 
 HOLD_SOURCES = ("run", "video", "card", "payment", "bill", "request", "action", "manual")
 TARGET_KINDS = B.TARGETS
-WARN_EVENT, LIMIT_EVENT = "finance.budget.warn", "finance.budget.limit"
+WARN_EVENT, LIMIT_EVENT = "finance.budget.warn", "finance.budget.cutoff"
 
 
 @dataclass(frozen=True)
@@ -103,7 +103,7 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str) -> list[
         on = {bid for bid, _ in rows}
         used: dict[str, int] = {}
 
-        def usage(bid: str) -> int:
+        def usage(bid: str, used: dict[str, int] = used, target: str = target, kind: str = kind, tid: str = tid) -> int:
             if bid not in used:
                 total = SB.target_used(ctx.c, subtree(ctx, bid), start, end, target, absorbed=kind != "teammate")
                 used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid) if kind == "teammate" else 0)
@@ -141,7 +141,7 @@ def leaf(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: 
 
 
 def crossings(ctx: Ctx, budget_ids: Sequence[str], by: str = SYSTEM) -> None:
-    """A `finance.budget.warn` / `.limit` event the first time in a period a budget reaches its warn level or its
+    """A `finance.budget.warn` / `.cutoff` event the first time in a period a budget reaches its warn level or its
     amount, for Tico's triggers to drain."""
     at = dates.day(ctx.today)
     for bid in dict.fromkeys(budget_ids):

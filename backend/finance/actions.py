@@ -12,7 +12,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import cast
 
-from . import budgeting, handlers, posting, setup as setup_mod
+from . import budgeting, gateway_sync, handlers, jobs, posting, runs, setup as setup_mod, usage
 from .context import Ctx, load
 from .core import kinds as K
 from .core import org as O
@@ -363,3 +363,17 @@ def action(c: sqlite3.Connection, action_id: str) -> ActionResult:
     if row is None:
         raise FinanceError(NOT_FOUND, "no such action")
     return _stored(row)
+
+
+# What the server, the scheduler and the run hooks call (part B).
+ensure_setup = jobs.ensure_setup
+drain_events = jobs.drain
+open_next_period = jobs.open_next_period
+RunHold = runs.RunHold
+run_hold = runs.hold
+run_ended = runs.ended
+post_usage = usage.post
+usage_snapshot = usage.snapshot
+gateway_start = gateway_sync.start
+gateway_ensure = gateway_sync.ensure
+gateway_stop = gateway_sync.stop

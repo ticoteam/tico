@@ -7,7 +7,9 @@ from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import date
 
-from . import budgeting
+from . import budgeting, limits, usage
+from . import context as _context
+from .store import usage as SU
 from .context import Ctx, load
 from .core import budgets as B
 from .core import dates, money
@@ -129,7 +131,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
         row = budget.setdefault(b.account_id, [None] * len(buckets))
-        budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols)]
+        budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols, strict=False)]
     projection: dict[str, list[int]] = {}
     if buckets:
         for r in SB.projections(c, s.ctx.book.id, buckets[0][0].isoformat()[:7], buckets[-1][1].isoformat()[:7]):
@@ -162,7 +164,7 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
                         for p, q in buckets],
             "rows": rows, "income": totals["income"], "expense": totals["expense"],
-            "net": [i - e for i, e in zip(totals["income"], totals["expense"])],
+            "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
             "excluded": sup.excluded, "view_version": s.view.version}
 
 
@@ -390,3 +392,16 @@ def view_version(c: sqlite3.Connection) -> int:
     """The counter a cache of any read keys on: it moves on every grant, revoke and privacy change."""
     return SA.view_version(c)
 
+
+
+# What usage limits and the server read (part B).
+Cutoff = limits.Cutoff
+Cutoffs = limits.Cutoffs
+cutoffs = limits.cutoffs
+usage_reconcile = usage.reconcile
+is_set_up = _context.is_set_up
+
+
+def events_waiting(c: sqlite3.Connection) -> bool:
+    """Whether a `finance.*` event waits to be handed to rules and automations."""
+    return bool(SU.undrained(c, 1))

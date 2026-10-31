@@ -411,7 +411,8 @@ function decideTick(st, i, on) {
   qcardRetick($('.decide .dc-actions'), c.it, c.q, ticked, 'dc');
 }
 const DEC_APPROVAL_Q = {send: 'Send this email?', spend: 'Approve this spend?', publish: 'Publish this?', merge: 'Merge this?',
-  support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?'};
+  support: 'Send this to Tico support?', task_cap: 'Set this task cap?', spend_limit: 'Set this spend limit?',
+  finance: 'Approve this Finance change?'};
 // The exact payload, as Needs you has always shown it (needs-you.js approvalPayloadNode): every value set as text,
 // the raw JSON folded underneath.
 function decideApprovalHTML(c) {

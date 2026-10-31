@@ -112,7 +112,7 @@ def test_settlement_past_the_budget_is_accepted_and_shows_as_over(books):
                                 expires_at=None, at=AT)
         assert not refused.allowed and refused.action == "decline" and refused.limit_budget_id == ai
         names = {r[0] for r in c.execute("SELECT name FROM fin_events WHERE subject=?", (ai,))}
-        assert names == {"finance.budget.warn", "finance.budget.limit"}
+        assert names == {"finance.budget.warn", "finance.budget.cutoff"}
 
 
 def test_expired_holds_release_and_other_expenses_asks(books):

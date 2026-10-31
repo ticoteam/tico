@@ -49,6 +49,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Live events | One server-sent event stream for a person's pages (docs/custom-frontend.md, Live events): tasks, messages, runs, bots and Needs you as they change, resumable from a change number. |
 | Tags | Tags, metadata, markdown checklists and reusable templates. |
 | Events | The catalog of named events ([guide](routines.md)). |
+| Finance | Budgets, the P&L, expenses and one line's detail, as far as the caller sees; Finance actions, committed or sent to one person for approval. |
 | Automations | A trigger and a tree of steps (filter, decide, llm, find, bot_turn, paths, action), saved as versions; one permission rule for UI, CLI and MCP. |
 | Roadmaps | Company roadmap settings, internal requesters, and anonymous publication ([guide](roadmaps.md)). |
 | Strategy | The team's strategy: a draft the owner edits, numbered published versions, and the bets goals serve. |

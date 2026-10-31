@@ -87,6 +87,9 @@ def check(c, who, auth, settings):
             if met and met["scope"] == "bot":
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it reached its spending limit.",
                     f"hub api PUT usage/limits/{slug} (a card: raising a limit is their click)")
+            elif met and met["scope"] == "budget":
+                add(bot, "paused_over_limit", HIGH, f"{name} is paused: the {met['name']} budget is used up.",
+                    "a person raises the budget in Finance (a card: raising a budget is their click)")
             elif met:
                 where = "company" if met["scope"] == usage_limits.COMPANY else "groups/" + met["scope"].split(":", 1)[1]
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: {met['name']} reached its {met['period']} spending limit.",
