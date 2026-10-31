@@ -882,8 +882,9 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .pm-scan{margin:-8px 0 0;padding:0 2px;font-size:var(--t-sm)}
 .pm-dialog .task-rule-form>label:not(.pm-kind){display:grid;gap:4px}
 .pm-dialog input[name=company_name],.pm-dialog select{width:100%}
-.pm-intake{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;flex-wrap:wrap}
-.pm-intake select{width:auto!important;min-width:0;max-width:min(100%,420px)}
+.pm-intake{display:grid!important;grid-template-columns:64px minmax(0,360px);align-items:center;gap:8px}
+.pm-intake select,.pm-intake input{width:min(100%,360px)!important;min-width:0;flex:0 1 auto}
+.pm-intake{margin-bottom:8px}
 @media (max-width:640px){
   .pm-table thead{display:none}
   .pm-table tbody tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;padding:9px 0;border-bottom:1px solid var(--line)}
