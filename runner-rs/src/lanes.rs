@@ -17,7 +17,7 @@ pub const CAPABILITIES: &[&str] = &[
     crate::login::REMOVE_CAPABILITY, crate::login::SWITCH_TO_KEY_CAPABILITY, "turns_at_once_v1",
     // Private live meetings run in their own lane and checkout (sessions.rs); the server hands them to no other runner.
     "private_lanes_v1",
-    "person_subscriptions_v1",
+    "model_subscriptions_v1",
 ];
 const DROP_FOR: Duration = Duration::from_secs(600);
 

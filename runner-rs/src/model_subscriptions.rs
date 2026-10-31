@@ -1,4 +1,4 @@
-//! A person's model subscription a turn signs in with (backend/model_subscriptions.py), read with the run's own token
+//! The company subscription a turn signs in with: its computer's for that runtime (backend/model_subscriptions.py), read with the run's own token
 //! from `credential-runtime` next to its granted credentials, so it reaches whichever computer runs the turn and never
 //! the bot's repository.
 //!
@@ -9,7 +9,7 @@
 //! 0600 into a home of its own, `<bot state>/subscriptions/<id>/<runtime>`, kept on this computer between turns so
 //! the CLI's threads resume there, and rewritten only when the server's revision moves; the turn's CODEX_HOME points
 //! at it and its conversation key names it, so no thread begun on another login is resumed on it. When Codex
-//! refreshed the login during the turn the new file goes back (`runner-person-subscription-refresh`) at the revision
+//! refreshed the login during the turn the new file goes back (`runner-model-subscription-refresh`) at the revision
 //! the turn had, so the next computer starts from it.
 //!
 //! One computer is one trust group (SECURITY.md): every bot on it runs as the same OS user, so another bot's turn here
@@ -43,9 +43,10 @@ pub struct Delivered {
 }
 
 impl Delivered {
-    /// The conversation key's suffix for a home subscription: a thread lives in that home.
+    /// The conversation key's suffix: a thread begun on one sign-in (the computer's own, another subscription) is
+    /// never resumed on this one, and a home subscription's threads live in that home.
     pub fn binding(&self) -> Option<String> {
-        self.home.as_ref().map(|_| format!(":subscription:{}", self.id))
+        Some(format!(":subscription:{}", self.id))
     }
 }
 
@@ -177,7 +178,7 @@ pub async fn send_back(client: &crate::client::Client, attempt: &str, delivered:
     for d in delivered {
         let Some(value) = refreshed(d) else { continue };
         let body = json!({"attempt": attempt, "subscription": d.id, "revision": d.revision, "value": value});
-        match client.post("runner-person-subscription-refresh", &body, Some(&format!("subscription:{attempt}:{}", d.id))).await {
+        match client.post("runner-model-subscription-refresh", &body, Some(&format!("subscription:{attempt}:{}", d.id))).await {
             Ok(answer) if answer["stored"].as_bool() == Some(true) => {
                 if let (Some(home), Some(next)) = (&d.home, answer["revision"].as_i64()) {
                     let _ = write_private(&home.join(REVISION_FILE), &next.to_string());
@@ -214,7 +215,7 @@ mod tests {
         assert!(keys.contains("CLAUDE_CODE_OAUTH_TOKEN") && !keys.contains("ANTHROPIC_API_KEY"));
         assert_eq!(values, vec!["sk-ant-oat01-synthetic".to_string()]);
         assert_eq!(got[0].billing, "subscription");
-        assert!(got[0].binding().is_none());
+        assert_eq!(got[0].binding().as_deref(), Some(":subscription:s1"));
         // A variable that does not sign the runtime in is never set.
         let mut env2 = Env::new();
         let bad = json!([{"id": "s2", "runtime": "claude", "env": "PATH", "value": "/evil", "revision": 1}]);
@@ -245,7 +246,7 @@ mod tests {
         let again = apply(&state, &item(1, "{\"tokens\":1}"), &mut Env::new(), &mut vec![], &mut BTreeSet::new());
         assert_eq!(again[0].written, "{\"tokens\":2}");
         assert_eq!(refreshed(&again[0]), None);
-        // A new revision (the person reconnected) replaces it.
+        // A new revision (someone reconnected it) replaces it.
         let moved = apply(&state, &item(2, "{\"tokens\":3}"), &mut Env::new(), &mut vec![], &mut BTreeSet::new());
         assert_eq!(std::fs::read_to_string(moved[0].file.as_ref().unwrap()).unwrap(), "{\"tokens\":3}");
         // An id that could leave the subscriptions folder is refused.

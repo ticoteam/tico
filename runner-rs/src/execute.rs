@@ -1324,9 +1324,9 @@ impl Runner {
             }
             // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
             let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
-            // A person's subscription the task, bot or team picked signs this runtime in instead (backend/model_subscriptions.py).
-            crate::person_subscriptions::point_homes(&vault.subscriptions, &mut env);
-            if let (Some(d), Some(s)) = (crate::person_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
+            // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py).
+            crate::model_subscriptions::point_homes(&vault.subscriptions, &mut env);
+            if let (Some(d), Some(s)) = (crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
                 s.billing = d.billing;
             }
             let socket_path = self.socket.as_ref().map(|s| {
@@ -1345,8 +1345,8 @@ impl Runner {
             crate::gitcred::apply(&mut env, client, tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
-                if crate::person_subscriptions::for_runtime(&vault.subscriptions, keyed).is_some() {
-                    continue;   // signed in with the person's subscription, never the computer's key
+                if crate::model_subscriptions::for_runtime(&vault.subscriptions, keyed).is_some() {
+                    continue;   // signed in with the company subscription, never the computer's key
                 }
                 if let Some((name, key)) = self.turn_key(keyed, selected.as_ref()) {
                     if env.get(&name).is_none_or(|v| v.is_empty()) {
@@ -1386,8 +1386,8 @@ impl Runner {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
             }
-            if let Some(b) = crate::person_subscriptions::for_runtime(&vault.subscriptions, &runtime).and_then(|d| d.binding()) {
-                conv.push_str(&b);      // nor on a subscription's own home
+            if let Some(b) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).and_then(|d| d.binding()) {
+                conv.push_str(&b);      // nor across the computer's login and its subscriptions
             }
             let start_attempt = attempt.clone();
             if p.has_checkout() {
@@ -1797,7 +1797,7 @@ impl Runner {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
-            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::person_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
+            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
         }
         // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
@@ -1845,11 +1845,11 @@ impl Runner {
                     meter: Meter::default(),
                     config: hop_config.clone(),
                     profile: selected.as_ref().map(|p| p.name.clone()),
-                    billing: crate::person_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime)
+                    billing: crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime)
                         .map_or_else(|| self.billing(&hop.runtime, selected.as_ref()), |d| d.billing),
                 });
                 let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
-                crate::person_subscriptions::point_homes(&vault.subscriptions, &mut hop_env);
+                crate::model_subscriptions::point_homes(&vault.subscriptions, &mut hop_env);
                 let own = crate::harness_tools::caps(&hop.runtime, &hop.harness).isolated_user;
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
                     // Leased only now, so a primary that runs as `bot` costs no lease and cleanup sweep. The turn has
@@ -2040,7 +2040,7 @@ impl Runner {
             if drove.limited && hop.default && !native_control && spent < 2 && source_saved.is_none() {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
-                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::person_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
+                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
                 pending = crate::gateway_relay::admit(next, vault.relay.is_some());
             }
         }
@@ -2078,7 +2078,7 @@ impl Runner {
         }
         let ran_on = fallback.clone().unwrap_or_else(|| runtime.clone());
         if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed")
-            .filter(|(rt, _)| crate::person_subscriptions::for_runtime(&vault.subscriptions, rt).is_none()) {
+            .filter(|(rt, _)| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_none()) {
             // Retrying cannot help: this runtime takes no work here until a credential changes. A refused subscription
             // is the server's to mark (it needs reconnecting); the computer's own login is not touched.
             self.sign_in.reject(rt, reason, selected.as_ref());
@@ -2242,7 +2242,7 @@ impl Runner {
         }
         crate::continuity::session_field(&mut completion, session.as_ref().filter(|_| host.is_some()), serves_session);
         // A ChatGPT login Codex refreshed in a subscription's home goes back, so the next computer starts from it.
-        crate::person_subscriptions::send_back(&self.client, &aid, &vault.subscriptions).await;
+        crate::model_subscriptions::send_back(&self.client, &aid, &vault.subscriptions).await;
         let profile_used = selected.as_ref().filter(|_| host.is_some()).map(|p| p.name.clone());
         if let Some(name) = &profile_used {
             completion.insert("profile_used".into(), json!(name));
