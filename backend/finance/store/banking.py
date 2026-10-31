@@ -10,7 +10,7 @@ from .ledger import new_id
 
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
                     "fin_cards", "fin_card_auths", "fin_recipients", "fin_payments", "fin_inbox", "fin_outbox",
-                    "fin_rules", "fin_rule_runs"})
+                    "fin_rules", "fin_rule_runs", "fin_transfers"})
 LIVE_PAYMENT = ("queued", "sending", "awaiting_bank_approval", "submitted", "unknown")
 
 

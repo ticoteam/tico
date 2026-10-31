@@ -328,6 +328,16 @@ CREATE TABLE IF NOT EXISTS fin_private_lines (
   account_id TEXT PRIMARY KEY REFERENCES fin_accounts(id),
   others_see TEXT NOT NULL DEFAULT 'totals' CHECK (others_see IN ('totals','hidden')),
   full_detail_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_transfers (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
+  from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed')),
+  provider_txn_id TEXT, last_error TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  CHECK (from_money_account_id <> to_money_account_id));
 """
 
 INDEXES = """
@@ -517,6 +527,12 @@ def phase2(c: sqlite3.Connection) -> None:
     same statements as `create` again, then the vendor names phase 1 posted as written (vendor_keys_folded)."""
     create(c)
     vendor_keys_folded(c)
+
+
+def gaps_books(c: sqlite3.Connection) -> None:
+    """Cloud migration 73 (the books gaps): fin_transfers, for an install made before it. The same statements as
+    `create`, which skips whatever exists, so a fresh install gets the table from `create` and this changes nothing."""
+    create(c)
 
 
 def vendor_keys_folded(c: sqlite3.Connection) -> None:

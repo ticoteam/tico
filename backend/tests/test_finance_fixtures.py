@@ -204,6 +204,11 @@ class FakeMercury:
             self.land(body, str(answer.body.get("requestId")), str(answer.body.get("status") or "pendingApproval"))
         return answer
 
+    def create_transfer(self, body):
+        """An internal transfer: Mercury's transfer at once, numbered in the order sent (xfer-1, ...)."""
+        number = len(self.sent("create_transfer")) + 1
+        return self._answer("create_transfer", dict(body), {"id": f"xfer-{number}", "status": "pending"})
+
     def create_transaction(self, account_id, body):
         """A direct send: Mercury's transaction at once, numbered in the order sent (txn-direct-1, ...)."""
         number = len(self.sent("create_transaction")) + 1
