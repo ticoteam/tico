@@ -149,6 +149,10 @@
     {
       "name": "Cards and pins",
       "description": "Tico's built-in cards and where pages and cards are pinned: the Dashboard, team pages, bot sidebars and tasks (docs/overview.md). A card shows each reader only what they may see."
+    },
+    {
+      "name": "Model subscriptions",
+      "description": "The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it."
     }
   ],
   "paths": {
@@ -4740,6 +4744,96 @@
         },
         "tags": [
           "Goals"
+        ]
+      }
+    },
+    "/api/v2/computer-subscriptions": {
+      "get": {
+        "summary": "Which subscription each computer uses per runtime, and the computers that can take one",
+        "operationId": "listComputerSubscriptions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputerSubscriptionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Model subscriptions"
+        ]
+      },
+      "put": {
+        "summary": "Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true",
+        "operationId": "setComputerSubscription",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ComputerSubscription"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ComputerSubscriptionResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Model subscriptions"
         ]
       }
     },
@@ -14411,6 +14505,247 @@
         },
         "tags": [
           "Needs you"
+        ]
+      }
+    },
+    "/api/v2/model-subscriptions": {
+      "get": {
+        "summary": "Saved subscriptions and the kinds that can be added",
+        "operationId": "listModelSubscriptions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSubscriptionList"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Model subscriptions"
+        ]
+      },
+      "post": {
+        "summary": "Add a subscription: a kind, a name and the pasted value (owners and admins)",
+        "operationId": "addModelSubscription",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionWrite"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSubscription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Model subscriptions"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
+    "/api/v2/model-subscriptions/{sid}": {
+      "post": {
+        "summary": "Rename a subscription and/or reconnect it with a new value (owners and admins)",
+        "operationId": "changeModelSubscription",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SubscriptionWrite"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSubscription"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Model subscriptions"
+        ]
+      },
+      "delete": {
+        "summary": "Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`",
+        "operationId": "removeModelSubscription",
+        "parameters": [
+          {
+            "name": "sid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Sid"
+            }
+          },
+          {
+            "name": "confirm",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Confirm"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelSubscriptionDeleted"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Model subscriptions"
         ]
       }
     },
@@ -29977,6 +30312,123 @@
         "type": "object",
         "title": "CompanyUpdate"
       },
+      "ComputerSubscription": {
+        "properties": {
+          "runner_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Runner Id"
+          },
+          "runtime": {
+            "type": "string",
+            "pattern": "^(claude|codex)$",
+            "title": "Runtime"
+          },
+          "subscription": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subscription"
+          },
+          "confirm": {
+            "type": "boolean",
+            "title": "Confirm",
+            "default": false
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "runner_id",
+          "runtime"
+        ],
+        "title": "ComputerSubscription",
+        "description": "Give a computer a subscription for one runtime; a null `subscription` takes it off. `confirm` accepts that the\ncomputer's live runs on that runtime stop and start again."
+      },
+      "ComputerSubscriptionList": {
+        "type": "object",
+        "properties": {
+          "assignments": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "runner_id": {
+                  "type": "string"
+                },
+                "runtime": {
+                  "enum": [
+                    "claude",
+                    "codex"
+                  ]
+                },
+                "subscription_id": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "runner_id",
+                "runtime",
+                "subscription_id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "capable": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "assignments",
+          "capable"
+        ],
+        "additionalProperties": true
+      },
+      "ComputerSubscriptionResult": {
+        "type": "object",
+        "properties": {
+          "runner_id": {
+            "type": "string"
+          },
+          "runtime": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "subscription_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "stopped": {
+            "type": "integer"
+          },
+          "sessions_reset": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "runner_id",
+          "runtime",
+          "sessions_reset",
+          "stopped",
+          "subscription_id"
+        ],
+        "additionalProperties": true
+      },
       "Config": {
         "type": "object",
         "properties": {
@@ -36181,6 +36633,223 @@
         ],
         "additionalProperties": true
       },
+      "ModelSubscription": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "claude_token",
+              "codex_login",
+              "anthropic_key",
+              "openai_key"
+            ]
+          },
+          "runtime": {
+            "enum": [
+              "claude",
+              "codex"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "new",
+              "working",
+              "needs_reconnect"
+            ]
+          },
+          "status_detail": {
+            "type": "string"
+          },
+          "status_at": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "preview": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "computers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "usage": {
+            "anyOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "window": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "5h",
+                      "week",
+                      null
+                    ]
+                  },
+                  "used_pct": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "cost_usd_month": {
+                    "type": [
+                      "number",
+                      "null"
+                    ]
+                  },
+                  "resets_at": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  }
+                },
+                "required": [
+                  "cost_usd_month",
+                  "used_pct",
+                  "window"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "added_by": {
+            "type": "string"
+          },
+          "added_by_name": {
+            "type": "string"
+          },
+          "created": {
+            "type": "string"
+          },
+          "updated": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "added_by",
+          "added_by_name",
+          "computers",
+          "created",
+          "id",
+          "kind",
+          "label",
+          "name",
+          "preview",
+          "revision",
+          "runtime",
+          "status",
+          "status_at",
+          "status_detail",
+          "updated",
+          "usage"
+        ],
+        "additionalProperties": true
+      },
+      "ModelSubscriptionDeleted": {
+        "type": "object",
+        "properties": {
+          "deleted": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "computers": {
+            "type": "integer"
+          },
+          "stopped": {
+            "type": "integer"
+          },
+          "sessions_reset": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "computers",
+          "deleted",
+          "id",
+          "sessions_reset",
+          "stopped"
+        ],
+        "additionalProperties": true
+      },
+      "ModelSubscriptionList": {
+        "type": "object",
+        "properties": {
+          "subscriptions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ModelSubscription"
+            }
+          },
+          "kinds": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "enum": [
+                    "claude_token",
+                    "codex_login",
+                    "anthropic_key",
+                    "openai_key"
+                  ]
+                },
+                "label": {
+                  "type": "string"
+                },
+                "runtime": {
+                  "enum": [
+                    "claude",
+                    "codex"
+                  ]
+                },
+                "secret_label": {
+                  "type": "string"
+                },
+                "help": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "help",
+                "kind",
+                "label",
+                "runtime",
+                "secret_label"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "kinds",
+          "subscriptions"
+        ],
+        "additionalProperties": true
+      },
       "Moderate": {
         "properties": {
           "action": {
@@ -40897,6 +41566,52 @@
           "weekly"
         ],
         "additionalProperties": true
+      },
+      "SubscriptionWrite": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 80
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "secret": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 65536,
+                "format": "password",
+                "writeOnly": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Secret"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "SubscriptionWrite",
+        "description": "A new subscription, or a saved one's reconnect (a new `secret`) or rename."
       },
       "Suggestion": {
         "properties": {
