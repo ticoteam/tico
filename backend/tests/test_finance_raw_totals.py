@@ -10,6 +10,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
+from backend.finance.raw_totals import OUTSIDE
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
@@ -118,3 +119,53 @@ def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
     two = RT.parse("month,line,amount\n2026-02,Rent,200\n2026-01,Rent,100\n", "cash")
     assert one.digest == two.digest
     assert one.digest != RT.parse("month,line,amount\n2026-01,Rent,100\n2026-02,Rent,200\n", "accrual").digest
+
+
+def test_a_scoped_replay_is_denied_the_same_as_a_fresh_import(books):
+    with books.transaction() as c:
+        first = act(c, OWNER, "import_raw_totals", _body())
+        assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"}).status == "committed"
+        replay = act(c, "bot:coder", "import_raw_totals", _body(), "scoped-replay")
+        fresh = act(c, "bot:coder", "import_raw_totals", {**_body(), "csv": "month,line,amount\n2026-05,Office rent,100\n"},
+                    "scoped-fresh")
+        assert replay.code == fresh.code == DENIED and replay.reason == fresh.reason
+        dry = act(c, "bot:coder", "import_raw_totals", _body(), dry_run=True)
+        assert dry.code == DENIED
+        for refused in (replay, dry):
+            assert first.result["batch_id"] not in str(refused.as_dict())
+
+
+def test_a_scoped_caller_hitting_an_occupied_month_sees_no_entry(books):
+    with books.transaction() as c:
+        first = act(c, OWNER, "import_raw_totals", _body())
+        jan_entry = str(first.result["months"][0]["entry_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "expenses", "whose": "team",
+                                            "whose_team": "web"}).status == "committed"
+        # Web's software lines net to zero, so the month needs no untagged offset line: the view covers the whole file
+        # and the refusal can only come from January being occupied.
+        web_only = ("month,line,amount,team\n2026-{m},Software subscriptions,9000,web\n"
+                    "2026-{m},Software refunds,-9000,web\n")
+        mapping = {"Software subscriptions": "6100", "Software refunds": "6100"}
+        april = {"csv": web_only.format(m="04"), "basis": "cash", "mapping": mapping}
+        january = {"csv": web_only.format(m="01"), "basis": "cash", "mapping": mapping}
+        assert act(c, "bot:coder", "import_raw_totals", april, "scoped-april").status == "needs_approval"
+        held = act(c, "bot:coder", "import_raw_totals", january, "scoped-jan")
+        assert held.code == DENIED and held.reason == OUTSIDE and jan_entry not in str(held.as_dict())
+        owner = act(c, OWNER, "import_raw_totals", january, "owner-jan")
+        assert owner.code == CONFLICT and jan_entry in owner.reason
+
+
+def test_reports_mark_the_months_an_import_states_on_another_basis(books):
+    months = [{"month": m, "basis": "cash"} for m in ("2026-01", "2026-02", "2026-03")]
+    with books.transaction() as c:
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
+        assert FR.pnl(c, OWNER, "2026-01-01", "2026-03-31", basis="accrual", at=AT)["imported"] == months
+        assert FR.pnl(c, OWNER, "2026-02-01", "2026-02-28", basis="accrual", at=AT)["imported"] == [months[1]]
+        assert FR.pnl(c, OWNER, "2026-01-01", "2026-03-31", basis="cash", at=AT)["imported"] == []
+        assert FR.pnl(c, "human:cara", "2026-01-01", "2026-03-31", basis="accrual", at=AT)["imported"] == []
+        # The sheet and the budgets have no basis of their own: they are stated in the book's.
+        assert FR.balance_sheet(c, OWNER, as_of="2026-03-31", at=AT)["imported"] == []
+        c.execute("UPDATE fin_books SET basis='accrual'")
+        assert FR.balance_sheet(c, OWNER, as_of="2026-03-31", at=AT)["imported"] == months
+        assert FR.budget_vs_actual(c, OWNER, "2026-02-01", "2026-02-28", at=AT)["imported"] == [months[1]]

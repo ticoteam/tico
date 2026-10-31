@@ -17,6 +17,7 @@ from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
+from .store import raw_totals as SR
 
 Row = dict[str, object]
 MAX_PAGE = 200
@@ -74,6 +75,15 @@ def feed_scope(ctx: Ctx, view: VW.View) -> tuple[list[str], list[str]]:
 
 
 # ------------------------------------------------------------------------------------------------ balance sheet
+def imported_months(c: sqlite3.Connection, ctx: Ctx, view: VW.View, first: str, last: str, basis: str) -> list[Row]:
+    """The months from first to last (YYYY-MM) that hold a standing history import stating a basis other than
+    `basis`: the cells a report labels as imported (§4.1). Owner-visible only, as the imports list is."""
+    if not view.everything:
+        return []
+    return [{"month": str(r["month"]), "basis": str(r["basis"])}
+            for r in SR.live_months(c, ctx.book.id, first, last) if str(r["basis"]) != basis]
+
+
 def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, at: str | None = None) -> Row:
     """Assets, liabilities and equity on a day (today by default), each line with what makes it up: the money accounts
     mapped to it and the kinds of entry posted to it. Owner-only unless granted; a line grant shows that whole line.
@@ -117,7 +127,9 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
         totals["equity"] += earned
     return {"as_of": day, "assets": sections["asset"], "liabilities": sections["liability"],
             "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
-            "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version}
+            "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version,
+            # The sheet has no basis of its own: it is stated in the book's.
+            "imported": imported_months(c, ctx, view, "0001-01", day[:7], ctx.book.basis)}
 
 
 # ------------------------------------------------------------------------------------------------ transactions

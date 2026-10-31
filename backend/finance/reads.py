@@ -318,7 +318,8 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                              "state": _column_state(p, q, today)} for p, q in buckets],
                 "rows": rows, "income": totals["income"], "expense": totals["expense"],
                 "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
-                "excluded": sup.excluded, "view_version": s.view.version}
+                "excluded": sup.excluded, "view_version": s.view.version,
+                "imported": tab.imported_months(c, s.ctx, s.view, a.isoformat()[:7], z.isoformat()[:7], basis)}
     if view == "expenses":
         out["teammates"] = _side_panel(s, spent, tops, versions, a, z, f)
     return out
@@ -631,7 +632,9 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     return {"start": a.isoformat(), "end": z.isoformat(), "period": period,
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
                         for p, q in buckets],
-            "budgets": rows, "more": len(seen) > most, "view_version": s.view.version}
+            "budgets": rows, "more": len(seen) > most, "view_version": s.view.version,
+            "imported": tab.imported_months(c, s.ctx, s.view, a.isoformat()[:7], z.isoformat()[:7],
+                                             s.ctx.book.basis)}
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",

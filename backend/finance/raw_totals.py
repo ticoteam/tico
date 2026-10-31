@@ -1,7 +1,7 @@
 """Spreadsheet history as raw totals (spec §4.1, §16 decision 4): `import_raw_totals` reads a CSV of each month's
 total per line, maps the sheet's lines to accounts, and posts one balanced entry per month against Opening balance
-equity. The same file posts nothing again; a month that already holds raw totals is refused until its entry
-is reversed."""
+equity. The same file posts nothing again; a month that already holds raw totals is refused until its entry is
+reversed. Every refusal that could name a figure or an entry checks the caller's view first."""
 from typing import Any
 
 from .context import Ctx
@@ -17,6 +17,7 @@ from .store import raw_totals as SR
 
 LISTED = 20             # line names a refusal lists
 SHOWN = 60              # accounts a dry run lists
+OUTSIDE = "some of these lines are outside your view"     # the same refusal whatever the lines or the month
 
 
 def _names(names: list[str]) -> str:
@@ -57,15 +58,23 @@ def _mapping(ctx: Ctx, raw: object) -> dict[str, L.Account]:
     return out
 
 
-def _check_month(ctx: Ctx, who: str, month: str, lines: tuple[L.Line, ...]) -> None:
+def _covered(ctx: Ctx, who: str, lines: list[tuple[str, dict[str, str]]]) -> bool:
+    """Whether `who` may write every one of these (account, tags) lines."""
+    return all(may_write(ctx, who, account_id, tags) for account_id, tags in lines)
+
+
+def _check_month(ctx: Ctx, who: str, month: str) -> None:
+    """A month is open, and empty of raw totals the caller may not see. Its entry's id is named only to a caller who
+    sees all of that entry's lines, so a scoped caller learns nothing from a refusal about a month."""
     end = RT.month_end(month)
     if SL.closed_on(ctx.c, ctx.book.id, end):
         raise FinanceError(PERIOD_CLOSED, f"{month} is closed: the owner reopens it before raw totals post")
     held = SR.live_entry_in(ctx.c, ctx.book.id, f"{month}-01", end)
-    if held is not None:
-        raise FinanceError(CONFLICT, f"{month} already has raw totals in entry {held['id']}: reverse it first")
-    if not all(may_write(ctx, who, x.account_id, x.tags) for x in lines):
-        raise denied(f"some lines in {month} are outside your view")
+    if held is None:
+        return
+    if not _covered(ctx, who, SR.entry_lines(ctx.c, str(held["id"]))):
+        raise denied(OUTSIDE)
+    raise FinanceError(CONFLICT, f"{month} already has raw totals in entry {held['id']}: reverse it first")
 
 
 def _again(row: Any) -> Plan:
@@ -78,9 +87,6 @@ def _again(row: Any) -> Plan:
 def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("csv", "basis", "mapping", "source_name"))
     sheet = RT.parse(V.text(p, "csv", RT.MAX_BYTES), V.choice(p, "basis", RT.BASES))
-    prior = SR.live_by_digest(ctx.c, ctx.book.id, sheet.digest)
-    if prior is not None:
-        return _again(prior)
     by_key = _mapping(ctx, p.get("mapping"))
     missing = RT.unmapped(sheet, by_key)
     if missing:
@@ -89,8 +95,17 @@ def import_raw_totals(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if teams:
         raise invalid(f"no team on the org chart for: {_names(teams)}")
     months = RT.lines_by_month(sheet, by_key, _opening(ctx), ctx.book.base_currency)
-    for month, lines in months.items():
-        _check_month(ctx, who, month, lines)
+    # The view comes first: a replay, a closed month and an occupied month all reveal something, so none of them
+    # answers a caller who cannot write every line of the file.
+    if not all(may_write(ctx, who, x.account_id, x.tags) for lines in months.values() for x in lines):
+        raise denied(OUTSIDE)
+    prior = SR.live_by_digest(ctx.c, ctx.book.id, sheet.digest)
+    if prior is not None:
+        if not _covered(ctx, who, SR.batch_lines(ctx.c, ctx.book.id, str(prior["id"]))):
+            raise denied(OUTSIDE)
+        return _again(prior)
+    for month in months:
+        _check_month(ctx, who, month)
     source = V.opt_text(p, "source_name", 120) or ""
     memo = f"Imported raw totals, {sheet.basis} basis" + (f": {source}" if source else "")
     gross = sum(abs(r.amount) for r in sheet.rows)
