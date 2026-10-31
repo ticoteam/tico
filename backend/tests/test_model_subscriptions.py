@@ -379,17 +379,31 @@ def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api)
             "tokens"]["refresh_token"] == "r-2"
 
 
-def test_a_reconnect_restarts_runs_on_the_old_value_and_their_late_refusal_leaves_the_new_one(api):
+def test_a_reconnect_confirms_then_restarts_runs_on_the_old_value_and_their_late_refusal_leaves_the_new_one(api):
     setup(api)
     company(api)
     on(api, "ops", "claude", "claude-sonnet-5-5")
     sid = add(api)["id"]
     m = machine(api)                                  # no Claude login of its own: the subscription is its only one
+    idle = machine(api, bot="cpo", label="Idle Mac")
     give(api, m, "claude", sid)
+    give(api, idle, "claude", sid)
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-old"}, m["token"])
-    assert post(api, f"model-subscriptions/{sid}", {"secret": OTHER})["revision"] == 2
+    # A run would stop: the reconnect asks first, and nothing is saved without the confirm (not the new name either).
+    error = post(api, f"model-subscriptions/{sid}", {"secret": OTHER, "name": "Renamed"}, expected=409)["error"]
+    assert error["code"] == "confirm_restart" and error["running"] == 1 and error["computers"] == 2
+    assert error["sessions"] >= 1
+    [kept] = listed(api)
+    assert kept["revision"] == 1 and kept["name"] == "Company Max" and kept["preview"].endswith(TOKEN[-4:])
+    assert not post(api, f"attempts/{turn['id']}/renew", {}, m["token"]).get("stop")
+    assert post(api, f"model-subscriptions/{sid}", {"name": "Max"})["name"] == "Max"      # a rename never asks
+    done = post(api, f"model-subscriptions/{sid}", {"secret": OTHER, "confirm": True})
+    assert done["revision"] == 2 and done["preview"].endswith(OTHER[-4:])
+    with api.app.state.store.read() as c:
+        assert json.loads(c.execute("SELECT detail_json FROM events WHERE action='subscription.updated' "
+                                    "ORDER BY rowid DESC LIMIT 1").fetchone()[0])["stopped"] == 1
     # The run handed revision 1 is stopped and put back in the queue, and never reads the new value.
     renewed = post(api, f"attempts/{turn['id']}/renew", {}, m["token"])
     assert renewed["stop"] is True and "sign-in changed" in renewed["stop_reason"]

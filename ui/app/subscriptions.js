@@ -252,7 +252,13 @@ function subsDialog(mode, sub = null) {
     const button = form.querySelector('button[type=submit]'); button.disabled = true;
     try {
       if (mode === 'add') await post('/v2/model-subscriptions', {kind: form.querySelector('#subs-kind').dataset.kind, name, secret});
-      else await post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, mode === 'rename' ? {name} : {secret});
+      else if (mode === 'rename') await post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, {name});
+      else {
+        // A new value restarts the runs on each computer given it: with runs going, the page asks first.
+        const done = await subsConfirmed(confirm => post(`/v2/model-subscriptions/${encodeURIComponent(sub.id)}`, confirm ? {secret, confirm} : {secret}),
+          running => ({title: `Reconnect ${sub.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Reconnect', danger: false}));
+        if (!done) { button.disabled = false; return; }
+      }
       if (form.elements.secret) form.elements.secret.value = '';   // nothing on the page keeps the value once sent
       toast(mode === 'add' ? `${name} added` : mode === 'rename' ? 'Renamed' : `${sub.name} reconnected`);
       dialog.close();
@@ -267,6 +273,18 @@ function subsDialog(mode, sub = null) {
   document.body.appendChild(dialog); dialog.showModal();
   (form.elements.name || form.elements.secret)?.focus();
 }
+// A write that may stop runs: send it; when the server answers 409 confirm_restart, ask in the page with the count
+// (`ask(running)` gives the settingsConfirm options) and, on yes, send it again with confirm (a new body, so a fresh
+// Idempotency-Key). Resolves to the answer, or null when the person says no.
+async function subsConfirmed(write, ask) {
+  try { return await write(false); }
+  catch (error) {
+    const problem = subsProblem(error);
+    if (problem.code !== 'confirm_restart') throw error;
+    if (!await settingsConfirm(ask(subsRunning(problem)))) return null;
+    return write(true);
+  }
+}
 // Remove: asks first; with runs going on its computers, says how many restart and asks once more.
 async function subsRemove(sub) {
   const count = (sub.computers || []).length;
@@ -274,14 +292,9 @@ async function subsRemove(sub) {
   if (!await settingsConfirm({title: `Remove ${sub.name}?`, text, ok: 'Remove'})) return;
   const path = `/v2/model-subscriptions/${encodeURIComponent(sub.id)}`;
   try {
-    try { await writeRequest('DELETE', path); }
-    catch (error) {
-      const problem = subsProblem(error);
-      if (problem.code !== 'confirm_restart') throw error;
-      const text2 = `${subsStopWords(subsRunning(problem))}, and their sessions start fresh.`;
-      if (!await settingsConfirm({title: `Remove ${sub.name}?`, text: text2, ok: 'Remove'})) return;
-      await writeRequest('DELETE', `${path}?confirm=1`);
-    }
+    const done = await subsConfirmed(confirm => writeRequest('DELETE', confirm ? `${path}?confirm=1` : path),
+      running => ({title: `Remove ${sub.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Remove'}));
+    if (!done) return;
     toast(`${sub.name} removed`);
   } catch (error) { toast(error.message, true); }
   await subsRefresh();
@@ -321,16 +334,10 @@ async function subsPick(select) {
   const body = {runner_id: runner, runtime, subscription: id};
   select.disabled = true;
   try {
-    let done;
-    try { done = await put('/v2/computer-subscriptions', {...body, confirm: false}); }
-    catch (error) {
-      const problem = subsProblem(error);
-      if (problem.code !== 'confirm_restart') throw error;
-      const ok = await settingsConfirm({title: `Switch ${computer}'s ${tool} to ${name}?`,
-        text: `${subsStopWords(subsRunning(problem))}, and every ${tool} session on this computer starts fresh.`, ok: 'Switch', danger: false});
-      if (!ok) { select.value = was; return; }
-      done = await put('/v2/computer-subscriptions', {...body, confirm: true});
-    }
+    const done = await subsConfirmed(confirm => put('/v2/computer-subscriptions', {...body, confirm}),
+      running => ({title: `Switch ${computer}'s ${tool} to ${name}?`,
+        text: `${subsStopWords(running)}, and every ${tool} session on this computer starts fresh.`, ok: 'Switch', danger: false}));
+    if (!done) { select.value = was; return; }
     SUBS.assignments = SUBS.assignments.filter(row => !(row.runner_id === runner && row.runtime === runtime));
     if (id) SUBS.assignments.push({runner_id: runner, runtime, subscription_id: id});
     select.dataset.current = id || '';

@@ -2965,6 +2965,7 @@ export type SubscriptionWeeklyResult = {
 };
 
 export type SubscriptionWrite = {
+  confirm?: boolean;
   kind?: string | null;
   name?: string | null;
   secret?: string | null;

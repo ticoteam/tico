@@ -34,8 +34,8 @@ picker until it updates.
 
 Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
 cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu. A new value
-restarts the running tasks on each computer that has the subscription, as a switch does, without asking first, so no
-run goes on with the old one.
+restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
+old one. The page asks first and says how many.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -206,7 +206,7 @@ page sees the list (name, kind, status, computers, usage), never a value.
 Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
 computers. Every bot on that computer then runs that tool on it.
 
-- Giving, switching or taking off a computer's subscription, or removing one in use, restarts that tool there: its
+- Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
   running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
   instead), and every session of that tool on that computer starts fresh. The page asks first and says how many.
 - It works on any computer it is given to, a new cloud machine included: nobody signs in there. The turn reads it from

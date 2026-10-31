@@ -37,9 +37,10 @@ from it. Only a live run still given the subscription on that computer, at the r
 (`refreshed`).
 
 Revisions: a run reads only what it was handed. A reconnect (a new value) is a change like any other: it stops the
-live runs given it and starts their sessions fresh (`_restart`), so a run never reads another account's value. A
-refresh is the same account: a run still going that reads after one gets the refreshed value and its record moves
-with it (`run_values`), so its write-back and its verdict (`turn_rejected`, `turn_worked`) match what it ran on.
+live runs given it (confirmed first) and starts their sessions fresh (`_restart`), so a run never reads another
+account's value. A refresh is the same account: a run still going that reads after one gets the refreshed value and
+its record moves with it (`run_values`), so its write-back and its verdict (`turn_rejected`, `turn_worked`) match
+what it ran on.
 
 Only a runner that says it can (`CAPABILITY`) is handed subscriptions; an older one runs as before and the page says it
 needs an update. One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
@@ -98,10 +99,12 @@ CREATE INDEX IF NOT EXISTS attempt_subscriptions_sub ON attempt_subscriptions(su
 
 
 class SubscriptionWrite(Contract):
-    """A new subscription, or a saved one's reconnect (a new `secret`) or rename."""
+    """A new subscription, or a saved one's reconnect (a new `secret`) or rename. `confirm` accepts that a reconnect
+    stops and restarts the live runs on every computer given it."""
     name: str | None = Field(default=None, max_length=80)
     kind: str | None = Field(default=None, max_length=40)
     secret: SecretStr | None = Field(default=None, max_length=MAX_VALUE)
+    confirm: bool = False
 
 
 class ComputerSubscription(Contract):
@@ -463,25 +466,32 @@ def save(c, vault, settings, who, body, sid=None):
             raise Problem("not_found", "Subscription not found", 404)
         if body.kind and body.kind != sub["kind"]:
             raise Problem("kind", "A subscription keeps its kind; add a new one instead", 422)
-        if body.name is not None:
-            name = body.name.strip()
-            if not name:
-                raise Problem("name", "Enter a name", 422)
-            c.execute("UPDATE model_subscriptions SET name=?,updated=? WHERE id=?", (name, now, sid))
+        name = body.name.strip() if body.name is not None else None
+        if body.name is not None and not name:
+            raise Problem("name", "Enter a name", 422)
+        given = []
         if body.secret is not None:
             value, preview = checked(sub["kind"], body.secret.get_secret_value())
+            given = [g for g in c.execute("SELECT g.runner_id,g.runtime,r.capabilities_json "
+                                          "FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
+                                          "WHERE g.subscription_id=? ORDER BY g.runner_id", (sid,)).fetchall()
+                     if runner_takes(g)]
+            if not body.confirm:
+                plans = [_plan(c, settings, g["runner_id"], g["runtime"]) for g in given]
+                running = sum(p["running"] for p in plans)
+                if running:
+                    _confirm({"running": running, "sessions": sum(p["sessions"] for p in plans)},
+                             {"computers": len(given)})
+        if name is not None:
+            c.execute("UPDATE model_subscriptions SET name=?,updated=? WHERE id=?", (name, now, sid))
+        if body.secret is not None:
             c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
                       "status_detail='',status_at=?,updated=? WHERE id=?",
                       (vault.cipher.seal(c, _context(sid), value), preview, now, now, sid))
             # A new value may be another account: as for a change, every computer given it stops its live runs on
-            # that runtime (their work goes back in the queue) and starts its sessions there fresh. An older runner
-            # never signed in with it, so nothing changes there.
-            stopped = 0
-            for g in c.execute("SELECT g.runner_id,g.runtime,r.capabilities_json FROM computer_subscriptions g "
-                               "JOIN runners r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id",
-                               (sid,)).fetchall():
-                if runner_takes(g):
-                    stopped += _restart(c, settings, g["runner_id"], g["runtime"])["stopped"]
+            # that runtime (their work goes back in the queue; confirmed first) and starts its sessions there fresh.
+            # An older runner never signed in with it, so nothing changes there.
+            stopped = sum(_restart(c, settings, g["runner_id"], g["runtime"])["stopped"] for g in given)
             H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
             return view(c, row(c, sid))
         H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})

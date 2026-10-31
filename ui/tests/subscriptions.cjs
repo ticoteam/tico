@@ -3,7 +3,7 @@
 //  - Settings has a Models tab between Computers and Repositories with Subscriptions, Tico Gateway, Defaults and
 //    Limits; old links (AI providers, Subscriptions, Chat, the Models card on Computers) open it;
 //  - Add subscription: a kind search box that starts on Claude plan, a required name, POST {kind, name, secret};
-//    Rename, Reconnect and Remove from the row's menu, Remove asking again when runs would restart;
+//    Rename, Reconnect and Remove from the row's menu, Reconnect and Remove asking first when runs would restart;
 //  - Computers: one row per computer with a picker per AI tool; a switch that stops runs asks in the page first
 //    (409 confirm_restart), then sends confirm; an older computer says Needs update; Gateway off reads None;
 //  - a computer's pop-up still lists one connection per AI tool, its own login, and the queue line;
@@ -122,7 +122,15 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     const one = p.match(/^\/api\/v2\/model-subscriptions\/([^/]+)$/);
     if (one) {
       const sub = data.subs.find(s => s.id === one[1]);
-      if (method === 'POST') { const body = req.postDataJSON(); writes.push({p, method, body}); if (body.name) sub.name = body.name; return json(sub); }
+      if (method === 'POST') {
+        const body = req.postDataJSON(); writes.push({p, method, body});
+        (data.keys ||= []).push(req.headers()['idempotency-key']);
+        // Tico Team box is running a task: a new value there stops it, so the server asks first.
+        if (body.secret && sub.computers.includes('r1') && !body.confirm)
+          return json(problem('confirm_restart', 'Reconnecting restarts running tasks', {running: 1, sessions: 2, computers: sub.computers.length}), 409);
+        if (body.name) sub.name = body.name;
+        return json(sub);
+      }
       if (method === 'DELETE') {
         writes.push({p, method, confirm: url.searchParams.get('confirm')});
         if (sub.computers.includes('r1') && url.searchParams.get('confirm') !== '1')
@@ -286,7 +294,7 @@ async function addSubscription(browser) {
 }
 
 async function rowMenu(browser) {
-  const {page, errors, writes} = await open(browser);
+  const {page, errors, writes, data} = await open(browser);
   await modelsReady(page);
   // Rename.
   await page.locator('[data-subs-more=s3]').click();
@@ -305,6 +313,28 @@ async function rowMenu(browser) {
   await again.locator('button[type=submit]').click();
   await again.waitFor({state: 'detached'});
   assert.deepEqual(writes.at(-1), {p: '/api/v2/model-subscriptions/s4', method: 'POST', body: {secret: 'sk-ant-oat01-new'}});
+  // Reconnect with a task running on a computer given it: the page asks first; Cancel keeps the dialog and sends nothing more.
+  await page.locator('[data-subs-more=s2]').click();
+  await page.locator('#subs-menu [data-subs-act=reconnect]').click();
+  const live = page.locator('dialog.subs-dialog[open]');
+  await live.locator('#subs-secret').fill('{"auth_mode": "chatgpt"}');
+  await live.locator('button[type=submit]').click();
+  const ask = page.locator('dialog.settings-confirm[open]');
+  await ask.waitFor();
+  assert.equal(await ask.locator('.tmodal-title').innerText(), 'Reconnect ChatGPT Pro (Ana)?');
+  assert.equal(await ask.locator('p').innerText(), '1 running task stops and restarts, and their sessions start fresh.');
+  assert.deepEqual(await ask.locator('button').allInnerTexts(), ['Cancel', 'Reconnect']);
+  await ask.locator('[data-confirm-cancel]').click();
+  await ask.waitFor({state: 'detached'});
+  assert.equal(await live.count(), 1);
+  assert.equal(writes.filter(w => w.body?.confirm).length, 0);
+  // Reconnect sends confirm with a new Idempotency-Key.
+  await live.locator('button[type=submit]').click();
+  await page.locator('dialog.settings-confirm[open] [data-confirm-ok]').click();
+  await live.waitFor({state: 'detached'});
+  const s2 = writes.filter(w => w.p === '/api/v2/model-subscriptions/s2').map(w => w.body);
+  assert.deepEqual(s2, [{secret: '{"auth_mode": "chatgpt"}'}, {secret: '{"auth_mode": "chatgpt"}'}, {secret: '{"auth_mode": "chatgpt"}', confirm: true}]);
+  assert.notEqual(data.keys.at(-1), data.keys.at(-2));
   // Remove: asks; with runs going, the server says how many restart and the page asks once more.
   await page.locator('[data-subs-more=s1]').click();
   await page.locator('#subs-menu [data-subs-act=remove]').click();

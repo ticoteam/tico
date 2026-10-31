@@ -14611,7 +14611,7 @@
     },
     "/api/v2/model-subscriptions/{sid}": {
       "post": {
-        "summary": "Rename a subscription and/or reconnect it with a new value (owners and admins)",
+        "summary": "Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true",
         "operationId": "changeModelSubscription",
         "parameters": [
           {
@@ -41606,12 +41606,17 @@
               }
             ],
             "title": "Secret"
+          },
+          "confirm": {
+            "type": "boolean",
+            "title": "Confirm",
+            "default": false
           }
         },
         "additionalProperties": false,
         "type": "object",
         "title": "SubscriptionWrite",
-        "description": "A new subscription, or a saved one's reconnect (a new `secret`) or rename."
+        "description": "A new subscription, or a saved one's reconnect (a new `secret`) or rename. `confirm` accepts that a reconnect\nstops and restarts the live runs on every computer given it."
       },
       "Suggestion": {
         "properties": {
