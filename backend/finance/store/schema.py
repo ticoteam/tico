@@ -337,6 +337,7 @@ CREATE TABLE IF NOT EXISTS fin_transfers (
   idempotency_key TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted','cancelled')),
   provider_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT, settled_at TEXT, submitted_at TEXT,
+  counted_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
   CHECK (from_money_account_id <> to_money_account_id));
 """

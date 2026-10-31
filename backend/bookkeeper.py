@@ -273,6 +273,20 @@ def render_watch(items: list[dict[str, str]]) -> str:
     return "\n".join(lines).rstrip().encode()[:BODY_BYTES].decode(errors="ignore")
 
 
+def _listed_keys(body: str) -> list[str]:
+    """The item ids a rendered task body lists: its "  - <id>  <label>" lines."""
+    return [line[4:].split(" ", 1)[0] for line in body.splitlines() if line.startswith("  - ")]
+
+
+def _watch_shown(c, items, fresh):
+    """What a Watch task lists: the new findings, and the items an open Watch task already lists (it is still open, so
+    they are still to look at). A finding on a finished task was reviewed, so it is not listed again."""
+    open_task = _open_check(c, WATCH_TITLE)
+    listed = set(_listed_keys(open_task["body"])) if open_task else set()
+    new = {item["key"] for item in fresh}
+    return [item for item in items if item["key"] in new or item["key"] in listed]
+
+
 def watch(c, auth, at: str) -> dict[str, Any]:
     """One pass of the Watch checks. Nothing new is a quiet run: no task, no wake. Something new opens or updates one
     "Watch" task for the Bookkeeper (private, like the Books check), which opens a task for the owner only when a
@@ -285,8 +299,9 @@ def watch(c, auth, at: str) -> dict[str, Any]:
     fresh = _fresh(c, items, at, repeat=False)
     task_id, state = None, ""
     if fresh:
-        task_id, state = deliver(c, render_watch(items), len(items), name=WATCH_TITLE, event=WATCH_EVENT)
-        H.event(c, H.KEEPER, "bookkeeper.watch", SLUG, {"items": len(items), "new": len(fresh), "state": state})
+        shown = _watch_shown(c, items, fresh)
+        task_id, state = deliver(c, render_watch(shown), len(shown), name=WATCH_TITLE, event=WATCH_EVENT)
+        H.event(c, H.KEEPER, "bookkeeper.watch", SLUG, {"items": len(shown), "new": len(fresh), "state": state})
     for item in items:
         # Still standing, listed or reviewed: seen now, so the ledger forgets only what is gone for KEEP_DAYS.
         c.execute("INSERT INTO bookkeeper_seen(key,stamp,seen) VALUES(?,?,?) ON CONFLICT(key) DO UPDATE SET "

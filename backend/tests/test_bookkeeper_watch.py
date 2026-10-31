@@ -98,3 +98,46 @@ def test_a_reviewed_finding_is_not_news_again_after_a_day_but_is_when_its_facts_
     monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(changed)])
     with store.transaction() as c:
         assert BK.watch(c, api.app.state.auth, H.shift(later, hours=1))["items"] == 1
+
+
+NEWER = {"kind": "duplicate_charge", "key": "duplicate_charge:f10", "stamp": {"amount": 500, "gap": 2},
+         "label": "Beta: 5.00 charged again 2 day(s) after"}
+
+
+def test_a_finished_watch_task_is_not_listed_again_when_a_new_finding_arrives(environment, monkeypatch):
+    """Finding A is on a Watch task that is finished. When B arrives, the new task lists only B: A was reviewed."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
+    with store.transaction() as c:
+        assert BK.watch(c, api.app.state.auth, H.now())["items"] == 1
+    (first,) = checks(api)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["id"],))
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING), dict(NEWER)])
+    with store.transaction() as c:
+        made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
+    assert made["items"] == 1 and made["state"] == "opened", made
+    (task,) = [t for t in checks(api) if t["id"] != first["id"]]
+    assert task["title"] == "Watch (1)" and "duplicate_charge:f10" in task["body"], task
+    assert "duplicate_charge:f9" not in task["body"], task["body"]
+
+
+def test_an_open_watch_task_keeps_what_it_lists_and_adds_the_new_finding(environment, monkeypatch):
+    """Still open, the task lists its own items (A) with the new one (B): an open item is not dropped, and a finding it
+    never listed is not added."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (opened,) = checks(api)
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING), dict(NEWER)])
+    with store.transaction() as c:
+        made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
+    assert made["state"] == "updated", made
+    (task,) = checks(api)
+    assert task["id"] == opened["id"] and task["title"] == "Watch (2)", task
+    assert "duplicate_charge:f9" in task["body"] and "duplicate_charge:f10" in task["body"], task["body"]

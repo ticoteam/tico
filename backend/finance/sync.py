@@ -448,8 +448,12 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         with store.transaction() as c:
             if not SK.outbox_claim(c, str(o["id"]), now):
                 continue
-            if str(o["op"]) == "transfer_create" and transfers.recheck(load(c, now), o):
-                continue          # re-checked at use: cancelled or held, so nothing is sent
+            if str(o["op"]) == "transfer_create":
+                ctx = load(c, now)
+                fresh: list[Any] = []
+                if transfers.recheck(ctx, o, fresh):
+                    continue      # re-checked at use: cancelled or held, so nothing is sent
+                transfers.reserve(ctx, o, fresh)         # with the claim: newly applicable limits move once
         body = SK.loads(o["payload_json"])
         answer = _send(store, provider, str(o["op"]), body)
         with store.transaction() as c:
@@ -470,7 +474,7 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
     body = SK.loads(o["payload_json"])
     ctx = load(c, now)
     if op == "transfer_create":
-        transfers.not_sent(ctx, body, why, unknown=True)
+        transfers.not_sent(ctx, body, why, unknown=True, started=o["claimed_at"])
         return
     if op == "card_create" and body.get("card_id"):
         cards.uncertain(ctx, str(body["card_id"]), why)
@@ -615,7 +619,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
         "status": "failed" if final else "pending", "attempts": attempts, "last_error": why, "claimed_at": None,
         "next_try_at": None if final else _after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]), "updated_at": now})
     if op == "transfer_create" and final:
-        transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500)
+        transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500,
+                           started=now)
     if op == "card_create" and card_id and (answer.status is None or answer.status >= 500):
         cards.uncertain(load(c, now), card_id, why)
     elif op.startswith("card_") and card_id:

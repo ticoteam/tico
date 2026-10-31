@@ -420,3 +420,122 @@ def test_when_mercury_returns_a_transfer_id_its_legs_settle_that_transfer_not_an
     sync_once(books, fake, POLL)
     rows = dict(_rows(books, "SELECT id, status FROM fin_transfers"))
     assert rows[second] == "posted" and rows[first] == "submitted", rows
+
+
+def _assert_private_to_owner(store, title):
+    """The one Needs-you task with this title is private: the owner (its assignee) reads it, a teammate outside Finance
+    does not."""
+    with store.read() as c:
+        (task_id,) = [r[0] for r in c.execute("SELECT id FROM tasks WHERE title LIKE ?", (title,)).fetchall()]
+        row = H.task(c, task_id)
+        assert row["private"] == 1, dict(row)
+        assert H.task_private_readable(c, OWNER, row)
+        assert not H.task_private_readable(c, "human:gus", row)
+
+
+def test_a_limit_added_after_transfers_were_queued_is_reserved_at_send_once(books):
+    """Two $100 moves are queued; a $100 a day limit is added before they go. The first fits and reserves the counter
+    at its send claim; the second is over it and is cancelled, never sent."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "first")).status == "committed"
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "second")).status == "committed"
+        cap = act(c, OWNER, "rule_create", {
+            "name": "Moves per day", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "limit", "limit": 10_000, "per": "day"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal", "amount": 10}, "expect": "limit"}]})
+        assert cap.status == "committed", cap
+        rule_id = str(cap.result["rule_id"])
+    sync_once(books, fake)
+    assert len(fake.sent("create_transfer")) == 1
+    with books.read() as c:
+        assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
+                               (rule_id,)).fetchone()) == (10_000, 1)
+        assert sorted(r[0] for r in c.execute("SELECT status FROM fin_transfers")) == ["cancelled", "submitted"]
+
+
+def test_a_refused_transfer_gives_back_the_limit_it_reserved(books):
+    """A transfer that reserved a monthly limit at its send claim, then was refused by Mercury, takes it back: only the
+    transfer that went is counted."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "refused")).status == "committed"
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 20_000, "sent")).status == "committed"
+        rule_id = str(act(c, OWNER, "rule_create", {
+            "name": "Moves per month", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "limit", "limit": 50_000, "per": "month"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal", "amount": 10}, "expect": "limit"}]}
+        ).result["rule_id"])
+    fake.queue["create_transfer"] = [Answer(422, {"message": "insufficient funds"})]
+    sync_once(books, fake)
+    with books.read() as c:
+        (sent_amount,) = c.execute("SELECT amount FROM fin_transfers WHERE status='submitted'").fetchone()
+        assert c.execute("SELECT count(*) FROM fin_transfers WHERE status='failed'").fetchone()[0] == 1
+        assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
+                               (rule_id,)).fetchone()) == (sent_amount, 1)
+
+
+def test_a_deny_on_the_owner_rule_added_after_someone_else_queued_a_transfer_cancels_it(books):
+    """Ben queues a move; the owner then adds a deny for payments by anyone but the owner. The send-time facts carry
+    actor.owner as the request did, so the rule applies and nothing is sent."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    _queued_by_ben(books, src, dst)
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {
+            "name": "Only the owner moves money", "when": {"kind": "payment_create", "actor.owner": False},
+            "outcome": {"outcome": "deny"},
+            "examples": [{"input": {"kind": "payment_create", "actor.owner": False}, "expect": "deny"}]})
+        assert made.status == "committed", made
+    sync_once(books, fake)
+    _assert_cancelled_unsent(books, fake)
+
+
+def test_a_cancelled_transfer_notice_is_private_to_the_one_who_must_act(books):
+    """Ben's payment right is revoked after he queued a $100 move: the cancellation's Needs-you names the amount, so
+    it is private to the owner, and a teammate outside Finance cannot read it."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    _queued_by_ben(books, src, dst)
+    with books.transaction() as c:
+        act(c, OWNER, "right_revoke", {"teammate": "human:ben", "right": "finance.pay"})
+    sync_once(books, fake)
+    _assert_cancelled_unsent(books, fake)
+    _assert_private_to_owner(books, "Transfer of 100.00 was not sent%")
+
+
+def test_a_waiting_transfer_notice_is_private_to_the_one_who_must_act(books):
+    """A rule that asks the owner about the checking account, added after Ben queued a $100 move: the waiting Needs-you
+    names the amount, so it is private to the owner."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    _, src_code = _ledger(books, src[0])
+    _queued_by_ben(books, src, dst)
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {
+            "name": "Checking asks", "when": {"kind": "payment_create", "accounts": src_code},
+            "outcome": {"outcome": "needs_approval", "who": "owner"},
+            "examples": [{"input": {"kind": "payment_create", "accounts": [src_code]}, "expect": "needs_approval"}]})
+        assert made.status == "committed", made
+    sync_once(books, fake)
+    assert fake.sent("create_transfer") == []
+    _assert_private_to_owner(books, "Transfer of 100.00 is waiting%")
+
+
+def test_a_transfer_cut_off_before_midnight_settles_on_the_legs_of_its_submit_day(books):
+    """The worker claimed the call at 23:58 on the 15th; Mercury took the transfer and the worker stopped before it
+    recorded the answer. The recovery runs the next morning. Its legs are dated the 15th, so they settle it: the window
+    starts when the call was made, not when it was recovered."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='transfer_create'", ("2026-10-15T23:58:00.000000Z",))
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "unknown"
+    _arrive(fake, src[1], dst[1], 800.0, day="2026-10-15")
+    sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "posted"
+    assert fake.sent("create_transfer") == []

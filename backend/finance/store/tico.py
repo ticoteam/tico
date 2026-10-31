@@ -261,11 +261,12 @@ def notice(c: sqlite3.Connection, person: str, text: str) -> None:
     _H.say(c, _H.KEEPER, person, text, kind="notice")
 
 
-def needs_you(c: sqlite3.Connection, person: str, title: str, body: str) -> str | None:
+def needs_you(c: sqlite3.Connection, person: str, title: str, body: str, *, private: bool | None = None) -> str | None:
     """One Needs-you item (a keeper task the person owns); an open one with the same title is reused. None when the
-    person cannot be given one."""
+    person cannot be given one. `private` (True for a notice that names an amount) keeps it to the person and its
+    requester; left None, Tico's default applies."""
     try:
-        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True)
+        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True, private=private)
     except _H.Refused:
         return None
     task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}

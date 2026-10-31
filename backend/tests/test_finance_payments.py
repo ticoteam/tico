@@ -452,6 +452,10 @@ def test_a_wire_needs_its_purpose_and_a_refusal_is_never_silent(books):
         assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.payment.failed'").fetchone()[0] == 1
         assert _asks(c, "Payment of 300.01 failed") == 1
         assert status(fixable) == "queued" and _asks(c, "Payment of 300.02 is waiting") == 1   # a fixable refusal
+        # The notices name the amount, so they are private to the one who must act.
+        assert c.execute("SELECT private FROM tasks WHERE title LIKE 'Payment of 300.01 failed%'").fetchone()[0] == 1
+        waiting = c.execute("SELECT private FROM tasks WHERE title LIKE 'Payment of 300.02 is waiting%'").fetchone()
+        assert waiting[0] == 1
         assert (30_002, "held") in _holds(c)
 
 
@@ -957,3 +961,25 @@ def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "failed"
         assert (10_000, "released") in _holds(c)
+
+
+def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(books):
+    """Ben queues a payment; the owner then adds a deny for payments by anyone but the owner. The send-time facts carry
+    actor.owner as the request did, so the payment is cancelled before Mercury sees it."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c)}
+        queued = act(c, "human:ben", "payment_create", {**body, "amount": 5_000})
+        assert queued.status == "committed", queued
+        _rule(c, OWNER, "Only the owner pays", {"kind": "payment_create", "actor.owner": False},
+              {"outcome": "deny"}, [{"input": {"kind": "payment_create", "actor.owner": False}, "expect": "deny"}])
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+    with books.read() as c:
+        status = c.execute("SELECT status || ':' || coalesce(last_error, '') FROM fin_payments").fetchone()[0]
+        assert status.startswith("cancelled:Only the owner pays"), status

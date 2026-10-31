@@ -19,9 +19,9 @@ Posting needs no code here. Both legs arrive as feed rows of kind internalTransf
 one transfer entry (Dr the account the money went to, Cr the one it left) with no income or expense line. The matcher
 links the two legs to the transfer row and settles it to `posted` (store/banking: settle_pair, settle_legs), for legs
 dated from the transfer's submit day through TRANSFER_WINDOW_DAYS on."""
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
-from typing import Any
+from typing import Any, cast
 
 from . import payments
 from .context import Ctx
@@ -137,21 +137,22 @@ def _stop(ctx: Ctx, o: Any, t: Any, why: str, *, hold: bool) -> None:
         if first:
             tico.needs_you(ctx.c, payments.admin_person(ctx), f"Transfer of {amount} is waiting",
                            f"Transfer {tid} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
-                           "own.")
+                           "own.", private=True)
         return
     SK.update(ctx.c, "fin_transfers", tid, {"status": "cancelled", "last_error": why[:500], "updated_at": ctx.at},
               "status='queued'")
     SK.update(ctx.c, "fin_outbox", oid, {"status": "failed", "claimed_at": None, "next_try_at": None,
                                          "last_error": why[:300], "updated_at": ctx.at})
     tico.needs_you(ctx.c, payments.admin_person(ctx), f"Transfer of {amount} was not sent",
-                   f"Transfer {tid} was cancelled before it went to Mercury: {why}. Nothing moved.")
+                   f"Transfer {tid} was cancelled before it went to Mercury: {why}. Nothing moved.", private=True)
 
 
-def recheck(ctx: Ctx, o: Any) -> bool:
+def recheck(ctx: Ctx, o: Any, fresh: list[G.Hit] | None = None) -> bool:
     """Right before Mercury is called (§5, re-check at use), for a transfer write the claim just took: whoever asked still
     has the payment right and sees both accounts, payments are still on for the bank connection, and the gate rules (with
     their counters, less this transfer's own) still let it through. True when it did not, so nothing is sent: the claim
-    is released (a hold) or the transfer is cancelled."""
+    is released (a hold) or the transfer is cancelled. On a send, the limits it fits that it has not counted yet go into
+    `fresh`, for `reserve` once the send is claimed."""
     from . import gating
     body = SK.loads(o["payload_json"])
     t = SK.get(ctx.c, "fin_transfers", str(body["transfer_id"]))
@@ -174,10 +175,8 @@ def recheck(ctx: Ctx, o: Any) -> bool:
     if not payments.settings(ctx.c, str(src["connection_id"])).get("payments_enabled"):
         _stop(ctx, o, t, "payments were turned off for this bank connection", hold=False)
         return True
-    found = {"kind": "payment_create", "actor": who,
-             "actor.kind": "bot" if who in ctx.org.bots else "human", "actor.team": ctx.org.team_of.get(who, ""),
-             "now": ctx.at, "currency": ctx.book.base_currency, **_facts(ctx, src, dst, amount)}
-    mine = payments.own_counts(ctx, "[]", t["action_id"])
+    found = gating.send_facts(ctx, who, "payment_create", _facts(ctx, src, dst, amount))
+    mine = payments.own_counts(ctx, t["counted_json"], t["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -191,7 +190,38 @@ def recheck(ctx: Ctx, o: Any) -> bool:
         _stop(ctx, o, t, f"{verdict.reason or 'a finance rule asks for approval'}"
                          f"{' (its data is stale)' if verdict.stale else ''}", hold=True)
         return True
+    if fresh is not None:
+        fresh.extend(h for h in verdict.counts if (h.rule, h.period_key, h.subject) not in mine)
     return False
+
+
+def reserve(ctx: Ctx, o: Any, hits: Sequence[G.Hit]) -> None:
+    """Move the counters of the limits this transfer fits, in the transaction that claims its send (payments.reserve
+    does the same): the transfer owns them, so they move once, and come back if Mercury refuses it."""
+    if not hits:
+        return
+    tid = str(SK.loads(o["payload_json"])["transfer_id"])
+    t = SK.get(ctx.c, "fin_transfers", tid)
+    if t is None:
+        return
+    owned = [list(x) for x in SK.loads_list(t["counted_json"])]
+    for h in hits:
+        SK.count(ctx.c, h.rule, h.period_key, h.subject, int(t["amount"]), ctx.at)
+        owned.append([h.rule, h.period_key, h.subject])
+    SK.update(ctx.c, "fin_transfers", tid, {"counted_json": SK.dump(owned)})
+
+
+def _give_back(ctx: Ctx, tid: str) -> None:
+    """A refused transfer takes back the counters it reserved at its claim, once. Its record then empties
+    (payments.unreserve does the same)."""
+    t = SK.get(ctx.c, "fin_transfers", tid)
+    if t is None:
+        return
+    for raw in SK.loads_list(t["counted_json"]):
+        if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
+            rule, key, subject = cast(list[Any], raw)
+            SK.uncount(ctx.c, str(rule), str(key), str(subject), int(t["amount"]), ctx.at)
+    SK.update(ctx.c, "fin_transfers", tid, {"counted_json": "[]"})
 
 
 def plan_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -234,15 +264,19 @@ def sent(ctx: Ctx, payload: Mapping[str, Any], answer: Mapping[str, Any]) -> Non
     SK.settle_legs(ctx.c, tid, ctx.at, F.TRANSFER_KINDS)
 
 
-def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool) -> None:
+def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool, *, started: object = None) -> None:
     """A send that did not clearly land: `unknown` when it may have (no answer, a 5xx, a call cut off), else refused.
-    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own."""
+    Either way a finance admin is asked to check Mercury, and nothing sends the transfer again on its own. `started` is
+    when the call was claimed: it may have landed from then, so its legs are looked for from that day, not from the day
+    the failure is recorded (a recovery can run days later)."""
     tid = str(payload["transfer_id"])
     fields: dict[str, object] = {"status": "unknown" if unknown else "failed", "last_error": why[:500],
                                  "updated_at": ctx.at}
     if unknown:
-        fields["submitted_at"] = ctx.at          # it may have landed: its legs are looked for from now on
+        fields["submitted_at"] = str(started or ctx.at)
     SK.update(ctx.c, "fin_transfers", tid, fields)
+    if not unknown:
+        _give_back(ctx, tid)                     # Mercury refused it: nothing moved, so its limits come back
     amount = dollars(int(payload["amount"]))
     if unknown:
         title = f"Check Mercury for transfer {tid}"
@@ -253,4 +287,4 @@ def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool) -> N
         title = f"Mercury refused transfer {tid}"
         body = (f"Mercury refused a transfer of {amount} between two of the company's Mercury accounts: "
                 f"{why[:200]}. Nothing moved. Finance will not send it again on its own.")
-    tico.needs_you(ctx.c, payments.admin_person(ctx), title, body)
+    tico.needs_you(ctx.c, payments.admin_person(ctx), title, body, private=True)

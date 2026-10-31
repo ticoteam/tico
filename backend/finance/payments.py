@@ -444,7 +444,7 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
         maker = str(pay["created_by"])
         person = maker if maker in ctx.org.humans else admin_person(ctx)
         tico.needs_you(ctx.c, person, f"Payment of {int(pay['amount']) / 100:.2f} failed",
-                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.")
+                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.", private=True)
 
 
 def admin_person(ctx: Ctx) -> str:
@@ -460,7 +460,7 @@ def _hold(ctx: Ctx, pay: Any, why: str) -> str:
     if first:
         tico.needs_you(ctx.c, admin_person(ctx), f"Payment of {int(pay['amount']) / 100:.2f} is waiting",
                        f"Payment {pay['id']} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
-                       "own.")
+                       "own.", private=True)
     return "wait"
 
 
@@ -568,10 +568,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])
-    found = {"kind": "payment_create", "actor": who,
-             "actor.kind": "bot" if who in ctx.org.bots else "human", "actor.team": ctx.org.team_of.get(who, ""),
-             "now": ctx.at, "currency": ctx.book.base_currency,
-             **_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money)}
+    found = gating.send_facts(ctx, who, "payment_create",
+                              _facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money))
     mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
@@ -751,7 +749,7 @@ def not_found(ctx: Ctx, pay: Any) -> None:
         tico.needs_you(ctx.c, admin_person(ctx), f"Check Mercury for a {int(pay['amount']) / 100:.2f} payment",
                        f"Payment {pay['id']} may or may not have reached Mercury (no answer since {since}). Look for "
                        f"a request or transaction with note {NOTE}{pay['idempotency_key']}. If it is not there, cancel the payment "
-                       "in Finance; Finance will not send it again on its own.")
+                       "in Finance; Finance will not send it again on its own.", private=True)
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
 
