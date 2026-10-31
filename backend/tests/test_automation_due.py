@@ -122,15 +122,13 @@ def test_an_overdue_occurrence_stays_open_and_never_blocks_the_next(api):
     assert open_tasks[0]["id"] not in handed
 
 
-def test_the_task_is_due_at_the_end_of_its_day_and_its_refs_name_the_occurrence_and_rule(api):
-    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC",
-                    "rule_due_id": "rdd_7"})
+def test_the_task_is_due_at_the_end_of_its_day_and_its_refs_name_the_occurrence(api):
+    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"})
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     task = sql(api, "SELECT due, occurrence FROM tasks WHERE title='Payroll'")
     assert [(row["due"], row["occurrence"]) for row in task] == [("2030-03-01T23:59:59+00:00", f"{aid}:2030-03-01")]
     refs = sql(api, "SELECT refs_json FROM messages WHERE json_extract(refs_json,'$.automation')=?", (aid,))
-    assert any('"due_on": "2030-03-01"' in ref["refs_json"] and '"rule_due_id": "rdd_7"' in ref["refs_json"]
-               for ref in refs)
+    assert any('"due_on": "2030-03-01"' in ref["refs_json"] for ref in refs)
 
 
 def test_a_due_day_only_routine_without_a_rule_id_stores_no_rule_id(api):

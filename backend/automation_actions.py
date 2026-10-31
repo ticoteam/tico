@@ -205,26 +205,32 @@ def _create_task(c, auto, run_id, args, values, step=None):
                                         ("human:" + owner) if owner else actor)
     if owner.startswith("person:"):
         owner = "human:" + owner[7:]
-    due, marker, refs = _occurrence(auto, args, values)
+    due, marker, refs = _occurrence(c, auto, args, values)
     row = H.task_create(c, actor, title, _text(args, "body") or title, owner, due=due, lint=False,
                         deduplicate=False, wake_refs={**refs, **_chain_refs(auto)}, occurrence=marker,
                         occurrence_step=str(step) if marker and step else None, rule_due_id=refs.get("rule_due_id"))
     return {"ok": True, "detail": f"task {row['id']}", "task": row["id"]}
 
 
-def _occurrence(auto, args, values):
+def _occurrence(c, auto, args, values):
     """A task a run opens: its due, the occurrence marker and the refs that name it. A due-date run's task is due at
     the end of its due day in the trigger's zone unless the step says otherwise (the step's `due` wins), and the
     marker is "<automation_id>:<due_on>" (`tasks.occurrence`), so the task stays that day's deadline. Other runs get
-    no marker: (None, None, {automation})."""
+    no marker: (None, None, {automation}).
+
+    The rule due date the task stands for (`rule_due_id`) is never the run's input, a manual run's sample included: it
+    is the automation's own trigger's, and only while the automation is that due date's routine (rule_due.links)."""
     occurrence = values.get("due") if isinstance(values.get("due"), dict) else {}
     if not occurrence.get("due_on"):
         return str(args.get("due") or "") or None, None, {"automation": auto["id"]}
     from . import automation_due as D
+    from . import rule_due
     from datetime import date
     end = D.due_end(date.fromisoformat(occurrence["due_on"]), occurrence.get("tz") or "UTC")
-    refs = {"automation": auto["id"], "due_on": occurrence["due_on"],
-            **({"rule_due_id": str(occurrence["rule_due_id"])} if occurrence.get("rule_due_id") else {})}
+    trigger = auto["flow"].get("trigger") or {}
+    due_id = str(trigger.get("rule_due_id") or "") if trigger.get("type") == "due" else ""
+    linked = bool(due_id) and H._has_table(c, "rule_due_dates") and rule_due.links(c, due_id, auto["id"])
+    refs = {"automation": auto["id"], "due_on": occurrence["due_on"], **({"rule_due_id": due_id} if linked else {})}
     return (str(args.get("due") or "") or end), f"{auto['id']}:{occurrence['due_on']}", refs
 
 
@@ -423,7 +429,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
     name = str(auto["flow"].get("name") or auto["id"])
     title = f"{name} · {label}"[:300] if label else name[:300]
     # A due-date run's turn is that occurrence's task, due and marked the same way as a create_task's (`_occurrence`).
-    due, marker, occ_refs = _occurrence(auto, {}, {"due": occurrence} if occurrence else {})
+    due, marker, occ_refs = _occurrence(c, auto, {}, {"due": occurrence} if occurrence else {})
     task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
                          routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
                          occurrence_step=str(step_id) if marker else None, rule_due_id=occ_refs.get("rule_due_id"),

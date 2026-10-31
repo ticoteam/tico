@@ -547,6 +547,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
             entries.append({"line_id": r["line_id"], "entry_id": r["entry_id"], "date": r["entry_date"],
                             "account_id": r["account_id"], "amount": int(r["amount"]), "vendor": r["contact_id"],
                             "description": r["description"], "memo": r["memo"], "source": r["source"],
+                            "status": str(r["entry_status"]), "reverses": r["reverses_id"] or None,
                             "tags": tags.get(r["line_id"], {})})
         more = more or len(rows) > most * 4
         names = tab_ap.vendor_labels(s.ctx, s.view, [str(e["vendor"] or "") for e in entries])

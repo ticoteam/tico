@@ -60,7 +60,7 @@ until the owner saves another one here.
 While the recommended choice waits for a sign-in, the owner sees one **Needs you** item, "Sign in to Claude and
 ChatGPT, or add API keys", with **Open Settings → Computers**. It goes away by itself once both are signed in on a
 computer. Gateway work runs only on a computer that runs bots as their own user (Tico's Docker runner, see
-[below](#pick-a-tico-model-for-a-bot)). When no computer here can, the item also says "This computer can't run Gateway
+[below](#pick-a-tico-model-for-a-bot)) or on a Tico cloud machine (docs/cloud-machines.md). When no computer here can, the item also says "This computer can't run Gateway
 work without the Docker runner; sign in to Claude and ChatGPT or add API keys", and bots wait for a sign-in instead of
 running on the Gateway. They never fail for it. The missing sign-in is the only thing the Gateway stands in for: a bot
 whose checkout is missing, whose settings differ from the server's, or whose computer doesn't have pi waits as before,
@@ -192,7 +192,8 @@ seconds per try instead of 8). Higher costs more per question and answers slower
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
 that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
-Docker runner does, and says so when it checks in. On the current Docker runner, every Tico model turn (including
+Docker runner does, and says so when it checks in. So does a Tico cloud machine, where all of one company's bots run as
+one user: there a Gateway turn gets the same pass with no separate user (docs/cloud-machines.md). On the current Docker runner, every Tico model turn (including
 a fallback to a Tico model) gets a separate OS user from a pool of 64. Other bots cannot read its live environment,
 open file descriptors or private temporary files, or use its Gateway connection, and it can enter only the checkouts
 its turn runs in. Workspace files remain shared through the bot group; subscription sign-ins and turns on other providers keep their existing boundary. At turn

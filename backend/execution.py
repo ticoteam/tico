@@ -1740,9 +1740,9 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
         # still runs; this one starts again once credit lands, with no restart.
         return "out_of_credit", None
-    if gateway_connection.is_tico(filled.get("model")) and not models_preset.isolated(ready):
-        # A Tico model runs only where bots run as their own user (runner-rs/src/gateway_relay.rs): elsewhere the
-        # runner would refuse the turn, so the work waits here instead of failing there.
+    if gateway_connection.is_tico(filled.get("model")) and not models_preset.runs_gateway(ready):
+        # A Tico model runs only where bots run as their own user, or on a cloud machine (runner-rs/src/gateway_relay.rs
+        # Separation): elsewhere the runner would refuse the turn, so the work waits here instead of failing there.
         return ("not_isolated" if ready.get("isolated") is False else "isolation_unknown"), None
     check = bot_readiness(ready, bot)
     if models_preset.waiting(record, ready, filled):
@@ -1866,7 +1866,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
         if providers.gateway_model(choice["model"]):
             # Signs in with the turn's relay: no login of its own to hold, but only where bots run as their own user
             # (a company row is listed only then; one the bot names is checked here).
-            if not models_preset.isolated(ready):
+            if not models_preset.runs_gateway(ready):
                 continue
             return "", choice["runtime"]
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}
@@ -3932,14 +3932,15 @@ class Execution:
         c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), reply["id"]))
         H.held_queue_recheck(c, reply["id"])
 
-    def file_result(self, c, row, body):
+    def file_result(self, c, row, body, held=False):
         """A result whose job this runner no longer speaks for: a review decided it, another
         attempt owns the work now, or the bot moved to another Mac. The run is recorded against
         its own attempt so the text, the tokens and the outcome survive — a reviewer can now read
         what the run actually produced — and the job is left exactly as its owner left it. The
         attempt stays `expired`, which is the true account of its lease and keeps late output
-        archivable against it."""
-        result = body.model_dump(exclude={"load_snapshot"})
+        archivable against it. `held`: the org rule check held its reply (forget_late_reply), and `body`
+        carries only the note."""
+        result = {**body.model_dump(exclude={"load_snapshot"}), **({"held_reply": True} if held else {})}
         prior = json.loads(row['result_json'] or '{}')
         # A late report cannot erase the saved-session decision that already requeued this job.
         for key in ('lease_continue', 'quota_continue', 'capacity_continue', 'source_continue', 'source_running', 'source_pending'):
@@ -4478,6 +4479,20 @@ class Execution:
         bump_bot_session_epoch(c, row["bot"])
         H.event(c, H.KEEPER, "reply.held", aid, {"bot": row["bot"]})
 
+    def forget_late_reply(self, c, row, rule_check):
+        """A late result's reply that the org rule check would hold (a Block or Escalate rule it breaks) is filed as its
+        held note only: no later turn posts it, so no hold is opened, and like a held completion the run keeps none of
+        its text, live stream or thread (forget_held_reply). Returns the note, or None when nothing holds it."""
+        from . import org_rule_check
+        if not org_rule_check.holds(rule_check):
+            return None
+        broken = [r for r in rule_check["rules"] if r["id"] in rule_check["broken"] and r["if_broken"] != "warn"]
+        note = org_rule_check.held_note(c, "bot:" + row["bot"], broken[0])
+        found = c.execute("SELECT m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.id=?",
+                          (row["job_id"],)).fetchone()
+        self.forget_held_reply(c, row, row["id"], found[0] if found else None, note)
+        return note
+
     def complete(self, c, who, aid, body, rule_check=None):
         """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
@@ -4526,7 +4541,10 @@ class Execution:
         if returned:
             return self.hand_back(c, row, body)
         if late and not self.settleable(c, who, row) and not self.settles_late(c, who, row, body):
-            filed = self.file_result(c, row, body)
+            held_late = self.forget_late_reply(c, row, rule_check)
+            if held_late:
+                body = body.model_copy(update={"text": held_late})
+            filed = self.file_result(c, row, body, held=bool(held_late))
             if row["stop_requested"] and not benched and self.holds(c, who, row):
                 # The Stop stands over the answer, and over a second run of the request too: the job ends as a
                 # stopped one would, rather than waiting uncertain for `auto_reconcile` to resume it. Inputs the runtime

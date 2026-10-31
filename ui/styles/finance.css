@@ -192,3 +192,7 @@
 .fin-match .fin-n{font-variant-numeric:tabular-nums}
 .fin-match span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .fin-match input{margin:0}
+
+/* Transactions rail: a bank row's line and tags (categorize), one Save. */
+.fin-cat .fin-foot{align-items:center}
+.fin-cat[hidden]{display:none}

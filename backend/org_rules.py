@@ -137,8 +137,7 @@ def _via(who):
 def redact_audit(c, auth, who, found):
     """The audit rows of org rules (backend/audit_log.py `rows`), with each cite's quote shown only where the reader may
     read its file now, as `view` shows it. Changed in place: `before` and `after` of each row."""
-    from . import files as F
-    cache = {}
+    memo = {}
     for item in found:
         if not str(item.get("object") or "").startswith("org_rule:"):
             continue
@@ -148,7 +147,7 @@ def redact_audit(c, auth, who, found):
             if not cite:
                 continue
             row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
-            if not row or not F.file_visible(c, auth, who, row, cache):
+            if not _cite_visible(c, auth, who, row, memo):
                 snap["cite"] = {"hidden": True}
 
 
@@ -432,12 +431,26 @@ def _check_manage(c, auth, who, scope, ctx=None):
 
 
 # ----------------------------------------------------------------------------- views
-def _cite(c, auth, who, cite):
+def _cite_visible(c, auth, who, row, memo):
+    """Whether a cite of this file shows its quote to `who`: they may read the file now. Counsel reads it as the people
+    its run answers would (counsel.cite_readers), so a quote never enters a run whose asker could not read the file."""
+    from . import counsel
+    from . import files as F
+    if not row:
+        return False
+    if not counsel.is_counsel(who):
+        return F.file_visible(c, auth, who, row, memo.setdefault("files", {}))
+    if "readers" not in memo:
+        memo["readers"] = counsel.cite_readers(c, auth, who)
+    return bool(memo["readers"]) and all(F.file_visible(c, auth, reader, row, memo.setdefault(reader.actor, {}))
+                                         for reader in memo["readers"])
+
+
+def _cite(c, auth, who, cite, memo=None):
     if not cite:
         return None
-    from . import files as F
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
-    if not row or not F.file_visible(c, auth, who, row, {}):
+    if not _cite_visible(c, auth, who, row, memo if memo is not None else {}):
         return {"hidden": True}
     return {"file_id": cite.get("file_id"), "version": cite.get("version"), "section": cite.get("section"),
             "quote": cite.get("quote")}
@@ -466,7 +479,7 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "can_edit": row["status"] != "retired" and may_manage(c, auth, who, row["who"], ctx),
     }
     if row.get("cite"):
-        out["cite"] = _cite(c, auth, who, row["cite"]) if quote else {"pending": True}
+        out["cite"] = _cite(c, auth, who, row["cite"], ctx.setdefault("cite_memo", {})) if quote else {"pending": True}
     return out
 
 

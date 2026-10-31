@@ -709,6 +709,60 @@ def test_a_task_room_reply_held_before_done_keeps_its_text_nowhere(ruled):
     assert "blue" not in api.get(f"/api/v2/turns/{aid}/steps", headers=headers()).text
 
 
+def test_sql_shows_a_watched_live_run_tool_steps_but_not_its_said_text(ruled):
+    from backend import hubdb
+    api, _ = ruled
+    color_rule(api)
+    r, _, attempt = review_turn(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/events", {"events": [
+        {"seq": 1, "kind": "tool", "payload": {"name": "read"}},
+        {"seq": 2, "kind": "delta", "payload": {"text": "thinking about blue"}},
+        {"seq": 3, "kind": "message", "payload": {"text": "Acme's favorite color is blue."}}]}, token=r["token"])
+    with api.app.state.store.transaction() as c:
+        hubdb.delta_append(c, "bot:ops", aid, "favorite color is blue")
+
+    def read(sql):
+        res = api.post("/api/v2/sql", json={"sql": sql}, headers=headers())
+        assert res.status_code == 200, res.text
+        return json.dumps(res.json())
+    events_sql = f"SELECT kind, payload_json FROM attempt_events WHERE attempt_id='{aid}'"
+    assert "blue" not in read(events_sql) and '"tool"' in read(events_sql)
+    assert "blue" not in read(f"SELECT text FROM deltas WHERE turn_id='{aid}'")
+    # Once the run hands in a reply that passes, its stream reads again.
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 3}, token=r["token"])
+    assert "thinking about blue" in read(events_sql)
+
+
+def test_a_late_result_a_block_rule_holds_is_filed_as_its_note_and_sql_masks_a_live_reply(ruled):
+    api, _ = ruled
+    color_rule(api)
+    r, _, attempt = setup_attempt(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/started", {"thread_id": "late-thread"}, r["token"])
+    # Its lease lapsed and another attempt took the job: the result that comes in now is only filed.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='expired' WHERE id=?", (aid,))
+        c.execute("UPDATE jobs SET attempt_id='another-attempt' WHERE id=?", (attempt["job_id"],))
+    done = post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Acme's favorite color is blue.",
+                                                  "last_seq": 0}, token=r["token"])
+    assert done["filed"] is True
+    for query in ("SELECT final_text AS t FROM attempts WHERE id=?", "SELECT result_json AS t FROM attempts WHERE id=?",
+                  "SELECT summary AS t FROM turns WHERE id=?"):
+        assert all("blue" not in str(row["t"] or "") for row in sql(api, query, (aid,))), query
+    assert sql(api, "SELECT thread_id FROM attempts WHERE id=?", (aid,))[0]["thread_id"] is None
+
+    # A watched run not settled yet keeps its reply columns out of SQL; the rest of the run reads as it is.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET final_text=?, result_json=? WHERE id=?",
+                  ("favorite color is blue", json.dumps({"text": "favorite color is blue", "outcome": "completed"}), aid))
+        c.execute("UPDATE turns SET summary='favorite color is blue' WHERE id=?", (aid,))
+    res = api.post("/api/v2/sql", json={"sql": f"SELECT a.state, a.final_text, a.result_json, t.summary FROM attempts a "
+                                               f"JOIN turns t ON t.id=a.id WHERE a.id='{aid}'"}, headers=headers())
+    assert res.status_code == 200, res.text
+    assert "blue" not in res.text and "expired" in res.text and "completed" in res.text
+
+
 def test_a_review_reply_that_passes_records_its_verdict_from_the_delivered_text(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")

@@ -149,6 +149,10 @@ const TX = [
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [
       {line_id: 'l5', account_id: 'a-6100', account: 'Software', amount: 30000, vendor: 'Linear', tags: {team: 'eng', teammate: 'bot:eng-lead'}},
       {line_id: 'l6', account_id: 'a-6100', account: 'Software', amount: 20000, vendor: 'Linear', tags: {team: 'mkt'}}]},
+  {kind: 'feed', id: 'f5', date: '2026-10-26', amount: -41000, currency: 'USD', counterparty: 'AWS', description: 'AWS', status: 'posted', pending: false, card_id: null, reconciled: true,
+    money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l7', account_id: 'a-5100', account: 'Hosting', amount: 41000, vendor: 'AWS', tags: {}}]},
+  {kind: 'feed', id: 'f7', date: '2026-10-25', amount: -500000, currency: 'USD', counterparty: 'Savings', description: 'Transfer to Savings', status: 'posted', pending: false, card_id: null,
+    provider_kind: 'internalTransfer', entry_id: 'e7', money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: []},
   {kind: 'entry', id: 'l9', entry_id: 'e9', date: '2026-10-27', amount: 610000, account_id: 'a-6300', account: 'Contractors', vendor: 'Northwind Design', description: 'October design work',
     memo: '', source: 'manual', reversed: false, tags: {team: 'mkt'}}];
 const SOURCES = {groups: [
@@ -206,11 +210,12 @@ const listDocs = (rows, url) => {
 };
 
 // ----------------------------------------------------------------- the fake hub
-// GET /v2/finance/chart: bills post to expense and asset lines, invoices to income lines, journals to any line.
-const CHART = [['a-1010', '1010', 'Checking', 'asset', 'bank'], ['a-1020', '1020', 'Savings', 'asset', 'bank'], ['a-1200', '1200', 'Accounts receivable', 'asset', 'receivable'],
-  ['a-1300', '1300', 'Prepaid expenses', 'asset', 'prepaid'], ['a-2000', '2000', 'Accounts payable', 'liability', 'payable'], ['a-2100', '2100', 'Card balance', 'liability', 'card'],
-  ['a-4200', '4200', 'Services', 'income', ''], ['a-6100', '6100', 'Software', 'expense', '']]
-  .map(([id, number, name, type, subtype]) => ({id, number, name, type, subtype, parent_id: null, company_wide: true}));
+// GET /v2/finance/chart: bills post to expense and asset lines, invoices to income lines, journals to any line. The
+// balance-sheet lines here and the P&L lines (not private) of LINES.
+const CHART = [...[['a-1010', '1010', 'Checking', 'asset', 'bank'], ['a-1020', '1020', 'Savings', 'asset', 'bank'], ['a-1200', '1200', 'Accounts receivable', 'asset', 'receivable'],
+  ['a-1300', '1300', 'Prepaid expenses', 'asset', 'prepaid'], ['a-2000', '2000', 'Accounts payable', 'liability', 'payable'], ['a-2100', '2100', 'Card balance', 'liability', 'card']]
+  .map(([id, number, name, type, subtype]) => ({id, number, name, type, subtype, parent_id: null, company_wide: true})),
+  ...LINES.filter(l => !l[7]).map(([id, number, name, type, parent_id]) => ({id, number, name, type, subtype: '', parent_id, company_wide: true}))];
 const chartFor = use => CHART.filter(a => use === 'bill' ? ['expense', 'asset'].includes(a.type) && !['payable', 'receivable'].includes(a.subtype)
   : use === 'invoice' ? a.type === 'income' : true);
 
@@ -218,7 +223,9 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
-  const writes = [], reads = [];
+  // hub.ask: dry runs need this approver; hub.hold: dry runs wait for it; hub.apply: a categorize that moves a bank row
+  // to a line shows in the next transactions read (this page's own copy of TX); hub.noChart: the chart read fails.
+  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false, noChart: false}, tx = structuredClone(TX);
   let billsEmail = 'bills@acme.example';
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
@@ -257,8 +264,13 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/contacts') return json({contacts: CONTACTS.filter(c => !url.searchParams.get('kind') || c.kind === url.searchParams.get('kind')), next_cursor: null, view_version: 'v1'});
     // The form pickers: the chart for teammates who write to the books, the bank accounts for finance.pay.
     const rights = viewer === 'ana' ? ALL_RIGHTS : apRights;
+    // For the owner, Contractors stands in for a line that is not company-wide, so its amounts need a For (the viewer
+    // first); for anyone else no P&L line is.
+    if (p === '/api/v2/finance/chart' && hub.noChart) return json({error: {code: 'down', detail: 'down'}}, 500);
     if (p === '/api/v2/finance/chart') return ['finance.book', 'finance.ap', 'finance.ar'].some(r => rights.includes(r))
-      ? json({accounts: chartFor(url.searchParams.get('for')).map(a => viewer === 'ana' || !['expense', 'income'].includes(a.type) ? a
+      ? json({accounts: chartFor(url.searchParams.get('for')).map(a => viewer === 'ana'
+        ? (a.id === 'a-6300' ? {...a, company_wide: false, attributable: [{teammate: 'human:ana'}, {team: 'eng'}, {team: 'platform'}, {teammate: 'bot:builder'}]} : a)
+        : !['expense', 'income'].includes(a.type) ? a
         : {...a, company_wide: false, attributable: [{team: 'eng'}, {team: 'platform'}, {teammate: 'bot:builder'}, {teammate: 'bot:eng-lead'}, {teammate: 'human:cara'}]}),
         more: false, view_version: 'v1'}) : denied();
     if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
@@ -276,7 +288,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       {id: 'mu-2', name: 'Ops Card User', connection_id: 'c1', email: 'o•••@acme.example', updated_at: '2026-10-30T10:00:00Z'}]});
     if (p === '/api/v2/finance/balance-sheet') return viewer === 'ana' ? json(BS) : denied();
     if (p === '/api/v2/finance/cards') return json({cards: viewer === 'ana' ? CARDS : CARDS.filter(c => c.holder !== 'bot:writer'), next: null});
-    if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
+    if (p === '/api/v2/finance/transactions') return json({rows: tx, next: null});
     // The new Figma row ($99): two Figma payments marked paid add up to it; one Northwind payment is the same amount.
     if (p === '/api/v2/finance/feed/f2/expected') return json({feed_id: 'f2', kind: 'bill', amount: 9900, date: '2026-10-28', more: false, view_version: 'v1', expected: [
       {settlement_id: 's-a', kind: 'bill', document_id: 'bill-5', number: 'FG-1', contact_id: 'v-figma', contact_name: 'Figma', amount: 6000, marked_on: '2026-10-26'},
@@ -284,6 +296,11 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       {settlement_id: 's-c', kind: 'bill', document_id: 'bill-2', number: '#118', contact_id: 'v-northwind', contact_name: 'Northwind Design', amount: 9900, marked_on: '2026-10-27'}]});
     if (p.startsWith('/api/v2/finance/feed/')) return json({feed_id: p.split('/')[5], kind: 'bill', amount: 0, date: '', more: false, view_version: 'v1', expected: []});
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.hold) await hub.hold;
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: {}});
+    const moved = body?.kind === 'categorize' && !body.dry_run && hub.apply && tx.find(r => r.id === body.payload?.feed_id);
+    if (moved) moved.lines = [{line_id: 'l-' + moved.id, account_id: body.payload.account_id, account: CHART.find(a => a.id === body.payload.account_id)?.name,
+      amount: -moved.amount, vendor: moved.counterparty, tags: body.payload.tags}];
     // The rules send a bill's schedule to the owner for approval: its dry run says so, then the request is sent.
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run) return json(body.kind === 'bill_schedule'
       ? {status: 'needs_approval', kind: body.kind, action_id: '', approver: 'human:ana', reason: '', dry_run: true, result: {}, impact: {}}
@@ -296,7 +313,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   await page.goto('http://tico-ui.test/' + hash);
   await page.waitForFunction(() => typeof S !== 'undefined' && S.me && (S.emps || []).length);
   await page.locator('#fin-head [data-fin-tab]').first().waitFor();
-  return {page, errors, writes, reads};
+  return {page, errors, writes, reads, hub};
 }
 
 // ----------------------------------------------------------------- helpers
@@ -305,6 +322,12 @@ const sideways = page => page.evaluate(() => [document.documentElement, document
 const actions = writes => writes.filter(w => w[1] === '/api/v2/finance/actions').map(w => w[2]);
 // The real requests only (a decision's dry run comes first).
 const sent = writes => actions(writes).filter(a => !a.dry_run);
+// Waits (up to 3s) for something the fake hub records, then a beat for the page to redraw.
+async function settled(done) {
+  for (let t = Date.now(); !done() && Date.now() - t < 3000;) await new Promise(r => setTimeout(r, 20));
+  assert.ok(done(), 'timed out waiting');
+  await new Promise(r => setTimeout(r, 100));
+}
 async function shot(page, name) {
   const dir = process.env.TICO_UI_SHOTS;
   if (!dir) return;
@@ -326,7 +349,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
     // The owner, on a computer: every tab, the P&L as a statement, budget edits only in future months.
     {
       const tag = 'owner';
-      const {page, errors, writes, reads} = await open(browser);
+      const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Sources', 'Access'], tag + ': every tab, in order');
       assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
@@ -519,13 +542,34 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('[data-fin-card="card-1"]').click();
       await shot(page, 'cards-desktop');
       await go(page, '#/finance/transactions', READY.transactions);
-      await page.locator('#fin-rail [data-fin-tag]').waitFor();
+      // A posted bank row: one form (line, teammate, team, project), one Save, one categorize, dry run first.
+      const cat = '#fin-rail [data-fin-cat]', save = cat + ' [data-fin-cat-save]';
+      await page.locator(cat + ' select[name="account"] option[value="a-6100"]').waitFor({state: 'attached'});
       await shot(page, 'transactions-desktop');
-      await page.locator('#fin-rail select[name="team"]').selectOption('eng');
-      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
-      await page.waitForTimeout(100);
-      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'}},
-        tag + ': categorize keeps the line\'s other tags');
+      assert.equal(await page.locator('#fin-rail form').count(), 1, tag + ': one form on a posted row');
+      assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-6100', tag + ': a posted row starts on its line');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': nothing changed, nothing to save');
+      await page.locator(cat + ' select[name="team"]').selectOption('eng');
+      let n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      const tagWant = {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'};
+      assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: tagWant, dry_run: true}, {kind: 'categorize', payload: tagWant}],
+        tag + ': the same line only re-tags, keeping the line\'s other tags');
+      assert.notEqual(writes[n][3], writes[n + 1][3], tag + ': the dry run and the action have their own keys');
+      // A new line reposts the row with its tags (the old line's budget tag stays behind).
+      await page.locator(cat + ' select[name="account"]').selectOption('a-5100');
+      await page.locator(cat + ' input[name="project"]').fill('Q4');
+      n = writes.length;
+      hub.apply = true;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      hub.apply = false;
+      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {feed_id: 'f1', account_id: 'a-5100', tags: {teammate: 'bot:eng-lead', project: 'Q4'}}},
+        tag + ': a new line sends feed_id, account_id and the tags');
+      await page.waitForFunction(() => FIN.tx.rows.find(r => r.id === 'f1')?.lines[0]?.account_id === 'a-5100');
+      assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-5100', tag + ': after the reload the rail shows the new line');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': and nothing left to save');
       assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/feed/f1/')), tag + ': a posted row asks for no match');
       assert.equal(await page.locator('#fin-tx-match').innerHTML(), '', tag + ': no Match section on a posted row');
       // A new row: its expected payments, matched once the checked ones are one contact's and add up to the row.
@@ -547,19 +591,109 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       for (let i = 0; i < 50 && !sent(writes).some(w => w.kind === 'feed_match'); i++) await page.waitForTimeout(50);
       assert.deepEqual(actions(writes).slice(-2), [{kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}, dry_run: true},
         {kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}}], tag + ': a dry run, then feed_match');
+      // A row a rule split: Mixed where its lines differ; the same line changes only the field set.
       await page.locator('[data-fin-tx="feed:f4"]').click();
       assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
       await page.locator('#fin-rail input[name="project"]').fill('Launch');
-      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
-      await page.waitForTimeout(100);
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {team: 'eng', teammate: 'bot:eng-lead', project: 'Launch'}},
         {line_id: 'l6', tags: {team: 'mkt', project: 'Launch'}}], mode: 'replace'}}, tag + ': a split row changes only the field set; each line keeps its own team');
-      await page.locator('[data-fin-tx="feed:f4"]').click();
       await page.locator('#fin-rail select[name="team"]').selectOption('');
-      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
-      await page.waitForTimeout(100);
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {teammate: 'bot:eng-lead'}}, {line_id: 'l6', tags: {}}], mode: 'replace'}},
         tag + ': on a mixed split, — clears the team on every line');
+      // A new bank row: no line yet; Save waits for one.
+      await page.locator('[data-fin-tx="feed:f2"]').click();
+      assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), '', tag + ': a new row has no line');
+      assert.equal(await page.locator(cat + ' select[name="teammate"]').count(), 0, tag + ': a new row has no tag fields');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': Save waits for a line');
+      await page.locator(cat + ' select[name="account"]').selectOption('a-6100');
+      assert.equal(await page.locator(cat + ' select[name="for"]').count(), 0, tag + ': no For on a company-wide line');
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      const catWant = {feed_id: 'f2', account_id: 'a-6100', tags: {}};
+      assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: catWant, dry_run: true}, {kind: 'categorize', payload: catWant}],
+        tag + ': a new row posts to the picked line, dry run first');
+      // A line that is not company-wide for the viewer asks For, the viewer first; the rules ask for approval.
+      await page.locator(cat + ' select[name="account"]').selectOption('a-6300');
+      assert.deepEqual((await page.locator(cat + ' select[name="for"] option').allInnerTexts()).slice(0, 2), ['Ana Silva', 'Engineering'], tag + ': For lists the viewer first');
+      await page.locator(cat + ' select[name="for"]').selectOption('team:eng');
+      hub.ask = 'human:ana';
+      n = writes.length;
+      await page.locator(save).click();
+      await page.locator(cat + ' .fin-ask').waitFor();
+      assert.equal(await page.locator(cat + ' .fin-ask').innerText(), 'Approval from Ana Silva', tag + ': who approves');
+      await page.locator(cat + ' [data-fin-cat-no]').click();
+      assert.equal(await page.locator(cat + ' select[name="for"]').inputValue(), 'team:eng', tag + ': Cancel keeps the picks');
+      await page.locator(save).click();
+      await page.locator(cat + ' [data-fin-cat-yes]').click();
+      await settled(() => actions(writes.slice(n)).length >= 3);
+      hub.ask = '';
+      const forWant = {feed_id: 'f2', account_id: 'a-6300', tags: {team: 'eng'}};
+      assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: forWant, dry_run: true}, {kind: 'categorize', payload: forWant, dry_run: true},
+        {kind: 'categorize', payload: forWant}], tag + ': For is the line\'s tag, sent after Send, once');
+      // While a dry run is out: every Save is off, and an approval asked for picks since changed is not shown.
+      let release = () => {};
+      hub.ask = 'human:ana'; hub.hold = new Promise(r => { release = r; });
+      await page.locator(cat + ' select[name="account"]').selectOption('a-6100');
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => writes.length > n);
+      await page.locator(cat + ' select[name="account"]').selectOption('a-5100');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': no Save while a categorize is out');
+      release(); hub.hold = null;
+      await page.waitForFunction(() => !FIN.tx.busy);
+      assert.equal(await page.locator(cat + ' .fin-ask').count(), 0, tag + ': no approval prompt for picks changed since the dry run');
+      await page.locator(save).click();
+      await page.locator(cat + ' [data-fin-cat-yes]').click();
+      await settled(() => actions(writes.slice(n)).length >= 3);
+      hub.ask = '';
+      assert.deepEqual(actions(writes.slice(n)).at(-1), {kind: 'categorize', payload: {feed_id: 'f2', account_id: 'a-5100', tags: {}}}, tag + ': Send sends what was asked about');
+      assert.equal(actions(writes.slice(n)).filter(a => !a.dry_run).length, 1, tag + ': one categorize');
+      // Another row's unsaved picks outlive this row's save.
+      hub.hold = new Promise(r => { release = r; });
+      await page.locator(cat + ' select[name="account"]').selectOption('a-6100');
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => writes.length > n);
+      await page.locator('[data-fin-tx="feed:f1"]').click();
+      await page.locator(cat + ' select[name="team"]').selectOption('mkt');
+      release(); hub.hold = null;
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      await page.waitForFunction(() => !FIN.tx.busy && FIN.tx.sel === 'feed:f1');
+      assert.equal(await page.locator(cat + ' select[name="team"]').inputValue(), 'mkt', tag + ': row B keeps its picks when row A saves');
+      // A transfer between our own accounts has no line to pick.
+      await page.locator('[data-fin-tx="feed:f7"]').click();
+      await page.locator('#fin-rail .fin-rail-title').waitFor();
+      assert.equal(await page.locator('#fin-rail form').count(), 0, tag + ': no line picker on a transfer');
+      // No chart read, no form.
+      hub.noChart = true;
+      await page.evaluate(() => { FIN.tx.chart = undefined; });
+      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.waitForFunction(() => FIN.tx.chart === false && FIN.tx.sel === 'feed:f2');
+      assert.equal(await page.locator(cat).isHidden(), true, tag + ': no form when the chart read fails');
+      hub.noChart = false;
+      await page.evaluate(() => { FIN.tx.chart = undefined; });
+      // A reconciled row keeps its line, read only; its tags still change.
+      await page.locator('[data-fin-tx="feed:f5"]').click();
+      await page.locator('#fin-rail [data-fin-tag]').waitFor();
+      assert.equal(await page.locator(cat).count(), 0, tag + ': no line picker on a reconciled row');
+      assert.match(await page.locator('#fin-rail').innerText(), /Hosting\s+410\.00/, tag + ': its line, read only');
+      await page.evaluate(() => { FIN.tx.busy = true; finTxRail(); });
+      assert.equal(await page.locator('#fin-rail [data-fin-tag] [type=submit]').isDisabled(), true, tag + ': its Save waits while a categorize is out');
+      await page.evaluate(() => { FIN.tx.busy = false; finTxRail(); });
+      await page.evaluate(() => { FIN_TX.q = ''; FIN_TX.account = ''; });
+      await go(page, '#/finance/cards', READY.cards);
+      await go(page, '#/finance/transactions', READY.transactions);
+      await page.locator(cat + ' select[name="account"] option[value="a-6100"]').waitFor({state: 'attached'});
+      await page.locator(cat + ' select[name="team"]').selectOption('eng');
+      await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
+      await shot(page, 'transactions-categorize-desktop');
       await go(page, '#/finance/sources', READY.sources);
       await page.locator('[data-fin-group="banks"]').click();
       await page.locator('[data-fin-src="bank:m1"]').click();
@@ -692,7 +826,8 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');
       await page.locator('dialog.fin-dlg input[name="name"]').fill('Acme Paper');
       await page.locator('dialog.fin-dlg input[name="number"]').fill('AP-1');
-      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="line"] option').allInnerTexts(), ['Checking', 'Savings', 'Prepaid expenses', 'Software'], tag + ': a bill\'s lines');
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="line"] option').allInnerTexts(), ['Checking', 'Savings', 'Prepaid expenses', 'Cost of revenue', 'Hosting', 'AI services', 'Operating expenses', 'Software', 'Contractors'],
+        tag + ': a bill\'s lines, never payables or receivables');
       await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
       await page.locator('dialog.fin-dlg input[name="amount"]').fill('45.50');
       await page.locator('dialog.fin-dlg [type=submit]').click();
@@ -874,6 +1009,10 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.equal(await page.locator('[data-fin-card-add]').count(), 0, tag + ': no card create without the right');
       await page.locator('[data-fin-card="card-1"]').click();
       assert.equal(await page.locator('#fin-rail [data-fin-freeze]').count(), 0, tag + ': no freeze without the right');
+      await go(page, '#/finance/transactions', READY.transactions);
+      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('#fin-rail .fin-rail-title').waitFor();
+      assert.equal(await page.locator('#fin-rail [data-fin-cat], #fin-rail [data-fin-tag]').count(), 0, tag + ': no line picker without finance.book');
       await go(page, '#/finance/access', READY.access);
       assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
       await page.locator('[data-fin-mate="bot:builder"]').click();

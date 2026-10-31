@@ -1327,7 +1327,8 @@ impl Runner {
                 let kept = if runtime == "pi" && session_runtime == runtime { self.pi.reclaim(&owner) } else { None };
                 if let Some(held) = kept {
                     (vault.turn_user, vault.relay) = (held.user, held.relay);
-                } else {
+                } else if crate::gateway_relay::separation() != crate::gateway_relay::Separation::TrustGroup {
+                    // A cloud machine has no turn-user pool (no isolation): its Gateway turn runs on the relay alone.
                     let taken = self.during_drain(&aid, self.take_turn_user(&attempt, &flags, crate::turn_users::Lease::take)).await;
                     vault.turn_user = Some(taken.map_err(|e| self.lease_failed(&aid, e, &mut drove))?);
                 }
@@ -1375,8 +1376,8 @@ impl Runner {
                 }
             }
             // The Gateway's key stays with this runner: the turn gets a relay and a token good for this turn only.
-            let isolated = crate::isolation::enabled();
-            if let Err(why) = crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, isolated).await {
+            let separation = crate::gateway_relay::separation();
+            if let Err(why) = crate::gateway_relay::hand_to_turn(&self.client, &attempt, &mut env, &mut vault, separation).await {
                 // A failed turn whose error carries its code: the server settles it unstarted (`not_isolated`), so it
                 // is said once and not retried.
                 let _ = self.state.append(&aid, "error", &json!({"error": why}));

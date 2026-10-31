@@ -47,7 +47,7 @@ EMPTY = (
     "task_reconnects", "google_signin_refusals",
     # routines and watchers
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
-    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "watcher_runs", "watcher_items", "watcher_refs",
+    "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "mail_reads", "mail_private_backfill", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
     "bookkeeper_seen",   # the Bookkeeper's repeat ledger: the copy starts its Books check fresh
     "org_rule_holds",    # org rules: a held output could still be sent anyway from the copy

@@ -196,3 +196,16 @@ def test_view_as_reaches_lines_expenses_and_budgets_and_only_for_the_owner(api):
     get(api, "finance/transactions?who=nobody", expected=422)
     get(api, "finance/mercury-users", token="ben-test", expected=403)
     assert get(api, "finance/mercury-users")["users"] == []
+
+
+def test_chart_lists_unused_lines_and_tells_a_manager_whom_they_may_tag(books):
+    with books.transaction() as c:
+        act(c, OWNER, "right_grant", {"teammate": "human:cara", "right": "finance.book"})
+        with pytest.raises(FinanceError):
+            FR.chart(c, "human:eve")                                     # no finance.book, ap or ar
+        owner = FR.chart(c, OWNER)["accounts"]
+        assert "6100" in {a["number"] for a in owner}                    # no activity, still listed
+        assert all(a["company_wide"] and "attributable" not in a for a in owner)
+        line = next(a for a in FR.chart(c, "human:cara")["accounts"] if a["number"] == "6100")
+        assert not line["company_wide"] and line["attributable"][0] == {"teammate": "human:cara"}
+        assert {"team": "web"} in line["attributable"] and {"teammate": "human:eve"} in line["attributable"]

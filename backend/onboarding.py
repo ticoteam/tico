@@ -334,6 +334,8 @@ def config_view(c, settings, who=None):
         value["computer_logins_v1"] = True
         # Likewise whether a tool's turns run as their own OS user (runner-rs/src/fallback.rs server_takes_turn_user).
         value["readiness_turn_user"] = True
+        # And whether it is a cloud machine's trust group (`trust`, runner-rs/src/fallback.rs server_takes_trust).
+        value["readiness_trust"] = True
         # Where a bucket's objects open (TICO_S3_VIEW_URLS): the UI links s3:// URIs, `hub` rewrites them before sending.
         value["s3_view_urls"] = dict(settings.s3_view_urls)
         # Pages and SVG from Tico file hosting: the desktop app follows a frame to this origin, only on its signed

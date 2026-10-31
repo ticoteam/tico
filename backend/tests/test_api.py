@@ -26,6 +26,8 @@ def api_settings(tmp_path):
         "ana-test": Identity("human:ana", "owner", "ana@acme.example"),
         "ben-test": Identity("human:ben", "human", "ben@acme.example"),
         "cara-test": Identity("human:cara", "human", "cara@acme.example"),
+        "eve-test": Identity("human:eve", "human", "eve@acme.example"),
+        "fay-test": Identity("human:fay", "human", "fay@acme.example"),
     })
 
 

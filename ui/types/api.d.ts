@@ -1105,7 +1105,7 @@ export type FinanceAccess = {
   grants: Array<Record<string, unknown>>;
   kind: string;
   reports_to: string | null;
-  rights: Array<string>;
+  rights: Array<string> | null;
   team: string | null;
   teammate: string;
 }>;

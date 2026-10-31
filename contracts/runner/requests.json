@@ -2414,6 +2414,19 @@
      "default": null,
      "title": "Shared Env"
     },
+    "trust": {
+     "anyOf": [
+      {
+       "const": "cloud_machine",
+       "type": "string"
+      },
+      {
+       "type": "null"
+      }
+     ],
+     "default": null,
+     "title": "Trust"
+    },
     "worktree_waits": {
      "anyOf": [
       {

@@ -242,9 +242,9 @@ def _store_link(c, blobs, files, plan, task_id, text, title):
     file_library.index(c, saved["id"], saved["current_version"], saved["title"], text)
 
 
-# Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py). A denylist, so the runner's
-# plumbing (attempts, heartbeats, completion, claims that are not sends) and every read stay open. Counsel speaks only on
-# its own task: a task comment is allowed there and nowhere else (TASK_COMMENT).
+# Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py), said in their own words;
+# COUNSEL_ROUTES below refuses every route it does not name in any case. Counsel speaks only on its own task: a task
+# comment is allowed there and nowhere else (TASK_COMMENT).
 OUTWARD = tuple(re.compile(pattern) for pattern in (
     r"^/api/v2/gateway/(search|fetch|images)$",                 # the Gateway: web search, page fetch, images
     r"^/api/v2/messages(/[^/]+/answer)?$",                      # a message to anyone, or an answer to a question
@@ -267,6 +267,16 @@ REFUSED = "Counsel sends nothing outside Tico and speaks only on its own task: t
 
 def is_counsel(who):
     return who.role == "bot" and who.actor == "bot:" + SLUG
+
+
+ATTACH_REFUSED = "Counsel attaches no files: it quotes the document it was asked to read in its words and its rule."
+
+
+def no_attachments(who, items):
+    """Counsel's comments carry no files (visuals.attach, before any is read): an attachment is a version of a file on
+    its task, which is not the one version its read grants (run_read), and its response would carry a signed address."""
+    if items and is_counsel(who):
+        raise Problem("privacy", ATTACH_REFUSED, 403)
 
 
 def refused(store, who, path, method):
@@ -448,38 +458,86 @@ def private_suggestion(c, who, data):
         raise Problem("validation", f"Quote at least {PRIVATE_QUOTE_MIN} characters of the document, copied exactly", 422)
 
 
-# Reads that could return text other than its read's: another task, a file or version, a run, a chat. While a run may
-# publish (attempt_read), Counsel reads its own read task, that file at that version and its own run; nothing else here.
-SCOPED_READS = re.compile(r"^/api/(v2/)?(tasks|deleted-tasks|files|uploads|conversations|messages|inbox|inboxes|events|"
-                          r"runs|turns|attempts|search|context/search|bots/[^/]+/(files|task-tabs)|employees/[^/]+/files)"
-                          r"(/|$)")
-READ_SCOPE = "While Counsel reads a document it may publish from, it reads only that task, that file at that version and its own run."
+# Every call Counsel may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
+# later is not Counsel's until it is named here. It is what Counsel is offered and what runs it: its tools
+# (clients/hubtools.py COUNSEL_TOOLS: hub_rules_list/get/add, hub_file_read, hub_task_comment, hub_task_close) and the
+# calls they make, the MCP that carries them (each call inside comes back through here), `me` (which tools it is
+# offered), and what the computer running it asks with the run's own token (its task, sessions.rs task_closed; its
+# credentials, env.rs credential-runtime). Its runner's plumbing (claim, start, events, complete) is the runner's own
+# token, not Counsel's. Each call is then scoped (read_refused): its own run, the tasks it carries, its read's version.
+GET, WRITE, ANY = frozenset({"GET", "HEAD"}), frozenset({"POST"}), frozenset({"GET", "HEAD", "POST", "PUT", "PATCH",
+                                                                              "DELETE"})
+COUNSEL_ROUTES = tuple((methods, re.compile(r"^/api/v2/" + pattern + r"$")) for methods, pattern in (
+    (WRITE, r"mcp"),
+    (GET, r"me"),
+    (GET, r"credential-runtime"),
+    (GET, r"rules"),
+    (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
+    (WRITE, r"rules"),
+    (GET | WRITE, r"tasks/[^/]+"),
+    (WRITE, r"tasks/[^/]+/comments"),
+    (GET, r"files/[^/]+"),
+    (GET, r"files/[^/]+/versions/\d+"),
+    (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
+))
+READ_SCOPE = "Counsel reads only its own task, the document version it was asked to read and its own run."
+# SQL reads across the whole hub: never Counsel's, in a run or not (outside the allowlist too; its own words).
+SQL_READS = re.compile(r"^/api/(v2/)?sql/?$")
+SQL_REFUSED = "Counsel reads no SQL: it reads its own task and the document version it was asked to read."
 
 
-def read_refused(store, auth, who, path, query):
-    """Whether a read by Counsel's run is outside its read (SCOPED_READS). Only a run attempt_read lets publish is
-    scoped: any other Counsel run publishes nothing company-wide, and its reads are left to the routes."""
-    if not is_counsel(who) or not who.attempt_id or not SCOPED_READS.match(path):
-        return False
+def read_refused(store, auth, who, method, path, query):
+    """Why a call by Counsel is refused, or None. Only COUNSEL_ROUTES are its, whatever else its bot's rights would
+    allow (another run's summary, an answer to another run's question, a page or a review of another version). On those:
+    a run's attempt and steps are its own run's alone, and Counsel outside a run reads none; a Counsel run reads only
+    the tasks it carries (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's
+    read (run_read), that file at that version, which it names. Counsel outside a run is left to those routes, which
+    grant it nothing from `rule_reads` (backend/files.py asked_to_read)."""
+    if not is_counsel(who):
+        return None
+    if SQL_READS.match(path):
+        return SQL_REFUSED
+    method = method.upper()
+    if not any(method in methods and pattern.match(path) for methods, pattern in COUNSEL_ROUTES):
+        return READ_SCOPE
+    parts = path.split("/")[3:]
+    kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
+    if kind in ("attempts", "turns"):
+        return READ_SCOPE if ident != who.attempt_id else None
+    if not who.attempt_id or kind not in ("tasks", "files"):
+        return None
+    from .task_privacy import carried_tasks
     with store.read() as c:
-        read = run_read(c, who)
-        if not read:
-            return False
-        parts = path.split("/")[2:]
-        parts = parts[1:] if parts[:1] == ["v2"] else parts
-        kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
-        if kind in ("attempts", "turns"):
-            return ident != who.attempt_id
-        if kind == "tasks" and ident:
+        if kind == "tasks":
             try:
-                return auth.resolve_task(c, who, ident) != read["task_id"]
+                refused = auth.resolve_task(c, who, ident) not in carried_tasks(c, who.attempt_id)
             except Problem:
-                return True
-        if kind == "files" and ident == read["file_id"]:
-            if rest == ["versions", str(read["version"])] or rest in (["meta"], ["versions"]):
-                return False
-            return not (not rest and _version(query.get("v")) == read["version"])
-    return True
+                refused = True
+        else:
+            read = run_read(c, who)
+            refused = not read or ident != read["file_id"] or (
+                rest != ["versions", str(read["version"])] if rest else _version(query.get("v")) != read["version"])
+    return READ_SCOPE if refused else None
+
+
+def cite_readers(c, auth, who):
+    """Whom a rule's cite is shown as when Counsel reads rules: the people whose tasks its run carries (who asked for its
+    read or its question), each of whom must be able to read the cited file, so a quote never enters a run whose asker
+    could not read it. Nobody outside a run, or for a task with no person behind it: Counsel then sees no quote."""
+    if not who.attempt_id:
+        return []
+    from .task_privacy import carried_tasks
+    readers = []
+    for task_id in sorted(carried_tasks(c, who.attempt_id)):
+        task = H.task(c, task_id)
+        requester = task["requester"] if task else None
+        if not requester or not H.is_human(requester):
+            return []
+        try:
+            readers.append(auth.identity_for_actor(c, requester))
+        except Problem:
+            return []
+    return readers
 
 
 def _disclaimer(line):
@@ -507,18 +565,18 @@ def turn_done(c, attempt, outcome, task_id, text):
 
 
 def check_cite(c, auth, who, blobs, cite):
-    """A suggestion's cite, checked. Counsel cites only the (file, version) it was asked to read (`rule_reads`), and it
-    must name that version: a cite with no version, or another one, is a 404 before any quote is checked. A person cites a
-    file they can read (F.file_visible); any other bot cites nothing. Returns the cite to store, or None when the quote is
-    not in that version's text (the drop is counted as an event and no rule is written)."""
+    """A suggestion's cite, checked. Counsel cites only the (file, version) of its own run's read (run_read: the
+    `rule_reads` row of the read task it runs on), and it must name that version: any other cite is a 404 before any
+    quote is checked. A person cites a file they can read (F.file_visible); any other bot cites nothing. Returns the cite
+    to store, or None when the quote is not in that version's text (the drop is counted as an event and no rule is
+    written)."""
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite["file_id"],)).fetchone()
-    if who.role == "bot" and H.actor_id(who.actor) == SLUG:
-        asked = [r["version"] for r in c.execute(
-            "SELECT version FROM rule_reads WHERE file_id=? ORDER BY version", (cite["file_id"],))]
+    if is_counsel(who):
+        read = run_read(c, who)
         number = _version(cite.get("version"))
-        if not row or number not in asked:
-            raise Problem("not_found", "Counsel cites only the version of a document it was asked to read, and names it: "
-                          "use the version its task gives", 404)
+        if not row or not read or read["file_id"] != row["id"] or number != read["version"]:
+            raise Problem("not_found", "Counsel cites only the document its run was asked to read, at the version its "
+                          "task gives, and names that version", 404)
     elif who.role == "bot":
         raise Problem("forbidden", "Only Counsel cites a document; a bot's rule is written without a quote", 403)
     else:

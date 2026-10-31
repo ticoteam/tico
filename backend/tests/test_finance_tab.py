@@ -8,7 +8,8 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.store import banking as SK
 from backend.tests.test_api import api, get  # noqa: F401
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import (  # noqa: F401
+    AT, OWNER, _seed, account, act, books, finance_template, spend, store)
 
 
 def _bank(c, at=AT):
@@ -164,10 +165,20 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
         mates = {m["teammate"]: m for m in owner["teammates"]}
         assert mates["human:ana"]["default"] == "everything" and mates["human:cara"]["default"] == "team_expenses"
         assert len(mates["human:eve"]["grants"]) == 1
-        ben = {m["teammate"] for m in FR.access(c, "human:ben", at=AT)["teammates"]}
-        assert ben == {"human:ben", "human:cara", "human:eve", "human:fay", "bot:coder"}
+        # A manager (Ben leads Engineering, so Web under it too) sees his own row and his teams', never Sales.
+        ben = FR.access(c, "human:ben", at=AT)
+        assert {m["teammate"] for m in ben["teammates"]} == {"human:ben", "human:cara", "human:eve", "human:fay", "bot:coder"}
+        assert not ben["can_view_as"]
+        mine = next(m for m in ben["teammates"] if m["teammate"] == "human:ben")
+        assert mine["default"] == "team_expenses" and mine["rights"] == []
+        assert next(m for m in ben["teammates"] if m["teammate"] == "human:cara")["rights"] is None
         eve = FR.access(c, "human:eve", at=AT)
         assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and not eve["can_view_as"]
+        assert [g["subject"] for g in eve["teammates"][0]["grants"]] == ["human:eve"]
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+        fay = {m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]}
+        owner = {m["teammate"] for m in FR.access(c, OWNER, at=AT)["teammates"]}
+        assert fay == owner and {"human:ana", "human:gus", "bot:coder"} <= fay   # a finance admin sees the whole roster
         assert FR.view_as(c, OWNER, "human:cara", at=AT) == "human:cara"
         with pytest.raises(FinanceError):
             FR.view_as(c, "human:ben", "human:cara", at=AT)
@@ -188,3 +199,37 @@ def test_tab_routes_answer_in_the_callers_view(api):
     assert get(api, "finance/access", token="ben-test")["can_view_as"] is False
     get(api, "finance/pnl?view_as=human:nobody", expected=404)
     get(api, "finance/pnl?view_as=human:ana", token="ben-test", expected=403)
+
+
+def test_access_over_http_is_the_roster_for_admins_and_each_managers_own_teams_otherwise(api):
+    """The access read over HTTP: owner and finance admins see everyone (with rights and private lines); a manager sees
+    their own row and the teammates in the teams they manage, nested, but no rights and no private lines; anyone else
+    sees only their own row."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        _seed(c)                                    # the Acme org chart, as the finance fixtures have it
+        assert FA.ensure_setup(c, store.settings.owner_email)
+        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6900"), "private": True}).status == "committed"
+    owner = get(api, "finance/access")
+    everyone = {m["teammate"] for m in owner["teammates"]}
+    acme = {"human:ana", "human:ben", "human:cara", "human:dan", "human:eve", "human:fay", "human:gus", "bot:coder",
+            "bot:seller"}
+    assert acme <= everyone and owner["private_lines"] and all(m["rights"] is not None for m in owner["teammates"])
+    # Cara leads Web (under Engineering): her own row and Web's people, the bot included, never Sales or Ana.
+    cara = get(api, "finance/access", token="cara-test")
+    assert {m["teammate"] for m in cara["teammates"]} == {"human:cara", "human:eve", "human:fay", "bot:coder"}
+    assert cara["private_lines"] == [] and [t["id"] for t in cara["teams"]] == ["web"]
+    rows = {m["teammate"]: m for m in cara["teammates"]}
+    assert rows["human:cara"]["rights"] is not None and rows["human:eve"]["rights"] is None
+    # Ben leads Engineering, so Web is under him too.
+    ben = get(api, "finance/access", token="ben-test")
+    assert {m["teammate"] for m in ben["teammates"]} == {"human:ben", "human:cara", "human:eve", "human:fay", "bot:coder"}
+    # Eve is a plain teammate: her own row only.
+    eve = get(api, "finance/access", token="eve-test")
+    assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and eve["private_lines"] == []
+    # A finance admin sees the whole roster, rights included.
+    with store.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+    fay = get(api, "finance/access", token="fay-test")
+    assert {m["teammate"] for m in fay["teammates"]} == everyone and fay["private_lines"]
+    assert all(m["rights"] is not None for m in fay["teammates"])
