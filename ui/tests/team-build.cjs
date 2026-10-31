@@ -20,10 +20,14 @@ const suggestion = () => ({team: 'engineering', department: 'engineering', roles
   {role: 'Security engineer', pick: item('security-engineer', 'Security Engineer', 'strong'),
     alternatives: [item('software-architect', 'Software Architect', 'good'), item('pr-reviewer', 'PR Reviewer')], on_team: false, checked: true},
   {role: 'DevOps engineer', pick: item('devops-engineer', 'DevOps Engineer'), alternatives: [], on_team: false, checked: true},
-  {role: 'Developer advocate', pick: item('developer-advocate', 'Developer Advocate'), alternatives: [item('docs-writer', 'Docs Writer')],
+  {role: 'Developer advocate', pick: item('developer-advocate', 'Developer Advocate'),
+    alternatives: [item('software-architect', 'Software Architect', 'good'), item('docs-writer', 'Docs Writer')],
     on_team: false, checked: false},
   {role: 'Second pair of hands', pick: cloud, alternatives: [], on_team: false, checked: false},
 ]});
+// The briefing changes and the recommender now suggests Software Architect for DevOps, which the Security role already holds.
+const reranked = () => ({...suggestion(), roles: suggestion().roles.map((role, i) => i !== 2 ? role
+  : {...role, pick: item('software-architect', 'Software Architect', 'strong'), alternatives: [item('pr-reviewer', 'PR Reviewer')]})});
 const until = async (test, ms = 4000) => {
   const end = Date.now() + ms;
   while (!test()) { if (Date.now() > end) throw new Error('timed out waiting'); await new Promise(r => setTimeout(r, 25)); }
@@ -62,7 +66,7 @@ async function scenario(browser, {name, viewport, theme}) {
     if (p === '/api/v2/team-build/suggest') {
       calls.push(['suggest', route.request().postDataJSON()]);
       if (++suggests === 1) await gate;
-      return json(suggestion());
+      return json(suggests === 2 ? reranked() : suggestion());
     }
     if (p === '/api/v2/team-build/hire') {
       calls.push(['hire', route.request().postDataJSON()]);
@@ -75,6 +79,15 @@ async function scenario(browser, {name, viewport, theme}) {
   await page.waitForFunction(() => typeof teamBuildOpen === 'function');
   await page.evaluate(() => teamBuildOpen('engineering'));
   const dialog = page.locator('#team-build-dialog'), cards = page.locator('#team-build-dialog .tb-card');
+  const alts = i => page.locator(`#team-build-dialog [data-card="${i}"] .tb-alt-name`).allTextContents();
+  // No role offers a template another role picks, and no template is two roles' picks.
+  const sharedTemplates = () => page.evaluate(() => {
+    const cardsNow = [...document.querySelectorAll('#team-build-dialog .tb-card')];
+    const picks = cardsNow.map(card => card.querySelector('.tb-pick-name').textContent);
+    const offered = cardsNow.flatMap((card, i) => [...card.querySelectorAll('.tb-alt-name')].map(name => name.textContent)
+      .filter(name => picks.some((pick, k) => k !== i && pick === name)));
+    return {offered, twice: picks.filter((pick, i) => picks.indexOf(pick) !== i)};
+  });
   await dialog.waitFor();
   // Focus starts on the brief on the desktop, and on the dialog on the phone so the keyboard stays down until a tap.
   const focused = await page.evaluate(() => document.activeElement.id === 'team-build-dialog' ? 'dialog'
@@ -87,6 +100,7 @@ async function scenario(browser, {name, viewport, theme}) {
   release();
   await cards.nth(4).waitFor();
   assert.equal(await cards.count(), 5);
+  assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
   assert.equal(await page.locator('#team-build-dialog .tb-dot').getAttribute('data-state'), 'done');
   // The cards fade in (transform and opacity) on the first answer.
   assert.equal(await cards.nth(0).evaluate(el => getComputedStyle(el).animationName), 'tb-in');
@@ -130,6 +144,10 @@ async function scenario(browser, {name, viewport, theme}) {
   assert.equal(await page.locator('#team-build-dialog [data-card="1"] .tb-alt').count(), 2);
   assert.equal(await count(), 2);
   assert.equal(await cards.count(), 5);                                              // replaced in place, not added
+  // The pick moved: the role offers the pick it gave up, and the other roles stop offering the one now picked.
+  assert.deepEqual(await alts(1), ['Security Engineer', 'PR Reviewer']);
+  assert.deepEqual(await alts(3), ['Docs Writer']);
+  assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
   await page.locator('#team-build-dialog [data-tb-check="3"]').click();
   assert.equal(await count(), 3);
   // A new briefing goes to the server once, after a pause, and keeps what the person picked.
@@ -139,16 +157,32 @@ async function scenario(browser, {name, viewport, theme}) {
   await page.waitForFunction(() => document.querySelector('#team-build-dialog .tb-dot')?.dataset.state === 'done');
   assert.equal(await page.locator('#team-build-dialog [data-card="1"] .tb-pick-name').innerText(), 'Software Architect');
   assert.equal(await count(), 3);
+  // DevOps, which the re-ranked briefing gave Software Architect, takes its first free offer: a template is never sent twice.
+  assert.deepEqual(await sharedTemplates(), {offered: [], twice: []});
   // Hire sends each checked role with its chosen template, in order; the dialog closes and a toast says it.
   await hireButton.click();
   await until(() => calls.at(-1)[0] === 'hire');
   assert.deepEqual(calls.at(-1)[1], {team: 'engineering', reports_to: '', picks: [
     {role: 'Security engineer', template: 'software-architect'},
-    {role: 'DevOps engineer', template: 'devops-engineer'},
+    {role: 'DevOps engineer', template: 'pr-reviewer'},
     {role: 'Developer advocate', template: 'developer-advocate'},
   ]});
   await dialog.waitFor({state: 'detached'});
   assert.ok(await page.locator('.toast').count() >= 1);
+  // Team > + > Build a team has no team: the dialog asks which one first, and suggests for the one chosen.
+  const asked = calls.length;
+  await page.evaluate(() => teamBuildOpen(null));
+  await dialog.waitFor();
+  const picker = page.locator('#team-build-dialog [data-tb-team]');
+  assert.deepEqual(await picker.locator('option').allTextContents(), ['Choose a team', 'Engineering']);
+  assert.equal(await cards.count(), 0);
+  assert.equal(calls.length, asked);                                                  // nothing is asked until a team is chosen
+  await picker.selectOption('engineering');
+  await cards.nth(4).waitFor();
+  assert.deepEqual(calls.slice(asked), [['suggest', {team: 'engineering', briefing: ''}]]);
+  assert.equal(await page.locator('#team-build-dialog .tb-team').textContent(), 'Engineering');
+  await page.locator('#team-build-dialog [data-tb-close]').click();
+  await dialog.waitFor({state: 'detached'});
   assert.deepEqual(errors, []);
   await page.close();
 }

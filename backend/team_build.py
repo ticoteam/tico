@@ -4,7 +4,7 @@ picks are hired into that team in one step.
 `suggest` answers from the local recommender (backend/recruit_rank.py) only, so the briefing never leaves this server and
 Tico HQ is not asked. Its roles are the team's department's suggested templates in the recommender's order. A role's
 alternatives are the next templates that the team does not already have, and `on_team` marks a role that a bot already on
-the team fills (a bot built from that template).
+the team fills (a bot built from that template). Only the bots the caller may see count, here and in `hire`.
 
 `hire` makes one Recruiting seat per pick in the team, then fills each with the seat page's own call
 (backend/recruiting.py `hire`). The department head goes first, so the other seats report to it as they do when hired one
@@ -63,9 +63,12 @@ def _may_build(who):
 
 
 # ------------------------------------------------------------------ the team
-def _group(c, team):
-    """The team as the sidebar draws it (backend/groups.py `rows`): its id, name and the live bots in it."""
-    row = next((g for g in Groups.rows(Groups._roster(c), Groups._configs(c), Groups._archived(c))
+def _group(c, auth, who, team):
+    """The team as this caller sees it: its row in the sidebar (backend/groups.py `rows`, filtered as GET /v2/groups
+    filters it), so a bot they cannot see is neither named nor counted as filling its role."""
+    access = auth.bot_accesses(c, who)
+    row = next((g for g in Groups.rows(Groups._roster(c), Groups._configs(c), Groups._archived(c),
+                                        lambda slug: access.get(slug, auth.FULL)["see"])
                 if g["id"] == team), None)
     if not row:
         raise Problem("not_found", "Team not found", 404)
@@ -138,7 +141,7 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
     """The roles a team of bots needs for this briefing: one per suggested template, the head first, each with its
     alternatives and whether a bot on the team already fills it. Deterministic: the same answer gives the same roles."""
     _may_read(who)
-    group = _group(c, team)
+    group = _group(c, auth, who, team)
     value = recruit.catalog(onboarding.settings)
     dept = _department(value, group)
     if not dept:
@@ -187,7 +190,8 @@ def hire(auth, onboarding, c, who, team, reports_to, picks):
     """Hire the picks into the team: one seat each, the head first and the rest under it, then each seat filled as
     backend/recruiting.py `hire` fills one. Returns the bots made, in the order they were hired."""
     _may_build(who)
-    group = _group(c, team)
+    group = _group(c, auth, who, team)
+    Groups.may_add(c, auth, who, team)      # a seat in the team is an add to it, the rule a move into it obeys
     value = recruit.catalog(onboarding.settings)
     dept = _department(value, group)
     offered = {card["template"]: card for card in recruiting._recruitable(onboarding)[1] if card["department"] == dept}
