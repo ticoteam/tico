@@ -13,6 +13,7 @@ from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, 
 
 SEP = ("2026-09-01", "2026-09-30")
 OCT = ("2026-10-01", "2026-10-31")
+NOV = "2026-11-05T12:00:00.000000Z"
 
 
 def _acme(c):
@@ -229,3 +230,30 @@ def test_a_multi_month_budget_read_omits_a_budget_its_viewer_cannot_see_in_every
         assert seats(*SEP) == []
         assert seats("2026-09-01", "2026-10-31") == []
         assert [r["actual"] for r in seats(*OCT)] == [[0]]      # October alone: visible, and nothing in it
+
+
+def test_a_multi_month_budget_read_lists_a_budget_each_month_shows_after_it_moves_out_of_view(books):  # noqa: F811
+    # Seats sat under software when September and October both closed, where Cara's company-wide grant reaches it. Seats
+    # then moved under other expenses, out of her live view. Each month alone lists it with its own actual, so September
+    # to October lists it with both months' actuals.
+    with books.transaction() as c:
+        assert act(c, OWNER, "account_create", {"code": "6110", "name": "Seats", "type": "expense",
+                                                "parent_id": account(c, "6100")}).status == "committed"
+        spend(c, "6110", 12_345, day="2026-09-12")
+        spend(c, "6110", 6_789, day="2026-10-05")
+        assert act(c, OWNER, "budget_create", {"name": "Seats", "account_id": account(c, "6110"), "amount": 20_000,
+                                               "effective_from": "2026-09-01"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:cara", "what": "pnl_lines",
+                                            "account_ids": [account(c, "6100")], "whose": "company"}
+                   ).status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"), "parent_id": account(c, "6900")},
+                   at=NOV).status == "committed"
+
+        def seats(a, z):
+            return [r for r in FR.budget_vs_actual(c, "human:cara", a, z, "month", at=NOV)["budgets"]
+                    if r["name"] == "Seats"]
+        assert [r["actual"] for r in seats(*SEP)] == [[12_345]]
+        assert [r["actual"] for r in seats(*OCT)] == [[6_789]]
+        assert [r["actual"] for r in seats("2026-09-01", "2026-10-31")] == [[12_345, 6_789]]

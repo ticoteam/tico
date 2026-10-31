@@ -816,9 +816,16 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     base = s
     s, snap = _closed(base, viewer, a, z)
     trees = [(sa, sz, _closed(base, viewer, sa, sz)[0].ctx) for sa, sz in _segments(a, z)]
-    # Listed only where the viewer sees it in every month of the window, each judged on that month's own tree, as a read
-    # of that month alone judges it. A month whose tree lacks the budget's account has no spend on it to show.
-    seen = [b for b in _visible(s, False)
+    # A budget is a candidate when the live tree or a month of the window lists it for the viewer, each read on its own
+    # tree. It is listed only where the viewer sees it in every month of the window, each judged on that month's own
+    # tree, as a read of that month alone judges it. A month whose tree lacks the budget's account has no spend to show.
+    live = s.ctx.budgets()
+    pool: dict[str, B.Budget] = {}
+    for ctx in [s.ctx, *(ctx for _, _, ctx in trees)]:
+        for b in ctx.budgets().values():
+            if b.active and sees_budget(ctx, viewer, b):
+                pool.setdefault(b.id, live.get(b.id, b))
+    seen = [b for b in pool.values()
             if all(sees_budget(ctx, viewer, b) for _, _, ctx in trees if b.catch_all or b.account_id in ctx.accounts)]
     most = max(1, min(int(limit), 500))
     versions = SB.versions(c, [b.id for b in seen[:most]])
