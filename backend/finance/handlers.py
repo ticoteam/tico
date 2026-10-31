@@ -376,7 +376,8 @@ def _route(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], effective: st
     try:
         _under_parent(ctx, parent, raised, effective)
     except FinanceError:
-        raise invalid(f"raise {ctx.budgets()[parent.parent_id].name} first") from None
+        grand = ctx.budgets()[parent.parent_id].name
+        raise _refusal(ctx, who, near, invalid(f"raise {grand} first")) from None
     return _Route(parent.owner, parent, raise_to, all(shows_numbers(ctx, who, x) for x in near))
 
 
@@ -416,6 +417,12 @@ def _raise_note(ctx: Ctx, route: _Route, effective: str) -> tuple[str, Result]:
 def _raise_parent(ctx: Ctx, route: _Route, effective: str, who: str) -> None:
     """Write the parent's raise from the same day as the change it makes room for."""
     SB.insert_version(ctx.c, route.parent.id, effective, route.raise_to, ctx.book.base_currency, who, ctx.at)
+
+
+def _raise_check(ctx: Ctx, raise_to: int | None) -> str | None:
+    """A keyed fingerprint of the parent raise a change needs. The approval payload keeps this, not the amount: the
+    requester and approver can read it, and the raise less the child's amount would show a hidden sibling total."""
+    return None if raise_to is None else tico.fingerprint(ctx.c, "budget-raise", str(raise_to))
 
 
 def _budget_owner_gate(route: _Route) -> K.Gate:
@@ -484,7 +491,7 @@ def _budget_fields(p: V.Payload, base: B.Budget) -> B.Budget:
 
 def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("name", "period", "account_id", "catch_all", "team", "teammate", "vendor", "parent_id", "owner",
-               "warn_pct", "at_limit", "rollover", "amount", "effective_from", "raise_to"))
+               "warn_pct", "at_limit", "rollover", "amount", "effective_from", "raise_check"))
     new = _budget_fields(p, B.Budget(
         id="", book_id=ctx.book.id, name=V.text(p, "name", 120), period=V.choice(p, "period", B.PERIODS, "month"),
         account_id=V.opt_text(p, "account_id", 80) or "", catch_all=V.flag(p, "catch_all"),
@@ -516,7 +523,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         (f" at {amount / 100:.2f} {ctx.book.base_currency} per {new.period}" if amount is not None else "")
     return Plan(gate, head + words,
                 apply, {"effective_from": effective, "budget": new.name, **impact},
-                {"effective_from": effective, "raise_to": raise_to} if amount is not None else {})
+                {"effective_from": effective, "raise_check": _raise_check(ctx, raise_to)} if amount is not None else {})
 
 
 def _budget(ctx: Ctx, budget_id: str) -> B.Budget:
@@ -528,7 +535,7 @@ def _budget(ctx: Ctx, budget_id: str) -> B.Budget:
 
 def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("budget_id", "name", "owner", "warn_pct", "at_limit", "rollover", "active", "amount", "effective_from",
-               "raise_to"))
+               "raise_check"))
     old = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, old)
     new = replace(_budget_fields(p, old), active=V.flag(p, "active", old.active))
@@ -557,7 +564,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         (f" to {amount / 100:.2f} {ctx.book.base_currency} from {effective}" if amount is not None else "")
     return Plan(gate, head + words,
                 apply, {"effective_from": effective, "budget": old.name, **impact},
-                {"effective_from": effective, "raise_to": raise_to} if amount is not None else {})
+                {"effective_from": effective, "raise_check": _raise_check(ctx, raise_to)} if amount is not None else {})
 
 
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:

@@ -79,6 +79,14 @@ def stricter(gate: K.Gate, verdict: G.Verdict) -> K.Gate:
     return K.Gate("needs_approval", verdict.who, verdict.rule)
 
 
+def combine(right: K.Gate, planned: K.Gate) -> K.Gate:
+    """A missing right's gate and the planner's gate together. The higher approver decides, and the person the planner
+    named (a parent budget's owner) goes with it; a tie keeps the right's gate."""
+    if planned.outcome != "needs_approval" or planned.who == right.who:
+        return right
+    return planned if G.higher(right.who, planned.who) == planned.who else right
+
+
 def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id: str) -> Judged:
     """Run the gate rules on one planned action. Raises Denied; returns the combined gate and a plan whose apply also
     moves the period counters of the limits it fits under."""

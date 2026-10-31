@@ -99,3 +99,17 @@ def test_a_restatement_of_a_closed_month_is_flagged_on_its_snapshot(books):  # n
         sep = FR.pnl(c, OWNER, *SEP, "month", "accrual", AT)
         assert _by_code(sep["rows"])["6100"]["total"] == 850
         assert sep["snapshot"] == {"month": "2026-09", "restatements": 1}
+
+
+def test_a_report_over_several_months_reads_each_closed_month_as_it_closed(books):  # noqa: F811
+    with books.transaction() as c:
+        _acme(c)
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"),
+                                                "parent_id": account(c, "6900")}).status == "committed"
+        both = ("2026-09-01", "2026-10-31")
+        software = next(r for r in FR.budget_vs_actual(c, OWNER, *both, "month", at=AT)["budgets"]
+                        if r["name"] == "Software")
+        assert software["actual"] == [1_100, 0]         # September as it closed: seats were under software then
+        assert FR.line_detail(c, OWNER, account(c, "6100"), *SEP, at=AT)["total"] == 1_100
+        drill = FR.line_detail(c, OWNER, account(c, "6100"), *both, at=AT)
+        assert drill["total"] == 1_100 and sorted(e["amount"] for e in drill["entries"]) == [300, 800]

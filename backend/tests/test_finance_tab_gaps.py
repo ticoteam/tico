@@ -228,3 +228,16 @@ def test_chart_lists_unused_lines_and_tells_a_manager_whom_they_may_tag(books):
         line = next(a for a in FR.chart(c, "human:cara")["accounts"] if a["number"] == "6100")
         assert not line["company_wide"] and line["attributable"][0] == {"teammate": "human:cara"}
         assert {"team": "web"} in line["attributable"] and {"teammate": "human:eve"} in line["attributable"]
+
+
+def test_a_team_override_leaves_the_other_teams_defaults_standing(books):
+    with books.transaction() as c:
+        soft = account(c, "6100")
+        spend(c, "6100", 1_000, day="2026-09-10", team="web")
+        spend(c, "6100", 2_000, day="2026-09-10", team="sales")
+        assert FR.line_detail(c, OWNER, soft, at=AT)["next_month"] == {
+            "month": "2026-11", "projection": 3_000, "projection_method": "recurring"}
+        assert act(c, OWNER, "projection_set", {"account_id": soft, "month": "2026-11", "amount": 1_500,
+                                                "team": "web"}).status == "committed"
+        # Web's override replaces Web's default; Sales keeps its own.
+        assert FR.line_detail(c, OWNER, soft, at=AT)["next_month"]["projection"] == 3_500

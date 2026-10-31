@@ -34,11 +34,12 @@ def finish(c: sqlite3.Connection, action_id: str, *, status: str, result: Mappin
 
 
 def asked(c: sqlite3.Connection, action_id: str, *, approval_id: str, approval_hash: str, requester: str, to: str,
-          rule_id: str, at: str) -> None:
-    """The approval an action waits on: its id, the hash of the payload it was asked for, who asked and who decides."""
+          rule_id: str, payload: Mapping[str, object], at: str) -> None:
+    """The approval an action waits on: its id, the hash of the payload it was asked for, who asked and who decides. The
+    stored payload becomes that one, so the decision checks the payload that was asked."""
     c.execute("UPDATE fin_actions SET status='needs_approval', approval_id=?, approval_hash=?, approval_by=?, "
-              "approval_to=?, rule_id=?, updated_at=? WHERE id=?",
-              (approval_id, approval_hash, requester, to, rule_id, at, action_id))
+              "approval_to=?, rule_id=?, payload_json=?, updated_at=? WHERE id=?",
+              (approval_id, approval_hash, requester, to, rule_id, _dump(payload), at, action_id))
 
 
 def settled_waits(c: sqlite3.Connection, most: int) -> list[str]:
