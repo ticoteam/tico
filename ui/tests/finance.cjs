@@ -271,6 +271,12 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/balance-sheet') return viewer === 'ana' ? json(BS) : denied();
     if (p === '/api/v2/finance/cards') return json({cards: viewer === 'ana' ? CARDS : CARDS.filter(c => c.holder !== 'bot:writer'), next: null});
     if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
+    // The new Figma row ($99): two Figma payments marked paid add up to it; one Northwind payment is the same amount.
+    if (p === '/api/v2/finance/feed/f2/expected') return json({feed_id: 'f2', kind: 'bill', amount: 9900, date: '2026-10-28', more: false, view_version: 'v1', expected: [
+      {settlement_id: 's-a', kind: 'bill', document_id: 'bill-5', number: 'FG-1', contact_id: 'v-figma', contact_name: 'Figma', amount: 6000, marked_on: '2026-10-26'},
+      {settlement_id: 's-b', kind: 'bill', document_id: 'bill-6', number: 'FG-2', contact_id: 'v-figma', contact_name: 'Figma', amount: 3900, marked_on: '2026-10-27'},
+      {settlement_id: 's-c', kind: 'bill', document_id: 'bill-2', number: '#118', contact_id: 'v-northwind', contact_name: 'Northwind Design', amount: 9900, marked_on: '2026-10-27'}]});
+    if (p.startsWith('/api/v2/finance/feed/')) return json({feed_id: p.split('/')[5], kind: 'bill', amount: 0, date: '', more: false, view_version: 'v1', expected: []});
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
     // The rules send a bill's schedule to the owner for approval: its dry run says so, then the request is sent.
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run) return json(body.kind === 'bill_schedule'
@@ -514,6 +520,27 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.waitForTimeout(100);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'}},
         tag + ': categorize keeps the line\'s other tags');
+      assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/feed/f1/')), tag + ': a posted row asks for no match');
+      assert.equal(await page.locator('#fin-tx-match').innerHTML(), '', tag + ': no Match section on a posted row');
+      // A new row: its expected payments, matched once the checked ones are one contact's and add up to the row.
+      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('#fin-rail .fin-match').first().waitFor();
+      assert.deepEqual((await page.locator('#fin-rail .fin-match').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()),
+        ['Figma FG-1 $60 Oct 26', 'Figma FG-2 $39 Oct 27', 'Northwind Design #118 $99 Oct 27'], tag + ': the expected payments');
+      const matchBtn = page.locator('#fin-rail [data-fin-match]'), tick = id => page.locator(`#fin-rail .fin-match input[value="${id}"]`).check();
+      assert.equal(await matchBtn.isDisabled(), true, tag + ': Match waits for a pick');
+      await tick('s-a');
+      assert.equal(await matchBtn.isDisabled(), true, tag + ': $60 of $99 does not match');
+      await tick('s-b');
+      assert.equal(await matchBtn.isDisabled(), false, tag + ': $60 + $39 matches');
+      await tick('s-c');
+      assert.equal(await matchBtn.isDisabled(), true, tag + ': two contacts, or more than the row, do not');
+      await page.locator('#fin-rail .fin-match input[value="s-c"]').uncheck();
+      await shot(page, 'transactions-match-desktop');
+      await matchBtn.click();
+      for (let i = 0; i < 50 && !sent(writes).some(w => w.kind === 'feed_match'); i++) await page.waitForTimeout(50);
+      assert.deepEqual(actions(writes).slice(-2), [{kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}, dry_run: true},
+        {kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}}], tag + ': a dry run, then feed_match');
       await page.locator('[data-fin-tx="feed:f4"]').click();
       assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
       await page.locator('#fin-rail input[name="project"]').fill('Launch');

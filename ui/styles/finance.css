@@ -186,3 +186,9 @@
   .fin-menu{left:16px;right:16px}
   .fin-jl{grid-template-columns:minmax(0,1fr) 72px 72px}
 }
+
+/* Transactions rail: the payments marked paid a new bank row may match, checked off to its amount. */
+.fin-match{display:grid;grid-template-columns:auto minmax(0,1fr) auto auto auto;align-items:center;gap:8px;min-height:26px;padding:3px 0;border-bottom:1px solid color-mix(in srgb,var(--line) 60%,transparent);cursor:pointer}
+.fin-match .fin-n{font-variant-numeric:tabular-nums}
+.fin-match span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.fin-match input{margin:0}
