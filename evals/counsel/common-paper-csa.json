@@ -1,0 +1,41 @@
+{
+  "expected": [
+    {
+      "text": "Customer and its users must keep their passwords and login credentials confidential.",
+      "quote": "Customer and Users must protect the confidentiality of their passwords and login credentials.",
+      "section": "Account security",
+      "who_hint": "security"
+    },
+    {
+      "text": "Before submitting GDPR personal data, sign a data processing agreement with the provider.",
+      "quote": "Before submitting Personal Data governed by GDPR, Customer must enter into a data processing agreement with Provider.",
+      "section": "Data protection",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Raise a good-faith fee dispute with the provider before payment is due, or within 30 days of an automatic payment.",
+      "quote": "If Customer has a good-faith disagreement about the Fees charged or invoiced, Customer must notify Provider about the dispute before payment is due",
+      "section": "Fees",
+      "who_hint": "finance"
+    },
+    {
+      "text": "Do not reverse engineer the product or let anyone else do so.",
+      "quote": "Except as expressly permitted by this Agreement, Customer will not (and will not allow anyone else to)",
+      "section": "Restrictions",
+      "who_hint": "engineering"
+    },
+    {
+      "text": "Use the product in line with its documentation.",
+      "quote": "Use of the Product must comply with all Documentation.",
+      "section": "Use",
+      "who_hint": "product"
+    }
+  ],
+  "url": "https://commonpaper.com/standards/cloud-service-agreement/",
+  "fetched_at": "2026-10-30T23:39:41Z",
+  "from": {
+    "name": "Common Paper Cloud Service Agreement",
+    "kind": "other"
+  },
+  "truncated": true
+}

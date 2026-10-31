@@ -174,9 +174,14 @@ Rules work without relying on a bot's instructions. Decide checks what a bot sen
 ahead of time so it doesn't try.
 
 - **Shape: `ask_ingest`'s preflight/apply** (`backend/ask_ingest.py`). One Decide call outside the write's transaction
-  (`preflight`), plain code deciding inside it (`apply`), a 10 s deadline, one `judge.call` row per call, fail open. It
+  (`preflight`), plain code deciding inside it (`apply`), a deadline per level (Low 5 s, Medium 10 s, High 15 s) that
+  the engine call itself stops at (`J.within`), one `judge.call` row per call, fail open. It
   borrows screening's verdict cache and budget helpers (`backend/screening.py`). Screening's deferred thread can't stop
   an output before delivery, so it isn't the model. No engine call inside `store.transaction()`.
+  - **Bounded:** at most `TICO_RULE_CHECK_CONCURRENCY` checks (default 8) run at once; a write that finds them all
+    busy goes through unchecked at once (reason `busy`), never waiting. After 5 timeouts or errors in a row, checks
+    stop for 60 s (reason `breaker`); the first one after that is a probe. Both are per process.
+  - No active rule at all: one `SELECT ... LIMIT 1` and nothing else, no roster read and no engine.
 - **One gate helper** judges every bot-authored string a teammate or the public will read. The HTTP routes, the hubdb
   writers and the automation writers all call it. A write is a bot's when the actor is a bot, or when `task_actor` is
   a bot or `via` is `botops` (BotOps writes as the person; it's still checked as BotOps). Only a person's own typed
@@ -201,7 +206,20 @@ ahead of time so it doesn't try.
   - bulk owner changes (`POST /api/v2/task-bulk`): one verdict per task, and held tasks come back as skipped with the
     reason;
   - mail: a new `POST /api/v2/bots/{bot}/mail-check` the connector calls with the draft before `check_send` (today the
-    connector only reads the on/off switch).
+    connector only reads the on/off switch). It's one try within 20 s (the longest deadline plus a margin). A person's
+    mail, their Assistant's included, answers `not_checked`. Another bot's token is refused; a refusal or a server
+    error is a `rules.unchecked` event (reason `forbidden` / `error`), and the connector sends on a failed check but
+    logs it (`rule-check-failed`) and says so in its answer. Each check carries a fresh UUID as its
+    Idempotency-Key, and the route keeps it with any `rules.unchecked` it writes for that check (`org_rule_misses`).
+    A mail sent after any failed check (any status, or no answer) is kept in the connector's state by that key alone
+    (at most 100 per bot, oldest dropped) and reported once Tico answers again: `POST
+    /api/v2/bots/{bot}/mail-check/misses {ids}` records one `rules.unchecked` (reason `connector`) per id not yet
+    kept for that bot, so a check the route counted, or a repeat, counts nothing more. Whichever lands first, the
+    check or the report, claims the id and counts it; a report it doesn't count isn't kept. The connector makes an id
+    reportable only in the commit that records Gmail's confirmed send. It counts only when a rule
+    in force names the bot with With empty (an id can't say where the mail went), up to 200 a bot a UTC day. The
+    connector forgets the ids after its 2xx; a release without the route (404/405) leaves them queued. BotOps writing
+    mail for a person finds its holds and approvals under BotOps, the author they were held as.
 
   Not phase 1: public roadmap comments (Later #16). Send/publish approvals aren't check points:
   they're optional, so they'd only catch sends a bot chose to ask about.
@@ -218,7 +236,8 @@ ahead of time so it doesn't try.
 - **What's judged:** the whole output, short or long. Screening's 200-character minimum, 20k cut and `free_text`
   extraction are injection heuristics and aren't reused ("My favorite color is blue" must be checked). One output is
   one call. An output that doesn't fit Decide's state limit (120k) is held, not passed; it isn't on the fail-open
-  list.
+  list. When every rule it meets is Warn, it's delivered with a line saying it was too long to check, and counted
+  unchecked (reason `too_large`).
 - **The question** (`questions/rule-check.json`): state `{rules, operation, output, from, to, context}`; one `noul` per matched
   rule ("does this output break it"), capped per call; thresholds in the set file, as screening does. Level **Medium**
   (Claude Sonnet 5.5) until the rule-check eval shows Low (Jev) is good enough: Jev is calibrated per question set and
@@ -234,8 +253,11 @@ ahead of time so it doesn't try.
   - **Repeats:** the 3rd block of the same rule by the same bot in a day turns into Escalate for the rest of that day:
     one review task, not one per block. Cache hits count as blocks.
 - **Reviewer and the held output:**
-  - The reviewer is `report_managers.person_above` (first human up the chain), else the bot's operator, else the
-    default person (screening's `person_for` order). Never a bot.
+  - The reviewer is the rule's reviewer, else `report_managers.person_above` (first human up the chain), else the
+    bot's operator, else the default person (screening's `person_for` order), else the team owner, else an admin;
+    someone who left or whose sign-in is off is skipped. Never a bot. With no person at all, an Escalate stays a Block.
+    The owner or an admin can read, keep or send any hold whose reviewer is missing or gone, and the review task's
+    hold list shows it to them.
   - The held output lives in its own `org_rule_holds` row (operation, payload, author, destinations, rules, verdict),
     readable only by the author bot and the reviewer. It is never a message or task row: an undelivered message is
     what inboxes and the mailbox loop read. Send anyway submits the hold's one-shot server nonce: the normal write
@@ -286,7 +308,9 @@ legal rules are one user of it.
 - **Fields:**
   - **Due**: a first date plus a repeat (yearly, quarterly, monthly or once). No RRULE.
   - **Open task**: N days before (default 14).
-  - **Owner**.
+  - **Owner**: the caller, a teammate in the rule's Who, or someone the caller manages; the team owner and admins may
+    set anyone. An owner change meets the same check; an existing due date whose owner no longer passes keeps its
+    routine.
   - **For rule** (optional): links it to an external rule.
 - It shows on the Automations page with other routines, and on the owner's Tasks with its due date.
 - Each occurrence is a normal task with `due` set and `refs {routine_id, due_on}`. That pair is the unique key: a

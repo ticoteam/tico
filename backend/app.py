@@ -34,6 +34,7 @@ from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
 from . import login_holds
 from . import cloud_access
+from . import counsel
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -178,6 +179,7 @@ def create_app(settings=None):
                 onboarding.ensure_librarian(c)
                 onboarding.ensure_goal_manager(c)
                 onboarding.ensure_task_manager(c)
+                onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
@@ -392,7 +394,7 @@ def create_app(settings=None):
         demo_task = None
         if settings.demo:
             from . import demo
-            demo_task = asyncio.create_task(demo.keep_alive(store, stop))
+            demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
         try:
             yield
         finally:
@@ -670,6 +672,15 @@ def create_app(settings=None):
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
+                # Counsel sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
+                if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
+                        None, counsel.refused, store, who, request.url.path, request.method):
+                    raise Problem("forbidden", counsel.REFUSED, 403)
+                # While its run may publish a document's suggestions, Counsel reads only that document's task and version.
+                if counsel.is_counsel(who) and who.attempt_id and request.method in ("GET", "HEAD") and \
+                        await asyncio.get_running_loop().run_in_executor(
+                            None, counsel.read_refused, store, auth, who, request.url.path, dict(request.query_params)):
+                    raise Problem("privacy", counsel.READ_SCOPE, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -7572,6 +7583,8 @@ def create_app(settings=None):
             return None
         from .execution import reply_target, split_runner_notices, work_task_id
         with store.read() as c:
+            if not org_rule_check.R.any_active(c):
+                return None             # no rule in force: the completion reads nothing more for its check
             if store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                 return None             # a retry answers from its saved result; nothing is checked again
             row = c.execute("SELECT a.bot, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",
@@ -7719,6 +7732,7 @@ def create_app(settings=None):
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
     org_rule_check.install(app, store, auth, mutate)
+    counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow
@@ -7806,6 +7820,8 @@ def create_app(settings=None):
     install_bot_copy(app, store, auth, mutate, settings_admin, place_now)
     from .subscriptions import install as install_subscriptions
     install_subscriptions(app, store, auth, mutate, settings, computer_rows)
+    from .model_subscriptions import install as install_model_subscriptions
+    install_model_subscriptions(app, store, auth, mutate, settings)
     from .groups import install as install_groups
     install_groups(app, store, auth, mutate, settings)
     from .report_order import install as install_report_order

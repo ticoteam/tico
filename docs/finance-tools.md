@@ -41,6 +41,12 @@ rest; a paged list's `next_cursor` carries on from the last row shown. Period co
 big on its own keeps its ids and amounts and has its long text and nested lists cut; a result that still does not fit
 comes back as `{"error": "too_big", "chars", "cap"}`.
 
+## Testing Finance without Mercury
+
+`TICO_MERCURY_BASE` points the bank worker at another Mercury API base, such as the sandbox
+(`https://api-sandbox.mercury.com/api/v1`) or a local fake. Unset, the worker calls Mercury's own API. For a local run
+with no token, `scripts/finance_e2e.sh` starts `scripts/fake_mercury.py` and the demo that reads it.
+
 ## Card fill
 
 `hub_finance_card_fill` is listed so agents can find it. It returns "Card fill is not available yet" and never takes

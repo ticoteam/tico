@@ -3,7 +3,10 @@ time and never logged. It is only ever called outside a transaction, by the sync
 connect probe. Every call returns (status, JSON); it never raises for an HTTP answer. A 429 waits out Retry-After a
 few times; 401/403 on a write means the token's IP allowlist lacks this server. The Vault host (full card numbers)
 is never called."""
+import http.client
 import json
+import logging
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -15,12 +18,21 @@ from typing import Any, Protocol, cast
 
 BASE = "https://api.mercury.com/api/v1"
 SANDBOX = "https://api-sandbox.mercury.com/api/v1"
+BASE_ENV = "TICO_MERCURY_BASE"          # a developer's override: the sandbox, or a local fake (scripts/fake_mercury.py)
+OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "api-sandbox.mercury.com"})  # the only hosts it may name
+log = logging.getLogger(__name__)
+_warned = [False]
 TIMEOUT = 15
 MAX_WAIT = 30.0                       # seconds one 429 may make us wait
 TRIES_429 = 3
 PAGE = 500
 IP_HINT = "Mercury refused the write: add this server's IP address to the token's allowlist in Mercury"
-Opener = Callable[[urllib.request.Request, float], Any]
+
+
+class Opener(Protocol):
+    """urlopen's shape: the request, then the timeout by keyword (never positionally: urlopen's 2nd arg is data)."""
+
+    def __call__(self, request: urllib.request.Request, *, timeout: float) -> Any: ...
 
 
 @dataclass(frozen=True)
@@ -60,6 +72,22 @@ class Provider(Protocol):
     def send_requests(self, account_id: str, start_after: str | None = None) -> Answer: ...
 
 
+def base_url() -> str:
+    """The API base the bank worker calls: TICO_MERCURY_BASE when it names a local or sandbox host, else Mercury's own.
+    A stray value naming any other host is ignored (one warning per process): the real token never goes elsewhere."""
+    raw = os.environ.get(BASE_ENV, "").strip()
+    if not raw:
+        return BASE
+    host = urllib.parse.urlsplit(raw).hostname or ""
+    if host in OVERRIDE_HOSTS:
+        return raw
+    if not _warned[0]:
+        _warned[0] = True
+        log.warning("%s ignored: %r is not 127.0.0.1, localhost, ::1 or api-sandbox.mercury.com; using Mercury's API",
+                    BASE_ENV, host or raw)
+    return BASE
+
+
 def dollars(cents: int) -> Decimal:
     """Cents as the dollar amount Mercury takes (a number in 0.01 steps)."""
     return (Decimal(cents) / 100).quantize(Decimal("0.01"))
@@ -75,7 +103,10 @@ class Mercury:
         query = urllib.parse.urlencode([(k, str(v)) for k, v in (params or {}).items() if v not in (None, "")],
                                        doseq=True)
         url = self._base + path + (f"?{query}" if query else "")
-        data = json.dumps(body, default=str).encode() if body is not None else None
+        try:
+            data = json.dumps(body, default=_json_default).encode() if body is not None else None
+        except ValueError:                       # an amount too big to send exactly (see _json_default)
+            return Answer(None, {})
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -83,7 +114,7 @@ class Mercury:
             request = urllib.request.Request(url, data=data, method=method, headers=headers)
             send = self._opener or cast(Opener, urllib.request.urlopen)
             try:
-                with send(request, TIMEOUT) as response:
+                with send(request, timeout=TIMEOUT) as response:
                     return Answer(int(getattr(response, "status", 200) or 200), _parse(cast(bytes, response.read())))
             except urllib.error.HTTPError as exc:
                 if exc.code == 429 and attempt < TRIES_429:
@@ -91,10 +122,10 @@ class Mercury:
                     continue
                 try:
                     raw = exc.read()
-                except OSError:
+                except (OSError, http.client.HTTPException):
                     raw = b""
                 return Answer(exc.code, _parse(raw))
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
                 return Answer(None, {})
         return Answer(429, {})
 
@@ -159,6 +190,16 @@ class Mercury:
 
     def request_send_money(self, account_id: str, body: Mapping[str, object]) -> Answer:
         return self._call("POST", f"/account/{urllib.parse.quote(account_id)}/request-send-money", body=body)
+
+
+def _json_default(value: object) -> object:
+    """Decimal amounts go out as JSON numbers (Mercury takes 0.01 steps); anything else as its text.
+    Floats hold cents exactly below 2**53 cents, so amounts of 10**13 dollars or more are refused."""
+    if isinstance(value, Decimal):
+        if abs(value) >= 10**13:
+            raise ValueError("amount too large to send exactly")
+        return float(value)
+    return str(value)
 
 
 def _parse(raw: bytes) -> dict[str, Any]:

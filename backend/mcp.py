@@ -122,7 +122,8 @@ class InProcessApi:
 def caller_kind(auth, who):
     """What kind of caller this is, for the tools it is offered (`hubtools.KINDS`): a human as owner, admin or member,
     a bot, BotOps, an external agent run by a bot (a Hermes profile), or the Assistant working in a human's private room.
-    The checks are the server's own: `auth.bot_admin`, `Identity.agent`, `Identity.via`."""
+    Counsel is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
+    `Identity.agent`, `Identity.via`."""
     from . import hubdb as H
     if who.via == "assistant":
         return "assistant"
@@ -131,7 +132,8 @@ def caller_kind(auth, who):
     if who.role == "human":
         return "admin" if auth.bot_admin(who) else "member"
     if who.role == "bot":
-        return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else "bot"
+        return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else \
+            "counsel" if who.actor == "bot:" + H.COUNSEL else "bot"
     return None
 
 

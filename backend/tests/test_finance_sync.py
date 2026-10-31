@@ -2,7 +2,7 @@
 claimed before their call and a cut-off create is never sent blindly again; a card's provider writes follow its latest
 desired state; a lower limit or a cancel keeps the reservation until Mercury confirms; ingestion is atomic per
 transaction and retried; inbox events belong to their connection; older snapshots never win."""
-from backend.finance import banking
+from backend.finance import banking, sync
 from backend.finance.mercury import Answer
 from backend.finance.store import banking as SK
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -393,3 +393,29 @@ def test_an_unowned_event_no_connection_can_read_yet_is_retried_for_a_day(books)
     with books.read() as c:
         assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt-soon'").fetchone()[0] == "done"
         assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id='txn-dep'").fetchone()[0] == 1
+
+
+def test_the_bank_worker_calls_the_base_it_is_pointed_at(store, monkeypatch):
+    """TICO_MERCURY_BASE sends the worker's calls to a sandbox or a local fake; unset, they go to Mercury's own API."""
+    from backend.finance.mercury import BASE
+    from backend.finance.store import tico
+    monkeypatch.setattr(tico, "credential_secret", lambda c, vault, ref: "token-for-test")
+    monkeypatch.setenv("TICO_MERCURY_BASE", "http://127.0.0.1:18790/api/v1/")
+    assert sync._provider(store, object(), "cred-mercury", None)._base == "http://127.0.0.1:18790/api/v1"
+    monkeypatch.delenv("TICO_MERCURY_BASE")
+    assert sync._provider(store, object(), "cred-mercury", None)._base == BASE
+
+
+def test_a_stray_base_naming_another_host_is_ignored_with_one_warning(monkeypatch, caplog):
+    """TICO_MERCURY_BASE only counts for a local or sandbox host. Any other host is ignored: the real token must never
+    be sent elsewhere. The warning is logged once per process."""
+    import logging
+    from backend.finance import mercury
+    monkeypatch.setattr(mercury, "_warned", [False])
+    caplog.set_level(logging.WARNING, logger="backend.finance.mercury")
+    monkeypatch.setenv("TICO_MERCURY_BASE", "https://evil.example.com/api/v1")
+    assert mercury.base_url() == mercury.BASE
+    assert mercury.base_url() == mercury.BASE
+    assert [r.levelno for r in caplog.records] == [logging.WARNING]
+    monkeypatch.setenv("TICO_MERCURY_BASE", "https://api-sandbox.mercury.com/api/v1")
+    assert mercury.base_url() == "https://api-sandbox.mercury.com/api/v1"

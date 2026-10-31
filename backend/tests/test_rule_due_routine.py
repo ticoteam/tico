@@ -2,6 +2,7 @@
 a due date" automation linked by routine_id, whose run opens the owner's task on time; completing that task marks the
 day Satisfied, a cancel or the keeper's close doesn't, and reopening takes it back; a day marked by hand is skipped; an
 edit moves the routine to the new row; removing the due date turns it off; Due soon follows its lead time."""
+import json
 from datetime import datetime, timedelta, timezone
 
 from backend import rule_due as D
@@ -213,3 +214,32 @@ def test_a_task_opened_by_run_now_marks_its_day(api):
     [task] = tasks(api, due["routine_id"])
     write(api, H.task_update, "bot:ops", task["id"], status="done")
     assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
+
+
+def test_a_due_dates_owner_is_the_caller_a_teammate_in_who_or_someone_they_manage(api):
+    # The routine makes tasks as the due date's owner, outside task caps: a co-owner of Ops manages Ops's rule, and may
+    # name herself or Ops, never the company's owner or a teammate the rule does not name.
+    org(api)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET bot_owners_json='[\"cara\"]' WHERE bot='ops'")
+    r = rule(api, {"kind": "internal", "text": TEXT, "who": {"bots": ["ops"]}})
+    body = {"first_due": "2030-03-01", "repeats": "once", "timezone": "UTC", "task_days": 14}
+    for owner in ("ana", "ben"):
+        post(api, f"rules/{r['id']}/due", {**body, "owner": owner}, token="cara-test", expected=403)
+    assert sql(api, "SELECT id FROM automations WHERE flow_json LIKE '%rule_due_id%'") == []
+    mine = post(api, f"rules/{r['id']}/due", {**body, "owner": "cara"}, token="cara-test")
+    ops = post(api, f"rules/{r['id']}/due", {**body, "owner": "ops"}, token="cara-test")
+    assert automation(api, ops["routine_id"])["owner"] == "bot:ops"
+    # Someone below her on the chart is hers to name too.
+    with api.app.state.store.transaction() as c:
+        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["people"].append({"id": "dan", "email": "dan@acme.example", "reports_to": "cara"})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(raw),))
+    post(api, f"rules/{r['id']}/due", {**body, "owner": "dan"}, token="cara-test")
+    # The owner names anyone.
+    assert post(api, f"rules/{r['id']}/due", {**body, "owner": "ben"})["owner"] in ("human:ben", "ben")
+    # An owner change passes the same test; an edit that keeps the owner is not asked again.
+    post(api, f"rule-due/{ops['id']}", {"owner": "ana"}, token="cara-test", expected=403)
+    assert automation(api, ops["routine_id"])["owner"] == "bot:ops"
+    post(api, f"rule-due/{mine['id']}", {"owner": "ops"}, token="cara-test")
+    post(api, f"rule-due/{ops['id']}", {"owner": "ops", "task_days": 7}, token="cara-test")

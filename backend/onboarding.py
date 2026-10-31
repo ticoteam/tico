@@ -909,6 +909,11 @@ class Onboarding:
         checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
         return self._ensure_builtin(c, "bookkeeper", "Bookkeeper", "bookkeeper.turned_on")
 
+    def ensure_counsel(self, c):
+        """The same for Counsel (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
+        was built in gets it once it can run it, and it is outside the org chart."""
+        return self._ensure_builtin(c, H.COUNSEL, "Counsel", "counsel.turned_on")
+
     def turn_on_task_manager(self, c, who):
         """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
         keeps running either way, but the tasks it opens need the bot to be active)."""
@@ -1066,6 +1071,7 @@ class Onboarding:
         self.ensure_task_manager(c)
         from . import bookkeeper
         bookkeeper.ensure(c, self, self.auth)
+        self.ensure_counsel(c)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed

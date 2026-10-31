@@ -67,6 +67,9 @@ def install(app, store, auth):
         """Who changed what. The owner reads every row; anyone else reads only their own changes."""
         who = request.state.identity
         auth.domain(who)
+        from .org_rules import redact_audit
         with store.read() as c:
             mine = None if who.role == "owner" else who.actor
-            return rows(c, obj=object, actor=mine, limit=limit, before=before)
+            page = rows(c, obj=object, actor=mine, limit=limit, before=before)
+            redact_audit(c, auth, who, page["rows"])
+            return page

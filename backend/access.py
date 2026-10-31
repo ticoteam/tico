@@ -86,6 +86,14 @@ def load_owner(c, settings):
             "updated_by": str(stored.get("updated_by") or ""), "source": str(stored.get("source") or "")}
 
 
+def owner_and_admin_emails(c):
+    """The owner's address, then the Admins', as stored at database initialization (`seed`) and revised since: for code
+    with no settings at hand that must find someone who can act (an org rule hold's reviewer, backend/org_rule_check.py)."""
+    owner = (_load_json(c, OWNER) or {}).get("email")
+    stored = _load_json(c, ACCESS) or {}
+    return emails([owner, *(stored["admins"] if "admins" in stored else stored.get("bot_admins") or [])])
+
+
 def load_access(c, settings):
     stored = _load_json(c, ACCESS)
     source = "owner" if stored else "environment"

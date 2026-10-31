@@ -243,15 +243,18 @@ async fn container() -> Option<Value> {
 
 /// (ok, error) for a finished `docker run`, or None when the image went away since it was listed.
 fn container_outcome(code: i32, stderr: &str, stdout: &str) -> Option<(bool, String)> {
-    // 126/127: the image has no `true`. The daemon still created and started the container, which is what this checks.
-    if [0, 126, 127].contains(&code) {
+    let lower = stderr.to_lowercase();
+    // The image has no `true` (126/127, or the runtime's exec error on any code). The daemon still created and started the container, which is what this checks.
+    let no_true = lower.contains("exec") && lower.contains("no such file or directory") || lower.contains("executable file not found");
+    if [0, 126, 127].contains(&code) || no_true {
         return Some((true, String::new()));
     }
-    if stderr.to_lowercase().contains("no such image") {
+    if lower.contains("no such image") {
         return None; // nothing was checked, and nothing was pulled
     }
     let text = if stderr.trim().is_empty() { stdout } else { stderr };
-    Some((false, text.trim().lines().last().map(str::to_string).unwrap_or_else(|| format!("docker run exited {code}"))))
+    let last = text.trim().lines().last().unwrap_or_default();
+    Some((false, if last.is_empty() { format!("exit {code}") } else { format!("exit {code}: {last}") }))
 }
 
 /// Whether a GitHub App token minted for a bot hosted here signs in (tool_probes.github).
@@ -654,6 +657,18 @@ mod tests {
         assert_eq!(pick_image("", None), None);
         assert_eq!(container_outcome(127, "", ""), Some((true, String::new())));
         assert_eq!(container_outcome(125, "Error: No such image: sha256:cc", ""), None);
-        assert_eq!(container_outcome(125, "pulling\ndocker: Error response from daemon: disk stalled\n", ""), Some((false, "docker: Error response from daemon: disk stalled".into())));
+        assert_eq!(container_outcome(125, "pulling\ndocker: Error response from daemon: disk stalled\n", ""), Some((false, "exit 125: docker: Error response from daemon: disk stalled".into())));
+    }
+
+    #[test]
+    fn a_missing_true_in_the_image_is_not_a_daemon_failure() {
+        let boat = "docker: Error response from daemon: exec /bin/true: no such file or directory: unknown\n";
+        assert_eq!(container_outcome(125, boat, ""), Some((true, String::new())));
+        assert_eq!(container_outcome(1, boat, ""), Some((true, String::new())));
+        assert_eq!(container_outcome(125, "docker: Error response from daemon: exec: \"true\": executable file not found in $PATH\n", ""), Some((true, String::new())));
+        let daemon = "docker: Cannot connect to the Docker daemon at unix:///var/run/docker.sock. Is the docker daemon running?\n";
+        let (ok, error) = container_outcome(125, daemon, "").unwrap();
+        assert!(!ok);
+        assert!(error.starts_with("exit 125: "), "{error}");
     }
 }

@@ -91,6 +91,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
+    # The mail tool's org rule check before a send, and its report of checks Tico never answered, change nothing: a
+    # person's own mail is never checked (backend/org_rule_check.py), and the send itself meets its own checks.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check(/misses)?", path):
+        return True
     try:
         fields = json.loads(body or b"{}")
     except ValueError:
@@ -229,7 +233,7 @@ def instructed_org(method, path, body=None):
         return False
     if any(m == method and p.fullmatch(path) for m, p in _ORG):
         return True
-    if method == "POST" and path == "/api/v2/rules":
+    if method == "POST" and path in ("/api/v2/rules", "/api/v2/rules/read", "/api/v2/rules/ask"):
         return True
     fields = _fields(body)
     return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields
@@ -942,7 +946,7 @@ def ensure_room(c, actor, bot):
 # (`rooms.STRATEGY_ROOM`, one per company, belonging to the owner seat) is history: readable by the owner under
 # "Earlier chats", never written to again. A transfer of ownership still moves it to the new owner
 # (`move_strategy_room`), and `migrate` moved the cards that were waiting in it to the owner's Assistant room.
-HELPERS = ("botops", strategy_bot.SLUG, "librarian")
+HELPERS = ("botops", strategy_bot.SLUG, "librarian", H.COUNSEL)
 
 
 def strategy_on(c):

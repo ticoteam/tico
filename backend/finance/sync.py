@@ -20,7 +20,7 @@ from .core import feeds as F
 from .core.errors import FinanceError
 from .core.org import SYSTEM
 from .gateway_sync import Bell
-from .mercury import Answer, Mercury, Provider, error_text, listed, next_page
+from .mercury import Answer, Mercury, Provider, base_url, error_text, listed, next_page
 from .store import banking as SK
 from .store import tico
 
@@ -153,7 +153,7 @@ def _provider(store: Any, vault: Any, ref: str, make: Make | None) -> Provider |
         token = tico.credential_secret(c, vault, ref) if vault is not None else ""
     if make is not None:
         return make(token)
-    return Mercury(token) if token else None
+    return Mercury(token, base=base_url()) if token else None
 
 
 def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, make: Make | None = None,

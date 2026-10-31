@@ -1,4 +1,4 @@
-/* ui/app/settings-providers.js — Settings > Computers > Models
+/* ui/app/settings-providers.js — Settings > Models: Tico Gateway and Defaults; the first-run models step
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -58,20 +58,13 @@ function providersFormHTML(view, models, id, editable = true) {
       ${routed.length ? `<div class="prov prov-routed"><span class="muted">Via OpenRouter</span>${routed.map(row =>
         `<label class="prov-chip">${box(row)}${esc(row.label)}</label>`).join('')}</div>` : ''}</div>
     <label class="onb-field"><span class="k">Default model</span><select data-provider-model${dis}></select></label></div>
-    ${id === 'set-prov' && view.decide_levels?.length ? `<label class="onb-field"><span class="k">Decisions</span><select data-provider-decide${dis}>${view.decide_levels.map(level =>
-      `<option value="${esc(level)}"${level === (view.decide_level || view.decide_levels[0]) ? ' selected' : ''}>${esc(level.charAt(0).toUpperCase() + level.slice(1))}</option>`).join('')}</select>
-      <span class="muted">How carefully Tico judges approvals and checks. Higher is slower and costs more.</span></label>` : ''}
-    ${id === 'set-prov' ? `<label class="onb-field"><span class="k">Meeting model</span><select data-provider-meeting${dis}></select></label>` : ''}
-    ${id === 'set-prov' ? `<label class="prov"><input type="checkbox" data-provider-fallback ${view.auto_fallback !== false ? 'checked' : ''}${dis}>
-      <strong>Fall back when a plan runs out</strong><span class="muted">A bot with no fallback of its own runs on another provider signed in on its computer</span></label>
-    <label class="onb-field"><span class="k">Check model</span><input type="text" data-provider-check
-      value="${esc((view.check_models || []).join(', '))}"
-      placeholder="${esc((view.check_order || []).map(row => row.runtime).join(', ') || 'grok, codex')}"${dis}>
-      <span class="muted">Review and check subtasks prefer the first of these from a provider other than the author's, then the other providers above. With none that can run, they use the author's own rather than wait.</span></label>` : ''}</div>`;
+    </div>`;
 }
 function providersFillModels(root, view, models, keep) {
+  // The first-run step ticks providers; Settings > Models offers what the company has on (its subscriptions tick them).
   const gateway = providersGatewayIds(view).filter(id => (view.enabled || []).includes(id));
-  const enabled = [...[...root.querySelectorAll('[data-provider]:checked')].map(input => input.value), ...gateway];
+  const boxes = root.querySelectorAll('[data-provider]');
+  const enabled = boxes.length ? [...[...boxes].filter(input => input.checked).map(input => input.value), ...gateway] : view.enabled || [];
   const select = root.querySelector('[data-provider-model]');
   const options = providersModels(view, models, enabled);
   const meetingOptions = providersModels(view, models, enabled, true);
@@ -79,7 +72,7 @@ function providersFillModels(root, view, models, keep) {
     : (options.find(row => row.recommended) || options[0] || {}).id || '';
   select.innerHTML = options.length ? options.map(row =>
     `<option value="${esc(row.id)}" ${row.id === wanted ? 'selected' : ''}${row.description ? ` title="${esc(row.description)}"` : ''}>${esc(row.label)}</option>`).join('')
-    : '<option value="">Tick a provider first</option>';
+    : `<option value="">${boxes.length ? 'Tick a provider first' : 'No models yet'}</option>`;
   const meeting = root.querySelector('[data-provider-meeting]');
   if (meeting) {
     // Live-meeting replies: the bot's own model, or one of the models above; the saved one stays selected.
@@ -122,39 +115,102 @@ async function providersSave(view, chosen) {
     ...('decide_level' in chosen ? {decide_level: chosen.decide_level} : {}),
     ...('meeting_model' in chosen ? {meeting_model: chosen.meeting_model} : {})});
 }
+// ----------------------------------------------------------------- Settings > Models: Tico Gateway and Defaults
 let SETTINGS_PROVIDERS_VIEW = null;
-function renderSettingsProviderNext() {
-  const root = $('#set-provider-next');
-  if (!root || !SETTINGS_PROVIDERS_VIEW) return;
-  const restoreFocus = computerFocusRestore(root);
-  patchHTML(root, providersNextHTML(SETTINGS_PROVIDERS_VIEW, S.me?.role === 'owner'));
-  restoreFocus();
+// The Gateway toggle is the models preset (backend/models_preset.py): on runs a computer with no subscription for a
+// tool, or one whose plan ran out, on Tico Gateway; off waits. "Gateway only" and "own keys" keep their place.
+const providersGatewayOn = view => ['subscriptions-gateway', 'gateway'].includes(view?.preset || 'subscriptions-gateway');
+const providersPresetFor = (view, on) => on ? (view.preset === 'gateway' ? 'gateway' : 'subscriptions-gateway')
+  : (view.preset === 'own-keys' ? 'own-keys' : 'subscriptions');
+// Read the providers view once for the Computers tab too: its pickers say "Gateway" or "None" by the toggle.
+async function providersViewLoad() {
+  const view = await get('/v2/providers', {fresh: true});
+  SETTINGS_PROVIDERS_VIEW = view;
+  return view;
 }
-async function renderSettingsProviders() {
-  const el = $('#set-providers'); if (!el) return;
+// A label with at most one (?) bubble, then its control.
+const providersRow = (id, label, control, help = '') =>
+  `<div class="models-row"><span class="k"><label for="${id}">${esc(label)}</label>${help ? helpBubble(help) : ''}</span>${control}</div>`;
+function providersDefaultsHTML(view, owner) {
+  const dis = owner ? '' : ' disabled';
+  const levels = view.decide_levels || [];
+  return `<form id="set-prov" class="models-form" data-providers-form>
+    ${providersRow('set-prov-model', 'Default model', `<select id="set-prov-model" class="settings-inline-select" data-provider-model${dis}></select>`)}
+    ${levels.length ? providersRow('set-prov-decide', 'Decisions', `<select id="set-prov-decide" class="settings-inline-select" data-provider-decide${dis}>${levels.map(level =>
+      `<option value="${esc(level)}"${level === (view.decide_level || levels[0]) ? ' selected' : ''}>${esc(level.charAt(0).toUpperCase() + level.slice(1))}</option>`).join('')}</select>`,
+      'How carefully Tico judges approvals and checks. Higher is slower and costs more.') : ''}
+    ${providersRow('set-prov-meeting', 'Meeting model', `<select id="set-prov-meeting" class="settings-inline-select" data-provider-meeting${dis}></select>`)}
+    ${providersRow('set-prov-fallback', 'Fall back when a plan runs out', `<input id="set-prov-fallback" type="checkbox" class="people-switch" data-provider-fallback${view.auto_fallback !== false ? ' checked' : ''}${dis}>`,
+      'A bot with no fallback of its own runs on another AI tool signed in on its computer.')}
+    ${providersRow('set-prov-check', 'Check model', `<input id="set-prov-check" type="text" data-provider-check value="${esc((view.check_models || []).join(', '))}"
+      placeholder="${esc((view.check_order || []).map(row => row.runtime).join(', ') || 'grok, codex')}"${dis}>`,
+      "Reviews and checks prefer the first of these from a provider other than the author's.")}
+    ${owner ? '<div class="onb-actions"><button class="primary" type="submit" id="set-prov-save">Save</button><span class="muted" id="set-prov-status" role="status"></span></div>' : settingsWhoCanHTML('models')}
+  </form>`;
+}
+function providersGatewayCardHTML(view, gateway, owner) {
+  const [tone, line] = gateway ? gatewayStatusLine(gateway) : ['', ''];
+  return `<div class="models-gw">
+      <label class="models-gw-toggle"><input type="checkbox" class="people-switch" data-gateway-toggle${providersGatewayOn(view) ? ' checked' : ''}${owner ? '' : ' disabled'}>
+        <span>Use when a computer has no subscription, or a plan runs out</span></label></div>
+    ${gateway ? `<details class="models-adv" data-gateway-advanced><summary>Advanced</summary>
+      <p class="models-gw-line" data-gateway-state="${esc(gateway.state || (gateway.connected ? 'connected' : 'none'))}"><span class="dot ${tone === 'ok' ? 'ok' : 'failed'}" aria-hidden="true"></span><span data-gateway-line>${esc(line)}</span>${settingsIsAdmin() ? ' · <a href="#/settings/gateway">Picks and services</a>' : ''}</p>
+      ${gatewayHTML(gateway, owner)}</details>` : ''}`;
+}
+// The Gateway toggle saves the models preset at once, with the providers and model as they are.
+function providersToggleWire() {
+  const card = $('#set-gateway-card'), toggle = card?.querySelector('[data-gateway-toggle]');
+  if (!toggle) return;
+  toggle.onchange = async () => {
+    const view = SETTINGS_PROVIDERS_VIEW || {};   // the latest record, so a Defaults save in between keeps its revision
+    toggle.disabled = true;
+    try {
+      const saved = await put('/v2/providers', {enabled: view.enabled || [], model: view.default?.model || '', expected_revision: view.revision || 0,
+        preset: providersPresetFor(view, toggle.checked)});
+      SETTINGS_PROVIDERS_VIEW = saved;
+      toast(toggle.checked ? 'Gateway on' : 'Gateway off');
+    } catch (error) { toast(error.message, true); toggle.checked = !toggle.checked; }
+    await renderSettingsProviders(true);
+  };
+}
+// A poll leaves a card alone while someone types in it; `gatewaySaved` redraws the Gateway card after its own save.
+async function renderSettingsProviders(gatewaySaved = false) {
+  const el = $('#set-providers'), card = $('#set-gateway-card');
+  if (!el || !card) return;
+  const drawCard = gatewaySaved || !formBusy(card), drawDefaults = !formBusy(el);
+  if (!drawCard && !drawDefaults) return;
   const owner = S.me?.role === 'owner';
   try {
-    const view = await get('/v2/providers');
-    if (!$('#set-providers')) return;
-    const gateway = await get('/v2/providers/gateway').catch(() => null);
-    if (!$('#set-providers')) return;
-    SETTINGS_PROVIDERS_VIEW = view;
-    el.innerHTML = `${providersFormHTML(view, SETTINGS_DATA.models, 'set-prov', owner)}
-      <div id="set-provider-next">${providersNextHTML(view, owner)}</div>
-      ${owner ? '<div class="onb-actions"><button class="primary" type="button" id="set-prov-save">Save</button><span class="spacer"></span><span class="muted" id="set-prov-status"></span></div>'
-        : settingsWhoCanHTML('models')}
-      ${gateway ? gatewayHTML(gateway, owner) : ''}`;
-    providersWire($('#set-prov'), view, SETTINGS_DATA.models);
-    if (gateway) gatewayWire(gateway);
+    const [view, gateway] = await Promise.all([providersViewLoad(), get('/v2/providers/gateway').catch(() => null)]);
+    if (!el.isConnected) return;
+    if (drawCard) {
+      const open = !!card.querySelector('[data-gateway-advanced]')?.open;
+      card.innerHTML = providersGatewayCardHTML(view, gateway, owner);
+      if (open) card.querySelector('[data-gateway-advanced]').open = true;
+      if (gateway) gatewayWire(gateway);
+    }
     settingsReveal('#settings-models');
-    const save = $('#set-prov-save');
-    if (save) save.onclick = async () => {
-      const chosen = providersCollect($('#set-prov')), status = $('#set-prov-status');
+    if (drawCard) providersToggleWire();
+    if (!drawDefaults) return;
+    el.innerHTML = providersDefaultsHTML(view, owner);
+    const form = $('#set-prov');
+    providersWire(form, view, SETTINGS_DATA.models);
+    if (owner) form.onsubmit = async event => {
+      event.preventDefault();
+      const save = $('#set-prov-save'), status = $('#set-prov-status');
+      // No preset here (the Gateway toggle is its own save), and the providers stay as the company has them.
+      const chosen = {...providersCollect(form), enabled: view.enabled || []};
+      delete chosen.preset;
+      const sent = [...form.querySelectorAll('input')].map(input => [input, input.value]);
       save.disabled = true; status.textContent = 'Saving…';
       try {
         const saved = await providersSave(view, chosen);
         applyConfig({...S.config, providers_configured: !!saved.enabled?.length, default_runtime: saved.default?.runtime || ''});
         SETTINGS_DATA.enabledProviders = saved.enabled; SETTINGS_DATA.defaultModel = saved.default?.model || '';
+        // What was sent is now saved; anything typed while it was sending stays unsaved, and the redraw waits for it.
+        for (const [input, value] of sent) input.defaultValue = value;
+        Object.assign(view, saved); SETTINGS_PROVIDERS_VIEW = view;
+        save.disabled = false; status.textContent = '';
         toast('Saved');
         await renderSettingsProviders();
       } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; save.disabled = false; }
@@ -162,47 +218,38 @@ async function renderSettingsProviders() {
   } catch (error) { el.innerHTML = `<div class="err">${esc(error.message)}</div>`; }
 }
 
-// ----------------------------------------------------------------- Tico AI Gateway
+// ----------------------------------------------------------------- Tico AI Gateway: key and address
 // One key (and the Gateway's URL) for everything the app asks Tico's Gateway: Decide and the Tico models. The key is
 // typed once and never shown again: the server keeps it sealed and answers with its first and last three characters.
-const GATEWAY_STATE = {connected: 'ok', unchecked: 'ok', warning: 'needs', not_ready: 'needs', cap_reached: 'fail', revoked: 'fail', unknown: 'fail'};
 function gatewayHTML(gateway, owner) {
+  if (!owner) return '';
   const state = gateway.state || (gateway.connected ? 'connected' : 'none');
-  const badge = gateway.connected
-    ? `<span class="pill ${GATEWAY_STATE[state] || ''}" data-gateway-state="${esc(state)}">${esc(
-      gateway.working === false ? 'Not working' : state === 'cap_reached' ? 'Gateway cap reached'
-        : state === 'not_ready' ? 'Not ready' : 'Connected')}</span>`
-    : '<span class="pill" data-gateway-state="none">Not connected</span>';
-  const head = `<h3 class="prov-gateway-title">Tico AI Gateway ${badge}</h3>
-    <p class="muted">Tico's own models and Decide, with one gateway key from Tico.${settingsIsAdmin() ? ' <a href="#/settings/gateway">Picks and services</a>' : ''}</p>`;
-  if (!owner) return `<div class="prov-gateway" id="set-gateway">${head}</div>`;
   const message = gateway.message ? `<p class="${gateway.working === false || state === 'cap_reached' ? 'err' : 'muted'}" data-gateway-message>${esc(gateway.message)}</p>` : '';
   // An install the install command invited gets its own key from Tico: nothing to paste, and a pasted key still wins.
   const automatic = gateway.automatic ? '<p data-gateway-automatic>Tico AI Gateway: connected automatically</p>'
-    : gateway.auto_off ? `<p class="muted">This install can connect to the Tico AI Gateway by itself.</p>
-      <div class="onb-actions"><button class="ghost" type="button" data-gateway-automatic-on>Connect automatically</button></div>` : '';
+    : gateway.auto_off ? '<div class="onb-actions"><button class="ghost" type="button" data-gateway-automatic-on>Connect automatically</button></div>' : '';
   if (!gateway.editable) {
-    return `<div class="prov-gateway" id="set-gateway">${head}
-      <p class="muted">Set by the server's environment (${esc(gateway.env || 'TICO_GATEWAY_KEY')}); change it there.</p>${message}
+    return `<div class="prov-gateway" id="set-gateway">
+      <p class="muted">Set by the server's environment (${esc(gateway.env || 'TICO_GATEWAY_KEY')}).</p>${message}
       <div class="onb-actions"><button class="ghost" type="button" data-gateway-check>Check now</button></div></div>`;
   }
-  return `<div class="prov-gateway" id="set-gateway">${head}${automatic}
-    <label class="onb-field"><span class="k">${gateway.automatic ? 'Use your own gateway key instead' : 'Gateway key'}</span><input type="password" autocomplete="off" spellcheck="false"
-      data-gateway-key placeholder="${gateway.connected ? esc(`Saved (${gateway.preview || '••••••'}). Leave empty to keep it`) : 'Paste the gateway key Tico gave you'}"></label>
-    <label class="onb-field"><span class="k">Gateway URL</span><input type="url" data-gateway-url
-      value="${esc(gateway.url && gateway.url !== gateway.default_url ? gateway.url : '')}" placeholder="${esc(gateway.default_url || '')}"></label>
+  return `<div class="prov-gateway" id="set-gateway">${automatic}
+    ${providersRow('set-gateway-key', gateway.automatic ? 'Own gateway key' : 'Gateway key', `<input id="set-gateway-key" type="password" autocomplete="off" spellcheck="false"
+      data-gateway-key placeholder="${gateway.connected ? esc(`Saved (${gateway.preview || '••••••'})`) : 'tgw_…'}">`)}
+    ${providersRow('set-gateway-url', 'Gateway URL', `<input id="set-gateway-url" type="url" data-gateway-url
+      value="${esc(gateway.url && gateway.url !== gateway.default_url ? gateway.url : '')}" placeholder="${esc(gateway.default_url || '')}">`)}
     ${message}
     <div class="onb-actions"><button class="primary" type="button" data-gateway-save>${gateway.connected ? 'Save' : 'Connect'}</button>
       ${gateway.connected ? '<button class="ghost" type="button" data-gateway-check>Check now</button><button class="ghost danger" type="button" data-gateway-clear>Clear key</button>' : ''}
-      <span class="spacer"></span><span class="muted" data-gateway-status></span></div></div>`;
+      <span class="spacer"></span><span class="muted" data-gateway-status role="status"></span></div></div>`;
 }
 function gatewayWire(gateway) {
   const root = $('#set-gateway'); if (!root) return;
   const status = root.querySelector('[data-gateway-status]');
   const run = async (button, busy, work, done) => {
     button.disabled = true; if (status) status.textContent = busy;
-    try { const shown = await work(); toast(done(shown), shown?.working === false); await loadSettings(); await renderSettingsProviders(); }
-    catch (error) { if (status) status.innerHTML = `<span class="err">${esc(error.message)}</span>`; else toast(error.message); button.disabled = false; }
+    try { const shown = await work(); toast(done(shown), shown?.working === false); await loadSettings(); await renderSettingsProviders(true); }
+    catch (error) { if (status) status.innerHTML = `<span class="err">${esc(error.message)}</span>`; else toast(error.message, true); button.disabled = false; }
   };
   const save = root.querySelector('[data-gateway-save]');
   if (save) save.onclick = () => {
@@ -220,28 +267,8 @@ function gatewayWire(gateway) {
   const automaticOn = root.querySelector('[data-gateway-automatic-on]');
   if (automaticOn) automaticOn.onclick = () => run(automaticOn, 'Connecting…', () => post('/v2/providers/gateway/automatic', {}), () => 'Connecting automatically');
   const clear = root.querySelector('[data-gateway-clear]');
-  if (clear) clear.onclick = () => {
-    if (!confirm('Clear the gateway key? Bots on Tico models stop until a key is saved again.')) return;
+  if (clear) clear.onclick = async () => {
+    if (!await settingsConfirm({title: 'Clear the gateway key?', text: 'Bots on Tico models stop until a key is saved again.', ok: 'Clear key'})) return;
     run(clear, 'Clearing…', () => writeRequest('DELETE', '/v2/providers/gateway'), () => 'Gateway key cleared');
   };
 }
-
-function providersNextHTML(view, owner) {
-  if (!view.enabled?.length) return '<p class="muted">Bots wait until you add an AI provider.</p>';
-  const wanted = new Set(SETTINGS_DATA.models.filter(model => view.enabled.includes(model.provider)).map(model => model.runtime));
-  const machines = SETTINGS_DATA.machines.filter(machine => !machine.revoked_at);
-  const rows = machines.flatMap(machine => [...wanted].filter(runtime => machine.readiness?.runtimes?.[runtime]?.authenticated !== 'ready').map(runtime => {
-    const online = machineOnline(machine);
-    const ready = machine.readiness?.runtimes?.[runtime]?.installed;
-    return `<li>${esc(machine.label)} · ${esc(runtime)}${owner && online && ready && harnessCaps(runtime).browser_sign_in
-      ? ` <button class="ghost" type="button" data-model-login data-runner="${esc(machine.id)}" data-runtime="${esc(runtime)}" data-machine="${esc(machine.label)}">Sign in</button>`
-      : ' · <button class="linkish" type="button" data-provider-computer="${esc(machine.id)}">Open computer</button>'}</li>`;
-  }));
-  return `<div class="provider-next"><p>Sign in on each computer, or <a href="${CREDENTIALS}">use an API key</a> in Credentials and share it with every computer.</p>
-    ${machines.length ? (rows.length ? `<ul>${rows.join('')}</ul>` : '<p class="muted">Computers are signed in.</p>') : ''}</div>`;
-}
-// The computers list is just above: open that computer's pop-up.
-document.addEventListener('click', event => {
-  const link = event.target.closest('[data-provider-computer]');
-  if (link) $(`#set-machines [data-computer-open="${CSS.escape(link.dataset.providerComputer)}"]`)?.click();
-});

@@ -4,6 +4,8 @@ import json
 from dataclasses import dataclass
 from typing import Callable
 
+from backend import screening
+
 from . import harness as X
 from ..redesign.harness import rows
 from .harness import CLAUDE_ID, DANA_ID, LEAD_ID, OMAR, OPENAI_ID, PM
@@ -256,7 +258,7 @@ def s_settings(org, items, judge):
     layers = org.api("put", "/api/v2/screening", {"patterns": False, "model": False}).body
     bad = org.api("put", "/api/v2/screening", {"webhook": "block"})
     return [("the first release only warns, at every door",
-             view.get("modes") == {s: "warn" for s in ("webhook", "mail", "idea", "watcher")}
+             view.get("modes") == {s: "warn" for s in screening.SOURCES}
              and view.get("defaults") == view.get("modes"), str(view.get("modes"))),
             ("both detectors are on by default", view.get("layers") == {"patterns": True, "model": True},
              str(view.get("layers"))),

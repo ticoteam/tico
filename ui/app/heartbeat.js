@@ -171,13 +171,10 @@ function bindStoppedLines(panel, list) {
     const issue = list[+ul.dataset.runs];
     ul.querySelectorAll('[data-run-row]').forEach(li => {
       const run = issue.runs[+li.dataset.runRow], buttons = li.querySelectorAll('button'), result = li.querySelector('[data-result]');
-      // A group holding this line (bindUpdateGroup) hears when its choice starts and ends saving, so no run gets both.
-      const saving = on => { run.saving = on; li.dispatchEvent(new Event('run-saving', {bubbles: true})); };
       buttons.forEach(button => button.onclick = async () => {
         const decision = button.dataset.runDecision;
         buttons.forEach(b => b.disabled = true);
         result.classList.remove('err'); result.textContent = 'Saving choice…';
-        saving(true);
         try {
           await decideRun(run, decision);
           li.dataset.decided = run.decided;
@@ -186,7 +183,7 @@ function bindStoppedLines(panel, list) {
           result.classList.add('err'); result.textContent = e.message;
           buttons.forEach(b => b.disabled = !!stoppedChosen(run) && b.dataset.runDecision !== stoppedChosen(run));
           return;
-        } finally { saving(false); }
+        }
         if (!ul.querySelector('[data-run-row]:not([data-decided])')) void refresh(false);
       });
     });
@@ -203,90 +200,6 @@ async function decideRun(run, decision) {
   run.decided = run.jobs.every(job => job.decided === decision) ? decision : 'mixed';
   return run.decided;
 }
-// Tico's own update restarts every computer at once, so the runs it stops arrive together. The ones the server puts in
-// the update's group (`update_group`: no named outside action, no approval used) and that nobody has started deciding
-// share one choice, two or more stopped within ten minutes of the first; a later update makes a group of its own.
-// Each keeps its own line under Details, and any other run keeps its own choice outside the group.
-const UPDATE_GROUP_MS = 10 * 60e3;
-function updateGroups(issues) {
-  const members = issues.flatMap(issue => (issue.runs || []).map((run, i) => ({issue, run, i, at: Date.parse(run.at || '')})))
-    .filter(m => m.run.cause === 'update' && m.run.update_group && !m.run.chosen && !stoppedChosen(m.run) && Number.isFinite(m.at))
-    .sort((a, b) => a.at - b.at);
-  const groups = [];
-  for (const m of members) {
-    const last = groups.at(-1);
-    if (last && m.at - last.at <= UPDATE_GROUP_MS) last.members.push(m);
-    else groups.push({members: [m], at: m.at});
-  }
-  return groups.filter(g => g.members.length > 1).map((g, k) => ({...g, k, at: new Date(g.at)}));
-}
-// Only the people who may decide a run see its buttons: the others read the same line with no choice to make.
-// The update's stop is timing, not proof its computer restarted, so Try all again is offered only when every run is
-// one the review card recommends retrying. Otherwise the row says how many ran commands Tico cannot check and offers
-// Don't retry for all of them; retrying any of them is that run's own choice on its line, under the title.
-const updateGroupRow = group => {
-  const n = group.members.length, deciding = group.members.filter(m => m.issue.can_review && m.run.jobs).length;
-  const scope = deciding === n ? 'Applies to all of them' : `Applies to the ${deciding} you can decide`;
-  const risky = group.members.filter(m => !m.run.retry).length;
-  const resume = cls => `<button class="${cls}" type="button" data-group-decision="resume" title="${scope}. ${RETRY_HINT}">Try all again</button>`;
-  const dismiss = cls => `<button class="${cls}" type="button" data-group-decision="dismiss" title="${scope}">Don’t retry</button>`;
-  const line = !deciding ? 'Only each bot’s operator can decide' : risky ? `${risky === n ? 'All of them' : `${risky} of them`} ran commands Tico can’t check` : '';
-  return `<div class="settings-issue stopped-group" data-update-group="${group.k}">
-    <div>${needsTitle(`${n} run${n === 1 ? '' : 's'} stopped during Tico’s update at ${group.at.toISOString().slice(11, 16)} UTC`,
-      'button type="button" data-group-details aria-expanded="false"')}${line ? `<p>${line}</p>` : ''}</div>
-    <div class="issue-buttons">${deciding ? (risky ? dismiss('primary') : resume('primary') + dismiss('ghost')) : ''}</div>
-    <ul class="stopped-lines" data-group-runs hidden></ul><p class="stopped-result" data-group-result role="status" aria-live="polite"></p></div>`;
-};
-function bindUpdateGroup(panel, group, stopped) {
-  const el = panel.querySelector(`[data-update-group="${group.k}"]`);
-  if (!el) return;
-  const runs = el.querySelector('[data-group-runs]'), result = el.querySelector('[data-group-result]');
-  // Each member's own line moves under Details, keeping the buttons bound by bindStoppedLines.
-  for (const m of group.members) {
-    m.li = panel.querySelector(`[data-runs="${stopped.indexOf(m.issue)}"] [data-run-row="${m.i}"]`);
-    if (m.li) runs.append(m.li);
-  }
-  const details = el.querySelector('[data-group-details]');
-  details.onclick = () => {
-    runs.hidden = !runs.hidden;
-    details.setAttribute('aria-expanded', String(!runs.hidden));
-  };
-  const picks = [...el.querySelectorAll('[data-group-decision]')];
-  // The group's choices wait while a run's own choice saves, and stay closed once the group's are saved.
-  let busy = false;
-  const free = () => picks.forEach(b => b.disabled = busy || group.members.some(m => m.run.saving));
-  el.addEventListener('run-saving', free);
-  picks.forEach(button => button.onclick = async () => {
-    if (busy || group.members.some(m => m.run.saving)) return;
-    const decision = button.dataset.groupDecision;
-    const todo = group.members.filter(m => m.issue.can_review && m.run.jobs && !stoppedChosen(m.run) && m.li);
-    // Each run's own choices wait while the group's are saved, so no run gets both; afterwards they show what was
-    // saved, as a run's own line does.
-    const lines = todo.map(m => [m.run, [...m.li.querySelectorAll('[data-run-decision]')]]);
-    const settle = () => lines.forEach(([run, buttons]) => buttons.forEach(b =>
-      b.disabled = !!run.decided || !!stoppedChosen(run) && b.dataset.runDecision !== stoppedChosen(run)));
-    busy = true; free();
-    lines.forEach(([, buttons]) => buttons.forEach(b => b.disabled = true));
-    result.classList.remove('err'); result.textContent = 'Saving choices…';
-    try {
-      // One request per run, in order: a refusal stops the rest and shows here, and the runs already saved stay saved.
-      for (const m of todo) {
-        if (stoppedChosen(m.run)) continue;
-        await decideRun(m.run, decision);
-        m.li.dataset.decided = m.run.decided;
-        m.li.querySelector('[data-result]').textContent = stoppedOutcome(m.run.decided, stoppedWaits(m.run));
-      }
-    } catch (e) {
-      result.classList.add('err'); result.textContent = e.message;
-      busy = false; free();
-      settle();
-      return;
-    }
-    settle();
-    result.textContent = decision === 'resume' ? 'Queued to try again.' : 'Dismissed. Tico won’t retry these runs.';
-    void refresh(false);
-  });
-}
 // A card is a title, at most one short line and at most two buttons. The title is the way to the details (the stopped
 // runs card, the bot, the computer, Health), so Details and Open bot are not buttons of their own; what the server
 // wrote in full stays on the title's tooltip.
@@ -297,7 +210,6 @@ const needsTitleTag = issue => issue.kind === 'uncertain_work' && issue.bot ? `b
 function needsYou() {
   document.querySelector('.needs-you')?.remove();
   const issues = (S.status?.health_issues || []).filter(needsPerson);
-  const groups = updateGroups(issues);
   const panel = document.createElement('section'); panel.className = 'needs-you';
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Needs you');
   const stopped = [];
@@ -308,7 +220,7 @@ function needsYou() {
   const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div>${needsTitle(issue.title, needsTitleTag(issue), full(issue))}${line(issue)}${stoppedLines(issue, stopped)}</div>
     <div class="issue-buttons">${runnerRestartButton(issue)}</div></div>`;
   panel.innerHTML = `<header><h2></h2><button class="ghost" data-close aria-label="Close">Close</button></header>
-    <div data-list>${groups.map(updateGroupRow).join('')}${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
+    <div data-list>${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
     <div class="row"><button class="ghost" data-snooze>Snooze for an hour</button><a class="ghost" href="#/settings">Open Settings</a></div>`;
   const close = () => { needsYouRemember({seen: issues.map(needsYouKey)}); panel.remove(); };
   panel.querySelector('[data-close]').onclick = close;
@@ -319,11 +231,6 @@ function needsYou() {
   panel.querySelectorAll('a[href]').forEach(a => a.addEventListener('click', close));
   bindRunnerRestart(panel);
   bindStoppedLines(panel, stopped);
-  groups.forEach(group => bindUpdateGroup(panel, group, stopped));
-  // An issue whose every run moved into an update's group would only repeat that group.
-  panel.querySelectorAll('[data-runs]').forEach(ul => {
-    if (!ul.children.length && !stopped[+ul.dataset.runs].more_runs) ul.closest('.settings-issue').hidden = true;
-  });
   const n = panel.querySelectorAll('[data-list] > .settings-issue:not([hidden])').length;
   panel.querySelector('h2').textContent = n === 1 ? 'One thing needs you' : `${n} things need you`;
   document.body.appendChild(panel);
