@@ -111,10 +111,10 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 
 def default_gate(org: Org, actor: str, kind: str) -> Gate:
-    """The defaults that are not editable rules: closing or reopening a period, and importing history, asks the
-    owner (unless the owner asks, §6.4 rule 6), a bot settling a cut-off card creation (card_resolve) asks a
-    finance admin, and so does a bot recording where its card is saved (§8.3: a person saves the card on the
-    vendor's account). The other §6.4 defaults are seeded gate rules (gates.DEFAULTS)."""
+    """The code's floor under the defaults (gates.FIXED): closing or reopening a period, and importing history,
+    asks the owner (unless the owner asks, §6.4 rule 6); a bot settling a cut-off card creation (card_resolve) asks a
+    finance admin, and so does a bot recording where its card is saved (§8.3: a person saves the card on the vendor's
+    account). The seeded gate rules (gates.DEFAULTS) say the same for closing, and the others are editable rules."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
@@ -218,12 +218,17 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                       ("address?", "obj", ""), ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
                       ("details", "obj", "bank details; sealed, never stored readable")),
-    "payment_create": (("recipient_id", "str", ""), ("amount", "minor", ""), ("money_account_id", "str", ""),
+    "payment_create": (("recipient_id?", "str", "the payee (not for method internal)"), ("amount", "minor", ""),
+                       ("money_account_id?", "str", "the bank to pay from"),
                        ("memo?", "str", ""), ("obligation?", "str", "one live payment per obligation (bill:<id>)"),
-                       ("account_id", "str", ""), ("tags?", "obj", ""),
+                       ("account_id?", "str", "the line it posts to (not for method internal)"), ("tags?", "obj", ""),
                        ("mode?", "approval_queue|direct", "default approval_queue"),
-                       ("purpose?", "obj", "")),
-    "payment_cancel": (("payment_id", "str", ""),),
+                       ("purpose?", "obj", ""),
+                       ("method?", "internal", "a move between our own bank accounts: from_account and to_account"),
+                       ("from_account?", "str", "internal only: the bank account to take from"),
+                       ("to_account?", "str", "internal only: the bank account to move it into, same connection")),
+    "payment_cancel": (("payment_id?", "str", ""),
+                       ("transfer_id?", "str", "an internal transfer not yet sent (instead of payment_id)")),
     "rule_create": _RULE,
     "rule_update": (("rule_id", "str", ""), *((n if n.endswith("?") else n + "?", t, w) for n, t, w in _RULE
                                               if n != "kind?")),
@@ -233,10 +238,13 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "contact_create": (("name", "str", ""), ("kind", "vendor|customer|both", ""), ("emails?", "list[str]", ""),
                        ("default_account_id?", "str", "the line a vendor's bills and rows default to"),
                        ("is_1099?", "bool", ""), ("tax_id?", "str", "sealed; only its last 4 show, to finance admins"),
-                       ("recipient_id?", "str", "the payment details bills to this vendor are paid to")),
+                       ("recipient_id?", "str", "the payment details bills to this vendor are paid to"),
+                       ("seats?", "int", "vendors: seats or licenses"),
+                       ("renewal_on?", "day", "vendors: the next renewal date")),
     "contact_update": (("contact_id", "str", ""), ("name?", "str", ""), ("kind?", "vendor|customer|both", ""),
                        ("emails?", "list[str]", ""), ("default_account_id?", "str", ""), ("is_1099?", "bool", ""),
-                       ("tax_id?", "str", ""), ("recipient_id?", "str", ""), ("active?", "bool", "")),
+                       ("tax_id?", "str", ""), ("recipient_id?", "str", ""), ("active?", "bool", ""),
+                       ("seats?", "int", "vendors"), ("renewal_on?", "day", "vendors: a day, or empty to clear")),
     "bill_create": (("vendor_id", "str", "a vendor contact"), ("number?", "str", "the vendor's bill number"),
                     ("bill_date", "day", ""), ("due_date?", "day", "or terms_days"),
                     ("terms_days?", "int", "due this many days after bill_date"), ("memo?", "str", ""),
@@ -312,7 +320,7 @@ WORDS: dict[str, str] = {
     "card_save": "Record that a card is saved on a vendor's account, so a bot can buy there with it.",
     "card_unsave": "Record that a card was removed from a vendor's account.",
     "recipient_add": "Add someone to pay (bank details are sealed).",
-    "payment_create": "Request a payment.", "payment_cancel": "Cancel a queued payment.",
+    "payment_create": "Request a payment, or move money between two of our bank accounts (method internal).", "payment_cancel": "Cancel a queued payment, or an internal transfer not yet sent.",
     "rule_create": "Add a gate or posting rule; its examples must pass.", "rule_update": "Change a rule.",
     "rule_enable": "Turn a rule on.", "rule_disable": "Turn a rule off.",
     "rule_test": "Run a rule over the last 90 days you can see; writes nothing.",

@@ -605,6 +605,12 @@ def _sync(conn: Any | None) -> Row | None:
             "egress_ip": settings.get("egress_ip")}
 
 
+def _direct_on(c: sqlite3.Connection) -> bool:
+    """The owner's company switch for direct send (payments.DIRECT_KEY)."""
+    from .payments import DIRECT_KEY
+    return SL.setting(c, DIRECT_KEY) is True
+
+
 def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at: str | None = None) -> Row:
     """Every source of the books, grouped (banks, cards, payments, payroll, bills and invoices, Tico, accounting,
     manual) with a count per group, so a card program with 500 cards is one row. Each source shows its account
@@ -646,7 +652,7 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at:
                                      "payments": {"mode": "approval_queue",
                                                   "eligible": bool(s.get("approval_eligible")),
                                                   "enabled": bool(s.get("payments_enabled")),
-                                                  "direct_send": bool(s.get("direct_send")),
+                                                  "direct_send": _direct_on(c),
                                                   "why_not": s.get("approval_note")}})
         elif str(r["purpose"]) == "books":
             rows["accounting"].append({"id": str(r["id"]), "kind": "connection", "name": str(r["name"] or

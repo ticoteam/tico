@@ -42,6 +42,7 @@ from .store import ledger as SL
 from .store import tico
 
 RECEIVED, DUE_SOON, OVERDUE = "finance.bill.received", "finance.bill.due_soon", "finance.invoice.overdue"
+RENEWAL_DUE = "finance.vendor.renewal_due"
 CONTROL = {"bill": ("2000", "payable", "accounts payable"), "invoice": ("1200", "receivable", "accounts receivable")}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 SIGN = {"bill": 1, "invoice": -1}       # a bill's lines are debits, an invoice's credits
@@ -104,7 +105,8 @@ def _money(amount: int) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ contacts
-CONTACT_FIELDS = ("name", "kind", "emails", "default_account_id", "is_1099", "recipient_id", "active")
+CONTACT_FIELDS = ("name", "kind", "emails", "default_account_id", "is_1099", "recipient_id", "active", "seats",
+                  "renewal_on")
 TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
 
 
@@ -151,6 +153,14 @@ def _contact_fields(ctx: Ctx, p: V.Payload, old: Any = None) -> dict[str, object
         last4 = V.opt_text(p, "tax_id_last4", 4) or ""
         out["tax_id_last4"] = last4 or None
         out["tax_id_ref"] = (V.opt_text(p, "tax_id_ref", 80) or None) if last4 else None
+    if "seats" in p or "renewal_on" in p:
+        kind = str(out.get("kind") or (old["kind"] if old is not None else ""))
+        if kind == "customer":
+            raise invalid("seats and renewal dates belong to vendors")
+    if "seats" in p:
+        out["seats"] = None if p.get("seats") is None else V.integer(p, "seats", 0, 1_000_000)
+    if "renewal_on" in p:
+        out["renewal_on"] = V.opt_day(p, "renewal_on")
     return out
 
 
@@ -1467,6 +1477,13 @@ def watch(ctx: Ctx) -> int:
         if stage:
             _event(ctx, OVERDUE, str(inv["id"]), {"invoice_id": str(inv["id"]), "stage": stage,
                                                   "due_date": inv["due_date"]}, stage)
+            n += 1
+    for vendor in SAP.renewals_due(ctx.c, ctx.book.id):
+        stage = AP.renewal_stage(vendor["renewal_on"], today)
+        if stage:
+            _event(ctx, RENEWAL_DUE, str(vendor["id"]), {"contact_id": str(vendor["id"]), "stage": stage,
+                                                         "renewal_on": vendor["renewal_on"]},
+                   f"{vendor['renewal_on']}:{stage}")
             n += 1
     return n
 

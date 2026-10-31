@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
 
-from . import banking, cards, payments
+from . import banking, cards, payments, transfers
 from .context import is_set_up, load
 from .core import feeds as F
 from .core.errors import FinanceError
@@ -33,7 +33,9 @@ EVENTS_PAGES = 4
 INBOX_MOST, OUTBOX_MOST, PAY_MOST = 200, 50, 50
 STATEMENT_HOURS = 24
 RETRY = (60, 300, 1800, 3600)
-NO_KEY_OPS = ("card_create", "recipient_create")   # Mercury documents no idempotency for these creates
+# Never sent again on their own once a call may have landed. Mercury documents no idempotency for recipients and cards;
+# a transfer is listed by choice: its key is sent, but an unknown result goes to a person, never to a resend.
+NO_KEY_OPS = ("card_create", "recipient_create", "transfer_create")
 CLAIM_MINUTES = 10                # a write claimed this long ago with no answer recorded was cut off mid-call
 UNOWNED_HOURS = 24               # an event no connection could read (404) is retried this long before it is nobody's
 MISSING = "404"                   # in an inbox row's tried list: some connection's read came back 404 this round
@@ -446,6 +448,8 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         with store.transaction() as c:
             if not SK.outbox_claim(c, str(o["id"]), now):
                 continue
+            if str(o["op"]) == "transfer_create" and transfers.recheck(load(c, now), o):
+                continue          # re-checked at use: cancelled or held, so nothing is sent
         body = SK.loads(o["payload_json"])
         answer = _send(store, provider, str(o["op"]), body)
         with store.transaction() as c:
@@ -465,6 +469,9 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
                                               "updated_at": now})
     body = SK.loads(o["payload_json"])
     ctx = load(c, now)
+    if op == "transfer_create":
+        transfers.not_sent(ctx, body, why, unknown=True)
+        return
     if op == "card_create" and body.get("card_id"):
         cards.uncertain(ctx, str(body["card_id"]), why)
     what = "a card" if op == "card_create" else f"recipient {body.get('name') or ''}".strip()
@@ -476,6 +483,8 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
 
 def _send(store: Any, provider: Provider, op: str, body: Mapping[str, Any]) -> Answer:
     """One outbox write, read against the card's latest desired state at send time."""
+    if op == "transfer_create":
+        return provider.create_transfer(transfers.request_body(body))
     if op == "recipient_create":
         return _send_recipient(store, provider, body)
     if op == "card_adopt":
@@ -570,6 +579,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
             # A payment waiting on this recipient goes in this pass (pay runs after outbox); the ring covers one paid
             # from another connection's account, whose pass may already be done.
             tico.after_commit(c, ring)
+        elif op == "transfer_create":
+            transfers.sent(load(c, now), body, answer.body)
         elif op == "card_create" and answer.body.get("waiting"):
             # Not issued and not cancelled: it is issued once it has an allocation again (cards.sync).
             SK.update(c, "fin_cards", card_id, {"sync_status": cards.WAITING, "updated_at": now,
@@ -603,6 +614,8 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
     SK.update(c, "fin_outbox", str(o["id"]), {
         "status": "failed" if final else "pending", "attempts": attempts, "last_error": why, "claimed_at": None,
         "next_try_at": None if final else _after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]), "updated_at": now})
+    if op == "transfer_create" and final:
+        transfers.not_sent(load(c, now), body, why, unknown=answer.status is None or answer.status >= 500)
     if op == "card_create" and card_id and (answer.status is None or answer.status >= 500):
         cards.uncertain(load(c, now), card_id, why)
     elif op.startswith("card_") and card_id:
@@ -628,7 +641,8 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             with store.transaction() as c:
                 payments.cut_off(load(c, now), SK.get(c, "fin_payments", pid))
             continue
-        if status in ("awaiting_bank_approval", "submitted", "unknown") and p["provider_request_id"]:
+        if status in ("awaiting_bank_approval", "submitted", "unknown") and p["provider_request_id"] \
+                and str(p["mode"]) != "direct":
             answer = provider.send_request(str(p["provider_request_id"]))
             with store.transaction() as c:
                 ctx = load(c, now)
@@ -660,7 +674,9 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             payments.reserve(ctx, row, fresh)         # with the claim: newly applicable limits move once
             rec = SK.get(c, "fin_recipients", str(p["recipient_id"]))
             claimed = SK.get(c, "fin_payments", pid)
-        answer = provider.request_send_money(account, payments.request_body(claimed, rec))
+        body = payments.request_body(claimed, rec)
+        answer = provider.create_transaction(account, body) if str(claimed["mode"]) == "direct" \
+            else provider.request_send_money(account, body)
         with store.transaction() as c:
             ctx = load(c, now)
             payments.sent(ctx, SK.get(c, "fin_payments", pid), answer)

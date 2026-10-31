@@ -119,7 +119,8 @@ def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], 
     if kind in K.SPEND:
         # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
         out["amount"] = payload.get("amount")
-        out["account"] = str(payload.get("money_account_id") or payload.get("account_id") or "bank")
+        out["account"] = str(payload.get("money_account_id") or payload.get("account_id")
+                             or payload.get("from_account") or "bank")
     return out
 
 
@@ -525,8 +526,13 @@ banking_ensure = sync.ensure
 banking_stop = sync.stop
 banking_ring = sync.ring
 banking_step = sync.step
-mercury_delivery = sync.delivery
 mercury_probe = sync.probe_credential
+
+
+def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:
+    """A kept call to a trigger whose consumer is Finance (spec §3.4): Mercury's event, kept once by its id. Mercury is
+    the only bank feed so far, so every Finance call is one of its deliveries."""
+    return sync.delivery(c, None, payload)
 
 
 # ------------------------------------------------------------------------------------------------ watch rules

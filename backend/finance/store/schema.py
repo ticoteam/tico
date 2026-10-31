@@ -350,6 +350,17 @@ CREATE TABLE IF NOT EXISTS fin_close_snapshots (
   accounts_json TEXT NOT NULL, pnl_json TEXT NOT NULL, balances_json TEXT NOT NULL,
   restated_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   UNIQUE (book_id, month));
+
+CREATE TABLE IF NOT EXISTS fin_transfers (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
+  from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted','cancelled')),
+  provider_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT, settled_at TEXT, submitted_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  CHECK (from_money_account_id <> to_money_account_id));
 """
 
 INDEXES = """
@@ -486,6 +497,8 @@ ADDED = (
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
     ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
+    # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
+    ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
 )
 
 
@@ -599,6 +612,12 @@ def raw_import(c: sqlite3.Connection) -> None:
 def close_snapshots(c: sqlite3.Connection) -> None:
     """Cloud migration 72: the close snapshot table on an install that closed months before it. Months closed before
     it have no snapshot and read live. The same statements as `create` again, so it is idempotent."""
+    create(c)
+
+
+def gaps_books(c: sqlite3.Connection) -> None:
+    """Cloud migration 73 (the books gaps): fin_transfers, for an install made before it. The same statements as
+    `create`, which skips whatever exists, so a fresh install gets the table from `create` and this changes nothing."""
     create(c)
 
 
