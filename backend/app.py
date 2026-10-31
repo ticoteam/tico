@@ -34,6 +34,7 @@ from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
 from . import login_holds
 from . import cloud_access
+from . import counsel
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -175,6 +176,7 @@ def create_app(settings=None):
                 onboarding.ensure_librarian(c)
                 onboarding.ensure_goal_manager(c)
                 onboarding.ensure_task_manager(c)
+                onboarding.ensure_counsel(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
         # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
@@ -656,6 +658,10 @@ def create_app(settings=None):
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
+                # Counsel sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
+                if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
+                        None, counsel.refused, store, who, request.url.path, request.method):
+                    raise Problem("forbidden", counsel.REFUSED, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -7694,6 +7700,7 @@ def create_app(settings=None):
     org_rule_check.AUDIENCE.update(rule_audiences())
     org_rule_check.AUDIENCE["automation"] = replay_audience
     org_rule_check.install(app, store, auth, mutate)
+    counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)
     from . import release_flow

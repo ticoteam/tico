@@ -1769,6 +1769,9 @@ class Store:
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
                 ensure_org_rule_check(c)
+                # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
+                from .counsel import ensure as ensure_rule_reads
+                ensure_rule_reads(c)
                 # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
                 from .lenses import ensure as ensure_lenses
                 ensure_lenses(c)

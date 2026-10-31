@@ -1892,6 +1892,8 @@ STABLE.extend([
     ('/api/v2/rules', 'get', 'Rules', 'listRules', 'The org rules, newest first, paged; mine=true adds the bot\'s settings as sentences', None),
     ('/api/v2/rules', 'post', 'Rules', 'addRule', 'Add an org rule: a bot\'s is a suggestion; only owners and admins add Everyone', None),
     ('/api/v2/rules/counts', 'get', 'Rules', 'getRulesCounts', 'Internal and external rules in force, due dates open, suggestions waiting', None),
+    ('/api/v2/rules/read', 'post', 'Rules', 'readRuleDocument', 'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it', None),
+    ('/api/v2/rules/ask', 'post', 'Rules', 'askRules', 'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task', None),
     ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
     ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
     ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
