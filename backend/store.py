@@ -1174,6 +1174,8 @@ class Store:
             c.executescript(_support.SCHEMA)
             from . import inbound as _inbound
             c.executescript(_inbound.SCHEMA)
+            from . import bills_address as _bills_address
+            c.executescript(_bills_address.SCHEMA)
             from . import support_access as _support_access
             c.executescript(_support_access.SCHEMA)
             from . import credential_cards as _credential_cards
@@ -1196,6 +1198,8 @@ class Store:
             c.executescript(_cards.SCHEMA)
             from . import task_manager as _task_manager
             c.executescript(_task_manager.SCHEMA)
+            from . import bookkeeper as _bookkeeper
+            c.executescript(_bookkeeper.SCHEMA)
             from . import health_monitor as _health_monitor
             c.executescript(_health_monitor.SCHEMA)
             # When a finding last woke the Health Monitor, and how bad it is: a rise wakes it (backend/health_monitor.py).
@@ -1727,6 +1731,41 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase1(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(65,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=66").fetchone():
+                    # Finance phase 2 (bills, invoices, contacts, settlements, the cash view, posting rules): new fin_*
+                    # tables and columns. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase2(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=67").fetchone():
+                    # Finance phase 3 (bot cards): the saved-card record, which vendor accounts a card is saved on.
+                    # Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase3(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(67,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=70").fetchone():
+                    # Finance tax (spec §11): the sales tax jurisdictions and the due dates seeded for the outside
+                    # obligations. Idempotent, like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.tax(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(70,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=71").fetchone():
+                    # Finance history imports (spec §4.1): the fin_raw_imports table. Idempotent like 65.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.raw_import(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(71,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=72").fetchone():
+                    # Finance close snapshots (fin_close_snapshots): a closed month reads the account tree it closed
+                    # with. Idempotent like 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.close_snapshots(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(72,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=73").fetchone():
+                    # The books gaps: fin_transfers, internal transfers between our own bank accounts
+                    # (backend/finance/transfers.py). Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.gaps_books(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(73,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

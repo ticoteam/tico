@@ -125,12 +125,25 @@ def network_blocked():
 
 
 # ----------------------------------------------------------------------------- the running demo
-async def keep_alive(store, stop):
+async def keep_alive(store, stop, vault=None):
     """What a real install's scheduler and a runner's heartbeat would keep true: the computers look
     online, the scheduler looks alive, and a message to a bot is answered (once) that this is a demo."""
+    # The demo's scheduler is off, so Finance's bank worker would never sync. With TICO_MERCURY_BASE set (a local
+    # fake Mercury: scripts/finance_e2e.sh), the worker runs and reads only that base. Without it, nothing starts.
+    # The same override runs Finance's short jobs every tick (waiting events, bills due, reminders), so payments and
+    # approvals can be tested without the scheduler.
+    finance_jobs = False
+    if vault is not None:
+        from .finance import actions as finance
+        from .finance import mercury
+        if mercury.base_url() != mercury.BASE:
+            finance.banking_start(store, vault)
+            finance_jobs = True
     while not stop.is_set():
         try:
             await asyncio.to_thread(tick, store)
+            if finance_jobs:
+                await asyncio.to_thread(finance_tick, store)
         except Exception as exc:
             log.error("Demo tick failed: %s", type(exc).__name__)
         try:
@@ -154,6 +167,16 @@ def tick(store):
                           conversation_id=job["conversation_id"], in_reply_to=job["message"])
                 except H.Refused:
                     pass
+
+
+def finance_tick(store):
+    from .finance import actions as finance, reads as finance_reads
+    with store.read() as c:
+        if not finance_reads.is_set_up(c):
+            return
+    for step in (finance.drain_events, finance.watch_documents):
+        with store.transaction() as c:
+            step(c)
 
 
 def avatar(pid):

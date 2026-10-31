@@ -36,6 +36,7 @@ Use `releases/download/vX.Y.Z/install.sh` to pin a release. For a shared server,
 - [Desktop app](desktop.md), [Your Assistant](assistant.md) and [External agents](connect-an-agent.md).
 - Knowledge and results: [Docs](docs.md), [Librarian](librarian.md), [Market watch](market-watch.md), [Weekly briefing](market-briefing.md), [Files](files.md), [Pages](pages.md), [Meetings](meetings.md), [Listening](listening.md), [Physical mail](physical-mail.md).
 - [Task Manager](task-manager.md): the built-in helper that tidies tasks once an hour on weekdays.
+- [Bookkeeper](bookkeeper.md): the built-in helper that keeps the books, and the [Finance tools](finance-tools.md) it and every bot use.
 - [Strategy](strategy.md), [Lenses](lenses.md), [Goals and KPIs](goals-and-kpis.md), [Your Strategy Bot](strategy-bot.md), [People](people.md), [Groups](org-chart.md) and [Access](permissions.md).
 - [Glossary](glossary.md) and [Help](support.md).
 

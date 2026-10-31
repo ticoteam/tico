@@ -137,6 +137,22 @@ def _build():
         {"card_id": "c1", "feed_id": "f2", "event_id": "e7"}, sourceless=True, outbound=False)
     add("finance.sync.failed", "Finance could not sync a bank connection.",
         {"connection_id": "n1", "event_id": "e8"}, sourceless=True, outbound=False)
+    # Finance's payables, receivables, cash alert and close (backend/finance/documents.py, jobs.py): ids only.
+    add("finance.bill.received", "A bill was recorded in Finance (by hand, upload or the bills address).",
+        {"bill_id": "bl1", "origin": "email", "event_id": "e9"}, sourceless=True, outbound=False)
+    add("finance.bill.due_soon", "An unpaid Finance bill is due in 7 days, in 1 day or today.",
+        {"bill_id": "bl1", "stage": "due_in_7", "due_date": "2026-11-07", "event_id": "e10"}, sourceless=True,
+        outbound=False)
+    add("finance.invoice.overdue", "A Finance invoice is 1, 7, 30, 60 or 90 days overdue.",
+        {"invoice_id": "in1", "stage": "overdue_7", "due_date": "2026-10-24", "event_id": "e11"}, sourceless=True,
+        outbound=False)
+    add("finance.cash.below", "The company's cash dropped under the owner's alert amount (read the cash metric for amounts).",
+        {"metric": "cash", "crossing": 1, "event_id": "e12"}, sourceless=True, outbound=False)
+    add("finance.period.ready", "A month is ready to close in Finance.",
+        {"month": "2026-10", "event_id": "e13"}, sourceless=True, outbound=False)
+    add("finance.vendor.renewal_due", "A vendor's renewal is 30 or 7 days away (its date is on the vendor).",
+        {"contact_id": "c1", "stage": "renewal_in_7", "renewal_on": "2026-11-07", "event_id": "e14"},
+        sourceless=True, outbound=False)
     add("custom.*", "Anything a bot or rule sends: custom.<name>.",
         {"note": "custom.<name> carries whatever its sender puts in data."})
     return found

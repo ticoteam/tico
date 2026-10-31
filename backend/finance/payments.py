@@ -30,8 +30,10 @@ from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 
-DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2); v1 sends nothing directly either way
+CASH_BELOW_KEY = "finance_cash_below"   # the owner's cash alert floor (minor units; 0 or unset: off)
+DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2), off unless the owner turns it on
 METHODS = ("ach", "wire", "check")
+INTERNAL = "internal"                   # payment_create's method for a move between our own bank accounts (§5)
 MERCURY_METHOD = {"ach": "ach", "wire": "domesticWire", "check": "check"}
 SENT, FAILED = "finance.payment.sent", "finance.payment.failed"
 RETRY = (60, 300, 1800, 3600)
@@ -51,9 +53,12 @@ def settings(c: Any, connection_id: str) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------------------------ recipients
-SEALED_KINDS = ("recipient_add",)
-BANK_FIELDS = ("account_number", "routing_number")
+TAX_KINDS = ("contact_create", "contact_update")          # a contact's tax id is sealed the same way (§4.2)
+SEALED_KINDS = ("recipient_add", *TAX_KINDS)
+BANK_FIELDS = ("account_number", "routing_number", "tax_id")
 SEALED_FIELDS = ("details_ref", "details_fp", "last4")     # what Finance keeps in their place; never sent by a caller
+TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
+REFS = ("details_ref", "tax_id_ref")
 
 
 def _bank_details(p: Mapping[str, object]) -> tuple[str, dict[str, Any]]:
@@ -73,6 +78,8 @@ def strip_details(c: Any, kind: str, body: Mapping[str, object]) -> tuple[dict[s
     out = dict(body)
     if kind not in SEALED_KINDS:
         return out, ""
+    if kind in TAX_KINDS:
+        return _strip_tax_id(c, out)
     if any(k in body for k in SEALED_FIELDS):
         raise invalid("send account_number and routing_number; Finance keeps them in the credential vault")
     method, info = _bank_details(body)
@@ -85,10 +92,39 @@ def strip_details(c: Any, kind: str, body: Mapping[str, object]) -> tuple[dict[s
     return out, json.dumps(info, sort_keys=True)
 
 
+def _strip_tax_id(c: Any, out: dict[str, object]) -> tuple[dict[str, object], str]:
+    """A contact's tax id taken out the same way: a keyed fingerprint and the last 4 stay, the number is sealed. An
+    empty `tax_id` clears it."""
+    if any(k in out for k in TAX_FIELDS):
+        raise invalid("send tax_id; Finance keeps it in the credential vault")
+    if "tax_id" not in out:
+        return out, ""
+    raw = out.pop("tax_id")
+    if raw in (None, ""):
+        out["tax_id_last4"] = ""
+        return out, ""
+    if V.has_card_number(raw):
+        raise invalid(V.CARD_NUMBER_REFUSED)     # refused, never sealed
+    if not isinstance(raw, str):
+        raise invalid("tax_id is text")
+    digits = "".join(ch for ch in raw if ch.isalnum())
+    if not 4 <= len(digits) <= 20 or len(digits) != len(raw.replace("-", "").replace(" ", "")):
+        raise invalid("a tax id is 4-20 letters and digits (dashes and spaces allowed)")
+    out["tax_id_fp"] = tico.fingerprint(c, "taxid", digits)
+    out["tax_id_last4"] = digits[-4:]
+    return out, json.dumps({"tax_id": digits})
+
+
 def seal_details(c: Any, body: Mapping[str, object], plain: str, by: str, at: str) -> dict[str, object]:
-    """Seal stripped bank details into the vault (inside the action's savepoint, so a refusal rolls it back too)."""
+    """Seal stripped bank details (or a tax id) into the vault inside the action's savepoint, so a refusal rolls it
+    back too."""
     if not plain:
         return dict(body)
+    if "tax_id_fp" in body:
+        last4 = str(body.get("tax_id_last4") or "")
+        ref = tico.seal_credential(c, f"Finance tax id {str(body.get('name') or '')[:100]} ••{last4}", plain,
+                                   f"••{last4}", by, at)
+        return {**body, "tax_id_ref": ref}
     last4 = str(body.get("last4") or "")
     ref = tico.seal_credential(c, f"Finance payee {str(body.get('name') or '')[:100]} ••{last4}", plain,
                                f"••{last4}", by, at)
@@ -96,10 +132,11 @@ def seal_details(c: Any, body: Mapping[str, object], plain: str, by: str, at: st
 
 
 def drop_details(c: Any, body: Mapping[str, object]) -> None:
-    """An action that will never run deletes the bank details it sealed."""
-    ref = body.get("details_ref")
-    if isinstance(ref, str) and ref:
-        tico.drop_credential(c, ref)
+    """An action that will never run deletes the bank details (or tax id) it sealed."""
+    for key in REFS:
+        ref = body.get(key)
+        if isinstance(ref, str) and ref:
+            tico.drop_credential(c, ref)
 
 
 def open_details(c: Any, ref: str) -> dict[str, Any]:
@@ -156,6 +193,7 @@ def recipient_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                                    or "businessChecking"}
         SK.outbox_add(ctx.c, connection_id=connection, action_id=aid, op="recipient_create", payload=body,
                       key=f"recipient-{rid}", by=who, at=ctx.at)
+        tico.after_commit(ctx.c, ring)
         return {"recipient_id": rid, "last4": last4 or None}
     return Plan(K.default_gate(ctx.org, who, "recipient_add"),
                 f"{'Change' if old is not None else 'Add'} recipient {name} ({method}"
@@ -189,7 +227,7 @@ def known(ctx: Ctx, recipient_id: str) -> bool:
     return SK.recipient_paid(ctx.c, recipient_id)
 
 
-def _age(ctx: Ctx, stamp: object) -> int | None:
+def age_minutes(ctx: Ctx, stamp: object) -> int | None:
     if not stamp:
         return None
     then = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -199,18 +237,24 @@ def _age(ctx: Ctx, stamp: object) -> int | None:
 
 def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Pay a recipient from a bank account through Mercury's approval queue. `account_id` (and tags) is the line the
-    payment posts to when it settles; `obligation` (a bill or any key) allows one live payment at a time."""
+    payment posts to when it settles; `obligation` (a bill or any key) allows one live payment at a time. `method` internal is a move between two of the company's bank accounts instead
+    (transfers.plan_internal)."""
+    if V.opt_text(p, "method", 20) == INTERNAL:
+        from .transfers import plan_internal     # lazy: transfers imports this module
+        return plan_internal(ctx, who, p)
     V.only(p, ("recipient_id", "amount", "money_account_id", "memo", "obligation", "account_id", "tags", "mode",
                "purpose"))
-    if V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue") == "direct":
-        on = SL.setting(ctx.c, DIRECT_KEY) is True
-        raise FinanceError(NOT_AVAILABLE, "direct send is not available in this version; payments go through "
-                           "Mercury's approval queue" if on else "direct send is off for this company")
+    mode = V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue")
+    if mode == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
+        raise FinanceError(NOT_AVAILABLE, "direct send is off for this company")
     rec = SK.get(ctx.c, "fin_recipients", V.text(p, "recipient_id", 80))
     if rec is None:
         raise FinanceError(NOT_FOUND, "no such recipient")
     if str(rec["status"]) != "active":
         raise FinanceError(CONFLICT, "that recipient's details changed; pay its current version")
+    if mode == "direct" and not known(ctx, str(rec["id"])):
+        # §9: direct send is for recipients already paid; a new one waits for Mercury's approval queue (rule 1 asks too).
+        raise denied("direct send is only for a recipient that has been paid before")
     amount = V.amount(p)
     if amount <= 0:
         raise invalid("a payment is more than 0")
@@ -231,27 +275,35 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     method = str(rec["method"])
     purpose = _purpose(p, method)
     pid = SL.new_id()
+    gate = K.default_gate(ctx.org, who, "payment_create")
+    bill = obligation.startswith("bill:")
+    if bill:
+        # A bill's payment: checked against the bill, and its expense budgets (already spent, never held again).
+        from .documents import bill_payment
+        budget_gate = bill_payment(ctx, who, obligation, rec, amount, line.id)
+        gate = budget_gate if gate.outcome == "allow" else gate
 
     def apply(aid: str) -> Result:
         hold = budgeting.place(ctx, budget_scope={"account_id": line.id, **tags, "vendor": vendor_of(rec)},
                                amount=amount, currency=ctx.book.base_currency, source="payment", source_id=pid,
-                               expires_at=None, by=who)
-        if not hold.allowed:
+                               expires_at=None, by=who) if not bill else None
+        if hold is not None and not hold.allowed:
             raise denied(f"it does not fit: {hold.reason}")
         SK.insert(ctx.c, "fin_payments", {
             "id": pid, "book_id": ctx.book.id, "action_id": aid, "idempotency_key": f"pay-{aid}",
             "recipient_id": str(rec["id"]), "recipient_version": int(rec["version"]),
             "money_account_id": str(bank["id"]), "amount": amount, "currency": ctx.book.base_currency,
             "method": method, "memo": memo, "obligation": obligation, "account_id": line.id,
-            "tags_json": SK.dump(tags), "mode": "approval_queue", "status": "queued", "hold_id": hold.hold_id,
+            "tags_json": SK.dump(tags), "mode": mode, "status": "queued",
+            "hold_id": hold.hold_id if hold is not None else None,
             "purpose_json": SK.dump(purpose),
             "next_try_at": ctx.at, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
-        ring()
+        tico.after_commit(ctx.c, ring)
         return {"payment_id": pid, "status": "queued"}
-    return Plan(K.default_gate(ctx.org, who, "payment_create"),
+    return Plan(gate,
                 f"Pay {amount / 100:.2f} {ctx.book.base_currency} to {rec['name']} by {method}"
                 f"{' for ' + obligation if obligation else ''}", apply,
-                facts=_facts(ctx, rec, amount, line.code, obligation, tags, bank))
+                facts={**_facts(ctx, rec, amount, line.code, obligation, tags, bank), "mode": mode})
 
 
 def _facts(ctx: Ctx, rec: Any, amount: int, code: str, obligation: str, tags: Mapping[str, str], bank: Any
@@ -261,7 +313,7 @@ def _facts(ctx: Ctx, rec: Any, amount: int, code: str, obligation: str, tags: Ma
             "recipient.name": str(rec["name"]), "counterparty": str(rec["name"]), "method": str(rec["method"]),
             "accounts": [code], "obligation": obligation, **{f"tags.{k}": v for k, v in tags.items()},
             "balance": bank["available_balance"] if bank["available_balance"] is not None else bank["balance"],
-            G.AGES: {"balance": _age(ctx, bank["balance_as_of"])}}
+            G.AGES: {"balance": age_minutes(ctx, bank["balance_as_of"])}}
 
 
 # Mercury's requestSendMoney purpose.simple.category values, and what each says about additionalInfo: required for a
@@ -302,6 +354,8 @@ def vendor_of(rec: Any) -> str:
 
 
 def ring() -> None:
+    """Wake the bank worker. Queued with `tico.after_commit`, so it reads the rows this transaction wrote (rung before
+    the commit, it finds nothing and sleeps until its next sweep), and an undone action drops it."""
     from . import sync
     sync.ring()
 
@@ -309,6 +363,9 @@ def ring() -> None:
 def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Cancel a payment Finance has not sent yet. Once it is in Mercury's queue there is no API to cancel it: a person
     rejects it in Mercury, which ends the payment here when the worker sees it."""
+    if "transfer_id" in p:
+        from .transfers import plan_cancel      # lazy: transfers imports this module
+        return plan_cancel(ctx, who, p)
     V.only(p, ("payment_id",))
     pay = SK.get(ctx.c, "fin_payments", V.text(p, "payment_id", 80))
     if pay is None or (str(pay["created_by"]) != who and not may_write(ctx, who, str(pay["account_id"]),
@@ -316,6 +373,8 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such payment")
     status = str(pay["status"])
     if status in ("awaiting_bank_approval", "submitted"):
+        if str(pay["mode"]) == "direct":
+            raise FinanceError(CONFLICT, "it was sent to Mercury directly: it cannot be cancelled here")
         raise FinanceError(CONFLICT, "it is already in Mercury: reject it in Mercury")
     lost = status == "unknown" and bool(pay["flagged_at"]) and R.is_admin(ctx.org, who, ctx.rights(who))
     if status == "unknown" and not lost:
@@ -332,20 +391,35 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         if pay["hold_id"]:
             budgeting.release(ctx, str(pay["hold_id"]))
         unreserve(ctx, pay)
+        from .documents import payment_ended
+        payment_ended(ctx, pay)                    # a bill it was paying is open again
         return {"payment_id": str(pay["id"]), "status": "cancelled"}
     return Plan(K.default_gate(ctx.org, who, "payment_cancel"), f"Cancel the {int(pay['amount']) / 100:.2f} payment",
                 apply)
 
 
 def payment_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """The owner's company switch for direct send (§9). v1 builds the switch only: direct payments stay refused."""
-    V.only(p, ("direct_send",))
-    on = V.flag(p, "direct_send")
+    """The owner's company switches: direct send (§9: payments may then go straight to Mercury, for recipients already
+    paid, past the same gate rules; off by default) and the cash alert (finance.cash.below fires when the books' cash
+    drops under `cash_below`; 0 turns it off)."""
+    V.only(p, ("direct_send", "cash_below"))
+    if not p:
+        raise invalid("say direct_send or cash_below")
+    on = V.flag(p, "direct_send") if "direct_send" in p else SL.setting(ctx.c, DIRECT_KEY) is True
+    floor = V.integer(p, "cash_below", 0, 10**15) if "cash_below" in p else None
 
     def apply(aid: str) -> Result:
-        SL.set_setting(ctx.c, DIRECT_KEY, on, who, ctx.at)
-        return {"direct_send": on, "available": False}
-    return Plan(K.ALLOW, f"Turn direct send {'on' if on else 'off'} for the company", apply)
+        out: Result = {"direct_send": on, "available": True}
+        if "direct_send" in p:
+            SL.set_setting(ctx.c, DIRECT_KEY, on, who, ctx.at)
+        if floor is not None:
+            SL.set_setting(ctx.c, CASH_BELOW_KEY, floor, who, ctx.at)
+            out["cash_below"] = floor
+        return out
+    words = [f"turn direct send {'on' if on else 'off'}"] if "direct_send" in p else []
+    if floor is not None:
+        words.append(f"alert when cash drops under {floor / 100:.2f}" if floor else "turn the cash alert off")
+    return Plan(K.ALLOW, f"{' and '.join(words).capitalize()} for the company", apply)
 
 
 # ------------------------------------------------------------------------------------------------ worker steps
@@ -366,11 +440,13 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
     if status in ("failed", "cancelled"):
         unreserve(ctx, pay)
     _event(ctx, FAILED, pay, why or status)
+    from .documents import payment_ended
+    payment_ended(ctx, pay)                        # a bill it paid is owed again
     if status == "failed":
         maker = str(pay["created_by"])
         person = maker if maker in ctx.org.humans else admin_person(ctx)
         tico.needs_you(ctx.c, person, f"Payment of {int(pay['amount']) / 100:.2f} failed",
-                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.")
+                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.", private=True)
 
 
 def admin_person(ctx: Ctx) -> str:
@@ -386,19 +462,19 @@ def _hold(ctx: Ctx, pay: Any, why: str) -> str:
     if first:
         tico.needs_you(ctx.c, admin_person(ctx), f"Payment of {int(pay['amount']) / 100:.2f} is waiting",
                        f"Payment {pay['id']} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
-                       "own.")
+                       "own.", private=True)
     return "wait"
 
 
-def _own_counts(ctx: Ctx, pay: Any) -> set[tuple[str, str, str]]:
+def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[str, str, str]]:
     """The rule counters this payment already moved: its own action's, and those reserved when it was claimed to send
     (so a recheck or a retried send never counts it twice)."""
     out: set[tuple[str, str, str]] = set()
-    for raw in SK.loads_list(pay["counted_json"]):
+    for raw in SK.loads_list(counted_json):
         if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
             rule, key, subject = cast(list[Any], raw)
             out.add((str(rule), str(key), str(subject)))
-    run = SK.last_rule_run(ctx.c, str(pay["action_id"] or ""))
+    run = SK.last_rule_run(ctx.c, str(action_id or ""))
     if run is None:
         return out
     hits = cast(list[Any], SK.loads(run["outcome_json"]).get("hits") or [])
@@ -434,13 +510,22 @@ def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": SK.dump(owned)})
 
 
-def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str) -> bool:
-    """Whether what a rule asks for now was already given: the payer is who would approve it (as at the action), or
-    the person who approved the payment's action may approve it."""
+def decided_by(ctx: Ctx, action: Any) -> str:
+    """Who approved the payment's action: the decider of its Tico approval when that was approved ("" when it had none).
+    The action's own `approval_by` is the requester, never the decider."""
+    approval = str(action["approval_id"] or "") if action is not None else ""
+    appr = tico.approval(ctx.c, approval) if approval else None
+    return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
+
+
+def approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:
+    """Whether what a gate asks for now was already given: the payer may approve it themselves now (as at the action),
+    or the payment's action was approved for this very gate (its rule: an approval for one rule or budget never covers
+    another) by someone who may approve it."""
     if O.approver(ctx.org, who_needed, who, ctx.approver_setting()) == who:
         return True
-    by = str(action["approval_by"] or "") if action is not None else ""
-    if not by:
+    by = decided_by(ctx, action)
+    if not by or not rule or str(action["rule_id"] or "") != rule:
         return False
     if ctx.org.owner and by == ctx.org.owner:
         return True
@@ -464,6 +549,11 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
     line = ctx.accounts.get(str(pay["account_id"]))
     why = ""
+    if str(pay["mode"]) == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
+        # The company turned direct send off since the action: the payment takes the approval-queue route like any
+        # other, so the send below is a request, never a direct call (the switch is read here, in the claim).
+        SK.update(ctx.c, "fin_payments", str(pay["id"]), {"mode": "approval_queue", "updated_at": ctx.at})
+        pay = SK.get(ctx.c, "fin_payments", str(pay["id"]))
     right = K.authority(ctx.org, who, "payment_create", ctx.rights(who))
     if right is not None and right.outcome == "deny":
         why = "whoever asked for it no longer has the right to pay"
@@ -480,11 +570,11 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])
-    found = {"kind": "payment_create", "actor": who,
-             "actor.kind": "bot" if who in ctx.org.bots else "human", "actor.team": ctx.org.team_of.get(who, ""),
-             "now": ctx.at, "currency": ctx.book.base_currency,
-             **_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money)}
-    mine = _own_counts(ctx, pay)
+    # The same facts create gave the action, mode included (the mode the send now uses, after any switch above).
+    found = gating.send_facts(ctx, who, "payment_create",
+                              {**_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money),
+                               "mode": str(pay["mode"])})
+    mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -494,7 +584,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         why = verdict.reason or "a finance rule now refuses it"
         end(ctx, pay, "cancelled", why)
         return why
-    if verdict.outcome == "needs_approval" and (verdict.stale or not _approved_for(ctx, action, who, verdict.who)):
+    if verdict.outcome == "needs_approval" and (verdict.stale or
+                                                not approved_for(ctx, action, who, verdict.who, verdict.rule)):
         return _hold(ctx, pay, f"{verdict.reason or 'a finance rule asks for approval'}"
                                f"{' (its data is stale)' if verdict.stale else ''}")
     hold = SB.hold(ctx.c, str(pay["hold_id"])) if pay["hold_id"] else None
@@ -515,15 +606,26 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         why = "its budget hold is gone"
         end(ctx, pay, "cancelled", why)
         return why
+    elif str(pay["obligation"] or "").startswith("bill:"):
+        # A bill's payment holds no budget (the bill spent it): its bill's budgets are judged again as at the action,
+        # so one lowered past its actuals since asks a person first (never refused: the bill is owed either way).
+        from .documents import bill_budget
+        asks = bill_budget(ctx, str(pay["obligation"]).removeprefix("bill:"))
+        # Approved for this budget at the action: it goes, even if that budget dropped further since (the person
+        # approved paying this bill past it). A different budget now over asks again, unless the payer may approve.
+        if asks.outcome == "needs_approval" and not approved_for(ctx, action, who, asks.who, asks.rule):
+            budget = ctx.budgets().get(asks.rule.removeprefix("budget:"))
+            return _hold(ctx, pay, f"the {budget.name if budget else 'bill'} budget is over")
     if fresh is not None:
         fresh.extend(h for h in verdict.counts if (h.rule, h.period_key, h.subject) not in mine)
     return ""
 
 
 def request_body(pay: Any, rec: Any) -> dict[str, object]:
-    """The request-send-money body. The key goes in `note` and leads `externalMemo` too: Mercury's list of requests
-    returns a memo (undocumented which field it echoes), not the idempotency key, so an unknown request is found by its
-    key in what comes back, its recipient and its amount."""
+    """The body for a payment's send: request-send-money (approval queue), or the same fields to a direct transaction.
+    The key goes in `note` and leads `externalMemo` too: Mercury's list of requests returns a memo (undocumented which
+    field it echoes), not the idempotency key, so an unknown request is found by its key in what comes back, its
+    recipient and its amount."""
     key = f"{NOTE}{pay['idempotency_key']}"
     memo = str(pay["memo"] or "")
     body: dict[str, object] = {
@@ -539,6 +641,17 @@ def request_body(pay: Any, rec: Any) -> dict[str, object]:
 
 
 def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
+    if str(pay["mode"]) == "direct":
+        # A direct send is Mercury's transaction at once (no approver): submitted, and settled when its bank row posts.
+        # Its id is kept where an approval request's id goes, and the bank row matches it (banking._settle).
+        gone = str(answer.body.get("status") or "").lower() in ("failed", "blocked", "cancelled")
+        SK.update(ctx.c, "fin_payments", str(pay["id"]), {
+            "status": "submitted", "provider_request_id": str(answer.body.get("id") or answer.body.get("requestId") or ""),
+            "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
+            "updated_at": ctx.at})
+        if gone:
+            end(ctx, pay, "failed", f"Mercury refused the direct send ({answer.body.get('status')})")
+        return
     status = F.request_status(answer.body.get("status")) or "awaiting_bank_approval"
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {
         "status": status, "provider_request_id": str(answer.body.get("requestId") or answer.body.get("id") or ""),
@@ -600,18 +713,26 @@ def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
 
-def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
-    """Whether one of Mercury's requests is this payment: its key in a memo field that comes back, the same recipient
-    and the same amount. Mercury does not return the idempotency key."""
-    key = f"{NOTE}{pay['idempotency_key']}"
-    if not any(key in str(r.get(f) or "") for f in ("memo", "note", "externalMemo")):
-        return False
-    if rec is None or str(r.get("recipientId") or "") != str(rec["provider_recipient_id"] or ""):
+KEY_FIELDS = ("memo", "note", "externalMemo")     # the fields Mercury echoes a request's or a transfer's note in
+
+
+def keyed(key: str, row: Mapping[str, object], amount: int) -> bool:
+    """Whether one of Mercury's rows is the instruction with this idempotency key: the key (NOTE + key) in a field that
+    comes back, and this amount (Mercury's sign aside). Mercury does not return the idempotency key itself. Shared by
+    payments (requests) and transfers (transactions)."""
+    if not any(f"{NOTE}{key}" in str(row.get(f) or "") for f in KEY_FIELDS):
         return False
     try:
-        return F.cents(r.get("amount")) == int(pay["amount"])
+        return abs(F.cents(row.get("amount"))) == amount
     except FinanceError:
         return False
+
+
+def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
+    """Whether one of Mercury's requests is this payment: keyed, and to the same recipient."""
+    if rec is None or str(r.get("recipientId") or "") != str(rec["provider_recipient_id"] or ""):
+        return False
+    return keyed(str(pay["idempotency_key"]), r, int(pay["amount"]))
 
 
 def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]]) -> bool:
@@ -634,13 +755,13 @@ def not_found(ctx: Ctx, pay: Any) -> None:
     there)."""
     fields: dict[str, object] = {"next_try_at": _later(ctx, 2), "updated_at": ctx.at}
     since = str(pay["unknown_since"] or ctx.at)
-    age = _age(ctx, since) or 0
+    age = age_minutes(ctx, since) or 0
     if age >= UNKNOWN_ASK_MINUTES and not pay["flagged_at"]:
         fields["flagged_at"] = ctx.at
         tico.needs_you(ctx.c, admin_person(ctx), f"Check Mercury for a {int(pay['amount']) / 100:.2f} payment",
                        f"Payment {pay['id']} may or may not have reached Mercury (no answer since {since}). Look for "
-                       f"a request with note {NOTE}{pay['idempotency_key']}. If it is not there, cancel the payment "
-                       "in Finance; Finance will not send it again on its own.")
+                       f"a request or transaction with note {NOTE}{pay['idempotency_key']}. If it is not there, cancel the payment "
+                       "in Finance; Finance will not send it again on its own.", private=True)
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
 
@@ -650,10 +771,12 @@ def cut_off(ctx: Ctx, pay: Any) -> None:
 
 
 def feed_settled(ctx: Ctx, pay: Any, feed_id: str) -> None:
-    """Its bank transaction posted: settled, and the entry absorbed the hold."""
+    """Its bank transaction posted: settled, the entry absorbed the hold, and the bill it pays (if any) is settled."""
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "settled", "provider_txn_id": feed_id,
                                                       "settled_at": ctx.at, "next_try_at": None, "updated_at": ctx.at})
     _event(ctx, SENT, pay)
+    from .documents import payment_settled
+    payment_settled(ctx, pay, feed_id)             # a bill it pays is settled on the bank row's day
 
 
 def feed_failed(ctx: Ctx, request_id: str, status: str) -> None:
@@ -668,4 +791,4 @@ def feed_failed(ctx: Ctx, request_id: str, status: str) -> None:
 PLANNERS = {"recipient_add": recipient_add, "payment_create": payment_create, "payment_cancel": payment_cancel,
             "payment_settings": payment_settings}
 
-__all__ = ["PLANNERS", "recheck", "not_found", "cut_off", "unknown", "sent", "polled", "found", "feed_settled", "feed_failed", "request_body", "end"]
+__all__ = ["PLANNERS", "recheck", "own_counts", "approved_for", "not_found", "cut_off", "unknown", "sent", "polled", "found", "feed_settled", "feed_failed", "request_body", "end"]

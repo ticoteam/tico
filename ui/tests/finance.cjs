@@ -1,7 +1,12 @@
 // The Finance tab (ui/app/finance*.js) against a fake hub: Acme (acme.example) with an owner (Ana), a manager (Cara,
 // who leads Engineering) and a few bots. The owner sees every tab; the manager only P&L (expenses), Cards, Transactions
 // and Access, and Balance sheet / Sources stay hidden even by address. A budget cell edits on a double-click only in a
-// future month and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Each tab draws
+// future month and sends budget_update with effective_from; the card rail's Freeze sends card_freeze. Payables and
+// Receivables list bills and invoices with no totals row; their decisions run a dry run first and send the right action,
+// and both tabs hide from a viewer without payables or receivables (a payables grant shows only Payables, read only).
+// The Balance sheet's "+ Add" enters a journal entry and offers Loan, Asset and Import history. Cards: Unfreeze only
+// for a person's freeze, a bot card's Saved on chips (card_unsave). Transactions › Transfers cancels a queued one
+// (payment_cancel). Tax (owner only): Sales tax with Exempt, and 1099. The P&L marks imported months. Each tab draws
 // without errors and without sideways scroll on a phone. TICO_UI_SHOTS=<dir> saves screenshots (desktop and phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -35,13 +40,16 @@ const MATES = [
     grants: [{id: 'g3', subject_kind: 'teammate', subject: 'bot:bookkeeper', what: 'everything', whose: 'company', whose_team: null, account_ids: [],
       new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true}]}),
 ];
-function access(viewer) {
+function access(viewer, apGrant = false, apRights = []) {
   const base = {teams, private_lines: [{account_id: 'a-6200', name: 'Payroll', others_see: 'totals', full_detail: ['bot:bookkeeper']}],
     defaults: {manager: 'team_expenses', member: 'own_expenses', manager_payroll: 'totals'}, view_version: 'v1'};
   if (viewer === 'ana') return {...base, teammates: MATES, can_view_as: true, can_edit_defaults: true};
   const mine = ['human:cara', 'bot:eng-lead', 'bot:builder'];
+  const payables = {id: 'g4', subject_kind: 'teammate', subject: 'human:cara', what: 'payables', whose: 'company', whose_team: null, account_ids: [],
+    new_members: false, granted_by: 'human:ana', expires_at: null, status: 'active', live: true};
   return {...base, teams: teams.filter(t => ['eng', 'platform'].includes(t.id)), private_lines: [],
-    teammates: MATES.filter(m => mine.includes(m.teammate)), can_view_as: false, can_edit_defaults: false};
+    teammates: MATES.filter(m => mine.includes(m.teammate)).map(m => apGrant && m.teammate === 'human:cara' ? {...m, grants: [payables], rights: apRights} : m),
+    can_view_as: false, can_edit_defaults: false};
 }
 
 // The chart: [id, code, name, type, parent, monthly actual (cents), budget, private]
@@ -81,10 +89,11 @@ function pnl(url, me, noRevenue = false, noCogsProjection = false) {
     : ({account_id, code, name: base0, type, section: section(code), parent_id, private: false,
     actual: cols.map((c, i) => c.state === 'future' ? null : c.state === 'current' ? Math.round(wave(base, i) * 0.9) : wave(base, i)),
     total: 0, budget: budget == null ? null : cols.map(() => budget),
-    projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null)}));
+    projection: cols.map((c, i) => c.state === 'future' && !(noCogsProjection && code.startsWith('5')) ? wave(base, i + 1) : null), projection_method: 'trend'}));
   const sum = type => cols.map((c, i) => rows.filter(r => r.type === type).reduce((a, r) => a + (r.actual?.[i] || 0), 0));
   const income = sum('income'), expense = sum('expense');
   return {columns: cols, rows, income, expense, net: income.map((v, i) => v - expense[i]), excluded: rows.some(r => r.private), start: q.get('start'), end: q.get('end'), view_version: 'v1',
+    imported: viewer === 'human:ana' ? [{month: cols[0].label, basis: 'cash'}] : [], snapshot: null,
     filter: {teams: q.getAll('teams'), teammates: q.getAll('teammates'), who: q.get('who') || 'both', unattributed: q.get('unattributed') === 'true'},
     ...(view === 'expenses' ? {teammates: [{teammate: 'bot:eng-lead', kind: 'bot', spent: 182000, budget: 200000}, {teammate: 'bot:builder', kind: 'bot', spent: 96000, budget: 120000},
       {teammate: 'human:cara', kind: 'person', spent: 41000, budget: null}]} : {})};
@@ -106,7 +115,7 @@ function line(id, url) {
   if (vendor != null) return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor, total: 84000, excluded: 0, hidden: 0,
     by_vendor: [{key: vendor, label: vendor, amount: 84000}], by_team: [{key: 'eng', label: 'Engineering', amount: 60000}, {key: 'platform', label: 'Platform', amount: 24000}],
     by_teammate: [], paid_by: [{kind: 'card', name: 'Engineering', amount: 63000, count: 3}, {kind: 'bank', name: 'Checking ••0001', amount: 21000, count: 1}],
-    next_month: {month: iso(nm).slice(0, 7), projection: 310000},
+    next_month: {month: iso(nm).slice(0, 7), projection: 310000}, ...(vendor === 'GitHub' ? {seats: 12, renewal_on: '2027-01-15'} : {}),
     entries: [{line_id: 'l1', entry_id: 'e1', date: '2026-10-28', account_id: id, amount: 21000, vendor, description: vendor + ' Team', memo: '', source: 'feed', tags: {}}], more: false};
   return {account: {id: l[0], code: l[1], name: l[2], type: l[3]}, vendor: null, total: l[5], excluded: 0, hidden: 0,
     paid_by: [{kind: 'card', name: 'Engineering', amount: 84000, count: 4}], next_month: {month: iso(nm).slice(0, 7), projection: 310000},
@@ -131,9 +140,18 @@ const CARDS = [
   {id: 'card-1', provider: 'mercury', holder: 'bot:eng-lead', nickname: 'Engineering', last4: '4242', kind: 'virtual', status: 'active', limit: 200000, limit_interval: 'monthly',
     currency: 'USD', budget: {id: 'b-software', name: 'Software'}, spent: 182000, sync_status: 'ok', expires_at: '2028-10-31'},
   {id: 'card-2', provider: 'mercury', holder: 'bot:writer', nickname: 'Content tools', last4: '1881', kind: 'virtual', status: 'frozen', limit: 50000, limit_interval: 'monthly',
-    currency: 'USD', budget: null, spent: 12000, sync_status: 'ok'},
+    currency: 'USD', budget: null, spent: 12000, sync_status: 'ok', frozen_by: 'person',
+    saved_on: [{vendor: 'v-figma', label: 'Figma', saved_by: 'human:ana', saved_at: '2026-10-20T09:00:00Z'}]},
   {id: 'card-3', provider: 'mercury', holder: 'human:cara', nickname: 'Travel', last4: '3007', kind: 'physical', status: 'active', limit: 300000, limit_interval: 'monthly',
-    currency: 'USD', budget: null, spent: 41000, sync_status: 'ok'}];
+    currency: 'USD', budget: null, spent: 41000, sync_status: 'ok'},
+  {id: 'card-4', provider: 'mercury', holder: 'bot:builder', nickname: 'Build tools', last4: '5150', kind: 'virtual', status: 'frozen', limit: 80000, limit_interval: 'monthly',
+    currency: 'USD', budget: {id: 'b-software', name: 'Software'}, spent: 80000, sync_status: 'ok', frozen_by: 'budget', saved_on: []}];
+const TRANSFERS = [{id: 'xf-1', status: 'queued', amount: 500000, currency: 'USD', memo: 'to savings', from: {id: 'm1', name: 'Checking', last4: '0001'},
+  to: {id: 'm2', name: 'Savings', last4: '0002'}, created_by: 'human:ana', created_at: '2026-10-29T10:00:00Z', settled_at: null, last_error: null}];
+const SALES_TAX = {year: 2026, currency: 'USD', rows: [{period: '2026-Q3', code: 'CA', jurisdiction: 'California', taxable_sales: 1200000, exempt_sales: 300000,
+  tax_collected: 87000, tax_remitted: 60000, due: 27000, due_on: '2026-10-31'}]};
+const F1099 = {year: 2026, currency: 'USD', threshold: 60000, due_on: '2027-01-31', rows: [{vendor_id: 'v-northwind', vendor: 'Northwind Design', tin_on_file: false,
+  cash_paid: 610000, card_paid_excluded: 0, threshold: 60000, reportable: true}]};
 const TX = [
   {kind: 'feed', id: 'f1', date: '2026-10-29', amount: -21000, currency: 'USD', counterparty: 'GitHub', description: 'GITHUB.COM', status: 'posted', pending: false, card_id: 'card-1',
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l1', account_id: 'a-6100', account: 'Software', amount: 21000, vendor: 'GitHub', tags: {teammate: 'bot:eng-lead', budget: 'b-software'}}]},
@@ -162,15 +180,67 @@ const SOURCES = {groups: [
     payments: {mode: 'approval_queue', eligible: true, enabled: false, direct_send: false, why_not: null}}]},
   {group: 'payroll', name: 'Payroll', count: 0, rows: []},
   {group: 'manual', name: 'Manual', count: 1, rows: [{id: 'manual', kind: 'entries', name: 'Journal entries and imports', manual: 4, import: 0}]}]};
+// Bills and invoices (GET /v2/finance/bills, /invoices and one of each): FinanceDocumentRow and FinanceDocument.
+const doc = (kind, id, number, contact, status, total, due, extra = {}) => ({id, kind, number, [kind === 'bill' ? 'vendor' : 'customer']: contact,
+  date: '2026-10-20', due_date: due, status, currency: 'USD', total, paid: 0, remaining: ['draft', 'paid', 'void'].includes(status) ? 0 : total,
+  aging: ['draft', 'paid', 'void'].includes(status) ? null : 'current', days_late: 0, memo: '', entry_id: null, attachments: 0,
+  created_by: 'bot:bookkeeper', created_at: '2026-10-20T09:00:00Z',
+  ...(kind === 'bill' ? {origin: 'email', approved_by: null, approved_at: null, pay_on: null} : {sent_at: '2026-10-15', written_off: 0, payment_link: null}), ...extra});
+const BILLS = [
+  doc('bill', 'bill-1', 'INV-2291', {id: 'v-figma', name: 'Figma'}, 'draft', 180000, '2026-11-03', {attachments: 1}),
+  doc('bill', 'bill-2', '#118', {id: 'v-northwind', name: 'Northwind Design'}, 'open', 250000, '2026-11-05', {approved_by: 'human:ana'}),
+  doc('bill', 'bill-3', 'Oct-2026', {id: 'v-vercel', name: 'Vercel'}, 'scheduled', 124000, '2026-11-12', {pay_on: '2026-11-11',
+    payment: {id: 'pay-3', status: 'awaiting_bank_approval', amount: 124000, on: '2026-11-11', error: null}}),
+  // Its last payment was rejected in Mercury: the bill is open again and says so.
+  doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16,
+    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
+  // Its scheduled payment's approval was declined before any payment existed: open, and says so.
+  doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
+    payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}}),
+  // Scheduled for a later day, no payment yet: it can move to another day.
+  doc('bill', 'bill-6', 'NW-9', {id: 'v-northwind', name: 'Northwind Design'}, 'scheduled', 40000, '2026-12-20', {pay_on: '2099-12-18'})];
+const INVOICES = [
+  doc('invoice', 'inv-1', '#1047', {id: 'c-bright', name: 'Brightline Studio'}, 'sent', 400000, '2026-11-14'),
+  doc('invoice', 'inv-2', '#1033', {id: 'c-pine', name: 'Pine & Co'}, 'sent', 150000, '2026-09-20', {aging: '31_60', days_late: 41}),
+  doc('invoice', 'inv-3', '#1051', {id: 'c-north', name: 'Northstar Labs'}, 'partial', 320000, '2026-11-27', {paid: 100000, remaining: 220000})];
+const docDetail = r => ({...r, terms_days: 30, view_version: 'v1',
+  lines: [{id: 'dl-' + r.id, account: r.kind === 'bill' ? {id: 'a-6100', code: '6100', name: 'Software'} : {id: 'a-4200', code: '4200', name: 'Services'},
+    amount: r.total, description: 'Seats', tags: {}}],
+  attachments: r.attachments ? [{id: 'att-1', file_id: 'file-1', created_by: 'bot:bookkeeper', created_at: '2026-10-20T09:00:00Z'}] : [],
+  // Part came in on a bank row; the rest was marked paid and its bank row has not arrived (from_kind expected).
+  settlements: r.paid ? [{id: 's-1', from_kind: 'feed', from_id: 'f9', amount: 60000, settled_on: '2026-10-25', entry_id: 'e9', voided_at: null, created_by: 'bot:bookkeeper'},
+    {id: 's-2', from_kind: 'expected', from_id: 'm1', amount: r.paid - 60000, settled_on: '2026-10-29', entry_id: 'e10', voided_at: null, created_by: 'human:ana'}] : [],
+  actions: r.id === 'bill-1' ? [{action_id: 'act-b1', kind: 'bill_approve', status: 'needs_approval', actor: 'bot:bookkeeper', approval_id: 'ap-1',
+    approval_to: 'human:ana', rule_id: 'r-1', created_at: '2026-10-20T09:01:00Z'}] : [],
+  ...(r.kind === 'bill' ? {schedule: r.pay_on && !r.payment ? {pay_on: r.pay_on, money_account_id: 'm2', action_id: null} : null} : {})});
+const CONTACTS = [{id: 'v-figma', name: 'Figma', kind: 'vendor'}, {id: 'v-northwind', name: 'Northwind Design', kind: 'vendor'},
+  {id: 'c-bright', name: 'Brightline Studio', kind: 'customer'}, {id: 'c-pine', name: 'Pine & Co', kind: 'customer'}]
+  .map(c => ({...c, emails: [], default_account: null, is_1099: false, has_tax_id: false, tax_id_last4: null, recipient_id: null, active: true, owed: {}}));
+const listDocs = (rows, url) => {
+  const status = url.searchParams.get('status') || '', q = (url.searchParams.get('q') || '').toLowerCase();
+  const open = ['draft', 'open', 'scheduled', 'sent', 'partial'];
+  return rows.filter(r => (!status || (status === 'unpaid' ? open.includes(r.status) : r.status === status))
+    && (!q || (r.vendor || r.customer).name.toLowerCase().includes(q) || r.number.toLowerCase().includes(q)));
+};
 
 // ----------------------------------------------------------------- the fake hub
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false} = {}) {
+// GET /v2/finance/chart: bills post to expense and asset lines, invoices to income lines, journals to any line. The
+// balance-sheet lines here and the P&L lines (not private) of LINES.
+const CHART = [...[['a-1010', '1010', 'Checking', 'asset', 'bank'], ['a-1020', '1020', 'Savings', 'asset', 'bank'], ['a-1200', '1200', 'Accounts receivable', 'asset', 'receivable'],
+  ['a-1300', '1300', 'Prepaid expenses', 'asset', 'prepaid'], ['a-2000', '2000', 'Accounts payable', 'liability', 'payable'], ['a-2100', '2100', 'Card balance', 'liability', 'card']]
+  .map(([id, number, name, type, subtype]) => ({id, number, name, type, subtype, parent_id: null, company_wide: true})),
+  ...LINES.filter(l => !l[7]).map(([id, number, name, type, parent_id]) => ({id, number, name, type, subtype: '', parent_id, company_wide: true}))];
+const chartFor = use => CHART.filter(a => use === 'bill' ? ['expense', 'asset'].includes(a.type) && !['payable', 'receivable'].includes(a.subtype)
+  : use === 'invoice' ? a.type === 'income' : true);
+
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false, noCogsProjection = false, apGrant = false, apRights = [], budgetsExcl = false} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
   // hub.ask: dry runs need this approver; hub.hold: dry runs wait for it; hub.apply: a categorize that moves a bank row
-  // to a line shows in the next transactions read (this page's own copy of TX).
-  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false}, tx = structuredClone(TX);
+  // to a line shows in the next transactions read (this page's own copy of TX); hub.noChart: the chart read fails.
+  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false, noChart: false, impact: null}, tx = structuredClone(TX);
+  let billsEmail = 'bills@acme.example';
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -194,28 +264,69 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/needs-you') return json({items: [], version: 'v0', count: 0, next: null});
     if (p === '/api/v2/conversations') return json({conversations: []});
     const denied = () => json({error: {code: 'denied', detail: 'Not in your view'}}, 403);
-    if (p === '/api/v2/finance/access') return json(access(viewer));
+    if (p === '/api/v2/finance/access') return json(access(viewer, apGrant, apRights));
+    // Payables for the owner and a payables grant; receivables for the owner only (backend/finance/tab_ap.py).
+    const seesAp = viewer === 'ana' || apGrant, seesAr = viewer === 'ana';
+    if (p === '/api/v2/finance/bills') return seesAp ? json({bills: listDocs(BILLS, url), next_cursor: null, currency: 'USD', view_version: 'v1', bills_email: billsEmail,
+      open: {count: 3, remaining: 513000, aging: {current: 374000, '1_30': 139000, '31_60': 0, '61_90': 0, over_90: 0}, more: false}}) : denied();
+    if (p === '/api/v2/finance/invoices') return seesAr ? json({invoices: listDocs(INVOICES, url), next_cursor: null, currency: 'USD', view_version: 'v1',
+      open: {count: 3, remaining: 770000, aging: {current: 620000, '1_30': 0, '31_60': 150000, '61_90': 0, over_90: 0}, more: false}}) : denied();
+    if (p.startsWith('/api/v2/finance/bills/') || p.startsWith('/api/v2/finance/invoices/')) {
+      const r = [...(seesAp ? BILLS : []), ...(seesAr ? INVOICES : [])].find(x => x.id === decodeURIComponent(p.split('/').pop()));
+      return r ? json(docDetail(r)) : json({error: {code: 'not_found', detail: 'no such document in your view'}}, 404);
+    }
+    if (p === '/api/v2/finance/contacts') return json({contacts: CONTACTS.filter(c => !url.searchParams.get('kind') || c.kind === url.searchParams.get('kind')), next_cursor: null, view_version: 'v1'});
+    // The form pickers: the chart for teammates who write to the books, the bank accounts for finance.pay.
+    const rights = viewer === 'ana' ? ALL_RIGHTS : apRights;
+    // For the owner, Contractors stands in for a line that is not company-wide, so its amounts need a For (the viewer
+    // first); for anyone else no P&L line is.
+    if (p === '/api/v2/finance/chart' && hub.noChart) return json({error: {code: 'down', detail: 'down'}}, 500);
+    if (p === '/api/v2/finance/chart') return ['finance.book', 'finance.ap', 'finance.ar'].some(r => rights.includes(r))
+      ? json({accounts: chartFor(url.searchParams.get('for')).map(a => viewer === 'ana'
+        ? (a.id === 'a-6300' ? {...a, company_wide: false, attributable: [{teammate: 'human:ana'}, {team: 'eng'}, {team: 'platform'}, {teammate: 'bot:builder'}]} : a)
+        : !['expense', 'income'].includes(a.type) ? a
+        : {...a, company_wide: false, attributable: [{team: 'eng'}, {team: 'platform'}, {teammate: 'bot:builder'}, {teammate: 'bot:eng-lead'}, {teammate: 'human:cara'}]}),
+        more: false, view_version: 'v1'}) : denied();
+    if (p === '/api/v2/finance/pay-from') return rights.includes('finance.pay')
+      ? json({accounts: [{id: 'm1', name: 'Checking', provider: 'mercury', last4: '0001', balance: 17105000}, {id: 'm2', name: 'Savings', provider: 'mercury', last4: '0002', balance: 1315000}],
+        currency: 'USD', view_version: 'v1'}) : denied();
+    // The bills address: only an Email & Phone inbox's address has an inbox; any other is kept with inbox_id null.
+    if (p === '/api/v2/finance/bills-address' && method === 'PUT') {
+      billsEmail = body.address;
+      return json({bills_email: billsEmail, inbox_id: billsEmail === 'bills@acme.example' ? 'ib-1' : null});
+    }
     if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue, noCogsProjection));
-    if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
+    // budgetsExcl: a viewer whose budget figures leave payroll out (the read and each row say excluded).
+    if (p === '/api/v2/finance/budgets') return json(budgetsExcl ? {budgets: BUDGETS.map(b => ({...b, state: {...b.state, excluded: true}})), more: false, excluded: true} : {budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
     if (p === '/api/v2/finance/mercury-users') return json({users: [{id: 'mu-1', name: 'Ana Silva', connection_id: 'c1', email: 'a•••@acme.example', updated_at: '2026-10-30T10:00:00Z'},
       {id: 'mu-2', name: 'Ops Card User', connection_id: 'c1', email: 'o•••@acme.example', updated_at: '2026-10-30T10:00:00Z'}]});
     if (p === '/api/v2/finance/balance-sheet') return viewer === 'ana' ? json(BS) : denied();
     if (p === '/api/v2/finance/cards') return json({cards: viewer === 'ana' ? CARDS : CARDS.filter(c => c.holder !== 'bot:writer'), next: null});
     if (p === '/api/v2/finance/transactions') return json({rows: tx, next: null});
-    // The lines one may post to (backend/finance/tab.py chart); Contractors stands in for a line that is not
-    // company-wide for the viewer, so its amounts need a For (attributable, the viewer first).
-    if (p === '/api/v2/finance/chart') return hub.noChart ? json({error: 'down'}, 500) : json({accounts: LINES.filter(l => !l[7]).map(([id, number, name, type, parent_id]) =>
-      ({id, number, name, type, subtype: '', parent_id, company_wide: id !== 'a-6300',
-        ...(id === 'a-6300' ? {attributable: [{teammate: 'human:' + viewer}, {team: 'eng'}, {team: 'platform'}, {teammate: 'bot:builder'}]} : {})})),
-      more: false, view_version: 'v1'});
+    // The new Figma row ($99): two Figma payments marked paid add up to it; one Northwind payment is the same amount.
+    if (p === '/api/v2/finance/feed/f2/expected') return json({feed_id: 'f2', kind: 'bill', amount: 9900, date: '2026-10-28', more: false, view_version: 'v1', expected: [
+      {settlement_id: 's-a', kind: 'bill', document_id: 'bill-5', number: 'FG-1', contact_id: 'v-figma', contact_name: 'Figma', amount: 6000, marked_on: '2026-10-26'},
+      {settlement_id: 's-b', kind: 'bill', document_id: 'bill-6', number: 'FG-2', contact_id: 'v-figma', contact_name: 'Figma', amount: 3900, marked_on: '2026-10-27'},
+      {settlement_id: 's-c', kind: 'bill', document_id: 'bill-2', number: '#118', contact_id: 'v-northwind', contact_name: 'Northwind Design', amount: 9900, marked_on: '2026-10-27'}]});
+    if (p.startsWith('/api/v2/finance/feed/')) return json({feed_id: p.split('/')[5], kind: 'bill', amount: 0, date: '', more: false, view_version: 'v1', expected: []});
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
+    if (p === '/api/v2/finance/transfers') return viewer === 'ana' ? json({transfers: TRANSFERS, next_cursor: null}) : denied();
+    if (p === '/api/v2/finance/tax/sales-tax') return viewer === 'ana' ? json(SALES_TAX) : denied();
+    if (p === '/api/v2/finance/tax/1099') return viewer === 'ana' ? json(F1099) : denied();
+    if (p === '/api/v2/triggers' && method === 'GET') return json({triggers: []});
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.hold) await hub.hold;
-    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: {}});
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: hub.impact || {}});
     const moved = body?.kind === 'categorize' && !body.dry_run && hub.apply && tx.find(r => r.id === body.payload?.feed_id);
-    if (moved) moved.lines = [{line_id: 'l-' + moved.id, account_id: body.payload.account_id, account: LINES.find(l => l[0] === body.payload.account_id)?.[2],
+    if (moved) moved.lines = [{line_id: 'l-' + moved.id, account_id: body.payload.account_id, account: CHART.find(a => a.id === body.payload.account_id)?.name,
       amount: -moved.amount, vendor: moved.counterparty, tags: body.payload.tags}];
-    if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
+    // The rules send a bill's schedule to the owner for approval: its dry run says so, then the request is sent.
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run) return json(body.kind === 'bill_schedule'
+      ? {status: 'needs_approval', kind: body.kind, action_id: '', approver: 'human:ana', reason: '', dry_run: true, result: {}, impact: {}}
+      : {status: 'committed', kind: body.kind, action_id: '', approver: null, reason: '', dry_run: true, result: {}, impact: {}});
+    if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind,
+      status: body.kind === 'bill_schedule' ? 'needs_approval' : 'committed', code: null, reason: null, approver: null,
+      result: {contact_create: {contact_id: 'v-new'}, bill_create: {bill_id: 'bill-2'}, invoice_create: {invoice_id: 'inv-9'}}[body.kind] || {}});
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + hash);
@@ -228,6 +339,8 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
 const tabs = page => page.locator('#fin-head [data-fin-tab]').allInnerTexts();
 const sideways = page => page.evaluate(() => [document.documentElement, document.querySelector('#main')].some(el => el && el.scrollWidth > el.clientWidth + 1));
 const actions = writes => writes.filter(w => w[1] === '/api/v2/finance/actions').map(w => w[2]);
+// The real requests only (a decision's dry run comes first).
+const sent = writes => actions(writes).filter(a => !a.dry_run);
 // Waits (up to 3s) for something the fake hub records, then a beat for the page to redraw.
 async function settled(done) {
   for (let t = Date.now(); !done() && Date.now() - t < 3000;) await new Promise(r => setTimeout(r, 20));
@@ -246,7 +359,8 @@ async function go(page, hash, ready) {
   await page.evaluate(h => { location.hash = h; }, hash);
   await page.locator(ready).first().waitFor();
 }
-const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', transactions: '[data-fin-tx]', sources: '[data-fin-group]', access: '[data-fin-mate]'};
+const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="bill-1"]', receivables: 'tr[data-fin-doc="inv-1"]', cards: '[data-fin-card]', transactions: '[data-fin-tx]',
+  tax: 'tr[data-fin-tax]', sources: '[data-fin-group]', access: '[data-fin-mate]'};
 
 (async () => {
   const browser = await chromium.launch();
@@ -256,11 +370,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       const tag = 'owner';
       const {page, errors, writes, reads, hub} = await open(browser);
       await page.locator('.fin-pl').waitFor();
-      assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Cards', 'Transactions', 'Sources', 'Access'], tag + ': every phase 1 tab, in order');
+      assert.deepEqual(await tabs(page), ['P&L', 'Balance sheet', 'Payables', 'Receivables', 'Cards', 'Transactions', 'Tax', 'Sources', 'Access'], tag + ': every tab, in order');
       assert.equal(await page.locator('#side a[data-nav="finance"]').count(), 1, tag + ': Finance in the sidebar');
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       for (const want of ['Gross profit', 'Gross margin', 'Total operating expenses', 'Net income']) assert.ok(firsts.includes(want), `${tag}: the statement has ${want}`);
       assert.equal(await page.locator('.fin-pl thead th.fin-p').count() > 0, true, tag + ': projected columns are shaded');
+      assert.equal(await page.locator('.fin-pl thead .fin-tag').first().textContent(), 'Imported', tag + ': an imported month says so');
       // The budget column is the current month's: not editable, and a double-click does nothing.
       assert.equal(await page.locator('td[data-fin-budget]').count(), 0, tag + ': the current month\'s budgets are not editable');
       const softwareBudget = page.locator('.fin-ln:has(a[href$="/line/a-6100"]) td.fin-b').last();
@@ -293,7 +408,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('td[data-fin-budget="a-5100"]').dblclick();
       assert.equal(await page.locator('.fin-cell-in').inputValue(), '4000.50', tag + ': the editor seeds exact cents');
       const before = actions(writes).length;
-      await page.locator('#fin-head').click();
+      await page.locator('#fin-head h1').click();
       await page.waitForFunction(() => !document.querySelector('.fin-cell-in'));
       await page.waitForTimeout(100);
       assert.equal(actions(writes).length, before, tag + ': blur on an untouched budget posts nothing');
@@ -341,6 +456,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       const lineRail = await page.locator('#fin-rail').innerText();
       for (const want of ['Paid by', 'Card · Engineering', 'Checking ••0001', 'By team', 'Platform', 'Transactions']) assert.ok(lineRail.toLowerCase().includes(want.toLowerCase()), `${tag}: the vendor rail has ${want}`);
       assert.match(lineRail, /Software · \w{3} projected\s+\$3,100/, tag + ': next month projected (the line\'s)');
+      assert.match(lineRail, /Seats\s+12[\s\S]*Renews\s+Jan 15/, tag + ': seats and renewal when the read has them');
       await shot(page, 'line-desktop');
       // A line with no budget of its own offers a line budget first, not a vendor one.
       await go(page, '#/finance/line/a-5200', '[data-fin-key="GitHub"]');
@@ -434,6 +550,14 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('#fin-rail [data-fin-freeze]').click();
       await page.waitForTimeout(100);
       assert.deepEqual(actions(writes).at(-1), {kind: 'card_unfreeze', payload: {card_id: 'card-2'}}, tag + ': Unfreeze sends card_unfreeze');
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-saved] .fin-chip').allInnerTexts().then(t => t.map(x => x.replace('✕', '').trim())), ['Figma'], tag + ': a bot card is saved on Figma');
+      await page.locator('#fin-rail [data-fin-unsave="v-figma"]').click();
+      await settled(() => actions(writes).at(-1)?.kind === 'card_unsave');
+      assert.deepEqual(actions(writes).at(-1), {kind: 'card_unsave', payload: {card_id: 'card-2', vendor: 'v-figma'}}, tag + ': ✕ sends card_unsave');
+      await page.locator('[data-fin-card="card-4"]').click();
+      await page.locator('#fin-rail .fin-rail-title').waitFor();
+      assert.equal(await page.locator('#fin-rail [data-fin-freeze]').count(), 0, tag + ': a budget freeze has no Unfreeze');
+      assert.match(await page.locator('[data-fin-card="card-4"]').innerText(), /Frozen · Budget/, tag + ': it says the budget froze it');
       await page.locator('[data-fin-card-add]').click();
       await page.locator('dialog.fin-dlg[open] select[name="user"] option').first().waitFor({state: 'attached'});
       assert.equal(await page.locator('dialog.fin-dlg input[name="user"]').count(), 0, tag + ': no typed Mercury user id');
@@ -475,6 +599,27 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForFunction(() => FIN.tx.rows.find(r => r.id === 'f1')?.lines[0]?.account_id === 'a-5100');
       assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-5100', tag + ': after the reload the rail shows the new line');
       assert.equal(await page.locator(save).isDisabled(), true, tag + ': and nothing left to save');
+      assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/feed/f1/')), tag + ': a posted row asks for no match');
+      assert.equal(await page.locator('#fin-tx-match').innerHTML(), '', tag + ': no Match section on a posted row');
+      // A new row: its expected payments, matched once the checked ones are one contact's and add up to the row.
+      await page.locator('[data-fin-tx="feed:f2"]').click();
+      await page.locator('#fin-rail .fin-match').first().waitFor();
+      assert.deepEqual((await page.locator('#fin-rail .fin-match').allInnerTexts()).map(t => t.replace(/\s+/g, ' ').trim()),
+        ['Figma FG-1 $60 Oct 26', 'Figma FG-2 $39 Oct 27', 'Northwind Design #118 $99 Oct 27'], tag + ': the expected payments');
+      const matchBtn = page.locator('#fin-rail [data-fin-match]'), tick = id => page.locator(`#fin-rail .fin-match input[value="${id}"]`).check();
+      assert.equal(await matchBtn.isDisabled(), true, tag + ': Match waits for a pick');
+      await tick('s-a');
+      assert.equal(await matchBtn.isDisabled(), true, tag + ': $60 of $99 does not match');
+      await tick('s-b');
+      assert.equal(await matchBtn.isDisabled(), false, tag + ': $60 + $39 matches');
+      await tick('s-c');
+      assert.equal(await matchBtn.isDisabled(), true, tag + ': two contacts, or more than the row, do not');
+      await page.locator('#fin-rail .fin-match input[value="s-c"]').uncheck();
+      await shot(page, 'transactions-match-desktop');
+      await matchBtn.click();
+      for (let i = 0; i < 50 && !sent(writes).some(w => w.kind === 'feed_match'); i++) await page.waitForTimeout(50);
+      assert.deepEqual(actions(writes).slice(-2), [{kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}, dry_run: true},
+        {kind: 'feed_match', payload: {feed_id: 'f2', settlement_ids: ['s-a', 's-b']}}], tag + ': a dry run, then feed_match');
       // A row a rule split: Mixed where its lines differ; the same line changes only the field set.
       await page.locator('[data-fin-tx="feed:f4"]').click();
       assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
@@ -578,6 +723,19 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator(cat + ' select[name="team"]').selectOption('eng');
       await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
       await shot(page, 'transactions-categorize-desktop');
+      await page.locator('[data-fin-seg="source"] button[data-v="transfer"]').click();
+      await page.locator('#fin-rail [data-fin-xfer-cancel]').waitFor();
+      await page.locator('#fin-rail [data-fin-xfer-cancel]').click();
+      await settled(() => actions(writes).at(-1)?.kind === 'payment_cancel');
+      assert.deepEqual(actions(writes).at(-1), {kind: 'payment_cancel', payload: {transfer_id: 'xf-1'}}, tag + ': Cancel transfer sends payment_cancel');
+      await shot(page, 'transfers-desktop');
+      await page.evaluate(() => { FIN_TX.source = 'all'; });
+      await go(page, '#/finance/tax', READY.tax);
+      assert.deepEqual(await page.locator('#fin-tax thead th').allInnerTexts(), ['QUARTER', 'JURISDICTION', 'TAXABLE', 'EXEMPT', 'COLLECTED', 'REMITTED', 'DUE', 'DUE ON'], tag + ': the sales tax columns');
+      await shot(page, 'tax-desktop');
+      await page.locator('[data-fin-seg="tax"] button[data-v="1099"]').click();
+      await page.locator('tr[data-fin-tax="v-northwind"]').waitFor();
+      assert.match(await page.locator('tr[data-fin-tax="v-northwind"]').innerText(), /Northwind Design\s+Missing\s+6,100/, tag + ': a 1099 vendor without a TIN');
       await go(page, '#/finance/sources', READY.sources);
       await page.locator('[data-fin-group="banks"]').click();
       await page.locator('[data-fin-src="bank:m1"]').click();
@@ -617,6 +775,222 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       assert.deepEqual(actions(writes).at(-1), {kind: 'view_defaults_set', payload: {manager_payroll: 'hidden'}}, tag + ': view_defaults_set with what changed');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // The owner's Payables and Receivables: plain rows and no totals row; each decision is a dry run, then the action
+    // (one the rules send for approval names the approver first); the Balance sheet's "+ Add" posts a journal entry.
+    {
+      const tag = 'payables';
+      const {page, errors, writes} = await open(browser, {hash: '#/finance/payables'});
+      const today = await page.evaluate(() => finToday());
+      const heads = async () => (await page.locator('.fin-doc-t thead th').allInnerTexts()).map(t => t.toUpperCase());
+      await page.locator(READY.payables).waitFor();
+      assert.deepEqual(await heads(), ['VENDOR', 'BILL', 'DUE', 'AGING', 'AMOUNT', 'STATUS', 'PAYS'], tag + ': the bill columns');
+      assert.equal(await page.locator('.fin-doc-t tbody tr').count(), BILLS.length, tag + ': one row per bill, no totals row');
+      const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(6)`).innerText()).replace(/\s+/g, ' ').trim();
+      assert.equal(await statusOf('bill-3'), 'Approve in Mercury', tag + ': a bill paying now shows its payment\'s state');
+      assert.equal(await statusOf('bill-4'), 'Open Pay cancelled', tag + ': a rejected payment shows beside Open');
+      assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
+      assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
+      assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
+      // The owner sets the address: an inbox address saves; any other saves but says it is not an inbox's; empty clears it.
+      const setEmail = async value => {
+        await page.locator('[data-fin-email-set]').click();
+        await page.locator('dialog.fin-dlg[open] input[name="address"]').fill(value);
+        await page.locator('dialog.fin-dlg[open] [type=submit]').click();
+      };
+      await setEmail('ap@acme.example');
+      await page.locator('dialog.fin-dlg[open] [data-error]:not([hidden])').waitFor();
+      assert.equal(await page.locator('dialog.fin-dlg [data-error]').innerText(), 'Not an inbox address', tag + ': an address no inbox has is named');
+      assert.deepEqual(writes.at(-1).slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: 'ap@acme.example'}], tag + ': PUT the address');
+      await page.locator('dialog.fin-dlg[open] input[name="address"]').fill('bills@acme.example');
+      await page.locator('dialog.fin-dlg[open] [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(writes.at(-1).slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: 'bills@acme.example'}], tag + ': an inbox address saves');
+      await setEmail('');
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(writes.at(-1).slice(0, 3), ['PUT', '/api/v2/finance/bills-address', {address: null}], tag + ': empty clears it');
+      assert.equal((await page.locator('[data-fin-email-set]').innerText()).trim(), 'Bills address', tag + ': no address: a Bills address button');
+      await setEmail('bills@acme.example');
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      await page.locator('#fin-rail [data-fin-do="approve"]').waitFor();
+      const rail = await page.locator('#fin-rail').innerText();
+      assert.match(rail, /Lines[\s\S]*Software · Seats[\s\S]*Files[\s\S]*Approvals\s+Approve\s+Waiting Ana Silva/i, tag + ': lines, files and approvals');
+      assert.equal(await page.locator('#fin-rail a[href="/api/v2/files/file-1"]').count(), 1, tag + ': the bill\'s file links to the Library');
+      await shot(page, 'payables-desktop');
+      await page.locator('#fin-rail [data-fin-do="approve"]').click();
+      await page.waitForFunction(() => !document.querySelector('#fin-rail [data-fin-do="approve"]:disabled'));
+      await page.waitForTimeout(100);
+      assert.deepEqual(actions(writes).slice(-2), [{kind: 'bill_approve', payload: {bill_id: 'bill-1'}, dry_run: true}, {kind: 'bill_approve', payload: {bill_id: 'bill-1'}}],
+        tag + ': Approve is a dry run, then bill_approve');
+      // Schedule: the rules ask the owner, so the dialog says so and the second Save sends it.
+      await page.locator('tr[data-fin-doc="bill-2"]').click();
+      await page.locator('#fin-rail [data-fin-do="schedule"]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="from"] option').allInnerTexts(), ['Checking ••0001', 'Savings ••0002'], tag + ': the accounts to pay from');
+      const payOn = await page.locator('dialog.fin-dlg input[name="on"]').inputValue();
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg [data-ask]:not([hidden])').waitFor();
+      assert.equal(await page.locator('dialog.fin-dlg [data-ask]').innerText(), 'Approval from Ana Silva', tag + ': the approver is named before sending');
+      assert.equal(sent(writes).filter(a => a.kind === 'bill_schedule').length, 0, tag + ': nothing sent by the dry run');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_schedule', payload: {bill_id: 'bill-2', pay_on: payOn, money_account_id: 'm1'}}, tag + ': bill_schedule from the bank picked');
+      assert.equal(actions(writes).filter(a => a.kind === 'bill_schedule' && a.dry_run).length, 1, tag + ': one dry run');
+      await page.locator('tr[data-fin-doc="bill-4"]').click();
+      await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Pay cancelled rejected in Mercury/, tag + ': the rail says why it was not paid');
+      await page.locator('#fin-rail [data-fin-do="paid"]').click();
+      assert.equal(await page.locator('dialog.fin-dlg input[name="amount"]').inputValue(), '1390', tag + ': Mark paid starts at what is left');
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="from"] option').allInnerTexts(), ['Checking ••0001', 'Savings ••0002', 'Elsewhere'], tag + ': paid from a bank account or elsewhere');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_mark_paid', payload: {bill_id: 'bill-4', amount: 139000, date: today, money_account_id: 'm1'}}, tag + ': bill_mark_paid');
+      await page.locator('tr[data-fin-doc="bill-3"]').click();
+      await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': a scheduled bill is paid or voided, not scheduled again');
+      assert.match(await page.locator('#fin-rail').innerText(), /Payment\s+Approve in Mercury/, tag + ': the rail shows the payment\'s state');
+      await page.locator('tr[data-fin-doc="bill-6"]').click();
+      await page.locator('#fin-rail [data-fin-do="schedule"]').waitFor();
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid', 'Reschedule'], tag + ': a scheduled bill with no payment yet moves');
+      await page.locator('#fin-rail [data-fin-do="schedule"]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      assert.equal(await page.locator('dialog.fin-dlg input[name="on"]').inputValue(), '2099-12-18', tag + ': Reschedule starts at its day');
+      assert.equal(await page.locator('dialog.fin-dlg select[name="from"]').inputValue(), 'm2', tag + ': Reschedule keeps its bank account');
+      await page.locator('dialog.fin-dlg input[name="on"]').fill('2099-12-20');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg [data-ask]:not([hidden])').waitFor();
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_schedule', payload: {bill_id: 'bill-6', pay_on: '2099-12-20', money_account_id: 'm2'}}, tag + ': Reschedule is bill_schedule');
+      // + Bill naming an existing vendor in another case picks that vendor; no second contact is made.
+      await page.locator('[data-fin-doc-add]').click();
+      await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');
+      await page.locator('dialog.fin-dlg input[name="name"]').fill('figma');
+      await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
+      await page.locator('dialog.fin-dlg input[name="amount"]').fill('12');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_create', payload: {vendor_id: 'v-figma', bill_date: today, lines: [{account_id: 'a-6100', amount: 1200}], origin: 'manual'}},
+        tag + ': an existing name picks its contact');
+      assert.equal(sent(writes).filter(a => a.kind === 'contact_create').length, 0, tag + ': no contact_create for a name that exists');
+      // + Bill for a new vendor: the vendor first, then the bill under its id.
+      await page.locator('[data-fin-doc-add]').click();
+      await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');
+      await page.locator('dialog.fin-dlg input[name="name"]').fill('Acme Paper');
+      await page.locator('dialog.fin-dlg input[name="number"]').fill('AP-1');
+      assert.deepEqual(await page.locator('dialog.fin-dlg select[name="line"] option').allInnerTexts(), ['Checking', 'Savings', 'Prepaid expenses', 'Cost of revenue', 'Hosting', 'AI services', 'Operating expenses', 'Software', 'Contractors'],
+        tag + ': a bill\'s lines, never payables or receivables');
+      await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
+      await page.locator('dialog.fin-dlg input[name="amount"]').fill('45.50');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).slice(-2), [{kind: 'contact_create', payload: {name: 'Acme Paper', kind: 'vendor'}},
+        {kind: 'bill_create', payload: {vendor_id: 'v-new', bill_date: today, lines: [{account_id: 'a-6100', amount: 4550}], number: 'AP-1', origin: 'manual'}}],
+        tag + ': contact_create, then bill_create');
+      await page.waitForFunction(() => FIN.doc.sel === 'bill-2' && document.querySelector('tr.fin-on[data-fin-doc="bill-2"]'));
+      // Receivables.
+      await go(page, '#/finance/receivables', READY.receivables);
+      assert.deepEqual(await heads(), ['CUSTOMER', 'INVOICE', 'DUE', 'AGING', 'AMOUNT', 'STATUS'], tag + ': the invoice columns');
+      assert.equal(await page.locator('.fin-doc-t tbody tr').count(), INVOICES.length, tag + ': one row per invoice, no totals row');
+      assert.equal(await page.locator('#fin-body button, #fin-body a').filter({hasText: /remind|chase/i}).count(), 0, tag + ': no reminders');
+      await page.locator('tr[data-fin-doc="inv-2"]').click();
+      await page.locator('#fin-rail [data-fin-do="paid"]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
+      await page.locator('dialog.fin-dlg select[name="from"]').selectOption('');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'invoice_record_payment', payload: {invoice_id: 'inv-2', amount: 150000, date: today}}, tag + ': Elsewhere sends no account');
+      await page.locator('tr[data-fin-doc="inv-3"]').click();
+      await page.locator('#fin-rail [data-fin-do="writeoff"]').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Left\s+\$2,200[\s\S]*Payments\s+Oct 25 · Bank row\s+\$600\s+Oct 29 · Expected\s+\$400/i, tag + ': what is left, what was paid, what is expected');
+      await shot(page, 'receivables-desktop');
+      await page.locator('#fin-rail [data-fin-do="writeoff"]').click();
+      await page.locator('dialog.fin-dlg input[name="memo"]').fill('Settled');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'invoice_write_off', payload: {invoice_id: 'inv-3', amount: 220000, memo: 'Settled'}}, tag + ': invoice_write_off');
+      // The Balance sheet's "+ Add".
+      await go(page, '#/finance/balance', READY.balance);
+      await page.locator('[data-fin-add]').click();
+      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Mercury', 'Stripe', 'Invoice', 'Bill', 'Loan', 'Asset', 'Journal entry', 'Import history'],
+        tag + ': what the owner may add');
+      await shot(page, 'balance-add-desktop');
+      await page.locator('[data-fin-add-item="journal"]').click();
+      const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
+      await jl.nth(0).locator('select').selectOption('a-6100');
+      await jl.nth(0).locator('[name=dr]').fill('100');
+      await jl.nth(1).locator('select').selectOption('a-1010');
+      await jl.nth(1).locator('[name=cr]').fill('90');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      assert.match(await page.locator('dialog.fin-dlg [data-error]').innerText(), /differ by \$10/, tag + ': an unbalanced entry is refused');
+      await jl.nth(1).locator('[name=cr]').fill('100');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(sent(writes).at(-1), {kind: 'journal', payload: {date: today, lines: [{account_id: 'a-6100', amount: 10000}, {account_id: 'a-1010', amount: -10000}]}},
+        tag + ': journal with balanced lines');
+      const keys = writes.map(w => w[3]);
+      assert.ok(keys.every(Boolean) && new Set(keys).size === keys.length, tag + ': a fresh Idempotency-Key per write');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A payables grant without the right: Payables only, read only; Receivables stays hidden, even by address.
+    {
+      const tag = 'payables grant';
+      const {page, errors, writes, reads} = await open(browser, {viewer: 'cara', apGrant: true, hash: '#/finance/payables'});
+      await page.locator(READY.payables).waitFor();
+      assert.deepEqual(await tabs(page), ['P&L', 'Payables', 'Cards', 'Transactions', 'Access'], tag + ': Payables, not Receivables');
+      await page.locator('#fin-rail .fin-h').first().waitFor();
+      assert.equal(await page.locator('[data-fin-do], [data-fin-doc-add], [data-fin-email-set]').count(), 0, tag + ': no decisions without finance.ap');
+      assert.equal(await page.locator('[data-fin-copy]').getAttribute('data-fin-copy'), 'bills@acme.example', tag + ': the bills address, copyable');
+      await page.evaluate(() => { location.hash = '#/finance/receivables'; });
+      await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
+      await page.locator('.fin-pl').waitFor();
+      await go(page, '#/finance/balance', '.fin-pl');
+      assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/invoices')), tag + ': invoices never read');
+      assert.equal(writes.length, 0, tag + ': nothing written');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // finance.ap without finance.pay: bills are approved, paid and voided, never scheduled; no bank list is read.
+    {
+      const tag = 'ap right';
+      const {page, errors, reads, writes} = await open(browser, {viewer: 'cara', apGrant: true, apRights: ['finance.ap'], hash: '#/finance/payables'});
+      await page.locator('#fin-rail [data-fin-do="approve"]').waitFor();
+      await page.locator('tr[data-fin-doc="bill-2"]').click();
+      await page.locator('#fin-rail [data-fin-do="paid"]').waitFor();
+      assert.deepEqual(await page.locator('#fin-rail [data-fin-do]').allInnerTexts(), ['Void', 'Mark paid'], tag + ': no Schedule without finance.pay');
+      await page.locator('#fin-rail [data-fin-do="paid"]').click();
+      assert.deepEqual(await page.locator('dialog.fin-dlg[open] select[name="from"] option').allInnerTexts(), ['Elsewhere'], tag + ': Mark paid offers only Elsewhere');
+      await page.locator('dialog.fin-dlg[open] [data-close], dialog.fin-dlg[open] button.ghost').first().click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      await page.locator('[data-fin-doc-add]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="line"] option[value="a-6100"]').waitFor({state: 'attached'});
+      assert.ok(reads.includes('/api/v2/finance/chart?for=bill'), tag + ': the bill form reads the chart for bills');
+      assert.ok(!reads.some(r => r.startsWith('/api/v2/finance/pay-from')), tag + ': pay-from never read');
+      // Software is not company-wide for a manager: the bill names whom it is for from the chart's attributable tags,
+      // the manager first, then teams, then teammates. Checking is, so it asks no one.
+      const forPick = page.locator('dialog.fin-dlg[open] [data-fin-for]');
+      await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-1010');
+      assert.equal(await forPick.isHidden(), true, tag + ': a company-wide line asks no one');
+      await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
+      assert.deepEqual(await forPick.locator('option').allInnerTexts(), ['Cara Lee', 'Engineering', 'Platform', 'Builder', 'Engineering Lead'], tag + ': whom the manager may attribute to');
+      assert.equal(await forPick.locator('select').inputValue(), 'teammate:human:cara', tag + ': their own scope first');
+      await page.locator('dialog.fin-dlg input[name="amount"]').fill('80');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      const billOf = () => writes.map(w => w[2]).filter(b => b?.kind === 'bill_create' && !b.dry_run).at(-1)?.payload.lines;
+      assert.deepEqual(billOf(), [{account_id: 'a-6100', amount: 8000, tags: {teammate: 'human:cara'}}], tag + ': the line tagged to the manager');
+      await page.locator('[data-fin-doc-add]').click();
+      await page.locator('dialog.fin-dlg[open] select[name="line"] option[value="a-6100"]').waitFor({state: 'attached'});
+      await page.locator('dialog.fin-dlg select[name="line"]').selectOption('a-6100');
+      await forPick.locator('select').selectOption('team:platform');
+      await page.locator('dialog.fin-dlg input[name="amount"]').fill('80');
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
+      assert.deepEqual(billOf(), [{account_id: 'a-6100', amount: 8000, tags: {team: 'platform'}}], tag + ': or to a team they lead');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
@@ -665,6 +1039,45 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // Back from a books consent that needs a new grant: Sources, one "Reconnect books", and a clean address.
+    {
+      const tag = 'books return';
+      const {page, errors} = await open(browser, {hash: '#/finance?books=error&reason=reconnect_required'});
+      await page.waitForFunction(() => location.hash === '#/finance/sources');
+      await page.locator(READY.sources).first().waitFor();
+      assert.match(await page.locator('.toast').first().innerText(), /Reconnect books/, tag + ': says to reconnect');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // Budget figures without payroll say so wherever they show, as the P&L's totals do: the budget column, the line
+    // page's budget column and rail, and what an approval would leave in a budget.
+    {
+      const tag = 'budgets excl. payroll';
+      const {page, errors, hub} = await open(browser, {budgetsExcl: true});
+      await page.locator('.fin-pl').waitFor();
+      assert.match(await page.locator('.fin-pl thead th.fin-b', {hasText: 'budget'}).first().textContent(), /budget excl\. payroll$/, tag + ': the budget column');
+      await page.locator('a[href$="/line/a-6100"]').click();
+      await page.locator('[data-fin-key="GitHub"]').waitFor();
+      assert.ok((await page.locator('#fin-line thead th').allTextContents()).includes('Budget / mo excl. payroll'), tag + ': the line page\'s budget column');
+      await page.locator('[data-fin-key="GitHub"]').click();
+      await page.locator('#fin-rail .fin-bars').waitFor();
+      assert.match(await page.locator('#fin-rail').innerText(), /Budget excl\. payroll\s+\$900/, tag + ': the line rail');
+      await go(page, '#/finance/balance', READY.balance);
+      await page.locator('[data-fin-add]').click();
+      await page.locator('[data-fin-add-item="journal"]').click();
+      const jl = page.locator('dialog.fin-dlg [data-fin-jl] .fin-jl');
+      await jl.nth(0).locator('select').selectOption('a-6100');
+      await jl.nth(0).locator('[name=dr]').fill('100');
+      await jl.nth(1).locator('select').selectOption('a-1010');
+      await jl.nth(1).locator('[name=cr]').fill('100');
+      hub.ask = 'human:ana';
+      hub.impact = {budgets: [{budget_id: 'b-software', name: 'Software', remaining: 60000, remaining_after: 50000, excluded: true}]};
+      await page.locator('dialog.fin-dlg [type=submit]').click();
+      await page.locator('dialog.fin-dlg .fin-ask:not([hidden])').waitFor();
+      assert.match(await page.locator('dialog.fin-dlg [data-impact]').innerText(), /Software left excl\. payroll\s+\$600\s+→\s+\$500/, tag + ': approval impact');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
     // A manager: their teams' expenses; Balance sheet and Sources hidden, even by address.
     {
       const tag = 'manager';
@@ -680,7 +1093,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       assert.deepEqual((await priv.locator('td[data-fin-cell]').allInnerTexts()).filter(t => t !== '—'), [], tag + ': a private line shows no figures');
       const firsts = await page.locator('.fin-pl tbody td:first-child').allInnerTexts();
       assert.ok(firsts.includes('Total expenses excl. payroll'), tag + ': totals without payroll say so');
-      for (const hidden of ['balance', 'sources']) {
+      for (const hidden of ['balance', 'sources', 'payables', 'receivables']) {
         await page.evaluate(h => { location.hash = h; }, '#/finance/' + hidden);
         await page.waitForFunction(() => location.hash.startsWith('#/finance/pnl'));
         await page.locator('.fin-pl').waitFor();
@@ -723,12 +1136,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       assert.equal(await page.locator('.fin-pl a[href*="/line/"]').count(), 0, tag + ': no drill-down while viewing as');
       assert.match(await page.evaluate(() => location.hash), /view_as=human%3Acara/, tag + ': View as lives in the address');
       await page.goBack();
-      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 6);
+      await page.waitForFunction(() => location.hash === '#/finance/access' && !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
       await page.goForward();
       await page.locator('.fin-as').waitFor();
       assert.deepEqual(await tabs(page), ['P&L', 'Cards', 'Transactions'], tag + ': Forward views as again');
       await page.locator('.fin-as button').click();
-      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 6);
+      await page.waitForFunction(() => !document.querySelector('.fin-as') && document.querySelectorAll('#fin-head [data-fin-tab]').length === 9);
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }

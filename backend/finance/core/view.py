@@ -298,6 +298,7 @@ class Cell:
     teammate: str
     vendor: str
     amount: int
+    linked: bool = False            # settled private payroll lines were netted out of it (reads._cells); totals say so
 
 
 @dataclass(frozen=True)
@@ -320,7 +321,10 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
     come from the runs, never from the caller's dates: a window takes in a cell whole by its date or not at all, so
     `cells` must reach the whole fiscal quarters around `window`. A narrower read (a team below a department, a teammate,
     a vendor) shows none of it. A teammate sees their own lines only in a result with no department cell on that
-    account, so own lines and a department total never sit side by side. Unattributed private lines never show."""
+    account, so own lines and a department total never sit side by side. Unattributed private lines never show.
+
+    A `linked` cell has already had a settled private payroll entry's lines taken out of it, so it only marks the
+    totals "excl. payroll", and stays only while anything of its own is left."""
     lo, hi = window[0].isoformat(), window[1].isoformat()
 
     def inside(day: str) -> bool:
@@ -329,7 +333,14 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
     cut: set[str] = set()
     own: list[Cell] = []
     runs: dict[tuple[str, str, str], list[Cell]] = {}
+    settled = False
     for cell in cells:
+        if cell.linked:
+            if inside(cell.day):
+                settled = True
+                if cell.amount:
+                    kept.append(cell)
+            continue
         rule = private.get(cell.account_id)
         if rule is None or cell.account_id in view.full_detail:
             if inside(cell.day):
@@ -367,7 +378,7 @@ def suppress(view: View, org: Org, private: Mapping[str, PrivateLine], accounts:
         else:
             kept.append(cell)
     kept.extend(shown)
-    return Suppressed(cells=tuple(kept), hidden=frozenset(cut), excluded=bool(cut))
+    return Suppressed(cells=tuple(kept), hidden=frozenset(cut), excluded=bool(cut) or settled)
 
 
 def _unshown(view: View, group: Iterable[Cell], inside: Callable[[str], bool], own: list[Cell],

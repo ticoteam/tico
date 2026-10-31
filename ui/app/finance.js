@@ -1,17 +1,18 @@
 /* ui/app/finance.js — The Finance tab (spec §12): its place in the sidebar, the page head with its tabs (P&L, Balance
-   sheet, Cards, Transactions, Sources, Access; Payables and Receivables come with bills and invoices), the owner's
+   sheet, Payables, Receivables, Cards, Transactions, Sources, Access), the owner's
    "View as", and what every tab shares: money in cents shown as dollars, a right rail that stacks under the table on
    a phone, CSV export of what is on screen, and actions (POST /api/v2/finance/actions, a fresh Idempotency-Key each).
    Every number is the route's, cut to the viewer (§7.5); nothing hidden is worked out here.
    Reads: GET /api/v2/finance/access (who sees what: the sidebar link and the tabs follow it).
    The tabs are their own files: finance-pnl.js (P&L and a line's page), finance-books.js (Balance sheet, Cards,
-   Transactions), finance-admin.js (Sources, Access).
+   Transactions), finance-docs.js (Payables, Receivables, and entering a bill, invoice or journal entry),
+   finance-admin.js (Sources, Access).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
 const FIN_ROUTE = '#/finance';
-const FIN_TABS = [['pnl', 'P&L'], ['balance', 'Balance sheet'], ['cards', 'Cards'], ['transactions', 'Transactions'],
-  ['sources', 'Sources'], ['access', 'Access']];
+const FIN_TABS = [['pnl', 'P&L'], ['balance', 'Balance sheet'], ['payables', 'Payables'], ['receivables', 'Receivables'],
+  ['cards', 'Cards'], ['transactions', 'Transactions'], ['tax', 'Tax'], ['sources', 'Sources'], ['access', 'Access']];
 let FIN = null;           // the open page: {load, tab, arg, q, acc, caps}
 let FIN_ACCESS = null;    // the last GET /v2/finance/access, or null (not set up, or nothing to see)
 let FIN_PROBE = null;     // the sidebar's one read per visit
@@ -28,14 +29,18 @@ function finCapsOf(acc, who) {
   const owner = row.default === 'everything';
   const all = owner || what.has('everything');
   const rights = new Set(row.rights || []);
-  return {row, owner, all, rights,
+  const may = right => owner || rights.has(right) || rights.has('finance.admin');
+  return {row, owner, all, rights, may,
     any: all || row.default !== 'none' || live.length > 0,
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
     companyExpenses: all || live.some(g => g.whose === 'company' && (g.what === 'pnl' || g.what === 'expenses')),
     balance: all || what.has('balance_sheet') || what.has('bs_lines'),
     sources: all || what.has('sources'),
-    may: right => owner || rights.has(right) || rights.has('finance.admin')};
+    // Bills and invoices show to a payables or receivables view, or to the right whose work they are
+    // (backend/finance/tab_ap.py sees_side).
+    payables: all || what.has('payables') || may('finance.ap'),
+    receivables: all || what.has('receivables') || may('finance.ar')};
 }
 // The viewer's own: what the reads run as (the teammate viewed as, for the owner), and whether writes are open.
 function finCaps() {
@@ -46,8 +51,9 @@ function finCaps() {
   const viewing = who !== me;
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
 }
-const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources
-  : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
+// Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
+const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
+  : tab === 'payables' ? caps.payables : tab === 'receivables' ? caps.receivables : tab === 'access' ? !caps.viewing && (!!acc?.can_view_as || (acc?.teammates || []).length > 1) : true);
 // ?view_as=… on every read while the owner views as someone.
 const finAs = (sep = '&') => FIN_VIEW_AS && finCaps()?.viewing ? `${sep}view_as=${encodeURIComponent(FIN_VIEW_AS)}` : '';
 // A Finance address that keeps "View as": the view is in the address, so Back and Forward carry it.
@@ -79,7 +85,29 @@ async function finProbe() {
   return FIN_ACCESS;
 }
 // Once a visit, after the first page is drawn (who is signed in is known by then).
-function finProbeOnce() { if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+function finProbeOnce() { finBooksReturn(); if (!FIN_PROBE && S.me?.id) FIN_PROBE = finProbe(); }
+
+const FIN_BOOKS = {quickbooks: 'QuickBooks', xero: 'Xero'};
+// Back from connecting QuickBooks or Xero: the server sends the browser to #/finance?books=connected or
+// ?books=error&reason=<code> (backend/finance/books_link.py codes). Says how it went once, lands on Sources and cleans
+// the address.
+function finBooksReturn() {
+  const [hashPath, hashQ = ''] = location.hash.split('?'), h = new URLSearchParams(hashQ);
+  if (!h.has('books') || !S.me?.id) return;
+  const state = h.get('books'), reason = h.get('reason') || '';
+  h.delete('books'); h.delete('reason');
+  const hs = h.toString(), path = hashPath && hashPath !== FIN_ROUTE && rdUnder(hashPath, FIN_ROUTE) ? hashPath : FIN_ROUTE + '/sources';
+  history.replaceState(history.state, '', location.pathname + location.search + path + (hs ? '?' + hs : ''));
+  if (state === 'connected') toast('Books connected');
+  else if (reason === 'reconnect_required') toast('Reconnect books', true);
+  else toast('Books not connected' + (FIN_BOOKS_WHY[reason] ? ': ' + FIN_BOOKS_WHY[reason] : ''), true);
+  setTimeout(() => route(), 0);   // draw the cleaned address (this runs inside a route draw)
+}
+const FIN_BOOKS_WHY = {access_denied: 'access denied', not_connected: 'connect again', vault_write_failed: 'sign-in not saved',
+  no_refresh_token: 'connect again', gateway_refused: 'try again', bad_answer: 'try again', unknown: 'try again'};
+
+// A narrow viewer's figures leave payroll out (§7.5): a read (or row) with `excluded` says so, as the P&L's totals do.
+const finExcl = x => x?.excluded ? ' excl. payroll' : '';
 
 // ----------------------------------------------------------------- formats
 const FIN_MON = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -168,7 +196,8 @@ const finTableRows = table => [...(table?.querySelectorAll('tr') || [])].filter(
   .map(tr => [...tr.children].flatMap(td => [td.querySelector('input')?.value ?? td.textContent.replace(/[▸▾]/g, '').trim(),
     ...Array(Math.max(0, (Number(td.getAttribute('colspan')) || 1) - 1)).fill('')]));
 
-// A small dialog: a title, a form, Cancel and the primary button. `onSave(form)` throws to show an error.
+// A small dialog: a title, a form, Cancel and the primary button. `onSave(form)` throws to show an error, and returns
+// false to keep the dialog open (a decision that now names its approver).
 function finDialog(title, body, saveLabel, onSave) {
   document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close());
   const dlg = document.createElement('dialog');
@@ -184,7 +213,7 @@ function finDialog(title, body, saveLabel, onSave) {
   const form = dlg.querySelector('form'), err = dlg.querySelector('[data-error]'), save = dlg.querySelector('[type=submit]');
   form.onsubmit = async ev => {
     ev.preventDefault(); err.hidden = true; save.disabled = true;
-    try { await onSave(form); dlg.close(); }
+    try { if (await onSave(form) === false) save.disabled = false; else dlg.close(); }
     catch (e) { err.textContent = e.message; err.hidden = false; save.disabled = false; }
   };
   dlg.showModal();
@@ -227,8 +256,11 @@ function finShow(state) {
   if (state.tab === 'line') finLinePage(state.arg);
   else if (tab === 'pnl') finPnlPage();
   else if (tab === 'balance') finBalancePage();
+  else if (tab === 'payables') finDocPage('bill');
+  else if (tab === 'receivables') finDocPage('invoice');
   else if (tab === 'cards') finCardsPage();
   else if (tab === 'transactions') finTxPage();
+  else if (tab === 'tax') finTaxPage();
   else if (tab === 'sources') finSourcesPage();
   else if (tab === 'access') finAccessPage();
 }

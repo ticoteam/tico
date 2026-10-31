@@ -2,6 +2,7 @@
 payload voids and asks again, decline denies, a withdrawn or expired approval ends the action)."""
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
@@ -34,9 +35,9 @@ def test_same_key_same_result_and_dry_runs_write_nothing(books):
         assert first.result["account_id"] and again.result == {}
         assert _count(c, "fin_accounts") == before["fin_accounts"] + 1
         assert act(c, OWNER, "account_create", {**body, "name": "Trips"}, "a1").code == "conflict"
-        denied = act(c, OWNER, "bill_create", {"amount": 1}, "p1")
-        assert (denied.status, denied.code) == ("denied", "not_available")
-        assert act(c, OWNER, "bill_create", {"amount": 1}, "p1").action_id == denied.action_id
+        refused = act(c, OWNER, "bill_create", {"amount": 1}, "p1")
+        assert (refused.status, refused.code) == ("failed", "invalid")
+        assert act(c, OWNER, "bill_create", {"amount": 1}, "p1").action_id == refused.action_id
         assert act(c, OWNER, "teleport", {}, "t1").code == "invalid"
         audit = c.execute("SELECT detail_json FROM events WHERE action='finance.account_create' AND target=?",
                           (first.action_id,)).fetchone()
@@ -70,7 +71,7 @@ def test_dry_run_reports_the_approval_and_budget_impact(books):
             {"account_id": account(c, "6100"), "amount": 1_000}, {"account_id": account(c, "1000"), "amount": -1_000}]},
             dry_run=True)
         assert spend.impact["budgets"] == [{"budget_id": parent, "name": "Software", "remaining": 50_000,
-                                            "remaining_after": 49_000}]
+                                            "remaining_after": 49_000, "excluded": False}]
 
 
 def test_approval_commits_once(books):
@@ -187,3 +188,50 @@ def test_the_bot_gate_counts_the_whole_entry(books):
                                                  {"account_id": account(c, "1000"), "amount": -300_000},
                                                  {"account_id": account(c, "2000"), "amount": -300_000}]}
         assert act(c, "bot:coder", "journal", split).status == "needs_approval"
+
+
+def test_a_recheck_refusal_that_named_a_sibling_hides_its_name_once_the_asker_cannot_see_it(books):
+    body = {"name": "Eng tools", "team": "eng", "amount": 5_000}
+    with books.transaction() as c:
+        parent = _software(c)
+        grant = act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "everything"})
+        assert grant.status == "committed"
+        asked = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
+                                                      "parent_id": parent}, "eng-ask")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:cara")
+        # Before the manager decides, an overlapping sibling is added; the recheck at approval refuses naming it.
+        payroll = act(c, OWNER, "budget_create", {"name": "Payroll", "team": "eng", "amount": 5_000,
+                                                  "account_id": account(c, "6100"), "parent_id": parent})
+        assert payroll.status == "committed"
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        closed = FA.approval_decided(c, asked.approval_id, AT)
+        assert closed.status == "failed" and "Payroll" in closed.reason
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        assert "Payroll" not in stored
+        replay = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
+                                                       "parent_id": parent}, "eng-ask")
+        assert replay.replayed and "Payroll" not in replay.reason
+        assert "Payroll" not in FR.action_for(c, "human:eve", asked.action_id)["reason"]
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "everything"}).status == "committed"
+        again = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
+                                                      "parent_id": parent}, "eng-ask")
+        assert again.replayed and "Payroll" in again.reason
+
+
+def test_an_approval_that_no_longer_fits_stores_no_figure(books):
+    """A set-aside a teammate without finance.budgets asks for is decided when its manager approves. If the budget was
+    cut meanwhile, the refusal is stored without the figure; the owner reads the figure from the budget's name."""
+    with books.transaction() as c:
+        parent = _software(c)
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "pnl"}, "coder-view").status == "committed"
+        asked = act(c, "bot:coder", "allocation_set", {"budget_id": parent, "target_kind": "teammate",
+                                                       "target_id": "bot:coder", "amount": 5_000}, "coder-set")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:cara"), asked
+        assert act(c, OWNER, "budget_update", {"budget_id": parent, "amount": 1_000}, "cut").status == "committed"
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status in ("failed", "denied") and done.code == "invalid", done
+        stored = FA.action(c, str(asked.action_id)).reason
+        assert not any(ch.isdigit() for ch in stored), stored
+        assert "Software" in FR.action_for(c, OWNER, asked.action_id)["reason"]

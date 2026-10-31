@@ -33,6 +33,7 @@ class Ctx:
     _views: dict[str, VW.View] = field(default_factory=lambda: dict[str, VW.View]())
     _budgets: dict[str, B.Budget] | None = None
     _private: dict[str, VW.PrivateLine] | None = None
+    deciding: bool = False       # set while an approval is rechecked: outcomes then use the true figures
 
     @property
     def today(self) -> str:

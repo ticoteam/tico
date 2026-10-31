@@ -10,15 +10,19 @@ from .ledger import new_id
 
 def _budget(r: Any) -> Budget:
     return Budget(id=r["id"], book_id=r["book_id"], name=r["name"], period=r["period"], account_id=r["account_id"] or "",
-                  catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor"],
+                  catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor_key"],
                   parent_id=r["parent_id"] or "", owner=r["owner"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
                   rollover=r["rollover"], active=bool(r["active"]), created_at=r["created_at"])
 
 
 def budgets(c: sqlite3.Connection, book_id: str) -> dict[str, Budget]:
-    """Every budget in the book, active or not (a tree is small: dozens of rows)."""
-    return {r["id"]: _budget(r) for r in c.execute("SELECT * FROM fin_budgets WHERE book_id=? ORDER BY created_at, id",
-                                                    (book_id,))}
+    """Every budget in the book, active or not (a tree is small: dozens of rows). A budget on a vendor name goes by
+    the contact's id once a contact has that name (fin_vendor_aliases; the name key compared exactly)."""
+    return {r["id"]: _budget(r) for r in c.execute(
+        "SELECT b.*, CASE WHEN EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor) THEN b.vendor ELSE "
+        "COALESCE((SELECT a.contact_id FROM fin_vendor_aliases a WHERE b.vendor<>'' AND a.book_id=b.book_id AND "
+        "a.name_key=b.vendor), b.vendor) END AS vendor_key FROM fin_budgets b WHERE b.book_id=? "
+        "ORDER BY b.created_at, b.id", (book_id,))}
 
 
 def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
@@ -101,6 +105,16 @@ def held(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str,
     return int(c.execute(sql, args).fetchone()[0])
 
 
+def budget_holds(c: sqlite3.Connection, budget_id: str, start: str, end: str) -> int:
+    """What holds placed directly on this budget, with no target, reserve against it in the window: live holds at their
+    amount and settled ones no entry has absorbed, as `held` counts them. A child's holds sit inside the child's own
+    amount, and a card's or a teammate's are reserved by their allocation, so none of those is counted here."""
+    row = c.execute("SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN status='settled' AND entry_id IS NULL "
+                    "THEN settled_amount ELSE 0 END), 0) FROM fin_holds WHERE budget_id=? AND COALESCE(target, '')='' "
+                    f"AND {LIVE} AND held_on>=? AND held_on<=?", (budget_id, start, end)).fetchone()
+    return int(row[0])
+
+
 def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str, target: str,
                 absorbed: bool) -> int:
     """What a target's holds placed in the window used on these budgets: live holds at their amount, settled ones at
@@ -124,6 +138,15 @@ def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, en
                          [*budget_ids, target, start, end]).fetchone()[0])
 
 
+# A card's use is the money-role line of every entry posted for its feed rows (originals, reversals and
+# replacements), on the budgets it is on. card_used sums those lines; a budget read takes the private ones out.
+_CARD_MONEY = ("FROM fin_feed_txns f JOIN fin_cards k ON k.id=f.card_id "
+               "JOIN fin_entries e ON e.source='card' AND e.source_id>=f.id AND e.source_id<f.id || ';' "
+               "AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
+               "JOIN fin_lines l ON l.entry_id=e.id AND l.role='money' "
+               "WHERE f.card_id=? AND k.budget_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?")
+
+
 def card_used(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, start: str, end: str) -> int:
     """What a card's settled transactions used in the window, straight from the ledger: what every entry ever posted
     for its feed rows (originals, their reversals and replacements, each at its own date) put on the card program's
@@ -134,14 +157,19 @@ def card_used(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, st
     if not budget_ids:
         return 0
     marks = ",".join("?" * len(budget_ids))
-    row = c.execute(
-        f"SELECT COALESCE(-SUM(l.amount), 0) FROM fin_feed_txns f JOIN fin_cards k ON k.id=f.card_id "
-        f"JOIN fin_entries e ON e.source='card' AND e.source_id>=f.id AND e.source_id<f.id || ';' "
-        f"AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
-        f"JOIN fin_lines l ON l.entry_id=e.id AND l.role='money' "
-        f"WHERE f.card_id=? AND k.budget_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?",
-        [card_id, *budget_ids, start, end]).fetchone()
+    row = c.execute("SELECT COALESCE(-SUM(l.amount), 0) " + _CARD_MONEY.format(marks=marks),
+                    [card_id, *budget_ids, start, end]).fetchone()
     return int(row[0])
+
+
+def card_money(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, start: str, end: str) -> list[Any]:
+    """Each money-role line card_used sums, with the feed row its entry was posted for (feed_id), so a read can take
+    out the ones a private feed row stands for."""
+    if not budget_ids:
+        return []
+    marks = ",".join("?" * len(budget_ids))
+    return c.execute("SELECT f.id AS feed_id, l.amount AS amount " + _CARD_MONEY.format(marks=marks),
+                     [card_id, *budget_ids, start, end]).fetchall()
 
 
 def card_lines(c: sqlite3.Connection, card_id: str, start: str, end: str) -> list[Any]:
@@ -153,6 +181,25 @@ def card_lines(c: sqlite3.Connection, card_id: str, start: str, end: str) -> lis
         "AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
         "JOIN fin_lines l ON l.entry_id=e.id AND l.role<>'money' "
         "WHERE f.card_id=? AND l.entry_date>=? AND l.entry_date<=?", (card_id, start, end)).fetchall()
+
+
+def settled_holds(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str,
+                   target: str = "") -> list[Any]:
+    """The settled holds placed in the window on these budgets (for one `target` when given), each with the entry it was
+    posted to (its source and source id), so a read can tell whose spend it is."""
+    if not budget_ids:
+        return []
+    marks = ",".join("?" * len(budget_ids))
+    sql = ("SELECT fin_holds.id, fin_holds.settled_amount, fin_holds.source, fin_holds.source_id, fin_holds.entry_id, "
+           "e.source AS entry_source, e.source_id AS entry_source_id, e.status AS entry_status "
+           "FROM fin_holds INDEXED BY fin_holds_budget LEFT JOIN fin_entries e ON e.id=fin_holds.entry_id "
+           f"WHERE fin_holds.budget_id IN ({marks}) AND fin_holds.status='settled' "
+           "AND fin_holds.held_on>=? AND fin_holds.held_on<=?")
+    args: list[object] = [*budget_ids, start, end]
+    if target:
+        sql += " AND fin_holds.target=?"
+        args.append(target)
+    return c.execute(sql, args).fetchall()
 
 
 def resize_hold(c: sqlite3.Connection, hold_id: str, amount: int) -> int:

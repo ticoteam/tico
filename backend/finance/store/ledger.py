@@ -74,6 +74,13 @@ def account_has_lines(c: sqlite3.Connection, account_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ periods
+def open_periods_before(c: sqlite3.Connection, book_id: str, day: str, most: int) -> list[Any]:
+    """Open periods that ended before `day`, oldest first (the latest `most`)."""
+    rows = c.execute("SELECT * FROM fin_periods WHERE book_id=? AND status='open' AND end_date<? "
+                     "ORDER BY end_date DESC LIMIT ?", (book_id, day, most)).fetchall()
+    return list(reversed(rows))
+
+
 def period(c: sqlite3.Connection, book_id: str, day: str) -> Any:
     return c.execute("SELECT * FROM fin_periods WHERE book_id=? AND start_date<=? AND end_date>=?",
                      (book_id, day, day)).fetchone()
@@ -115,14 +122,34 @@ def closed_through(c: sqlite3.Connection, book_id: str) -> str | None:
     return str(found) if found else None
 
 
+# ------------------------------------------------------------------------------------------------ vendor labels
+def label_vendor(c: sqlite3.Connection, book_id: str, name_key: str, label: str, day: str, *,
+                 weak: bool = False) -> None:
+    """Remember the text a vendor name key was posted under; an older entry date never replaces a newer one, and a
+    `weak` label (the key itself) only fills a missing one."""
+    keep = "DO NOTHING" if weak else ("DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
+                                      "WHERE excluded.seen_on>=fin_vendor_labels.seen_on")
+    c.execute(f"INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
+              f"ON CONFLICT(book_id, name_key) {keep}", (book_id, name_key, label, day))
+
+
+def vendor_label_texts(c: sqlite3.Connection, book_id: str, keys: Sequence[str]) -> dict[str, str]:
+    if not keys:
+        return {}
+    marks = ",".join("?" * len(keys))
+    return {str(r[0]): str(r[1]) for r in c.execute(
+        f"SELECT name_key, label FROM fin_vendor_labels WHERE book_id=? AND name_key IN ({marks})",
+        (book_id, *keys))}
+
+
 # ------------------------------------------------------------------------------------------------ entries and lines
 def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: str, action_id: str,
                  reverses_id: str, by: str, at: str) -> list[str]:
     """The entry, its lines, their tags and the rollups they move. The ids of the lines, in order."""
     c.execute("INSERT INTO fin_entries(id, book_id, entry_date, memo, source, source_id, status, reverses_id, "
-              "period_id, action_id, created_at, created_by) VALUES(?,?,?,?,?,?,'posted',?,?,?,?,?)",
+              "period_id, action_id, basis, created_at, created_by) VALUES(?,?,?,?,?,?,'posted',?,?,?,?,?,?)",
               (entry_id, e.book_id, e.entry_date, e.memo, e.source, e.source_id, reverses_id or None, period_id,
-               action_id or None, at, by))
+               action_id or None, e.basis, at, by))
     ids: list[str] = []
     for n, item in enumerate(e.lines):
         lid = new_id()
@@ -196,6 +223,18 @@ def entry_lines(c: sqlite3.Connection, entry_id: str) -> list[tuple[Any, Line]]:
     return [(r, _line(r, tags.get(r["id"], {}))) for r in rows]
 
 
+def bank_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str]) -> list[Any]:
+    """The lines in a window on these accounts of bank and card entries, reversals included (they are all in the
+    rollups), with the entry's source and source id (the feed row it was posted for) and its basis."""
+    if not account_ids:
+        return []
+    accounts = ",".join("?" * len(account_ids))
+    return c.execute("SELECT l.id, l.account_id, l.entry_date, l.contact_id, l.amount, e.source, e.source_id, "
+                     "e.basis FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id WHERE l.book_id=? AND "
+                     "l.entry_date>=? AND l.entry_date<=? AND e.source IN ('bank','card') AND "
+                     f"l.account_id IN ({accounts})", (book_id, start, end, *account_ids)).fetchall()
+
+
 def entries_touching(c: sqlite3.Connection, entry_ids: Sequence[str], account_ids: Sequence[str]) -> set[str]:
     """Which of these entries have a line on any of these accounts."""
     if not entry_ids or not account_ids:
@@ -249,6 +288,12 @@ def _chunks(values: Sequence[str], size: int = 400) -> Iterable[list[str]]:
 
 
 # ------------------------------------------------------------------------------------------------ rollup reads
+def last_day(c: sqlite3.Connection, book_id: str) -> str | None:
+    """The last day any posting falls on in the book, or None when nothing is posted."""
+    row = c.execute("SELECT MAX(day) FROM fin_rollups WHERE book_id=?", (book_id,)).fetchone()
+    return str(row[0]) if row and row[0] else None
+
+
 def rollup_rows(c: sqlite3.Connection, book_id: str, start: str, end: str,
                 account_ids: Iterable[str] | None = None) -> list[Any]:
     """Every rollup row in the window (on `account_ids` when given): what reports and budget actuals sum."""
@@ -265,8 +310,9 @@ def rollup_rows(c: sqlite3.Connection, book_id: str, start: str, end: str,
 
 
 def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str], *,
-               teams: Sequence[str] | None = None, teammate: str = "", vendor: str = "") -> int:
-    """The posted total on `account_ids` in the window, cut to `teams` (None: any), a teammate and a vendor."""
+               teams: Sequence[str] | None = None, teammate: str = "", vendors: Sequence[str] = ()) -> int:
+    """The posted total on `account_ids` in the window, cut to `teams` (None: any), a teammate and a vendor (any of
+    the keys its lines carry, store/ap.vendor_keys, compared exactly)."""
     if not account_ids or teams is not None and not teams:
         return 0
     sql = (f"SELECT COALESCE(SUM(amount), 0) FROM fin_rollups WHERE book_id=? AND day>=? AND day<=? "
@@ -278,26 +324,46 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
     if teammate:
         sql += " AND teammate=?"
         args.append(teammate)
-    if vendor:
-        sql += " AND vendor=?"
-        args.append(vendor)
+    if vendors:
+        sql += f" AND vendor IN ({','.join('?' * len(vendors))})"
+        args += list(vendors)
     return int(c.execute(sql, args).fetchone()[0])
 
 
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
-               most: int, vendor: str | None = None) -> list[Any]:
-    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries (one vendor's when
-    `vendor` is given; "" is lines with none). Each says the card or money account its feed row came through."""
+               most: int, vendors: Sequence[str] | None = None, offset: int = 0) -> list[Any]:
+    """Lines on `account_ids` in the window with their entry, newest first, `most` of them after the first `offset`: a
+    drill-down's entries (one vendor's when `vendors`, its keys, is given; [""] is lines with none). Each says the card
+    or money account its feed row came through."""
     if not account_ids:
         return []
     marks = ",".join("?" * len(account_ids))
-    cut, args = ("", []) if vendor is None else (" AND l.contact_id=?", [vendor])
+    cut, args = ("", []) if vendors is None else (f" AND l.contact_id IN ({','.join('?' * len(vendors))})",
+                                                  list(vendors))
     return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
-                     f"l.description, e.memo, e.source, e.status AS entry_status, e.reverses_id, "
+                     f"l.description, e.memo, e.source, e.source_id, e.status AS entry_status, e.reverses_id, "
                      f"(SELECT f.card_id FROM fin_feed_txns f WHERE f.entry_id=l.entry_id "
                      f"AND f.card_id IS NOT NULL LIMIT 1) AS card_id, (SELECT f.money_account_id FROM fin_feed_txns f "
                      f"WHERE f.entry_id=l.entry_id LIMIT 1) AS money_account_id "
                      f"FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
                      f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?{cut} "
-                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?",
-                     (book_id, *account_ids, start, end, *args, most)).fetchall()
+                     f"ORDER BY l.entry_date DESC, l.id LIMIT ? OFFSET ?",
+                     (book_id, *account_ids, start, end, *args, most, offset)).fetchall()
+
+
+def insert_snapshot(c: sqlite3.Connection, book_id: str, period_id: str, month: str, accounts_json: str,
+                    pnl_json: str, balances_json: str, by: str, at: str) -> None:
+    """A closed month's snapshot. Closing a month again replaces its totals and keeps the restatements it took."""
+    c.execute("INSERT INTO fin_close_snapshots(id, book_id, period_id, month, accounts_json, pnl_json, balances_json, "
+              "restated_json, created_at, created_by) VALUES(?,?,?,?,?,?,?,'[]',?,?) ON CONFLICT(period_id) DO UPDATE "
+              "SET accounts_json=excluded.accounts_json, pnl_json=excluded.pnl_json, "
+              "balances_json=excluded.balances_json, created_at=excluded.created_at, created_by=excluded.created_by",
+              (new_id(), book_id, period_id, month, accounts_json, pnl_json, balances_json, at, by))
+
+
+def snapshot(c: sqlite3.Connection, book_id: str, month: str) -> Any:
+    return c.execute("SELECT * FROM fin_close_snapshots WHERE book_id=? AND month=?", (book_id, month)).fetchone()
+
+
+def set_restated(c: sqlite3.Connection, snapshot_id: str, restated_json: str) -> None:
+    c.execute("UPDATE fin_close_snapshots SET restated_json=? WHERE id=?", (restated_json, snapshot_id))

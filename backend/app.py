@@ -152,6 +152,9 @@ def create_app(settings=None):
         # Files go to the company's own bucket from the first request, when the owner set one.
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
+        # Finance seals payees' bank details with this app's vault, timers or not (banking_start registers it again).
+        from .finance import actions as finance_vault
+        finance_vault.use_vault(app.state.vault)
         cloud_access.current(store)        # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
@@ -187,6 +190,13 @@ def create_app(settings=None):
                 finance.ensure_setup(c, settings.owner_email)
         except Exception as exc:
             telemetry.capture("finance_setup", exc)
+        # The Bookkeeper once Finance is set up (backend/bookkeeper.py): built if missing, its rights, one view ask.
+        try:
+            from . import bookkeeper
+            with store.transaction() as c:
+                bookkeeper.ensure(c, onboarding, auth)
+        except Exception as exc:
+            telemetry.capture("bookkeeper", exc)
         # Physical mail filed before bills and tax letters were private: those tasks go private, once.
         try:
             app.state.postal_mail.backfill_private()
@@ -390,7 +400,7 @@ def create_app(settings=None):
         demo_task = None
         if settings.demo:
             from . import demo
-            demo_task = asyncio.create_task(demo.keep_alive(store, stop))
+            demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
         try:
             yield
         finally:
@@ -7800,6 +7810,8 @@ def create_app(settings=None):
     install_meeting_review(app, store, auth, mutate)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
+    from .finance import actions as finance_vault
+    finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)
@@ -7840,6 +7852,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from . import bills_address
+    bills_address.install(app, store, auth)             # the bills address: emailed bills become draft bills
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)

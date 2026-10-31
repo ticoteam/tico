@@ -1,12 +1,14 @@
 /* ui/app/finance-books.js — Finance › Balance sheet, Cards and Transactions (spec §12).
    Balance sheet: assets, liabilities and equity as of a day (and a day to compare with), each line with the accounts
-   that feed it; the totals are the route's. Cards: each card with its holder, budget, limit and spend this period;
+   that feed it; the totals are the route's. "+ Add" enters an invoice, bill or journal entry (finance-docs.js) or leads
+   to Sources to connect one. Cards: each card with its holder, budget, limit and spend this period;
    the rail freezes, unfreezes and sets the limit. Transactions: bank feed rows and entries, searched and filtered,
    paged by cursor; for those who keep the books the rail's one form sets a bank row's line and tags (categorize,
-   a dry run first), and tags an entry's or a reconciled row's lines.
+   a dry run first), and tags an entry's or a reconciled row's lines; it matches a new bank row to the payments marked
+   paid it is the bank side of (feed_match).
    Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users,
-   /finance/chart.
-   Writes (POST /api/v2/finance/actions): card_create, card_freeze, card_unfreeze, card_update_limit, categorize.
+   /finance/chart, /finance/feed/{id}/expected.
+   Writes (POST /api/v2/finance/actions): card_create, card_freeze, card_unfreeze, card_update_limit, categorize, feed_match.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -14,20 +16,19 @@
 const FIN_BS = {asOf: '', compare: '', sel: ''};
 const FIN_BS_SECTIONS = [['assets', 'Assets', 'asset'], ['liabilities', 'Liabilities', 'liability'], ['equity', 'Equity', 'equity']];
 function finBalancePage() {
-  const b = FIN_BS, caps = finCaps();
+  const b = FIN_BS;
   if (!b.asOf) b.asOf = finToday();
   FIN.bs = {data: null, prev: null, load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-inline"><span class="muted">As of</span><input type="date" data-fin-asof value="${b.asOf}"></label>
       <label class="fin-inline"><span class="muted">Compare</span><input type="date" data-fin-cmp value="${b.compare}"></label>
-      <span id="fin-balanced"></span><span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button>
-      ${caps.may('finance.admin') ? '<button type="button" class="primary" data-fin-bank>+ Bank account</button>' : ''}</div>`
+      <span id="fin-balanced" class="fin-marks"></span><span class="spacer"></span><button type="button" class="ghost" data-fin-export>Export</button>${finAddMenuHtml()}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-bs">${skelRows(8, {dot: false})}</div>`, '', 'Selected line');
   const body = $('#fin-body');
   body.querySelector('[data-fin-asof]').onchange = ev => { b.asOf = ev.target.value || finToday(); void finBsLoad(); };
   body.querySelector('[data-fin-cmp]').onchange = ev => { b.compare = ev.target.value; void finBsLoad(); };
   body.onclick = ev => {
+    if (finAddClick(ev)) return;
     if (ev.target.closest('[data-fin-export]')) { finCsv(finTableRows($('#fin-bs table')), `balance-sheet-${b.asOf}.csv`); return; }
-    if (ev.target.closest('[data-fin-bank]')) { finConnectMercury(); return; }
     const tr = ev.target.closest('tr[data-fin-line]');
     if (tr) { b.sel = tr.dataset.finLine; finBsDraw(); finBsRail(); }
   };
@@ -62,6 +63,8 @@ function finBsDraw() {
   const d = state.data, prev = state.prev, b = FIN_BS, totals = d.totals || {};
   const balanced = !d.scoped && totals.asset != null && totals.asset === (totals.liability || 0) + (totals.equity || 0);
   $('#fin-balanced').innerHTML = balanced ? '<span class="pill ok">Balanced</span>' : '';
+  if (d.snapshot) { const m = document.createElement('span'); finMarksDraw(m, d); $('#fin-balanced').append(...m.childNodes); }
+  const imp = (d.imported || []).map(m => `${m.month} · ${m.basis === 'cash' ? 'Cash' : 'Accrual'}`).join(', ');
   const prevOf = (key, sec) => { if (!prev) return null; const t = finBsTree(prev[sec] || []).find(r => finBsKey(r) === key); return t ? t.sum : null; };
   const source = s => `<span class="fin-src">${esc([s.provider, s.name].filter(Boolean).join(' · '))}${s.last4 ? ' ••' + esc(s.last4) : ''}</span>`;
   const cols = prev ? 5 : 3;
@@ -82,7 +85,7 @@ function finBsDraw() {
     const le = (totals.liability || 0) + (totals.equity || 0), lp = prev ? (prev.totals?.liability || 0) + (prev.totals?.equity || 0) : null;
     out.push(`<tr class="fin-tot"><td>Liabilities + equity</td><td class="fin-n">${finNum(le)}</td>${prev ? `<td class="fin-n">${finNum(lp)}</td><td class="fin-n ${finDiff(le - lp).cls}">${finDiff(le - lp).text}</td>` : ''}<td></td></tr>`);
   }
-  box.innerHTML = `<table class="fin-bs"><thead><tr><th></th><th class="fin-n">${esc(finDayLabel(d.as_of || b.asOf))}</th>${prev
+  box.innerHTML = `<table class="fin-bs"><thead><tr><th></th><th class="fin-n">${esc(finDayLabel(d.as_of || b.asOf))}${imp ? `<span class="fin-tag" title="${esc(imp)}">Imported</span>` : ''}</th>${prev
     ? `<th class="fin-n">${esc(finDayLabel(prev.as_of || b.compare))}</th><th class="fin-n">Change</th>` : ''}<th>From</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
   box.querySelector('tbody').onkeydown = ev => { const tr = ev.target.closest('tr[data-fin-line]'); if (tr && ev.key === 'Enter') tr.click(); };
 }
@@ -138,11 +141,18 @@ async function finCardsLoad(more) {
   finCardsDraw(); finCardRail();
 }
 const finCardName = c => `${c.nickname || 'Card'}${c.last4 ? ' · ' + c.last4 : ''}`;
+// A frozen card says who froze it: its budget ran out (it unfreezes itself when there is room again) or a person did.
+const finCardPill = c => {
+  const [cls, label] = FIN_CARD_STATUS[c.status] || ['idle', c.status];
+  return [cls, c.status === 'frozen' && c.frozen_by ? `${label} · ${c.frozen_by === 'budget' ? 'Budget' : 'Person'}` : label];
+};
+// Where a person sees their own card's number: the provider's app (spec §8.3). Tico never reads, keeps or logs one.
+const FIN_CARD_APP = {mercury: 'https://app.mercury.com/cards'};
 function finCardsDraw() {
   const state = FIN.cards, box = $('#fin-cards'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No cards yet.'); return; }
   box.innerHTML = `<table class="fin-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
-    const [cls, label] = FIN_CARD_STATUS[c.status] || ['idle', c.status];
+    const [cls, label] = finCardPill(c);
     return `<tr data-fin-card="${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
       <td>${c.budget ? esc(c.budget.name) : '<span class="muted">—</span>'}</td><td class="fin-n">${c.limit == null ? '<span class="muted">—</span>' : finNum(c.limit)}</td><td class="fin-n">${finNum(c.spent)}</td>
       <td><span class="pill ${cls}">${esc(label)}</span>${c.sync_status && c.sync_status !== 'ok' ? ` <span class="muted fin-small">${esc(c.sync_status)}</span>` : ''}</td></tr>`;
@@ -152,18 +162,29 @@ function finCardRail() {
   const state = FIN.cards, c = state.rows.find(x => x.id === state.sel);
   if (!c) { finRail(''); return; }
   const may = finCaps().may('finance.cards') && c.status !== 'cancelled';
-  const [cls, label] = FIN_CARD_STATUS[c.status] || ['idle', c.status];
+  const [cls, label] = finCardPill(c);
+  // A budget's freeze lifts when the budget has room again; only a person's freeze is undone by hand.
+  const toggle = c.status === 'frozen' ? (c.frozen_by === 'budget' ? '' : 'Unfreeze') : 'Freeze';
+  const app = c.holder === finMe() && c.status !== 'cancelled' && FIN_CARD_APP[c.provider || 'mercury'];
+  const saved = c.saved_on || [], bot = String(c.holder || '').startsWith('bot:');
   finRail(`<div class="fin-rail-title"><h2>${esc(finCardName(c))}</h2><span class="pill ${cls}">${esc(label)}</span></div>
     ${finKv('Holder', esc(finWho(c.holder)))}${finKv('Budget', c.budget ? esc(c.budget.name) : '—')}
     ${finKv('Limit', c.limit == null ? '—' : `${finUsd(c.limit)}${c.limit_interval ? ` <span class="muted">/ ${esc(c.limit_interval.replace(/ly$/, '').replace('dai', 'day'))}</span>` : ''}`)}
     ${finKv('Spent', finUsd(c.spent))}${c.expires_at ? finKv('Expires', esc(finDayLabel(c.expires_at))) : ''}
+    ${app ? finKv('Number', `<a href="${esc(app)}" target="_blank" rel="noopener noreferrer">Show in ${esc(c.provider === 'mercury' || !c.provider ? 'Mercury' : c.provider)}</a>`) : ''}
+    ${bot && (saved.length || may) ? `<h3 class="fin-h">Saved on</h3><div class="fin-saved" data-fin-saved>${saved.map(v => `<span class="fin-chip" title="${esc(v.saved_by ? finWho(v.saved_by) : '')}">${esc(v.label || v.vendor)}${
+      may ? `<button type="button" data-fin-unsave="${esc(v.vendor)}" aria-label="Remove ${esc(v.label || v.vendor)}">✕</button>` : ''}</span>`).join('')}${
+      may && saved.length < 10 ? `<span class="fin-pop-at"><button type="button" class="ghost fin-chip-add" data-fin-save aria-haspopup="dialog" aria-expanded="false" aria-controls="fin-save">+ Vendor</button>
+        <form class="fin-pop fin-vpick" id="fin-save" hidden><input name="vendor" list="fin-save-list" maxlength="200" autocomplete="off" placeholder="Vendor" aria-label="Vendor"><datalist id="fin-save-list"></datalist>
+        <button type="submit" class="primary">Save</button></form></span>` : ''}</div>` : ''}
     ${may ? `<form class="fin-form fin-rail-form" data-fin-limit><label>Limit<input name="amount" inputmode="decimal" autocomplete="off" value="${c.limit == null ? '' : c.limit / 100}"></label>
-      <div class="fin-foot"><button type="button" class="ghost" data-fin-freeze>${c.status === 'frozen' ? 'Unfreeze' : 'Freeze'}</button><button type="submit" class="primary">Save limit</button></div></form>` : ''}`);
+      <div class="fin-foot">${toggle ? `<button type="button" class="ghost" data-fin-freeze>${toggle}</button>` : ''}<button type="submit" class="primary">Save limit</button></div></form>` : ''}`);
   const rail = $('#fin-rail');
+  finCardSavedWire(c, rail);
   rail.querySelector('[data-fin-freeze]')?.addEventListener('click', async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
     try {
-      const r = await finAct(c.status === 'frozen' ? 'card_unfreeze' : 'card_freeze', {card_id: c.id});
+      const r = await finAct(c.status === 'frozen' ? 'card_unfreeze' : 'card_freeze', {card_id: c.id});   // a refusal's reason shows as sent
       if (r.status === 'committed') toast(c.status === 'frozen' ? 'Unfrozen' : 'Frozen');
       void finCardsLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
@@ -179,6 +200,33 @@ function finCardRail() {
       if (r.status === 'committed') toast('Saved');
       void finCardsLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
+  };
+}
+// "Saved on": the vendor accounts a person saved this bot card on (card_save, card_unsave). The picker offers known
+// vendors (GET /finance/contacts?kind=vendor) and takes a typed name too; a refusal shows the server's words.
+function finCardSavedWire(c, rail) {
+  rail.querySelectorAll('[data-fin-unsave]').forEach(b => b.addEventListener('click', async () => {
+    b.disabled = true;
+    try { const r = await finAct('card_unsave', {card_id: c.id, vendor: b.dataset.finUnsave}); if (r.status === 'committed') toast('Removed'); void finCardsLoad(false); }
+    catch (e) { toast(e.message, true); b.disabled = false; }
+  }));
+  const btn = rail.querySelector('[data-fin-save]'), form = rail.querySelector('#fin-save');
+  if (!btn || !form) return;
+  const list = form.querySelector('datalist'), input = form.elements.vendor;
+  let vendors = [], timer = 0;
+  const fill = async q => {
+    try { vendors = (await get('/v2/finance/contacts?kind=vendor&limit=20' + (q ? '&q=' + encodeURIComponent(q) : ''), {fresh: true}))?.contacts || []; } catch { vendors = []; }
+    list.innerHTML = vendors.map(v => `<option value="${esc(v.name)}"></option>`).join('');
+  };
+  btn.onclick = () => { finPop(btn, form); if (!form.hidden) void fill(''); };
+  input.oninput = () => { clearTimeout(timer); timer = setTimeout(() => void fill(input.value.trim()), 250); };
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const name = input.value.trim(); if (!name) return;
+    const known = vendors.find(v => v.name.toLowerCase() === name.toLowerCase());
+    const sub = form.querySelector('[type=submit]'); sub.disabled = true;
+    try { const r = await finAct('card_save', {card_id: c.id, vendor: known ? known.id : name}); if (r.status === 'committed') toast('Saved'); void finCardsLoad(false); }
+    catch (e) { toast(e.message, true); sub.disabled = false; }
   };
 }
 async function finCardAdd() {
@@ -220,9 +268,10 @@ function finTxPage() {
   FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: [], chart: undefined, cat: null, busy: false};
   const orgChip = t.org ? `<span class="fin-chip">${esc([...finPicked(t.org).map(finPickName), ...(t.org.who !== 'both' ? [t.org.who === 'bots' ? 'Bots' : 'People'] : [])].join(', '))}<button type="button" data-fin-org-clear aria-label="Clear filter">✕</button></span>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><span class="sr-only">Search</span><input type="search" data-fin-q value="${esc(t.q)}" placeholder="Search" aria-label="Search"></label>
-      ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries']], t.source)}
+      ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries'], ...(finCaps().balance ? [['transfer', 'Transfers']] : [])], t.source)}
       <select data-fin-status aria-label="Status">${FIN_TX_STATUS.map(([v, l]) => `<option value="${v}"${v === t.status ? ' selected' : ''}>${l}</option>`).join('')}</select>
-      <select data-fin-account aria-label="Line"><option value="">All lines</option>${t.account ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}</select>${orgChip}</div>`
+      <select data-fin-account aria-label="Line"><option value="">All lines</option>${t.account ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}</select>${orgChip}
+      <span class="spacer"></span>${finCaps().may('finance.pay') ? '<button type="button" class="primary" data-fin-xfer-add>+ Transfer</button>' : ''}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-tx">${skelRows(8, {dot: false})}</div>`, '', 'Selected transaction');
   const body = $('#fin-body');
   let timer = 0;
@@ -232,6 +281,7 @@ function finTxPage() {
   body.onclick = ev => {
     const seg = ev.target.closest('[data-fin-seg] button');
     if (seg) { if (seg.dataset.v !== t.source) { t.source = seg.dataset.v; finSegSet(seg); void finTxLoad(false); } return; }
+    if (ev.target.closest('[data-fin-xfer-add]')) { void finXferAdd(); return; }
     if (ev.target.closest('[data-fin-more]')) { void finTxLoad(true); return; }
     const clear = ev.target.closest('[data-fin-org-clear]');
     if (clear) {
@@ -266,6 +316,10 @@ async function finTxLines() {
     `<option value="${esc(r.account_id)}"${r.account_id === t.account ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
 }
 async function finTxLoad(more) {
+  if (FIN_TX.source === 'transfer' && !finCaps().balance) FIN_TX.source = 'all';
+  // Transfers are their own list: the bank filters don't apply to them.
+  $('#fin-body').querySelectorAll('[data-fin-status], [data-fin-account]').forEach(el => { el.hidden = FIN_TX.source === 'transfer'; });
+  if (FIN_TX.source === 'transfer') return finXferLoad(more);
   const state = FIN.tx, t = FIN_TX, load = ++state.load;
   const qs = new URLSearchParams({source: t.source, limit: '50'});
   if (t.q) qs.set('q', t.q.slice(0, 100));
@@ -284,8 +338,10 @@ async function finTxLoad(more) {
 }
 const finTxKey = r => `${r.kind}:${r.id}`;
 // A row's teammate and vendor: an entry's own tags, a feed row's first line's.
-const finTxTags = r => r.kind === 'entry' ? {tags: r.tags || {}, vendor: r.vendor} : {tags: r.lines?.[0]?.tags || {}, vendor: r.lines?.[0]?.vendor};
+// The vendor shown is its name (a bill's or invoice's vendor key is the contact's id).
+const finTxTags = r => { const l = r.kind === 'entry' ? r : r.lines?.[0]; return {tags: (r.kind === 'entry' ? r.tags : l?.tags) || {}, vendor: l ? l.vendor_name ?? l.vendor : ''}; };
 function finTxDraw() {
+  if (FIN_TX.source === 'transfer') { finXferDraw(); return; }
   const state = FIN.tx, box = $('#fin-tx'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No transactions.'); return; }
   box.innerHTML = `<table class="fin-t"><thead><tr><th>Date</th><th>Description</th><th>Account</th><th class="fin-n">Amount</th><th>Teammate</th><th>Vendor</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
@@ -299,6 +355,7 @@ function finTxDraw() {
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
 }
 function finTxRail() {
+  if (FIN_TX.source === 'transfer') { finXferRail(); return; }
   const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
   if (!r) { finRail(''); return; }
   const lines = r.kind === 'feed' ? (r.lines || []) : r.entry_id && r.id ? [{line_id: r.id, account: r.account, amount: r.amount, vendor: r.vendor, tags: r.tags || {}}] : [];
@@ -319,11 +376,13 @@ function finTxRail() {
     ${r.kind === 'feed' ? finKv('Account', esc(`${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}`)) + (r.description && r.description !== title ? finKv('Description', esc(r.description)) : '') : finKv('Source', esc(r.source || ''))}
     ${r.memo ? finKv('Memo', esc(r.memo)) : ''}
     ${lines.length && !(cat && lines.length === 1) ? `<h3 class="fin-h">Lines</h3>${lines.map(l => finKv(l.account || '', finCents(l.amount))).join('')}` : ''}
+    <div id="fin-tx-match"></div>
     ${cat ? '<form class="fin-form fin-rail-form fin-cat" data-fin-cat novalidate></form>' : may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', shown.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), shown.teammate)).join('')}</select></label>
       <label>Team<select name="team">${mixed('team')}${opt('', '—', shown.team)}${(acc.teams || []).map(t => opt(t.id, t.name, shown.team)).join('')}</select></label>
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${shown.project === FIN_MIXED ? '' : esc(shown.project)}"${shown.project === FIN_MIXED ? ' placeholder="Mixed"' : ''}></label>
       <div class="fin-foot"><button type="submit" class="primary"${state.busy ? ' disabled' : ''}>Save</button></div></form>` : ''}`);
   if (cat) finTxCatDraw(r);
+  void finTxExpected(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
   if (form) form.onsubmit = async ev => {
@@ -339,7 +398,7 @@ function finTxRail() {
       for (const [k, v] of changed) { if (v) next[k] = v; else delete next[k]; }
       return next;
     };
-    if (state.busy) return;   // one categorize at a time on the tab (finTxCatDraw)
+    if (state.busy) return;   // one categorize or match at a time on the tab (finTxCatDraw)
     const btn = form.querySelector('[type=submit]'); btn.disabled = true; state.busy = true;
     try {
       const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
@@ -348,6 +407,51 @@ function finTxRail() {
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
     finally { state.busy = false; }
+  };
+}
+// A new bank row whose automatic match to payments marked paid was unclear: the waiting payments it may be the bank
+// side of (GET /finance/feed/{id}/expected), checked off to one contact and the row's exact amount, then feed_match.
+// Only for those who may match (finance.ap or finance.ar); nothing shows when there are none.
+async function finTxExpected(r) {
+  const caps = finCaps(), state = FIN.tx, key = finTxKey(r);
+  if (r.kind !== 'feed' || r.pending || r.status !== 'new' || !(caps.may('finance.ap') || caps.may('finance.ar'))) return;
+  let d;
+  try { d = await get(`/v2/finance/feed/${encodeURIComponent(r.id)}/expected${finAs('?')}`, {fresh: true}); } catch { return; }
+  const box = $('#fin-tx-match');
+  if (FIN?.tx !== state || state.sel !== key || !box || !d?.expected?.length) return;
+  const rows = d.expected;
+  box.innerHTML = `<h3 class="fin-h">Match</h3>${rows.map(x => `<label class="fin-match"><input type="checkbox" value="${esc(x.settlement_id)}">
+      <span>${esc(x.contact_name || '—')}</span><span class="muted">${esc(x.number || '')}</span><span class="fin-n">${finUsd(x.amount)}</span><span class="muted">${esc(finDayLabel(x.marked_on))}</span></label>`).join('')}
+    <div class="fin-acts" data-fin-match-acts><button type="button" class="primary" data-fin-match disabled>Match</button></div>`;
+  const picked = () => rows.filter(x => box.querySelector(`input[value="${CSS.escape(x.settlement_id)}"]`)?.checked);
+  const sync = () => {
+    const p = picked(), btn = box.querySelector('[data-fin-match]');
+    if (btn) btn.disabled = !p.length || p.reduce((t, x) => t + x.amount, 0) !== d.amount || new Set(p.map(x => x.contact_id)).size !== 1;
+  };
+  box.addEventListener('change', sync);
+  box.onclick = async ev => {
+    const btn = ev.target.closest('[data-fin-match], [data-fin-ask-yes], [data-fin-ask-no]');
+    if (!btn) return;
+    const acts = box.querySelector('[data-fin-match-acts]'), payload = {feed_id: r.id, settlement_ids: picked().map(x => x.settlement_id)};
+    if (btn.matches('[data-fin-ask-no]')) { acts.innerHTML = '<button type="button" class="primary" data-fin-match>Match</button>'; sync(); return; }
+    if (state.busy) return;   // one categorize or match at a time on the tab
+    btn.disabled = true; state.busy = true;
+    try {
+      const res = await finDecide('feed_match', payload, btn.matches('[data-fin-ask-yes]') ? box.dataset.sig || '' : '');
+      if (res.ask != null) {
+        box.dataset.sig = res.sig;
+        acts.innerHTML = `<span class="fin-ask">${esc(finAskText(res.ask))}</span><button type="button" class="ghost" data-fin-ask-no>Cancel</button><button type="button" class="primary" data-fin-ask-yes>Send</button>`;
+        return;
+      }
+      if (res.status === 'committed') toast('Matched');
+      state.busy = false;
+      void finTxLoad(false);
+    } catch (e) { toast(e.message, true); btn.disabled = false; }
+    finally {
+      state.busy = false;
+      // Categorize, edited while this ran, drew its Save off (finTxCatDraw): draw it again with Save back on.
+      if (FIN?.tx === state) finTxCatRedraw();
+    }
   };
 }
 
@@ -422,7 +526,7 @@ function finTxCatDraw(r) {
     : moved() ? {feed_id: r.id, account_id: now.account, tags: moveTags()}
     : {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'};
   const footHtml = () => `<div class="fin-foot">${c.ask != null
-    ? `<span class="fin-ask">${esc(c.ask.who ? `Approval from ${finWho(c.ask.who)}` : 'Needs approval')}</span><button type="button" class="ghost" data-fin-cat-no>Cancel</button><button type="button" class="primary" data-fin-cat-yes${state.busy ? ' disabled' : ''}>Send</button>`
+    ? `<span class="fin-ask">${esc(finAskText(c.ask.who))}</span><button type="button" class="ghost" data-fin-cat-no>Cancel</button><button type="button" class="primary" data-fin-cat-yes${state.busy ? ' disabled' : ''}>Send</button>`
     : `<button type="submit" class="primary" data-fin-cat-save${ready() && !state.busy ? '' : ' disabled'}>Save</button>`}</div>`;
   const foot = () => { const f = form.querySelector('.fin-foot'); if (f) f.outerHTML = footHtml(); };
   const draw = focus => {
@@ -436,7 +540,7 @@ function finTxCatDraw(r) {
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${now.project === M ? '' : esc(now.project)}"${now.project === M ? ' placeholder="Mixed"' : ''}></label>` : ''}${footHtml()}`;
     if (focus) form.querySelector(focus)?.focus();
   };
-  // One categorize at a time on the tab (state.busy keeps every Save and Send off until it answers). An approval
+  // One categorize or match at a time on the tab (state.busy keeps every Save and Send off until it answers). An approval
   // prompt holds the payload its dry run was for, and Send sends that payload; changing the form drops the prompt.
   const send = async asked => {
     if (state.busy) return;
@@ -445,16 +549,12 @@ function finTxCatDraw(r) {
     const live = () => FIN?.tx === state && state.cat === c && document.contains(form);
     let saved = false;
     try {
-      if (!asked) {
-        const dry = await post('/v2/finance/actions', {kind: 'categorize', payload: p, dry_run: true});
-        if (dry?.status === 'needs_approval') {
-          // Only for the row and the picks it was asked about; anything changed since means press Save again.
-          if (live() && JSON.stringify(payload()) === sent) c.ask = {who: dry.approver || '', p};
-          return;
-        }
-        if (dry?.status !== 'committed') throw new Error(dry?.reason || 'Not done');
+      const res = await finDecide('categorize', p, asked ? asked.sig : '');
+      if (res.ask != null) {
+        // Only for the row and the picks it was asked about; anything changed since means press Save again.
+        if (live() && JSON.stringify(payload()) === sent) c.ask = {who: res.ask, p, sig: res.sig};
+        return;
       }
-      const res = await finAct('categorize', p);
       if (res.status === 'committed') toast('Saved');
       saved = true;
     } catch (e) { toast(e.message, true); }
@@ -487,4 +587,65 @@ function finTxCatDraw(r) {
   };
   form.onsubmit = ev => { ev.preventDefault(); if (ready() && c.ask == null) void send(null); };
   draw('');
+}
+
+// ----------------------------------------------------------------- transfers
+// Moves between the company's own bank accounts (payment_create method "internal", backend/finance/transfers.py), and
+// payment_cancel while one is still queued. GET /api/v2/finance/transfers?cursor= ->
+// {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next_cursor}.
+const FIN_XFER_STATUS = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
+  failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], cancelled: ['idle', 'Cancelled']};
+const finAcctName = a => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
+async function finXferLoad(more) {
+  const state = FIN.tx, load = ++state.load;
+  const qs = new URLSearchParams({limit: '50'});
+  if (more && state.next) qs.set('cursor', state.next);
+  let d;
+  try { d = await get('/v2/finance/transfers?' + qs + finAs(), {fresh: true}); }
+  catch (e) { if (FIN?.tx === state && state.load === load && $('#fin-tx')) { $('#fin-tx').innerHTML = finFail(e); finRail(''); } return; }
+  if (FIN?.tx !== state || state.load !== load || !$('#fin-tx')) return;
+  const rows = (d.transfers || []).map(x => ({...x, kind: 'transfer'}));
+  state.rows = more ? [...state.rows, ...rows] : rows;
+  state.next = d.next_cursor || null;
+  if (!state.rows.some(r => finTxKey(r) === state.sel)) state.sel = state.rows[0] ? finTxKey(state.rows[0]) : '';
+  finXferDraw(); finXferRail();
+}
+function finXferDraw() {
+  const state = FIN.tx, box = $('#fin-tx'); if (!box) return;
+  if (!state.rows.length) { box.innerHTML = finNote('No transfers.'); return; }
+  box.innerHTML = `<table class="fin-t"><thead><tr><th>Date</th><th>From</th><th>To</th><th class="fin-n">Amount</th><th>Memo</th><th>Status</th></tr></thead><tbody>${state.rows.map(r => {
+    const key = finTxKey(r), [cls, label] = FIN_XFER_STATUS[r.status] || ['idle', r.status];
+    return `<tr data-fin-tx="${esc(key)}"${state.sel === key ? ' class="fin-on"' : ''}><td class="fin-nowrap">${esc(finDayLabel(r.created_at))}</td>
+      <td><button type="button" class="fin-link">${esc(finAcctName(r.from))}</button></td><td>${esc(finAcctName(r.to))}</td><td class="fin-n">${finCents(r.amount)}</td>
+      <td>${r.memo ? esc(r.memo) : '<span class="muted">—</span>'}</td><td><span class="pill ${cls}">${esc(label)}</span></td></tr>`;
+  }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
+}
+function finXferRail() {
+  const state = FIN.tx, r = state.rows.find(x => finTxKey(x) === state.sel);
+  if (!r) { finRail(''); return; }
+  const [cls, label] = FIN_XFER_STATUS[r.status] || ['idle', r.status];
+  finRail(`<div class="fin-rail-title"><h2>Transfer</h2><span class="pill ${cls}">${esc(label)}</span></div>
+    ${finKv('Amount', finUsd(r.amount))}${finKv('From', esc(finAcctName(r.from)))}${finKv('To', esc(finAcctName(r.to)))}
+    ${finKv('Date', esc(finDayLabel(r.created_at)))}${r.created_by ? finKv('By', esc(finWho(r.created_by))) : ''}${r.memo ? finKv('Memo', esc(r.memo)) : ''}
+    ${r.last_error ? finKv('Error', esc(r.last_error), 'fin-bad') : ''}
+    ${r.status === 'queued' && finCaps().may('finance.pay') ? '<div class="fin-foot"><button type="button" class="ghost" data-fin-xfer-cancel>Cancel transfer</button></div>' : ''}`);
+  $('#fin-rail [data-fin-xfer-cancel]')?.addEventListener('click', async ev => {
+    const btn = ev.currentTarget; btn.disabled = true;
+    try { const res = await finAct('payment_cancel', {transfer_id: r.id}); if (res.status === 'committed') toast('Cancelled'); void finTxLoad(false); }
+    catch (e) { toast(e.message, true); btn.disabled = false; }
+  });
+}
+async function finXferAdd() {
+  let accounts = [];
+  try { accounts = await finPayFrom(); } catch (e) { toast(e.message, true); return; }
+  if (accounts.length < 2) { toast('Needs two bank accounts', true); return; }
+  finDecideDialog('Transfer', `<label>From<select name="from" required>${finOpts(accounts, accounts[0].id)}</select></label>
+    <label>To<select name="to" required>${finOpts(accounts, accounts[1].id)}</select></label>
+    <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>
+    <label>Memo<input name="memo" maxlength="140" autocomplete="off"></label>`, 'Transfer', form => {
+    const el = form.elements, amount = finParseCents(el.amount.value);
+    if (!amount) throw new Error('A dollar amount, like 500');
+    if (el.from.value === el.to.value) throw new Error('Pick two different accounts');
+    return ['payment_create', {method: 'internal', from_account: el.from.value, to_account: el.to.value, amount, ...(el.memo.value.trim() ? {memo: el.memo.value.trim()} : {})}];
+  }, 'Queued');
 }

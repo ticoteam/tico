@@ -1391,8 +1391,15 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
     "next": {"type": ["string", "null"]}}}})
 
 # Finance (backend/finance_routes.py): every read is cut to the caller's own view.
-TAGS["Finance"] = ("Budgets, the P&L, expenses and one line's detail, as far as the caller sees; Finance actions, "
-                   "committed or sent to one person for approval.")
+DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
+                                                          "name": {"type": ["string", "null"]}}}
+DOC_PAYMENT = {"anyOf": [obj({"id": "n", "status": {"type": "string", "enum": [
+    "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
+    "unknown", "denied", "expired", "withdrawn"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
+    "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did. No id "
+                   "when the scheduled ask ended before a payment existed (denied, expired, withdrawn or failed)"}
+TAGS["Finance"] = ("Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
+                   "caller sees; Finance actions, committed or sent to one person for approval.")
 STABLE.extend([
     ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
      "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
@@ -1415,15 +1422,25 @@ STABLE.extend([
     ("/api/v2/finance/webhook-deliveries", "get", "Finance", "listFinanceWebhookDeliveries",
      "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
      "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
-    ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
-     "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
-     "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
      "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
      "FinanceAccess"),
     ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
      "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
      "finance admin", "FinancePayments"),
+    ("/api/v2/finance/transfers", "get", "Finance", "listFinanceTransfers",
+     "Internal transfers between two money accounts the caller sees, newest first, with their status and a cursor; "
+     "errors only for the maker or a finance admin", "FinanceTransfers"),
+    ("/api/v2/finance/tax/sales-tax", "get", "Finance", "getFinanceSalesTax",
+     "The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters with taxable and exempt "
+     "sales, tax collected and remitted, what is due and when. Full view only", "FinanceSalesTax"),
+    ("/api/v2/finance/tax/sales-tax.csv", "get", "Finance", "getFinanceSalesTaxCsv",
+     "The sales tax workpaper as CSV, the same lines as on screen. Full view only", None),
+    ("/api/v2/finance/tax/1099", "get", "Finance", "getFinance1099",
+     "The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments left "
+     "out, the threshold, whether a 1099-NEC is due and when. Full view only", "Finance1099"),
+    ("/api/v2/finance/tax/1099.csv", "get", "Finance", "getFinance1099Csv",
+     "The 1099 workpaper as CSV, the same lines as on screen. Full view only", None),
     ("/api/v2/finance/recipients", "get", "Finance", "listFinanceRecipients",
      "Current payment recipients, last 4 only, for teammates who may pay", "FinanceRecipients"),
     ("/api/v2/finance/mercury-users", "get", "Finance", "listFinanceMercuryUsers",
@@ -1434,8 +1451,56 @@ STABLE.extend([
     ("/api/v2/finance/statements", "get", "Finance", "listFinanceStatements",
      "Bank and card statements for the money accounts the caller sees", "FinanceStatements"),
     ("/api/v2/finance/rules", "get", "Finance", "listFinanceRules",
-     "Finance gate rules with their words, condition, outcome, examples and latest runs, for teammates who may write "
+     "Finance gate and posting rules with their kind, priority, words, condition, outcome, examples and latest runs, "
+     "for teammates who may write "
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
+    ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
+     "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
+     "or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+     "FinanceBills"),
+    ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
+     "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
+     "FinanceDocument"),
+    ("/api/v2/finance/invoices", "get", "Finance", "listFinanceInvoices",
+     "Invoices the caller sees (receivables: a view grant or finance.ar), newest first, with the same filters as bills",
+     "FinanceInvoices"),
+    ("/api/v2/finance/invoices/{invoice_id}", "get", "Finance", "getFinanceInvoice",
+     "One invoice with its lines, the payments received, its attachments and the actions and approvals on it",
+     "FinanceDocument"),
+    ("/api/v2/finance/contacts", "get", "Finance", "listFinanceContacts",
+     "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
+     "tax id's last 4 only for a finance admin", "FinanceContacts"),
+    ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
+     "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
+     "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
+    ("/api/v2/finance/pay-from", "get", "Finance", "listFinancePayFrom",
+     "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees "
+     "that account", "FinancePayFrom"),
+    ("/api/v2/finance/feed/{feed_id}/expected", "get", "Finance", "listFinanceFeedExpected",
+     "The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account and "
+     "direction, at most its amount, marked within 5 days), capped at 20, for the feed_match action",
+     "FinanceFeedExpected"),
+    ("/api/v2/finance/inbox", "get", "Finance", "getFinanceInbox",
+     "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, "
+     "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
+     "FinanceInbox"),
+    ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
+     "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
+     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row",
+     "FinanceReportOf"),
+    ("/api/v2/finance/search", "get", "Finance", "searchFinance",
+     "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
+     "cursor, without it returns the first few of each kind", "FinanceSearch"),
+    ("/api/v2/finance/metrics/{name}", "get", "Finance", "getFinanceMetric",
+     "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
+     "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
+     "unreconciled_days", "FinanceMetric"),
+    ("/api/v2/finance/close/{month}", "get", "Finance", "getFinanceCloseChecklist",
+     "A month's close checklist (YYYY-MM) for teammates who do the books, and whether it is ready to close",
+     "FinanceCloseChecklist"),
+    ("/api/v2/finance/action-kinds", "get", "Finance", "listFinanceActionKinds",
+     "Every Finance action kind in a line, or with kind= one kind's payload fields, right and approval kind",
+     "FinanceActionKinds"),
     ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
      "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
      "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
@@ -1457,16 +1522,15 @@ STABLE.extend([
      "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
      "otherwise only while that view covers it",
      "FinanceAction"),
+    ("/api/v2/finance/bills-address", "put", "Finance", "setFinanceBillsAddress",
+     "Set the email address vendors send bills to, or clear it with null (owner or admin). inbox_id is the Email & "
+     "Phone inbox that receives it, else null: mail to it never reaches Tico and uploads still work",
+     "FinanceBillsAddress"),
 ])
 SCHEMAS.update({
     "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
                            "on": "s", "view_version": "i"}),
     "FinanceReport": obj({"view_version": "i"}),
-    "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
-                                                "parent_id": "n", "company_wide": "b",
-                                                "attributable": items(obj({"team": "s", "teammate": "s"}, required=[]))},
-                                               required=["id", "number", "name", "type"])),
-                         "more": "b", "view_version": "i"}),
     "FinancePnl": obj({
         "start": "s", "end": "s", "period": "s", "basis": "s", "view": "s", "team": "n", "teammate": "n",
         "budget_as_of": "n",
@@ -1499,7 +1563,8 @@ SCHEMAS.update({
                            "currency": "s", "counterparty": "s", "description": "s", "status": "s", "pending": "b",
                            "card_id": "n", "entry_id": "n", "reconciled": "b", "money_account": {"type": ["object", "null"]},
                            "lines": items({"type": "object", "additionalProperties": True}),
-                           "account_id": "s", "account": "s", "vendor": "s", "memo": "s", "source": "s",
+                           "account_id": "s", "account": "s", "vendor": "s", "vendor_name": "s", "memo": "s",
+                           "source": "s",
                            "reversed": "b", "tags": "o"}, required=["kind", "id", "date", "amount", "currency"])),
         "next": "n", "currency": "s", "view_version": "i"}),
     "FinanceCards": obj({
@@ -1545,6 +1610,25 @@ SCHEMAS.update({
             "money_account_id": "s", "created_by": "s", "created_at": "s", "settled_at": "n", "error": "n"},
             required=["id", "status", "amount", "currency"])),
         "next_cursor": "n"}),
+    "FinanceTransfers": obj({
+        "transfers": items(obj({
+            "id": "s", "status": {"type": "string", "enum": ["queued", "submitted", "unknown", "failed", "posted",
+                                                             "cancelled"]},
+            "amount": "i", "currency": "s", "memo": "s",
+            "from": obj({"id": "s", "name": "s", "last4": "n"}), "to": obj({"id": "s", "name": "s", "last4": "n"}),
+            "created_by": "s", "created_at": "s", "settled_at": "n", "last_error": "n"},
+            required=["id", "status", "amount", "currency", "from", "to"])),
+        "next_cursor": "n"}),
+    "FinanceSalesTax": obj({
+        "year": "i", "currency": "s",
+        "rows": items(obj({"period": "s", "code": "s", "jurisdiction": "s", "taxable_sales": "i", "exempt_sales": "i",
+                           "tax_collected": "i", "tax_remitted": "i", "due": "i", "due_on": "n"},
+                          required=["period", "code", "taxable_sales", "exempt_sales", "tax_collected", "due"]))}),
+    "Finance1099": obj({
+        "year": "i", "currency": "s", "threshold": "i", "due_on": "s",
+        "rows": items(obj({"vendor_id": "s", "vendor": "s", "tin_on_file": "b", "cash_paid": "i",
+                           "card_paid_excluded": "i", "threshold": "i", "reportable": "b"},
+                          required=["vendor_id", "vendor", "cash_paid", "reportable"]))}),
     "FinanceRecipients": obj({"recipients": items(obj({
         "id": "s", "name": "s", "method": "s", "last4": "n", "version": "i", "replaces_id": "n", "known": "b",
         "synced": "b", "created_at": "s"}, required=["id", "name", "method", "version"]))}),
@@ -1560,7 +1644,8 @@ SCHEMAS.update({
         "starting_balance": {"type": ["integer", "null"]}, "ending_balance": "i", "currency": "s", "source": "s"},
         required=["id", "money_account_id", "end_date", "ending_balance"]))}),
     "FinanceRules": obj({"rules": items(obj({
-        "id": "s", "name": "s", "words": "s", "when": "o", "outcome": "o",
+        "id": "s", "kind": {"type": "string", "enum": ["gate", "posting"]}, "priority": "i", "name": "s", "words": "s",
+        "when": "o", "outcome": "o",
         "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
         "active": "b", "created_at": "s",
         "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
@@ -1570,6 +1655,78 @@ SCHEMAS.update({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
                                     "approver": "n", "result": "o"}, required=["status", "kind"]),
+    "FinanceBillsAddress": obj({"bills_email": "n", "inbox_id": "n"}),
+    "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
+                         "currency": "s", "bills_email": "n", "view_version": "i"}),
+    "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
+                                                "parent_id": "n", "company_wide": "b",
+                                                "attributable": items(obj({"team": "s", "teammate": "s"}, required=[]))},
+                                               required=["id", "number", "name", "type"])),
+                         "more": "b", "view_version": "i"}),
+    "FinancePayFrom": obj({"accounts": items(obj({"id": "s", "name": "s", "provider": "s", "last4": "n",
+                                                  "balance": {"type": ["integer", "null"]},
+                                                  "available_balance": {"type": ["integer", "null"]},
+                                                  "balance_as_of": "n"}, required=["id", "name"])),
+                           "currency": "s", "view_version": "i"}),
+    "FinanceFeedExpected": obj({"feed_id": "s", "kind": {"type": "string", "enum": ["bill", "invoice"]},
+                                "amount": "i", "date": "s", "expected": items(obj({
+                                    "settlement_id": "s", "kind": "s", "document_id": "s", "number": "s",
+                                    "contact_id": "s", "contact_name": "s", "amount": "i", "marked_on": "s"})),
+                                "more": "b", "view_version": "i"}),
+    "FinanceInvoices": obj({"invoices": items(ref("FinanceDocumentRow")), "next_cursor": "n",
+                            "open": ref("FinanceOpenTotal"), "currency": "s", "view_version": "i"}),
+    "FinanceOpenTotal": obj({"count": "i", "remaining": "i", "more": "b",
+                             "aging": obj({k: "i" for k in ("current", "1_30", "31_60", "61_90", "over_90")})}),
+    "FinanceDocumentRow": obj({
+        "id": "s", "kind": {"type": "string", "enum": ["bill", "invoice"]}, "number": "s",
+        "vendor": DOC_CONTACT, "customer": DOC_CONTACT, "date": "s", "due_date": "n", "status": "s", "currency": "s",
+        "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
+        "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
+        "approved_at": "n", "pay_on": "n", "payment": DOC_PAYMENT, "sent_at": "n", "written_off": "i",
+        "payment_link": "n"},
+        required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
+    "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
+        "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
+                            "amount": "i", "description": "s", "tags": "o", "taxable": "b"},
+                           required=["id", "account", "amount", "description", "tags"])),
+        "settlements": items(obj({"id": "s", "from_kind": {"type": "string", "enum": ["payment", "feed", "credit",
+                                                                                       "account", "expected"]},
+                                  "from_id": "n", "amount": "i", "settled_on": "s", "entry_id": "n", "voided_at": "n",
+                                  "created_by": "s"})),
+        "attachments": items(obj({"id": "s", "file_id": "s", "created_by": "s", "created_at": "s"})),
+        "actions": items(obj({"action_id": "s", "kind": "s", "status": "s", "actor": "s", "approval_id": "n",
+                              "approval_to": "n", "rule_id": "n", "created_at": "s"})),
+        "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
+        "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
+        required=["lines", "settlements", "attachments", "actions"])]},
+    "FinanceContacts": obj({"contacts": items(obj({
+        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
+        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
+        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
+        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
+        required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
+    "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
+        "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
+        "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
+        "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
+        "next_cursor": "n", "currency": "s", "view_version": "i"}),
+    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "balance_sheet", "cash_flow",
+                                                                 "budget_vs_actual", "ap_aging", "ar_aging",
+                                                                 "spend_by"]},
+                            "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
+    "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
+        "entry", "feed", "bill", "invoice", "contact", "rule"]}, "id": "s", "label": "s"})),
+        "next_cursor": "n", "currency": "s", "view_version": "i"}),
+    "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
+        "type": "string", "enum": ["minor", "percent", "months", "count", "days"]}, "as_of": "s",
+        "data_as_of": "n", "stale": "b", "currency": "s", "view_version": "i"}, required=["name", "value", "unit",
+                                                                                         "as_of"]),
+    "FinanceCloseChecklist": obj({"month": "s", "start": "s", "end": "s", "status": "s", "ready": "b",
+                                  "checks": items(obj({"key": "s", "ok": "b", "label": "s"})), "view_version": "i"}),
+    "FinanceActionKinds": obj({"kinds": items(obj({"kind": "s", "words": "s", "live": "b"})), "kind": "s",
+                               "words": "s", "right": "s", "live": "b", "approval_kind": "s",
+                               "fields": items(obj({"name": "s", "type": "s", "required": "b", "words": "s"}))},
+                              required=[]),
 })
 
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
@@ -2159,6 +2316,9 @@ def spec(app):
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
                                 "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
+        if method == "get" and path.startswith("/api/v2/finance/tax/") and path.endswith(".csv"):
+            responses["200"] = {"description": "The workpaper as CSV (text/csv, sent as an attachment)",
+                                "content": {"text/csv": {"schema": {"type": "string"}}}}
         if path == "/auth/login":
             responses = {"302": {"description": "Redirect to the identity provider"},
                          "400": {"description": "next is not an allowed origin, or code_challenge is missing"}}

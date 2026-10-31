@@ -138,6 +138,8 @@ def _card(document, instructions):
             "team_templates": _strings(document.get("team_templates")),
             # A helper serves a person (the Inbox Manager), sits outside the org chart and is offered on its own.
             "kind": "helper" if document.get("kind") == "helper" else "role",
+            # A retired card is offered nowhere; a bot already built from it keeps it (`Onboarding.catalog`).
+            "retired": bool(document.get("retired")),
             # Checked when the wizard first shows the card, and `when` says who wants it.
             "default": bool(document.get("default")), "when": str(document.get("when") or ""),
             "summary": str(document.get("summary") or ""),
@@ -463,7 +465,7 @@ class Onboarding:
 
     # ------------------------------------------------------------------ catalog
     def catalog(self, c, rendered=True):
-        cards = read_cards(self.settings)
+        cards = [card for card in read_cards(self.settings) if not card["retired"] or H.bot(c, card["slug"])]
         if rendered:
             record = load(c)
             names = display_names(self.settings, record)
@@ -904,6 +906,11 @@ class Onboarding:
         run it. It is a helper outside the org chart, so no chart or seat changes."""
         return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
 
+    def ensure_bookkeeper(self, c):
+        """The same for the Bookkeeper (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
+        checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
+        return self._ensure_builtin(c, "bookkeeper", "Bookkeeper", "bookkeeper.turned_on")
+
     def ensure_counsel(self, c):
         """The same for Counsel (docs/rules-plan.md §5): the helper that reads documents for Rules. A company from before it
         was built in gets it once it can run it, and it is outside the org chart."""
@@ -1064,6 +1071,8 @@ class Onboarding:
         self.ensure_librarian(c)              # a company from before it was built in
         self.ensure_goal_manager(c)
         self.ensure_task_manager(c)
+        from . import bookkeeper
+        bookkeeper.ensure(c, self, self.auth)
         self.ensure_counsel(c)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)

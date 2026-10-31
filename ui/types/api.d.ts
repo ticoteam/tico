@@ -318,6 +318,10 @@ export type AutomationVersions = {
 }>;
 };
 
+export type BillsAddress = {
+  address?: string | null;
+};
+
 export type Bot = {
   access: Access;
   can_complete_onboarding?: boolean;
@@ -1082,6 +1086,22 @@ export type FilterIn = {
   task_types?: Array<string>;
 };
 
+export type Finance1099 = {
+  currency: string;
+  due_on: string;
+  rows: Array<{
+  card_paid_excluded?: number;
+  cash_paid: number;
+  reportable: boolean;
+  threshold?: number;
+  tin_on_file?: boolean;
+  vendor: string;
+  vendor_id: string;
+}>;
+  threshold: number;
+  year: number;
+};
+
 export type FinanceAccess = {
   can_edit_defaults: boolean;
   can_view_as: boolean;
@@ -1120,6 +1140,25 @@ export type FinanceAction = {
   kind: string;
   reason?: string;
   status: string;
+};
+
+export type FinanceActionKinds = {
+  approval_kind?: string;
+  fields?: Array<{
+  name: string;
+  required: boolean;
+  type: string;
+  words: string;
+}>;
+  kind?: string;
+  kinds?: Array<{
+  kind: string;
+  live: boolean;
+  words: string;
+}>;
+  live?: boolean;
+  right?: string;
+  words?: string;
 };
 
 export type FinanceActionRequest = {
@@ -1204,6 +1243,20 @@ export type FinanceBalanceSheet = {
   view_version: number;
 };
 
+export type FinanceBills = {
+  bills: Array<FinanceDocumentRow>;
+  bills_email: string | null;
+  currency: string;
+  next_cursor: string | null;
+  open: FinanceOpenTotal;
+  view_version: number;
+};
+
+export type FinanceBillsAddress = {
+  bills_email: string | null;
+  inbox_id: string | null;
+};
+
 export type FinanceBudgets = {
   budgets: Array<Record<string, unknown>>;
   more: boolean;
@@ -1254,6 +1307,20 @@ export type FinanceChart = {
   view_version: number;
 };
 
+export type FinanceCloseChecklist = {
+  checks: Array<{
+  key: string;
+  label: string;
+  ok: boolean;
+}>;
+  end: string;
+  month: string;
+  ready: boolean;
+  start: string;
+  status: string;
+  view_version: number;
+};
+
 export type FinanceConnectionRequest = {
   approver_email?: string | null;
   credential_id: string;
@@ -1272,6 +1339,154 @@ export type FinanceConnectionResult = {
   status: string;
 };
 
+export type FinanceContacts = {
+  contacts: Array<{
+  active: boolean;
+  created_at?: string;
+  default_account?: Record<string, unknown> | null;
+  emails?: Array<string>;
+  has_tax_id?: boolean;
+  id: string;
+  is_1099?: boolean;
+  kind: "vendor" | "customer" | "both";
+  name: string;
+  owed?: {
+  bills?: number;
+  invoices?: number;
+};
+  recipient_id?: string | null;
+  tax_id_last4?: string | null;
+}>;
+  next_cursor: string | null;
+  view_version: number;
+};
+
+export type FinanceDocument = (FinanceDocumentRow & {
+  actions: Array<{
+  action_id: string;
+  actor: string;
+  approval_id: string | null;
+  approval_to: string | null;
+  created_at: string;
+  kind: string;
+  rule_id: string | null;
+  status: string;
+}>;
+  attachment_count?: number;
+  attachments: Array<{
+  created_at: string;
+  created_by: string;
+  file_id: string;
+  id: string;
+}>;
+  attachments_more?: boolean;
+  lines: Array<{
+  account: Record<string, unknown> | null;
+  amount: number;
+  description: string;
+  id: string;
+  tags: Record<string, unknown>;
+  taxable?: boolean;
+}>;
+  schedule?: Record<string, unknown> | null;
+  settlement_count?: number;
+  settlements: Array<{
+  amount: number;
+  created_by: string;
+  entry_id: string | null;
+  from_id: string | null;
+  from_kind: "payment" | "feed" | "credit" | "account" | "expected";
+  id: string;
+  settled_on: string;
+  voided_at: string | null;
+}>;
+  settlements_more?: boolean;
+  terms_days?: number | null;
+  view_version?: number;
+});
+
+export type FinanceDocumentRow = {
+  aging?: string | null;
+  approved_at?: string | null;
+  approved_by?: string | null;
+  attachments?: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  customer?: {
+  id?: string | null;
+  name?: string | null;
+} | null;
+  date: string;
+  days_late?: number;
+  due_date?: string | null;
+  entry_id?: string | null;
+  id: string;
+  kind: "bill" | "invoice";
+  memo?: string;
+  number: string;
+  origin?: string;
+  paid: number;
+  pay_on?: string | null;
+  payment?: {
+  amount: number;
+  error: string | null;
+  id: string | null;
+  on: string;
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | "denied" | "expired" | "withdrawn";
+} | null;
+  payment_link?: string | null;
+  remaining: number;
+  sent_at?: string | null;
+  status: string;
+  total: number;
+  vendor?: {
+  id?: string | null;
+  name?: string | null;
+} | null;
+  written_off?: number;
+};
+
+export type FinanceFeedExpected = {
+  amount: number;
+  date: string;
+  expected: Array<{
+  amount: number;
+  contact_id: string;
+  contact_name: string;
+  document_id: string;
+  kind: string;
+  marked_on: string;
+  number: string;
+  settlement_id: string;
+}>;
+  feed_id: string;
+  kind: "bill" | "invoice";
+  more: boolean;
+  view_version: number;
+};
+
+export type FinanceInbox = {
+  counts: Record<string, number>;
+  currency: string;
+  items: Array<{
+  id: string;
+  kind: "uncategorized" | "bill_to_enter" | "unmatched_receipt" | "missing_receipt" | "bill_due" | "invoice_overdue" | "budget_near_limit" | "sync_failed" | "period_ready";
+  label: string;
+}>;
+  more: Array<string>;
+  next_cursor: string | null;
+  view_version: number;
+};
+
+export type FinanceInvoices = {
+  currency: string;
+  invoices: Array<FinanceDocumentRow>;
+  next_cursor: string | null;
+  open: FinanceOpenTotal;
+  view_version: number;
+};
+
 export type FinanceMercuryUsers = {
   users: Array<{
   connection_id: string;
@@ -1280,6 +1495,44 @@ export type FinanceMercuryUsers = {
   name: string;
   updated_at: string;
 }>;
+};
+
+export type FinanceMetric = {
+  as_of: string;
+  currency?: string;
+  data_as_of?: string | null;
+  name: string;
+  stale?: boolean;
+  unit: "minor" | "percent" | "months" | "count" | "days";
+  value: number | string | null;
+  view_version?: number;
+};
+
+export type FinanceOpenTotal = {
+  aging: {
+  "1_30": number;
+  "31_60": number;
+  "61_90": number;
+  current: number;
+  over_90: number;
+};
+  count: number;
+  more: boolean;
+  remaining: number;
+};
+
+export type FinancePayFrom = {
+  accounts: Array<{
+  available_balance?: number | null;
+  balance?: number | null;
+  balance_as_of?: string | null;
+  id: string;
+  last4?: string | null;
+  name: string;
+  provider?: string;
+}>;
+  currency: string;
+  view_version: number;
 };
 
 export type FinancePayments = {
@@ -1395,6 +1648,11 @@ export type FinanceReport = {
   view_version: number;
 };
 
+export type FinanceReportOf = {
+  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  prior?: Record<string, unknown>;
+};
+
 export type FinanceRules = {
   rules: Array<{
   active?: boolean;
@@ -1402,9 +1660,11 @@ export type FinanceRules = {
   examples?: Array<Record<string, unknown>>;
   external_rule_id?: string | null;
   id: string;
+  kind?: "gate" | "posting";
   name: string;
   outcome: Record<string, unknown>;
   owner?: string;
+  priority?: number;
   runs?: Array<{
   action_id: string | null;
   at: string;
@@ -1413,6 +1673,33 @@ export type FinanceRules = {
   when: Record<string, unknown>;
   words?: string;
 }>;
+};
+
+export type FinanceSalesTax = {
+  currency: string;
+  rows: Array<{
+  code: string;
+  due: number;
+  due_on?: string | null;
+  exempt_sales: number;
+  jurisdiction?: string;
+  period: string;
+  tax_collected: number;
+  tax_remitted?: number;
+  taxable_sales: number;
+}>;
+  year: number;
+};
+
+export type FinanceSearch = {
+  currency: string;
+  next_cursor: string | null;
+  results: Array<{
+  id: string;
+  kind: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule";
+  label: string;
+}>;
+  view_version: number;
 };
 
 export type FinanceSources = {
@@ -1463,8 +1750,34 @@ export type FinanceTransactions = {
   status?: string;
   tags?: Record<string, unknown>;
   vendor?: string;
+  vendor_name?: string;
 }>;
   view_version: number;
+};
+
+export type FinanceTransfers = {
+  next_cursor: string | null;
+  transfers: Array<{
+  amount: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  from: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+  id: string;
+  last_error?: string | null;
+  memo?: string;
+  settled_at?: string | null;
+  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "cancelled";
+  to: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+}>;
 };
 
 export type FinanceWebhookDeliveries = {
@@ -5331,6 +5644,22 @@ export type GetFileVersionParams = {
 export type GetFileVersionBody = never;
 export type GetFileVersionResponse = string;
 
+/** GET /api/v2/finance/tax/1099 */
+export type GetFinance1099Params = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099Body = never;
+export type GetFinance1099Response = Finance1099;
+
+/** GET /api/v2/finance/tax/1099.csv */
+export type GetFinance1099CsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099CsvBody = never;
+export type GetFinance1099CsvResponse = string;
+
 /** GET /api/v2/finance/access */
 export type GetFinanceAccessParams = Record<string, never>;
 export type GetFinanceAccessBody = never;
@@ -5351,6 +5680,14 @@ export type GetFinanceBalanceSheetParams = {
 export type GetFinanceBalanceSheetBody = never;
 export type GetFinanceBalanceSheetResponse = FinanceBalanceSheet;
 
+/** GET /api/v2/finance/bills/{bill_id} */
+export type GetFinanceBillParams = {
+  bill_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceBillBody = never;
+export type GetFinanceBillResponse = FinanceDocument;
+
 /** GET /api/v2/finance/chart */
 export type GetFinanceChartParams = {
   for?: "bill" | "invoice" | "journal" | null;
@@ -5358,6 +5695,13 @@ export type GetFinanceChartParams = {
 };
 export type GetFinanceChartBody = never;
 export type GetFinanceChartResponse = FinanceChart;
+
+/** GET /api/v2/finance/close/{month} */
+export type GetFinanceCloseChecklistParams = {
+  month: string;
+};
+export type GetFinanceCloseChecklistBody = never;
+export type GetFinanceCloseChecklistResponse = FinanceCloseChecklist;
 
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
@@ -5372,6 +5716,24 @@ export type GetFinanceExpensesParams = {
 };
 export type GetFinanceExpensesBody = never;
 export type GetFinanceExpensesResponse = FinanceReport;
+
+/** GET /api/v2/finance/inbox */
+export type GetFinanceInboxParams = {
+  cursor?: string | null;
+  kind?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type GetFinanceInboxBody = never;
+export type GetFinanceInboxResponse = FinanceInbox;
+
+/** GET /api/v2/finance/invoices/{invoice_id} */
+export type GetFinanceInvoiceParams = {
+  invoice_id: string;
+  view_as?: string | null;
+};
+export type GetFinanceInvoiceBody = never;
+export type GetFinanceInvoiceResponse = FinanceDocument;
 
 /** GET /api/v2/finance/lines/{account_id} */
 export type GetFinanceLineParams = {
@@ -5389,6 +5751,21 @@ export type GetFinanceLineParams = {
 };
 export type GetFinanceLineBody = never;
 export type GetFinanceLineResponse = FinanceReport;
+
+/** GET /api/v2/finance/metrics/{name} */
+export type GetFinanceMetricParams = {
+  account_id?: string | null;
+  budget_id?: string | null;
+  days?: number | null;
+  end?: string | null;
+  name: "cash" | "burn" | "runway_months" | "revenue" | "spend" | "budget_remaining" | "budget_pct_used" | "ap_due" | "ar_overdue" | "uncategorized_count" | "unreconciled_days";
+  start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  view_as?: string | null;
+};
+export type GetFinanceMetricBody = never;
+export type GetFinanceMetricResponse = FinanceMetric;
 
 /** GET /api/v2/finance/pnl */
 export type GetFinancePnlParams = {
@@ -5408,6 +5785,37 @@ export type GetFinancePnlParams = {
 };
 export type GetFinancePnlBody = never;
 export type GetFinancePnlResponse = FinancePnl;
+
+/** GET /api/v2/finance/reports/{kind} */
+export type GetFinanceReportParams = {
+  basis?: "cash" | "accrual" | null;
+  by?: "department" | "team" | "teammate" | "bot" | "person" | "vendor" | "account";
+  compare?: "prior" | null;
+  end?: string | null;
+  kind: "pnl" | "balance_sheet" | "cash_flow" | "budget_vs_actual" | "ap_aging" | "ar_aging" | "spend_by";
+  period?: "day" | "week" | "month" | "quarter" | "year";
+  start?: string | null;
+  top_n?: number;
+  view_as?: string | null;
+};
+export type GetFinanceReportBody = never;
+export type GetFinanceReportResponse = FinanceReportOf;
+
+/** GET /api/v2/finance/tax/sales-tax */
+export type GetFinanceSalesTaxParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxBody = never;
+export type GetFinanceSalesTaxResponse = FinanceSalesTax;
+
+/** GET /api/v2/finance/tax/sales-tax.csv */
+export type GetFinanceSalesTaxCsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxCsvBody = never;
+export type GetFinanceSalesTaxCsvResponse = string;
 
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
@@ -6037,6 +6445,28 @@ export type ListFilesParams = {
 export type ListFilesBody = never;
 export type ListFilesResponse = FileLibrary;
 
+/** GET /api/v2/finance/action-kinds */
+export type ListFinanceActionKindsParams = {
+  kind?: string | null;
+};
+export type ListFinanceActionKindsBody = never;
+export type ListFinanceActionKindsResponse = FinanceActionKinds;
+
+/** GET /api/v2/finance/bills */
+export type ListFinanceBillsParams = {
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  cursor?: string | null;
+  end?: string | null;
+  limit?: number;
+  q?: string;
+  start?: string | null;
+  status?: string | null;
+  vendor_id?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceBillsBody = never;
+export type ListFinanceBillsResponse = FinanceBills;
+
 /** GET /api/v2/finance/budgets */
 export type ListFinanceBudgetsParams = {
   at?: string | null;
@@ -6052,16 +6482,60 @@ export type ListFinanceCardsParams = {
   cursor?: string | null;
   holder?: string | null;
   limit?: number;
+  q?: string;
   status?: "active" | "frozen" | "cancelled" | null;
+  vendor?: string | null;
   view_as?: string | null;
 };
 export type ListFinanceCardsBody = never;
 export type ListFinanceCardsResponse = FinanceCards;
 
+/** GET /api/v2/finance/contacts */
+export type ListFinanceContactsParams = {
+  active?: boolean | null;
+  cursor?: string | null;
+  kind?: "vendor" | "customer" | "both" | null;
+  limit?: number;
+  q?: string;
+  view_as?: string | null;
+};
+export type ListFinanceContactsBody = never;
+export type ListFinanceContactsResponse = FinanceContacts;
+
+/** GET /api/v2/finance/feed/{feed_id}/expected */
+export type ListFinanceFeedExpectedParams = {
+  feed_id: string;
+  view_as?: string | null;
+};
+export type ListFinanceFeedExpectedBody = never;
+export type ListFinanceFeedExpectedResponse = FinanceFeedExpected;
+
+/** GET /api/v2/finance/invoices */
+export type ListFinanceInvoicesParams = {
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  cursor?: string | null;
+  customer_id?: string | null;
+  end?: string | null;
+  limit?: number;
+  q?: string;
+  start?: string | null;
+  status?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceInvoicesBody = never;
+export type ListFinanceInvoicesResponse = FinanceInvoices;
+
 /** GET /api/v2/finance/mercury-users */
 export type ListFinanceMercuryUsersParams = Record<string, never>;
 export type ListFinanceMercuryUsersBody = never;
 export type ListFinanceMercuryUsersResponse = FinanceMercuryUsers;
+
+/** GET /api/v2/finance/pay-from */
+export type ListFinancePayFromParams = {
+  view_as?: string | null;
+};
+export type ListFinancePayFromBody = never;
+export type ListFinancePayFromResponse = FinancePayFrom;
 
 /** GET /api/v2/finance/payments */
 export type ListFinancePaymentsParams = {
@@ -6130,6 +6604,15 @@ export type ListFinanceTransactionsParams = {
 };
 export type ListFinanceTransactionsBody = never;
 export type ListFinanceTransactionsResponse = FinanceTransactions;
+
+/** GET /api/v2/finance/transfers */
+export type ListFinanceTransfersParams = {
+  cursor?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type ListFinanceTransfersBody = never;
+export type ListFinanceTransfersResponse = FinanceTransfers;
 
 /** GET /api/v2/finance/webhook-deliveries */
 export type ListFinanceWebhookDeliveriesParams = {
@@ -7182,6 +7665,28 @@ export type SearchFilesParams = {
 export type SearchFilesBody = never;
 export type SearchFilesResponse = FileSearch;
 
+/** GET /api/v2/finance/search */
+export type SearchFinanceParams = {
+  account_id?: string | null;
+  active?: boolean | null;
+  aging?: "current" | "1_30" | "31_60" | "61_90" | "over_90" | null;
+  contact_id?: string | null;
+  contact_kind?: "vendor" | "customer" | "both" | null;
+  cursor?: string | null;
+  end?: string | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | null;
+  limit?: number;
+  money_account_id?: string | null;
+  q?: string;
+  rule_kind?: "gate" | "posting" | null;
+  start?: string | null;
+  status?: string | null;
+  vendor?: string | null;
+  view_as?: string | null;
+};
+export type SearchFinanceBody = never;
+export type SearchFinanceResponse = FinanceSearch;
+
 /** GET /api/v2/docs/search */
 export type SearchInternalAndLinkedDocsParams = {
   collection?: string;
@@ -7329,6 +7834,11 @@ export type SetExtraRepositoriesParams = {
 };
 export type SetExtraRepositoriesBody = ExtraRepos;
 export type SetExtraRepositoriesResponse = unknown;
+
+/** PUT /api/v2/finance/bills-address */
+export type SetFinanceBillsAddressParams = Record<string, never>;
+export type SetFinanceBillsAddressBody = BillsAddress;
+export type SetFinanceBillsAddressResponse = FinanceBillsAddress;
 
 /** POST /api/v2/goals/{gid}/kpis/{kid} */
 export type SetGoalKpiTargetParams = {

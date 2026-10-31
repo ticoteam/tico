@@ -6,13 +6,13 @@
 - Remaining = amount - posted actuals - active holds. A hold reserves in the whole chain at once.
 - Amounts live in versions with an effective-from day; a budget with no version has no amount and never cuts off.
 """
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
 from decimal import Decimal
 
 from . import dates, money
-from .errors import invalid
+from .errors import INVALID, Named, invalid, named_refusal
 from .ledger import PNL_TYPES, Account, ancestors, descendants
 from .org import Org
 
@@ -75,6 +75,7 @@ class State:
     pct: Decimal | None
     crossed_warn: bool
     at_limit: bool
+    excluded: bool = False          # a budget read netted out settled private lines (marked excluded)
 
 
 @dataclass(frozen=True)
@@ -242,9 +243,25 @@ def overlaps(a: Budget, b: Budget, accounts: Mapping[str, Account], org: Org) ->
     return not (a.vendor and b.vendor and a.vendor != b.vendor)
 
 
-def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Account], org: Org) -> None:
+def clash(budgets: Mapping[str, Budget], accounts: Mapping[str, Account], org: Org) -> tuple[Budget, Budget] | None:
+    """Two active sibling budgets one charge could count against (what renaming a vendor to another's name makes)."""
+    live = [b for b in budgets.values() if b.active and not b.catch_all]
+    for i, a in enumerate(live):
+        for b in live[i + 1:]:
+            if a.parent_id == b.parent_id and a.book_id == b.book_id and overlaps(a, b, accounts, org):
+                return a, b
+    return None
+
+
+def _unseen(_budget: Budget) -> bool:
+    return False
+
+
+def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Account], org: Org,
+          seen: Callable[[Budget], bool] = _unseen) -> None:
     """A new or changed budget's place in its tree. Raises `invalid` for anything that would let a charge count twice
-    or a child sit outside its parent."""
+    or a child sit outside its parent. `seen` says which budgets the asker may see: a sibling is named in the refusal
+    only where it is seen, else the refusal says another budget."""
     if new.period not in PERIODS:
         raise invalid(f"a budget period is {'|'.join(PERIODS)}")
     if new.at_limit not in AT_LIMIT:
@@ -296,7 +313,8 @@ def check(new: Budget, budgets: Mapping[str, Budget], accounts: Mapping[str, Acc
     for sibling in others.values():
         if sibling.parent_id == new.parent_id and not sibling.catch_all and sibling.book_id == new.book_id and \
                 overlaps(new, sibling, accounts, org):
-            raise invalid(f"it overlaps budget {sibling.name}")
+            named = Named((sibling.id,), "it overlaps budget {0}", "it overlaps another budget")
+            raise named_refusal(INVALID, named, [sibling.name], seen(sibling))
 
 
 def fit_points(change_from: date, versions: Iterable[Version]) -> list[date]:
@@ -316,4 +334,7 @@ def check_fit(parent: Budget, parent_versions: Sequence[Version], children: Mapp
             continue
         total = sum(amount_at(v, at) or 0 for v in children.values())
         if total > cap:
-            raise invalid(f"its children would total {total}, more than {parent.name}'s {cap}")
+            named = Named((parent.id,), f"its children would total {total}, more than {{0}}'s {cap}",
+                          "it does not fit: not enough left", numbers=True, on=at.isoformat())
+            # The caller re-raises this only where the asker may see the parent's numbers (handlers._fit).
+            raise named_refusal(INVALID, named, [parent.name], shown=True)

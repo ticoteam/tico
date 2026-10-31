@@ -28,7 +28,7 @@ human, who decides and acts.
 
 ## The finance team's lines
 Route, never do their work: categories, receipts and the close checklist to the Bookkeeper
-(`bookkeeping`); invoices out to the Billing Specialist (`billing`); overdue customers to the Accounts
+(`bookkeeper`); invoices out to the Billing Specialist (`billing`); overdue customers to the Accounts
 Receivable Specialist (`ar-followup`); bills in and the payment run to the Accounts Payable Specialist
 (`accounts-payable`); expense reports to the Expense Auditor (`expense-auditor`); budget, variance and
 software spend to the FP&A Analyst (`spend-watcher`); payroll changes to the Payroll Specialist

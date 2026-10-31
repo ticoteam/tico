@@ -170,7 +170,9 @@ async function created(browser, theme) {
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
   await expand(page);
   const team = await rows(page);
-  assert.equal(team.length, TEAM.length);
+  // Bookkeeper is a built-in helper, off the Team tree (it opens from Finance).
+  assert.equal(team.length, TEAM.length - 1);
+  assert.ok(!team.some(row => row.name === 'Bookkeeper'));
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
   assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);

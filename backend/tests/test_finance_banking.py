@@ -59,6 +59,54 @@ def test_the_adapter_reads_recorded_answers_waits_out_429_and_names_the_ip_allow
     assert refused.refused_write and error_text(refused, write=True) == IP_HINT
 
 
+def test_the_adapter_never_follows_a_redirect_so_the_token_stays_with_its_host():
+    """A 302 to another host is the answer: a failure, never followed, so the Authorization header goes nowhere else."""
+    elsewhere: list[tuple[str, str | None]] = []
+
+    class Other(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            elsewhere.append((self.path, self.headers.get("Authorization")))
+            self.send_response(200)
+            self.send_header("Content-Length", "2")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        do_POST = do_GET
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    other = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Other)
+    target = f"http://localhost:{other.server_address[1]}/stolen"
+
+    class Moves(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(302)
+            self.send_header("Location", target)
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+
+        do_POST = do_GET
+
+        def log_message(self, *args: object) -> None:
+            pass
+
+    moves = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Moves)
+    for server in (other, moves):
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        m = Mercury("tok-acme", base=f"http://127.0.0.1:{moves.server_address[1]}/api/v1")
+        read = m.accounts()
+        wrote = m.create_recipient({"name": "Acme Supplies"})
+        assert (read.status, read.ok, wrote.status, wrote.ok) == (302, False, 302, False)
+        assert "redirect" in error_text(wrote, write=True)
+        assert elsewhere == []
+    finally:
+        for server in (other, moves):
+            server.shutdown()
+            server.server_close()
+
+
 def test_signatures_amount_signs_and_statement_signs():
     body = json.dumps(MERCURY["event_txn_updated"]).encode()
     now = 1_792_000_000
@@ -366,7 +414,9 @@ def test_a_payment_settles_on_its_payees_contact_so_the_vendor_hold_and_actual_m
     with books.read() as c:
         vendor = c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_feed_txns f ON f.entry_id=l.entry_id "
                            "WHERE f.provider_id='txn-pay' AND l.amount>0").fetchone()[0]
-        assert vendor == "Acme Supplies"
+        assert vendor == "acme supplies"                               # the payee's name, keyed folded
+        assert c.execute("SELECT label FROM fin_vendor_labels WHERE name_key=?", (vendor,)).fetchone()[0] == \
+            "Acme Supplies"                                            # and read as written
         assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchone()[0] == "settled"
 
 
