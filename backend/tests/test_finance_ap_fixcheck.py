@@ -276,3 +276,31 @@ def test_per_kind_inbox_pages_never_skip_an_item_after_a_hidden_one(books):  # n
             if not cursor:
                 break
         assert seen == made[1:]                                                           # Codex r3 2
+
+
+def test_an_approved_over_budget_bill_payment_sends_and_a_later_drop_does_not_hold_it(books):  # noqa: F811
+    from backend import hubdb as H
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        budget = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"),
+                                                 "amount": 5_000, "at_limit": "hold_payment"})
+        bid = _approved(c, _vendor(c, recipient_id=rid), 15_000)
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        asked = act(c, "bot:seller", "payment_create", {"recipient_id": rid, "money_account_id": _checking(c),
+                                                        "obligation": f"bill:{bid}", "amount": 15_000,
+                                                        "account_id": account(c, "2000")})
+        assert (asked.status, asked.rule) == ("needs_approval", f"budget:{budget.result['budget_id']}"), asked
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done.status == "committed", done
+        pid = str(done.result["payment_id"])
+        # Grok r3: approved for that budget, so every recheck lets it send (it is not held again and again).
+        assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == ""
+        assert act(c, OWNER, "budget_update", {"budget_id": budget.result["budget_id"],
+                                               "amount": 1_000}).status == "committed"
+        assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == ""          # the approval covers it
+        assert SK.get(c, "fin_payments", pid)["status"] == "queued"

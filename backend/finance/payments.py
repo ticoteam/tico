@@ -490,12 +490,25 @@ def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": SK.dump(owned)})
 
 
+def decided_by(ctx: Ctx, action: Any) -> str:
+    """Who approved the payment's action: the decider of its Tico approval when that was approved ("" when it had none).
+    The action's own `approval_by` is the requester, never the decider."""
+    approval = str(action["approval_id"] or "") if action is not None else ""
+    appr = tico.approval(ctx.c, approval) if approval else None
+    return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
+
+
+def _approved_gate(ctx: Ctx, action: Any, rule: str) -> bool:
+    """Whether the payment's action was approved for this very gate (its rule, say `budget:<id>`)."""
+    return bool(rule) and action is not None and str(action["rule_id"] or "") == rule and bool(decided_by(ctx, action))
+
+
 def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str) -> bool:
     """Whether what a rule asks for now was already given: the payer is who would approve it (as at the action), or
     the person who approved the payment's action may approve it."""
     if O.approver(ctx.org, who_needed, who, ctx.approver_setting()) == who:
         return True
-    by = str(action["approval_by"] or "") if action is not None else ""
+    by = decided_by(ctx, action)
     if not by:
         return False
     if ctx.org.owner and by == ctx.org.owner:
@@ -576,7 +589,10 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         # so one lowered past its actuals since asks a person first (never refused: the bill is owed either way).
         from .documents import bill_budget
         asks = bill_budget(ctx, str(pay["obligation"]).removeprefix("bill:"))
-        if asks.outcome == "needs_approval" and not _approved_for(ctx, action, who, asks.who):
+        # Approved for this budget at the action: it goes, even if that budget dropped further since (the person
+        # approved paying this bill past it; a different budget now over asks again).
+        if asks.outcome == "needs_approval" and not (_approved_gate(ctx, action, asks.rule) or
+                                                     _approved_for(ctx, action, who, asks.who)):
             budget = ctx.budgets().get(asks.rule.removeprefix("budget:"))
             return _hold(ctx, pay, f"the {budget.name if budget else 'bill'} budget is over")
     if fresh is not None:
