@@ -143,7 +143,7 @@ def test_a_due_day_only_routine_without_a_rule_id_stores_no_rule_id(api):
 def test_a_step_due_overrides_the_occurrence_due_day(api):
     step = {"id": "open", "type": "action", "do": "create_task",
             "args": {"title": "Payroll", "owner": "coo", "due": "2030-04-02"}}
-    aid = due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[step])
+    due(api, {"first_due": "2030-03-01", "repeats": "once", "open_days": 14, "tz": "UTC"}, steps=[step])
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     assert [row["due"] for row in sql(api, "SELECT due FROM tasks WHERE title='Payroll'")] == ["2030-04-02"]
 
