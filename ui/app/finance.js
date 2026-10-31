@@ -196,6 +196,8 @@ function finDialog(title, body, saveLabel, onSave) {
 function pageFinance() {
   const [path, query] = (S.route || '').split('?');
   const parts = path.slice(FIN_ROUTE.length + 1).split('/').filter(Boolean);
+  // A dialog belongs to the page it opened on: a Finance route change (Back, Forward, a link) closes it.
+  document.querySelectorAll('dialog.fin-dlg').forEach(d => d.close());
   FIN = {load: (FIN?.load || 0) + 1, tab: parts[0] || '', arg: decodeURIComponent(parts[1] || ''),
     q: new URLSearchParams(query || ''), acc: FIN_ACCESS};
   FIN_VIEW_AS = FIN.q.get('view_as') || '';
@@ -233,10 +235,12 @@ function finShow(state) {
 function finHeadHtml() {
   const caps = FIN?.acc ? finCaps() : null, acc = FIN?.acc, on = FIN?.tab === 'line' ? 'pnl' : FIN?.tab;
   const tabs = caps ? FIN_TABS.filter(([id]) => finTabShown(id, caps, acc)) : [];
+  // The P&L tab keeps the view it was left on (Company or Expenses); on the P&L itself, the one in the address.
+  const pnlView = FIN?.tab === 'pnl' ? FIN.q?.get('view') : FIN_PNL.view;
   const viewing = caps?.viewing ? `<span class="fin-as">Viewing as ${esc(finWho(caps.who))}<button type="button" class="ghost" data-fin-as-end aria-label="Stop viewing as ${esc(finWho(caps.who))}">✕</button></span>` : '';
   return `<div class="strat-head rd-strat-head fin-head" id="fin-head"><h1>Finance</h1>
     <nav class="tabs slim strat-tabs" aria-label="Finance">${tabs.map(([id, label]) =>
-      `<a href="${finHref('/' + id)}" data-fin-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>
+      `<a href="${finHref('/' + id, id === 'pnl' && pnlView === 'expenses' ? {view: 'expenses'} : {})}" data-fin-tab="${id}"${on === id ? ' class="cur" aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>
     <span class="spacer"></span>${viewing}</div>`;
 }
 function finHeadDraw() {

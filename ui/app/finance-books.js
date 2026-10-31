@@ -304,11 +304,14 @@ function finTxRail() {
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${shown.project === FIN_MIXED ? '' : esc(shown.project)}"${shown.project === FIN_MIXED ? ' placeholder="Mixed"' : ''}></label>
       <div class="fin-foot"><button type="submit" class="primary">Save</button></div></form>` : ''}`);
   const form = $('#fin-rail [data-fin-tag]');
+  form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
   if (form) form.onsubmit = async ev => {
     ev.preventDefault();
     // Only the fields the person changed are set (or cleared) on each line; every other tag a line has stays.
-    const changed = ['teammate', 'team', 'project'].map(k => [k, form.elements[k].value.trim()])
-      .filter(([k, v]) => v !== FIN_MIXED && v !== (shown[k] === FIN_MIXED ? '' : shown[k]));
+    // On a mixed field only Mixed (a Project not typed in) means unchanged: — or an emptied Project clears every line.
+    const val = k => k === 'project' && shown.project === FIN_MIXED && !form.elements.project.dataset.finTyped ? FIN_MIXED : form.elements[k].value.trim();
+    const changed = ['teammate', 'team', 'project'].map(k => [k, val(k)])
+      .filter(([k, v]) => v !== FIN_MIXED && (shown[k] === FIN_MIXED || v !== shown[k]));
     if (!changed.length) return;
     const pick = l => {
       const next = {...(l.tags || {})};

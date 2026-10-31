@@ -190,7 +190,7 @@ function finDefaultLabel(row, acc) {
 }
 const finDefaultCls = d => ({everything: 'all', team_expenses: 'mgr', own_expenses: 'own', none: 'none'}[d] || 'own');
 function finLineNames(ids) {
-  const rows = [...(FIN_PNL.last?.rows || []), ...['assets', 'liabilities', 'equity'].flatMap(k => FIN.bs?.data?.[k] || [])];
+  const rows = [...(FIN_PNL.last?.rows || []), ...(FIN.accLines?.pnl || []), ...(FIN.accLines?.bs || [])];
   return (ids || []).map(id => rows.find(r => r.account_id === id)?.name || 'A line').join(', ');
 }
 function finGrantLabel(g) {
@@ -238,8 +238,11 @@ function finAccDraw() {
   for (const t of kids('')) walk(t, 0);
   box.innerHTML = `<table class="fin-t fin-acc-t"><thead><tr><th>Teammate</th><th>By default</th><th>Granted</th></tr></thead><tbody>${out.join('')}</tbody></table>`;
   const priv = acc.private_lines || [];
-  $('#fin-private').innerHTML = priv.length ? `<h2 class="fin-h2">Private lines</h2><div class="fin-chips">${priv.map(p =>
-    `<span class="fin-chip">${esc(p.name)} <span class="muted">· ${p.full_detail ? 'full detail' : 'totals only'}</span></span>`).join('')}</div>` : '';
+  // backend/finance/tab.py access: others_see totals|hidden; full_detail the teammates who see it all (owners only).
+  $('#fin-private').innerHTML = priv.length ? `<h2 class="fin-h2">Private lines</h2><div class="fin-private">${priv.map(p => {
+    const full = Array.isArray(p.full_detail) ? p.full_detail : [];
+    return `<span class="fin-chip">${esc(p.name)} <span class="muted">· ${p.others_see === 'hidden' ? 'Hidden' : 'Totals only'}${full.length ? ' · Full detail: ' + esc(full.map(finWho).join(', ')) : ''}</span></span>`;
+  }).join('')}</div>` : '';
 }
 function finAccRail() {
   const acc = FIN.acc, me = finMe(), t = (acc.teammates || []).find(x => x.teammate === FIN_ACC.sel);
@@ -247,18 +250,24 @@ function finAccRail() {
   const teams = acc.teams || [];
   const path = []; for (let id = t.team, n = 0; id && n < 12; n++) { const team = teams.find(x => x.id === id); if (!team) break; path.unshift(team.name); id = team.parent; }
   const owner = !!acc.can_view_as;
-  const grants = (t.grants || []).map(g => {
+  const grants = (t.grants || []).map((g, i) => {
     const mine = owner || g.granted_by === me;
-    return `<div class="fin-kv"><span>${esc(finGrantLabel(g))}</span><span class="muted fin-small">${g.granted_by ? esc(finWho(g.granted_by)) : ''}${g.expires_at ? ' · until ' + esc(finDayLabel(g.expires_at)) : ' · no end'}${mine
+    return `<div class="fin-kv"><span data-fin-glabel="${i}">${esc(finGrantLabel(g))}</span><span class="muted fin-small">${g.granted_by ? esc(finWho(g.granted_by)) : ''}${g.expires_at ? ' · until ' + esc(finDayLabel(g.expires_at)) : ' · no end'}${mine
       ? ` <button type="button" class="ghost fin-x" data-fin-revoke="${esc(g.id)}" aria-label="Revoke ${esc(finGrantLabel(g))}">✕</button>` : ''}</span></div>`;
   }).join('');
   // Owners grant anything; a manager grants to their teams' members (the route checks either way). No self-grants.
-  const leads = new Set(teams.filter(x => x.lead === me).map(x => x.id));
+  const leads = new Set(teams.filter(x => x.lead === me).flatMap(x => [...finTeamsBelow(x.id)]));
   const may = t.teammate !== me && (owner || (t.team && leads.has(t.team)));
-  const lines = (FIN_PNL.last?.rows || []).filter(r => !r.private);
-  const bsLines = ['assets', 'liabilities', 'equity'].flatMap(k => FIN.bs?.data?.[k] || []).filter(r => r.account_id);
+  const named = (t.grants || []).some(g => (g.account_ids || []).length);
+  const L = may || named ? finAccLines() : null;
+  // Line names come with the lines read; relabel the grants then (the form keeps what was typed).
+  if (L && !L.ready) L.wait.then(() => {
+    if (FIN_ACC.sel !== t.teammate) return;
+    (t.grants || []).forEach((g, i) => { const el = $(`#fin-rail [data-fin-glabel="${i}"]`); if (el) el.textContent = finGrantLabel(g); });
+  });
   const whats = owner ? Object.entries(FIN_WHAT) : [['expenses', FIN_WHAT.expenses], ['pnl_lines', FIN_WHAT.pnl_lines]];
-  finRail(`<div class="fin-rail-title">${finAvatar(t.teammate, 28)}<div><h2>${esc(finWho(t.teammate))}</h2><div class="muted fin-small">${esc([path.join(' › '), t.kind === 'bot' ? 'bot' : 'person', t.reports_to ? 'reports to ' + finWho(t.reports_to) : ''].filter(Boolean).join(' · '))}</div></div></div>
+  finRail(`<div class="fin-rail-title">${finAvatar(t.teammate, 28)}<h2>${esc(finWho(t.teammate))}</h2></div>
+    ${path.length ? finKv('Team', esc(path.join(' › '))) : ''}${finKv('Kind', t.kind === 'bot' ? 'Bot' : 'Person')}${t.reports_to ? finKv('Reports to', esc(finWho(t.reports_to))) : ''}
     <h3 class="fin-h">Sees</h3>${finKv(finDefaultLabel(t, acc), '<span class="muted fin-small">Default</span>')}${grants}
     ${may ? `<h3 class="fin-h">Grant more</h3><form class="fin-form fin-rail-form" data-fin-grant>
       <label>What<select name="what">${whats.map(([v, l]) => `<option value="${v}"${v === 'expenses' ? ' selected' : ''}>${esc(l)}</option>`).join('')}</select></label>
@@ -269,20 +278,24 @@ function finAccRail() {
   const form = $('#fin-rail [data-fin-grant]'); if (!form) return;
   const sync = () => {
     const what = form.elements.what.value, line = form.querySelector('[data-fin-line]');
-    const opts = what === 'pnl_lines' ? lines : what === 'bs_lines' ? bsLines : [];
-    line.hidden = !opts.length;
-    form.elements.line.innerHTML = opts.map(r => `<option value="${esc(r.account_id)}">${esc(r.name)}</option>`).join('');
+    // A manager names expense lines only (core/view.py: their pnl_lines grants are expense lines).
+    const pnl = (L.pnl || []).filter(r => owner || r.type === 'expense');
+    const opts = what === 'pnl_lines' ? pnl : what === 'bs_lines' ? L.bs || [] : [];
+    const keep = form.elements.line.value;
+    line.hidden = !['pnl_lines', 'bs_lines'].includes(what);
+    form.elements.line.innerHTML = opts.map(r => `<option value="${esc(r.account_id)}"${r.account_id === keep ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
     // Everything, the balance sheet and its lines, payables, receivables and sources are company-wide.
     form.querySelector('[data-fin-whose]').hidden = !['expenses', 'pnl', 'pnl_lines'].includes(what);
   };
   form.elements.what.onchange = sync; sync();
+  if (!L.ready) L.wait.then(() => { if (form.isConnected) sync(); });
   form.onsubmit = async ev => {
     ev.preventDefault();
     const what = form.elements.what.value, whose = form.elements.whose.value, scoped = !form.querySelector('[data-fin-whose]').hidden;
     const payload = {subject_kind: 'teammate', subject: t.teammate, what};
     if (scoped) { payload.whose = whose.startsWith('team:') ? 'team' : whose; if (whose.startsWith('team:')) payload.whose_team = whose.slice(5); }
     if (what === 'pnl_lines' || what === 'bs_lines') {
-      if (!form.elements.line.value) { toast('Open the P&L or balance sheet first to pick a line', true); return; }
+      if (!form.elements.line.value) { toast('Pick a line', true); return; }
       payload.account_ids = [form.elements.line.value];
     }
     if (form.elements.until.value) payload.expires_at = form.elements.until.value + 'T23:59:59Z';
@@ -293,6 +306,20 @@ function finAccRail() {
       await finAccReload();
     } catch (e) { toast(e.message, true); btn.disabled = false; }
   };
+}
+// Read once per visit to Access: the P&L lines (company view for whoever sees it) and the balance sheet's lines.
+function finAccLines() {
+  if (FIN.accLines) return FIN.accLines;
+  const caps = finCaps(), [a, z] = finPnlRange('month');
+  const L = FIN.accLines = {pnl: null, bs: null, ready: false, wait: null};
+  L.wait = Promise.allSettled([get(`/v2/finance/pnl?start=${a}&end=${z}&period=month&basis=cash&view=${caps.company ? 'company' : 'expenses'}`, {fresh: true}),
+    caps.balance ? get('/v2/finance/balance-sheet', {fresh: true}) : Promise.resolve(null)]).then(([p, b]) => {
+    L.pnl = p.status === 'fulfilled' ? (p.value?.rows || []).filter(r => !r.private).sort((x, y) => String(x.code).localeCompare(String(y.code))) : [];
+    const sheet = b.status === 'fulfilled' ? b.value : null;
+    L.bs = sheet ? ['assets', 'liabilities', 'equity'].flatMap(k => sheet[k] || []).filter(r => r.account_id) : [];
+    L.ready = true;
+  });
+  return L;
 }
 async function finAccReload() {
   try { FIN.acc = FIN_ACCESS = await get('/v2/finance/access', {fresh: true}); } catch { /* keep what is drawn */ }
