@@ -31439,6 +31439,20 @@
             "maxLength": 200,
             "minLength": 1,
             "title": "Owner"
+          },
+          "task_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 366.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Days",
+            "description": "Open the owner's task this many days before each due day (a routine); absent or null for none"
           }
         },
         "additionalProperties": false,
@@ -31505,6 +31519,20 @@
               }
             ],
             "title": "Owner"
+          },
+          "task_days": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 366.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Task Days",
+            "description": "The routine's lead time in days; null turns the routine off, absent leaves it as it is"
           }
         },
         "additionalProperties": false,

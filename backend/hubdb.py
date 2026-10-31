@@ -4073,6 +4073,10 @@ def _set_status(conn, actor, row, status=None, type=None, step=None, note="", *,
         _task_event(conn, row["id"], actor, "step", row.get("step_id"), step_id, note)
     if row.get("status") != effective:
         _task_event(conn, row["id"], actor, "status", row.get("status"), effective, note)
+        if row.get("occurrence"):
+            # A routine's task for a rule's due date: completing it marks that day Satisfied, reopening takes it back.
+            from . import rule_due
+            rule_due.on_task_status(conn, actor, row, row.get("status"), effective)
         # Someone moving a bot's finished result on is what became of the run that made it (backend/run_triggers.py).
         RT.turn_result(conn, actor, row, RT.result_outcome(row.get("status"), effective), event, effective)
         if effective in ("done", "closed", "declined", "review"):

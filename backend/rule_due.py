@@ -4,8 +4,8 @@
   Its occurrences are worked out from the first date and the repeat; nothing stores them. `rule_due_status` holds each
   occurrence someone marked Satisfied, keyed by its date: by hand, or by its routine's task once a routine links one.
 - Status is derived on read. Satisfied when the current occurrence has a status row (a Satisfied "once" stays so).
-  Overdue after the end of that day in the due date's zone. Due soon within WINDOW_DAYS (there is no routine window
-  yet). Otherwise Upcoming.
+  Overdue after the end of that day in the due date's zone. Due soon within the linked routine's lead time (its
+  trigger's `open_days`), or WINDOW_DAYS with no routine. Otherwise Upcoming.
 - Repeats count from the first date, not from the occurrence before, and clamp to the month's end: monthly from the 31st
   falls on the 30th in April, and yearly from 29 February falls on the 28th in other years.
 - An edit to the first date or the repeat ends the row (`ended_on`) and starts a new one, which points back at it
@@ -28,6 +28,7 @@ REPEATS = ("once", "weekly", "monthly", "quarterly", "yearly")
 STEP_MONTHS = {"monthly": 1, "quarterly": 3, "yearly": 12}
 STATUSES = ("overdue", "due_soon", "upcoming", "satisfied")
 WINDOW_DAYS = 30            # "due soon" without a routine window
+ROUTINE_DAYS = 14           # a routine's lead time when its trigger names none (automation_due.OPEN_DAYS)
 MAX_OCCURRENCES = 5000      # a backstop: a weekly date from decades ago still walks in a few hundred steps
 HISTORY = 5                 # the last status rows a list shows for a due date
 OPEN_DAYS = 20              # the open occurrences a detail names (the count is always exact)
@@ -112,10 +113,11 @@ def is_occurrence(first, repeats, day):
     return any(d == day for d in occurrences(first, repeats, day))
 
 
-def state(row, satisfied, today):
-    """Where one due date stands on `today` (a day in its zone). `satisfied` is the set of due days already marked.
-    Returns {due_on, status, open}: `open` counts the unsatisfied occurrences inside the window (overdue or due soon)."""
-    horizon = today + timedelta(days=WINDOW_DAYS)
+def state(row, satisfied, today, window=WINDOW_DAYS):
+    """Where one due date stands on `today` (a day in its zone). `satisfied` is the set of due days already marked, and
+    `window` the days before a due day it is Due soon. Returns {due_on, status, open}: `open` counts the unsatisfied
+    occurrences inside the window (overdue or due soon)."""
+    horizon = today + timedelta(days=window)
     opened, latest, beyond = [], None, None
     for day in occurrences(parse_date(row["first_due"]), row["repeats"], horizon):
         if day > horizon:
@@ -168,20 +170,41 @@ def _status_rows(c, due_ids):
     return found
 
 
+def task_days(c, rows):
+    """{routine id: its lead time in days} for the rows' linked routines still in place (not deleted)."""
+    ids = sorted({r["routine_id"] for r in rows if r.get("routine_id")})
+    out = {}
+    for start in range(0, len(ids), 500):
+        part = ids[start:start + 500]
+        for r in c.execute("SELECT id, flow_json FROM automations WHERE deleted_at IS NULL AND id IN (%s)"
+                           % ",".join("?" * len(part)), part):
+            trigger = json.loads(r["flow_json"]).get("trigger") or {}
+            if trigger.get("type") == "due":
+                out[r["id"]] = int(trigger.get("open_days", ROUTINE_DAYS))
+    return out
+
+
+def window(row, days):
+    """The days before a due day that it is Due soon: its routine's lead time, else WINDOW_DAYS."""
+    return days.get(row.get("routine_id") or "", WINDOW_DAYS)
+
+
 def views(c, rows, today=None):
     """Each due date's view, with its status today: {id, rule_id, first_due, repeats, timezone, owner, routine_id,
-    ended_on, retired_at, due_on, status, open, history}. `rows` are rule_due_dates rows. A list reads this; a detail
-    reads `detail`."""
+    task_days, ended_on, retired_at, due_on, status, open, history}. `rows` are rule_due_dates rows. `task_days` is the
+    linked routine's lead time (None with no routine). A list reads this; a detail reads `detail`."""
     statuses = _status_rows(c, [r["id"] for r in rows])
+    days = task_days(c, rows)
     out = []
     for row in rows:
         marks = statuses.get(row["id"], [])
         satisfied = {m["due_on"] for m in marks}
         now = today or local_today(row["timezone"])
-        current = state(row, satisfied, now)
+        current = state(row, satisfied, now, window(row, days))
         out.append({
             "id": row["id"], "rule_id": row["rule_id"], "first_due": row["first_due"], "repeats": row["repeats"],
             "timezone": row["timezone"], "owner": row["owner"], "routine_id": row["routine_id"],
+            "task_days": days.get(row["routine_id"] or ""),
             "ended_on": row["ended_on"], "retired_at": row["retired_at"],
             "due_on": current["due_on"], "status": current["status"], "open": current["open"],
             "history": [{"due_on": m["due_on"], "satisfied_by": m["satisfied_by"], "via": m["via"], "at": m["at"],
@@ -222,7 +245,8 @@ def detail(c, row, today=None):
         seen.add(later["id"])
         chain.append(dict(later))
     current = views(c, [row], today)[0]
-    current["open_days"] = state(row, satisfied_days(c, row["id"]), today or local_today(row["timezone"]))["open_days"]
+    current["open_days"] = state(row, satisfied_days(c, row["id"]), today or local_today(row["timezone"]),
+                                 window(row, task_days(c, [row])))["open_days"]
     rows = []
     for link in chain:
         marks = [dict(m) for m in c.execute("SELECT * FROM rule_due_status WHERE due_date_id=? ORDER BY due_on DESC "
@@ -280,7 +304,7 @@ def satisfy(c, actor, row, due_on=None, via="person", task_id=None):
     Returns the day marked."""
     satisfied = satisfied_days(c, row["id"])
     now = local_today(row["timezone"])
-    current = state(row, satisfied, now)
+    current = state(row, satisfied, now, window(row, task_days(c, [row])))
     if due_on is None:
         if current["open"] > 1:
             raise Problem("validation", f"{current['open']} occurrences are open: say which one with due_on", 422)
@@ -302,39 +326,74 @@ def satisfy(c, actor, row, due_on=None, via="person", task_id=None):
     return target.isoformat()
 
 
+def marked(c, due_id, due_on):
+    """Whether that occurrence of the due date is already marked Satisfied (its routine then skips the day)."""
+    return bool(c.execute("SELECT 1 FROM rule_due_status WHERE due_date_id=? AND due_on=?", (due_id, due_on)).fetchone())
+
+
+def on_task_status(c, actor, task, old, new):
+    """Every task status write (hubdb `_set_status`, in its transaction) of a routine's occurrence task: completing it
+    marks its due date's occurrence Satisfied, and leaving done or closed again takes that mark back."""
+    if not task.get("occurrence") or not H._has_table(c, "rule_due_dates"):
+        return
+    ended = ("done", "closed")
+    if new in ended and old not in ended:
+        on_due_task_completed(c, {**task, "status": new}, actor)
+    elif new == "closed" and old == "done":
+        on_due_task_completed(c, {**task, "status": new}, actor)    # done by someone else, then closed by a person
+    elif old in ended and new not in ended:
+        on_due_task_reopened(c, task, actor)
+
+
+def _completes(task, actor):
+    """Completed: marked done by its owner (or a person), or closed by a person. The keeper's close (ask expiry,
+    cleanup) and a decline (a cancel) never are."""
+    if not actor or actor == H.KEEPER:
+        return False
+    if task.get("status") == "done":
+        return actor == task.get("owner") or H.is_human(actor)
+    return task.get("status") == "closed" and H.is_human(actor)
+
+
+def _occurrence_row(c, task):
+    """The due date and the day a routine's task stands for: the task's occurrence marker (`<automation>:<due_on>`), then
+    that automation's trigger (`rule_due_id`), then back along the due date's chain to the row the day belongs to, so a
+    late completion of an older occurrence marks that one. (None, None) when it is not a rule's routine."""
+    aid, _, due_on = str(task.get("occurrence") or "").rpartition(":")
+    found = c.execute("SELECT flow_json FROM automations WHERE id=?", (aid,)).fetchone() if aid else None
+    if not found:
+        return None, None
+    trigger = json.loads(found["flow_json"]).get("trigger") or {}
+    try:
+        day = date.fromisoformat(due_on)
+    except ValueError:
+        return None, None
+    row, seen = one(c, str(trigger.get("rule_due_id") or "")), set()
+    while row and row["id"] not in seen and len(seen) < CHAIN_MAX:
+        seen.add(row["id"])
+        if not row["retired_at"] and row["routine_id"] == aid and \
+                is_occurrence(parse_date(row["first_due"]), row["repeats"], day):
+            return row, due_on
+        row = one(c, row["replaces"]) if row["replaces"] else None
+    return None, None
+
+
 def on_due_task_completed(c, task, closed_by=None):
-    """The seam P0's routine link calls when a routine's task closes (nothing calls it yet). A routine's task for a due
-    date carries refs {routine_id, due_on}; completing it marks that occurrence Satisfied, by whoever closed it (the
-    owner, or the person; the task's owner when the close names no one), via routine, with an audit row on the rule.
-    A close by the keeper (ask expiry, cleanup), a cancel, or a task that is not done writes nothing. Reopening the task
-    is `on_due_task_reopened`. Returns the due date ids marked."""
-    if task.get("status") != "done" or closed_by == H.KEEPER:
+    """A routine's task completed (`_completes`): its occurrence of the linked due date is marked Satisfied by whoever
+    completed it, via routine, with the task's id and an audit row on the rule. Returns the due date ids marked."""
+    if not _completes(task, closed_by):
         return []
-    refs = task.get("refs") or {}
-    if isinstance(refs, str):
-        try:
-            refs = json.loads(refs)
-        except ValueError:
-            return []
-    routine_id, due_on = refs.get("routine_id"), refs.get("due_on")
-    if not routine_id or not due_on:
+    row, due_on = _occurrence_row(c, task)
+    if not row or due_on in satisfied_days(c, row["id"]):
         return []
-    actor = closed_by or task.get("owner") or H.KEEPER
-    marked = []
-    for row in live_rows(c):
-        if row["routine_id"] != routine_id or due_on in satisfied_days(c, row["id"]):
-            continue
-        if not is_occurrence(parse_date(row["first_due"]), row["repeats"], parse_date(due_on)):
-            continue
-        try:
-            c.execute("INSERT INTO rule_due_status (due_date_id, due_on, satisfied_by, via, task_id, at) "
-                      "VALUES (?,?,?,?,?,?)", (row["id"], due_on, actor, "routine", task.get("id"), H.now()))
-        except sqlite3.IntegrityError:
-            continue
-        audit_log.write(c, actor, "org_rule:" + row["rule_id"], None,
-                        {"due": row["id"], "satisfied": due_on, "task": task.get("id")}, "routine")
-        marked.append(row["id"])
-    return marked
+    try:
+        c.execute("INSERT INTO rule_due_status (due_date_id, due_on, satisfied_by, via, task_id, at) "
+                  "VALUES (?,?,?,?,?,?)", (row["id"], due_on, closed_by, "routine", task.get("id"), H.now()))
+    except sqlite3.IntegrityError:
+        return []
+    audit_log.write(c, closed_by, "org_rule:" + row["rule_id"], None,
+                    {"due": row["id"], "satisfied": due_on, "task": task.get("id")}, "routine")
+    return [row["id"]]
 
 
 def on_due_task_reopened(c, task, reopened_by=None):

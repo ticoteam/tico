@@ -453,44 +453,6 @@ def _routine_due(api):
     return r, due, start
 
 
-def _done(start, **over):
-    return {"id": "task-1", "status": "done", "owner": "ops", "refs": {"routine_id": "routine-1", "due_on": start},
-            **over}
-
-
-def test_a_routine_task_closed_by_a_person_marks_the_day_for_that_person_with_an_audit_row(api):
-    org(api)
-    r, due, start = _routine_due(api)
-    before = len(audit(api, r["id"]))
-    with api.app.state.store.transaction() as c:
-        assert D.on_due_task_completed(c, _done(start), closed_by="human:ben") == [due["id"]]
-    marks = get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"]
-    assert [m["satisfied_by"] for m in marks] == ["human:ben"]
-    assert len(audit(api, r["id"])) == before + 1
-
-
-def test_a_keeper_close_a_cancel_and_an_open_task_mark_nothing(api):
-    org(api)
-    r, due, start = _routine_due(api)
-    with api.app.state.store.transaction() as c:
-        assert D.on_due_task_completed(c, _done(start), closed_by=H.KEEPER) == []
-        assert D.on_due_task_completed(c, _done(start, status="cancelled"), closed_by="human:ben") == []
-        assert D.on_due_task_completed(c, _done(start, status="open"), closed_by="human:ben") == []
-    assert get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"] == []
-
-
-def test_reopening_the_routine_task_removes_its_mark_and_writes_an_audit_row(api):
-    org(api)
-    r, due, start = _routine_due(api)
-    with api.app.state.store.transaction() as c:
-        D.on_due_task_completed(c, _done(start), closed_by="human:ben")
-    before = len(audit(api, r["id"]))
-    with api.app.state.store.transaction() as c:
-        assert D.on_due_task_reopened(c, _done(start, status="open"), reopened_by="human:ben") == [due["id"]]
-    assert get(api, f"rule-due/{due['id']}")["chain"][0]["satisfied"] == []
-    assert len(audit(api, r["id"])) == before + 1
-
-
 def test_two_marks_of_one_day_that_race_answer_the_same_conflict(api, monkeypatch):
     org(api)
     _, due, start = _routine_due(api)

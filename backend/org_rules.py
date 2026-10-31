@@ -428,7 +428,8 @@ def view(c, auth, who, row, ctx, dues=None, quote=True):
         "if_broken": row["if_broken"], "reviewer": reviewer, "status": row["status"],
         "suggested_by": row["suggested_by"], "decided_by": row["decided_by"], "decided_at": row["decided_at"],
         "version": row["version"], "created_at": row["created_at"], "updated_at": row["updated_at"],
-        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"]}
+        "due": [{"id": d["id"], "due_on": d["due_on"], "status": d["status"], "repeats": d["repeats"],
+                 "task_days": d["task_days"]}
                 for d in dues[:DUE_PER_RULE]],
         "due_more": max(0, len(dues) - DUE_PER_RULE),
         # Whether this caller may accept, edit, retire or add due dates (the UI hides what it can't use).
@@ -715,7 +716,11 @@ def add_due(c, auth, who, rule_id, body):
     repeats = D.parse_repeats(body.get("repeats"))
     zone = D.parse_zone(body.get("timezone"))
     owner = owner_actor(c, body.get("owner"))
+    from . import rule_due_routine as RR
+    days = RR.task_days_of(body)
     due_id = D.add(c, who.actor, rule_id, first.isoformat(), repeats, zone, owner)
+    if days is not RR.UNCHANGED and days is not None:
+        RR.sync(c, who.actor, D.one(c, due_id), row["text"], days, _via(who))
     after = D.views(c, [D.one(c, due_id)])[0]
     _audit(c, who.actor, rule_id, None, {"due": after}, who)
     _event(c, who.actor, "due_added", rule_id, {"due": due_id})
@@ -739,6 +744,10 @@ def edit_due(c, auth, who, due_text, body):
         changes["timezone"] = D.parse_zone(body["timezone"])
     if body.get("owner") is not None:
         changes["owner"] = owner_actor(c, body["owner"])
+    from . import rule_due_routine as RR
+    days = RR.task_days_of(body)
+    if days is RR.UNCHANGED:
+        days = RR.current_days(c, row)
     before = D.views(c, [row])[0]
     replaced = changes.get("first_due", row["first_due"]) != row["first_due"] or \
         changes.get("repeats", row["repeats"]) != row["repeats"]
@@ -747,6 +756,9 @@ def edit_due(c, auth, who, due_text, body):
     else:
         D.update_in_place(c, row["id"], changes)
         new_id = row["id"]
+    # The routine follows the row it now belongs to: the same automation, with this row's days, owner, zone and id.
+    if days is not None or row["routine_id"]:
+        RR.sync(c, who.actor, D.one(c, new_id), rule["text"], days, _via(who))
     after = D.views(c, [D.one(c, new_id)])[0]
     replaces = row["id"] if replaced else None
     _audit(c, who.actor, rule["id"], {"due": before}, {"due": after}, who)
@@ -764,6 +776,8 @@ def remove_due(c, auth, who, due_text):
     _check_manage(c, auth, who, rule["who"])
     before = D.views(c, [row])[0]
     D.remove(c, row["id"])
+    from . import rule_due_routine as RR
+    RR.off(c, who.actor, row, _via(who))
     stored = D.one(c, row["id"])
     _audit(c, who.actor, rule["id"], {"due": before}, {"due": D.views(c, [stored])[0]}, who)
     _event(c, who.actor, "due_removed", rule["id"], {"due": row["id"]})
@@ -912,7 +926,8 @@ def due_list(c, auth, who, args):
                                                  "source": ctx["sources"].get(rule["source_id"])},
                      "due_on": found["due_on"], "repeats": found["repeats"], "owner": found["owner"],
                      "first_due": found["first_due"], "timezone": found["timezone"],
-                     "routine_id": found["routine_id"], "status": found["status"], "open": found["open"],
+                     "routine_id": found["routine_id"], "task_days": found["task_days"],
+                     "status": found["status"], "open": found["open"],
                      "history": found["history"],
                      "can_edit": manage, "can_satisfy": manage or who.actor == found["owner"]})
     rows.sort(key=lambda r: (r["due_on"], r["id"]))
@@ -988,6 +1003,9 @@ class DueAdd(Contract):
     repeats: Literal["once", "weekly", "monthly", "quarterly", "yearly"]
     timezone: str | None = Field(default=None, max_length=64)
     owner: str = Field(min_length=1, max_length=200)
+    task_days: int | None = Field(default=None, ge=0, le=366,
+                                  description="Open the owner's task this many days before each due day (a routine); "
+                                              "absent or null for none")
 
 
 class DueEdit(Contract):
@@ -995,6 +1013,9 @@ class DueEdit(Contract):
     repeats: Literal["once", "weekly", "monthly", "quarterly", "yearly"] | None = None
     timezone: str | None = Field(default=None, max_length=64)
     owner: str | None = Field(default=None, max_length=200)
+    task_days: int | None = Field(default=None, ge=0, le=366,
+                                  description="The routine's lead time in days; null turns the routine off, absent "
+                                              "leaves it as it is")
 
 
 class DueSatisfied(Contract):
@@ -1135,7 +1156,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
 
         def work(c):
-            return edit_due(c, auth, who, due_id, body.model_dump())
+            return edit_due(c, auth, who, due_id, body.model_dump(exclude_unset=True))
         return mutate(request, body, work)
 
     @app.post("/api/v2/rule-due/{due_id}/remove")

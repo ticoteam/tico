@@ -92,6 +92,17 @@ def test_the_cli_manages_due_dates_and_marks_one_satisfied(api):
     assert marked["satisfied"] == start
 
 
+def test_the_cli_turns_a_due_dates_routine_on_and_off(api):
+    org(api)
+    rule = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Ops files the Acme return.", "--who", "ops")
+    due = cli(api, "ana-test", "due", "add", rule["id"], "--first", "2030-03-01", "--repeats", "yearly", "--owner", "ops",
+              "--task-days", "21")
+    assert due["routine_id"] and due["task_days"] == 21
+    assert cli(api, "ana-test", "due", "edit", due["id"], "--task-days", "7")["task_days"] == 7
+    off = cli(api, "ana-test", "due", "edit", due["id"], "--no-routine")
+    assert off["routine_id"] is None and off["task_days"] is None
+
+
 def test_a_retired_rule_is_no_longer_in_force_and_its_due_dates_come_back(api):
     org(api)
     rule = cli(api, "ana-test", "add", "--kind", "internal", "--text", "Ops answers within a day.", "--who", "ops")

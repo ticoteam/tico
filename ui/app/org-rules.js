@@ -68,6 +68,8 @@ const ruPill = status => { const [label, tone] = RU_STATUS[status] || [status, '
 const RU_URGENCY = {overdue: 0, due_soon: 1, upcoming: 2, satisfied: 3};
 const ruDueSorted = rule => (rule.due || []).slice().sort((a, b) => (RU_URGENCY[a.status] ?? 9) - (RU_URGENCY[b.status] ?? 9) || a.due_on.localeCompare(b.due_on));
 // The most urgent one, and "+N" for the rest (those the view counts but leaves out too).
+// A routine's lead time: "14 days before"; null with no routine.
+const ruLead = days => days == null ? null : `${days} day${days === 1 ? '' : 's'} before`;
 const ruDueCell = rule => {
   const [d, ...rest] = ruDueSorted(rule), more = rest.length + (rule.due_more || 0);
   return d ? `<span class="ru-due">${esc(ruDay(d.due_on))}${d.repeats && d.repeats !== 'once' ? ` <span class="muted">· ${esc(ruRepeatWord(d.repeats).toLowerCase())}</span>` : ''}${more ? ` <span class="ru-plus">+${more}</span>` : ''}</span>` : '<span class="ru-none">—</span>';
@@ -293,14 +295,14 @@ function ruDrawDue(filters, list) {
   const all = RU.due, f = RU.filter;
   const by = k => all.filter(d => d.status === k).length;
   filters.innerHTML = `<div class="ru-fh">Status</div>${Object.entries(RU_STATUS).map(([k, [label]]) => ruFacet('status', k, label, by(k), f.status === k)).join('')}
-    <div class="ru-fh">Routine</div>${ruFacet('routine', 'on', 'On', all.filter(d => d.routine_id).length, f.routine === 'on')}${ruFacet('routine', 'none', 'None', all.filter(d => !d.routine_id).length, f.routine === 'none')}`;
-  const rows = all.filter(d => (!f.status || d.status === f.status) && (!f.routine || (f.routine === 'on') === !!d.routine_id));
+    <div class="ru-fh">Routine</div>${ruFacet('routine', 'on', 'Task', all.filter(d => d.task_days != null).length, f.routine === 'on')}${ruFacet('routine', 'none', 'None', all.filter(d => d.task_days == null).length, f.routine === 'none')}`;
+  const rows = all.filter(d => (!f.status || d.status === f.status) && (!f.routine || (f.routine === 'on') === (d.task_days != null)));
   const open = ruQuery().get('due');
   const head = '<div class="ru-row ru-head" role="row"><span>Due</span><span>Rule</span><span>Repeats</span><span>Routine</span><span>Owner</span><span>Status</span></div>';
   const body = rows.map(d => `<a class="ru-row${open === d.id ? ' sel' : ''}" role="row" href="${ruHref('due', {due: d.id})}" data-due="${esc(d.id)}">
       <span class="ru-c ru-day">${esc(ruDay(d.due_on))}</span><span class="ru-txt">${esc(d.rule.text)}</span>
       <span class="ru-c" data-l="Repeats">${esc(ruRepeatWord(d.repeats))}</span>
-      <span class="ru-c${d.routine_id ? '' : ' ru-none'}" data-l="Routine">${d.routine_id ? 'On' : '—'}</span>
+      <span class="ru-c${d.task_days != null ? '' : ' ru-none'}" data-l="Routine">${esc(ruLead(d.task_days) || '—')}</span>
       <span class="ru-c ru-owner" data-l="Owner">${ruOwnerHTML(d.owner)}</span><span class="ru-c">${ruPill(d.status)}</span></a>`).join('');
   list.innerHTML = `<div class="ru-table ru-duet" role="table">${head}${body}</div>${body ? '' : `<p class="muted ru-pad">${all.length ? 'Nothing matches.' : 'No due dates yet.'}</p>`}`;
 }
@@ -560,7 +562,7 @@ async function ruRulePanel(side, id, note = '') {
         <label class="ru-reviewer"${r.if_broken === 'escalate' ? '' : ' hidden'}><span class="ru-lbl">Reviewer <span class="ru-opt">(optional)</span></span>
           <select name="reviewer"${dis}><option value="">Manager</option>${ruPeople().map(p => `<option value="${esc(p.id)}"${r.reviewer?.id === p.id ? ' selected' : ''}>${esc(p.name)}</option>`).join('')}</select></label></div>
       <div class="ru-fl"><span class="ru-lbl">Due</span>${dues.map(due =>
-          `<a class="ru-duebox" href="${ruHref('due', {due: due.id})}" data-due="${esc(due.id)}"><span>${esc(ruDay(due.due_on, true))}${due.repeats && due.repeats !== 'once' ? ' · ' + esc(ruRepeatWord(due.repeats).toLowerCase()) : ''}</span>${ruPill(due.status)}<span class="spacer"></span><span class="muted">›</span></a>`).join('')}
+          `<a class="ru-duebox" href="${ruHref('due', {due: due.id})}" data-due="${esc(due.id)}"><span>${esc(ruDay(due.due_on, true))}${due.repeats && due.repeats !== 'once' ? ' · ' + esc(ruRepeatWord(due.repeats).toLowerCase()) : ''}${due.task_days != null ? ' · task ' + esc(ruLead(due.task_days)) : ''}</span>${ruPill(due.status)}<span class="spacer"></span><span class="muted">›</span></a>`).join('')}
         ${r.due_more ? `<a class="ru-adddue" href="${ruHref('due')}">${r.due_more} more</a>` : ''}
         ${edit ? `<a class="ru-adddue" href="${ruHref('due', {due: 'new', rule: r.id})}">+ Add due date</a>` : dues.length ? '' : '<span class="ru-none">—</span>'}</div>
       ${quote}
@@ -648,8 +650,8 @@ async function ruDuePanel(side, id, ruleId, note = '') {
   const owner = d?.owner || '';
   const owners = `<optgroup label="Bots">${ruBots().map(b => opt('bot:' + b.id, b.name, owner)).join('')}</optgroup>
     <optgroup label="People">${ruPeople().map(p => opt('human:' + p.id, p.name, owner || myActor())).join('')}</optgroup>`;
-  // The routine link (and its lead time) comes later; until then the field only shows whether one is linked.
-  const routine = d?.routine_id ? 'On' : '—';
+  // Routine: none, or a task opened for the owner N days before each due day (an automation, linked by routine_id).
+  const lead = d ? d.task_days ?? null : null;
   const marks = d ? (d.chain || []).flatMap(link => link.satisfied || []).sort((a, b) => b.due_on.localeCompare(a.due_on)) : [];
   const history = d ? [
     ...(d.status !== 'satisfied' ? [`<div class="ru-h"><span>${esc(ruDay(d.due_on, true))}</span><span class="spacer"></span>${ruPill(d.status)}</div>`] : []),
@@ -665,8 +667,11 @@ async function ruDuePanel(side, id, ruleId, note = '') {
         <label class="ru-fl"><span class="ru-lbl">Due</span><input type="date" name="due" required value="${esc(d?.due_on || '')}"${dis}></label>
         <label class="ru-fl"><span class="ru-lbl">Repeats</span><select name="repeats"${dis}>${RU_REPEATS.map(([k, l]) => opt(k, l, d?.repeats || 'yearly')).join('')}</select></label>
         <label class="ru-fl"><span class="ru-lbl">Owner</span><select name="owner" required${dis}>${owners}</select></label>
-        <label class="ru-fl"><span class="ru-lbl">Routine</span><select name="routine" disabled><option>${esc(routine)}</option></select></label>
+        <div class="ru-fl"><span class="ru-lbl">Routine</span>
+          <select name="routine" aria-label="Routine"${dis}>${opt('', 'None', lead == null ? '' : 'task')}${opt('task', 'Task', lead == null ? '' : 'task')}</select>
+          <span class="ru-lead"${lead == null ? ' hidden' : ''}><input type="number" name="task_days" min="0" max="366" step="1" required value="${lead ?? 14}" aria-label="Days before"${lead == null || !edit ? ' disabled' : ''}><span>days before</span></span></div>
       </div>
+      ${d?.routine_id && lead != null ? `<a class="ru-routine" href="#/automations/${encodeURIComponent(d.routine_id)}">Open routine ›</a>` : ''}
       ${d ? `<div class="ru-stat"><span class="ru-lbl">Status</span>${ruPill(d.status)}<span class="spacer"></span>
         ${d.can_satisfy && d.status !== 'satisfied' ? '<button class="ghost small" type="button" data-ru-satisfy>Mark satisfied</button>' : ''}</div>
         <div class="ru-satisfy-on" hidden><select name="due_on" aria-label="Which due date">${openDays.map(day => opt(day, ruDay(day, true), d.due_on)).join('')}</select><button class="ghost small" type="button" data-ru-satisfy-on>Mark</button></div>
@@ -683,19 +688,27 @@ async function ruDuePanel(side, id, ruleId, note = '') {
       let saved;
       if (fresh) {
         const target = rule?.id || f.rule.value;
-        saved = await post('/v2/rules/' + encodeURIComponent(target) + '/due', {first_due: f.due.value, repeats: f.repeats.value, owner: f.owner.value});
+        const body = {first_due: f.due.value, repeats: f.repeats.value, owner: f.owner.value};
+        if (f.routine.value === 'task') body.task_days = Number(f.task_days.value);
+        saved = await post('/v2/rules/' + encodeURIComponent(target) + '/due', body);
       } else {
         // A new date or repeat starts again from the date shown (the next one due), not the first date ever set, so
         // occurrences already satisfied stay behind. An owner change alone keeps the anchor.
         const body = {};
         if (f.due.value !== d.due_on || f.repeats.value !== d.repeats) { body.first_due = f.due.value; body.repeats = f.repeats.value; }
         if (f.owner.value !== d.owner) body.owner = f.owner.value;
+        const days = f.routine.value === 'task' ? Number(f.task_days.value) : null;
+        if (days !== lead) body.task_days = days;
         saved = Object.keys(body).length ? await post('/v2/rule-due/' + encodeURIComponent(d.id), body) : d;
       }
       RU.loaded.delete('due');
       if (ruQuery().get('due') !== saved.id) { RU.note = {key: 'due:' + saved.id, text: 'Saved'}; location.hash = ruHref('due', {due: saved.id}); }
       else await ruRedraw(side, 'due:' + saved.id, 'Saved');
     } catch (e) { button.disabled = false; status.textContent = ruError(e); }
+  };
+  form.elements.routine.onchange = () => {
+    const on = form.elements.routine.value === 'task', box = form.querySelector('.ru-lead');
+    box.hidden = !on; form.elements.task_days.disabled = !on;
   };
   const satisfy = async dueOn => {
     status.textContent = 'Saving…';

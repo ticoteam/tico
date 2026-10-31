@@ -267,6 +267,20 @@ def _save(c, actor, aid, flow, before, *, current=None, summary=None, new_versio
     return _row(c, aid)
 
 
+def remove(c, actor, row, via=None):
+    """Delete an automation: what it holds is dropped, its unfinished runs are skipped (one mid-step finishes that step
+    and stops there, `HubServices.on_hold`), and the delete is on record. The row stays, marked deleted."""
+    aid = row["id"]
+    _unhold(c, aid, actor, "drop", via)
+    c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
+    for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
+                             "('queued','waiting','running')", (aid,)).fetchall():
+        _cancel_mail(c, dropped["id"])
+    c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
+              "AND status IN ('queued','waiting','running')", (H.now(), aid))
+    audit_log.write(c, actor, "automation:" + aid, flow_of(row), None, via)
+
+
 def follow(c, owner, old, new):
     """A teammate moved group: its automations in the old group go with it (backend/groups.py calls this)."""
     if old == new or not old:
@@ -1875,15 +1889,33 @@ def _due_pass(c, row, at):
             continue    # a failed day is tried again no sooner than an hour after it failed
         if _held_by_find(c, row):
             break
-        fire(c, "due", due_input(trigger, date.fromisoformat(ref[4:])), ref, only=row["id"])
+        _due_fire(c, row, trigger, date.fromisoformat(ref[4:]), ref)
     day, passed = cursor, 0
     while day and passed < D.MAX_CATCH_UP and D.fire_at(day, open_days, zone) <= at:
         if _held_by_find(c, row):
             break
-        fire(c, "due", due_input(trigger, day), f"due:{day.isoformat()}", only=row["id"])
+        _due_fire(c, row, trigger, day, f"due:{day.isoformat()}")
         day = D.next_after(D.first_due(trigger), trigger["repeats"], day)
         passed += 1
     c.execute("UPDATE automations SET next_due=? WHERE id=?", (_due_text(day), row["id"]))
+
+
+def _due_fire(c, row, trigger, day, ref):
+    """One due day's run, or, for a routine linked to a rule's due date (`rule_due_id`) whose day someone already marked
+    Satisfied by hand, a skipped run in its place: it opens no task, and the day counts as done."""
+    from . import rule_due
+    if trigger.get("rule_due_id") and rule_due.marked(c, trigger["rule_due_id"], day.isoformat()):
+        if not c.execute("SELECT 1 FROM automation_runs WHERE automation_id=? AND trigger_ref=? AND status!='failed' "
+                         "LIMIT 1", (row["id"], ref)).fetchone():
+            state = {**E.start(due_input(trigger, day)), "status": "skipped"}
+            now = H.now()
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,finished,status,"
+                      "state_json,chain_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                      ("run_" + H.new_id(), row["id"], row["version"], ref, now, now, "skipped",
+                       json.dumps(state, default=str), "[]"))
+            H.event(c, H.KEEPER, "automation.skipped", row["id"], {"due_on": day.isoformat(), "reason": "satisfied"})
+        return
+    fire(c, "due", due_input(trigger, day), ref, only=row["id"])
 
 
 def _deferred(c, row, day, why):
@@ -2249,15 +2281,7 @@ def install(app, store, auth, mutate):
         def work(c):
             auth.domain(who)
             row = deletable(c, who, aid)
-            _unhold(c, aid, who.actor, "drop", _via(who))
-            c.execute("UPDATE automations SET deleted_at=?, enabled=0 WHERE id=?", (H.now(), aid))
-            for dropped in c.execute("SELECT id FROM automation_runs WHERE automation_id=? AND status IN "
-                                     "('queued','waiting','running')", (aid,)).fetchall():
-                _cancel_mail(c, dropped["id"])
-            # A run mid-step finishes that step and stops there (`HubServices.on_hold`).
-            c.execute("UPDATE automation_runs SET status='skipped',finished=? WHERE automation_id=? "
-                      "AND status IN ('queued','waiting','running')", (H.now(), aid))
-            audit_log.write(c, who.actor, "automation:" + aid, flow_of(row), None, _via(who))
+            remove(c, who.actor, row, _via(who))
             return {"id": aid, "deleted": True}
         return mutate(request, body, work)
 

@@ -110,6 +110,10 @@ a.ru-row:hover *{text-decoration:none}
 .ru-foot{display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
 .ru-two{display:grid;grid-template-columns:1fr 1fr;gap:12px}
 .ru-stat{display:flex;align-items:center;gap:10px}
+.ru-lead{display:flex;align-items:center;gap:8px;color:var(--muted);font-size:var(--t-sm);white-space:nowrap}
+.ru-lead[hidden]{display:none}
+.ru-form .ru-lead input{width:72px}
+.ru-routine{align-self:flex-start;font-size:var(--t-sm)}
 .ru-satisfy-on{display:flex;gap:6px}
 .ru-satisfy-on[hidden]{display:none}
 .ru-hist{display:flex;flex-direction:column}

@@ -6028,15 +6028,37 @@ def rules_due(api, args):
                                                         "cursor": args.get("cursor"), "limit": args.get("limit")}))
 
 
+TASK_DAYS = {"type": "integer", "minimum": 0, "maximum": 366,
+             "description": "A routine opens the owner's task this many days before each due day"}
+
+
 @tool("hub_rules_due_set", "Add a due date to an org rule: a first day, a repeat, an owner (a bot or a person), and the "
       "routine's lead time in days.",
       {"id": _s("The rule's id"), "first_due": _s("YYYY-MM-DD"),
        "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
-       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago")},
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
+       "task_days": TASK_DAYS},
       required=("id", "first_due", "repeats", "owner"), writes=True)
 def rules_due_set(api, args):
-    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone")})
+    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
     return _as_person(api).post(f"rules/{args['id']}/due", body, key=_key(args))
+
+
+@tool("hub_rules_due_edit", "Change a rule's due date. A new first day or repeat starts a new due date and keeps the old "
+      "one in its history; an owner or zone changes it in place. task_days sets the routine's lead time; no_routine "
+      "turns the routine off.",
+      {"id": _s("The due date's id"), "first_due": _s("YYYY-MM-DD"),
+       "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
+       "task_days": TASK_DAYS, "no_routine": {"type": "boolean", "description": "Turn the routine off"}},
+      required=("id",), writes=True)
+def rules_due_edit(api, args):
+    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
+    if args.get("no_routine"):
+        if "task_days" in body:
+            raise APIError("validation", "Give task_days or no_routine, not both", 422)
+        body["task_days"] = None
+    return _as_person(api).post(f"rule-due/{args['id']}", body, key=_key(args))
 
 
 @tool("hub_rules_due_satisfied", "Mark a rule's due date satisfied for its current occurrence. With more than one open, "

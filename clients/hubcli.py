@@ -216,7 +216,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules due [--next 90d] [--status overdue|due_soon|upcoming|satisfied] [--limit N]
                                            the due dates of rules in force (`hub rules due list` is the same)
     hub rules due add <rule-id> --first YYYY-MM-DD --repeats once|weekly|monthly|quarterly|yearly --owner N
-                      [--timezone Z]
+                      [--timezone Z] [--task-days N]   --task-days: a routine opens the owner's task N days before
+    hub rules due edit <id> [--first ...] [--repeats ...] [--owner N] [--timezone Z] [--task-days N | --no-routine]
     hub rules due satisfied <id> [--on YYYY-MM-DD]   a due date's or its rule's id; --on when two are open
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
@@ -1770,7 +1771,18 @@ def parser():
     s.add_argument("--repeats", required=True, choices=["once", "weekly", "monthly", "quarterly", "yearly"])
     s.add_argument("--owner", required=True, help="a bot or person, by name or id")
     s.add_argument("--timezone")
+    s.add_argument("--task-days", type=int, metavar="N", help="a routine opens the owner's task N days before each one")
     s.set_defaults(fn="rules due set")
+    s = due_sub.add_parser("edit", help="change a due date; a new first day or repeat starts a new one, history kept")
+    s.add_argument("id", help="the due date's id")
+    s.add_argument("--first", dest="first_due", metavar="YYYY-MM-DD")
+    s.add_argument("--repeats", choices=["once", "weekly", "monthly", "quarterly", "yearly"])
+    s.add_argument("--owner", help="a bot or person, by name or id")
+    s.add_argument("--timezone")
+    routine = s.add_mutually_exclusive_group()
+    routine.add_argument("--task-days", type=int, metavar="N", help="a routine opens the owner's task N days before")
+    routine.add_argument("--no-routine", action="store_true", default=None, help="turn the routine off")
+    s.set_defaults(fn="rules due edit")
     s = due_sub.add_parser("satisfied", help="mark the current occurrence satisfied")
     s.add_argument("id", help="a due date's id, or its rule's when it has one due date")
     s.add_argument("--on", dest="due_on", metavar="YYYY-MM-DD", help="which occurrence, when two are open")

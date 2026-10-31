@@ -1,9 +1,9 @@
 // The Rules page (ui/app/org-rules.js) on a real hub seeded with the scenario org and its groups: Dana adds an internal
 // rule with a Who and a With and sees it listed, edits it in the side panel, a stale save is refused and the panel
-// reloads, a due date is added, marked satisfied and its repeat changed, a second date shows beside it, the Engineering
-// Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule without Save or
-// Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also saves each
-// screen at 1440 and 390, light and dark, into that directory.
+// reloads, a due date is added, marked satisfied, its repeat changed and a routine set, a second date shows beside
+// it, the Engineering Lead's Rules tab shows the rule and its settings, a teammate who manages nothing reads the rule
+// without Save or Retire, and the Engineering Lead's suggestions are added all at once. With RULES_SHOTS=<dir>, it also
+// saves each screen at 1440 and 390, light and dark, into that directory.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -125,6 +125,19 @@ const day = n => { const d = new Date(Date.now() + n * 86400000); return d.toISO
     // The ended row's address opens the live one.
     await go(page, `#/rules/due?due=${dueId}`);
     await page.waitForFunction(id => location.hash.includes('due=' + id), liveId, {timeout: t(10000)});
+
+    // Routine: a task 10 days before. The automation it makes is linked from the panel and the list shows the lead.
+    await side.locator('select[name=routine]').selectOption('task');
+    await side.locator('input[name=task_days]').fill('10');
+    await side.locator('button[type=submit]').click();
+    await side.locator('.ru-routine').waitFor({timeout: t(10000)});
+    const linked = await ok(page, 'GET', '/v2/rule-due/' + liveId);
+    assert.equal(linked.task_days, 10);
+    assert.equal(await side.locator('.ru-routine').getAttribute('href'), '#/automations/' + linked.routine_id);
+    assert.equal((await ok(page, 'GET', '/v2/automations/' + linked.routine_id)).trigger.rule_due_id, liveId);
+    await go(page, '#/rules/due');
+    await page.waitForFunction(id => /10 days before/.test(document.querySelector(`a.ru-row[data-due="${id}"] [data-l=Routine]`)?.textContent || ''),
+      liveId, {timeout: t(10000)});
 
     // A second, earlier date on the same rule (the hub's clock decides overdue or due soon): the list shows the most
     // urgent one and +1, the panel lists both.
