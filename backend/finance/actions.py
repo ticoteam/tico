@@ -18,6 +18,8 @@ from .core import kinds as K
 from .core import org as O
 from .core.errors import DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, CONFLICT, FinanceError
 from .store import actions as SX
+from .store import budgets as SB
+from .store import usage as SU
 from .store import tico
 
 # What part B and the HTTP routes call.
@@ -379,3 +381,13 @@ usage_snapshot = usage.snapshot
 gateway_start = gateway_sync.start
 gateway_ensure = gateway_sync.ensure
 gateway_stop = gateway_sync.stop
+
+
+# ------------------------------------------------------------------------------------------------ dev copies
+def scrub_dev_copy(c: sqlite3.Connection, at: str) -> dict[str, int]:
+    """Make a dev copy's Finance tables inert (backend/devcopy.py empties the rest): an action waiting on approval
+    would commit when someone approves it in the copy, so it goes; an undrained budget event would reach rules and the
+    owner, so it is marked drained without acting; allocations lose their link to the emptied holds, not themselves.
+    {table: rows changed}."""
+    return {"fin_actions": SX.drop_waiting(c), "fin_events": SU.drain_all(c, at),
+            "fin_allocations": SB.unlink_allocation_holds(c)}

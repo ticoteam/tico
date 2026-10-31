@@ -194,3 +194,8 @@ def event(c: sqlite3.Connection, name: str, subject: str, period_key: str, paylo
                      "VALUES(?,?,?,?,?,?,?) ON CONFLICT(name, subject, period_key) DO NOTHING",
                      (new_id(), name, subject, period_key, json.dumps(dict(payload), sort_keys=True, default=str),
                       at, by)).rowcount > 0
+
+
+def unlink_allocation_holds(c: sqlite3.Connection) -> int:
+    """Clear every allocation's hold link (a dev copy's scrub, which empties the holds)."""
+    return c.execute("UPDATE fin_allocations SET hold_id=NULL WHERE hold_id IS NOT NULL").rowcount

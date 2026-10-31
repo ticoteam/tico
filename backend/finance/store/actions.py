@@ -51,3 +51,8 @@ def settled_waits(c: sqlite3.Connection, most: int) -> list[str]:
 
 def _dump(value: object) -> str:
     return json.dumps(value, sort_keys=True, default=str)
+
+
+def drop_waiting(c: sqlite3.Connection) -> int:
+    """Delete every action still waiting on its approval (a dev copy's scrub). How many went."""
+    return c.execute("DELETE FROM fin_actions WHERE status='needs_approval'").rowcount

@@ -107,3 +107,8 @@ def undrained(c: sqlite3.Connection, most: int) -> list[Any]:
 
 def drained(c: sqlite3.Connection, event_id: str, at: str) -> None:
     c.execute("UPDATE fin_events SET drained_at=? WHERE id=? AND drained_at IS NULL", (at, event_id))
+
+
+def drain_all(c: sqlite3.Connection, at: str) -> int:
+    """Mark every undrained event drained without acting on it (a dev copy's scrub)."""
+    return c.execute("UPDATE fin_events SET drained_at=? WHERE drained_at IS NULL", (at,)).rowcount

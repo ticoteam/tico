@@ -294,14 +294,12 @@ def prune(c, days, keep_automations=False):
     if "registry_metadata" in present:
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
-    # Finance: an action waiting on approval would commit when someone approves it in the copy; an undrained budget
-    # event would reach rules and the owner. Allocations and kept rows lose their emptied hold, not themselves.
+    # Finance makes its kept tables inert itself: pending actions, undrained events, links to emptied holds.
     if "fin_actions" in present:
-        delete("fin_actions", "status='needs_approval'")
-    if "fin_events" in present:
-        c.execute("UPDATE fin_events SET drained_at=? WHERE drained_at IS NULL", (now(),))
-    if "fin_allocations" in present:
-        c.execute("UPDATE fin_allocations SET hold_id=NULL WHERE hold_id IS NOT NULL")
+        from .finance import actions as finance
+        dropped = finance.scrub_dev_copy(c, now())["fin_actions"]
+        if dropped:
+            removed["fin_actions"] = removed.get("fin_actions", 0) + dropped
     if "jobs" in present:
         delete("jobs", "state IN (%s)" % ",".join("?" * len(OPEN_JOBS)), OPEN_JOBS)
     if "attempts" in present:
