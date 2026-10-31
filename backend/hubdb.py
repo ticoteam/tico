@@ -3633,7 +3633,12 @@ def private_tasks_default(conn, actor, declared=None):
     config = declared(actor_id(actor))
     if source_of(config):
         config = declared(source_of(config))
-    return config.get("private_tasks_default", config.get("template") == "general-counsel") is True
+    return config.get("private_tasks_default", config.get("template") in PRIVATE_BY_TEMPLATE) is True
+
+
+# The templates whose tasks are private unless their config says otherwise: a general counsel's, and Counsel's (a
+# document's text and a can-I question are a company's own, so a teammate who cannot read the source cannot read them).
+PRIVATE_BY_TEMPLATE = ("general-counsel", "counsel")
 
 
 

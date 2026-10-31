@@ -2509,7 +2509,19 @@ export type RoadmapSettings = {
   suggestions_bot?: string | null;
 };
 
+export type RuleAsk = {
+  question: string;
+};
+
+export type RuleCite = {
+  file_id: string;
+  quote: string;
+  section?: string;
+  version?: number | null;
+};
+
 export type RuleCreate = {
+  cite?: RuleCite | null;
   description?: string;
   if_broken?: "block" | "escalate" | "warn" | null;
   kind: "internal" | "external";
@@ -2536,6 +2548,14 @@ export type RuleEdit = {
   with?: RuleScope | null;
 };
 
+export type RuleRead = {
+  file_id?: string | null;
+  kind?: string | null;
+  note?: string;
+  source_id: string;
+  url?: string | null;
+};
+
 export type RuleScope = {
   all_bots?: boolean;
   bots?: Array<string>;
@@ -2559,6 +2579,7 @@ export type RunnerTurnsAtOnce = {
 };
 
 export type ScreeningModes = {
+  document?: "off" | "warn" | "hold" | null;
   idea?: "off" | "warn" | "hold" | null;
   mail?: "off" | "warn" | "hold" | null;
   model?: boolean | null;
@@ -4101,6 +4122,13 @@ export type AskDocsParams = {
 };
 export type AskDocsBody = DocsAsk;
 export type AskDocsResponse = DocsAsked;
+
+/** POST /api/v2/rules/ask */
+export type AskRulesParams = {
+  "Idempotency-Key": string;
+};
+export type AskRulesBody = RuleAsk;
+export type AskRulesResponse = unknown;
 
 /** POST /api/v2/tasks/{tid}/files */
 export type AttachTaskFileParams = {
@@ -6003,6 +6031,13 @@ export type ReadInboundMessageParams = {
 };
 export type ReadInboundMessageBody = never;
 export type ReadInboundMessageResponse = unknown;
+
+/** POST /api/v2/rules/read */
+export type ReadRuleDocumentParams = {
+  "Idempotency-Key": string;
+};
+export type ReadRuleDocumentBody = RuleRead;
+export type ReadRuleDocumentResponse = unknown;
 
 /** POST /api/v2/health-monitor/local-findings */
 export type RecordLocalHealthFindingParams = {

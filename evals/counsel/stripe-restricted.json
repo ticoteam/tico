@@ -1,0 +1,35 @@
+{
+  "expected": [
+    {
+      "text": "Stay compliant with the restricted-business rules to use Stripe.",
+      "quote": "To use Stripe’s services, you must remain compliant with these rules and restrictions.",
+      "section": "Prohibited and Restricted Businesses",
+      "who_hint": "finance"
+    },
+    {
+      "text": "Do not use Stripe for illegal activity or for any business on the prohibited list.",
+      "quote": "You must not use Stripe's services for any illegal activities or for the businesses or product types listed below.",
+      "section": "Prohibited Businesses",
+      "who_hint": "finance"
+    },
+    {
+      "text": "The business location, jurisdiction of registration, and beneficial owner's address must match for Stripe Issuing.",
+      "quote": "Stripe requires that the physical location of your business, its jurisdiction of registration, and the physical address of at least one of your beneficial owners all match.",
+      "section": "Stripe Issuing",
+      "who_hint": "finance"
+    },
+    {
+      "text": "Use Stripe Issuing cards primarily in the same jurisdiction.",
+      "quote": "Furthermore, you must use Issuing cards primarily in the same jurisdiction.",
+      "section": "Stripe Issuing",
+      "who_hint": "finance"
+    }
+  ],
+  "url": "https://stripe.com/legal/restricted-businesses",
+  "fetched_at": "2026-10-30T23:39:36Z",
+  "from": {
+    "name": "Stripe Restricted Businesses",
+    "kind": "vendor"
+  },
+  "truncated": false
+}

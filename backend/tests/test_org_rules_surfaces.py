@@ -46,7 +46,7 @@ def test_the_cli_adds_reads_and_lists_a_rule_the_same_way_the_mcp_does(api):
     assert added["with"]["people"][0]["id"] == "cara"
     listed = cli(api, "ana-test", "list", "--bot", "ops")
     assert [r["id"] for r in listed["rules"]] == [added["id"]]
-    _, read = mcp(api, "hub_rules_read", {"id": added["id"]})
+    _, read = mcp(api, "hub_rules_get", {"id": added["id"]})
     assert read["text"] == "Ops answers within a day." and read["version"] == 1
 
 
@@ -58,7 +58,7 @@ def test_a_quote_stays_hidden_on_the_cli_and_the_mcp_when_its_file_is_not_readab
     hide_quote(api, added["id"])
     for listing in (cli(api, "cara-test", "list"), cli(api, "cara-test", "list", "--mine", "--bot", "finance")):
         assert "SECRET-QUOTE-MARKER" not in json.dumps(listing) and "hidden" in json.dumps(listing)
-    _, read = mcp(api, "hub_rules_read", {"id": added["id"]}, token="cara-test")
+    _, read = mcp(api, "hub_rules_get", {"id": added["id"]}, token="cara-test")
     assert "SECRET-QUOTE-MARKER" not in json.dumps(read) and read["cite"] == {"hidden": True}
 
 

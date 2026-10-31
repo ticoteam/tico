@@ -1766,6 +1766,9 @@ class Store:
                 # dates and their status rows. Unversioned the same way: an older release never reads the tables.
                 from .org_rules import ensure as ensure_org_rules
                 ensure_org_rules(c)
+                # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
+                from .counsel import ensure as ensure_rule_reads
+                ensure_rule_reads(c)
                 # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
                 from .lenses import ensure as ensure_lenses
                 ensure_lenses(c)

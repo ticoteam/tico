@@ -63,6 +63,7 @@ INSTRUCTIONS = ("Tico: tasks, messages, Decisions, status. "
 TOOLS = []
 CLI_TOOL_ALIASES = {
     "hub_rules_due_list": ("hub_rules_due",), "hub_rules_due_add": ("hub_rules_due_set",),
+    "hub_rules_read": ("hub_rules_get", "hub_rules_read"),   # `hub rules read <id>` or, with --from, a document
     "hub_task_child": ("hub_task_child_create",),
     "hub_automation_show": ("hub_automation_get",), "hub_automation_inbox": ("hub_inbox_send",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
@@ -2510,6 +2511,20 @@ def pin_remove(api, args):
       {"q": _s("Words to find"), "limit": {"type": "integer", "minimum": 1, "maximum": 50}}, required=("q",))
 def files_search(api, args):
     return api.get("files/search", q=args["q"], limit=args.get("limit"))
+
+
+@tool("hub_file_read", "Read one version of a file you may read, in full, as text (Markdown, text, HTML, CSV): the "
+      "current version unless a version is given. The whole text comes back, however long it is.",
+      {"id": _s("File id"), "version": {"type": "integer", "minimum": 1}}, required=("id",))
+def files_read(api, args):
+    fid, number = args["id"], args.get("version")
+    if not re.fullmatch(r"[a-zA-Z0-9_-]{1,100}", str(fid)):
+        raise ValueError("Use an opaque Tico file ID, not a URL or path")
+    path = f"/api/v2/files/{fid}/versions/{number}" if number else f"/api/v2/files/{fid}"
+    client = api.api if isinstance(api, _Requester) else api
+    data = client.request("GET", path, binary=True)
+    text = data.decode("utf-8", errors="replace")
+    return {"id": fid, "version": number, "characters": len(text), "text": text}
 
 
 @tool("hub_file_delete", "Delete a file for good, the owner only: every version's bytes leave storage and only the "
@@ -5962,10 +5977,34 @@ def rules_suggested(api, args):
     return _as_person(api).get("rules", status="suggested", cursor=args.get("cursor"), limit=args.get("limit"))
 
 
-@tool("hub_rules_read", "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
+@tool("hub_rules_get", "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
       "you can read that file.", {"id": _s("The rule's id")}, required=("id",))
-def rules_read(api, args):
+def rules_get(api, args):
     return _as_person(api).get(f"rules/{args['id']}")
+
+
+@tool("hub_rules_read", "Add a document for Counsel to read: a file you can read, or a public link (fetched now, saved as a "
+      "file version). Counsel suggests the obligations in it as rules, each with its quote, for a person to add or skip. "
+      "The Assistant adds it as the person, citing their words (on_behalf_of).",
+      {"id": _s("A file id, or a public link"), "source": _s("The From, by name or id"),
+       "kind": {"type": "string", "enum": ["vendor", "customer", "government", "other"],
+                "description": "The kind, when the From is new"},
+       "note": _s("What the document is for"), "on_behalf_of": ASKED}, required=("id", "source"), writes=True)
+def rules_read(api, args):
+    link = args["id"].startswith(("http://", "https://"))
+    body = _present({"url" if link else "file_id": args["id"], "source_id": args["source"], "kind": args.get("kind"),
+                     "note": args.get("note")})
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.post("rules/read", body, key=_key(args))
+
+
+@tool("hub_rules_ask", "A can-I question about the company's rules: the active rules that share words with it, cited, "
+      "and Counsel's answer on a task. Counsel answers from the rules only, and says it is not legal advice. The "
+      "Assistant asks as the person, citing their words (on_behalf_of).",
+      {"question": _s("The question, in one sentence"), "on_behalf_of": ASKED}, required=("question",), writes=True)
+def rules_ask(api, args):
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.post("rules/ask", {"question": args["question"]}, key=_key(args))
 
 
 @tool("hub_rules_add", "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
@@ -5973,14 +6012,20 @@ def rules_read(api, args):
       "Assistant adds one as the person, citing their words (on_behalf_of).",
       {"kind": {"type": "string", "enum": ["internal", "external"]},
        "text": _s("The rule in one sentence"), "description": _s("Optional, longer"),
-       "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: who it is about"),
+       "who": _rule_scope("Who follows it. A bot may leave it out when no department is named: the owner sets it on accept"),
+       "with": _rule_scope("Internal: who it is about"),
        "source_id": _s("External: the From, by name or id"),
+       "cite": {"type": "object", "additionalProperties": False, "description": "External: the words the rule rests on, "
+                "which must be in that file's version. A quote that is not there is dropped (the answer says so).",
+                "properties": {"file_id": _s("The document's file id"), "version": {"type": "integer", "minimum": 1},
+                               "section": _s("The section it is in"), "quote": _s("The exact words")},
+                "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
        "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
-      required=("kind", "text", "who"), writes=True)
+      required=("kind", "text"), writes=True)
 def rules_add(api, args):
-    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "if_broken",
-                                              "reviewer")})
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
+                                              "if_broken", "reviewer")})
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     return who.post("rules", body, key=_key(args))
 
@@ -6101,7 +6146,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
-                    "hub_settings_set"}
+                    "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
     "hub_task_caps": REQUESTER_READ, "hub_task_cap_set": PEOPLE + BOTS,
@@ -6182,18 +6227,29 @@ def kind_of(me):
     if role == "human":
         return "member"
     if role == "bot":
-        return "agent" if me.get("agent") else "botops" if actor == "bot:botops" else "bot"
+        return "agent" if me.get("agent") else "botops" if actor == "bot:botops" else \
+            "counsel" if actor == "bot:counsel" else "bot"
     return None
+
+
+# Counsel (backend/counsel.py) has no credentials and sends nothing, so it is offered only the tools it needs: its rules,
+# the document it reads, and its own task. A web search or fetch, a message to anyone, and every other tool are not its
+# to call. The server still decides every call; this keeps those tools out of its list and refuses them if it asks.
+COUNSEL = "counsel"
+COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "hub_file_read", "hub_task_comment",
+                           "hub_task_close"})
 
 
 def offered_to(tool_):
     """The kinds a tool is offered to."""
     name = tool_["name"]
     if name in AUDIENCE:
-        return AUDIENCE[name]
-    if tool_["writes"] and name not in ASSISTANT_WRITES:
-        return NOT_ASSISTANT
-    return KINDS
+        kinds = tuple(AUDIENCE[name])
+    elif tool_["writes"] and name not in ASSISTANT_WRITES:
+        kinds = NOT_ASSISTANT
+    else:
+        kinds = KINDS
+    return (*kinds, COUNSEL) if name in COUNSEL_TOOLS else kinds
 
 
 def listing(local=False, kind=None):
