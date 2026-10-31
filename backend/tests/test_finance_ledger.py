@@ -85,6 +85,22 @@ def test_setup_keeps_the_amount_of_a_replacement_ai_budget_a_person_made(books):
         assert FA.budget_state(c, str(made.result["budget_id"]), later).amount == 7_000  # type: ignore[index]
 
 
+def test_setup_drops_a_seeded_amount_on_an_ai_budget_switched_off_and_on_again(books):
+    from backend.finance.store import budgets as SB
+    with books.transaction() as c:
+        b1, later = budget(c, "AI services"), "2026-10-16T10:00:00.000000Z"
+        SB.insert_version(c, b1, "2026-10-01", 1230, "USD", OWNER, AT)              # an earlier setup's copy of the cap
+        assert act(c, OWNER, "budget_update", {"budget_id": b1, "active": False}, at=later).status == "committed"
+        made = act(c, OWNER, "budget_create", {"name": "AI spend", "account_id": account(c, "5100"), "amount": 7_000,
+                                               "at_limit": "decline"}, at=later)
+        b2 = str(made.result["budget_id"])  # type: ignore[index]
+        assert act(c, OWNER, "budget_update", {"budget_id": b2, "active": False}, at=later).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": b1, "active": True}, at=later).status == "committed"
+        FA.setup(c, OWNER, "2026-10-16T11:00:00.000000Z")
+        assert FA.budget_state(c, b1, later).amount is None
+        assert FA.budget_state(c, b2, later).amount == 7_000
+
+
 def test_random_entries_post_only_when_balanced_and_rollups_follow(books):
     rng = random.Random(64)
     with books.transaction() as c:

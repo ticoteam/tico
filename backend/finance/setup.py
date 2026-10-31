@@ -87,14 +87,15 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
         key = (account_id, not code)
         if key in named:
             ids[name] = named[key]
-            if code == AI:
-                _unseed(c, existing[named[key]])
             continue
         b = B.Budget(id=SL.new_id(), book_id=book.id, name=name, period="month", account_id=account_id,
                      catch_all=not code, owner=tico.owner_person(c, by), warn_pct=80, at_limit=at_limit,
                      created_at=at)
         SB.insert_budget(c, b, by, at)
         ids[name] = b.id
+    for old in existing.values():
+        if old.account_id == accounts[AI].id and not old.parent_id:
+            _unseed(c, old)
     if created:
         tico.audit(c, by, "finance.setup", book.id, {"accounts": len(accounts), "budgets": sorted(ids)})
     return SetupResult(book_id=book.id, created=created, accounts={k: v.id for k, v in accounts.items()},
@@ -102,9 +103,10 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
 
 
 def _unseed(c: sqlite3.Connection, b: B.Budget) -> None:
-    """Drop the amount an earlier setup copied from the company usage cap into AI services: its only version, written
-    by setup itself with the budget. The copy never followed the cap, so a raised or removed cap left bots paused. Its
-    events go too, so the first amount a person sets arms warn and cutoff again."""
+    """Drop the amount an earlier setup copied from the company usage cap into a company-wide AI services budget,
+    active or not (a person may have switched it off and on again): its only version, written by setup itself with the
+    budget. The copy never followed the cap, so a raised or removed cap left bots paused. Its events go too, so the
+    first amount a person sets arms warn and cutoff again."""
     if b.team or b.teammate or b.vendor:
         return
     if SB.seeded_version(c, b.id):
