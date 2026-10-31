@@ -265,8 +265,9 @@ CREATE TABLE IF NOT EXISTS fin_payments (
   obligation TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL REFERENCES fin_accounts(id),
   tags_json TEXT NOT NULL DEFAULT '{}',
   mode TEXT NOT NULL DEFAULT 'approval_queue' CHECK (mode IN ('approval_queue','direct')),
-  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','awaiting_bank_approval','submitted','settled',
-                                                          'returned','failed','cancelled','unknown')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','awaiting_bank_approval','submitted',
+                                                          'settled','returned','failed','cancelled','unknown')),
+  purpose_json TEXT NOT NULL DEFAULT '{}', unknown_since TEXT, flagged_at TEXT,
   provider_request_id TEXT, provider_txn_id TEXT, hold_id TEXT REFERENCES fin_holds(id), attempts INTEGER NOT NULL DEFAULT 0,
   next_try_at TEXT, last_error TEXT, settled_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT);
@@ -325,9 +326,10 @@ CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_ca
 CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
 CREATE INDEX IF NOT EXISTS fin_payments_status ON fin_payments(status, next_try_at);
 CREATE UNIQUE INDEX IF NOT EXISTS fin_payments_live ON fin_payments(obligation) WHERE obligation <> '' AND
-  status IN ('queued','awaiting_bank_approval','submitted','unknown');
+  status IN ('queued','sending','awaiting_bank_approval','submitted','unknown');
 CREATE INDEX IF NOT EXISTS fin_inbox_status ON fin_inbox(status, created_at);
 CREATE INDEX IF NOT EXISTS fin_rule_runs_rule ON fin_rule_runs(rule_id, created_at);
+CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, created_at);
 CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
 """
 
@@ -383,6 +385,9 @@ ADDED = (
     ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
     ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
     ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
+    ("fin_outbox", "claimed_at", "TEXT"), ("fin_cards", "provider_status", "TEXT"), ("fin_cards", "allocation_due", "INTEGER"),
+    ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
+    ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
 )
 
 

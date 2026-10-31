@@ -55,7 +55,7 @@ class Provider(Protocol):
     def recipient(self, recipient_id: str) -> Answer: ...
     def request_send_money(self, account_id: str, body: Mapping[str, object]) -> Answer: ...
     def send_request(self, request_id: str) -> Answer: ...
-    def send_requests(self, account_id: str) -> Answer: ...
+    def send_requests(self, account_id: str, start_after: str | None = None) -> Answer: ...
 
 
 def dollars(cents: int) -> Decimal:
@@ -128,8 +128,9 @@ class Mercury:
     def send_request(self, request_id: str) -> Answer:
         return self._call("GET", f"/request-send-money/{urllib.parse.quote(request_id)}")
 
-    def send_requests(self, account_id: str) -> Answer:
-        return self._call("GET", "/request-send-money", {"accountId": account_id})
+    def send_requests(self, account_id: str, start_after: str | None = None) -> Answer:
+        return self._call("GET", "/request-send-money", {"accountId": account_id, "limit": PAGE,
+                                                         "start_after": start_after})
 
     # writes
     def create_card(self, user_id: str, nickname: str, monthly_cents: int) -> Answer:

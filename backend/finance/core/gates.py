@@ -180,16 +180,22 @@ def matches(when: Mapping[str, object], facts: Facts) -> bool:
     return True
 
 
-def stale(rule: Rule, facts: Facts) -> bool:
-    """Whether the rule reads an input whose source is older than the rule tolerates (or of unknown age)."""
+def stale_keys(rule: Rule, facts: Facts) -> set[str]:
+    """The inputs the rule reads whose source is older than the rule tolerates (or of unknown age)."""
     ages = cast(Mapping[str, Any], facts.get(AGES) or {})
+    out: set[str] = set()
     for key in rule.when:
         root = key.split(".", 1)[0]
         if root in ages:
             age = ages[root]
             if age is None or int(age) > rule.stale_minutes:
-                return True
-    return False
+                out.add(key)
+    return out
+
+
+def stale(rule: Rule, facts: Facts) -> bool:
+    """Whether the rule reads an input whose source is older than the rule tolerates (or of unknown age)."""
+    return bool(stale_keys(rule, facts))
 
 
 def period_key(per: str, day: date) -> str:
@@ -216,17 +222,30 @@ Used = Callable[[Rule, str, str], int]
 
 def evaluate(rules: Sequence[Rule], facts: Facts, day: date, used: Used | None = None) -> Verdict:
     """Run every active rule that matches. A rule over stale inputs asks rather than allow or limit (it still denies
-    when it would); a limit compares this action's amount plus what its period counter already holds."""
+    when it would), and a stale input never dismisses a rule: its freshness is checked before its value is relied on.
+    A limit compares this action's amount plus what its period counter already holds."""
     amount = facts.get("amount")
     spend = amount if isinstance(amount, int) and not isinstance(amount, bool) else 0
     hits: list[Hit] = []
     counts: list[Hit] = []
     for r in rules:
-        if not r.active or not matches(r.when, facts):
+        if not r.active:
             continue
-        if r.outcome != "deny" and stale(r, facts):
+        old = stale_keys(r, facts)
+        full = matches(r.when, facts)
+        if old:
+            # A stale value can neither dismiss a rule nor satisfy an allow: when the rest of the condition holds,
+            # the rule asks (a deny that matches in full still denies).
+            if not matches({k: v for k, v in r.when.items() if k not in old}, facts) or \
+                    (r.outcome == "allow" and not full):
+                continue
+            if r.outcome == "deny" and full:
+                hits.append(Hit(r.id, "deny", r.who, r.reason or r.name))
+                continue
             hits.append(Hit(r.id, "needs_approval", r.who if r.outcome == "needs_approval" and r.who else
                             "finance_admin", f"{r.name}: its data is stale", stale=True))
+            continue
+        if not full:
             continue
         if r.outcome == "limit":
             key, subject = period_key(r.per, day), subject_of(r, facts)

@@ -258,3 +258,122 @@ def test_a_rehearsal_copy_calls_nothing(books):
     assert sync_once(books, fake, rehearsal=True) == "withheld" and fake.calls == [
         ("accounts", None), ("credit", None), ("users", None)]          # only the probe connect() made
     assert Answer(None, {}).ok is False
+
+
+# ------------------------------------------------------------------------------------------------ review fixes
+def _txn(raw_id, account, amount, kind, day="2026-10-14", **extra):
+    return {**MERCURY["txn_bank_fee"], "id": raw_id, "accountId": account, "amount": amount, "kind": kind,
+            "createdAt": f"{day}T10:00:00Z", "postedAt": f"{day}T10:00:00Z", "counterpartyName": "Acme", **extra}
+
+
+def _row(c, provider_id):
+    return c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE provider_id=?", (provider_id,)).fetchone()
+
+
+def test_transfers_pair_only_transfer_kinds_and_io_charges_on_unknown_cards_post(books):
+    """I and S: a posted non-transfer row is never unposted to pair a transfer; two possible counterparts wait for a
+    person; a charge on a card Tico didn't issue posts to Other expenses against the card liability."""
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                                     # -15.00, posts
+    fake.txns["txn-in"] = _txn("txn-in", "acct-sav", 15.0, "internalTransfer", day="2026-10-12")
+    fake.txns["txn-in1"] = _txn("txn-in1", "acct-sav", 100.0, "internalTransfer")
+    fake.txns["txn-in2"] = _txn("txn-in2", "acct-sav", 100.0, "treasuryTransfer")
+    fake.txns["txn-out"] = _txn("txn-out", "acct-chk", -100.0, "internalTransfer")          # two could be its pair
+    fake.txns["txn-io"] = _txn("txn-io", "credit-io", -30.0, "creditCardTransaction", cardId="card-unknown")
+    sync_once(books, fake)
+    with books.read() as c:
+        assert _row(c, "txn-fee")[1] is not None                                                 # stays posted
+        assert _row(c, "txn-in")[1] is None                                                      # waits, unpaired
+        assert all(_row(c, p)[1] is None for p in ("txn-out", "txn-in1", "txn-in2"))             # ambiguous
+        io_entry = _row(c, "txn-io")[1]
+        codes = sorted(str(r[0]) for r in c.execute(
+            "SELECT a.code FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id WHERE l.entry_id=?", (io_entry,)))
+        assert codes[1] == "6900" and codes[0] != "1000"                                       # Other vs IO liability
+
+
+def test_a_settled_card_charge_uses_its_allocation_at_its_actual_amount(books):
+    """P: a card charge first seen settled (a backfill, no authorization) still uses the card's allocation, and a
+    refund gives it back."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    fake.txns["txn-c1"] = _txn("txn-c1", "credit-io", -45.0, "creditCardTransaction", cardId="card-eve")
+    fake.txns["txn-c2"] = _txn("txn-c2", "credit-io", 5.0, "creditCardTransaction", cardId="card-eve")
+    with books.transaction() as c:
+        c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")             # backfill again
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        used = c.execute("SELECT sum(settled_amount) FROM fin_holds WHERE target=? AND status='settled'",
+                         (f"card:{card_id}",)).fetchone()[0]
+        assert used == 4_000
+        assert FA.budget_state(c, budget_id, AT).held == 20_000 - 4_000                      # reserve less the use
+
+
+def test_the_same_mercury_accounts_through_a_new_token_are_the_same_money_accounts(books):
+    """J: reconnecting with another credential reuses the money accounts by provider id; nothing is taken in twice."""
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])
+    sync_once(books, fake)
+    with books.read() as c:
+        before = sorted(str(r[0]) for r in c.execute("SELECT id FROM fin_money_accounts"))
+    found, why = sync.probe(fake)
+    assert not why
+    with books.transaction() as c:
+        again = act(c, OWNER, "connection_create", {"provider": "mercury", "credential_id": "cred-mercury-2",
+                                                    "probe": found, "approver_email": "ben@acme.example",
+                                                    "token_creator_email": "ana@acme.example"})
+        assert again.status == "committed", again
+    with books.transaction() as c:
+        c.execute("UPDATE fin_connections SET settings_json='{}', cursor=NULL")
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        assert sorted(str(r[0]) for r in c.execute("SELECT id FROM fin_money_accounts")) == before
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id='txn-fee'").fetchone()[0] == 1
+        assert _entries(c, "bank") == 1
+
+
+def test_a_payment_settles_on_its_payees_contact_so_the_vendor_hold_and_actual_meet(books):
+    """K: the settled line carries the recipient's contact, not the bank's counterparty text."""
+    from backend.tests.test_finance_payments import _checking, _payee
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 20_000, "account_id": account(c, "6100"),
+                                                "money_account_id": _checking(c)})
+        assert made.status == "committed", made
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    fake.txns["txn-pay"] = _txn("txn-pay", "acct-chk", -200.0, "outgoingPayment", day="2026-10-15",
+                                counterpartyName="ACME SUPPLIES LLC", requestId="req-1")
+    fake.events_list.append({"id": "evt-pay", "resourceType": "transaction", "resourceId": "txn-pay",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, "2026-10-15T16:00:00.000000Z")
+    with books.read() as c:
+        vendor = c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_feed_txns f ON f.entry_id=l.entry_id "
+                           "WHERE f.provider_id='txn-pay' AND l.amount>0").fetchone()[0]
+        assert vendor == "Acme Supplies"
+        assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchone()[0] == "settled"
+
+
+def test_a_row_the_books_dont_have_is_outstanding_never_cleared(books):
+    """O: an uncategorized deposit is not in the books, so a reconciliation can't clear or lock it, and can't be done
+    while the books miss it."""
+    fake = FakeMercury()
+    connect(books, fake)
+    for key in ("txn_bank_fee", "txn_deposit"):
+        fake.txns[str(MERCURY[key]["id"])] = dict(MERCURY[key])
+    sync_once(books, fake)
+    with books.transaction() as c:
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        made = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": 48_500})                  # -15 + 500
+        assert made.result["status"] == "open" and made.result["outstanding"] == 1, made
+        assert made.result["outstanding_total"] == 50_000 and made.result["cleared"] == 1
+        dep = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-dep'").fetchone()[0])
+        assert act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": 48_500, "cleared": [dep]}).code == "invalid"
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE reconciliation_id IS NOT NULL").fetchone()[0] == 0

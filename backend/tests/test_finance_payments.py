@@ -135,7 +135,13 @@ def _holds(c, source="payment"):
     return [tuple(r) for r in c.execute("SELECT amount, status FROM fin_holds WHERE source=?", (source,))]
 
 
-def test_a_timed_out_payment_is_unknown_keeps_its_hold_and_is_found_again_by_its_one_key(books):
+def _asks(c, title):
+    return c.execute("SELECT count(*) FROM tasks WHERE title LIKE ?", (f"{title}%",)).fetchone()[0]
+
+
+def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_and_amount(books):
+    """B: a timed-out request is never re-POSTed. It is found in Mercury's paged list only by its key in the memo with
+    the same recipient and amount; missing for 30 minutes it asks a finance admin once, who may then cancel it."""
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -152,22 +158,65 @@ def test_a_timed_out_payment_is_unknown_keeps_its_hold_and_is_found_again_by_its
         status, key = c.execute("SELECT status, idempotency_key FROM fin_payments WHERE id=?", (pid,)).fetchone()
         assert status == "unknown" and _holds(c) == [(50_000, "held")]
         assert act(c, OWNER, "payment_create", body).code == "conflict"         # one live payment per bill
-        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).code == "conflict"
-    # Mercury did take it: the worker finds it by the key in its note and never sends again under a new key.
-    fake.requests["req-1"] = {**MERCURY["send_request_created"], "note": f"tico:{key}"}
+        assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).code == "conflict"   # not looked for long yet
+    sent = {"recipientId": "rcp-1", "amount": 500.0, "note": f"tico:{key}"}
+    fake.land({**sent, "amount": 499.0}, "req-other-amount")                    # its key, another amount
+    fake.land({**sent, "recipientId": "rcp-9"}, "req-other-payee")              # its key, another payee
+    fake.page_size = 1
+    sync_once(books, fake, HOURS[2])                                             # an hour on: not there
     sync_once(books, fake, HOURS[3])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "unknown"
+        assert _asks(c, "Check Mercury") == 1                                    # asked once, not every pass
+    assert len(fake.sent("request_send_money")) == 1                             # never sent again
+    fake.land(sent, "req-9")                                                     # it was there after all, page 3
+    sync_once(books, fake, HOURS[4])
     assert len(fake.sent("request_send_money")) == 1
-    assert {b["idempotencyKey"] for b in fake.sent("request_send_money")} == {key}
+    assert any(after for _, after in fake.sent("send_requests"))                # it read past the first page
     with books.read() as c:
         assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()[:] == \
-            ("awaiting_bank_approval", "req-1")
-    fake.requests["req-1"] = {**MERCURY["send_request_rejected"], "note": f"tico:{key}"}
+            ("awaiting_bank_approval", "req-9")
+    fake.requests["req-9"] = {**fake.requests["req-9"], "status": "rejected"}
     sync_once(books, fake, HOURS[6])
     with books.transaction() as c:
         assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "cancelled"
         assert _holds(c) == [(50_000, "released")]
-        assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.payment.failed'").fetchone()[0] == 1
-        assert act(c, OWNER, "payment_create", body).status == "committed"     # the bill may be paid again
+        again = act(c, OWNER, "payment_create", body)                             # the bill may be paid again
+        assert again.status == "committed"
+    fake.queue["request_send_money"] = [Answer(502, {})]
+    sync_once(books, fake, HOURS[7])
+    sync_once(books, fake, HOURS[9])                                             # not found after two hours
+    with books.transaction() as c:
+        assert act(c, "human:ben", "payment_cancel", {"payment_id": again.result["payment_id"]}).status != "committed"
+        done = act(c, OWNER, "payment_cancel", {"payment_id": again.result["payment_id"]})
+        assert done.status == "committed", done                                  # a finance admin, once asked
+        assert _holds(c)[-1] == (50_000, "released")
+    assert len(fake.sent("request_send_money")) == 2
+
+
+def test_a_409_with_the_request_is_accepted_and_a_cut_off_send_is_unknown(books):
+    """B: a 409 that carries the request stores its id and status. A: a payment claimed and never recorded (the
+    worker stopped mid-call) becomes unknown, never sent again; a cancel can't take a claimed payment back."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 10_000, "account_id": account(c, "6100"),
+                                         "money_account_id": _checking(c)})
+        two = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 20_000, "account_id": account(c, "6100"),
+                                               "money_account_id": _checking(c)})
+    fake.queue["request_send_money"] = [Answer(409, {"requestId": "req-dup", "status": "pendingApproval"}),
+                                        Answer(None, {})]
+    with books.transaction() as c:
+        # The second is claimed by a worker that then stops before recording anything.
+        from backend.finance.store import banking as SK
+        assert SK.payment_claim(c, str(two.result["payment_id"]), HOURS[0], HOURS[0])
+        assert act(c, OWNER, "payment_cancel", {"payment_id": two.result["payment_id"]}).code == "conflict"
+    sync_once(books, fake, HOURS[1])
+    with books.read() as c:
+        rows = dict(c.execute("SELECT amount, status || ':' || coalesce(provider_request_id, '') FROM fin_payments"))
+    assert rows == {10_000: "awaiting_bank_approval:req-dup", 20_000: "unknown:"}
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [100]       # the cut-off one is not resent
 
 
 def test_a_payment_settles_once_when_its_bank_transaction_posts_and_direct_send_stays_off(books):
@@ -196,7 +245,7 @@ def test_a_payment_settles_once_when_its_bank_transaction_posts_and_direct_send_
     sync_once(books, fake, HOURS[3])
     sync_once(books, fake, HOURS[6])
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0] == "settled"
+        assert tuple(c.execute("SELECT status, last_error FROM fin_payments WHERE id=?", (pid,)).fetchone()) == ("settled", None)
         assert _holds(c) == [(50_000, "settled")]
         lines = sorted(tuple(r) for r in c.execute(
             "SELECT a.code, l.amount FROM fin_lines l JOIN fin_accounts a ON a.id=l.account_id JOIN fin_entries e "
@@ -283,6 +332,20 @@ def test_stale_bank_data_asks_instead_of_allowing(books):
         assert stale.status == "needs_approval" and stale.approver == OWNER
 
 
+def test_a_stale_input_never_dismisses_a_rule():
+    """L: a deny on a low balance can't be skipped because a stale balance looked high; it asks instead."""
+    from datetime import date
+    from backend.finance.core import gates as G
+    low = G.rule_of("r1", "Low balance", {"kind": "payment_create", "balance": {"lt": 100_000}}, {"outcome": "deny"})
+    day = date(2026, 10, 15)
+    stale = {"kind": "payment_create", "balance": 900_000, G.AGES: {"balance": 120}}
+    assert G.evaluate([low], stale, day).outcome == "needs_approval"
+    assert G.evaluate([low], {**stale, "balance": 50, G.AGES: {"balance": 120}}, day).outcome == "deny"
+    assert G.evaluate([low], {**stale, G.AGES: {"balance": 1}}, day).outcome == "allow"     # fresh and high
+    other = {"kind": "card_create", "balance": 900_000, G.AGES: {"balance": 120}}
+    assert G.evaluate([low], other, day).outcome == "allow"                                 # the fresh part misses
+
+
 def test_money_reads_cut_to_the_viewer_and_a_revoked_grant_is_gone(books):
     fake = FakeMercury()
     connect(books, fake)
@@ -310,6 +373,72 @@ def test_money_reads_cut_to_the_viewer_and_a_revoked_grant_is_gone(books):
         assert FR.recipients(c, OWNER, at=AT)["recipients"][0]["last4"] == "8888"
         assert FR.reconciliations(c, "human:cara", at=AT)["reconciliations"] == []
         assert FR.may_connect(c, OWNER, at=AT) and not FR.may_connect(c, "human:cara", at=AT)
+
+
+def test_every_send_is_judged_again_with_its_counters_once_and_a_new_deny_cancels_it(books):
+    """C: right before the send, the action's rights, view, rules (counters less its own) and budget run again: a
+    payment that used its own limit still goes; one a rule now denies, or whose payer lost the right, is cancelled."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        cap = _rule(c, OWNER, "Monthly cap", {"kind": "payment_create"},
+                    {"outcome": "limit", "limit": 60_000, "per": "month"},
+                    [{"input": {"kind": "payment_create", "amount": 10}, "expect": "limit"}])
+        assert cap.status == "committed", cap
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c)}
+        fits = act(c, "human:ben", "payment_create", {**body, "amount": 50_000})
+        assert fits.status == "committed", fits
+    sync_once(books, fake, HOURS[1])
+    assert [b["amount"] for b in fake.sent("request_send_money")] == [500]      # its own 500.00 not counted twice
+    with books.transaction() as c:
+        later = act(c, OWNER, "payment_create", {**body, "amount": 5_000})
+        lost = act(c, "human:ben", "payment_create", {**body, "amount": 4_000, "tags": {"team": "web"}})
+        assert later.status == lost.status == "committed"
+        _rule(c, OWNER, "No more Acme", {"kind": "payment_create", "counterparty": "Acme Supplies",
+                                         "amount": {"lt": 6_000}},
+              {"outcome": "deny"}, [{"input": {"kind": "payment_create", "counterparty": "Acme Supplies",
+                                               "amount": 1}, "expect": "deny"}])
+        act(c, OWNER, "right_revoke", {"teammate": "human:ben", "right": "finance.pay"})
+    sync_once(books, fake, HOURS[3])
+    assert len(fake.sent("request_send_money")) == 1
+    with books.read() as c:
+        rows = dict(c.execute("SELECT amount, status || ':' || last_error FROM fin_payments WHERE amount<50000"))
+        assert rows[5_000].startswith("cancelled:No more Acme")                 # a rule added after it was queued
+        assert rows[4_000] == "cancelled:whoever asked for it no longer has the right to pay"
+        assert sorted(_holds(c)) == [(4_000, "released"), (5_000, "released"), (50_000, "held")]   # the sent one keeps its
+
+
+def test_a_wire_needs_its_purpose_and_a_refusal_is_never_silent(books):
+    """Q: a wire carries purpose.simple; a refusal from Mercury fails it with an event and a Needs-you to its maker."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "recipient_add", {"name": "Acme Wire", "method": "wire",
+                                               "account_number": "000011112222", "routing_number": "000000000"})
+        assert made.status == "committed", made
+    sync_once(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        body = {"recipient_id": made.result["recipient_id"], "amount": 30_000, "account_id": account(c, "6100"),
+                "money_account_id": _checking(c)}
+        bare = act(c, OWNER, "payment_create", body)
+        assert bare.code == "invalid" and "purpose" in bare.reason
+        paid = act(c, OWNER, "payment_create", {**body, "purpose": {"category": "vendor", "additional_info": "Q4"}})
+        assert paid.status == "committed", paid
+        again = act(c, OWNER, "payment_create", {**body, "amount": 30_001, "purpose": {"category": "nonsense"}})
+    fake.queue["request_send_money"] = [Answer(200, MERCURY["send_request_created"]),
+                                        Answer(400, {"message": "purpose.simple.category is invalid"})]
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money")[0]["purpose"] == {"simple": {"category": "vendor", "additionalInfo": "Q4"}}
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (again.result["payment_id"],)).fetchone()[0] == \
+            "failed"
+        assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.payment.failed'").fetchone()[0] == 1
+        assert _asks(c, "Payment of 300.01 failed") == 1
 
 
 # ------------------------------------------------------------------------------------------------ sealed bank details

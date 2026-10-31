@@ -431,7 +431,24 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set aside part of a budget for one card, Gateway key or teammate. It must fit what the budget and every parent
-    have left; 0 ends it."""
+    have left; 0 ends it. A card's allocation is on the card's own budget, by someone who sees the card."""
+    V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
+    if p.get("target_kind") == "card":
+        from .cards import check_lower, sees as sees_card
+        card = SK.get(ctx.c, "fin_cards", V.text(p, "target_id", 120))
+        if card is None or not sees_card(ctx, who, card):
+            raise FinanceError(NOT_FOUND, "no such card")
+        if str(card["budget_id"] or "") != V.text(p, "budget_id", 80):
+            raise invalid("a card's allocation is on its own budget")
+        if str(card["status"]) == "cancelled":
+            raise FinanceError(CONFLICT, "that card is cancelled")
+        check_lower(ctx, card, V.amount(p))
+    return allocation_plan(ctx, who, p)
+
+
+def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """The allocation itself (card_create and card_update_limit come here with their own card checks). A card's lower
+    allocation keeps the old reservation until Mercury confirms the lower limit (cards.limit_follows)."""
     V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
     b = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, b)
@@ -451,13 +468,15 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 if shows_numbers(ctx, who, one):
                     raise invalid(f"it does not fit: {one.name} has {s.remaining} left")
                 raise invalid("it does not fit: not enough left")
+    lowered = kind == "card" and grow < 0
 
     def apply(aid: str) -> Result:
-        made = SB.upsert_allocation(ctx.c, budget_id=b.id, target_kind=kind, target_id=target, amount=amount,
-                                    currency=ctx.book.base_currency, by=who, at=ctx.at)
+        made = str(row["id"]) if lowered and row else SB.upsert_allocation(
+            ctx.c, budget_id=b.id, target_kind=kind, target_id=target, amount=amount, currency=ctx.book.base_currency,
+            by=who, at=ctx.at)
         if kind == "card":
             from .cards import limit_follows          # a card's provider limit is its allocation (§8.2)
-            limit_follows(ctx, target, amount, aid, who)
+            limit_follows(ctx, target, amount, aid, who, lowered)
         return {"allocation_id": made}
     return Plan(K.default_gate(ctx.org, who, "allocation_set"), f"Set aside {amount / 100:.2f} of {b.name} for "
                 f"{kind} {target}", apply)

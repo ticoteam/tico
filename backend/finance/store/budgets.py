@@ -125,6 +125,11 @@ def settle(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str | Non
                      "WHERE id=? AND status='held'", (amount, entry_id, at, hold_id)).rowcount
 
 
+def set_settled_amount(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
+    """A settled hold's real amount (a card charge that settled for more or less than it was authorized for)."""
+    return c.execute("UPDATE fin_holds SET settled_amount=? WHERE id=? AND status='settled'", (amount, hold_id)).rowcount
+
+
 def absorb(c: sqlite3.Connection, hold_id: str, entry_id: str) -> int:
     """A settled hold's entry arrives: from now the posted line counts instead of the hold."""
     return c.execute("UPDATE fin_holds SET entry_id=? WHERE id=? AND status='settled' AND entry_id IS NULL",

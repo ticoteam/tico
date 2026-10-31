@@ -111,6 +111,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         for a in accounts:
             if str(a.get("status") or "active") not in ("active", "pending"):
                 continue
+            if (kept := _reuse(ctx, cid, a)) is not None:
+                mapped.append(kept)
+                continue
             subtype = "savings" if "saving" in str(a.get("kind") or "").lower() else "checking"
             bank = by_code(ctx, BANK)
             used = bank is not None and any(str(r["account_id"]) == bank.id for r in SK.money_accounts(ctx.c,
@@ -120,6 +123,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             mapped.append(_money(ctx, cid, a, "bank", subtype, gl, who))
         for a in credit:
             if str(a.get("status") or "active") not in ("active", "pending"):
+                continue
+            if (kept := _reuse(ctx, cid, a)) is not None:
+                mapped.append(kept)
                 continue
             cards = by_code(ctx, CARDS)
             gl = cards if cards is not None and not any(
@@ -132,6 +138,19 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         return {"connection_id": cid, "money_accounts": mapped, "payments_enabled": not note,
                 "approval_note": note or None}
     return Plan(K.ALLOW, f"Connect Mercury ({len(accounts)} account(s), {len(credit)} credit)", apply)
+
+
+def _reuse(ctx: Ctx, cid: str, a: Mapping[str, object]) -> Result | None:
+    """A Mercury account already in the books (connected before, perhaps with another token for the same Mercury
+    organization) is the same money account: it moves to this connection, so its history is never taken in twice."""
+    m = SK.money_account_by_provider_id(ctx.c, ctx.book.id, "mercury", str(a.get("id") or ""))
+    if m is None:
+        return None
+    SK.update(ctx.c, "fin_money_accounts", str(m["id"]), {"connection_id": cid, "status": "active",
+                                                          "updated_at": ctx.at})
+    gl = ctx.accounts.get(str(m["account_id"]))
+    return {"money_account_id": str(m["id"]), "kind": str(m["kind"]), "account_id": str(m["account_id"]),
+            "code": gl.code if gl is not None else ""}
 
 
 def _money(ctx: Ctx, cid: str, a: Mapping[str, object], kind: str, subtype: str, gl: L.Account, who: str) -> Result:
@@ -161,8 +180,12 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
     if money is None:
         return None
     row = SK.feed_row(ctx.c, str(money["id"]), t.provider_id)
-    if row is not None and t.version and int(row["version"]) >= t.version:
-        return str(row["id"])
+    if row is not None:
+        have = int(row["version"])
+        # A snapshot older than the row (or one with no version, like a /transactions page, once a versioned event
+        # was taken in) changes nothing, and a posted row never goes back to pending.
+        if (t.version and have >= t.version) or (not t.version and have > 0) or (row["entry_id"] and t.pending):
+            return str(row["id"])
     card = SK.card_by_provider(ctx.c, "mercury", t.card_id) if t.card_id else None
     fields: dict[str, object] = {
         "txn_date": t.txn_date, "amount": t.amount, "counterparty": t.counterparty, "description": t.description,
@@ -213,23 +236,33 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is not None and t.amount < 0:
         tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
-        entry = _post(ctx, fid, t, [_line(str(pay["account_id"]), -t.amount, tags, t.counterparty),
+        rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
+        vendor = str(rec["contact_id"] or rec["name"]) if rec is not None else t.counterparty
+        entry = _post(ctx, fid, t, [_line(str(pay["account_id"]), -t.amount, tags, vendor),
                                     _line(gl.id, t.amount)], [str(pay["hold_id"])] if pay["hold_id"] else [])
         _posted(ctx, [fid], entry)
         payments.feed_settled(ctx, pay, fid)
         return
-    if program and card is not None:
-        account, tags = card_line(ctx, card)
+    if t.kind in F.TRANSFER_KINDS:
+        other = _counterpart(ctx, row, money)
+        if other is not None:
+            _transfer(ctx, row, money, other)
+        return                      # one side of a move between our accounts: it posts when the other side arrives
+    if program:
+        # A card charge or refund. On a card Tico did not issue it posts to Other expenses against the card liability.
+        if card is not None:
+            account, tags = card_line(ctx, card)
+        else:
+            other_line = by_code(ctx, OTHER)
+            if other_line is None:
+                return
+            account, tags = other_line.id, {}
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
         entry = _post(ctx, fid, t, [_line(account, -t.amount, tags, t.counterparty), _line(gl.id, t.amount)], holds)
         _posted(ctx, [fid], entry)
+        if card is not None:
+            _card_used(ctx, row, card, -t.amount, entry)
         return
-    other = _counterpart(ctx, row, money)
-    if other is not None:
-        _transfer(ctx, row, money, other)
-        return
-    if program or t.kind in F.TRANSFER_KINDS:
-        return                      # one side of a move between our accounts: it posts when the other side arrives
     if t.amount < 0:
         spend = by_code(ctx, OTHER)
         if spend is None:
@@ -251,6 +284,22 @@ def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:
     if account is None:
         raise invalid("the books have no Other expenses line")
     return account.id, tags
+
+
+def _card_used(ctx: Ctx, row: Any, card: Any, amount: int, entry_id: str) -> None:
+    """A settled card transaction uses the card's allocation at its actual amount (a refund gives some back): its
+    authorization hold settles at that amount, or, with none (first seen settled, as in a backfill), a settled hold
+    records it, so the allocation never stays reserved beside the actual."""
+    if row["hold_id"] and amount > 0:
+        SB.set_settled_amount(ctx.c, str(row["hold_id"]), amount)
+        return
+    b = ctx.budgets().get(str(card["budget_id"] or ""))
+    if b is None or not b.active:
+        return
+    hid = SB.insert_hold(ctx.c, budget_id=b.id, amount=abs(amount), currency=ctx.book.base_currency, source="card",
+                         source_id=f"{row['id']}:settled", target=f"card:{card['id']}", held_on=str(row["txn_date"]),
+                         expires_at=None, by=SYSTEM, at=ctx.at)
+    SB.settle(ctx.c, hid, amount, entry_id, ctx.at)
 
 
 def _card_hold(ctx: Ctx, row: Any, card: Any, amount: int) -> None:
@@ -282,10 +331,16 @@ def _post(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], hold
     """One entry for a feed row; a repost after a reversal gets a fresh source id, so it is never deduped away."""
     source = "card" if t.card else "bank"
     source_id = fid if SL.entry_by_source(ctx.c, ctx.book.id, source, fid) is None else f"{fid}:{ctx.at}"
-    done = posting.post_entry(ctx.c, {"date": t.txn_date, "source": source, "source_id": source_id,
+    done = posting.post_entry(ctx.c, {"date": open_day(ctx, t.txn_date), "source": source, "source_id": source_id,
                                       "memo": (t.counterparty or t.description)[:200], "lines": lines},
                               hold_ids=holds, at=ctx.at)
     return str(done["entry_id"])
+
+
+def open_day(ctx: Ctx, day: str) -> str:
+    """Where a dated item posts: its own day, or today when that day is in a closed period (§4.1: late items post in
+    the current open period, so a closed month keeps its meaning)."""
+    return ctx.today if SL.closed_on(ctx.c, ctx.book.id, day) else day
 
 
 def _posted(ctx: Ctx, ids: Sequence[str], entry_id: str) -> None:
@@ -325,30 +380,30 @@ def undo(ctx: Ctx, row: Any) -> None:
 
 
 def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
-    """The other side of a move between two of our money accounts: the opposite amount on another of them within
-    MATCH_DAYS, not yet part of a transfer."""
+    """The other side of a move between two of our money accounts: a transfer-kind row (internal or treasury
+    transfer) with the opposite amount on another of them within MATCH_DAYS, not yet posted. An ambiguous match waits
+    for a person."""
     others = [str(r["id"]) for r in SK.money_accounts(ctx.c, ctx.book.id) if str(r["id"]) != str(money["id"])]
     day = dates.day(str(row["txn_date"]))
     start, end = (day - timedelta(days=MATCH_DAYS)).isoformat(), (day + timedelta(days=MATCH_DAYS)).isoformat()
-    for r in SK.transfer_candidates(ctx.c, others, -int(row["amount"]), start, end):
-        if r["card_id"] or r["request_id"]:
-            continue
-        if r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1:
-            continue
-        return r
-    return None
+    found = [r for r in SK.transfer_candidates(ctx.c, others, -int(row["amount"]), start, end)
+             if str(r["kind"]) in F.TRANSFER_KINDS and not r["entry_id"] and not r["card_id"] and not r["request_id"]]
+    if len(found) > 1:
+        # Several could be the other side: a person picks (categorize), nothing is guessed.
+        event(ctx, CATEGORY_EVENT, str(row["id"]), {"feed_id": str(row["id"]), "why": "several possible transfers"},
+              "ambiguous")
+        return None
+    return found[0] if found else None
 
 
 def _transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
     """One entry for both sides: Dr the account money went to, Cr the one it left."""
-    if other["entry_id"]:
-        _unpost(ctx, other, "it is one side of a transfer")
     other_money = SK.get(ctx.c, "fin_money_accounts", str(other["money_account_id"]))
     here, there = _gl(ctx, money), _gl(ctx, other_money)
     amount = int(row["amount"])
     first = sorted([str(row["id"]), str(other["id"])])
     done = posting.post_entry(ctx.c, {
-        "date": max(str(row["txn_date"]), str(other["txn_date"])), "source": "bank",
+        "date": open_day(ctx, max(str(row["txn_date"]), str(other["txn_date"]))), "source": "bank",
         "source_id": f"transfer:{first[0]}:{first[1]}" + ("" if SL.entry_by_source(
             ctx.c, ctx.book.id, "bank", f"transfer:{first[0]}:{first[1]}") is None else f":{ctx.at}"),
         "memo": f"Transfer: {money['name']} / {other_money['name']}"[:200],
@@ -461,7 +516,13 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         opening = int(last["cleared_total"])
     total = opening + sum(int(window[i]["amount"]) for i in ids)
     difference = _signed(money, shown) - total
-    status = "done" if difference == 0 else "open"
+    # The books must say what the cleared rows say: their entries, still posted, moved the money account's GL line
+    # by exactly their amounts. Rows the books don't have yet are outstanding and never cleared.
+    booked = SL.posted_total(ctx.c, [str(window[i]["entry_id"]) for i in ids], str(money["account_id"] or "")) \
+        if money["account_id"] else sum(int(window[i]["amount"]) for i in ids)
+    book_gap = sum(int(window[i]["amount"]) for i in ids) - booked
+    waiting, waiting_total = SK.feed_outstanding(ctx.c, str(money["id"]), end)
+    status = "done" if difference == 0 and book_gap == 0 else "open"
 
     def apply(aid: str) -> Result:
         rid = SK.insert(ctx.c, "fin_reconciliations", {
@@ -472,7 +533,8 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "created_by": who})
         if status == "done":
             SK.set_cleared(ctx.c, ids, rid, ctx.at)
-        return {"reconciliation_id": rid, "status": status, "difference": difference, "cleared": len(ids)}
+        return {"reconciliation_id": rid, "status": status, "difference": difference, "cleared": len(ids),
+                "book_difference": book_gap, "outstanding": waiting, "outstanding_total": waiting_total}
     return Plan(K.default_gate(ctx.org, who, "reconcile"), f"Reconcile {money['name']} through {end}", apply)
 
 

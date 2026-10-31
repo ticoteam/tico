@@ -178,14 +178,27 @@ class FakeMercury:
     def request_send_money(self, account_id, body):
         answer = self._answer("request_send_money", dict(body), MERCURY["send_request_created"])
         if answer.ok:
-            self.requests[str(answer.body.get("requestId"))] = {**answer.body, "note": body.get("note")}
+            self.land(body, str(answer.body.get("requestId")), str(answer.body.get("status") or "pendingApproval"))
         return answer
+
+    def land(self, body, request_id: str, status: str = "pendingApproval") -> None:
+        """A request as Mercury keeps it: only the documented list fields. Which request field Mercury shows as
+        `memo` is not documented; Finance's key travels in `note`, so the fake shows that."""
+        self.requests[request_id] = {"requestId": request_id, "status": status, "amount": body.get("amount"),
+                                     "recipientId": body.get("recipientId"), "memo": body.get("note")}
 
     def send_request(self, request_id):
         return self._answer("send_request", request_id, self.requests.get(request_id) or self.Answer(404, {}))
 
-    def send_requests(self, account_id):
-        return self._answer("send_requests", account_id, {"requests": list(self.requests.values())})
+    page_size = 1000
+
+    def send_requests(self, account_id, start_after=None):
+        rows = list(self.requests.values())
+        ids = [str(r["requestId"]) for r in rows]
+        rows = rows[ids.index(start_after) + 1:] if start_after in ids else rows
+        page, more = rows[:self.page_size], len(rows) > self.page_size
+        return self._answer("send_requests", (account_id, start_after),
+                            {"requests": page, "page": {"nextPage": str(page[-1]["requestId"]) if more else None}})
 
 
 def connect(store: Store, fake: FakeMercury, *, approver: str = "ben@acme.example",

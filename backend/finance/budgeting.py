@@ -65,6 +65,13 @@ def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "") -> i
                          teammate=teammate or b.teammate, vendor=b.vendor)
 
 
+def period_window(ctx: Ctx, budget_id: str) -> tuple[str, str]:
+    """The budget's period today, as ISO days."""
+    b = ctx.budgets()[budget_id]
+    start, end = _period(ctx, b, dates.day(ctx.today), SB.versions(ctx.c, [b.id])[b.id])
+    return start.isoformat(), end.isoformat()
+
+
 def _period(ctx: Ctx, b: B.Budget, at: date, versions: Sequence[B.Version]) -> tuple[date, date]:
     return B.period_of(b, at, ctx.book.fiscal_year_start, versions)
 

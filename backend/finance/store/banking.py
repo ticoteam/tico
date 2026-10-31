@@ -11,7 +11,7 @@ from .ledger import new_id
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
                     "fin_cards", "fin_card_auths", "fin_recipients", "fin_payments", "fin_inbox", "fin_outbox",
                     "fin_rules", "fin_rule_runs"})
-LIVE_PAYMENT = ("queued", "awaiting_bank_approval", "submitted", "unknown")
+LIVE_PAYMENT = ("queued", "sending", "awaiting_bank_approval", "submitted", "unknown")
 
 
 def dump(value: object) -> str:
@@ -86,6 +86,14 @@ def money_accounts(c: sqlite3.Connection, book_id: str) -> list[Any]:
 def money_account_by_provider(c: sqlite3.Connection, connection_id: str, provider_account_id: str) -> Any:
     return c.execute("SELECT * FROM fin_money_accounts WHERE connection_id=? AND provider_account_id=?",
                      (connection_id, provider_account_id)).fetchone()
+
+
+def money_account_by_provider_id(c: sqlite3.Connection, book_id: str, provider: str, provider_account_id: str) -> Any:
+    """The money account for one provider account, whichever connection holds it now."""
+    if not provider_account_id:
+        return None
+    return c.execute("SELECT * FROM fin_money_accounts WHERE book_id=? AND provider=? AND provider_account_id=? "
+                     "ORDER BY created_at LIMIT 1", (book_id, provider, provider_account_id)).fetchone()
 
 
 def card_counts(c: sqlite3.Connection) -> dict[str, dict[str, int]]:
@@ -188,10 +196,20 @@ def rows_of_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
 
 
 def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> list[Any]:
-    """Posted (not pending, not ignored) rows on or before `through` that no done reconciliation cleared yet."""
+    """Settled rows on or before `through` that are in the books (posted or matched to an entry) and that no done
+    reconciliation cleared yet. A `new` row is not in the books, so it can't be cleared: it stays outstanding."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND txn_date<=? AND pending=0 AND "
-                     "status<>'ignored' AND reconciliation_id IS NULL ORDER BY txn_date, id",
+                     "status NOT IN ('ignored','new') AND entry_id IS NOT NULL AND reconciliation_id IS NULL "
+                     "ORDER BY txn_date, id",
                      (money_account_id, through)).fetchall()
+
+
+def feed_outstanding(c: sqlite3.Connection, money_account_id: str, through: str) -> tuple[int, int]:
+    """Settled rows on or before `through` the books don't have yet (`new`): how many, and their total."""
+    row = c.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "
+                    "txn_date<=? AND pending=0 AND status='new' AND reconciliation_id IS NULL",
+                    (money_account_id, through)).fetchone()
+    return int(row[0]), int(row[1])
 
 
 def feed_rows(c: sqlite3.Connection, ids: Sequence[str]) -> dict[str, Any]:
@@ -323,11 +341,21 @@ def payment_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE provider_request_id=?", (request_id,)).fetchone()
 
 
-def payments_due(c: sqlite3.Connection, at: str, most: int) -> list[Any]:
-    """Payments the worker owes a call: to send (queued), to resolve (unknown), or to poll (waiting on the bank)."""
-    return c.execute("SELECT * FROM fin_payments WHERE status IN ('queued','unknown','awaiting_bank_approval',"
-                     "'submitted') AND (next_try_at IS NULL OR next_try_at<=?) ORDER BY next_try_at, created_at LIMIT ?",
-                     (at, most)).fetchall()
+def payments_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | None = None) -> list[Any]:
+    """Payments the worker owes a call: to send (queued), to resolve (unknown, or `sending` left by a crash), or to
+    poll (waiting on the bank); with `connection_id`, only those paid from that connection's accounts."""
+    scope = " AND money_account_id IN (SELECT id FROM fin_money_accounts WHERE connection_id=?)" if connection_id \
+        else ""
+    return c.execute("SELECT * FROM fin_payments WHERE status IN ('queued','sending','unknown','awaiting_bank_approval',"
+                     f"'submitted') AND (next_try_at IS NULL OR next_try_at<=?){scope} ORDER BY next_try_at, "
+                     "created_at LIMIT ?", (at, *([connection_id] if connection_id else []), most)).fetchall()
+
+
+def payment_claim(c: sqlite3.Connection, payment_id: str, at: str, stuck_at: str) -> bool:
+    """Take a queued payment for one send: only one worker wins, and a cancel can no longer take it back. If nothing
+    records an answer by `stuck_at`, the worker finds it again as cut off."""
+    return c.execute("UPDATE fin_payments SET status='sending', updated_at=?, next_try_at=? WHERE id=? AND "
+                     "status='queued'", (at, stuck_at, payment_id)).rowcount == 1
 
 
 def payments(c: sqlite3.Connection, *, status: str = "", before: str = "", most: int = 100) -> list[Any]:
@@ -352,8 +380,26 @@ def inbox_add(c: sqlite3.Connection, *, connection_id: str | None, provider: str
                      (new_id(), connection_id, provider, event_id, dump(payload), at)).rowcount == 1
 
 
-def inbox_waiting(c: sqlite3.Connection, most: int) -> list[Any]:
-    return c.execute("SELECT * FROM fin_inbox WHERE status='new' ORDER BY created_at, id LIMIT ?", (most,)).fetchall()
+def inbox_waiting(c: sqlite3.Connection, most: int, connection_id: str | None = None, at: str | None = None
+                  ) -> list[Any]:
+    """Events to take in: with `connection_id`, that connection's own and those no connection was named for that it
+    has not tried yet; due now when `at` is given."""
+    where, args = ["status='new'"], list[object]()
+    if connection_id:
+        where.append("(connection_id=? OR (connection_id IS NULL AND NOT EXISTS (SELECT 1 FROM json_each(tried_json) "
+                     "WHERE value=?)))")
+        args += [connection_id, connection_id]
+    if at:
+        where.append("(next_try_at IS NULL OR next_try_at<=?)")
+        args.append(at)
+    return c.execute(f"SELECT * FROM fin_inbox WHERE {' AND '.join(where)} ORDER BY created_at, id LIMIT ?",
+                     (*args, most)).fetchall()
+
+
+def inbox_later(c: sqlite3.Connection, inbox_id: str, *, attempts: int, next_try_at: str | None,
+                tried: Sequence[str]) -> None:
+    c.execute("UPDATE fin_inbox SET attempts=?, next_try_at=?, tried_json=? WHERE id=?",
+              (attempts, next_try_at, dump(list(tried)), inbox_id))
 
 
 def inbox_done(c: sqlite3.Connection, inbox_id: str, status: str, at: str) -> None:
@@ -371,9 +417,42 @@ def outbox_add(c: sqlite3.Connection, *, connection_id: str | None, action_id: s
                                     "status": "pending", "created_at": at, "created_by": by, "updated_at": at})
 
 
-def outbox_due(c: sqlite3.Connection, at: str, most: int) -> list[Any]:
-    return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND (next_try_at IS NULL OR next_try_at<=?) "
-                     "ORDER BY created_at LIMIT ?", (at, most)).fetchall()
+def outbox_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | None = None) -> list[Any]:
+    """Unclaimed writes due now (with `connection_id`, that connection's only), oldest first."""
+    scope = " AND connection_id=?" if connection_id else ""
+    return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND claimed_at IS NULL AND (next_try_at IS NULL "
+                     f"OR next_try_at<=?){scope} ORDER BY created_at LIMIT ?",
+                     (at, *([connection_id] if connection_id else []), most)).fetchall()
+
+
+def outbox_claim(c: sqlite3.Connection, outbox_id: str, at: str) -> bool:
+    """Take one write for one call: only one worker wins it."""
+    return c.execute("UPDATE fin_outbox SET claimed_at=?, updated_at=? WHERE id=? AND status='pending' AND "
+                     "claimed_at IS NULL", (at, at, outbox_id)).rowcount == 1
+
+
+def card_sync_waiting(c: sqlite3.Connection, card_id: str) -> bool:
+    """A card_sync for this card not yet claimed: it will read the card's latest state when sent."""
+    return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_sync' AND status='pending' AND claimed_at IS NULL AND "
+                     "json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+
+
+def card_create_claimed(c: sqlite3.Connection, card_id: str) -> bool:
+    """This card's creation is at Mercury right now (claimed, not recorded)."""
+    return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_create' AND status='pending' AND claimed_at IS NOT NULL "
+                     "AND json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+
+
+def card_create_waiting(c: sqlite3.Connection, card_id: str) -> bool:
+    """This card's creation is still owed (queued or at Mercury now)."""
+    return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_create' AND status='pending' AND "
+                     "json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+
+
+def outbox_stuck(c: sqlite3.Connection, before: str, connection_id: str) -> list[Any]:
+    """Writes claimed before `before` and never recorded: the worker stopped mid-call."""
+    return c.execute("SELECT * FROM fin_outbox WHERE status='pending' AND claimed_at IS NOT NULL AND claimed_at<? AND "
+                     "connection_id=? ORDER BY created_at", (before, connection_id)).fetchall()
 
 
 # ------------------------------------------------------------------------------------------------ rules
@@ -488,6 +567,14 @@ def seed_rule(c: sqlite3.Connection, *, rule_id: str, name: str, words: str, whe
 def rule_runs(c: sqlite3.Connection, rule_id: str, most: int) -> list[Any]:
     return c.execute("SELECT * FROM fin_rule_runs WHERE rule_id=? ORDER BY created_at DESC, id DESC LIMIT ?",
                      (rule_id, most)).fetchall()
+
+
+def last_rule_run(c: sqlite3.Connection, action_id: str) -> Any:
+    """The latest gate evaluation logged for one action (what its counters moved by when it committed)."""
+    if not action_id:
+        return None
+    return c.execute("SELECT * FROM fin_rule_runs WHERE action_id=? ORDER BY created_at DESC, id DESC LIMIT 1",
+                     (action_id,)).fetchone()
 
 
 def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
