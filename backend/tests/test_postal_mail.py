@@ -356,6 +356,21 @@ def test_each_retry_of_a_letter_counts_against_the_daily_cap(api, hq, mail, monk
     assert (items(api)["412"]["status"], items(api)["412"]["error"]) == ("new", "daily_cap")
 
 
+def test_an_upgrade_keeps_the_days_reads_against_the_cap(api, hq, mail, monkeypatch):
+    from backend import postal_mail_schema
+    monkeypatch.setattr(P, "READS_PER_DAY", 2)
+    for ident in ("431", "432", "433"):
+        letter(api, ident, "other")
+        deliver(hq, ident)
+    service(api).tick()
+    with api.app.state.store.transaction() as c:          # V2: two letters read in the last hour, no ledger yet
+        c.execute("UPDATE mail_items SET read_at=? WHERE external_id IN ('431','432')", (H.shift(H.now(), hours=-1),))
+        c.execute("DROP TABLE mail_reads")
+        H._apply(c, postal_mail_schema.V3)
+    api.app.state.postal_mail.process(items(api)["433"]["id"])
+    assert (items(api)["433"]["status"], items(api)["433"]["error"]) == ("new", "daily_cap")
+
+
 def test_bills_filed_before_they_were_private_go_private_once(api, hq, mail):
     from backend import postal_mail_schema
     for ident, kind in (("421", "bill"), ("422", "government_tax"), ("423", "financial"), ("424", "legal"),
@@ -365,6 +380,9 @@ def test_bills_filed_before_they_were_private_go_private_once(api, hq, mail):
     service(api).tick()
     drain(api)
     got = {i: r["task_id"] for i, r in items(api).items()}
+    with api.app.state.store.transaction() as c:
+        got["sub"] = H.task_create(c, H.KEEPER, "Pay the water bill", "", "bot:finance", parent_id=got["421"],
+                                   lint=False, deduplicate=False)["id"]
     with api.app.state.store.transaction() as c:          # filed by the build before V2: the company could read them
         c.execute("UPDATE tasks SET private=0, visibility='public'")    # (legal mail someone made public since)
         c.execute("DELETE FROM mail_private_backfill")
@@ -374,7 +392,7 @@ def test_bills_filed_before_they_were_private_go_private_once(api, hq, mail):
     def private():
         with api.app.state.store.read() as c:
             return {i: c.execute("SELECT private FROM tasks WHERE id=?", (t,)).fetchone()[0] for i, t in got.items()}
-    assert private() == {"421": 1, "422": 1, "423": 1, "424": 0, "425": 0}
+    assert private() == {"421": 1, "422": 1, "423": 1, "424": 0, "425": 0, "sub": 1}
     with api.app.state.store.transaction() as c:
         assert c.execute("SELECT count(*) FROM mail_private_backfill").fetchone()[0] == 0
         c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id=?", (got["421"],))   # public again, on purpose

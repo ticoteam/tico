@@ -500,8 +500,11 @@ class PostalMail:
         with self.store.transaction() as c:
             for (task_id,) in c.execute("SELECT task_id FROM mail_private_backfill").fetchall():
                 row = H.task(c, task_id)
-                if row and not H.task_private(c, row):
-                    H._made_private(c, H.KEEPER, task_id)
+                if not row:
+                    continue
+                for each in [row, *H.descendants(c, task_id)]:   # a subtask of a private task is private too
+                    if not H.task_private(c, each):
+                        H._made_private(c, H.KEEPER, each["id"])
             c.execute("DELETE FROM mail_private_backfill")
 
     def fail(self, row, code):
