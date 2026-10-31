@@ -9,6 +9,7 @@ from typing import Any, cast
 
 from .context import Ctx, load
 from .core import dates
+from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, descendants
@@ -528,17 +529,15 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Who can see what in Finance: the org chart with each teammate's default and grants, private lines and the
-    defaults. The owner sees everyone and may view as anyone; a manager sees the teammates in the teams they lead
-    (whom they may grant to); anyone else sees their own row."""
+    defaults. The roster (every teammate's grants and rights) is for the owner and finance admins (`finance.admin`,
+    spec §7.5); anyone else, managers included, sees only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
+    roster = owner or R.is_admin(org, viewer, ctx.rights(viewer))
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
     everyone = sorted(org.humans | org.bots)
-    if owner:
-        shown = everyone
-    else:
-        shown = [m for m in everyone if m == viewer or org.team_of.get(m, "") in led]
+    shown = everyone if roster else [viewer]
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
     rights_rows = {m: sorted(ctx.rights(m)) for m in shown}

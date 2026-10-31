@@ -164,10 +164,16 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
         mates = {m["teammate"]: m for m in owner["teammates"]}
         assert mates["human:ana"]["default"] == "everything" and mates["human:cara"]["default"] == "team_expenses"
         assert len(mates["human:eve"]["grants"]) == 1
-        ben = {m["teammate"] for m in FR.access(c, "human:ben", at=AT)["teammates"]}
-        assert ben == {"human:ben", "human:cara", "human:eve", "human:fay", "bot:coder"}
+        # The roster is for the owner and finance admins: a manager (Ben leads Web's team) sees only his own row.
+        ben = FR.access(c, "human:ben", at=AT)
+        assert [m["teammate"] for m in ben["teammates"]] == ["human:ben"] and not ben["can_view_as"]
+        assert ben["teammates"][0]["default"] == "team_expenses" and ben["teammates"][0]["rights"] == []
         eve = FR.access(c, "human:eve", at=AT)
         assert [m["teammate"] for m in eve["teammates"]] == ["human:eve"] and not eve["can_view_as"]
+        assert [g["subject"] for g in eve["teammates"][0]["grants"]] == ["human:eve"]
+        assert act(c, OWNER, "right_grant", {"teammate": "human:fay", "right": "finance.admin"}).status == "committed"
+        fay = {m["teammate"] for m in FR.access(c, "human:fay", at=AT)["teammates"]}
+        assert {"human:ana", "human:gus", "bot:coder"} <= fay              # a finance admin sees the whole roster
         assert FR.view_as(c, OWNER, "human:cara", at=AT) == "human:cara"
         with pytest.raises(FinanceError):
             FR.view_as(c, "human:ben", "human:cara", at=AT)

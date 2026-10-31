@@ -624,6 +624,27 @@ def test_card_use_follows_each_entrys_posted_card_line_after_the_card_account_is
         assert money == [("2100", -10_000), ("2100", 10_000), ("2110", -12_000)]
 
 
+def test_a_re_categorized_row_nets_out_its_teammate_tag_in_the_expenses_rollup(books):
+    """Categorize a feed row to Ana, then categorize it again untagged: the reversal carries Ana's tags, so the
+    expenses by teammate show $0 for her and the full amount as Unattributed."""
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.txns[str(MERCURY["txn_bank_fee"]["id"])] = dict(MERCURY["txn_bank_fee"])
+    sync_once(books, fake)
+    with books.transaction() as c:
+        fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-fee'").fetchone()[0])
+        tagged = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900"),
+                                              "tags": {"teammate": "human:ana"}})
+        assert tagged.status == "committed", tagged
+        assert {r["key"]: r["amount"] for r in FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "teammate",
+                                                           at=AT)["rows"]}["human:ana"] == 1_500
+        untagged = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6900")})
+        assert untagged.status == "committed", untagged
+        by_mate = FR.expenses(c, OWNER, "2026-10-01", "2026-10-31", "teammate", at=AT)
+        assert {r["key"]: r["amount"] for r in by_mate["rows"]}.get("human:ana", 0) == 0
+        assert {r["key"]: r["amount"] for r in by_mate["rows"]}["unattributed"] == 1_500
+
+
 def test_a_re_categorized_card_charge_still_uses_the_cards_allocation(books):
     """Round 4 #1 (same rule): moving a settled card charge to another line reposts it; its use follows the new entry
     instead of lapsing with the reversed one."""
