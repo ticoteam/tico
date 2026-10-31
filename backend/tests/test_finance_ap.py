@@ -712,3 +712,36 @@ def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whol
         other = _vendor(c, "Globex")
         c.execute("INSERT INTO fin_vendor_aliases VALUES(?,?,?,?)", (book, vendor, other, AT))   # as if it got in
         assert SB.budgets(c, book)[held].vendor == vendor
+
+
+def test_a_long_vendor_name_whose_key_folds_longer_still_reclassifies_and_settles(books):
+    """Codex fix check: 79 A's and ß fold to an 81-character key (names are capped at 80 before folding, keys never
+    after). A reconciled debit under that name, found as a lost payment, moves to the payment's line and settles:
+    lines take back the stored folded key."""
+    from backend.finance.core.ledger import name_key
+    from backend.tests.test_finance_payments import _debit, _lost_send, _reconcile
+    from backend.finance.core import ledger as L
+    from backend.finance.core.errors import FinanceError
+    long = "A" * 79 + "ß"
+    assert len(name_key(long)) == 81
+    assert L.line({"account_id": "a", "amount": 1, "contact_id": name_key(long)}, "USD").contact_id == name_key(long)
+    with pytest.raises(FinanceError, match="longer than 80"):
+        L.line({"account_id": "a", "amount": 1, "contact_id": "A" * 81}, "USD")    # a name as typed stays capped
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _lost_send(books, fake)
+    _debit(fake, "txn-lost", "req-9", "evt-lost", counterpartyName=long)
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        fid = _reconcile(c, "txn-lost")
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
+    sync_once(books, fake, "2026-11-02T13:30:00.000000Z")
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, provider_txn_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
+            == ("settled", fid)
+        assert c.execute("SELECT count(*) FROM fin_entries WHERE source='bank' AND source_id=?",
+                         (f"{fid}:reclass",)).fetchone()[0] == 1
+        keys = {str(r[0]) for r in c.execute("SELECT contact_id FROM fin_lines WHERE contact_id<>''")}
+        assert name_key(long) in keys and "acme supplies" in keys
+        assert c.execute("SELECT label FROM fin_vendor_labels WHERE name_key=?", (name_key(long),)).fetchone()[0] \
+            == long

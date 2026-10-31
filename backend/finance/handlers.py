@@ -387,7 +387,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         id="", book_id=ctx.book.id, name=V.text(p, "name", 120), period=V.choice(p, "period", B.PERIODS, "month"),
         account_id=V.opt_text(p, "account_id", 80) or "", catch_all=V.flag(p, "catch_all"),
         team=V.opt_text(p, "team", 80) or "", teammate=V.opt_text(p, "teammate", 120) or "",
-        vendor=SAP.vendor_resolved(ctx.c, ctx.book.id, V.opt_text(p, "vendor", 80) or ""),
+        vendor=SAP.vendor_resolved(ctx.c, ctx.book.id, L.vendor_text(p, "vendor")),
         parent_id=V.opt_text(p, "parent_id", 80) or "", owner=who,
         created_at=ctx.at))
     B.check(new, ctx.budgets(), ctx.accounts, ctx.org)

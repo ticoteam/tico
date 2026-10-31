@@ -11,7 +11,7 @@ from .core import budgets as B
 from .core import dates, money
 from .core import validate as V
 from .core.errors import FinanceError, NOT_FOUND, invalid
-from .core.ledger import descendants
+from .core.ledger import descendants, vendor_text
 from .core.org import SYSTEM
 from .store import ap as SAP
 from .store import budgets as SB
@@ -195,7 +195,7 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
     p = V.obj(budget_scope, "budget_scope")
     V.only(p, ("account_id", "team", "teammate", "vendor"))
     return leaf(ctx, V.text(p, "account_id", 80), V.opt_text(p, "team", 80) or "", V.opt_text(p, "teammate", 120) or "",
-                V.opt_text(p, "vendor", 80) or "")
+                vendor_text(p, "vendor"))
 
 
 def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:

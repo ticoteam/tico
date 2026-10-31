@@ -123,11 +123,14 @@ def closed_through(c: sqlite3.Connection, book_id: str) -> str | None:
 
 
 # ------------------------------------------------------------------------------------------------ vendor labels
-def label_vendor(c: sqlite3.Connection, book_id: str, name_key: str, label: str, day: str) -> None:
-    """Remember the text a vendor name key was posted under; an older entry date never replaces a newer one."""
-    c.execute("INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
-              "ON CONFLICT(book_id, name_key) DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
-              "WHERE excluded.seen_on>=fin_vendor_labels.seen_on", (book_id, name_key, label, day))
+def label_vendor(c: sqlite3.Connection, book_id: str, name_key: str, label: str, day: str, *,
+                 weak: bool = False) -> None:
+    """Remember the text a vendor name key was posted under; an older entry date never replaces a newer one, and a
+    `weak` label (the key itself) only fills a missing one."""
+    keep = "DO NOTHING" if weak else ("DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
+                                      "WHERE excluded.seen_on>=fin_vendor_labels.seen_on")
+    c.execute(f"INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
+              f"ON CONFLICT(book_id, name_key) {keep}", (book_id, name_key, label, day))
 
 
 def vendor_label_texts(c: sqlite3.Connection, book_id: str, keys: Sequence[str]) -> dict[str, str]:
