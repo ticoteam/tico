@@ -293,7 +293,8 @@ def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], 
     marks = ",".join("?" * len(account_ids))
     cut, args = ("", []) if vendor is None else (" AND l.contact_id=?", [vendor])
     return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
-                     f"l.description, e.memo, e.source, (SELECT f.card_id FROM fin_feed_txns f WHERE f.entry_id=l.entry_id "
+                     f"l.description, e.memo, e.source, e.status AS entry_status, e.reverses_id, "
+                     f"(SELECT f.card_id FROM fin_feed_txns f WHERE f.entry_id=l.entry_id "
                      f"AND f.card_id IS NOT NULL LIMIT 1) AS card_id, (SELECT f.money_account_id FROM fin_feed_txns f "
                      f"WHERE f.entry_id=l.entry_id LIMIT 1) AS money_account_id "
                      f"FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "

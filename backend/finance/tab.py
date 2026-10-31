@@ -528,32 +528,37 @@ def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
 
 
 def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
-    """Who can see what in Finance: the org chart with each teammate's default and grants, private lines and the
-    defaults. The roster (every teammate's grants and rights) is for the owner and finance admins (`finance.admin`,
-    spec §7.5); anyone else, managers included, sees only their own row. The owner may view as anyone."""
+    """Who can see what in Finance (spec §7.5): the org chart with each teammate's default and grants, private lines
+    and the defaults. Owner and finance admins (`finance.admin`) see everyone, with rights and private lines. A manager
+    sees their own row and the teammates in the teams they manage (nested), with defaults and grants but no rights and
+    no private lines. Anyone else sees only their own row. The owner may view as anyone."""
     ctx = load(c, at)
     org = ctx.org
     owner = bool(org.owner) and viewer == org.owner
-    roster = owner or R.is_admin(org, viewer, ctx.rights(viewer))
+    admin = owner or R.is_admin(org, viewer, ctx.rights(viewer))
     led = frozenset[str]().union(*(org.below(t) for t in org.led_by(viewer)))
-    everyone = sorted(org.humans | org.bots)
-    shown = everyone if roster else [viewer]
+    own_team = org.team_of.get(viewer, "")
+    if admin:
+        shown = sorted(org.humans | org.bots)
+    else:
+        shown = sorted({viewer} | {m for m in org.members(led) if m in org.humans or m in org.bots})
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
-    rights_rows = {m: sorted(ctx.rights(m)) for m in shown}
     teammates: list[Row] = []
     for m in shown:
         mine = [g for g in grants if VW.applies(org, g, m)]
+        # Rights are admin-only, except a teammate's own.
+        rights = sorted(ctx.rights(m)) if admin or m == viewer else None
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
                           "default": _default_of(bool(org.led_by(m)), defaults, bool(org.owner) and m == org.owner),
-                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights_rows[m]})
+                          "grants": [_grant_row(g, ctx) for g in mine], "rights": rights})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
              for t in sorted(org.teams.values(), key=lambda x: x.name)
-             if owner or t.id in led or t.id == org.team_of.get(viewer, "")]
+             if admin or t.id in led or t.id == own_team]
     private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
                 "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
-               for a, p in sorted(ctx.private().items())]
+               for a, p in sorted(ctx.private().items())] if admin else []
     return {"teams": teams, "teammates": teammates, "private_lines": private,
             "defaults": {"manager": defaults.manager, "member": defaults.member,
                          "manager_payroll": defaults.manager_payroll},
