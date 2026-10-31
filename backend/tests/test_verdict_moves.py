@@ -812,3 +812,52 @@ def test_a_check_github_sends_while_the_read_is_in_flight_is_not_overwritten_by_
     link = _link(api, task)
     assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"].get("suite:lint#7") == "failing"
     assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def _many_checks(first):
+    """101 checks on the head: `first` comes first, then 100 that pass, so the newest 100 leave `first` out."""
+    return {"lint": first, **{f"shard {n}": "passing" for n in range(100)}}
+
+
+def test_a_failure_among_more_than_100_checks_still_fails_the_head_on_a_fresh_read(api):
+    """Dev 646 Review 2 delta: the state came from the newest 100 keys, so an early failure read as passing."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        assert G.apply_checks(c, _link(api, task)["id"], HEAD, _many_checks("failing")) == "failing"
+    link = _link(api, task)
+    stored = H._json(link["detail_json"], {})["checks"]
+    assert link["checks"] == "failing" and len(stored) == 100 and stored["lint"] == "failing"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_failure_the_store_kept_from_more_than_100_checks_still_fails_the_head_on_a_later_webhook(api):
+    """The webhook path reads the stored copy back: a failure must survive the cut so the next green check keeps it."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        G.apply_checks(c, _link(api, task)["id"], HEAD, {**_many_checks("failing"), "suite:tico-team-bots#%d" % STUCK: "passing"})
+    _suite(api, "vercel", "completed", "success", sha=HEAD, id=8)
+    link = _link(api, task)
+    assert link["checks"] == "failing" and H._json(link["detail_json"], {})["checks"]["lint"] == "failing"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_a_check_still_running_among_more_than_100_checks_keeps_the_head_pending_on_a_later_webhook(api):
+    """A dropped running check would let the next finished suite read the head green and wake a merge while it runs."""
+    from backend import github as G
+    task = _passed_at_head_behind_a_stuck_suite(api)
+    with api.app.state.store.transaction() as c:
+        assert G.apply_checks(c, _link(api, task)["id"], HEAD, _many_checks("pending")) == "pending"
+    assert H._json(_link(api, task)["detail_json"], {})["checks"]["lint"] == "pending"
+    _suite(api, "vercel", "completed", "success", sha=HEAD, id=8)
+    link = _link(api, task)
+    assert link["checks"] == "pending" and H._json(link["detail_json"], {})["checks"]["lint"] == "pending"
+    assert not [m for m in builder_jobs(api) if m["refs"].get(V.HANDOFF) == "merge"]
+
+
+def test_the_stored_checks_keep_the_newest_when_every_check_passes(api):
+    from backend import github as G
+    checks = _many_checks("passing")
+    kept = G._kept(checks)
+    assert len(kept) == 100 and "lint" not in kept and list(kept) == list(checks)[1:]
