@@ -862,8 +862,13 @@ def test_a_completed_counsel_turn_finishes_its_read_task_and_a_failed_one_does_n
     first = read_document(api, store_file(api, CONTRACT)[0])
     r, attempt = counsel_run(api)
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "last_seq": 0,
-         "text": "Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."}, token=r["token"])
+         "text": "Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us.\n\n*Not legal advice. For real "
+                 "exposure, ask a lawyer.*"}, token=r["token"])
     assert task_state(api, first["task_id"])["status"] == "done"
+    with api.app.state.store.read() as c:
+        notes = [x[0] for x in c.execute("SELECT note FROM task_events WHERE task_id=? AND field='status' AND new='done'",
+                                         (first["task_id"],))]
+    assert notes == ["Wrote 3 suggestions, 0 quotes dropped; read, nothing else for us."]
     # A failed run leaves its read task to the normal retry.
     second = read_document(api, store_file(api, CONTRACT, title="Globex Terms")[0])
     attempt = post(api, "jobs/claim", {"bot": "counsel", "start_places": True}, token=r["token"])["attempt"]
