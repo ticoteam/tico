@@ -126,11 +126,14 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/cards")
     def finance_cards(request: Request, status: Literal["active", "frozen", "cancelled"] | None = None,
-                      holder: str | None = None, cursor: str | None = Query(None, max_length=600),
+                      holder: str | None = None, vendor: str | None = Query(None, max_length=120),
+                      q: str = Query("", max_length=100), cursor: str | None = Query(None, max_length=600),
                       limit: int = Query(100, ge=1, le=200), view_as: str | None = None):
-        """The cards the caller follows, last 4 only, with allocation and spend this period."""
+        """The cards the caller follows, last 4 only, with allocation, spend this period and where each is saved
+        (`saved_on`). `vendor` keeps the cards saved on that vendor; `q` matches nickname, last 4 or holder."""
         actor = as_viewer(request, view_as)
-        return read(lambda c: finance_reads.cards(c, actor, status=status, holder=holder, cursor=cursor, limit=limit))
+        return read(lambda c: finance_reads.cards(c, actor, status=status, holder=holder, vendor=vendor, q=q,
+                                                  cursor=cursor, limit=limit))
 
     @app.get("/api/v2/finance/sources")
     def finance_sources(request: Request, group: str | None = None, view_as: str | None = None):
@@ -287,8 +290,10 @@ def install(app, store, auth, mutate):
                                                    compare=compare, top_n=top_n, by=by))
 
     @app.get("/api/v2/finance/search")
-    def finance_search(request: Request, kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule"] | None
-                       = None, q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
+    def finance_search(request: Request,
+                       kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule", "card"] | None = None,
+                       q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
+                       vendor: str | None = Query(None, max_length=120),
                        contact_id: str | None = Query(None, max_length=80),
                        account_id: str | None = Query(None, max_length=80),
                        money_account_id: str | None = Query(None, max_length=80),
@@ -301,7 +306,7 @@ def install(app, store, auth, mutate):
         """Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees. With `kind` it
         pages by `cursor`; without, it returns the first few of each kind."""
         actor = as_viewer(request, view_as)
-        named = {"status": status, "contact_id": contact_id, "account_id": account_id,
+        named = {"status": status, "contact_id": contact_id, "account_id": account_id, "vendor": vendor,
                  "money_account_id": money_account_id, "start": start, "end": end, "aging": aging,
                  "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
                  "active": None if active is None else ("1" if active else "0")}

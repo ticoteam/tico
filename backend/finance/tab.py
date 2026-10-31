@@ -439,10 +439,27 @@ def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
     return not any(str(x["account_id"]) in cut for x in lines)
 
 
+SAVED_ON_MOST = 10      # vendor accounts shown per card; `vendor=` on the cards read finds every one
+
+
+def _saved_on(c: sqlite3.Connection, card_ids: Sequence[str]) -> dict[str, list[Row]]:
+    """The vendor accounts each card is saved on now (the first SAVED_ON_MOST, oldest first): the vendor (its key, for
+    `vendor=`), its label, who saved it and when."""
+    out: dict[str, list[Row]] = {}
+    for r in SK.card_saves(c, card_ids):
+        saved = out.setdefault(str(r["card_id"]), [])
+        if len(saved) < SAVED_ON_MOST:
+            saved.append({"vendor": str(r["vendor_key"]), "label": str(r["vendor_label"]),
+                          "saved_by": str(r["saved_by"]), "saved_at": str(r["saved_at"])})
+    return out
+
+
 def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, holder: str | None = None,
-          cursor: str | None = None, limit: int = 100, at: str | None = None) -> Row:
-    """The cards the viewer follows (their own, their teams', or all for the owner), with each card's allocation and
-    what it spent this budget period."""
+          vendor: str | None = None, q: str | None = None, cursor: str | None = None, limit: int = 100,
+          at: str | None = None) -> Row:
+    """The cards the viewer follows (their own, their teams', or all for the owner), with each card's allocation, what
+    it spent this budget period and the vendor accounts it is saved on (`saved_on`). `vendor` keeps the cards saved on
+    that vendor (a contact's id or a name); `q` matches a card's nickname, last 4 or holder."""
     from . import budgeting
     from .store import budgets as SB
     ctx = load(c, at)
@@ -454,6 +471,8 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     after = marks[0] if marks else ""
     accounts = _card_accounts(ctx)
     cut = set(private_cut(ctx, view))
+    saved_at = SK.cards_saved_at(c, ctx.book.id, SAP.vendor_keys(c, ctx.book.id, vendor)) if vendor else None
+    text = (q or "").strip().lower()
     out: list[Row] = []
     scanned = 0
     today = dates.day(ctx.today)
@@ -464,6 +483,10 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
         scanned += len(batch)
         for r in batch:
             after = str(r["id"])
+            if saved_at is not None and str(r["id"]) not in saved_at:
+                continue
+            if text and text not in f"{r['nickname']} {r['last4'] or ''} {r['holder']}".lower():
+                continue
             if not sees_card(ctx, view, r, accounts.get(str(r["budget_id"] or ""), "")):
                 continue
             alloc = spent = None
@@ -484,6 +507,9 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
             break
     more = len(out) > most or scanned >= SCAN
     page = out[:most]
+    saves = _saved_on(c, [str(row["id"]) for row in page])
+    for row in page:
+        row["saved_on"] = saves.get(str(row["id"]), [])
     nxt = encode_cursor([str(page[-1]["id"]) if len(out) > most else after]) if more and (page or after) else None
     return {"cards": page, "next": nxt, "view_version": view.version}
 

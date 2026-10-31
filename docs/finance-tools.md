@@ -9,7 +9,7 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 
 | Tool | Command | Input | Output |
 |---|---|---|---|
-| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule; leave it out to search all), `q`, filters (`status`, `contact_id`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
+| `hub_finance_search` | `hub finance search` | `kind` (entry, feed, bill, invoice, contact, rule, card; leave it out to search all), `q`, filters (`status`, `contact_id`, `vendor`, `account_id`, `money_account_id`, `start`, `end`, `aging`, `contact_kind`, `active`, `rule_kind`), `cursor`, `limit` (up to 200) | `{results, next_cursor, view_version}` |
 | `hub_finance_report` | `hub finance report <kind>` | `kind` (pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by, close), `start`, `end`, `period`, `basis`, `compare`, `top_n`, `by`; `month` for close | the report, rows past `top_n` folded into "Other · n" |
 | `hub_finance_metric` | `hub finance metric <name>` | `name` (cash, burn, runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, unreconciled_days) and its filters | `{value, as_of, ...}` |
 | `hub_finance_act` | `hub finance act <kind>` | `kind`, `payload` (JSON), `dry_run`, `operation_id` | `{status, action_id, code, reason, result?, impact?}` |
@@ -46,6 +46,19 @@ comes back as `{"error": "too_big", "chars", "cap"}`.
 `TICO_MERCURY_BASE` points the bank worker at another Mercury API base, such as the sandbox
 (`https://api-sandbox.mercury.com/api/v1`) or a local fake. Unset, the worker calls Mercury's own API. For a local run
 with no token, `scripts/finance_e2e.sh` starts `scripts/fake_mercury.py` and the demo that reads it.
+
+## Bot cards
+
+A bot's card is a standing card linked to its budget. Mercury limits it to its allocation, so the card can't spend
+past the budget. Mercury has no single-use cards and no merchant locks, so a bot buys through a card a person has
+saved on the vendor's account (`card_save`, once per vendor): a card is seen by whoever sees its holder's spend on its
+budget line, so a bot sees its own cards and a manager sees its reports' cards. Each card row lists the vendor
+accounts it is `saved_on` (vendor, label, who saved it, when): the first ten, oldest first; the vendor filter finds
+all.
+
+`hub finance search --kind card --vendor "Acme Cloud"` answers "which of my cards works at this vendor". `card_unsave`
+records that a card was removed from a vendor's account. Both are gated: a bot's `card_save` or `card_unsave` waits for
+a finance admin.
 
 ## Card fill
 

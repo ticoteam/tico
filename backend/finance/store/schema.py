@@ -1,5 +1,5 @@
 """Every Finance table (spec §4), created by the core migration chain (backend/store.py: cloud migration 64, and 65
-for phase 1's additions, 66 for phase 2's), including the ones later phases fill, so the schema has one starting point.
+for phase 1's additions, 66 for phase 2's, 67 for phase 3's), including the ones later phases fill, so the schema has one starting point.
 
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
@@ -197,6 +197,12 @@ CREATE TABLE IF NOT EXISTS fin_card_auths (
   decision TEXT NOT NULL, reasons_json TEXT NOT NULL DEFAULT '[]', hold_id TEXT REFERENCES fin_holds(id),
   commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
+CREATE TABLE IF NOT EXISTS fin_card_saves (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), card_id TEXT NOT NULL REFERENCES fin_cards(id),
+  vendor_key TEXT NOT NULL, vendor_label TEXT NOT NULL DEFAULT '', active INTEGER NOT NULL DEFAULT 1 CHECK (active IN (0,1)),
+  saved_by TEXT NOT NULL, saved_at TEXT NOT NULL, removed_by TEXT, removed_at TEXT, created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL, updated_at TEXT NOT NULL, UNIQUE (card_id, vendor_key));
+
 CREATE TABLE IF NOT EXISTS fin_actions (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL, payload_json TEXT NOT NULL, actor TEXT NOT NULL,
   on_behalf_of TEXT NOT NULL DEFAULT '', rule_id TEXT NOT NULL DEFAULT '', idempotency_key TEXT NOT NULL UNIQUE,
@@ -365,6 +371,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
 CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
 CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
 CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
+CREATE INDEX IF NOT EXISTS fin_card_saves_vendor ON fin_card_saves(book_id, vendor_key, active);
 CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
 CREATE INDEX IF NOT EXISTS fin_payments_status ON fin_payments(status, next_try_at);
 CREATE INDEX IF NOT EXISTS fin_payments_obligation ON fin_payments(obligation, created_at);
@@ -507,6 +514,12 @@ def create(c: sqlite3.Connection) -> None:
 def phase1(c: sqlite3.Connection) -> None:
     """Cloud migration 65: phase 1's tables, columns, indexes and triggers on an install migration 64 made before
     them. The same statements as `create`, which skips whatever exists."""
+    create(c)
+
+
+def phase3(c: sqlite3.Connection) -> None:
+    """Cloud migration 67: phase 3's saved-card record (fin_card_saves: which vendor accounts a card is saved on). The
+    same statements as `create`, which skips whatever exists."""
     create(c)
 
 

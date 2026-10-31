@@ -19,6 +19,7 @@ from .context import Ctx, load
 from .core import gates as G
 from .core import kinds as K
 from .core import org as O
+from .core import validate as V
 from .core.errors import DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, CONFLICT, FinanceError
 from .store import actions as SX
 from .store import budgets as SB
@@ -52,6 +53,7 @@ STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withd
 DENIAL_CODES = (DENIED, NOT_AVAILABLE)
 SOURCE = "finance"                    # marks a Tico approval as Finance's, for the decide routes to route
 MAX_KEY = 200
+CARD_NUMBER_REFUSED = "a card number never goes into Finance: Tico does not take one (spec §8.3)"
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
@@ -193,6 +195,8 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         return ActionResult(status="failed", kind=kind, code=e.code, reason=e.message)
     except tico.Refused as e:
         return ActionResult(status="failed", kind=kind, code=NOT_AVAILABLE, reason=str(e)[:300])
+    if V.has_card_number(body):
+        return ActionResult(status="failed", kind=kind, code=INVALID, reason=CARD_NUMBER_REFUSED)
     if not dry_run:
         prior = SX.by_key(c, key)
         if prior is not None:
@@ -258,11 +262,13 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
 
 def receipt_payload(c: sqlite3.Connection, kind: str, payload: Mapping[str, object]) -> dict[str, object]:
     """The payload as a route's idempotency receipt may hash it: bank account and routing numbers become a keyed
-    fingerprint and the last 4, so no receipt holds (or a plain hash of) the numbers."""
+    fingerprint and the last 4, and a card number is never kept (the receipt says it was refused), so no receipt holds
+    (or a plain hash of) a number."""
     try:
-        return payments.strip_details(c, kind, _canonical(payload))[0]
+        body = payments.strip_details(c, kind, _canonical(payload))[0]
     except (FinanceError, tico.Refused):
-        return {k: v for k, v in payload.items() if k not in payments.BANK_FIELDS}
+        body = {k: v for k, v in payload.items() if k not in payments.BANK_FIELDS}
+    return {"refused": CARD_NUMBER_REFUSED} if V.has_card_number(body) else body
 
 
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,

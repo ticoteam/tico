@@ -11,7 +11,8 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
        "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
        "payment_create", "payment_cancel", "recipient_add", "card_create", "card_update_limit", "card_freeze",
-       "card_unfreeze", "card_cancel", "card_resolve", "reconcile_undo", "connection_create", "payment_settings",
+       "card_unfreeze", "card_cancel", "card_resolve", "card_save", "card_unsave", "reconcile_undo",
+       "connection_create", "payment_settings",
        "budget_create", "budget_update", "allocation_set", "projection_set",
        "view_grant", "view_revoke", "private_lines_set",
        "rule_create", "rule_update", "rule_disable", "rule_enable", "rule_test", "contact_create", "contact_update",
@@ -32,13 +33,16 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
-        "invoice_write_off", "invoice_void", "attach", "feed_match")
+        "invoice_write_off", "invoice_void", "attach", "feed_match",
+        # phase 3: the vendor accounts a card is saved on (bot cards, §8.3)
+        "card_save", "card_unsave")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
          "allocation_set": R.BUDGETS, "projection_set": R.BUDGETS, "reconcile": R.BOOK, "reconcile_undo": R.BOOK,
          "card_create": R.CARDS, "card_update_limit": R.CARDS, "card_freeze": R.CARDS, "card_unfreeze": R.CARDS,
-         "card_cancel": R.CARDS, "card_resolve": R.CARDS, "recipient_add": R.PAY, "payment_create": R.PAY,
+         "card_cancel": R.CARDS, "card_resolve": R.CARDS, "card_save": R.CARDS, "card_unsave": R.CARDS,
+         "recipient_add": R.PAY, "payment_create": R.PAY,
          "payment_cancel": R.PAY,
          "rule_create": R.RULES, "rule_update": R.RULES, "rule_enable": R.RULES, "rule_disable": R.RULES,
          "rule_test": R.RULES,
@@ -102,7 +106,8 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 def default_gate(org: Org, actor: str, kind: str) -> Gate:
     """The defaults that are not editable rules: closing or reopening a period asks the owner (unless the owner asks,
-    §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a finance admin. The other §6.4
+    §6.4 rule 6), a bot settling a cut-off card creation (card_resolve) asks a finance admin, and so does a bot
+    recording where its card is saved (§8.3: a person saves the card on the vendor's account). The other §6.4
     defaults are seeded gate rules (gates.DEFAULTS)."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
@@ -110,6 +115,8 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
     if actor in org.bots and kind == "card_resolve":
         # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
+    if actor in org.bots and kind in ("card_save", "card_unsave"):
+        return Gate("needs_approval", "finance_admin", "default:bot-card-vendor")
     return ALLOW
 
 
@@ -187,12 +194,17 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                          ("cash_below?", "minor", "finance.cash.below fires when cash drops under this; 0 turns "
                           "it off")),
     "card_create": (("holder", "str", ""), ("budget_id", "str", ""), ("amount", "minor", "monthly limit"),
-                    ("nickname?", "str", ""), ("money_account_id?", "str", ""), ("provider_user_id?", "str", "")),
+                    ("kind?", "standing|person", "standing for a bot (the default for one), person for a teammate; "
+                     "single_use is not on Mercury yet"),
+                    ("nickname?", "str", ""), ("money_account_id?", "str", ""),
+                    ("provider_user_id?", "str", "the Mercury user the card is issued to")),
     "card_update_limit": (("card_id", "str", ""), ("amount", "minor", "")),
     "card_freeze": (("card_id", "str", ""), ("budget_id?", "str", ""), ("reason?", "str", "")),
     "card_unfreeze": (("card_id", "str", ""), ("reason?", "str", "")),
     "card_cancel": (("card_id", "str", ""), ("reason?", "str", "")),
     "card_resolve": (("card_id", "str", ""), ("provider_card_id?", "str", ""), ("none?", "bool", "")),
+    "card_save": (("card_id", "str", ""), ("vendor", "str", "a vendor contact's id, or the name the vendor goes by")),
+    "card_unsave": (("card_id", "str", ""), ("vendor", "str", "the vendor the card was saved on")),
     "recipient_add": (("name", "str", ""), ("method", "ach|wire|check", ""), ("account_type?", "str", ""),
                       ("address?", "obj", ""), ("email?", "str", ""), ("contact_id?", "str", ""),
                       ("replaces?", "str", ""), ("money_account_id?", "str", ""),
@@ -274,6 +286,8 @@ WORDS: dict[str, str] = {
     "card_create": "Issue a card on a budget.", "card_update_limit": "Change a card's limit.",
     "card_freeze": "Freeze a card.", "card_unfreeze": "Unfreeze a card.", "card_cancel": "Cancel a card.",
     "card_resolve": "Say whether the bank issued a card whose creation was cut off.",
+    "card_save": "Record that a card is saved on a vendor's account, so a bot can buy there with it.",
+    "card_unsave": "Record that a card was removed from a vendor's account.",
     "recipient_add": "Add someone to pay (bank details are sealed).",
     "payment_create": "Request a payment.", "payment_cancel": "Cancel a queued payment.",
     "rule_create": "Add a gate or posting rule; its examples must pass.", "rule_update": "Change a rule.",

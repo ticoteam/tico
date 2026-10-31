@@ -504,8 +504,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
-    hub finance search [--kind entry|feed|bill|invoice|contact|rule] [--q words] [--status S] [--start D] [--end D]
-                    [--cursor C] [--limit N]   the books you may see; name a kind to page
+    hub finance search [--kind entry|feed|bill|invoice|contact|rule|card] [--q words] [--status S] [--vendor V]
+                    [--start D] [--end D] [--cursor C] [--limit N]   the books you may see; name a kind to page
     hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by|close> [--start D]
                     [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor] [--month YYYY-MM]
     hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
@@ -3110,9 +3110,10 @@ def parser():
     fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
                          "(docs/finance-tools.md)").add_subparsers(dest="sub")
     s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
-    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule"])
+    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule", "card"])
     s.add_argument("--q")
-    for flag in ("--status", "--contact-id", "--account-id", "--money-account-id", "--start", "--end", "--cursor"):
+    for flag in ("--status", "--contact-id", "--vendor", "--account-id", "--money-account-id", "--start", "--end",
+                 "--cursor"):
         s.add_argument(flag)
     s.add_argument("--aging", choices=["current", "1_30", "31_60", "61_90", "over_90"])
     s.add_argument("--contact-kind", choices=["vendor", "customer", "both"])
