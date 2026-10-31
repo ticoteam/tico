@@ -1,5 +1,5 @@
-"""Every Finance table (spec §4), created once by the core migration chain (backend/store.py, cloud migration 64),
-including the ones later phases fill, so the schema has one starting point.
+"""Every Finance table (spec §4), created by the core migration chain (backend/store.py: cloud migration 64, and 65
+for phase 1's additions), including the ones later phases fill, so the schema has one starting point.
 
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
@@ -45,7 +45,7 @@ CREATE TABLE IF NOT EXISTS fin_lines (
   line_no INTEGER NOT NULL, entry_date TEXT NOT NULL, account_id TEXT NOT NULL REFERENCES fin_accounts(id),
   amount BIGINT NOT NULL, currency TEXT NOT NULL, original_amount BIGINT NOT NULL, fx_rate TEXT NOT NULL DEFAULT '1',
   contact_id TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, role TEXT NOT NULL DEFAULT '');
 
 CREATE TABLE IF NOT EXISTS fin_dimensions (
   id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom')), value TEXT NOT NULL,
@@ -103,7 +103,8 @@ CREATE TABLE IF NOT EXISTS fin_money_accounts (
   kind TEXT NOT NULL CHECK (kind IN ('bank','card_program','stripe','gateway_credit')), name TEXT NOT NULL,
   provider TEXT NOT NULL DEFAULT '', connection_id TEXT, account_id TEXT REFERENCES fin_accounts(id), last4 TEXT,
   holds_cash INTEGER NOT NULL DEFAULT 1, balance BIGINT, balance_currency TEXT, balance_as_of TEXT,
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, provider_account_id TEXT,
+  subtype TEXT NOT NULL DEFAULT '', available_balance BIGINT, status TEXT NOT NULL DEFAULT 'active');
 
 CREATE TABLE IF NOT EXISTS fin_feed_txns (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), provider_id TEXT NOT NULL,
@@ -111,13 +112,16 @@ CREATE TABLE IF NOT EXISTS fin_feed_txns (
   description TEXT NOT NULL DEFAULT '',
   status TEXT NOT NULL DEFAULT 'new' CHECK (status IN ('new','matched','posted','ignored')),
   entry_id TEXT REFERENCES fin_entries(id), commitment_id TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
-  updated_at TEXT, UNIQUE (money_account_id, provider_id));
+  updated_at TEXT, pending INTEGER NOT NULL DEFAULT 0, provider_status TEXT NOT NULL DEFAULT '', posted_at TEXT,
+  kind TEXT NOT NULL DEFAULT '', card_id TEXT, hold_id TEXT, reconciliation_id TEXT, version INTEGER NOT NULL DEFAULT 0,
+  request_id TEXT, raw_json TEXT NOT NULL DEFAULT '{}', UNIQUE (money_account_id, provider_id));
 
 CREATE TABLE IF NOT EXISTS fin_reconciliations (
   id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), statement_end TEXT NOT NULL,
   statement_balance BIGINT NOT NULL, cleared_json TEXT NOT NULL DEFAULT '[]', difference BIGINT NOT NULL DEFAULT 0,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open','done')), completed_at TEXT,
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, cleared_total BIGINT NOT NULL DEFAULT 0, statement_id TEXT,
+  action_id TEXT, undone_at TEXT, undone_by TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_budgets (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), name TEXT NOT NULL, owner TEXT NOT NULL DEFAULT '',
@@ -162,7 +166,8 @@ CREATE TABLE IF NOT EXISTS fin_cards (
   kind TEXT NOT NULL CHECK (kind IN ('standing','single_use','person')), limit_amount BIGINT, limit_interval TEXT,
   currency TEXT NOT NULL, merchant_locks_json TEXT NOT NULL DEFAULT '[]', category_locks_json TEXT NOT NULL DEFAULT '[]',
   expires_at TEXT, status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','frozen','cancelled')), last4 TEXT,
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, nickname TEXT NOT NULL DEFAULT '',
+  provider_limit BIGINT, sync_status TEXT NOT NULL DEFAULT '', sync_error TEXT, synced_at TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_card_auths (
   id TEXT PRIMARY KEY, card_id TEXT NOT NULL REFERENCES fin_cards(id), provider_auth_id TEXT, amount BIGINT NOT NULL,
@@ -193,7 +198,8 @@ CREATE TABLE IF NOT EXISTS fin_connections (
   id TEXT PRIMARY KEY, provider TEXT NOT NULL,
   purpose TEXT NOT NULL CHECK (purpose IN ('bank','cards','books','payments')), credential_ref TEXT,
   status TEXT NOT NULL DEFAULT 'new', cursor TEXT, last_ok_at TEXT, last_error TEXT,
-  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT, name TEXT NOT NULL DEFAULT '',
+  settings_json TEXT NOT NULL DEFAULT '{}', events_cursor TEXT, last_sync_at TEXT, next_sync_at TEXT);
 
 CREATE TABLE IF NOT EXISTS fin_external_refs (
   id TEXT PRIMARY KEY, connection_id TEXT NOT NULL REFERENCES fin_connections(id), local_table TEXT NOT NULL,
@@ -242,6 +248,47 @@ CREATE TABLE IF NOT EXISTS fin_view_grants (
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','suspended','expired','revoked')),
   suspended_reason TEXT, revoked_at TEXT, revoked_by TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
 
+CREATE TABLE IF NOT EXISTS fin_recipients (
+  id TEXT PRIMARY KEY, connection_id TEXT REFERENCES fin_connections(id), provider_recipient_id TEXT,
+  name TEXT NOT NULL, method TEXT NOT NULL CHECK (method IN ('ach','wire','check','rtp')), last4 TEXT,
+  details_hash TEXT NOT NULL, details_ref TEXT, version INTEGER NOT NULL DEFAULT 1,
+  replaces_id TEXT REFERENCES fin_recipients(id),
+  status TEXT NOT NULL DEFAULT 'active' CHECK (status IN ('active','replaced')), contact_id TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT);
+
+-- The provider's own users (Mercury issues cards only to them), as last read with a connection's token: a card holder
+-- picker. Replaced on every sync.
+CREATE TABLE IF NOT EXISTS fin_provider_users (
+  connection_id TEXT NOT NULL REFERENCES fin_connections(id), provider_user_id TEXT NOT NULL,
+  name TEXT NOT NULL DEFAULT '', email TEXT NOT NULL DEFAULT '', role TEXT NOT NULL DEFAULT '',
+  updated_at TEXT NOT NULL, PRIMARY KEY (connection_id, provider_user_id));
+
+CREATE TABLE IF NOT EXISTS fin_payments (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
+  idempotency_key TEXT NOT NULL UNIQUE, recipient_id TEXT NOT NULL REFERENCES fin_recipients(id),
+  recipient_version INTEGER NOT NULL, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL,
+  method TEXT NOT NULL CHECK (method IN ('ach','wire','check','rtp')), memo TEXT NOT NULL DEFAULT '',
+  obligation TEXT NOT NULL DEFAULT '', account_id TEXT NOT NULL REFERENCES fin_accounts(id),
+  tags_json TEXT NOT NULL DEFAULT '{}',
+  mode TEXT NOT NULL DEFAULT 'approval_queue' CHECK (mode IN ('approval_queue','direct')),
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','awaiting_bank_approval','submitted',
+                                                          'settled','returned','failed','cancelled','unknown')),
+  purpose_json TEXT NOT NULL DEFAULT '{}', counted_json TEXT NOT NULL DEFAULT '[]', unknown_since TEXT, flagged_at TEXT,
+  provider_request_id TEXT, provider_txn_id TEXT, hold_id TEXT REFERENCES fin_holds(id), attempts INTEGER NOT NULL DEFAULT 0,
+  next_try_at TEXT, last_error TEXT, settled_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  updated_at TEXT);
+
+CREATE TABLE IF NOT EXISTS fin_rule_counters (
+  rule_id TEXT NOT NULL, period_key TEXT NOT NULL, subject TEXT NOT NULL DEFAULT '', amount BIGINT NOT NULL DEFAULT 0,
+  count INTEGER NOT NULL DEFAULT 0, updated_at TEXT NOT NULL, PRIMARY KEY (rule_id, period_key, subject));
+
+CREATE TABLE IF NOT EXISTS fin_statements (
+  id TEXT PRIMARY KEY, money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id), provider_id TEXT,
+  start_date TEXT, end_date TEXT NOT NULL, starting_balance BIGINT, ending_balance BIGINT NOT NULL,
+  currency TEXT NOT NULL, source TEXT NOT NULL CHECK (source IN ('api','manual')), created_at TEXT NOT NULL,
+  created_by TEXT NOT NULL, UNIQUE (money_account_id, end_date));
+
 CREATE TABLE IF NOT EXISTS fin_private_lines (
   account_id TEXT PRIMARY KEY REFERENCES fin_accounts(id),
   others_see TEXT NOT NULL DEFAULT 'totals' CHECK (others_see IN ('totals','hidden')),
@@ -277,6 +324,20 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_status ON fin_feed_txns(status, txn_dat
 CREATE INDEX IF NOT EXISTS fin_outbox_due ON fin_outbox(status, next_try_at);
 CREATE INDEX IF NOT EXISTS fin_cards_holder ON fin_cards(holder, status);
 CREATE INDEX IF NOT EXISTS fin_cards_budget ON fin_cards(budget_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_account ON fin_feed_txns(money_account_id, txn_date);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_card ON fin_feed_txns(card_id, txn_date);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_request ON fin_feed_txns(request_id);
+CREATE INDEX IF NOT EXISTS fin_feed_txns_entry ON fin_feed_txns(entry_id);
+CREATE INDEX IF NOT EXISTS fin_money_accounts_provider ON fin_money_accounts(connection_id, provider_account_id);
+CREATE INDEX IF NOT EXISTS fin_cards_provider ON fin_cards(provider, provider_card_id);
+CREATE INDEX IF NOT EXISTS fin_recipients_provider ON fin_recipients(connection_id, provider_recipient_id);
+CREATE INDEX IF NOT EXISTS fin_payments_status ON fin_payments(status, next_try_at);
+CREATE UNIQUE INDEX IF NOT EXISTS fin_payments_live ON fin_payments(obligation) WHERE obligation <> '' AND
+  status IN ('queued','sending','awaiting_bank_approval','submitted','unknown');
+CREATE INDEX IF NOT EXISTS fin_inbox_status ON fin_inbox(status, created_at);
+CREATE INDEX IF NOT EXISTS fin_rule_runs_rule ON fin_rule_runs(rule_id, created_at);
+CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, created_at);
+CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
 """
 
 # Invariants 2 and 3 again in the database, so no statement (Finance's or anyone's) can break them. SQLite syntax: a
@@ -310,6 +371,35 @@ BEGIN SELECT RAISE(ABORT, 'period closed'); END;
 """
 
 
+# Columns phase 1 added to tables an install may already have from migration 64 (table, column, definition). Migration
+# 65 (`phase1`) adds whichever is missing, so an upgraded install ends with the same schema as a new one.
+ADDED = (
+    ("fin_lines", "role", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_money_accounts", "provider_account_id", "TEXT"), ("fin_money_accounts", "subtype", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_money_accounts", "available_balance", "BIGINT"),
+    ("fin_money_accounts", "status", "TEXT NOT NULL DEFAULT 'active'"),
+    ("fin_feed_txns", "pending", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_feed_txns", "provider_status", "TEXT NOT NULL DEFAULT ''"), ("fin_feed_txns", "posted_at", "TEXT"),
+    ("fin_feed_txns", "kind", "TEXT NOT NULL DEFAULT ''"), ("fin_feed_txns", "card_id", "TEXT"),
+    ("fin_feed_txns", "hold_id", "TEXT"), ("fin_feed_txns", "reconciliation_id", "TEXT"),
+    ("fin_feed_txns", "version", "INTEGER NOT NULL DEFAULT 0"), ("fin_feed_txns", "request_id", "TEXT"),
+    ("fin_feed_txns", "raw_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_reconciliations", "cleared_total", "BIGINT NOT NULL DEFAULT 0"),
+    ("fin_reconciliations", "statement_id", "TEXT"), ("fin_reconciliations", "action_id", "TEXT"),
+    ("fin_reconciliations", "undone_at", "TEXT"), ("fin_reconciliations", "undone_by", "TEXT"),
+    ("fin_cards", "nickname", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "provider_limit", "BIGINT"),
+    ("fin_cards", "sync_status", "TEXT NOT NULL DEFAULT ''"), ("fin_cards", "sync_error", "TEXT"),
+    ("fin_cards", "synced_at", "TEXT"),
+    ("fin_connections", "name", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_connections", "settings_json", "TEXT NOT NULL DEFAULT '{}'"), ("fin_connections", "events_cursor", "TEXT"),
+    ("fin_connections", "last_sync_at", "TEXT"), ("fin_connections", "next_sync_at", "TEXT"),
+    ("fin_outbox", "claimed_at", "TEXT"), ("fin_cards", "provider_status", "TEXT"), ("fin_cards", "allocation_due", "INTEGER"),
+    ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
+    ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("fin_payments", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+)
+
+
 def table_names() -> list[str]:
     """Every fin_* table the migration makes."""
     return re.findall(r"CREATE TABLE IF NOT EXISTS (fin_\w+)", TABLES)
@@ -329,11 +419,30 @@ def statements(script: str) -> list[str]:
     return out
 
 
+def _add_columns(c: sqlite3.Connection) -> None:
+    have: dict[str, set[str]] = {}
+    for table, column, ddl in ADDED:
+        if table not in have:
+            have[table] = {str(r[1]) for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in have[table]:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            have[table].add(column)
+
+
 def create(c: sqlite3.Connection) -> None:
     """Every table, index and trigger, statement by statement inside the caller's transaction (executescript would
-    commit it). Idempotent."""
-    for script in (TABLES, INDEXES, TRIGGERS):
+    commit it). Idempotent: on an install made before a later phase it adds the new tables and columns too."""
+    for statement in statements(TABLES):
+        c.execute(statement)
+    _add_columns(c)
+    for script in (INDEXES, TRIGGERS):
         for statement in statements(script):
             c.execute(statement)
     from . import tico
     tico.watch_org(c)
+
+
+def phase1(c: sqlite3.Connection) -> None:
+    """Cloud migration 65: phase 1's tables, columns, indexes and triggers on an install migration 64 made before
+    them. The same statements as `create`, which skips whatever exists."""
+    create(c)

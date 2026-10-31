@@ -12,9 +12,10 @@ on a ChatGPT or Claude sign-in are flat cost, so their API-equivalent counts onl
   100%  the bot takes no new job until the period turns over or the limit is raised: the job stays queued and the bot
         reads "Paused: over its hourly limit". A run already going finishes.
 
-A Finance budget that refuses at its limit (`decline`) on AI services or Video production is one more limit: at its
-cutoff every bot it covers is held the same way and reads "Paused: AI services budget reached" (scope `budget`, no
-amounts, since who reads a paused bot may not see the budget). Caps and budgets both stay; whichever is met first holds.
+A Finance budget that refuses at its limit (`decline`) on a bot's AI services path is one more limit: at its cutoff
+every bot it covers is held the same way and reads "Paused: AI services budget reached" (scope `budget`, no amounts,
+since who reads a paused bot may not see the budget). Video production is not one: a run need not make images, so its
+cutoff refuses new images instead. Caps and budgets both stay; whichever is met first holds.
 
 The window is the UTC half hour (`per_30m`): it replaces the hour for every new limit, and an hour limit set before
 stays in force. The day is the UTC day, the week starts

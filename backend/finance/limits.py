@@ -1,6 +1,7 @@
-"""Budget cutoffs as usage limits (spec §9): a `decline` budget at its limit is one more limit a bot can be over, for
-every bot it covers, so the bot takes no new job and reads "Paused: AI services budget reached". One `Cutoffs` serves a
-whole pass over many bots: the budgets' states are read once."""
+"""Budget cutoffs (spec §4.4, §9). A `decline` budget at its limit on the bot's AI services path is one more usage
+limit a bot can be over, so the bot takes no new job and reads "Paused: AI services budget reached". Video production is
+not a run limit (a run need not make images): at its cutoff it refuses new image making for whoever it covers, people
+included, and pauses no bot. One `Cutoffs` serves a whole pass over many bots: the budgets' states are read once."""
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -36,16 +37,19 @@ class Cutoffs:
 
     def of(self, bot: str) -> Cutoff | None:
         """The cutoff holding `bot`, or None."""
+        return self.holding("bot:" + bot)
+
+    def holding(self, mate: str) -> Cutoff | None:
+        """The cutoff holding teammate `mate` (`bot:<slug>` or `human:<id>`), or None."""
         if not self.cut or self.ctx is None:
             return None
-        if bot not in self._seen:
-            self._seen[bot] = self._find(self.ctx, bot)
-        return self._seen[bot]
+        if mate not in self._seen:
+            self._seen[mate] = self._find(self.ctx, mate)
+        return self._seen[mate]
 
-    def _find(self, ctx: Ctx, bot: str) -> Cutoff | None:
-        """The first budget on the bot's path that is at its limit for the bot itself: money set aside for the bot
-        there is still its to spend, exactly as its run hold would see it."""
-        mate = "bot:" + bot
+    def _find(self, ctx: Ctx, mate: str) -> Cutoff | None:
+        """The first budget on the teammate's path that is at its limit for them: money set aside for them there is
+        still theirs to spend, exactly as their hold would see it."""
         today = dates.day(ctx.today)
         for account in self.lines:
             found = budgeting.leaf(ctx, account, teammate=mate)
@@ -62,10 +66,10 @@ class Cutoffs:
         return None
 
 
-def cutoffs(c: sqlite3.Connection, at: str | None = None) -> Cutoffs:
-    """The `decline` budgets over AI services and Video production that are at their limit now, counting every
-    allocation (each bot's own allocations come off when its cutoff is read). Cheap when Finance is not set up or no
-    such budget has an amount."""
+def cutoffs(c: sqlite3.Connection, at: str | None = None, line: str = AI) -> Cutoffs:
+    """The `decline` budgets that are at their limit now, read against each teammate's path on `line` (an account
+    code; AI services for usage limits), counting every allocation (each teammate's own come off when their cutoff is
+    read). Cheap when Finance is not set up or no such budget has an amount."""
     book = SL.book(c)
     if book is None:
         return Cutoffs(ctx=None, cut={}, lines=())
@@ -76,7 +80,7 @@ def cutoffs(c: sqlite3.Connection, at: str | None = None) -> Cutoffs:
     if not any(versions.get(bid) for bid in budgets):
         return Cutoffs(ctx=None, cut={}, lines=())
     ctx = load(c, at)
-    lines = tuple(a.id for a in ctx.accounts.values() if a.code in (AI, VIDEO))
+    lines = tuple(a.id for a in ctx.accounts.values() if a.code == line)
     today = dates.day(ctx.today)
     cut: dict[str, B.State] = {}
     for bid in budgets:
@@ -86,3 +90,9 @@ def cutoffs(c: sqlite3.Connection, at: str | None = None) -> Cutoffs:
         if st.at_limit and st.amount is not None:
             cut[bid] = st
     return Cutoffs(ctx=ctx, cut=cut, lines=lines)
+
+
+def video_cutoff(c: sqlite3.Connection, actor: str, at: str | None = None) -> Cutoff | None:
+    """The Video production `decline` budget at its cutoff that refuses `actor`'s new image making, or None: at its
+    limit a budget refuses new requests (spec §4.4). A person follows the budget their own spend counts against."""
+    return cutoffs(c, at, VIDEO).holding(actor)

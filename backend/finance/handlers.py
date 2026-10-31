@@ -8,6 +8,7 @@ from . import budgeting, posting
 from .context import Ctx
 from .core import budgets as B
 from .core import dates, kinds as K
+from .core import feeds as F
 from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
@@ -15,6 +16,7 @@ from .core import view as VW
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .store import access as SA
+from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
@@ -31,6 +33,8 @@ class Plan:
     # Defaults that depend on when the action runs (a version's effective day, a reversal's date), fixed into the
     # canonical payload before an approval is asked, so what runs is exactly what was approved.
     resolved: Result = field(default_factory=lambda: Result())
+    # What gate rules match on beyond kind and actor (amount, recipient, accounts, tags...), see finance/gating.py.
+    facts: Result = field(default_factory=lambda: Result())
 
 
 Planner = Callable[[Ctx, str, V.Payload], Plan]
@@ -149,6 +153,11 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             _need_line(ctx, who, item.account_id, item.tags)
         if row["status"] != "posted" or row["reverses_id"]:
             raise FinanceError(CONFLICT, "that entry is already reversed or is a reversal")
+        # A reclassification of a reconciled row's spend is locked with that row's own entry (banking._reclass).
+        moved = SK.get(ctx.c, "fin_feed_txns", F.reclass_of(str(row["source"]), str(row["source_id"])) or "-")
+        if any(r["reconciliation_id"] for r in SK.rows_of_entry(ctx.c, entry_id)) or \
+                (moved is not None and moved["reconciliation_id"]):
+            raise FinanceError(CONFLICT, "that entry is in a reconciled statement; undo the reconciliation first")
         total = sum(x.amount for x in lines if x.amount > 0)
         return Plan(K.default_gate(ctx.org, who, "journal", total=total), f"Reverse entry {entry_id}",
                     lambda aid: {"entry_id": posting.reverse(ctx, entry_id, day=when, memo=memo, by=who,
@@ -173,7 +182,10 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Add or replace tags on posted lines. Lines in a closed period are refused until it is reopened, so a closed
-    month's scoped reports never change underneath."""
+    month's scoped reports never change underneath. With `feed_id` it posts or ignores a bank or card row instead."""
+    if "feed_id" in p:
+        from .banking import categorize_feed
+        return categorize_feed(ctx, who, p)
     V.only(p, ("lines", "mode"))
     mode = V.choice(p, "mode", ("add", "replace"), "add")
     wanted: dict[str, dict[str, str]] = {}
@@ -423,7 +435,24 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set aside part of a budget for one card, Gateway key or teammate. It must fit what the budget and every parent
-    have left; 0 ends it."""
+    have left; 0 ends it. A card's allocation is on the card's own budget, by someone who sees the card."""
+    V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
+    if p.get("target_kind") == "card":
+        from .cards import check_lower, sees as sees_card
+        card = SK.get(ctx.c, "fin_cards", V.text(p, "target_id", 120))
+        if card is None or not sees_card(ctx, who, card):
+            raise FinanceError(NOT_FOUND, "no such card")
+        if str(card["budget_id"] or "") != V.text(p, "budget_id", 80):
+            raise invalid("a card's allocation is on its own budget")
+        if str(card["status"]) == "cancelled":
+            raise FinanceError(CONFLICT, "that card is cancelled")
+        check_lower(ctx, card, V.amount(p))
+    return allocation_plan(ctx, who, p)
+
+
+def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """The allocation itself (card_create and card_update_limit come here with their own card checks). A card's lower
+    allocation keeps the old reservation until Mercury confirms the lower limit (cards.limit_follows)."""
     V.only(p, ("budget_id", "target_kind", "target_id", "amount"))
     b = _budget(ctx, V.text(p, "budget_id", 80))
     _need_budget_view(ctx, who, b)
@@ -443,11 +472,16 @@ def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 if shows_numbers(ctx, who, one):
                     raise invalid(f"it does not fit: {one.name} has {s.remaining} left")
                 raise invalid("it does not fit: not enough left")
+    lowered = kind == "card" and grow < 0
 
     def apply(aid: str) -> Result:
-        return {"allocation_id": SB.upsert_allocation(ctx.c, budget_id=b.id, target_kind=kind, target_id=target,
-                                                      amount=amount, currency=ctx.book.base_currency, by=who,
-                                                      at=ctx.at)}
+        made = str(row["id"]) if lowered and row else SB.upsert_allocation(
+            ctx.c, budget_id=b.id, target_kind=kind, target_id=target, amount=amount, currency=ctx.book.base_currency,
+            by=who, at=ctx.at)
+        if kind == "card":
+            from .cards import limit_follows          # a card's provider limit is its allocation (§8.2)
+            limit_follows(ctx, target, amount, aid, who, lowered)
+        return {"allocation_id": made}
     return Plan(K.default_gate(ctx.org, who, "allocation_set"), f"Set aside {amount / 100:.2f} of {b.name} for "
                 f"{kind} {target}", apply)
 
@@ -548,6 +582,30 @@ def private_lines_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 f"{'Make' if private else 'Stop making'} {account.name} private", apply)
 
 
+def view_defaults_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """What each role sees by default (spec §7.5, the Access page's "Edit defaults"): managers, everyone else, and
+    whether managers see their department's payroll total. Owner-only; grants a manager made that the new defaults no
+    longer back are suspended."""
+    V.only(p, ("manager", "member", "manager_payroll"))
+    picks = {"manager": VW.MANAGER_POLICIES, "member": VW.MEMBER_POLICIES, "manager_payroll": VW.PAYROLL_POLICIES}
+    wanted = {role: V.choice(p, role, options) for role, options in picks.items() if role in p}
+    if not wanted:
+        raise invalid("name at least one of manager, member, manager_payroll")
+    old = SA.defaults(ctx.c)
+
+    def apply(aid: str) -> Result:
+        for role, policy in wanted.items():
+            SA.set_default(ctx.c, role, policy, who, ctx.at)
+        version = SA.bump_view(ctx.c, "defaults", ctx.at)
+        ctx.changed()
+        suspended = suspend_unstanding(ctx)
+        now = SA.defaults(ctx.c)
+        return {"defaults": {"manager": now.manager, "member": now.member, "manager_payroll": now.manager_payroll},
+                "suspended_grants": suspended, "view_version": version}
+    changes = ", ".join(f"{role} {getattr(old, role)} to {policy}" for role, policy in wanted.items())
+    return Plan(K.ALLOW, f"Change Finance view defaults: {changes}", apply)
+
+
 def right_grant(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("teammate", "right", "expires_at"))
     mate, right = V.text(p, "teammate", 120), V.choice(p, "right", R.RIGHTS)
@@ -599,8 +657,9 @@ PLANNERS: dict[str, Planner] = {
     "close_period": close_period, "reopen_period": reopen_period, "budget_create": budget_create,
     "budget_update": budget_update, "allocation_set": allocation_set, "projection_set": projection_set,
     "view_grant": view_grant, "view_revoke": view_revoke, "private_lines_set": private_lines_set,
+    "view_defaults_set": view_defaults_set,
     "right_grant": right_grant, "right_revoke": right_revoke}
-assert set(PLANNERS) == set(K.LIVE)
+assert set(PLANNERS) <= set(K.LIVE)          # the rest live in banking, cards, payments and gating (actions.py)
 
 __all__ = ["Plan", "PLANNERS", "sees_scope", "sees_budget", "shows_numbers", "private_scope", "may_write",
            "suspend_unstanding", "SYSTEM"]

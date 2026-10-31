@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import claim_holds, cloud_access, cloud_machines, quarantine_stops, reconnects, run_backoff, turn_budgets
+from . import claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import reports_tool_calls
@@ -1733,6 +1733,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         return "login_upgrade", None
     record = providers.load(c, settings)
     filled = providers.fill(record, config)
+    # A runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
+    ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(c, runner, filled))
     if cloud_access.frozen(c) and (gateway_connection.is_tico(filled.get("model"))
                                    or models_preset.waiting(record, ready, filled)):
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
@@ -1754,7 +1756,7 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
             return "not_ready", None
         if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
             return "limit", None
-        return ("cooling_off", None) if cooling_off(c, bot) else (None, config)
+        return ("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config) else (None, config)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
@@ -1765,7 +1767,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         return "limit", None
     # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
     # otherwise the bot's own cooldown does, as for a limit its fallback met.
-    if (cooling_off(c, bot) and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
+    if (cooling_off_here(c, settings, runner, bot, config, subscription_context)
+            and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
             or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
         # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
         pending = c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued' AND held=0", (bot,))
@@ -1773,6 +1776,20 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
                    for j in pending):
             return "cooling_off", None
     return None, config
+
+
+def cooling_off_here(c, settings, runner, bot, config, ctx=None):
+    """cooling_off for a turn of `bot` on `runner`, judged on the login that turn would sign in with. A limit met on a
+    company subscription holds that subscription (backend/login_holds.py `sub:<id>`), which the computer then passes
+    over (model_subscriptions.in_effect): the turn runs on the computer's own login or the Gateway instead, so the
+    subscription's cooldown does not keep it waiting. That login's own hold, if any, still decides (login_refusal)."""
+    if not cooling_off(c, bot):
+        return False
+    last = last_limit(c, bot)
+    held = str((login_holds.for_attempt(c, last["id"]) if last else {}).get("profile") or "")
+    if held.startswith(login_holds.SUBSCRIPTION) and runner:
+        return login_key(c, settings, runner["id"], bot, config, ctx)[1] == held
+    return True
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
@@ -1946,10 +1963,10 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None):
+def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
-    turn out (live_tasks)."""
+    turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
     if not privacy.message_readable(c, "bot:" + job["bot"], message):
         return "unreadable"
@@ -1974,6 +1991,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
+    if wanted and runner is not None:
+        # A check runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
+        ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(
+            c, runner, check_models.apply(followed, wanted)))
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
     if wanted and not message["from_actor"].startswith("human:") and check_models.dropped(c, task_id):
@@ -2217,7 +2238,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
         elif not private_lanes_on(runner) and private_job(c, job):
             why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         if why is None or (oldest and why != "lane_held"):
             return result(why, job["created"], person, job["id"])
@@ -2275,7 +2296,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
         elif not private_lanes_on(runner) and private_job(c, job):
             why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         yield job, why
 
@@ -2579,11 +2600,14 @@ class Execution:
             takes = runner['accepts_member_bots'] and self.auth.member_bot(c, row['bot'], configs.get(row['bot']), creators)
             if row['operator'] != runner['operator'] and runner['operator'] != owner and not takes:
                 continue
+            config = app_delivery.job_config(providers.fill(company, follow(
+                c, row['bot'], json.loads(row['config_json']), configs.get)))
             result.append({**dict(row), 'computer_label': runner['label'], 'computer_logins_v1': True,
-                           'config': app_delivery.job_config(providers.fill(company, follow(
-                               c, row['bot'], json.loads(row['config_json']), configs.get))),
+                           'config': config,
                            'repository': bot_repository(c, self.store.settings, row['bot'], configs.get, app),
-                           'mail_agent': bool(P.inbox_person(row['bot'], people))})
+                           'mail_agent': bool(P.inbox_person(row['bot'], people)),
+                           # The runtimes its own or its team's subscription signs in: no sign-in needed here for them.
+                           **model_subscriptions.assignment_fields(c, runner, config)})
         return result
 
     def assign(self, c, who, bot, body):
@@ -3027,7 +3051,7 @@ class Execution:
                     continue        # left queued for a runner that continues its thread: this one would start it afresh
                 if not private_lanes and private_job(c, row):
                     continue        # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
-                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live)
+                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live, runner=runner)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.
                     self.check_backoff.pop(row["bot"], None)
@@ -3478,6 +3502,10 @@ class Execution:
         # The company's models choice: the Gateway while the bot's subscription is not signed in here, and the
         # Gateway as its last fallback, on a computer that can run it (backend/models_preset.py).
         here = readiness_document(runner["readiness_json"])
+        # The computer's subscription for this runtime signs the turn in, so a missing or
+        # refused sign-in here does not move it to the Gateway (backend/model_subscriptions.py).
+        subscribed = model_subscriptions.for_claim(c, runner, config)
+        here = model_subscriptions.covered(here, [x["runtime"] for x in subscribed])
         # Its department's tier (Medium by default) is looked up only when a turn would use it.
         tier = lambda: models_preset.model_for_bot(c, self.store.settings, row["bot"], followed)
         config = models_preset.with_gateway_fallback(record, here, models_preset.main_config(record, here, config, tier), tier)
@@ -3622,6 +3650,7 @@ class Execution:
         from .views import roster
         people = roster(c)
         inbox = P.inbox_person(row["bot"], people)
+        subscriptions = model_subscriptions.hand_out(c, aid, subscribed)
         parked = c.execute("SELECT onboarding_state FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
         from .chat_goals import current
         from . import worktrees
@@ -3643,8 +3672,12 @@ class Execution:
                             # The mailboxes an inbox bot's turn may ask its runner for mail access to: the one it declares
                             # (its person's email when it declares none), then the people below them.
                             "mailboxes": routines.token_mailboxes(c, row["bot"], people) if inbox else [], "next_run": carried, "notes": notes, "job_id": row["id"], "bot": row["bot"], "lane": lane,
-                            "credential_vault": c.execute("SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
-                                                          ("bot:" + row["bot"],)).fetchone() is not None,
+                            "credential_vault": bool(subscriptions) or c.execute(
+                                "SELECT 1 FROM credential_grants WHERE subject=? AND revoked IS NULL LIMIT 1",
+                                ("bot:" + row["bot"],)).fetchone() is not None,
+                            # The company subscriptions this turn signs in with: ids and kinds, never values, which the run
+                            # reads from credential-runtime (backend/model_subscriptions.py).
+                            **({"subscriptions": subscriptions} if subscriptions else {}),
                             # A run on a Tico model reaches the Gateway through its runner, which alone is handed the key
                             # (runner-gateway-credentials; runner-rs/src/gateway_relay.rs).
                             "gateway": gateway_connection.wanted(config),
@@ -3934,7 +3967,7 @@ class Execution:
         (`quarantine_stops.requeues`)."""
         person = row["stop_requested"]
         benched = quarantine_stops.stopped_by(c, row)
-        then = quarantine_stops.HELD if held else quarantine_stops.REQUEUED
+        then = quarantine_stops.then(c, row, held)
         said = f"{benched}. {then}" if benched else f"Stopped by {stopper(c, person)}"
         settle_status(c, row["bot"], "idle", "", claimed=row["created"])
         # Quiet: the bot reads it with the room next time; it does not start a run of its own. A quarantined bot's
@@ -3942,8 +3975,9 @@ class Execution:
         H.unless_queue_full(c, lambda: H.say(c, H.KEEPER, "bot:" + row["bot"], said, conversation_id=conversation_id,
                                              kind="notice", refs={"quiet": True, "stopped_by": person,
                                                                   "turn_id": row["id"]}))
+        reason = "restart" if benched and quarantine_stops.restarted(c, row) else "quarantine"
         H.event(c, H.KEEPER, "attempt.stopped", row["id"], {"bot": row["bot"], "job_id": row["job_id"], "by": person,
-                                                            **({"quarantine": benched, "requeued": not held}
+                                                            **({reason: benched, "requeued": not held}
                                                                if benched else {})})
         # A worktree this turn was waiting for is not wanted any more (backend/worktree_waits.py).
         from .worktree_waits import cancel_for_attempt
@@ -4453,7 +4487,9 @@ class Execution:
         # (`quarantine_stops.requeues`); otherwise the whole turn's work is held for review, where the kept answer
         # shows what the run already finished (Dev 573).
         benched = quarantine_stops.stopped_by(c, row)
-        if benched and body.outcome == "completed":
+        # A turn that finished before its runner heard a restart's Stop (its computer's subscription changed) stays a
+        # finished turn: nothing to run again.
+        if benched and body.outcome == "completed" and not quarantine_stops.restarted(c, row):
             body = body.model_copy(update={"outcome": "interrupted"})
         # `attempt` has already given `restore` its chance. What is left is a finished turn whose
         # lease lapsed under it: settle the job with it when the job is still waiting, and file it
@@ -4851,6 +4887,9 @@ class Execution:
                       usage=self.run_usage(c, row, body), usage_reason=self.no_usage_reason(body))
         from . import automations
         automations.turn_done(c, row, body.outcome, body.text)   # an automation that started this turn is charged it
+        from . import counsel
+        # Counsel's completed turn on a document's read task finishes that task.
+        counsel.turn_done(c, row, "stopped" if stopped else body.outcome, work_task_id(msg, conv), body.text)
         # The checkpoint goes on the task whose session the turn ran in: a subtask's turn runs in its session
         # root's lane (`task:<root>`, set at claim), so it checkpoints that root, never the subtask, even if
         # the subtask moved during the turn. A lane naming a task this bot does not own checkpoints nothing.
@@ -4909,22 +4948,40 @@ class Execution:
                                                 runtime, body, aid, H.now(),
                                                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {})
                                                 if hopped else None)
+        elif check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+            # A check's own schedule stays its own (check_models.hold below), but a company subscription it signed in
+            # with is one login on every computer given it: its limit holds it there too, and a check that worked on it
+            # clears it.
+            login_holds.after_turn(c, row["runner_id"], row["bot"], "", runtime, body, aid, H.now(),
+                                   subscriptions_only=True)
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
         if source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
                 c, self.store.settings, row['runner_id'], row['bot'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
+        # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
+        subscription = model_subscriptions.turn_rejected(
+            c, self.store.settings, aid, row["bot"], body.auth_rejected.runtime, body.auth_rejected.reason,
+            turn_task_id) if rejected else None
         if rejected:
-            self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason, body.profile_used)
+            if not subscription:
+                self.mark_rejected(c, row["runner_id"], body.auth_rejected.runtime, body.auth_rejected.reason,
+                                   body.profile_used)
             H.event(c, H.KEEPER, "attempt.auth_rejected", aid,
-                    {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason})
-            # The task it ran for waits on a card for whoever signs the computer in (backend/reconnects.py).
-            reconnects.login_refused(c, self.store.settings, row["bot"], row["runner_id"],
-                                     body.auth_rejected.runtime, turn_task_id, body.profile_used or "")
+                    {"bot": row["bot"], "runtime": body.auth_rejected.runtime, "reason": body.auth_rejected.reason,
+                     **({"subscription": subscription["id"]} if subscription else {})})
+            if not subscription:
+                # The task it ran for waits on a card for whoever signs the computer in (backend/reconnects.py).
+                reconnects.login_refused(c, self.store.settings, row["bot"], row["runner_id"],
+                                         body.auth_rejected.runtime, turn_task_id, body.profile_used or "")
         elif body.outcome == "completed" and not check and not body.fallback:
-            # A run that completed on the bot's own login (not a fallback's) shows that profile's login works.
-            reconnects.login_works(c, row["runner_id"], [(runtime, body.profile_used or "")])
+            # A run that completed on the bot's own login (not a fallback's) shows that profile's login works, or
+            # the subscription it was handed.
+            if model_subscriptions.handed(c, aid, runtime):
+                model_subscriptions.turn_worked(c, aid, runtime)
+            else:
+                reconnects.login_works(c, row["runner_id"], [(runtime, body.profile_used or "")])
         if body.fallback:
             # The runner ran this turn on the bot's fallback harness: countable here, and
             # named in Runs, so a primary that keeps failing is noticed. `primary_runtime` is what the bot is
@@ -5052,7 +5109,8 @@ class Execution:
         elif rejected:
             settle_status(c, row["bot"], "idle" if requeue else "crashed",
                           f"{body.auth_rejected.runtime} sign-in was rejected; " +
-                          ("sign in on this computer to continue" if requeue else "this run is saved for review"),
+                          (f"reconnect {subscription['name']} in Settings > Models" if subscription and requeue
+                           else "sign in on this computer to continue" if requeue else "this run is saved for review"),
                           claimed=row["created"], stop=aid if not requeue else None)
         elif silent and tico_code == gateway.UNAVAILABLE:
             from .repositories import save_metadata

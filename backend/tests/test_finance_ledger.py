@@ -1,4 +1,4 @@
-"""The books: migration 64 on an existing hub, setup, the posting invariants (seeded property test: balanced posts,
+"""The books: migrations 64 and 65 on an existing hub, setup, the posting invariants (seeded property test: balanced posts,
 unbalanced never do, rollups always equal the lines), immutability and closed periods in the database itself."""
 import random
 import sqlite3
@@ -8,7 +8,7 @@ import pytest
 
 from backend.finance import actions as FA
 from backend.finance.store import schema
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
 
 
 def _rollups_match_lines(c: sqlite3.Connection) -> None:
@@ -46,8 +46,21 @@ def test_migration_64_on_an_existing_hub(store):
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=64").fetchone()[0] == 1
 
 
-def test_setup_is_idempotent_and_takes_the_usage_cap(store):
+def test_migration_65_adds_phase_1_to_an_install_from_64(store):
+    with store.transaction() as c:
+        c.execute("DELETE FROM cloud_migrations WHERE version=65")
+        c.execute("DROP TABLE fin_payments")
+        c.execute("ALTER TABLE fin_feed_txns DROP COLUMN raw_json")
+    store.initialize(seed_market=False)
+    with store.read() as c:
+        assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_payments'").fetchone()
+        assert "raw_json" in {r[1] for r in c.execute("PRAGMA table_info(fin_feed_txns)")}
+        assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=65").fetchone()[0] == 1
+
+
+def test_setup_is_idempotent_and_leaves_ai_services_without_an_amount(store):
     from backend import usage_limits
+    from backend.finance.store import budgets as SB
     with store.transaction() as c:
         usage_limits.save_pool(c, usage_limits.COMPANY, {k: (12.3 if k == "monthly_usd" else None)
                                                          for k in usage_limits.KEYS}, OWNER)
@@ -56,11 +69,48 @@ def test_setup_is_idempotent_and_takes_the_usage_cap(store):
         assert first.created and not again.created and first.accounts == again.accounts
         assert first.budgets == again.budgets and set(first.budgets) == {"AI services", "Video production",
                                                                          "Other expenses"}
-        assert first.ai_amount == 1230
         assert c.execute("SELECT count(*) FROM fin_periods").fetchone()[0] == 12
-        state = FA.budget_state(c, first.budgets["AI services"], AT)
-        assert state.amount == 1230 and state.remaining == 1230
-        assert FA.budget_state(c, first.budgets["Video production"], AT).amount is None
+        ai = first.budgets["AI services"]
+        assert FA.budget_state(c, ai, AT).amount is None
+        # An earlier setup's copy of the usage cap (its only version, written with the budget) goes, with its events.
+        SB.insert_version(c, ai, "2026-10-01", 1230, "USD", OWNER, AT)
+        SB.event(c, "finance.budget.cutoff", ai, "2026-10-01/v1", {}, OWNER, AT)
+        FA.setup(c, OWNER, "2026-10-16T09:00:00.000000Z")
+        FA.setup(c, OWNER, "2026-10-16T09:00:00.000000Z")
+        assert FA.budget_state(c, ai, AT).amount is None
+        assert c.execute("SELECT count(*) FROM fin_events WHERE subject=?", (ai,)).fetchone()[0] == 0
+        # An amount a person set stays.
+        later = "2026-10-16T10:00:00.000000Z"
+        assert act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 5_000}, at=later).status == "committed"
+        FA.setup(c, OWNER, "2026-10-16T11:00:00.000000Z")
+        assert FA.budget_state(c, ai, later).amount == 5_000
+
+
+def test_setup_keeps_the_amount_of_a_replacement_ai_budget_a_person_made(books):
+    with books.transaction() as c:
+        ai, later = budget(c, "AI services"), "2026-10-16T10:00:00.000000Z"
+        assert act(c, OWNER, "budget_update", {"budget_id": ai, "active": False}, at=later).status == "committed"
+        made = act(c, OWNER, "budget_create", {"name": "AI spend", "account_id": account(c, "5100"), "amount": 7_000,
+                                               "at_limit": "decline"}, at=later)
+        assert made.status == "committed", made
+        FA.setup(c, OWNER, "2026-10-16T11:00:00.000000Z")
+        assert FA.budget_state(c, str(made.result["budget_id"]), later).amount == 7_000  # type: ignore[index]
+
+
+def test_setup_drops_a_seeded_amount_on_an_ai_budget_switched_off_and_on_again(books):
+    from backend.finance.store import budgets as SB
+    with books.transaction() as c:
+        b1, later = budget(c, "AI services"), "2026-10-16T10:00:00.000000Z"
+        SB.insert_version(c, b1, "2026-10-01", 1230, "USD", OWNER, AT)              # an earlier setup's copy of the cap
+        assert act(c, OWNER, "budget_update", {"budget_id": b1, "active": False}, at=later).status == "committed"
+        made = act(c, OWNER, "budget_create", {"name": "AI spend", "account_id": account(c, "5100"), "amount": 7_000,
+                                               "at_limit": "decline"}, at=later)
+        b2 = str(made.result["budget_id"])  # type: ignore[index]
+        assert act(c, OWNER, "budget_update", {"budget_id": b2, "active": False}, at=later).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": b1, "active": True}, at=later).status == "committed"
+        FA.setup(c, OWNER, "2026-10-16T11:00:00.000000Z")
+        assert FA.budget_state(c, b1, later).amount is None
+        assert FA.budget_state(c, b2, later).amount == 7_000
 
 
 def test_random_entries_post_only_when_balanced_and_rollups_follow(books):
@@ -154,3 +204,23 @@ def test_a_fresh_database_gets_the_finance_tables(tmp_path):
     s.initialize(seed_market=False)
     with closing(sqlite3.connect(s.settings.db_path)) as c:
         assert c.execute("SELECT count(*) FROM sqlite_master WHERE name LIKE 'fin_%' AND type='trigger'").fetchone()[0] >= 5
+
+
+def test_a_lines_role_is_recorded_where_tico_puts_it_kept_by_its_reversal_and_never_taken_from_a_request(books):
+    """A feed row's money line is marked on the line (any position), its reversal keeps the mark, and a journal
+    request cannot set one (card use is read from it)."""
+    from backend.finance import posting
+    from backend.finance.core.ledger import MONEY_ROLE
+    with books.transaction() as c:
+        lines = [{"account_id": account(c, "1000"), "amount": -700}, {"account_id": account(c, "6100"), "amount": 700}]
+        done = posting.post_entry(c, {"date": "2026-10-03", "source": "card", "source_id": "row-1", "lines": lines},
+                                  at=AT, roles={0: MONEY_ROLE})
+        back = act(c, OWNER, "journal", {"reverses": done["entry_id"]})
+        assert back.status == "committed", back
+
+        def roles(entry_id):
+            return [tuple(r) for r in c.execute("SELECT line_no, role FROM fin_lines WHERE entry_id=? ORDER BY line_no",
+                                                (entry_id,))]
+        assert roles(done["entry_id"]) == roles(back.result["entry_id"]) == [(0, "money"), (1, "")]
+        forged = act(c, OWNER, "journal", {"date": "2026-10-04", "lines": [{**lines[0], "role": "money"}, lines[1]]})
+        assert forged.status != "committed" and forged.code == "invalid"

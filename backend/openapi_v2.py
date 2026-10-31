@@ -1391,13 +1391,56 @@ TAGS["Finance"] = ("Budgets, the P&L, expenses and one line's detail, as far as 
                    "committed or sent to one person for approval.")
 STABLE.extend([
     ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
-     "The budgets the caller sees, each with where it stands today (amounts in cents)", "FinanceBudgets"),
+     "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
+     "day (the version in effect then); amounts in cents. The owner may pass view_as", "FinanceBudgets"),
     ("/api/v2/finance/pnl", "get", "Finance", "getFinancePnl",
-     "The P&L the caller sees, by month, quarter or year, with budget and projection beside each actual", "FinanceReport"),
+     "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget "
+     "and projection beside each actual; each row says its section. view=expenses filters by teams and teammates "
+     "(several at once), who (bots, people or both) and unattributed. The owner may pass view_as",
+     "FinancePnl"),
+    ("/api/v2/finance/balance-sheet", "get", "Finance", "getFinanceBalanceSheet",
+     "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
+     "FinanceBalanceSheet"),
+    ("/api/v2/finance/transactions", "get", "Finance", "listFinanceTransactions",
+     "Feed rows and entries the caller sees, newest first, with filters, search and a cursor", "FinanceTransactions"),
+    ("/api/v2/finance/cards", "get", "Finance", "listFinanceCards",
+     "The cards the caller follows, last 4 only, with allocation and spend this period", "FinanceCards"),
+    ("/api/v2/finance/sources", "get", "Finance", "listFinanceSources",
+     "Every source of the books grouped with counts, each with its account mapping, sync and access. Owner-only "
+     "unless granted", "FinanceSources"),
+    ("/api/v2/finance/webhook-deliveries", "get", "Finance", "listFinanceWebhookDeliveries",
+     "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
+     "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
+    ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
+     "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+     "FinanceAccess"),
+    ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
+     "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
+     "finance admin", "FinancePayments"),
+    ("/api/v2/finance/recipients", "get", "Finance", "listFinanceRecipients",
+     "Current payment recipients, last 4 only, for teammates who may pay", "FinanceRecipients"),
+    ("/api/v2/finance/mercury-users", "get", "Finance", "listFinanceMercuryUsers",
+     "Mercury's users as last synced, to pick a card holder, for teammates who may issue cards; emails (masked) only "
+     "for a finance admin", "FinanceMercuryUsers"),
+    ("/api/v2/finance/reconciliations", "get", "Finance", "listFinanceReconciliations",
+     "Reconciliations of the money accounts the caller sees, and how far each is locked", "FinanceReconciliations"),
+    ("/api/v2/finance/statements", "get", "Finance", "listFinanceStatements",
+     "Bank and card statements for the money accounts the caller sees", "FinanceStatements"),
+    ("/api/v2/finance/rules", "get", "Finance", "listFinanceRules",
+     "Finance gate rules with their words, condition, outcome, examples and latest runs, for teammates who may write "
+     "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
+    ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
+     "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
+     "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
     ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
-     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line", "FinanceReport"),
+     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line. The owner may pass "
+     "view_as", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
-     "One line's spend by vendor, team and teammate, and its entries, as far as the caller sees", "FinanceReport"),
+     "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
+     "projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
+     "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may "
+     "pass view_as",
+     "FinanceReport"),
     ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
      "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
      "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
@@ -1410,10 +1453,111 @@ STABLE.extend([
 ])
 SCHEMAS.update({
     "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
-                           "view_version": "i"}),
+                           "on": "s", "view_version": "i"}),
     "FinanceReport": obj({"view_version": "i"}),
+    "FinancePnl": obj({
+        "start": "s", "end": "s", "period": "s", "basis": "s", "view": "s", "team": "n", "teammate": "n",
+        "budget_as_of": "n",
+        "columns": items(obj({"start": "s", "end": "s", "label": "s",
+                              "state": {"type": "string", "enum": ["past", "current", "future"]}})),
+        "filter": obj({"teams": items({"type": "string"}), "teammates": items({"type": "string"}),
+                       "who": {"type": "string", "enum": ["both", "bots", "people"]}, "unattributed": "b"}),
+        "rows": items(obj({"account_id": "s", "code": "s", "name": "s", "type": "s", "parent_id": "s", "private": "b",
+                           "section": {"type": "string", "enum": ["revenue", "cost_of_revenue", "operating", "other"]},
+                           "actual": {"type": ["array", "null"], "items": {"type": "integer"}},
+                           "total": {"type": ["integer", "null"]},
+                           "budget": {"type": ["array", "null"], "items": {"type": ["integer", "null"]}},
+                           "projection": {"type": ["array", "null"], "items": {"type": "integer"}}})),
+        "income": items({"type": "integer"}), "expense": items({"type": "integer"}), "net": items({"type": "integer"}),
+        "excluded": "b", "view_version": "i",
+        "teammates": items(obj({"teammate": "s", "kind": "s", "spent": "i", "budget": {"type": ["integer", "null"]}}))},
+        required=["start", "end", "period", "basis", "view", "columns", "rows", "income", "expense", "net",
+                  "excluded", "view_version"]),
+    "FinanceBalanceSheet": obj({
+        "as_of": "s", "currency": "s", "scoped": "b", "view_version": "i", "closed_through": "n",
+        "totals": obj({"asset": "i", "liability": "i", "equity": "i"}),
+        **{k: items(obj({"account_id": "n", "code": "s", "name": "s", "subtype": "s", "parent_id": "n", "balance": "i",
+                         "entry_sources": items({"type": "string"}),
+                         "sources": items(obj({"money_account_id": "s", "name": "s", "provider": "s", "last4": "n",
+                                               "provider_balance": {"type": ["integer", "null"]},
+                                               "balance_as_of": "n", "due_out": obj({"count": "i", "amount": "i"})}))}))
+           for k in ("assets", "liabilities", "equity")}}),
+    "FinanceTransactions": obj({
+        "rows": items(obj({"kind": {"type": "string", "enum": ["feed", "entry"]}, "id": "s", "date": "s", "amount": "i",
+                           "currency": "s", "counterparty": "s", "description": "s", "status": "s", "pending": "b",
+                           "card_id": "n", "entry_id": "n", "reconciled": "b", "money_account": {"type": ["object", "null"]},
+                           "lines": items({"type": "object", "additionalProperties": True}),
+                           "account_id": "s", "account": "s", "vendor": "s", "memo": "s", "source": "s",
+                           "reversed": "b", "tags": "o"}, required=["kind", "id", "date", "amount", "currency"])),
+        "next": "n", "currency": "s", "view_version": "i"}),
+    "FinanceCards": obj({
+        "cards": items(obj({"id": "s", "provider": "s", "holder": "s", "nickname": "s", "last4": "n", "kind": "s",
+                            "status": "s", "limit": {"type": ["integer", "null"]}, "limit_interval": "n",
+                            "provider_limit": {"type": ["integer", "null"]}, "sync_status": "s", "currency": "s",
+                            "money_account_id": "n", "budget": {"type": ["object", "null"]},
+                            "allocation": {"type": ["integer", "null"]}, "spent": {"type": ["integer", "null"]},
+                            "expires_at": "n", "created_at": "s"})),
+        "next": "n", "view_version": "i"}),
+    "FinanceSources": obj({
+        "groups": items(obj({"group": {"type": "string", "enum": ["banks", "cards", "payments", "payroll",
+                                                                  "bills_invoices", "tico", "accounting", "manual"]},
+                             "name": "s", "count": "i",
+                             "rows": items({"type": "object", "additionalProperties": True})})),
+        "view_version": "i"}),
+    "FinanceAccess": obj({
+        "teams": items(obj({"id": "s", "name": "s", "parent": "n", "lead": "n"})),
+        "teammates": items(obj({"teammate": "s", "kind": "s", "team": "n", "reports_to": "n",
+                                "default": {"type": "string", "enum": ["everything", "team_expenses", "own_expenses",
+                                                                       "none"]},
+                                "grants": items({"type": "object", "additionalProperties": True}),
+                                "rights": items({"type": "string"})})),
+        "private_lines": items(obj({"account_id": "s", "name": "s", "others_see": "s",
+                                    "full_detail": {"type": ["array", "null"], "items": {"type": "string"}}})),
+        "defaults": obj({"manager": "s", "member": "s", "manager_payroll": "s"}),
+        "can_view_as": "b", "can_edit_defaults": "b", "view_version": "i"}),
     "FinanceAction": obj({"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"},
                          required=["status", "kind"]),
+    "FinancePayments": obj({
+        "payments": items(obj({
+            "id": "s", "status": {"type": "string", "enum": ["queued", "sending", "awaiting_bank_approval", "submitted",
+                                                             "settled", "returned", "failed", "cancelled",
+                                                             "unknown"]},
+            "amount": {"type": ["integer", "null"]}, "currency": "s", "method": "s", "memo": "s", "obligation": "n", "mode": "s",
+            "recipient": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
+                                                                     "name": {"type": "string"},
+                                                                     "last4": {"type": ["string", "null"]},
+                                                                     "version": {"type": "integer"}}},
+            "account": {"type": ["object", "null"], "properties": {"id": {"type": "string"},
+                                                                   "code": {"type": "string"},
+                                                                   "name": {"type": "string"}}},
+            "money_account_id": "s", "created_by": "s", "created_at": "s", "settled_at": "n", "error": "n"},
+            required=["id", "status", "amount", "currency"])),
+        "next_cursor": "n"}),
+    "FinanceRecipients": obj({"recipients": items(obj({
+        "id": "s", "name": "s", "method": "s", "last4": "n", "version": "i", "replaces_id": "n", "known": "b",
+        "synced": "b", "created_at": "s"}, required=["id", "name", "method", "version"]))}),
+    "FinanceReconciliations": obj({
+        "reconciliations": items(obj({
+            "id": "s", "money_account_id": "s", "statement_end": "s", "statement_balance": "i", "difference": "i",
+            "status": {"type": "string", "enum": ["open", "done", "undone"]}, "cleared_total": "i", "cleared": "i",
+            "statement_id": "n", "created_by": "s", "created_at": "s", "undone_at": "n"},
+            required=["id", "money_account_id", "statement_end", "statement_balance", "difference", "status"])),
+        "locked_through": {"type": "object", "additionalProperties": {"type": ["string", "null"]}}}),
+    "FinanceStatements": obj({"statements": items(obj({
+        "id": "s", "money_account_id": "s", "start_date": "n", "end_date": "s",
+        "starting_balance": {"type": ["integer", "null"]}, "ending_balance": "i", "currency": "s", "source": "s"},
+        required=["id", "money_account_id", "end_date", "ending_balance"]))}),
+    "FinanceRules": obj({"rules": items(obj({
+        "id": "s", "name": "s", "words": "s", "when": "o", "outcome": "o",
+        "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
+        "active": "b", "created_at": "s",
+        "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
+    "FinanceMercuryUsers": obj({"users": items(obj({"id": "s", "name": "s", "connection_id": "s", "email": "n",
+                                                    "updated_at": "s"}))}),
+    "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
+        "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
+    "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
+                                    "approver": "n", "result": "o"}, required=["status", "kind"]),
 })
 
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
@@ -1679,7 +1823,7 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}','get','Triggers','getTrigger','One trigger',None),
     ('/api/v2/triggers/{trigger_id}','post','Triggers','updateTrigger','Change its name, preset, type source, hourly limit, keep days or unheard setting',None),
     ('/api/v2/triggers/{trigger_id}/rotate','post','Triggers','rotateTrigger','A new address secret; the old one stops at once',None),
-    ('/api/v2/triggers/{trigger_id}/signing','post','Triggers','signTrigger','Verify calls with a preset (hmac, github, standard, stripe, slack) or stop; the signing secret is shown once',None),
+    ('/api/v2/triggers/{trigger_id}/signing','post','Triggers','signTrigger','Verify calls with a preset (hmac, github, standard, stripe, slack, mercury) or stop; the signing secret is shown once',None),
     ('/api/v2/triggers/{trigger_id}/delete','post','Triggers','deleteTrigger','Delete a trigger and its kept calls',None),
     ('/api/v2/triggers/{trigger_id}/deliveries','get','Triggers','listTriggerDeliveries','The latest calls, newest first',None),
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}','get','Triggers','getTriggerDelivery','One kept call: redacted headers and body (a bot reads fenced 20,000-character parts, only of a call it was given)',None),
@@ -1892,6 +2036,8 @@ STABLE.extend([
     ('/api/v2/rules', 'get', 'Rules', 'listRules', 'The org rules, newest first, paged; mine=true adds the bot\'s settings as sentences', None),
     ('/api/v2/rules', 'post', 'Rules', 'addRule', 'Add an org rule: a bot\'s is a suggestion; only owners and admins add Everyone', None),
     ('/api/v2/rules/counts', 'get', 'Rules', 'getRulesCounts', 'Internal and external rules in force, due dates open, suggestions waiting', None),
+    ('/api/v2/rules/read', 'post', 'Rules', 'readRuleDocument', 'Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it', None),
+    ('/api/v2/rules/ask', 'post', 'Rules', 'askRules', 'A can-I question: the active rules that share words with it, cited, and Counsel\'s answer on a task', None),
     ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
     ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
     ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
@@ -1927,6 +2073,38 @@ SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bo
                                           required=['id', 'item', 'position', 'size'])),
                         'audience': {'type': 'object', 'description': 'A team page: who sees it (docs/permissions.md)'},
                         'name': 's', 'group': 's'}, required=['place', 'kind', 'saved', 'can_edit', 'pins'])
+
+# Settings > Models: the company's subscriptions (backend/model_subscriptions.py). Values are never in an answer.
+TAGS['Model subscriptions'] = ("The company's saved model logins and keys, given to computers per runtime. A value is "
+                               "sent only to add or reconnect one; no answer carries it.")
+STABLE.extend([
+    ('/api/v2/model-subscriptions', 'get', 'Model subscriptions', 'listModelSubscriptions', 'Saved subscriptions and the kinds that can be added', 'ModelSubscriptionList'),
+    ('/api/v2/model-subscriptions', 'post', 'Model subscriptions', 'addModelSubscription', 'Add a subscription: a kind, a name and the pasted value (owners and admins)', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'post', 'Model subscriptions', 'changeModelSubscription', 'Rename a subscription and/or reconnect it with a new value (owners and admins); a reconnect answers 409 `confirm_restart` while runs would stop unless `confirm` is true', 'ModelSubscription'),
+    ('/api/v2/model-subscriptions/{sid}', 'delete', 'Model subscriptions', 'removeModelSubscription', 'Remove a subscription and take it off every computer; 409 `confirm_restart` while runs would stop unless `confirm=1`', 'ModelSubscriptionDeleted'),
+    ('/api/v2/computer-subscriptions', 'get', 'Model subscriptions', 'listComputerSubscriptions', 'Which subscription each computer uses per runtime, and the computers that can take one', 'ComputerSubscriptionList'),
+    ('/api/v2/computer-subscriptions', 'put', 'Model subscriptions', 'setComputerSubscription', 'Give a computer a subscription for one runtime, switch it, or clear it (null); 409 `confirm_restart` while live runs would stop unless `confirm` is true', 'ComputerSubscriptionResult'),
+])
+_SUB_KIND = {"enum": ["claude_token", "codex_login", "anthropic_key", "openai_key"]}
+SCHEMAS['ModelSubscription'] = obj({
+    'id': 's', 'name': 's', 'kind': _SUB_KIND, 'runtime': {'enum': ['claude', 'codex']}, 'label': 's',
+    'status': {'enum': ['new', 'working', 'needs_reconnect']}, 'status_detail': 's', 'status_at': 'n', 'preview': 's',
+    'revision': 'i', 'computers': items({'type': 'string'}),
+    'usage': {'anyOf': [obj({'window': {'type': ['string', 'null'], 'enum': ['5h', 'week', None]}, 'used_pct': NUM_N,
+                             'cost_usd_month': NUM_N, 'resets_at': 'n'}, required=['window', 'used_pct', 'cost_usd_month']),
+                        {'type': 'null'}]},
+    'added_by': 's', 'added_by_name': 's', 'created': 's', 'updated': 's'},
+    required=['id', 'name', 'kind', 'runtime', 'label', 'status', 'status_detail', 'status_at', 'preview', 'revision',
+              'computers', 'usage', 'added_by', 'added_by_name', 'created', 'updated'])
+SCHEMAS['ModelSubscriptionList'] = obj({
+    'subscriptions': items(ref('ModelSubscription')),
+    'kinds': items(obj({'kind': _SUB_KIND, 'label': 's', 'runtime': {'enum': ['claude', 'codex']}, 'secret_label': 's', 'help': 's'}))})
+SCHEMAS['ModelSubscriptionDeleted'] = obj({'deleted': 'b', 'id': 's', 'computers': 'i', 'stopped': 'i', 'sessions_reset': 'i'})
+SCHEMAS['ComputerSubscriptionList'] = obj({
+    'assignments': items(obj({'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 's'})),
+    'capable': items({'type': 'string'})})
+SCHEMAS['ComputerSubscriptionResult'] = obj({
+    'runner_id': 's', 'runtime': {'enum': ['claude', 'codex']}, 'subscription_id': 'n', 'stopped': 'i', 'sessions_reset': 'i'})
 
 DESCRIPTION = (
     "The stable API for building your own frontend on Tico. Everything here keeps its shape within v2: fields are added, "

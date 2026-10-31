@@ -5,8 +5,9 @@
 
 `runner` is a computer id (default: the computer the bot is on). The answer is judged from that computer's last
 heartbeat **for this bot**: its own subscription profile's sign-in when it has one, its own API-key Credential for the
-harnesses that take a key per bot (`api_keys = "bot"`: Gemini CLI, pi), and otherwise the computer's shared sign-in for that runtime. Another
-bot's missing key or another profile's sign-in never decides it.
+harnesses that take a key per bot (`api_keys = "bot"`: Gemini CLI, pi), the company subscription the computer is given
+for that runtime while one is in effect there (backend/model_subscriptions.py), and otherwise the computer's shared
+sign-in for that runtime. Another bot's missing key or another profile's sign-in never decides it.
 
     can_run      True, False, or None when nothing says (offline, an older computer, not checked yet, not applicable)
     applicable   False for a bot an external agent runs (Hermes, OpenClaw, Grok Bot): no computer check applies
@@ -161,6 +162,12 @@ def can_run(c, bot, runtime, runner=None, harness="", model=""):
         if name not in _held(c, bot):
             return verdict(False, "This bot has no " + name + " Credential", "Give the bot the " + name +
                            " Credential in Credentials", "#/credentials")
+        return verdict(True)
+    # A company subscription given to this computer for the runtime signs its CLI turns in, whatever the computer's own
+    # login says (backend/model_subscriptions.py). An older runner is never given one (in_effect), so nothing changes
+    # there; nor for a bot delivered through a desktop app, which signs in its own way.
+    from . import model_subscriptions
+    if not config.get("app_delivery") and model_subscriptions.in_effect(c, row["id"], runtime):
         return verdict(True)
     # Every bot runs each tool on its computer's one login for it: a bot has no sign-in of its own.
     shared = computer_login(readiness, runtime)

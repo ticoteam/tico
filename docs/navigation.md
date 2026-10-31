@@ -6,7 +6,7 @@ Tools is in the sidebar.
 Controls appear when your rights allow the action. A card you can read but cannot change names who can.
 For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana owns the team.
 
-**Picks and services** opens Gateway. **Key and connection** opens Computers and scrolls to the Models card.
+**Picks and services** opens Gateway. **Key and connection** opens Models.
 
 | To | Open |
 |---|---|
@@ -23,15 +23,17 @@ For example, Repositories says **Ask Ana Rivera to connect GitHub** when Ana own
 | Change Instructions | Bot → More → Instructions → Edit Instructions → Ask BotOps to change |
 | Change model, effort, owners or status | Settings → Bots |
 | Register or remove a Computer | Settings → Computers → Add computer; open a computer → Revoke computer |
-| Sign a computer in to an AI tool, or add a subscription | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
+| Add a subscription and give it to computers | Settings → Models → Add subscription; then Settings → Computers ([Subscriptions](computers.md#subscriptions)) |
+| Sign a computer in to an AI tool | Settings → Computers → open a computer → Connections ([Computers](computers.md)) |
+| Change company turn limits | Settings → Models → Limits |
 | Check problems and recovery | Settings → Health |
 | Store a Credential and grant it | Tools → Credentials → Add credential; then Access → Grant access |
 | Connect or review a Tool | Tools; Slack channels are under Tools → Slack channels |
 | Add or manage people and member rules | Settings → People |
 | Connect your Google account | Settings → My Google account |
 | Manage shared email and phone numbers | Settings → More → Email & Phone |
-| Choose AI providers | Settings → Computers → Models |
-| Connect the Tico AI Gateway | Settings → Computers → Models → Tico AI Gateway ([Tico AI Gateway](ai-gateway.md)) |
+| Choose AI providers | Settings → Models |
+| Connect the Tico AI Gateway | Settings → Models → Tico Gateway → Advanced ([Tico AI Gateway](ai-gateway.md)) |
 | Connect your External agent | Connect an external agent beside your email |
 | Review message work | Message bots → mailbox or channel |
 | Read or write team knowledge | Docs → Internal docs; outside sources are Linked docs |

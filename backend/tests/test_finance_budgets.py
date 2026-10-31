@@ -203,11 +203,11 @@ def test_impacts_and_errors_show_only_numbers_the_actor_may_see(books):
 def test_an_allocation_serves_only_spend_on_its_own_branch(books):
     with books.transaction() as c:
         pid, kids = _tree(c, 10_000, (("web", 5_000), ("sales", 5_000)))
-        act(c, OWNER, "allocation_set", {"budget_id": kids["sales"], "target_kind": "card", "target_id": "c1",
-                                         "amount": 3_000})
+        act(c, OWNER, "allocation_set", {"budget_id": kids["sales"], "target_kind": "teammate",
+                                         "target_id": "bot:coder", "amount": 3_000})
         spend(c, "6100", 3_000, team="sales")             # Software: 10,000 - 3,000 spent - 3,000 set aside
         d = FA.hold_place(c, budget_scope=kids["web"], amount=4_500, currency="USD", source="card", source_id="w1",
-                          expires_at=None, target="card:c1", at=AT)
+                          expires_at=None, target="teammate:bot:coder", at=AT)
         assert not d.allowed and d.limit_budget_id == pid
 
 
@@ -215,12 +215,12 @@ def test_a_settled_hold_draws_its_allocation_down_once(books):
     with books.transaction() as c:
         soft = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 100})
         bid = str(soft.result["budget_id"])
-        act(c, OWNER, "allocation_set", {"budget_id": bid, "target_kind": "card", "target_id": "c1", "amount": 100})
+        act(c, OWNER, "allocation_set", {"budget_id": bid, "target_kind": "teammate", "target_id": "bot:coder", "amount": 100})
         d = FA.hold_place(c, budget_scope=bid, amount=100, currency="USD", source="card", source_id="t1",
-                          expires_at=None, target="card:c1", at=AT)
+                          expires_at=None, target="teammate:bot:coder", at=AT)
         assert d.allowed
         FA.post_entry(c, {"date": "2026-10-10", "source": "import", "source_id": "t1", "lines": [
-            {"account_id": account(c, "6100"), "amount": 100}, {"account_id": account(c, "1000"), "amount": -100}]},
+            {"account_id": account(c, "6100"), "amount": 100, "tags": {"teammate": "bot:coder"}}, {"account_id": account(c, "1000"), "amount": -100}]},
             hold_ids=[str(d.hold_id)], at=AT)
         s = FA.budget_state(c, bid, AT)
         assert (s.actual, s.held, s.remaining) == (100, 0, 0)
@@ -249,3 +249,20 @@ def test_asking_again_for_a_source_resizes_its_hold_or_says_why_not(books):
         assert not refused.allowed and refused.hold_id == first.hold_id and "kept" in refused.reason
         assert FA.budget_state(c, ai, AT).held == 900
         assert again(300).allowed and FA.budget_state(c, ai, AT).held == 300
+
+
+def test_period_hold_sums_search_the_budget_index_by_period(books):
+    from backend.finance.store import budgets as SB
+    seen: list[str] = []
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        c.set_trace_callback(seen.append)
+        SB.held(c, [ai], "2026-10-01", "2026-10-31")
+        SB.held(c, [ai], "2026-10-01", "2026-10-31", target="teammate:bot:coder")
+        SB.target_used(c, [ai], "2026-10-01", "2026-10-31", "teammate:bot:coder", absorbed=True)
+        c.set_trace_callback(None)
+        sums = [q for q in seen if "FROM fin_holds" in q]
+        assert len(sums) == 3
+        for q in sums:
+            plan = " ".join(str(r[3]) for r in c.execute("EXPLAIN QUERY PLAN " + q))
+            assert "fin_holds_budget (budget_id=? AND status=? AND held_on>? AND held_on<?)" in plan, plan

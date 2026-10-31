@@ -1,5 +1,5 @@
 """What Finance reads from and calls in the rest of Tico, typed at the border: the roster and org chart, the install
-owner, the company's usage cap, the audit log and approvals. Every function takes the caller's connection."""
+owner, the audit log and approvals. Every function takes the caller's connection."""
 import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
@@ -109,14 +109,6 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
             reports[actor] = _actor(str(config["reports_to"]), slugs)
     return Org(owner=owner, teams=teams, team_of=team_of, reports_to=reports, humans=frozenset(humans),
                bots=frozenset("bot:" + s for s in slugs))
-
-
-def company_monthly_cap(c: sqlite3.Connection) -> object | None:
-    """The company pool's monthly usage cap in USD (backend/usage_limits.py), or None when none is set."""
-    from ... import usage_limits
-    U: Any = usage_limits
-    caps = cast(Mapping[str, object], U.pool(c, U.COMPANY))
-    return caps.get("monthly_usd")
 
 
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:
@@ -269,6 +261,18 @@ def notice(c: sqlite3.Connection, person: str, text: str) -> None:
     _H.say(c, _H.KEEPER, person, text, kind="notice")
 
 
+def needs_you(c: sqlite3.Connection, person: str, title: str, body: str) -> str | None:
+    """One Needs-you item (a keeper task the person owns); an open one with the same title is reused. None when the
+    person cannot be given one."""
+    try:
+        made: Any = _H.task_create(c, _H.KEEPER, title[:200], body, person, deduplicate=True)
+    except _H.Refused:
+        return None
+    task: Mapping[str, Any] = cast(Mapping[str, Any], made) if isinstance(made, Mapping) else {}
+    found: object = task.get("id")
+    return str(found) if found else None
+
+
 def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, object]) -> None:
     """A Finance event to Tico's rules (a sourceless `judge_event`) and automations, with ids only."""
     from ... import rules
@@ -297,6 +301,70 @@ def gateway_target(c: sqlite3.Connection, vault: object, settings: object) -> tu
     return str(secret or ""), str(base or "")
 
 
+def credential_secret(c: sqlite3.Connection, vault: object, credential_id: str) -> str:
+    """A stored credential's secret, read at use time ("" when it is gone or holds none). Never logged or kept."""
+    row = c.execute("SELECT * FROM credentials WHERE id=?", (credential_id,)).fetchone()
+    if row is None or row["ciphertext"] is None or vault is None:
+        return ""
+    return str(cast(Any, vault).cipher.decrypt(c, row) or "")
+
+
+# The credential vault (backend/credentials.py `Vault`), registered once at startup (finance/actions `use_vault`). A
+# payee's bank details are sealed into a vault row the moment they are asked for; Finance keeps only the row's id.
+_VAULT: list[Any] = []
+SEALED_KIND, SEALED_SOURCE = "password", "finance"
+
+
+def use_vault(vault: object | None) -> None:
+    _VAULT[:] = [vault] if vault is not None else []
+
+
+def _cipher() -> Any:
+    if not _VAULT or not getattr(_VAULT[0], "configured", False):
+        raise Refused("the credential vault is not set up, so bank details cannot be kept")
+    return _VAULT[0].cipher
+
+
+def fingerprint(c: sqlite3.Connection, context: str, value: str) -> str:
+    """A keyed fingerprint (HMAC-SHA256 with the vault's data key) of `value`: compares bank details without keeping
+    them, and cannot be guessed offline from the database alone."""
+    import hashlib
+    import hmac
+    key = cast(bytes, _cipher().key(c))
+    return hmac.new(key, f"tico-finance:{context}:".encode() + value.encode(), hashlib.sha256).hexdigest()
+
+
+def seal_credential(c: sqlite3.Connection, name: str, value: str, preview: str, by: str, at: str) -> str:
+    """`value` sealed into a new vault row (Tools > Credentials, source finance); its id."""
+    cipher = _cipher()
+    cid = new_id()
+    ciphertext, nonce = cipher.encrypt(c, cid, value)
+    c.execute("INSERT INTO credentials(id,name,kind,preview,ciphertext,nonce,source,created,updated,updated_by,"
+              "created_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
+              (cid, name[:150], SEALED_KIND, preview, ciphertext, nonce, SEALED_SOURCE, at, at, by, by))
+    return cid
+
+
+def open_credential(c: sqlite3.Connection, credential_id: str) -> str:
+    """A sealed value, read at send time ("" when it is gone). Never logged or kept."""
+    row = c.execute("SELECT * FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE)).fetchone()
+    if row is None or row["ciphertext"] is None:
+        return ""
+    return str(_cipher().decrypt(c, row) or "")
+
+
+def drop_credential(c: sqlite3.Connection, credential_id: str) -> None:
+    """Delete a vault row Finance sealed (an action that never ran: declined, withdrawn, expired or failed)."""
+    c.execute("DELETE FROM credential_grants WHERE credential_id=? AND credential_id IN "
+              "(SELECT id FROM credentials WHERE source=?)", (credential_id, SEALED_SOURCE))
+    c.execute("DELETE FROM credentials WHERE id=? AND source=?", (credential_id, SEALED_SOURCE))
+
+
+def credential_exists(c: sqlite3.Connection, credential_id: str) -> bool:
+    return c.execute("SELECT 1 FROM credentials WHERE id=? AND ciphertext IS NOT NULL", (credential_id,)
+                     ).fetchone() is not None
+
+
 def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
     """Run `fn` once the caller's transaction commits (a doorbell); at once on a connection that has no such list."""
     pending = cast(list[Callable[[], None]] | None, getattr(c, "after_commit", None))
@@ -304,6 +372,23 @@ def after_commit(c: sqlite3.Connection, fn: Callable[[], None]) -> None:
         fn()
     elif fn not in pending:
         pending.append(fn)
+
+
+# ------------------------------------------------------------------------------------------------ Finance's webhooks
+def finance_presets() -> tuple[str, ...]:
+    """The trigger presets whose calls are Finance's (backend/trigger_presets.py FINANCE): a Mercury trigger."""
+    from ... import trigger_presets as _presets
+    return tuple(str(p) for p in cast(Sequence[Any], cast(Any, _presets).FINANCE))
+
+
+def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
+    """Calls to Finance's triggers still kept (trigger_bodies, backend/triggers.py), newest first, bodies included."""
+    presets = finance_presets()
+    marks = ",".join("?" * len(presets))
+    return list(c.execute(
+        "SELECT b.trigger_id, b.delivery, b.received_at, b.type, b.via, b.outcome, b.body FROM trigger_bodies b "
+        "JOIN triggers t ON t.id=b.trigger_id WHERE t.deleted_at IS NULL AND t.preset IN (" + marks + ") "
+        "AND b.expires_at>? ORDER BY b.received_at DESC, b.delivery DESC LIMIT ?", (*presets, at, most)).fetchall())
 
 
 # ------------------------------------------------------------------------------------------------ the view version

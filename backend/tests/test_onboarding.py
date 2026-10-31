@@ -435,3 +435,36 @@ def test_the_wizard_is_told_when_the_team_name_is_only_the_servers_stand_in(tmp_
     assert unnamed["company_name"] == "Company" and unnamed["company_name_default"] is True
     named = Settings(db_path=tmp_path / "b.db", company_name="Acme").environment()
     assert named["company_name"] == "Acme" and named["company_name_default"] is False
+
+
+COUNSEL_CARD = {
+    "template": "tico-counsel", "slug": "tico-counsel", "name": "Counsel", "required": True, "bootstrap": True,
+    "kind": "helper", "summary": "Reads documents for Rules.", "owns": ["suggested rules"], "never": ["advises"],
+    "reasoning_effort": "high", "recommend_when": ["never"], "private_tasks_default": True}
+
+
+def test_a_companys_own_bot_named_counsel_is_never_taken_for_the_built_in_counsel(environment):
+    # A legal team's own bot, still being set up: planned and on no computer, which is the state a built-in is adopted in.
+    own = {"name": "counsel", "status": "planned", "display_name": "Legal Desk"}
+    api = environment(seed={**SEED, "counsel": own},
+                      cards=[(ASSISTANT_CARD, ASSISTANT_AGENT), (BOTOPS_CARD, ""), (COUNSEL_CARD, "# Counsel\n")])
+
+    def theirs():
+        with api.app.state.store.read() as c:
+            return (dict(c.execute("SELECT * FROM bots WHERE slug='counsel'").fetchone()),
+                    dict(c.execute("SELECT * FROM bot_config WHERE bot='counsel'").fetchone()),
+                    c.execute("SELECT COUNT(*) FROM assignments WHERE bot='counsel'").fetchone()[0])
+    before = theirs()
+    machine(api)
+    draft(api)
+    assert api.post("/api/v2/onboarding/complete", json={}, headers=signed_in()).status_code == 200
+    with api.app.state.store.transaction() as c:
+        api.app.state.onboarding.ensure_counsel(c)
+    assert theirs() == before
+    assert _states(api)[H.COUNSEL] == "active"
+    assert not api.app.state.auth.system_bot("counsel") and api.app.state.auth.system_bot(H.COUNSEL)
+    # The built-in still works: a can-I question is its task, not theirs.
+    asked = api.post("/api/v2/rules/ask", json={"question": "Can I text customers on Sunday?"}, headers=signed_in())
+    assert asked.status_code == 200, asked.text
+    task = api.get("/api/v2/tasks/" + asked.json()["task_id"], headers=signed_in()).json()
+    assert (task.get("task") or task)["owner"] == "bot:" + H.COUNSEL

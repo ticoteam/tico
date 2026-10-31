@@ -7,7 +7,7 @@ saved answer without running the call again, so the saved answer is only the act
 call also carries the result it just made, and a retry (the saved answer, or once it has lapsed Finance's own replay of
 the action) reads the rest afresh through the caller's current view: a reason that names amounts shows only while that
 view still covers them."""
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Query, Request
 from pydantic import Field
@@ -20,6 +20,16 @@ from .store import Problem
 STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not_available": 409,
           "period_closed": 409, "unbalanced": 422}
 Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account"]
+
+
+class FinanceConnectionRequest(Contract):
+    """Connect Mercury with a stored token credential. The approver is a Mercury user other than the token's creator,
+    who approves payments in Mercury; without one, payments stay off."""
+    credential_id: str = Field(min_length=1, max_length=120)
+    name: str | None = Field(None, max_length=120)
+    approver_email: str | None = Field(None, max_length=200)
+    token_creator_email: str | None = Field(None, max_length=200)
+    server_ip: str | None = Field(None, max_length=64)
 
 
 class FinanceActionRequest(Contract):
@@ -47,36 +57,187 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
-    @app.get("/api/v2/finance/budgets")
-    def finance_budgets(request: Request, include_inactive: bool = False, limit: int = Query(200, ge=1, le=500)):
-        """The budgets the caller sees, each with where it stands today (amount, actual, held, remaining)."""
+    def as_viewer(request, view_as):
+        """The caller, or for the owner the teammate they view Finance as (audited)."""
         who = viewer(request)
-        return read(lambda c: finance_reads.budgets(c, who.actor, include_inactive=include_inactive, limit=limit))
+        if not view_as or view_as == who.actor:
+            return who.actor
+        try:
+            with store.transaction() as c:
+                target = finance_reads.view_as(c, who.actor, view_as)
+                finance.note_view_as(c, who.actor, target)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        return target
+
+    @app.get("/api/v2/finance/budgets")
+    def finance_budgets(request: Request, include_inactive: bool = False, limit: int = Query(200, ge=1, le=500),
+                        at: str | None = Query(None, pattern=r"^\d{4}-\d{2}-\d{2}$"), view_as: str | None = None):
+        """The budgets the caller sees, each with where it stands today (amount, actual, held, remaining), or with
+        `at` in the period holding that day: the amount of the version in effect then."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.budgets(c, actor, include_inactive=include_inactive, limit=limit, on=at))
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(request: Request, start: str | None = None, end: str | None = None,
-                    period: Literal["month", "quarter", "year"] = "month",
-                    basis: Literal["cash", "accrual"] = "cash"):
-        """The P&L the caller sees: income and expense lines by period, with budget and projection beside each actual."""
+                    period: Literal["day", "week", "month", "quarter", "year"] = "month",
+                    basis: Literal["cash", "accrual"] = "cash", view: Literal["company", "expenses"] = "company",
+                    team: str | None = None, teammate: str | None = None, budget_as_of: str | None = None,
+                    view_as: str | None = None, teams: Annotated[list[str] | None, Query()] = None,
+                    teammates: Annotated[list[str] | None, Query()] = None,
+                    who: Literal["both", "bots", "people"] = "both", unattributed: bool = False):
+        """The P&L the caller sees: income and expense lines by period (past, current and projected columns), with
+        budget and projection beside each actual; the expenses view filters by teams and teammates (several at once),
+        bots, people or both, and Unattributed."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.pnl(c, actor, start, end, period, basis, view=view, team=team,
+                                                teammate=teammate, budget_as_of=budget_as_of, teams=teams or (),
+                                                teammates=teammates or (), who=who, unattributed=unattributed))
+
+    @app.get("/api/v2/finance/balance-sheet")
+    def finance_balance_sheet(request: Request, as_of: str | None = None, view_as: str | None = None):
+        """Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.balance_sheet(c, actor, as_of))
+
+    @app.get("/api/v2/finance/transactions")
+    def finance_transactions(request: Request, source: Literal["all", "feed", "entry"] = "all",
+                             money_account_id: str | None = None,
+                             status: Literal["new", "matched", "posted", "ignored", "pending"] | None = None,
+                             account_id: str | None = None, start: str | None = None, end: str | None = None,
+                             q: str | None = Query(None, max_length=100), cursor: str | None = Query(None, max_length=600),
+                             limit: int = Query(50, ge=1, le=200), view_as: str | None = None,
+                             teams: Annotated[list[str] | None, Query()] = None,
+                             teammates: Annotated[list[str] | None, Query()] = None,
+                             who: Literal["both", "bots", "people"] = "both", unattributed: bool = False):
+        """Feed rows and entries the caller sees, newest first, with filters, search and a cursor; teams, teammates,
+        who and unattributed cut it as the P&L's expenses view does."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.transactions(c, actor, source=source, money_account_id=money_account_id,
+                                                         status=status, account_id=account_id, start=start, end=end,
+                                                         q=q, cursor=cursor, limit=limit, teams=teams or (),
+                                                         teammates=teammates or (), who=who,
+                                                         unattributed=unattributed))
+
+    @app.get("/api/v2/finance/cards")
+    def finance_cards(request: Request, status: Literal["active", "frozen", "cancelled"] | None = None,
+                      holder: str | None = None, cursor: str | None = Query(None, max_length=600),
+                      limit: int = Query(100, ge=1, le=200), view_as: str | None = None):
+        """The cards the caller follows, last 4 only, with allocation and spend this period."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.cards(c, actor, status=status, holder=holder, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/sources")
+    def finance_sources(request: Request, group: str | None = None, view_as: str | None = None):
+        """Every source of the books, grouped with counts; mapping, sync and access per source. Owner-only unless
+        granted."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.sources(c, actor, group=group))
+
+    @app.get("/api/v2/finance/webhook-deliveries")
+    def finance_webhook_deliveries(request: Request, limit: int = Query(20, ge=1, le=100)):
+        """Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies: for a finance admin who
+        sees sources. The ordinary trigger routes never show these bodies."""
         who = viewer(request)
-        return read(lambda c: finance_reads.pnl(c, who.actor, start, end, period, basis))
+        return read(lambda c: finance_reads.webhook_deliveries(c, who.actor, limit=limit))
+
+    @app.get("/api/v2/finance/access")
+    def finance_access(request: Request):
+        """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.access(c, who.actor))
+
+    @app.get("/api/v2/finance/payments")
+    def finance_payments(request: Request, status: Literal["queued", "sending", "awaiting_bank_approval", "submitted",
+                                                           "settled", "returned", "failed", "cancelled",
+                                                           "unknown"] | None = None,
+                         cursor: str | None = Query(None, max_length=100), limit: int = Query(50, ge=1, le=200),
+                         view_as: str | None = None):
+        """Payments the caller made or whose line they see, newest first, with their lifecycle status."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.payments(c, actor, status=status, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/recipients")
+    def finance_recipients(request: Request):
+        """Current recipients, last 4 only, for teammates who may pay."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.recipients(c, who.actor))
+
+    @app.get("/api/v2/finance/mercury-users")
+    def finance_mercury_users(request: Request):
+        """Mercury's users as the last sync read them, to pick a card holder: for teammates who may issue cards. A
+        finance admin also sees each email, masked."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.provider_users(c, who.actor))
+
+    @app.get("/api/v2/finance/reconciliations")
+    def finance_reconciliations(request: Request, money_account_id: str | None = None,
+                                limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Reconciliations of the money accounts the caller sees, with each account's locked-through day."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.reconciliations(c, actor, money_account_id=money_account_id, limit=limit))
+
+    @app.get("/api/v2/finance/statements")
+    def finance_statements(request: Request, money_account_id: str | None = None,
+                           limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Bank and card statements for the money accounts the caller sees."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.statements(c, actor, money_account_id=money_account_id, limit=limit))
+
+    @app.get("/api/v2/finance/rules")
+    def finance_rules(request: Request, external_rule_id: str | None = Query(None, max_length=120)):
+        """Finance gate rules for teammates who may write them; `external_rule_id` lists those linked to one."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
+
+    @app.post("/api/v2/finance/connections")
+    def finance_connect(request: Request, body: FinanceConnectionRequest):
+        """Connect Mercury: the token is tested and its accounts listed (outside any transaction), then the
+        connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
+        who = viewer(request)
+        if not read(lambda c: finance_reads.may_connect(c, who.actor)):
+            raise Problem("denied", "connecting a bank is for finance admins", 403)
+        found, why = finance.mercury_probe(store, request.app.state.vault, body.credential_id)
+        if why:
+            raise Problem("invalid", why, 422)
+        key = (request.headers.get("idempotency-key") or "").strip()
+        payload = {"provider": "mercury", "credential_id": body.credential_id, "probe": found,
+                   **{k: v for k, v in (("name", body.name), ("approver_email", body.approver_email),
+                                        ("token_creator_email", body.token_creator_email),
+                                        ("server_ip", body.server_ip)) if v}}
+
+        def work(c):
+            done = finance.act(c, who.actor, "connection_create", payload, key)
+            return {"action_id": done.action_id, "kind": done.kind, "status": done.status, "code": done.code,
+                    "reason": done.reason, "approver": done.approver, "result": dict(done.result)}
+        saved = mutate(request, body, work)
+        if saved.get("status") == "committed":
+            finance.banking_ring()                     # after the commit: the worker's first sync starts now
+        return saved
 
     @app.get("/api/v2/finance/expenses")
     def finance_expenses(request: Request, start: str | None = None, end: str | None = None,
                          by: Group = "department", account_id: str | None = None, team: str | None = None,
-                         teammate: str | None = None, top_n: int = Query(20, ge=1, le=200)):
+                         teammate: str | None = None, top_n: int = Query(20, ge=1, le=200), view_as: str | None = None):
         """Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line."""
-        who = viewer(request)
-        return read(lambda c: finance_reads.expenses(c, who.actor, start, end, by, account_id=account_id, team=team,
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.expenses(c, actor, start, end, by, account_id=account_id, team=team,
                                                      teammate=teammate, top_n=top_n))
 
     @app.get("/api/v2/finance/lines/{account_id}")
     def finance_line(request: Request, account_id: str, start: str | None = None, end: str | None = None,
-                     limit: int = Query(50, ge=1, le=200), top_n: int = Query(10, ge=1, le=200)):
-        """One line's spend by vendor, team and teammate, and its entries, as far as the caller sees."""
-        who = viewer(request)
-        return read(lambda c: finance_reads.line_detail(c, who.actor, account_id, start, end, limit=limit,
-                                                        top_n=top_n))
+                     limit: int = Query(50, ge=1, le=200), top_n: int = Query(10, ge=1, le=200),
+                     vendor: str | None = Query(None, max_length=200), view_as: str | None = None,
+                     teams: Annotated[list[str] | None, Query()] = None,
+                     teammates: Annotated[list[str] | None, Query()] = None,
+                     who: Literal["both", "bots", "people"] = "both", unattributed: bool = False):
+        """One line's spend by vendor, team and teammate, its entries and how they were paid, and its projection for
+        next month, as far as the caller sees; `vendor` ("" for none) narrows all of it to one vendor, and teams,
+        teammates, who and unattributed filter it as the P&L's expenses view does."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.line_detail(c, actor, account_id, start, end, limit=limit, top_n=top_n,
+                                                        vendor=vendor, teams=teams or (), teammates=teammates or (),
+                                                        who=who, unattributed=unattributed))
 
     @app.post("/api/v2/finance/actions")
     def finance_act(request: Request, body: FinanceActionRequest):
@@ -96,7 +257,14 @@ def install(app, store, auth, mutate):
             done = finance.act(c, who.actor, body.kind, body.payload, key)
             first["result"] = done
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
-        saved = mutate(request, body, work)
+        receipt = body
+        if any(k in body.payload for k in finance.BANK_FIELDS):
+            # Bank numbers never reach the idempotency receipt, not even hashed: a keyed fingerprint stands in.
+            with store.transaction() as c:
+                receipt = body.model_copy(update={"payload": finance.receipt_payload(c, body.kind, body.payload)})
+        saved = mutate(request, receipt, work)
+        if body.kind == "connection_sync" and saved.get("status") == "committed":
+            finance.banking_ring()                     # after the commit: the worker syncs it now
         done = first.get("result")
         if done is not None and not done.replayed and done.action_id == saved.get("action_id"):
             return {**saved, "code": done.code, "reason": done.reason, "approval_id": done.approval_id,
