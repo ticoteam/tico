@@ -136,6 +136,7 @@ class QuickBooks:
     HQ when `force` is set (after a 401); it raises books_link.BrokerFailed when HQ cannot."""
 
     entities: tuple[str, ...] = tuple(Q.PAGES)
+    feeds: tuple[str, ...] = Q.ENTITIES
 
     def __init__(self, realm: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -254,14 +255,27 @@ class QuickBooks:
             return Read(False, error=f"no such entity: {entity}")
         return self._across(names, start, size)
 
-    def changed(self, since: str) -> Read:
-        reply = self._call("GET", "cdc", query={"entities": ",".join(Q.ENTITIES), "changedSince": _iso(since)})
-        if reply.status != 200:
-            return Read(False, error=_fault(reply.body, reply.status))
+    def changed(self, since: Mapping[str, str]) -> Read:
+        """The change feed, one answer per entity: each has its own cap, so each entity's cursor moves on its own."""
+        answers: list[tuple[str, Any]] = []
+        for entity in Q.ENTITIES:
+            if entity not in since:
+                continue
+            reply = self._call("GET", "cdc", query={"entities": entity, "changedSince": _iso(since[entity])})
+            if reply.status != 200:
+                return Read(False, error=_fault(reply.body, reply.status))
+            answers.append((entity, reply.body))
         known = self._item_accounts()
         if isinstance(known, str):
             return Read(False, error=known)
-        return Read(True, tuple(Q.change_records(reply.body, known)), through=Q.change_through(reply.body))
+        out: list[Any] = []
+        through: list[tuple[str, str]] = []
+        for entity, body in answers:
+            out += Q.change_records(body, known)
+            cut = Q.change_through(body, entity)
+            if cut:
+                through.append((entity, cut))
+        return Read(True, tuple(out), through=tuple(through))
 
     def _write_off_item(self, account_key: str, key: str) -> str | Sent:
         """The item a write-off is billed by: found by name, else created once (its RequestId comes from the write-off's
@@ -370,7 +384,7 @@ def _write_of(op: str, body: Mapping[str, Any],
     if op == "bill.create":
         return "Bill", "bill", Q.bill_body(body), {}
     if op == "invoice.create":
-        income = {v["income"]: k for k, v in items.items() if v.get("income")}
+        income = Q.income_items(items)
         return "Invoice", "invoice", Q.invoice_body(body, income), {}
     if op == "bill.void":
         return "Bill", "bill", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "delete"}

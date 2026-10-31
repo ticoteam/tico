@@ -673,7 +673,8 @@ def settle(ctx: Ctx, kind: str, doc_id: str, *, amount: int, day: str, from_kind
     doc = _doc(ctx, kind, doc_id)
     before = int(doc["amount_paid"])
     after = before + amount
-    _cash(ctx, kind, doc, before, after, open_day(ctx, day))
+    if from_kind != "credit":                   # a credit applied moves no cash
+        _cash(ctx, kind, doc, before, after, open_day(ctx, day))
     sid = SAP.insert(ctx.c, "fin_settlements", {
         "book_id": ctx.book.id, "from_kind": from_kind, "from_id": from_id, "to_kind": kind, "to_id": doc_id,
         "amount": amount, "settled_on": day, "entry_id": entry_id or None, "action_id": action_id or None,
@@ -714,7 +715,8 @@ def unsettle(ctx: Ctx, s: Any, by: str = SYSTEM) -> None:
     if SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"voided_at": ctx.at, "voided_by": by},
                   "voided_at IS NULL") != 1:
         return
-    _cash(ctx, kind, doc, before, after, open_day(ctx, str(s["settled_on"])))
+    if str(s["from_kind"]) != "credit":
+        _cash(ctx, kind, doc, before, after, open_day(ctx, str(s["settled_on"])))
     status = _status(kind, doc, after)
     if kind == "bill" and status == "scheduled" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is None:
         status = "open"

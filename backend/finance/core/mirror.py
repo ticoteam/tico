@@ -38,6 +38,7 @@ class Ext:
     revision: str
     deleted: bool = False
     reference: str = ""
+    currency: str = ""      # the record's currency code ("" when the provider names none)
 
     @property
     def key(self) -> str:
@@ -70,6 +71,7 @@ class EntryLine:
     amount: int         # minor units, debits positive
     party: str = ""     # the provider's key for the vendor or customer ("Vendor:9"), "" for none
     description: str = ""
+    key: str = ""       # the provider's id for the line: it stays the same when the line's amount changes
 
 
 @dataclass(frozen=True)
@@ -97,6 +99,7 @@ class Document:
     memo: str = ""
     links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
     tax: int = 0                                # the sales tax in its total, posted on TAX_ACCOUNT
+    control: str = ""                           # the provider's payable or receivable account ("Account:33")
 
 
 @dataclass(frozen=True)
@@ -231,12 +234,12 @@ def encode(r: Record) -> dict[str, Any]:
 
 def _ext(d: Mapping[str, Any]) -> Ext:
     return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)),
-               str(d.get("reference", "")))
+               str(d.get("reference", "")), str(d.get("currency", "")))
 
 
 def _lines(raw: Any) -> tuple[EntryLine, ...]:
     return tuple(EntryLine(str(x["account"]), int(x["amount"]), str(x.get("party", "")),
-                           str(x.get("description", ""))) for x in raw)
+                           str(x.get("description", "")), key=str(x.get("key", ""))) for x in raw)
 
 
 def _pairs(raw: Any) -> tuple[tuple[str, int], ...]:
@@ -260,7 +263,7 @@ def decode(d: Mapping[str, Any]) -> Record:
     if kind == "Document":
         return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
                         _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),
-                        int(d.get("tax", 0)))
+                        int(d.get("tax", 0)), control=str(d.get("control", "")))
     if kind == "Settlement":
         return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
                           _pairs(d.get("links", [])), _pairs(d.get("credits", [])))

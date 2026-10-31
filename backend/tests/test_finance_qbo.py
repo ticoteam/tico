@@ -510,11 +510,18 @@ def test_a_bill_paid_from_a_credit_card_goes_out_as_a_card_payment_on_that_card_
     assert "CheckPayment" not in got
 
 
-def test_a_foreign_currency_record_is_refused_not_posted():
+def test_a_record_in_another_currency_carries_its_currency_even_at_a_rate_of_one():
     row = {"Id": "5", "SyncToken": "0", "TxnDate": "2026-10-10", "TotalAmt": "5.00", "CustomerRef": {"value": "4"},
-           "CurrencyRef": {"value": "EUR"}, "ExchangeRate": "1.1", "Line": []}
+           "CurrencyRef": {"value": "EUR"}, "ExchangeRate": "1", "Line": []}
     [made] = Q.records("Invoice", [row], {})
-    assert isinstance(made, M.Refused) and made.why == Q.FOREIGN
+    assert isinstance(made, M.Document) and made.ext.currency == "EUR"
+
+
+def test_an_active_item_is_the_one_an_income_account_sends_when_an_inactive_item_shares_it():
+    items = Q.item_accounts([{"Id": "8", "Active": False, "IncomeAccountRef": {"value": "40"}},
+                             {"Id": "7", "Active": True, "IncomeAccountRef": {"value": "40"}}])
+    assert items["8"]["active"] is False and items["7"]["active"] is True
+    assert Q.income_items(items) == {items["7"]["income"]: "7"}
 
 
 def test_a_taxed_invoice_keeps_its_tax_apart_from_its_lines():
@@ -536,15 +543,16 @@ def test_quickbooks_account_types_keep_payables_receivables_and_sales_tax():
     assert receivable is not None and (receivable.type, receivable.subtype) == ("asset", "receivable")
 
 
-def test_a_change_feed_cut_at_its_cap_is_complete_only_to_a_second_before_its_newest_change():
+def test_a_change_feed_cut_at_its_cap_is_complete_only_to_a_second_before_its_newest_change_of_its_entity():
     def obj(i: int, when: str) -> dict[str, object]:
         return {"Id": str(i), "SyncToken": "0", "MetaData": {"LastUpdatedTime": when}}
 
     whole = {"CDCResponse": [{"QueryResponse": [{"Account": [obj(i, "2026-10-15T12:00:00-07:00") for i in range(10)]}]}]}
-    assert Q.change_through(whole) == ""
+    assert Q.change_through(whole, "Account") == ""
     cut = {"CDCResponse": [{"QueryResponse": [{"Invoice": [obj(i, "2026-10-15T12:00:00-07:00") for i in range(999)]
                                                           + [obj(1000, "2026-10-15T12:00:05-07:00")]}]}]}
-    assert Q.change_through(cut) == "2026-10-15T19:00:04.000000Z"
+    assert Q.change_through(cut, "Invoice") == "2026-10-15T19:00:04.000000Z"
+    assert Q.change_through(cut, "Account") == ""
 
 
 def test_items_are_read_page_by_page_past_a_thousand_and_active_or_not():
@@ -564,8 +572,9 @@ def test_a_change_feed_answer_cut_at_its_cap_is_read_through_to_a_second_before_
     objects.append({"Id": "1000", "SyncToken": "0", "MetaData": {"LastUpdatedTime": "2026-10-15T12:00:05-07:00"}})
     wire = Wire(QC.Reply(200, {"CDCResponse": [{"QueryResponse": [{"Invoice": objects}]}]}),
                 QC.Reply(200, {"QueryResponse": {"Item": []}}))
-    read = _client(wire).changed("2026-10-15T10:00:00Z")
-    assert read.ok and read.through == "2026-10-15T19:00:04.000000Z"
+    read = _client(wire).changed({"Invoice": "2026-10-15T10:00:00Z"})
+    assert read.ok and read.through == (("Invoice", "2026-10-15T19:00:04.000000Z"),)
+    assert "entities=Invoice&" in wire.sent[0][1] or "entities=Invoice" in wire.sent[0][1]
 
 
 def test_a_purchase_is_read_as_an_entry_between_its_bank_and_its_expense_account():

@@ -10,6 +10,7 @@ import pytest
 from backend import company_server, hook_relay
 from backend.finance import actions as FA
 from backend.finance import books_link
+from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
 from backend.tests.test_api import api, get, headers  # noqa: F401
@@ -154,6 +155,23 @@ def _claimed(books: Any, vault: object) -> str:
                                     name="Acme books", by=OWNER, now=AT)
 
 
+def test_a_consent_for_a_company_already_connected_repairs_that_connection(books, monkeypatch):
+    vault = T._VAULT[0]
+    other = {**tokens("acc-4", "ref-4"), "realm_id": "456"}
+    hq = HQ(claim=[tokens("acc-1", "ref-1"), tokens("acc-3", "ref-3"), other])
+    monkeypatch.setattr(books_link, "_call", hq)
+    first = _claimed(books, vault)
+    assert _claimed(books, vault) == first                                  # the same realm: the same connection
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "quickbooks")] == [first]
+        assert SX.books_status(c, first) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, first)["refresh"])) == "ref-3"
+    second = _claimed(books, vault)                                         # another realm: a connection of its own
+    assert second != first
+    with books.read() as c:
+        assert {row[0] for row in SX.books_connections(c, "quickbooks")} == {first, second}
+
+
 def test_a_refresh_whose_vault_write_fails_once_keeps_the_connection_active(books, monkeypatch):
     vault = T._VAULT[0]
     hq = HQ(claim=[tokens("acc-1", "ref-1")], refresh=[tokens("acc-2", "ref-2", "2026-10-15T13:30:00Z")])
@@ -219,3 +237,19 @@ def test_connection_create_refuses_books_providers_so_the_claim_makes_every_book
             assert done.status == "failed" and done.code == "invalid"
     with books.read() as c:
         assert c.execute("SELECT count(*) FROM fin_connections").fetchone()[0] == 0
+
+
+def test_sources_show_a_books_connection_with_its_mirror_state_and_outbox_counts(api, linked):
+    store = api.app.state.store
+    api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"}, headers=headers())
+    api.get(return_path(api, linked) + "?finance=connected&claim=clm_3", headers=headers(), follow_redirects=False)
+    zero = {"pending": 0, "failed": 0, "unknown": 0, "withheld": 0}
+    accounting = next(g for g in get(api, "finance/sources")["groups"] if g["group"] == "accounting")
+    cid = accounting["rows"][0]["id"]
+    assert [(r["mirror"], r["outbox"]) for r in accounting["rows"]] == [("native", zero)]
+    with store.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload={}, key="bill.create:one",
+                      by=OWNER, at=AT)
+        SX.set_connection_status(c, cid, "reconnect", "reconnect_required", AT)
+    accounting = next(g for g in get(api, "finance/sources")["groups"] if g["group"] == "accounting")
+    assert [(r["mirror"], r["outbox"]["pending"]) for r in accounting["rows"]] == [("reconnect", 1)]
