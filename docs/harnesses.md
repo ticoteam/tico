@@ -133,7 +133,7 @@ maintained, replacing the catch-all is a manifest and a host adapter, described 
 
 ## How providers map to harnesses
 
-The owner enables providers in **Settings > Computers > Models** (`backend/providers.py`). Each provider names its runtime
+The owner enables providers in **Settings > Models** (`backend/providers.py`). Each provider names its runtime
 (the host adapter) and its harness (the manifest). Enabling a provider offers its models; it does not install
 anything. Each computer installs only:
 
@@ -161,7 +161,7 @@ on lookup, and pi's `models.json` names the turn's model for the run. `tico-chea
 and `tico-power-1.0` are the old lineup (`deprecated`, `lineup: old`): no picker offers them, but a bot already on one keeps
 running at its old price. In Settings the Gateway is a harness / provider of its own ("Tico AI Gateway") whose Model control is
 Department, Level, Fast and Version, and the stored model is the id they make. Their provider, `tico`, is never ticked: it is on
-exactly while the **Tico AI Gateway** connection in Settings > Computers > Models has a key (`backend/gateway_connection.py`),
+exactly while the **Tico AI Gateway** connection in Settings > Models has a key (`backend/gateway_connection.py`),
 and OpenRouter's catch-all does not offer them. The key is the one Decide uses; the server's `TICO_GATEWAY_KEY` and
 `TICO_GATEWAY_URL` win over a saved one and show as connected. A saved key is sealed and never read back, only a
 preview of its first and last three characters. What the owner sees and does is in [Tico AI Gateway](ai-gateway.md).
