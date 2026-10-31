@@ -122,10 +122,11 @@ def named_visible(ctx: Ctx, who: str, budgets: Sequence[B.Budget], numbers: bool
     return all(shows_numbers(ctx, who, b) if numbers else sees_budget(ctx, who, b) for b in budgets)
 
 
-def _figures_agree(ctx: Ctx, who: str, b: B.Budget) -> bool:
-    """Whether `who`'s own figure for a budget is the true one now. Only then may a sentence show the figure: no private
-    spend shows as a difference (the rule an allocation refusal was written under)."""
-    day = dates.day(ctx.today)
+def _figures_agree(ctx: Ctx, who: str, b: B.Budget, on: str = "") -> bool:
+    """Whether `who`'s own figure for a budget, in the period holding `on` (today when none), is the true one. Only then
+    may a sentence show the figure: no private spend shows as a difference (the rule an allocation refusal was written
+    under)."""
+    day = dates.day(on or ctx.today)
     true = budgeting.state(ctx, b.id, day).remaining
     return budgeting.state(ctx, b.id, day, read=budgeting.Netted(ctx.view(who))).remaining == true
 
@@ -149,9 +150,11 @@ def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], d
                             and all(sees_card(ctx, who, card) for card in cards)):
         return fallback
     names = [b.name for b in shown]
+    on = str(recorded.get("on") or "")
     if recorded["numbers"] and not decider:
         from .cards import figure_hidden
-        if not all(_figures_agree(ctx, who, b) for b in shown) or any(figure_hidden(ctx, who, card) for card in cards):
+        if not all(_figures_agree(ctx, who, b, on) for b in shown) or \
+                any(figure_hidden(ctx, who, card, on) for card in cards):
             # The reader's own figure is not the true one now: the sentence names the budget and carries no amount.
             plain = str(recorded.get("plain") or "")
             return plain.format(*names) if plain else fallback
@@ -466,10 +469,9 @@ def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> i
     need = 0
     for at in B.fit_points(start, every):
         total = sum(B.amount_at(v, at) or 0 for v in children.values())
-        if allocs:
-            period_start, period_end = B.period_of(parent, at, ctx.book.fiscal_year_start, parent_versions)
-            total += sum(reserve for _, reserve in
-                         _card_reserves(ctx, tree, allocs, period_start.isoformat(), period_end.isoformat()))
+        period_start, period_end = B.period_of(parent, at, ctx.book.fiscal_year_start, parent_versions)
+        cards, direct = _reserves(ctx, parent.id, tree, allocs, period_start.isoformat(), period_end.isoformat())
+        total += sum(reserve for _, reserve in cards) + direct
         if ends is None or at < ends:
             need = max(need, total)
         elif (later_cap := B.amount_at(parent_versions, at)) is not None and total > later_cap:
@@ -600,17 +602,31 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         if not cap:
             continue
         start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
-        cards = _card_reserves(ctx, tree, allocs, start.isoformat(), end.isoformat())
+        cards, direct = _reserves(ctx, b.id, tree, allocs, start.isoformat(), end.isoformat())
         owed = sum(B.amount_at(vs, at) or 0 for vs in kids.values())
-        total = sum(reserve for _, reserve in cards) + owed
-        if not cards or total <= cap:
+        total = sum(reserve for _, reserve in cards) + direct + owed
+        if (not cards and not direct) or total <= cap:
             continue
+        on = at.isoformat()
+        if not cards:
+            named = Named((b.id,), f"it does not fit: its holds and child budgets reserve {total / 100:.2f}",
+                          "it does not fit: its holds and child budgets reserve more than that", numbers=True, on=on)
+            raise named_refusal(INVALID, named, [b.name], shows_numbers(ctx, who, b))
         parts = "; ".join(f"{{{n}}} reserves {reserve / 100:.2f}" for n, (_, reserve) in enumerate(cards, start=1))
-        named = Named((b.id,), f"it does not fit: its cards and child budgets reserve {total / 100:.2f}; "
+        whose = "its cards, holds and child budgets" if direct else "its cards and child budgets"
+        named = Named((b.id,), f"it does not fit: {whose} reserve {total / 100:.2f}; "
                       f"lower these cards first: {parts}", "it does not fit: its cards reserve more than that",
-                      numbers=True, cards=tuple(str(card["id"]) for card, _ in cards))
+                      numbers=True, cards=tuple(str(card["id"]) for card, _ in cards), on=on)
         shown = shows_numbers(ctx, who, b) and all(sees_card(ctx, who, card) for card, _ in cards)
         raise named_refusal(INVALID, named, [b.name, *(_card_label(card) for card, _ in cards)], shown)
+
+
+def _reserves(ctx: Ctx, budget_id: str, tree: list[str], allocs: list[Any], start: str, end: str
+              ) -> tuple[list[tuple[Any, int]], int]:
+    """What a budget reserves in a period beyond its children's amounts: each allocated card's reserve (_card_reserves)
+    and the holds placed directly on the budget with no target (SB.budget_holds). A child's holds sit inside the child's
+    own amount, so they are not counted again here."""
+    return _card_reserves(ctx, tree, allocs, start, end), SB.budget_holds(ctx.c, budget_id, start, end)
 
 
 def _card_label(card: Any) -> str:
@@ -853,7 +869,8 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
                 seen = (budgeting.state(ctx, one.id, at, read=budgeting.Netted(ctx.view(who))).remaining
                         if numbers else None)
                 named = Named((one.id,), f"it does not fit: {{0}} has {s.remaining} left",
-                              "it does not fit: not enough left", numbers=True, plain="it does not fit in {0}")
+                              "it does not fit: not enough left", numbers=True, plain="it does not fit in {0}",
+                              on=at.isoformat())
                 if numbers and seen == s.remaining:
                     raise FinanceError(INVALID, named.template.format(one.name), named)
                 raise FinanceError(INVALID, named.plain.format(one.name) if numbers else named.fallback, named)

@@ -15,6 +15,7 @@ from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, invalid
 from .core.ledger import descendants, vendor_text
 from .core.org import SYSTEM
+from .store import access as SA
 from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
@@ -80,7 +81,7 @@ def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "", read
     total = SL.rollup_sum(ctx.c, ctx.book.id, start, end, accounts, teams=teams, teammate=teammate, vendors=vendors)
     if read is None:
         return total
-    return total - _settled_in(ctx, read, start, end, accounts, teams, teammate, vendors)
+    return total - _cut_in(ctx, read, start, end, accounts, teams, teammate, vendors)
 
 
 def _settled_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence[str], teams: Sequence[str] | None,
@@ -104,6 +105,55 @@ def _settled_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence
         total += int(r["amount"])
         read.excluded = True
     return total
+
+
+def _cut_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence[str], teams: Sequence[str] | None,
+            teammate: str, vendors: Sequence[str]) -> int:
+    """What a read takes out of a rollup's scope: the private money its viewer can't see, whatever its origin (spec
+    §7.5). Settled feed postings on ordinary accounts come out line by line (`_settled_in`); lines on a private account
+    (a journal entry, a bill or a feed row) are cut the way the P&L cuts them (`_private_in`)."""
+    from . import tab
+    hidden = set(tab.private_cut(ctx, read.view))
+    return (_settled_in(ctx, read, start, end, [a for a in accounts if a not in hidden], teams, teammate, vendors)
+            + _private_in(ctx, read, start, end, [a for a in accounts if a in hidden], teams, teammate, vendors))
+
+
+def _private_in(ctx: Ctx, read: Netted, start: str, end: str, accounts: Sequence[str], teams: Sequence[str] | None,
+                teammate: str, vendors: Sequence[str]) -> int:
+    """The lines on these private accounts, in the rollup's scope and the window, that the viewer's figure leaves out.
+    They go through the one suppression function (view.suppress) over the whole fiscal quarters around the window, as the
+    P&L reads them: a pay run or quarter the viewer may see stays in, and the rest comes out. A narrower read (a team, a
+    teammate or a vendor) shows none of it. `excluded` is set when a line in the window is not shown to the viewer."""
+    if not accounts or (teams is not None and not teams):
+        return 0
+    a, z = dates.day(start), dates.day(end)
+    fy = ctx.book.fiscal_year_start
+    wide = (dates.fiscal_bounds(a, 3, fy)[0], dates.fiscal_bounds(z, 3, fy)[1])
+    cells: list[VW.Cell] = []
+    total = 0
+    unseen = False
+    for r in SL.rollup_rows(ctx.c, ctx.book.id, wide[0].isoformat(), wide[1].isoformat(), accounts):
+        team, mate, vendor = str(r["team"]), str(r["teammate"]), str(r["vendor"])
+        if (teams is not None and team not in teams) or (teammate and mate != teammate) or \
+                (vendors and vendor not in vendors):
+            continue
+        day, amount = str(r["day"]), int(r["amount"])
+        inside = a.isoformat() <= day <= z.isoformat()
+        account = ctx.accounts.get(str(r["account_id"]))
+        seen = account is not None and read.view.sees(account, {"team": team, "teammate": mate})
+        unseen = unseen or (inside and not seen)
+        if seen:
+            cells.append(VW.Cell(account_id=str(r["account_id"]), day=day, team=team, teammate=mate, vendor=vendor,
+                                 amount=amount))
+        if inside:
+            total += amount
+    shown = VW.suppress(read.view, ctx.org, SA.private_lines(ctx.c), ctx.accounts, cells,
+                        teams is not None or bool(teammate) or bool(vendors), window=(a, z),
+                        closed=SL.closed_months(ctx.c, ctx.book.id), fiscal_start=fy)
+    kept = sum(cell.amount for cell in shown.cells)
+    if unseen or kept != total:
+        read.excluded = True
+    return total - kept
 
 
 def _held(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None) -> int:
@@ -159,10 +209,10 @@ def settled_used(ctx: Ctx, read: Netted, budget_ids: Sequence[str], start: str, 
     return _private_holds(ctx, read, budget_ids, start, end, target) - sum(int(r["amount"]) for r in took)
 
 
-def period_window(ctx: Ctx, budget_id: str) -> tuple[str, str]:
-    """The budget's period today, as ISO days."""
+def period_window(ctx: Ctx, budget_id: str, on: str = "") -> tuple[str, str]:
+    """The budget's period on the day `on` (today when none), as ISO days."""
     b = ctx.budgets()[budget_id]
-    start, end = _period(ctx, b, dates.day(ctx.today), SB.versions(ctx.c, [b.id])[b.id])
+    start, end = _period(ctx, b, dates.day(on or ctx.today), SB.versions(ctx.c, [b.id])[b.id])
     return start.isoformat(), end.isoformat()
 
 

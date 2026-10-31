@@ -335,6 +335,6 @@ def check_fit(parent: Budget, parent_versions: Sequence[Version], children: Mapp
         total = sum(amount_at(v, at) or 0 for v in children.values())
         if total > cap:
             named = Named((parent.id,), f"its children would total {total}, more than {{0}}'s {cap}",
-                          "it does not fit: not enough left", numbers=True)
+                          "it does not fit: not enough left", numbers=True, on=at.isoformat())
             # The caller re-raises this only where the asker may see the parent's numbers (handlers._fit).
             raise named_refusal(INVALID, named, [parent.name], shown=True)

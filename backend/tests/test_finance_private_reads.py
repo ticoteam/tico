@@ -566,3 +566,75 @@ def test_a_card_limit_approval_that_no_longer_fits_stores_no_figure(books):
         assert act(c, OWNER, "view_revoke", {"grant_id": asked["grant"]}, at=OCT_END).status == "committed"
         assert "40.00" not in FR.action_for(c, "human:cara", held.action_id, at=OCT_END)["reason"]
         assert "40.00" in FR.action_for(c, OWNER, held.action_id, at=OCT_END)["reason"]
+
+
+def test_a_payroll_journal_entry_is_netted_from_a_budget_for_a_reader_without_payroll_detail(books):
+    """Other expenses (10,000) has a private payroll line under it, and a 4,000 journal entry for one person (not a feed
+    row). A reader with the P&L and finance.budgets, but no payroll detail, nets it out of their figure as the P&L does
+    (spec §7.5): their figure is not the true 6,000, so every amount they ask for gets the same outcome."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        payroll = str(act(c, OWNER, "account_create", {"code": "6910", "name": "Payroll", "type": "expense",
+                                                       "parent_id": account(c, "6900")}).result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"}).status == "committed"
+        budget_id = _other_budget(c, at=AT)
+        posted = act(c, OWNER, "journal", {"date": "2026-10-03", "memo": "Payroll", "lines": [
+            {"account_id": payroll, "amount": 4_000, "tags": {"teammate": "human:eve"}},
+            {"account_id": account(c, "1000"), "amount": -4_000}]}, at=AT)
+        assert posted.status == "committed", posted
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
+                   at=AT).status == "committed"
+        ask = {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1"}
+        owner = {amount: act(c, OWNER, "allocation_set", {**ask, "amount": amount}, at=AT, dry_run=True).status
+                 for amount in (6_000, 6_001)}
+        gus = [act(c, "human:gus", "allocation_set", {**ask, "amount": amount}, at=AT, dry_run=True)
+               for amount in (6_000, 6_001)]
+        true = budgeting.state(load(c, AT), budget_id, date(2026, 10, 15))
+        gus_view = load(c, AT).view("human:gus")
+        seen = budgeting.state(load(c, AT), budget_id, date(2026, 10, 15), read=budgeting.Netted(gus_view))
+    assert owner == {6_000: "committed", 6_001: "failed"}, owner
+    assert [g.status for g in gus] == ["needs_approval", "needs_approval"], gus
+    assert gus[0].reason == gus[1].reason and not any(ch.isdigit() for ch in gus[0].reason or ""), gus
+    assert (true.actual, seen.actual) == (4_000, 0), (true, seen)
+
+
+def test_a_card_limit_refusal_keeps_a_private_charge_hidden_when_read_in_a_later_period(books):
+    """The holder's October charge (40.00) sits on a private payroll line. A teammate without payroll detail asks for a
+    lower card limit; the owner approves in October, and the recheck refuses it (the card has used 40.00). Read in
+    November, when the card has nothing spent, the asker still gets no amount: the period the refusal was about decides
+    what they may see, not today's period."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        payroll = _payroll_line(c)
+        budget_id = _other_budget(c, at=AT)
+        card = act(c, OWNER, "card_create", {"holder": "human:eve", "budget_id": budget_id, "amount": 5_000,
+                                             "provider_user_id": "user-eve"}, at=AT)
+        assert card.status == "committed", card
+    sync_once(books, fake)
+    fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
+    fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        feed = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-card-oct'").fetchone()[0])
+        spent = act(c, OWNER, "categorize", {"feed_id": feed, "account_id": payroll,
+                                             "tags": {"teammate": "human:eve"}}, at=LATER)
+        assert spent.status == "committed", spent
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=OCT_END).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.budgets"},
+                   at=OCT_END).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": "finance.cards"},
+                   at=OCT_END).status == "committed"
+        card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:eve'").fetchone()[0])
+        asked = act(c, "human:gus", "card_update_limit", {"card_id": card_id, "amount": 3_000}, at=OCT_END,
+                    key="gus-limit")
+        assert asked.status == "needs_approval" and asked.action_id and asked.approval_id, asked
+        H.approval_decide(c, str(asked.approver), asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, OCT_END)
+    assert done is not None and (done.status, done.code) == ("failed", "invalid"), done and done.reason
+    with books.read() as c:
+        assert "40.00" in FR.action_for(c, OWNER, asked.action_id)["reason"]
+        later = FR.action_for(c, "human:gus", asked.action_id, at=NOV)["reason"]
+    assert "40.00" not in later and "4000" not in later, later

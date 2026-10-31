@@ -105,6 +105,16 @@ def held(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str,
     return int(c.execute(sql, args).fetchone()[0])
 
 
+def budget_holds(c: sqlite3.Connection, budget_id: str, start: str, end: str) -> int:
+    """What holds placed directly on this budget, with no target, reserve against it in the window: live holds at their
+    amount and settled ones no entry has absorbed, as `held` counts them. A child's holds sit inside the child's own
+    amount, and a card's or a teammate's are reserved by their allocation, so none of those is counted here."""
+    row = c.execute("SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN status='settled' AND entry_id IS NULL "
+                    "THEN settled_amount ELSE 0 END), 0) FROM fin_holds WHERE budget_id=? AND COALESCE(target, '')='' "
+                    f"AND {LIVE} AND held_on>=? AND held_on<=?", (budget_id, start, end)).fetchone()
+    return int(row[0])
+
+
 def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str, target: str,
                 absorbed: bool) -> int:
     """What a target's holds placed in the window used on these budgets: live holds at their amount, settled ones at

@@ -18,6 +18,7 @@ from typing import Any, cast
 
 from . import handlers
 from .context import Ctx
+from .core import dates
 from .core import kinds as K
 from .core.budgets import amount_at
 from .core import validate as V
@@ -520,16 +521,17 @@ def check_lower(ctx: Ctx, card: Any, amount: int, who: str) -> None:
     have = used(ctx, card)
     if 0 < amount < have:
         named = Named((), f"the card has used {have / 100:.2f} this period; its limit can't go below that",
-                      LIMIT_FALLBACK, numbers=True, cards=(str(card["id"]),))
+                      LIMIT_FALLBACK, numbers=True, cards=(str(card["id"]),), on=dates.day(ctx.today).isoformat())
         shown = sees(ctx, who, card) and not figure_hidden(ctx, who, card)
         raise named_refusal(INVALID, named, [], shown)
 
 
-def figure_hidden(ctx: Ctx, who: str, card: Any) -> bool:
-    """Whether `who`'s figure for the card's spend differs from the true one (a settled private part is netted out)."""
+def figure_hidden(ctx: Ctx, who: str, card: Any, on: str = "") -> bool:
+    """Whether `who`'s figure for the card's spend, in the period holding `on` (today when none), differs from the true
+    one: a settled private part is netted out of it."""
     from .budgeting import Netted, period_window, settled_used, subtree
     bid = str(card["budget_id"] or "")
-    start, end = period_window(ctx, bid)
+    start, end = period_window(ctx, bid, on)
     netted = Netted(ctx.view(who))
     settled_used(ctx, netted, subtree(ctx, bid), start, end, f"card:{card['id']}", absorbed=True)
     return netted.excluded

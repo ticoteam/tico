@@ -885,3 +885,32 @@ def test_a_cards_refusal_names_the_cards_only_while_the_asker_can_see_them(books
         assert act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "everything"}).status == "committed"
         again = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
         assert again.replayed and "coder" in again.reason and "reserves 200.00" in again.reason
+
+
+def test_a_routed_raise_covers_the_parents_own_holds_with_its_children(books):
+    """A hold placed on a parent budget itself (no target) reserves that money as a card's holds do, so a routed raise of
+    its child raises the parent to cover it too. Company 1,300.00 with 600.00 of cards; Software 300.00 with a 150.00 run
+    hold on it; Engineering 300.00 under it. Raising Engineering to 500.00 needs Software at 650.00 (500.00 of children
+    and the hold), so the request is for that. Lowering Software below it is refused, as a card's reserve would be."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        company = _budget(c, name="Company", amount=130_000)
+        assert _bot_card(c, company, "bot:coder", amount=30_000).status == "committed"
+        assert _bot_card(c, company, "bot:seller", amount=30_000, user="user-dan").status == "committed"
+        software = _budget(c, name="Software", amount=30_000, team="eng", parent_id=company)
+        eng = _budget(c, name="Engineering", amount=30_000, team="eng", vendor="Acme Cloud", parent_id=software)
+        assert act(c, OWNER, "budget_update", {"budget_id": software, "owner": "human:dan"}).status == "committed"
+        held = FA.hold_place(c, budget_scope=software, amount=15_000, currency="USD", source="run", source_id="run-1",
+                             expires_at=None, at=AT)
+        assert held.allowed, held
+        asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="held-raise")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
+        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done is not None and done.status == "committed", (done and done.reason)
+        amounts = {bid: max(SB.versions(c, [bid])[bid], key=lambda v: (v.effective_from, v.version)).amount
+                   for bid in (software, eng)}
+        assert amounts == {software: 65_000, eng: 50_000}
+        lowered = act(c, OWNER, "budget_update", {"budget_id": software, "amount": 60_000}, key="held-lower")
+        assert (lowered.status, lowered.code) == ("failed", "invalid"), (lowered.status, lowered.code, lowered.reason)

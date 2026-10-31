@@ -24,6 +24,7 @@ class Named:
     numbers: bool = False
     cards: tuple[str, ...] = ()
     plain: str = ""     # the same sentence without amounts, for a reader who may see the names but not the figures
+    on: str = ""        # the day the figures were judged: each budget's and card's period is the one holding it
 
 
 class FinanceError(Exception):
