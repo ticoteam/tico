@@ -4742,6 +4742,77 @@
         ]
       }
     },
+    "/api/v2/cloud-agents/{agent_id}/add": {
+      "post": {
+        "summary": "Add an agent Tico connects as a Tico bot on the harness it runs on, placed under `reports_to`, or in the seat's place when `seat_id` names one, which the bot then fills",
+        "operationId": "addCloudAgent",
+        "parameters": [
+          {
+            "name": "agent_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Agent Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CloudAgentAdd"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudAgentAdded"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/cloud-agents/{agent_id}/request": {
       "post": {
         "summary": "Request an agent Tico does not connect yet: a seat for it goes on the chart now and Tico's team builds the connection. `other` takes the agent's name or website in `name`",
@@ -22955,6 +23026,67 @@
         ]
       }
     },
+    "/api/v2/seats/{seat_id}/cancel-request": {
+      "post": {
+        "summary": "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
+        "operationId": "cancelSeatRequest",
+        "parameters": [
+          {
+            "name": "seat_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Seat Id"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SeatCancelled"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/seats/{seat_id}/close": {
       "post": {
         "summary": "Take a seat off the chart; its row is kept",
@@ -35794,6 +35926,49 @@
           "name",
           "site",
           "supported"
+        ],
+        "additionalProperties": true
+      },
+      "CloudAgentAdd": {
+        "properties": {
+          "reports_to": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Reports To",
+            "default": ""
+          },
+          "seat_id": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Seat Id",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "CloudAgentAdd"
+      },
+      "CloudAgentAdded": {
+        "type": "object",
+        "properties": {
+          "bot": {
+            "type": "string"
+          },
+          "harness": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "seat": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "bot",
+          "harness",
+          "model",
+          "seat"
         ],
         "additionalProperties": true
       },
@@ -49265,9 +49440,15 @@
           "org_parent": {
             "type": "string"
           },
-          "agent": "s",
-          "agent_name": "s",
-          "request_state": "s"
+          "agent": {
+            "type": "string"
+          },
+          "agent_name": {
+            "type": "string"
+          },
+          "request_state": {
+            "type": "string"
+          }
         },
         "required": [
           "agent",
@@ -49395,6 +49576,26 @@
         ],
         "title": "SeatBatchCreate",
         "description": "A single confirmed group of Recruiting seats."
+      },
+      "SeatCancelled": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "closed": {
+            "type": "boolean"
+          },
+          "request_state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "closed",
+          "id",
+          "request_state"
+        ],
+        "additionalProperties": true
       },
       "SeatCandidate": {
         "type": "object",

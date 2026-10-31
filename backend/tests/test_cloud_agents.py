@@ -1,12 +1,15 @@
-"""Cloud agents (backend/cloud_agents.py): a seat asks Tico's team to connect an agent it does not connect yet. The
-request keeps the seat and the first task in the transaction that files the ticket, and nothing reaches Tico for a
-request that cannot be kept."""
+"""Cloud agents (backend/cloud_agents.py): a seat asks Tico's team to connect an agent it does not connect yet, and a
+supported agent is added as a Tico bot. A request is reserved under its key, checked before Tico hears of it, and kept in
+the transaction that keeps its ticket; cancelling it tells Tico and declines the first task."""
 import json
+import threading
+import time
 import uuid
 
-from backend import cloud_agents
+from backend import cloud_agents, lifecycle, support
 from backend import hubdb as H
 from backend.auth import Identity
+from backend.store import Problem
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.tests.test_support import hq  # noqa: F401
 
@@ -23,6 +26,21 @@ def ask(api, path, body, headers=None, expected=200):
     r = api.post("/api/v2/" + path, json=body, headers=headers or signed_in())
     assert r.status_code == expected, r.text
     return r.json()
+
+
+def hold_tico(monkeypatch, entered, release, during=None):
+    """Hold the first ticket sent to Tico until `release` is set; `during` runs while it is held."""
+    real = support._ask_hq
+
+    def held(method, path, **kwargs):
+        if method == "POST" and path == "/v1/support" and not entered.is_set():
+            entered.set()
+            if during:
+                during()
+            release.wait(10)
+        return real(method, path, **kwargs)
+
+    monkeypatch.setattr(support, "_ask_hq", held)
 
 
 def test_the_catalog_lists_eight_agents_and_only_claude_code_and_codex_connect(environment, hq):
@@ -83,7 +101,7 @@ def test_other_takes_the_name_the_person_typed_and_refuses_an_empty_one(environm
     assert "Acme Agent" in filed(hq)[0]["message"]
 
 
-def test_a_supported_agent_is_added_directly_and_an_unknown_one_is_refused(environment, hq):
+def test_a_supported_agent_is_added_not_requested_and_an_unknown_one_is_refused(environment, hq):
     api = environment()
     ask(api, "cloud-agents/claude/request", {}, expected=422)
     ask(api, "cloud-agents/codex/request", {}, expected=422)
@@ -117,12 +135,83 @@ def test_a_repeated_key_files_once_and_returns_the_seat_it_made(environment, hq)
     assert len(filed(hq)) == 1 and len(seats(api)) == 1
 
 
-def test_a_token_is_not_a_person_and_cannot_request(environment, hq):
+def test_two_identical_requests_at_once_file_once_and_share_the_seat(environment, hq, monkeypatch):
     api = environment()
-    api.app.state.store.settings.test_identities["viaa"] = Identity("human:riley", "human", email="riley@acme.example",
-                                                                   via_token=True)
-    ask(api, "cloud-agents/devin/request", {}, headers=signed_in("viaa"), expected=403)
-    assert hq.seen == []
+    headers = {**signed_in(), "Idempotency-Key": str(uuid.uuid4())}
+    entered, release, answers = threading.Event(), threading.Event(), {}
+    hold_tico(monkeypatch, entered, release)
+
+    def send(name):
+        answers[name] = api.post("/api/v2/cloud-agents/devin/request", json={}, headers=headers)
+
+    first = threading.Thread(target=send, args=("first",))
+    first.start()
+    assert entered.wait(10)
+    second = threading.Thread(target=send, args=("second",))
+    second.start()
+    time.sleep(0.5)            # the second one is waiting on the first, not filing its own ticket
+    release.set()
+    first.join(20)
+    second.join(20)
+    assert answers["first"].status_code == 200 and answers["second"].status_code == 200, answers["second"].text
+    assert answers["first"].json()["id"] == answers["second"].json()["id"]
+    assert len(filed(hq)) == 1 and len(seats(api)) == 1
+
+
+def test_a_key_used_for_other_content_is_refused(environment, hq):
+    api = environment()
+    key = str(uuid.uuid4())
+    ask(api, "cloud-agents/devin/request", {}, headers={**signed_in(), "Idempotency-Key": key})
+    ask(api, "cloud-agents/jules/request", {}, headers={**signed_in(), "Idempotency-Key": key}, expected=409)
+    assert len(filed(hq)) == 1 and len(seats(api)) == 1
+
+
+def test_a_first_task_whose_title_is_already_open_is_refused_before_tico_hears_of_it(environment, hq):
+    api = environment()
+    ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
+    refused = ask(api, "cloud-agents/jules/request", {"first_task": "Map the sign-in errors\nMore detail"}, expected=409)
+    assert refused["error"]["code"] == "duplicate"
+    assert len(filed(hq)) == 1 and len(seats(api)) == 1
+
+
+def test_a_seat_cannot_be_closed_or_renamed_while_its_request_is_being_filed(environment, hq, monkeypatch):
+    api = environment()
+    seat = ask(api, "seats", {"title": "Support lead"})
+    entered, release, during = threading.Event(), threading.Event(), []
+
+    def refused_meanwhile():
+        during.append(api.post(f"/api/v2/seats/{seat['id']}/close", json={}, headers=signed_in()).status_code)
+        during.append(api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "Renamed"}, headers=signed_in()).status_code)
+
+    hold_tico(monkeypatch, entered, release, during=refused_meanwhile)
+    answer = {}
+    asking = threading.Thread(target=lambda: answer.update(r=api.post(
+        f"/api/v2/seats/{seat['id']}/request-agent", json={"agent": "copilot"}, headers=signed_in())))
+    asking.start()
+    assert entered.wait(10)
+    release.set()
+    asking.join(20)
+    assert during == [409, 409]
+    assert answer["r"].status_code == 200 and answer["r"].json()["agent"] == "copilot"
+    assert answer["r"].json()["title"] == "Support lead"
+
+
+def test_the_line_is_checked_again_when_the_ticket_is_kept(environment, hq, monkeypatch):
+    api = environment()
+    seat = ask(api, "seats", {"title": "Support lead"})
+    real, checks = lifecycle.placement, []
+
+    def placement(auth, c, who, reports_to, seat_id=""):
+        checks.append(seat_id)
+        if len(checks) > 1:      # the ticket is being kept: the line no longer answers to this person
+            raise Problem("forbidden", "You may add or change seats only under yourself or someone below you", 403)
+        return real(auth, c, who, reports_to, seat_id)
+
+    monkeypatch.setattr(lifecycle, "placement", placement)
+    ask(api, f"seats/{seat['id']}/request-agent", {"agent": "copilot"}, expected=403)
+    monkeypatch.undo()
+    [kept] = [s for s in seats(api) if s["id"] == seat["id"]]
+    assert kept["agent"] == "" and kept["request_state"] == ""
 
 
 def test_a_person_cannot_place_a_request_under_someone_else_and_nothing_is_filed(environment, hq, monkeypatch):
@@ -133,12 +222,46 @@ def test_a_person_cannot_place_a_request_under_someone_else_and_nothing_is_filed
     assert hq.seen == [] and [s for s in seats(api) if s["agent"]] == []
 
 
-def test_closing_the_seat_cancels_the_request(environment, hq):
+def test_a_seat_with_a_request_is_cancelled_not_closed(environment, hq):
     api = environment()
     seat = ask(api, "cloud-agents/devin/request", {})
-    ask(api, f"seats/{seat['id']}/close", {})
+    ask(api, f"seats/{seat['id']}/close", {}, expected=409)
+    assert [s["id"] for s in seats(api)] == [seat["id"]]
+
+
+def test_cancelling_tells_tico_and_declines_the_first_task(environment, hq):
+    api = environment()
+    seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
+    task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
+    [(hq_id, secret)] = [(tid, t["secret"]) for tid, t in hq.tickets.items()]
+    mark = len(hq.seen)
+    cancelled = ask(api, f"seats/{seat['id']}/cancel-request", {})
+    assert cancelled["closed"] is True and cancelled["request_state"] == "cancelled"
+    [note] = [r for r in hq.seen[mark:] if r.method == "POST"]
+    assert note.url.path == f"/v1/support/{hq_id}/messages" and note.headers["x-ticket-secret"] == secret
+    message = hq.tickets[hq_id]["messages"][-1]["body"]
+    assert "Cancelled" in message and "Devin" in message
     assert seats(api) == []
-    assert api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).status_code == 404
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "declined"
+    # A repeat answers the same and tells Tico nothing more.
+    again = ask(api, f"seats/{seat['id']}/cancel-request", {})
+    assert again["request_state"] == "cancelled" and len([r for r in hq.seen[mark:] if r.method == "POST"]) == 1
+    assert api.post(f"/api/v2/seats/{seat['id']}/request-agent", json={"agent": "copilot"}, headers=signed_in()).status_code == 404
+
+
+def test_cancelling_while_tico_is_down_changes_nothing_so_it_can_be_tried_again(environment, hq):
+    api = environment()
+    seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
+    task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
+    hq.down = True
+    ask(api, f"seats/{seat['id']}/cancel-request", {}, expected=502)
+    [still] = seats(api)
+    assert still["request_state"] == "requested"
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "open"
+    hq.down = False
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
 
 
 def test_a_private_first_task_is_listed_only_to_the_people_who_can_read_it(environment, hq):
@@ -151,6 +274,56 @@ def test_a_private_first_task_is_listed_only_to_the_people_who_can_read_it(envir
     assert [t["id"] for t in owner["tasks"]] == [task["id"]]
     riley = api.get(f"/api/v2/seats/{seat['id']}/request", headers=as_person(api, "riley")).json()
     assert riley["tasks"] == [] and riley["agent"]["id"] == "devin"
+
+
+def test_a_token_is_not_a_person_and_cannot_request_add_or_cancel(environment, hq):
+    api = environment()
+    api.app.state.store.settings.test_identities["viaa"] = Identity("human:riley", "human", email="riley@acme.example",
+                                                                   via_token=True)
+    seat = ask(api, "cloud-agents/devin/request", {})
+    ask(api, "cloud-agents/devin/request", {}, headers=signed_in("viaa"), expected=403)
+    ask(api, "cloud-agents/claude/add", {}, headers=signed_in("viaa"), expected=403)
+    ask(api, f"seats/{seat['id']}/cancel-request", {}, headers=signed_in("viaa"), expected=403)
+    assert len(filed(hq)) == 1 and len(seats(api)) == 1
+
+
+def test_adding_a_supported_agent_hires_a_bot_on_its_harness_and_fills_the_seat(environment, hq):
+    api = environment()
+    seat = ask(api, "seats", {"title": "Support lead", "description": "Runs the support queue"})
+    added = ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]})
+    assert added["harness"] == "claude" and added["seat"] == seat["id"] and added["bot"]
+    with api.app.state.store.read() as c:
+        bot = H.bot(c, added["bot"])
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+        closed = c.execute("SELECT closed_at, filled_by FROM seats WHERE id=?", (seat["id"],)).fetchone()
+    assert bot["display_name"] == "Support lead" and config["harness"] == "claude" and config["runtime"] == "claude"
+    assert config["model"] == added["model"] and config["reports_to"] == seat["reports_to"]
+    assert closed["filled_by"] == added["bot"] and closed["closed_at"]
+    assert seats(api) == [] and hq.seen == []
+
+
+def test_adding_without_a_seat_places_the_bot_under_the_line_it_names(environment, hq):
+    api = environment()
+    line = ask(api, "seats", {"title": "Ops lead"})["reports_to"]
+    added = ask(api, "cloud-agents/codex/add", {"reports_to": line})
+    assert added["harness"] == "codex" and added["seat"] == ""
+    with api.app.state.store.read() as c:
+        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+    assert config["harness"] == "codex" and config["runtime"] == "codex" and config["reports_to"] == line
+
+
+def test_only_connected_agents_are_added_and_a_seat_with_a_request_takes_no_bot(environment, hq):
+    api = environment()
+    ask(api, "cloud-agents/devin/add", {}, expected=422)
+    seat = ask(api, "cloud-agents/devin/request", {})
+    ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, expected=409)
+    assert [s["id"] for s in seats(api)] == [seat["id"]]
+
+
+def test_a_person_placing_a_bot_under_someone_else_is_refused(environment, hq):
+    api = environment()
+    line = ask(api, "seats", {"title": "Owner's seat"})["reports_to"]
+    ask(api, "cloud-agents/claude/add", {"reports_to": line}, headers=as_person(api, "riley"), expected=403)
 
 
 def test_the_listing_is_the_catalog_the_route_serves_and_a_copy(environment):

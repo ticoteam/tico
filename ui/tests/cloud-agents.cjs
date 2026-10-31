@@ -1,7 +1,7 @@
 // Cloud agents on Recruit (ui/app/cloud-agents.js, backend/cloud_agents.py): the agents grid is four across and two
 // across on a phone, a request files a seat and opens its Connecting page, the team builder's Request link opens the same
-// dialog for the team it names, the seat sits on the chart as a dashed node with its own pill, Add opens that agent's
-// connect steps, and the Connecting pulse moves opacity only and stops under reduced motion. The agents are the
+// dialog for the team it names, the seat sits on the chart as a dashed node with its own pill, Add hires a supported
+// agent as a bot in the seat or under the line it names, and the Connecting pulse moves opacity only and stops under reduced motion. The agents are the
 // backend's own catalog. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -26,9 +26,9 @@ const detailOf = seat => {
   return {seat, agent: known, steps: ['requested', 'building', 'ready'], tasks: [{id: 't-1', title: 'Fix the flaky retry test', status: 'open'}]};
 };
 
-async function open(browser, viewport, {reducedMotion = 'no-preference'} = {}) {
+async function open(browser, viewport, {reducedMotion = 'no-preference', seats = [requested]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
-  const errors = [], calls = [], state = {seats: [requested], failRequest: false};
+  const errors = [], calls = [], state = {seats, failRequest: false, failAdd: false};
   page.on('pageerror', error => errors.push(error.message));
   await page.emulateMedia({reducedMotion});
   await page.addInitScript(() => localStorage.setItem('hub.collapsed.v3.ana', '[]'));
@@ -69,11 +69,19 @@ async function open(browser, viewport, {reducedMotion = 'no-preference'} = {}) {
       state.seats = [...state.seats.filter(s => s.id !== seat.id), seat];
       return json(seat);
     }
-    const close = p.match(/^\/api\/v2\/seats\/([^/]+)\/close$/);
-    if (close && method === 'POST') {
+    const add = p.match(/^\/api\/v2\/cloud-agents\/([^/]+)\/add$/);
+    if (add && method === 'POST') {
+      const body = request.postDataJSON();
+      calls.push({method, path: p, body});
+      if (state.failAdd) return json({error: {code: 'requested', detail: 'Cancel the request first', retryable: false}}, 409);
+      state.seats = state.seats.filter(s => s.id !== body.seat_id);
+      return json({bot: 'rust-engineer-2', harness: add[1], model: 'claude-opus-5-5', seat: body.seat_id || ''});
+    }
+    const cancel = p.match(/^\/api\/v2\/seats\/([^/]+)\/cancel-request$/);
+    if (cancel && method === 'POST') {
       calls.push({method, path: p, body: request.postDataJSON()});
-      state.seats = state.seats.filter(s => s.id !== close[1]);
-      return json({id: close[1], closed: true});
+      state.seats = state.seats.filter(s => s.id !== cancel[1]);
+      return json({id: cancel[1], closed: true, request_state: 'cancelled'});
     }
     return json(unrouted(p));
   });
@@ -115,7 +123,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       page.once('dialog', dialog => dialog.accept());
       await seatDialog.locator('[data-cloud-cancel]').click();
       await seatDialog.waitFor({state: 'detached'});
-      assert.deepEqual(calls.map(c => c.path), ['/api/v2/seats/s-devin/close'], 'cancelling closes the seat');
+      assert.deepEqual(calls.map(c => c.path), ['/api/v2/seats/s-devin/cancel-request'], 'cancelling withdraws the request');
 
       // The grid from Team's plus menu: four across, two of them Add, six Request.
       await page.evaluate(() => window.cloudAgentsOpen('eng'));
@@ -140,14 +148,14 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await seatDialog.locator('[data-close]').first().click();
       await seatDialog.waitFor({state: 'detached'});
 
-      // Add: a supported agent opens its own connect steps (the MCP URL is that agent's), not the picker.
+      // Add: a supported agent is hired as a bot under the line the grid names; the personal connect steps stay closed.
       await grid.locator('[data-cloud-add="claude"]').click();
-      const connect = page.locator('dialog.connect-agent');
-      await connect.waitFor();
-      assert.equal(await connect.locator('[data-url]').innerText(), 'https://mcp.tico.test/api/v2/mcp');
-      assert.equal(await connect.locator('[data-create]').count(), 1, 'with its token step');
-      await page.keyboard.press('Escape');
-      await connect.waitFor({state: 'hidden'});
+      const add = page.locator('dialog.cloud-add');
+      await add.waitFor();
+      assert.equal(await page.locator('dialog.connect-agent').count(), 0, 'Add does not open the personal connect steps');
+      await add.locator('button[type="submit"]').click();
+      await add.waitFor({state: 'detached'});
+      assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer'}});
 
       // Another agent: the typed name is the agent, and the request says so.
       await grid.locator('input[name="name"]').fill('Acme Agent');
@@ -171,17 +179,41 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await seatDialog.locator('[data-close]').first().click();
       await seatDialog.waitFor({state: 'detached'});
 
-      // The same link with a supported agent adds it: the request route refuses one, so nothing is filed.
+      // The same link with a supported agent hires it under the head it names. The request route refuses one, so no seat is filed.
       const count = calls.length;
-      await page.evaluate(p => window.cloudAgentRequest(p), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
-      await connect.waitFor();
-      assert.equal(await connect.locator('[data-url]').innerText(), 'https://mcp.tico.test/api/v2/mcp');
-      assert.equal(calls.length, count, 'a supported agent files no request');
-      await page.keyboard.press('Escape');
-      await connect.waitFor({state: 'hidden'});
+      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
+      await add.waitFor();
+      await add.locator('button[type="submit"]').click();
+      await add.waitFor({state: 'detached'});
+      assert.deepEqual(calls.slice(count), [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer'}}]);
 
       assert.deepEqual(errors, []);
       console.log('cloud-agents: desktop ok');
+      await page.close();
+    }
+
+    // A seat's Cloud agents tab: Add hires the agent into that seat, so the seat is filled and leaves the chart.
+    {
+      const lead = {id: 's-lead', kind: 'seat', stage: 'recruiting', title: 'Support lead', description: '', team: 'eng',
+        reports_to: 'human:ana', created: '2026-10-31T00:00:00Z', org_parent: 'p:ana', agent: '', agent_name: '', request_state: ''};
+      const {page, errors, calls, state} = await open(browser, {width: 1300, height: 900}, {seats: [lead]});
+      await page.goto('https://tico-ui.test/#/tasks');
+      await page.waitForSelector('#tree [data-seat="s-lead"]');
+      await page.evaluate(() => {
+        const host = document.createElement('div');
+        host.id = 'seat-tab';
+        document.querySelector('#main').append(host);
+        return window.cloudAgentsTab(host, 's-lead');
+      });
+      await page.locator('#seat-tab [data-cloud-add="claude"]').click();
+      const add = page.locator('dialog.cloud-add');
+      await add.waitFor();
+      await add.locator('button[type="submit"]').click();
+      await add.waitFor({state: 'detached'});
+      assert.deepEqual(calls, [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {seat_id: 's-lead'}}]);
+      assert.deepEqual(state.seats, [], 'the seat is filled');
+      assert.deepEqual(errors, []);
+      console.log('cloud-agents: seat tab ok');
       await page.close();
     }
 
@@ -196,6 +228,14 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await page.locator('dialog.cloud-request button[type="submit"]').click();
       await page.locator('dialog.cloud-request [data-cloud-error]').waitFor({state: 'visible'});
       assert.equal(await page.locator('dialog.cloud-request button[type="submit"]').isDisabled(), false);
+      // A refused add says so in its dialog, and the person can try again.
+      await page.keyboard.press('Escape');
+      await page.locator('dialog.cloud-request').waitFor({state: 'detached'});
+      state.failAdd = true;
+      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
+      await page.locator('dialog.cloud-add button[type="submit"]').click();
+      await page.locator('dialog.cloud-add [data-cloud-error]').waitFor({state: 'visible'});
+      assert.equal(await page.locator('dialog.cloud-add button[type="submit"]').isDisabled(), false);
       assert.deepEqual(errors, []);
       console.log('cloud-agents: refusal ok');
       await page.close();

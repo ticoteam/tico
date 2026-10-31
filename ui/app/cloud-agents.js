@@ -1,7 +1,7 @@
 /* ui/app/cloud-agents.js — Cloud agents on Recruit: the grid of agents (a seat's Cloud agents tab, and Team's plus menu),
-   the Request dialog, and a seat's Connecting page. Claude Code and Codex are added with connectAgent; the other agents
-   are requested: Tico's team builds them, and the seat keeps its place on the chart until they connect
-   (backend/cloud_agents.py). Uses the page's helpers: get, post, esc, toast, refresh, setDrawer, connectAgent, S. */
+   the Request dialog, and a seat's Connecting page. Claude Code and Codex are added as Tico bots (addDialog); the other
+   agents are requested: Tico's team builds them, and the seat keeps its place on the chart until they connect
+   (backend/cloud_agents.py). Uses the page's helpers: get, post, esc, toast, refresh, setDrawer, S. */
 'use strict';
 (function () {
   const STEPS = ['Requested', 'Building', 'Ready'];
@@ -35,7 +35,7 @@
       <div class="cloud-foot">
         <a href="https://${esc(agent.site)}" target="_blank" rel="noopener noreferrer">${esc(agent.site)} ↗</a>
         ${agent.supported
-          ? `<button class="primary cloud-act" type="button" data-cloud-add="${esc(agent.connect_id)}">Add</button>`
+          ? `<button class="primary cloud-act" type="button" data-cloud-add="${esc(agent.id)}">Add</button>`
           : `<button class="ghost cloud-act" type="button" data-cloud-request="${esc(agent.id)}">Request</button>`}
       </div></article>`;
 
@@ -48,7 +48,7 @@
   // `ctx` says where a request lands: a seat that exists (`seat`), or a new seat in a team (`team`, `reports_to`).
   const wire = (root, agents, ctx) => {
     root.querySelectorAll('[data-cloud-add]').forEach(button => {
-      button.onclick = () => connectAgent(button.dataset.cloudAdd);
+      button.onclick = () => addDialog(agents.find(a => a.id === button.dataset.cloudAdd), ctx);
     });
     root.querySelectorAll('[data-cloud-request]').forEach(button => {
       button.onclick = () => requestDialog(agents.find(a => a.id === button.dataset.cloudRequest), ctx);
@@ -121,6 +121,42 @@
     };
   }
 
+  // Adding a supported agent hires a Tico bot on its harness: it runs on a Tico computer under its own bot identity, in the
+  // seat when `ctx` names one (which it fills), else under the line `ctx` names. No token is issued to the person.
+  function addDialog(agent, ctx) {
+    if (!agent) return;
+    const seat = ctx.seat ? (S.seats || []).find(s => s.id === ctx.seat) : null;
+    const reportsTo = seat ? seat.reports_to : ctx.reports_to || '';
+    const teamId = seat ? seat.team : ctx.team;
+    const teamName = teamId ? (S.orgGroups || []).find(g => g.id === teamId)?.name || '' : '';
+    const under = placeName(reportsTo) || 'the top of the chart';
+    const dialog = dialogFor('cloud-request cloud-add', `Add ${agent.name}`, `<form class="cloud-request-form" data-cloud-form>
+      <header class="tmodal-head cloud-request-head"><span class="cloud-tile cloud-tile-lg" aria-hidden="true">${esc(initials(agent.name))}</span>
+        <div class="cloud-request-title"><h2>Add ${esc(agent.name)}</h2><span class="muted">${esc(agent.maker)}</span></div>
+        <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
+      <div class="bot-editor-body">
+        <p class="cloud-note"><span>${ctx.seat ? `Fills the seat “${esc(seat?.title || '')}”. ` : ''}It runs as a bot on a Tico computer and reports to ${esc(under)}${teamName ? ` in ${esc(teamName)}` : ''}.</span></p>
+        <p class="err" role="alert" data-cloud-error hidden></p>
+      </div>
+      <div class="bot-editor-foot"><span class="spacer"></span><button class="ghost" type="button" data-close>Cancel</button><button class="primary" type="submit">Add</button></div>
+    </form>`);
+    const form = dialog.querySelector('[data-cloud-form]'), error = dialog.querySelector('[data-cloud-error]');
+    const submit = form.querySelector('button[type="submit"]');
+    form.onsubmit = async event => {
+      event.preventDefault();
+      submit.disabled = true; error.hidden = true;
+      try {
+        await post(`/v2/cloud-agents/${encodeURIComponent(agent.id)}/add`, ctx.seat ? {seat_id: ctx.seat} : {reports_to: reportsTo});
+        dialog.close();
+        void refresh(true);
+        toast(`${agent.name} added`);
+      } catch (failure) {
+        error.textContent = failure.message || 'Could not add the agent.';
+        error.hidden = false; submit.disabled = false;
+      }
+    };
+  }
+
   // The Connecting page: the three steps the request is in, the time it usually takes and the first task waiting.
   function seatHTML(detail) {
     const {seat, agent} = detail;
@@ -159,7 +195,7 @@
       body.querySelector('[data-cloud-cancel]').onclick = async () => {
         if (!confirm('Cancel this request?')) return;
         try {
-          await post(`/v2/seats/${encodeURIComponent(seatId)}/close`, {});
+          await post(`/v2/seats/${encodeURIComponent(seatId)}/cancel-request`, {});
           void refresh(true);
           if (container) body.innerHTML = '<p class="muted">Request cancelled.</p>';
           else host.close();
@@ -188,10 +224,11 @@
   };
 
   // The team builder's Request link (ui/app/team-build.js) opens this dialog for the agent it picked, filed in the team
-  // and under the head it names. A supported agent is added, not requested: the request route refuses one.
+  // and under the head it names. A supported agent is added as a bot under that head, not requested: the request route
+  // refuses one.
   window.cloudAgentRequest = function cloudAgentRequest(agent, {team = '', reports_to = ''} = {}) {
     if (!agent) return;
-    if (agent.supported) return connectAgent(agent.connect_id || agent.id);
+    if (agent.supported) return addDialog(agent, {team, reports_to});
     requestDialog(agent, {team, reports_to});
   };
   window.cloudAgentsSeat = seatPage;

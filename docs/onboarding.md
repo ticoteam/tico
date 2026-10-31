@@ -235,9 +235,16 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
 - **A cloud agent** Tico does not connect yet is a request, not a bot: `POST /api/v2/cloud-agents/{id}/request` (or
   `POST /api/v2/seats/{id}/request-agent` for a seat that has none) keeps a seat with `agent` and `request_state`
   (`requested`; nothing moves it past that yet), and files the request with Tico's team through support as a feedback
-  ticket carrying only its message, with no install ID. The first task waits on the seat as a task its person owns;
-  `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. Closing the seat cancels the request. Claude Code
-  and Codex connect directly instead (`backend/cloud_agents.py`).
+  ticket carrying only its message, with no install ID. A repeated key, or an identical request sent at the same time,
+  shares that one seat and ticket. A first task whose title matches an open task is refused (`409`, `duplicate`) before
+  Tico hears of it. The first task waits on the seat as a task its person owns; `GET /api/v2/seats/{id}/request` shows it
+  to anyone who may read it. A seat with a request cannot be closed (`409`): **Cancel request**
+  (`POST /api/v2/seats/{id}/cancel-request`) tells Tico on the same ticket, declines the first task and closes the seat.
+  If Tico cannot be reached nothing changes, so it can be tried again.
+- **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` hires a bot on that
+  harness with the current recommended model, owned by the person. With `{seat_id}` it fills the seat, in the seat's
+  place on the chart; with `{reports_to}` it is placed under that line. It runs under its own bot identity, with no
+  personal token issued (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in

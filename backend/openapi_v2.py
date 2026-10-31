@@ -2419,18 +2419,27 @@ STABLE.extend([
     ("/api/v2/seats/{seat_id}/request", "get", "Team chart", "getSeatAgent",
      "A seat's cloud agent: where its request stands (requested, building, ready) and the first task waiting for it",
      "SeatAgent"),
+    ("/api/v2/cloud-agents/{agent_id}/add", "post", "Team chart", "addCloudAgent",
+     "Add an agent Tico connects as a Tico bot on the harness it runs on, placed under `reports_to`, or in the seat's "
+     "place when `seat_id` names one, which the bot then fills", "CloudAgentAdded"),
+    ("/api/v2/seats/{seat_id}/cancel-request", "post", "Team chart", "cancelSeatRequest",
+     "Withdraw a seat's cloud agent request: Tico hears of it, the seat closes and its first task is declined",
+     "SeatCancelled"),
 ])
 SCHEMAS.update({
     "CloudAgent": obj({"id": "s", "name": "s", "maker": "s", "site": "s", "line": "s", "supported": "b",
                        "connect_id": "n"},
                       required=["id", "name", "maker", "site", "line", "supported", "connect_id"]),
     "CloudAgentList": obj({"agents": items(ref("CloudAgent"))}, required=["agents"]),
+    "CloudAgentAdded": obj({"bot": "s", "harness": "s", "model": "s", "seat": "s"},
+                           required=["bot", "harness", "model", "seat"]),
     "SeatAgent": obj({"seat": ref("Seat"), "agent": ref("CloudAgent"),
                       "steps": items({"enum": ["requested", "building", "ready"]}),
                       "tasks": items(obj({"id": "s", "title": "s", "status": "s"}, required=["id", "title", "status"]))},
                      required=["seat", "agent", "steps", "tasks"]),
+    "SeatCancelled": obj({"id": "s", "closed": "b", "request_state": "s"}, required=["id", "closed", "request_state"]),
 })
-SCHEMAS["Seat"]["properties"].update({"agent": "s", "agent_name": "s", "request_state": "s"})
+SCHEMAS["Seat"]["properties"].update({name: _t("s") for name in ("agent", "agent_name", "request_state")})
 SCHEMAS["Seat"]["required"] = sorted(set(SCHEMAS["Seat"]["required"]) | {"agent", "agent_name", "request_state"})
 
 
