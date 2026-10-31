@@ -198,3 +198,27 @@ def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_onc
         BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
     (task,) = checks(api)
     assert over in task["body"]
+
+
+def test_an_open_watch_task_still_lists_an_item_whose_key_holds_a_space(environment, monkeypatch):
+    """An unusual-spend key carries the vendor's name, spaces and all. When a new finding arrives, the open task keeps
+    that line: what the task lists is recorded beside it, never read back from its text (the first word of a key is not
+    the key)."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    spaced = {"kind": "unusual_spend", "key": "unusual_spend:Acme Supplies:2026-10", "stamp": {"amount": 4000},
+              "label": "Acme Supplies: 40.00 this month, above its usual"}
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(spaced), dict(FINDING)])
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (opened,) = checks(api)
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(spaced), dict(FINDING), dict(NEWER)])
+    with store.transaction() as c:
+        made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
+    assert made["state"] == "updated", made
+    (task,) = checks(api)
+    assert task["id"] == opened["id"], task
+    assert "  - unusual_spend:Acme Supplies:2026-10  Acme Supplies: 40.00 this month" in task["body"], task["body"]
+    with store.read() as c:
+        assert "unusual_spend:Acme Supplies:2026-10" in BK._open_listed(c)

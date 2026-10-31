@@ -64,6 +64,8 @@ HINTS = {
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bookkeeper_seen(
  key TEXT PRIMARY KEY, stamp TEXT NOT NULL, seen TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
+ task_id TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY (task_id, key));
 """
 
 
@@ -295,16 +297,22 @@ def render_watch(items: list[dict[str, str]]) -> tuple[str, list[dict[str, str]]
     return _watch_body(chosen), chosen
 
 
-def _listed_keys(body: str) -> list[str]:
-    """The item ids a rendered task body lists: its "  - <id>  <label>" lines."""
-    return [line[4:].split(" ", 1)[0] for line in body.splitlines() if line.startswith("  - ")]
-
-
 def _open_listed(c) -> set[str]:
     """The items an open Watch task lists: still open, so they are still to look at. A finished one was reviewed, so
-    its items are not."""
+    its items are not. What it lists is the record kept when it was delivered, never read back from its text: a key can
+    hold a space (an unusual-spend key carries the vendor's name)."""
     open_task = _open_check(c, WATCH_TITLE)
-    return set(_listed_keys(open_task["body"])) if open_task else set()
+    if not open_task:
+        return set()
+    return {str(r[0]) for r in c.execute("SELECT key FROM bookkeeper_watch_listed WHERE task_id=?",
+                                         (open_task["id"],)).fetchall()}
+
+
+def _set_listed(c, task_id: str, keys: list[str]) -> None:
+    """Record the items the Watch task `task_id` lists now. Only the one open Watch task's list is kept."""
+    c.execute("DELETE FROM bookkeeper_watch_listed")
+    for key in keys:
+        c.execute("INSERT INTO bookkeeper_watch_listed(task_id,key) VALUES(?,?)", (task_id, key))
 
 
 def watch(c, auth, at: str) -> dict[str, Any]:
@@ -326,6 +334,7 @@ def watch(c, auth, at: str) -> dict[str, Any]:
         body, shown = render_watch(pool)
         if shown:
             task_id, state = deliver(c, body, len(shown), name=WATCH_TITLE, event=WATCH_EVENT)
+            _set_listed(c, task_id, [item["key"] for item in shown])
             H.event(c, H.KEEPER, "bookkeeper.watch", SLUG, {"items": len(shown), "new": len(fresh), "state": state})
             left_out = {item["key"] for item in pool} - {item["key"] for item in shown}
         else:
