@@ -7573,6 +7573,8 @@ def create_app(settings=None):
             return None
         from .execution import reply_target, split_runner_notices, work_task_id
         with store.read() as c:
+            if not org_rule_check.R.any_active(c):
+                return None             # no rule in force: the completion reads nothing more for its check
             if store.saved(c, request.state.identity, request.url.path, request.headers.get("idempotency-key")):
                 return None             # a retry answers from its saved result; nothing is checked again
             row = c.execute("SELECT a.bot, j.message_id FROM attempts a JOIN jobs j ON j.id=a.job_id WHERE a.id=?",

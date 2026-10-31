@@ -41,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, weakref
+import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid, weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1857,8 +1857,16 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         base["review_advisory"] = review_note
 
     # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
-    # the bot is told the rule and whom to appeal to. Tico not answering lets it through, as every check failure does.
-    ruled = pl.rule_check(ctx.slug, to, cc, subject, body)
+    # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
+    # logged and named in the answer.
+    check_id = str(uuid.uuid4())                        # the check's Idempotency-Key, and its miss's id if it fails
+    ruled = pl.rule_check(ctx.slug, to, cc, subject, body, key=check_id)
+    if ruled and not ruled.get("failed") and not ctx.dry:
+        # Tico answers again: the sends whose check it never answered are told to it now, forgotten once it took them.
+        db.drop_mail_check_misses(ctx.conn, pl.report_misses(ctx.slug, db.mail_check_misses(ctx.conn, ctx.slug)))
+    if ruled and ruled.get("failed"):
+        ctx.audit("rule-check-failed", draft_id or thread_id, {"reason": ruled["failed"], "to": to, "cc": cc})
+        base["rule_check"] = "unchecked: the org rule check failed (" + str(ruled["failed"]) + ")"
     if ruled and ruled.get("outcome") == "held":
         return downgrade((ruled.get("held") or {}).get("text") or "held by an org rule", "rules")
     warning_line = ""
@@ -1896,7 +1904,9 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         raise
     message_id = res.get("id", "")
     thread_id = res.get("threadId") or thread_id
-    db.finish_send(ctx.conn, key, message_id, "sent")
+    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
+    db.finish_send(ctx.conn, key, message_id, "sent",
+                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
     handled = lb.handled(ctx.slug)
     label_thread(ctx, handled, msgs, [message_id])
     ctx.audit("send", message_id or draft_id,
