@@ -4815,6 +4815,7 @@ def create_app(settings=None):
         question to a person passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it
         is asked."""
         who = request.state.identity
+        counsel.no_attachments(who, body.attachments)    # before the rule check holds anything (visuals.attach too)
         if body.delivery and (body.ask or (body.needs_action and body.delivery != "steer")):
             raise Problem("delivery", "A question always wakes the one it is for, and needs_action is steer: send it "
                           "without a delivery, or with steer", 422)

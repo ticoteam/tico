@@ -1,6 +1,7 @@
 """Counsel over the API (docs/rules-plan.md §2, §5): a document becomes a Files version and one Counsel task, a bot's
 suggestion lands as suggested with a cite that must be in the file, a link's cite keeps pointing at the version it was
 read as, and a can-I question is answered with the rules that apply. Acme is the fictional company here."""
+import base64
 import json
 import re
 from pathlib import Path
@@ -18,6 +19,7 @@ from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.test_org_rules import as_bot, org
 
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 CONTRACT = ("Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every send. "
             "Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.")
 
@@ -389,7 +391,15 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
                                        "source_id": "Acme Vendor", "cite": cite}))["id"]
     tools(token, ("hub_rules_get", {"id": rule_id}),
           ("hub_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}))
-    assert not mcp(api, "hub_rules_list", {}, token=token)[0]           # the same tools over the hub's own MCP
+    # The same tools over the hub's own MCP: the version it was asked to read comes back whole, a newer one is refused.
+    assert not mcp(api, "hub_rules_list", {}, token=token)[0]
+    failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": version}, token=token)
+    assert not failed and got["text"] == CONTRACT, got
+    newer = new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
+    failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": newer}, token=token)
+    assert failed and "Globex" not in json.dumps(got), got
+    assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
+    seen[:] = [s for s in seen if s[2] is None]
     finish(api, r, attempt)
     # A question's run: the rules in force, one rule and a note on its task. Closing it reaches the route, which says
     # only the person who asked closes it.
@@ -404,6 +414,48 @@ def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monk
     assert {"/api/v2/mcp", "/api/v2/me", "/api/v2/rules", "/api/v2/rules/{id}", "/api/v2/tasks/{id}",
             "/api/v2/tasks/{id}/comments", "/api/v2/files/{id}/versions/1"} <= paths, paths
     assert ("POST", "/api/v2/tasks/" + ask["task_id"], None) in seen
+
+
+def test_counsel_attaches_no_file_and_is_given_no_visual_address(api, monkeypatch):
+    from backend import visuals
+    org(api)
+    counsel_on(api)
+    monkeypatch.setattr(api.app.state.store.settings, "visual_origin", "http://visuals.localhost:9001")
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+    read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    task_id, link = read["task_id"], read["file"]["id"]
+    # The person who asked puts another file on the read task and shows it in a comment: they get its address.
+    made = api.post(f"/api/v2/tasks/{task_id}/files", headers=headers("ana-test"),
+                    json={"name": "globex.png", "content_base64": base64.b64encode(PNG).decode()})
+    assert made.status_code == 200, made.text
+    other = made.json()["file_id"]
+    shown = api.post(f"/api/v2/tasks/{task_id}/comments", headers=headers("ana-test"),
+                     json={"text": "Also this", "attachments": [f"{other}@1"]})
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["comment"]["refs"]["attachments"][0]["src"]
+    r, attempt = counsel_run(api)
+    run = headers(attempt["token"])
+    # The page changes while the run works: the link's second version stays on the same task.
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched("Clause 12: the Globex merger is secret."))
+    assert post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": read["source"]["id"]}
+                )["file"]["version"] == 2
+    # Its comments carry no file: neither the other file, nor the version it was not asked to read, nor its own.
+    for ref in (f"{other}@1", f"{link}@2", f"{link}@1"):
+        refused = api.post(f"/api/v2/tasks/{task_id}/comments", headers=run, json={"text": "See", "attachments": [ref]})
+        assert refused.status_code == 403, (ref, refused.text)
+        assert "Globex" not in refused.text and "/visuals/" not in refused.text
+    # Its task shows the person's comment as a plain file ref, with no address, name or preview.
+    page = api.get(f"/api/v2/tasks/{task_id}", headers=run)
+    assert page.status_code == 200, page.text
+    [item] = next(m for m in page.json()["comments"] if m["id"] == shown.json()["comment"]["id"])["refs"]["attachments"]
+    assert set(item) <= {"id", "file_id", "version", "ref", "kind"} and item["file_id"] == other
+    assert "/visuals/" not in page.text
+    # And a visual token naming Counsel, however it came about, opens nothing.
+    token = visuals.mint(visuals.key_for(api.app, api.app.state.store.settings), "bot:tico-counsel", other, 1)
+    assert api.get("/visuals/" + token, headers={"host": "visuals.localhost:9001"}).status_code == 404
+    with api.app.state.store.read() as c:
+        assert visuals.token_reader(c, api.app.state.auth, "bot:tico-counsel") is None
+        assert visuals.token_reader(c, api.app.state.auth, "bot:ops") is not None
 
 
 def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):

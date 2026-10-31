@@ -269,6 +269,16 @@ def is_counsel(who):
     return who.role == "bot" and who.actor == "bot:" + SLUG
 
 
+ATTACH_REFUSED = "Counsel attaches no files: it quotes the document it was asked to read in its words and its rule."
+
+
+def no_attachments(who, items):
+    """Counsel's comments carry no files (visuals.attach, before any is read): an attachment is a version of a file on
+    its task, which is not the one version its read grants (run_read), and its response would carry a signed address."""
+    if items and is_counsel(who):
+        raise Problem("privacy", ATTACH_REFUSED, 403)
+
+
 def refused(store, who, path, method):
     """Whether a call by Counsel is refused: an outward route (OUTWARD), or a task comment on a task that is not Counsel's
     own (the task's owner is Counsel). Any other call is the runner's or a read, and is left to the route."""
