@@ -336,7 +336,8 @@ def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
              ("GET", f"file-approvals?file={file_id}&version=2"), ("GET", "bots/tico-counsel/turns"),
              ("GET", f"files/{file_id}/versions"), ("GET", f"files/{file_id}/meta?v=2"),
              ("GET", f"tasks/{read['task_id']}/answers"), ("GET", "rules/stats"),
-             ("POST", "task-questions"), ("POST", "pages")]
+             ("POST", "task-questions"), ("POST", "pages"), ("POST", "files/uploads?name=plan.md"),
+             ("POST", "files/imports?name=plan.md")]
     for method, path in asked:
         for token in (run, headers("counsel-test")):
             got = api.request(method, "/api/v2/" + path, headers=token, json={} if method == "POST" else None)
