@@ -264,7 +264,6 @@ async function finTxLines() {
   const t = FIN_TX, known = state.lines.some(r => r.account_id === t.account);
   sel.innerHTML = `<option value="">All lines</option>${t.account && !known ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}${state.lines.map(r =>
     `<option value="${esc(r.account_id)}"${r.account_id === t.account ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
-  if (state.chart === false) finTxCatRedraw();
 }
 async function finTxLoad(more) {
   const state = FIN.tx, t = FIN_TX, load = ++state.load;
@@ -363,9 +362,9 @@ const finTxTransfer = r => !!r.entry_id && ((['internalTransfer', 'treasuryTrans
   || (FIN?.tx?.rows || []).some(x => x !== r && x.kind === 'feed' && x.entry_id === r.entry_id));
 const FIN_TX_MIXED = '*';   // a field the row's lines differ on
 
-// The lines the viewer may post to, each with whether it takes amounts from them with no team or teammate tag
-// (GET /finance/chart). A server without that read gets the P&L lines this tab already reads, company-wide only for
-// a viewer who sees everything.
+// The lines the viewer may post to (GET /finance/chart), each with whether it takes amounts from them with no team or
+// teammate tag and, when it does not, whom they may put it on. With no answer (still loading, or the read failed)
+// the form stays hidden.
 async function finTxChart() {
   const state = FIN.tx;
   if (state.chart !== undefined) return;
@@ -373,42 +372,17 @@ async function finTxChart() {
   let rows = null;
   try { rows = (await get('/v2/finance/chart?for=journal' + finAs(), {fresh: true}))?.accounts; } catch { rows = null; }
   if (FIN?.tx !== state) return;
-  state.chart = Array.isArray(rows) && rows.length ? rows : false;
+  state.chart = Array.isArray(rows) ? rows : false;
   finTxCatRedraw();
-}
-function finTxCatLines() {
-  const state = FIN.tx;
-  if (Array.isArray(state.chart)) return state.chart;
-  if (state.chart !== false) return [];
-  // Company-wide: an everything view, or a live company grant on the P&L (or its expenses, for an expense line).
-  const caps = finCaps(), grants = (caps?.row?.grants || []).filter(g => g.live && g.status === 'active' && g.whose === 'company');
-  const wide = l => !!caps?.all || grants.some(g => g.what === 'pnl' || (g.what === 'expenses' && l.type === 'expense'));
-  return state.lines.map(l => ({id: l.account_id, name: l.name, parent_id: l.parent_id || null, company_wide: wide(l)}));
 }
 function finTxCatRedraw() {
   const r = FIN?.tx?.rows.find(x => finTxKey(x) === FIN.tx.sel);
   if (r && finTxCatOn(r)) finTxCatDraw(r);
 }
-// Whom an amount on a line that is not company-wide for the viewer may be for: the chart's own list when it sends one,
-// else from the access read by the rule a write checks (handlers.py may_write): everyone for a viewer who sees
-// everything; else the viewer when they see their own expenses (by default, or a live own grant on the line), the
-// teams their view covers (the ones they lead, on the manager default, and live team grants, each with the teams under
-// it that the access read lists), and the teammates in those teams. The viewer first. [value, label]. A granted team
-// the access read does not list shows by its id (the grant row carries no name).
-function finTxForOpts(line) {
-  const caps = finCaps(), me = caps?.who || '', acc = FIN.acc || {}, row = caps?.row || {};
-  const below = id => [id, ...(acc.teams || []).filter(t => t.parent === id).flatMap(t => below(t.id))];
-  const covered = new Set([...(caps?.all ? (acc.teams || []).map(t => t.id) : row.default === 'team_expenses' ? (acc.teams || []).filter(t => t.lead === me).map(t => t.id) : []),
-    ...(row.grants || []).filter(g => g.live && g.status === 'active' && g.whose === 'team' && g.whose_team).map(g => g.whose_team)].flatMap(below));
-  const own = row.default === 'team_expenses' || row.default === 'own_expenses' || (row.grants || []).some(g => g.live && g.status === 'active'
-    && g.whose === 'own' && (!(g.account_ids || []).length || [line?.id, line?.parent_id].some(a => a && g.account_ids.includes(a))));
-  const listed = (acc.teams || []).map(t => t.id);
-  const tags = line?.attributable || [...(caps?.all || own ? [{teammate: me}] : []),
-    ...[...listed.filter(id => covered.has(id)), ...[...covered].filter(id => !listed.includes(id))].map(id => ({team: id})),
-    ...(acc.teammates || []).filter(t => t.teammate !== me && covered.has(t.team)).map(t => ({teammate: t.teammate}))];
-  return [...tags.filter(t => t.teammate === me), ...tags.filter(t => t.teammate !== me)]
-    .map(t => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
-}
+// Whom an amount on a line that is not company-wide for the viewer may be for: the chart's list (the viewer first,
+// then teams, then teammates; the rule a write checks). [value, label].
+const finTxForOpts = line => (line?.attributable || [])
+  .map(t => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
 // The selected row's picks, kept while the rail redraws: what its lines have now (`was`) and the form's values.
 function finTxCatState(r) {
   const state = FIN.tx, key = finTxKey(r);
@@ -425,7 +399,10 @@ function finTxCatState(r) {
 function finTxCatDraw(r) {
   const form = $('#fin-rail [data-fin-cat]'); if (!form) return;
   void finTxChart();
-  const state = FIN.tx, c = finTxCatState(r), chart = finTxCatLines(), lines = r.lines || [], posted = lines.length > 0;
+  const state = FIN.tx;
+  form.hidden = !Array.isArray(state.chart);
+  if (form.hidden) { form.innerHTML = ''; return; }
+  const c = finTxCatState(r), chart = state.chart, lines = r.lines || [], posted = lines.length > 0;
   const acc = FIN.acc || {}, M = FIN_TX_MIXED, now = c.now, was = c.was;
   const lineOf = id => chart.find(a => a.id === id);
   const scoped = () => lineOf(now.account)?.company_wide === false;

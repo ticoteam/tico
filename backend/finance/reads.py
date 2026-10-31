@@ -629,6 +629,7 @@ cards = tab.cards
 sources = tab.sources
 access = tab.access
 view_as = tab.view_as
+chart = tab.chart
 # Money out and controls (finance/tab_money.py).
 payments = tab_money.payments
 recipients = tab_money.recipients

@@ -1411,6 +1411,9 @@ STABLE.extend([
     ("/api/v2/finance/webhook-deliveries", "get", "Finance", "listFinanceWebhookDeliveries",
      "Calls to Finance's triggers (Mercury) still kept, newest first, with their bodies, for a finance admin who sees "
      "sources; the ordinary trigger routes refuse them", "FinanceWebhookDeliveries"),
+    ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
+     "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
+     "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
     ("/api/v2/finance/access", "get", "Finance", "getFinanceAccess",
      "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
      "FinanceAccess"),
@@ -1455,6 +1458,11 @@ SCHEMAS.update({
     "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
                            "on": "s", "view_version": "i"}),
     "FinanceReport": obj({"view_version": "i"}),
+    "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
+                                                "parent_id": "n", "company_wide": "b",
+                                                "attributable": items(obj({"team": "s", "teammate": "s"}, required=[]))},
+                                               required=["id", "number", "name", "type"])),
+                         "more": "b", "view_version": "i"}),
     "FinancePnl": obj({
         "start": "s", "end": "s", "period": "s", "basis": "s", "view": "s", "team": "n", "teammate": "n",
         "budget_as_of": "n",

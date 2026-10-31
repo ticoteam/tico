@@ -165,3 +165,4 @@
 /* Transactions rail: a bank row's line and tags (categorize), one Save. */
 .fin-ask{margin:0 auto 0 0;color:var(--wait-ink);font-size:var(--t-sm)}
 .fin-cat .fin-foot{align-items:center}
+.fin-cat[hidden]{display:none}

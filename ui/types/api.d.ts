@@ -1236,6 +1236,24 @@ export type FinanceCards = {
   view_version: number;
 };
 
+export type FinanceChart = {
+  accounts: Array<{
+  attributable?: Array<{
+  team?: string;
+  teammate?: string;
+}>;
+  company_wide?: boolean;
+  id: string;
+  name: string;
+  number: string;
+  parent_id?: string | null;
+  subtype?: string;
+  type: string;
+}>;
+  more: boolean;
+  view_version: number;
+};
+
 export type FinanceConnectionRequest = {
   approver_email?: string | null;
   credential_id: string;
@@ -5312,6 +5330,14 @@ export type GetFinanceBalanceSheetParams = {
 };
 export type GetFinanceBalanceSheetBody = never;
 export type GetFinanceBalanceSheetResponse = FinanceBalanceSheet;
+
+/** GET /api/v2/finance/chart */
+export type GetFinanceChartParams = {
+  for?: "bill" | "invoice" | "journal" | null;
+  view_as?: string | null;
+};
+export type GetFinanceChartBody = never;
+export type GetFinanceChartResponse = FinanceChart;
 
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
