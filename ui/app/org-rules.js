@@ -1,9 +1,11 @@
-/* ui/app/org-rules.js — Rules (docs/rules-plan.md, Screens 1, 2, 4, 6, 7, 8): the Rules page with its Internal,
-   External, Due and Suggested tabs, the rule and due-date side panels, the Add rule dialog, and a bot's Rules tab.
+/* ui/app/org-rules.js — Rules (docs/rules-plan.md, Screens 1, 2, 4–8): the Rules page with its Internal, External, Due
+   and Suggested tabs, the rule and due-date side panels, the Add rule and Add document dialogs, and a bot's Rules tab.
    Everything is read from and written to the org rules API (backend/org_rules.py): GET /api/v2/rules (paged; every
    page is read, a team has dozens of rules), /rules/counts, /rules/due, /rule-sources and /bots/<slug>/rules. A rule
    says whether the caller may change it (`can_edit`), so the panels show its controls only then; the server checks
-   again, and a refusal shows as one line. Saving sends the rule's `version`: a 409 reloads it and says so.
+   again, and a refusal shows as one line. Saving sends the rule's `version`: a 409 reloads it and says so. Add document
+   starts a Counsel review (POST /rules/read, backend/counsel.py); its suggestions wait in Suggested, and each one's
+   quote shows in its side panel, never on its row.
    Addresses: #/rules[/external|/due|/suggested][?rule=<id> | ?due=<id> | ?due=new&rule=<id>]. The filters stay on
    the page, not in the address. On a phone the lists are stacked rows and a panel is a full-screen sheet.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
@@ -29,7 +31,8 @@ const ruHref = (tab, q = {}) => {
 
 // ----------------------------------------------------------------- names
 const ruGroups = () => (S.orgGroups || []).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
-const ruBots = () => (S.emps || []).filter(e => e.status !== 'archived').map(e => ({id: e.name, name: botDisplayName(e.name)}))
+// The Assistant and its helpers (Counsel among them) are in no bot picker (ui/app/sidebar.js isHiddenBot).
+const ruBots = () => (S.emps || []).filter(e => e.status !== 'archived' && !isHiddenBot(e.name)).map(e => ({id: e.name, name: botDisplayName(e.name)}))
   .sort((a, b) => a.name.localeCompare(b.name, undefined, {numeric: true}));
 const ruPeople = () => (S.people || []).filter(p => !p.hidden && !p.archived).map(p => ({id: p.id, name: p.name || p.email || p.id}))
   .sort((a, b) => a.name.localeCompare(b.name));
@@ -156,8 +159,7 @@ function ruDrawHead() {
   const human = S.me?.role !== 'bot';
   const acts = {
     internal: human ? '<button class="primary small" type="button" data-ru-add>+ Add rule</button>' : '',
-    // + Add document starts a Counsel review (phase 1b); hidden until then.
-    external: human ? '<button class="ghost small" type="button" data-ru-add-doc hidden>+ Add document</button><button class="primary small" type="button" data-ru-add>+ Add rule</button>' : '',
+    external: human ? '<button class="ghost small" type="button" data-ru-add>+ Add rule</button><button class="primary small" type="button" data-ru-add-doc>+ Add document</button>' : '',
     due: human ? '<button class="primary small" type="button" data-ru-add-due>+ Add due date</button>' : '',
     suggested: '',
   }[RU.tab];
@@ -266,7 +268,8 @@ function ruOwnerHTML(actor) {
   return `${face}<span>${esc(ruActorName(actor))}</span>`;
 }
 
-// Suggested: grouped by From, each row the sentence, a Who picker, and Skip / Add.
+// Suggested: grouped by From, each row the sentence, a Who picker, and Skip / Add. The sentence opens the rule's side
+// panel, where its quote is; the row names no document and shows no quote.
 function ruDrawSuggested(filters, list) {
   filters.innerHTML = '';
   const groups = new Map();
@@ -275,10 +278,11 @@ function ruDrawSuggested(filters, list) {
     if (!groups.has(key)) groups.set(key, {name, rows: []});
     groups.get(key).rows.push(r);
   }
-  // A suggestion with no Who yet (Counsel may leave it open) is added only once its picker names one.
+  // A suggestion with no Who yet (Counsel may leave it open) is added only once its picker names one; Add all adds the
+  // rows that have one and leaves the rest waiting.
   list.innerHTML = [...groups].map(([key, g]) => `<section class="ru-sg" data-group="${esc(key)}"><header><h2>${esc(g.name)}</h2><span class="spacer"></span>
         <button class="primary small" type="button" data-ru-add-all="${esc(key)}" hidden></button></header>
-      ${g.rows.map(r => { const who = ruScopeWords(r.who, ''); return `<div class="ru-prop" data-rule="${esc(r.id)}"${who ? ' data-has-who' : ''}><span class="ru-pt">${esc(r.text)}</span>
+      ${g.rows.map(r => { const who = ruScopeWords(r.who, ''); return `<div class="ru-prop${ruSel(r.id) ? ' sel' : ''}" data-rule="${esc(r.id)}"${who ? ' data-has-who' : ''}><a class="ru-pt" href="${ruHref('suggested', {rule: r.id})}">${esc(r.text)}</a>
         <select class="ru-pwho" aria-label="Who" data-ru-who${r.can_edit ? '' : ' disabled'}><option value="">${esc(who || 'Pick who')}</option>${ruWhoOptions()}</select>
         <span class="ru-pacts">${r.can_edit ? `<button class="ghost small" type="button" data-ru-skip>Skip</button><button class="primary small" type="button" data-ru-accept${who ? '' : ' disabled'}>Add</button>` : ''}</span></div>`; }).join('')}</section>`)
     .join('') || '<p class="muted ru-pad">No suggestions.</p>';
@@ -346,6 +350,7 @@ function ruWire() {
     if (t.closest('[data-ru-more]')) { RU.filter.moreFrom = true; ruDraw(); return; }
     if (t.closest('[data-ru-add]')) { ruAddOpen({kind: RU.tab === 'external' ? 'external' : 'internal'}); return; }
     if (t.closest('[data-ru-add-due]')) { location.hash = ruHref('due', {due: 'new'}); return; }
+    if (t.closest('[data-ru-add-doc]')) { void ruDocOpen(); return; }
     const prop = t.closest('.ru-prop');
     if (prop && t.closest('[data-ru-accept]')) { void ruAccept([prop]); return; }
     if (prop && t.closest('[data-ru-skip]')) { void ruSkip(prop); return; }
@@ -470,6 +475,16 @@ function ruDrawPanel() {
   if (ruleId) void ruRulePanel(side, ruleId);
   else void ruDuePanel(side, dueId, q.get('rule') || '');
 }
+// The cited section and quote, where the viewer may read its file (`hidden` otherwise: nothing shows). The section
+// opens that exact file version in the viewer (ui/app/viewer.js reads /api/v2/files/<id>?v=<n> links).
+function ruQuoteHTML(cite) {
+  if (!cite || cite.hidden || !cite.quote) return '';
+  const label = esc(cite.section || 'Document');
+  const src = cite.file_id
+    ? `<a class="ru-qsrc" href="${API}/v2/files/${encodeURIComponent(cite.file_id)}${cite.version ? '?v=' + encodeURIComponent(cite.version) : ''}" data-name="${label}">${label}</a>`
+    : `<b>${label}</b>`;
+  return `<blockquote class="ru-quote">${src} “${esc(cite.quote)}”</blockquote>`;
+}
 const ruPanelHead = (title, close) => `<div class="ru-side-h"><h2>${esc(title)}</h2><span class="spacer"></span><a class="ru-x" href="${close}" aria-label="Close">✕</a></div>`;
 
 async function ruRulePanel(side, id, note = '') {
@@ -482,8 +497,8 @@ async function ruRulePanel(side, id, note = '') {
   const edit = !!r.can_edit, dis = edit ? '' : ' disabled', internal = r.kind === 'internal';
   if (!internal && !RU.sources.length) RU.sources = await ruAll('/v2/rule-sources').catch(() => []);
   const due = (r.due || [])[0];
-  const quote = r.cite && !r.cite.hidden && r.cite.quote
-    ? `<blockquote class="ru-quote">${r.cite.section ? `<b>${esc(r.cite.section)}</b> ` : ''}“${esc(r.cite.quote)}”</blockquote>` : '';
+  const quote = ruQuoteHTML(r.cite);
+  const suggested = r.status === 'suggested';
   side.innerHTML = `${ruPanelHead('Rule', ruHref(RU.tab))}
     <form class="ru-form" data-rule="${esc(r.id)}">
       <label class="ru-fl"><span class="ru-lbl">Rule</span><textarea name="text" rows="2" maxlength="1000" required${dis}>${esc(r.text)}</textarea></label>
@@ -499,14 +514,22 @@ async function ruRulePanel(side, id, note = '') {
         : edit ? `<a class="ru-adddue" href="${ruHref('due', {due: 'new', rule: r.id})}">+ Add due date</a>` : '<span class="ru-none">—</span>'}</div>
       ${quote}
       <p class="ru-status" role="status">${esc(note)}</p>
-      ${edit ? '<div class="ru-foot"><button class="ghost" type="button" data-ru-retire>Retire</button><span class="spacer"></span><button class="primary" type="submit">Save</button></div>' : ''}
+      ${!edit ? '' : suggested
+        ? `<div class="ru-foot"><button class="ghost" type="button" data-ru-skip-one>Skip</button><span class="spacer"></span><button class="ghost" type="submit">Save</button>
+            <button class="primary" type="button" data-ru-accept-one>Add</button></div>`
+        : '<div class="ru-foot"><button class="ghost" type="button" data-ru-retire>Retire</button><span class="spacer"></span><button class="primary" type="submit">Save</button></div>'}
     </form>`;
   const form = side.querySelector('form'), status = form.querySelector('.ru-status');
-  const who = ruScopeEditor(form.querySelector('[data-scope="who"]'), r.who, {flags: true, disabled: !edit});
+  // A suggestion is added only with a Who: Add waits until the editor names one.
+  const addOne = form.querySelector('[data-ru-accept-one]');
+  const whoSet = scope => scope.everyone || scope.all_bots || ['groups', 'bots', 'people'].some(k => scope[k].length);
+  const who = ruScopeEditor(form.querySelector('[data-scope="who"]'), r.who, {flags: true, disabled: !edit,
+    onChange: () => { if (addOne) addOne.disabled = !whoSet(who.value()); }});
+  if (addOne) addOne.disabled = !whoSet(who.value());
   const withEd = internal ? ruScopeEditor(form.querySelector('[data-scope="with"]'), r.with, {flags: false, disabled: !edit}) : null;
   ruSegWire(form, (name, v) => { if (name === 'if_broken') form.querySelector('.ru-reviewer').hidden = v !== 'escalate'; });
-  form.onsubmit = async ev => {
-    ev.preventDefault();
+  // The fields changed in the panel, as an edit sends them (`version` alone when nothing changed).
+  const changes = () => {
     const body = {version: r.version};
     const text = form.elements.text.value.trim(), description = form.elements.description.value.trim();
     if (text !== r.text) body.text = text;
@@ -518,6 +541,11 @@ async function ruRulePanel(side, id, note = '') {
     if (broken !== r.if_broken) body.if_broken = broken;
     const reviewer = broken === 'escalate' ? form.elements.reviewer.value : '';
     if (reviewer !== (r.reviewer?.id || '')) body.reviewer = reviewer;
+    return body;
+  };
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const body = changes();
     if (Object.keys(body).length === 1) { status.textContent = 'Saved'; return; }
     const button = form.querySelector('[type=submit]'); button.disabled = true; status.textContent = 'Saving…';
     try {
@@ -531,6 +559,30 @@ async function ruRulePanel(side, id, note = '') {
       status.textContent = ruError(e);
     }
   };
+  // A suggestion: Add saves what was changed here, then accepts it; Skip sets it aside.
+  addOne?.addEventListener('click', async () => {
+    addOne.disabled = true; status.textContent = 'Saving…';
+    try {
+      const body = changes();
+      let version = r.version;
+      if (Object.keys(body).length > 1) version = (await post('/v2/rules/' + encodeURIComponent(r.id), body)).version;
+      await post('/v2/rules/' + encodeURIComponent(r.id) + '/accept', {version});
+      location.hash = ruHref(RU.tab);
+      await ruReload();
+      toast('Added');
+    } catch (e) {
+      addOne.disabled = false;
+      if (e.status === 409) { await ruReload(); void ruRulePanel(side, r.id, 'Changed elsewhere'); return; }
+      status.textContent = ruError(e);
+    }
+  });
+  form.querySelector('[data-ru-skip-one]')?.addEventListener('click', async () => {
+    try {
+      await post('/v2/rules/' + encodeURIComponent(r.id) + '/skip', {version: r.version});
+      location.hash = ruHref(RU.tab);
+      await ruReload();
+    } catch (e) { status.textContent = ruError(e); }
+  });
   form.querySelector('[data-ru-retire]')?.addEventListener('click', async () => {
     if (!confirm('Retire this rule?')) return;
     try {
@@ -711,6 +763,122 @@ async function ruAddOpen({kind = 'internal', who = null, after = null} = {}) {
   };
   dlg.showModal();
   form.elements.text.focus();
+}
+
+// ----------------------------------------------------------------- Add document
+// One file from Files (one the viewer can read) or a public link, From (an existing one, or a new name with its kind),
+// and an optional description. POST /rules/read opens Counsel's task; the dialog then says Counsel is reading it and
+// links the task. Asked again while that task is open, the server returns it (`existing`), and the dialog says so.
+const RU_DOC_SKIP = new Set(['image', 'media']);   // Files kinds Counsel reads no text from
+const RU_DOC_PICKS = 6;
+const ruIsLink = v => /^https?:\/\/\S+$/i.test(v);
+// A refusal as one line: Counsel off, a file it can't read, a link that didn't open, a file the viewer can't read.
+function ruDocError(e) {
+  const code = e?.body?.error?.code;
+  if (code === 'counsel_off') return 'Counsel is off.';
+  if (code === 'unreadable') return "Counsel can't read this file.";
+  if (code === 'fetch') return "Couldn't open that link.";
+  if (e?.status === 404) return "That file isn't one you can read.";
+  return ruError(e);
+}
+async function ruDocOpen() {
+  let dlg = document.getElementById('ru-doc');
+  if (!dlg) {
+    dlg = document.createElement('dialog');
+    dlg.id = 'ru-doc'; dlg.className = 'ru-modal'; dlg.setAttribute('aria-label', 'Add document');
+    dlg.addEventListener('click', ev => { if (ev.target === dlg) dlg.close(); });
+    document.body.appendChild(dlg);
+  }
+  const [sources, recent] = await Promise.all([ruAll('/v2/rule-sources').catch(() => []),
+    get('/v2/files?limit=50', {fresh: true}).then(r => r.files || []).catch(() => [])]);
+  const readable = f => f.locator !== 'remote_link' && !f.url && !RU_DOC_SKIP.has(f.library_kind) && !f.archived;
+  const files = recent.filter(readable);
+  const head = '<div class="ru-side-h"><h2>Add document</h2><span class="spacer"></span><button class="ghost tmodal-x" type="button" data-ru-close aria-label="Close">✕</button></div>';
+  dlg.innerHTML = `<form class="ru-form" method="dialog">${head}
+      <div class="ru-fl"><span class="ru-lbl">Document</span>
+        <div class="ru-doc" hidden><span class="nav-icon" aria-hidden="true">description</span><span class="ru-doc-t"></span>
+          <button type="button" class="ru-doc-x" data-ru-unpick aria-label="Remove">✕</button></div>
+        <input name="find" type="search" placeholder="Pick from Files or paste a link" aria-label="Pick from Files or paste a link" autocomplete="off">
+        <div class="ru-picks" role="listbox" aria-label="Files"></div></div>
+      <label class="ru-fl"><span class="ru-lbl">Description <span class="ru-opt">(optional)</span></span><textarea name="note" rows="2" maxlength="2000"></textarea></label>
+      <div class="ru-fl"><span class="ru-lbl">From</span>
+        <select name="source"><option value="">Pick one</option>${ruSourceOptions(sources, '')}<option value="new">New…</option></select>
+        <div class="ru-newdoc" hidden><input name="source_name" maxlength="200" placeholder="Name" aria-label="Name">${ruSegHTML('source_kind', RU_KINDS, 'vendor')}</div></div>
+      <p class="ru-status" role="status"></p>
+      <div class="ru-foot"><span class="spacer"></span><button class="ghost" type="button" data-ru-close>Cancel</button><button class="primary" type="submit">Read and suggest rules</button></div>
+    </form>`;
+  const form = dlg.querySelector('form'), status = form.querySelector('.ru-status'), find = form.elements.find;
+  const picks = form.querySelector('.ru-picks'), chosen = form.querySelector('.ru-doc');
+  let pick = null, found = [], seq = 0, soon = 0;
+  const pickRow = f => `<button type="button" class="ru-pick" role="option" data-id="${esc(f.id)}"><span class="nav-icon" aria-hidden="true">description</span>
+      <span class="ru-pick-t">${esc(f.title || f.name || f.id)}</span><span class="ru-pick-m">${esc(pageBotName(f))}</span></button>`;
+  // The list under the box: recent readable files whose title has every word typed, then search hits by title and text.
+  const drawPicks = () => {
+    const q = find.value.trim();
+    if (pick || ruIsLink(q)) { picks.innerHTML = ''; picks.hidden = true; return; }
+    const local = files.filter(f => ruMatches(f.title || f.name || '', q));
+    const rows = [...local, ...found.filter(f => !local.some(x => x.id === f.id))].slice(0, RU_DOC_PICKS);
+    picks.hidden = false;
+    picks.innerHTML = rows.map(pickRow).join('') || `<p class="ru-pick-none">${q ? 'No files match.' : 'No files yet.'}</p>`;
+  };
+  const choose = f => {
+    pick = f;
+    chosen.hidden = !f;
+    find.hidden = !!f;
+    if (f) chosen.querySelector('.ru-doc-t').textContent = f.title || f.name || f.id;
+    else { find.value = ''; find.focus(); }
+    drawPicks();
+  };
+  find.oninput = () => {
+    status.textContent = '';
+    found = [];
+    drawPicks();
+    clearTimeout(soon);
+    const q = find.value.trim(), mine = ++seq;
+    if (!q || ruIsLink(q)) return;
+    soon = setTimeout(async () => {
+      const r = await get('/v2/files/search?q=' + encodeURIComponent(q) + '&limit=' + RU_DOC_PICKS).catch(() => null);
+      if (mine !== seq || !dlg.open) return;
+      found = (r?.results || []).filter(readable);
+      drawPicks();
+    }, 250);
+  };
+  picks.onclick = ev => {
+    const b = ev.target.closest('.ru-pick');
+    if (b) choose([...files, ...found].find(f => f.id === b.dataset.id) || null);
+  };
+  chosen.querySelector('[data-ru-unpick]').onclick = () => choose(null);
+  form.elements.source.onchange = () => { form.querySelector('.ru-newdoc').hidden = form.elements.source.value !== 'new'; };
+  ruSegWire(form);
+  form.querySelectorAll('[data-ru-close]').forEach(b => { b.onclick = () => dlg.close(); });
+  form.onsubmit = async ev => {
+    ev.preventDefault();
+    const f = form.elements, button = form.querySelector('[type=submit]'), link = find.value.trim();
+    const body = {note: f.note.value.trim()};
+    if (pick) body.file_id = pick.id;
+    else if (ruIsLink(link)) body.url = link;
+    else { status.textContent = 'Pick a file or paste a link.'; return; }
+    if (f.source.value === 'new') {
+      if (!f.source_name.value.trim()) { status.textContent = 'Name the source.'; return; }
+      body.source_id = f.source_name.value.trim();
+      body.kind = ruSegValue(form, 'source_kind');
+    } else if (f.source.value) body.source_id = f.source.value;
+    else { status.textContent = 'Pick who it is from.'; return; }
+    button.disabled = true; status.textContent = 'Reading…';
+    let out;
+    try { out = await post('/v2/rules/read', body); }
+    catch (e) { button.disabled = false; status.textContent = ruDocError(e); return; }
+    if (RU) RU.sources = [];
+    const title = esc(out.file?.title || pick?.title || link);
+    form.innerHTML = `${head}
+      <p class="ru-done" data-ru-read="${esc(out.task_id)}">${out.existing ? `Counsel is already reading <b>${title}</b>.` : `Counsel is reading <b>${title}</b>.`}</p>
+      ${out.truncated ? '<p class="ru-warn">Long document: Counsel reads only the start.</p>' : ''}
+      <div class="ru-foot"><a href="#/task/${encodeURIComponent(out.task_id)}" data-ru-task>Open task ›</a><span class="spacer"></span><button class="primary" type="button" data-ru-close>Done</button></div>`;
+    form.querySelectorAll('[data-ru-close], [data-ru-task]').forEach(b => { b.addEventListener('click', () => dlg.close()); });
+  };
+  drawPicks();
+  dlg.showModal();
+  find.focus();
 }
 
 // ----------------------------------------------------------------- the bot's Rules tab

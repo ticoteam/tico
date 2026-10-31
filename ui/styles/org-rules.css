@@ -16,6 +16,7 @@
 .ru.ru-open .ru-body{grid-template-columns:190px minmax(0,1fr) 400px}
 .ru[data-tab="suggested"] .ru-body{grid-template-columns:minmax(0,1fr)}
 .ru[data-tab="suggested"] .ru-filters{display:none}
+.ru.ru-open[data-tab="suggested"] .ru-body{grid-template-columns:minmax(0,1fr) 400px}
 
 /* filters */
 .ru-filters{display:flex;flex-direction:column;gap:1px;min-height:0;overflow-y:auto;padding:12px 10px 16px;border-right:1px solid var(--line)}
@@ -67,7 +68,9 @@ a.ru-row:hover *{text-decoration:none}
 .ru-sg>header{display:flex;align-items:center;gap:8px;padding:0 8px 6px;border-bottom:1px solid var(--line)}
 .ru-sg h2{margin:0;font-size:var(--t-md);font-weight:600}
 .ru-prop{display:grid;grid-template-columns:minmax(0,1fr) 180px auto;align-items:center;gap:12px;min-height:44px;padding:6px 8px;border-bottom:1px solid var(--line)}
-.ru-pt{min-width:0;overflow-wrap:anywhere}
+.ru-pt{min-width:0;overflow-wrap:anywhere;color:var(--ink);text-decoration:none}
+.ru-pt:hover{text-decoration:underline}
+.ru-prop.sel{background:var(--surface2);box-shadow:inset 2px 0 0 var(--accent)}
 .ru-pwho{width:100%;min-width:0}
 .ru-pacts{display:flex;gap:6px;justify-content:flex-end}
 .ru-sg [hidden]{display:none}
@@ -103,7 +106,9 @@ a.ru-row:hover *{text-decoration:none}
 .ru-duebox a{color:var(--muted)}
 .ru-adddue{align-self:flex-start;font-size:var(--t-sm)}
 .ru-quote{margin:0;padding:8px 12px;border-left:2px solid var(--line);color:var(--muted);font-size:var(--t-sm)}
-.ru-quote b{color:var(--ink);font-weight:600}
+.ru-quote b,.ru-qsrc{color:var(--ink);font-weight:600}
+.ru-qsrc{text-decoration:none}
+.ru-qsrc:hover{text-decoration:underline}
 .ru-status{margin:0;min-height:1em;color:var(--muted);font-size:var(--t-sm)}
 .ru-status:empty{display:none}
 .ru-foot{display:flex;align-items:center;gap:8px;padding-top:12px;border-top:1px solid var(--line)}
@@ -123,6 +128,28 @@ a.ru-row:hover *{text-decoration:none}
 .ru-modal [hidden]{display:none}
 .ru-newsrc{display:grid;grid-template-columns:1fr 140px;gap:6px}
 .ru-newsrc[hidden]{display:none}
+
+/* Add document */
+.ru-newdoc{display:flex;flex-direction:column;gap:8px}
+.ru-newdoc .ru-seg{align-self:stretch}
+.ru-newdoc .ru-seg button{flex:1}
+.ru-doc{display:flex;align-items:center;gap:10px;min-height:38px;padding:6px 6px 6px 12px;border:1px solid var(--line);border-radius:var(--r-ctl);font-size:var(--t-sm)}
+.ru-doc .nav-icon,.ru-pick .nav-icon{flex:none;width:18px;height:18px;font-size:18px;color:var(--muted)}
+.ru-doc-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ru-doc-x{display:inline-flex;align-items:center;justify-content:center;flex:none;width:26px;height:26px;padding:0;border:0;border-radius:var(--r-ctl);background:none;color:var(--muted);cursor:pointer}
+.ru-doc-x:hover{background:var(--surface2);color:var(--ink)}
+.ru-picks{display:flex;flex-direction:column;max-height:228px;overflow-y:auto;border:1px solid var(--line);border-radius:var(--r-ctl)}
+.ru-picks:empty{display:none}
+.ru-pick{display:flex;align-items:center;gap:10px;min-height:38px;padding:6px 12px;border:0;border-bottom:1px solid var(--line);background:none;color:var(--ink);font:inherit;font-size:var(--t-sm);text-align:left;cursor:pointer}
+.ru-pick:last-child{border-bottom:0}
+.ru-pick:hover,.ru-pick:focus-visible{background:var(--surface2)}
+.ru-pick-t{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.ru-pick-m{flex:none;max-width:40%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--muted);font-size:var(--t-xs)}
+.ru-pick-none{margin:0;padding:10px 12px;color:var(--muted);font-size:var(--t-sm)}
+.ru-done{margin:4px 0 0;font-size:var(--t-md)}
+.ru-done b{font-weight:600;overflow-wrap:anywhere}
+.ru-warn{margin:0;padding:8px 10px;border-radius:var(--r-ctl);background:color-mix(in srgb,var(--wait) 14%,transparent);color:var(--ink);font-size:var(--t-sm)}
+.ru-foot [data-ru-task]{font-size:var(--t-sm)}
 
 /* the bot's Rules tab */
 .ru-bot-card>header{display:flex;align-items:center;gap:8px}

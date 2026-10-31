@@ -1,0 +1,178 @@
+// Counsel on the Rules page (ui/app/org-rules.js, docs/rules-plan.md §2, §5) on a real hub with Counsel on and a vendor's
+// terms in Files (evals/redesign/seeds.py `counsel`): Counsel is in no bot list and its bot page has no composer; Dana
+// adds the terms on External and a private Counsel task opens (asked again, the same task); Counsel's suggestions, one
+// with no Who, wait in Suggested with no quote on the rows; Add all adds only the rows with a Who; the one with no Who
+// is added once Dana picks one; and its quote shows in the rule's side panel, linked to the file version it cites.
+// With RULES_SHOTS=<dir>, it also saves Add document, Suggested and an external rule's panel at 1440 and 390, light and
+// dark, into <dir>/p1c-*.png.
+const {chromium} = require('playwright');
+const assert = require('node:assert/strict');
+const crypto = require('node:crypto');
+const fs = require('node:fs');
+const path = require('node:path');
+const {startHub, pageAs} = require('./support/real-hub.cjs');
+const {t} = require('./support/load.cjs');
+
+const QUOTE = 'Keep a record of each consent for five years.';
+// One API call as a teammate, by token: Counsel writes its suggestions this way, as its runner would.
+async function call(hub, teammate, method, p, body) {
+  const r = await fetch(hub.url + '/api' + p, {method, headers: {Authorization: 'Bearer ' + hub.tokens[teammate],
+    'content-type': 'application/json', ...(method === 'GET' ? {} : {'Idempotency-Key': crypto.randomUUID()})},
+    body: body === undefined ? undefined : JSON.stringify(body)});
+  const json = await r.json().catch(() => ({}));
+  assert.ok(r.status < 300, `${method} ${p} as ${teammate}: ${r.status} ${JSON.stringify(json)}`);
+  return json;
+}
+const ready = page => page.waitForFunction(() => {
+  const who = document.querySelector('#account .account-email')?.textContent || '';
+  return who !== '' && who !== 'Signing in…' && document.querySelector('#main')?.children.length > 0;
+}, null, {timeout: t(20000)});
+const go = async (page, hash) => { await page.evaluate(h => { location.hash = h; }, hash); };
+// Counsel's suggestion on the terms it was asked to read, citing that version.
+const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v2/rules', {kind: 'external', text, who,
+  source_id: read.source.id, ...(cite ? {cite: {file_id: read.file.id, version: read.file.version, ...cite}} : {})});
+
+(async () => {
+  const hub = await startHub({seeds: ['org', 'groups', 'toured', 'counsel']});
+  let browser;
+  try {
+    browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
+    const page = await pageAs(browser, hub, 'dana');
+    page.on('dialog', d => d.accept());
+    await ready(page);
+
+    // Counsel is a hidden helper: on the roster, but not on the Team list, and its bot page has no composer.
+    assert.ok(await page.evaluate(() => S.emps.some(e => e.name === 'counsel')), 'Counsel is on the roster');
+    await page.locator('[data-org^="b:"]').first().waitFor({timeout: t(15000)});
+    assert.equal(await page.locator('[data-org="b:counsel"], #side a[href="#/bot/counsel"]').count(), 0, 'Counsel is not on the Team list');
+    await go(page, '#/bot/counsel');
+    await page.locator('#chat-composer [data-ask-open]').waitFor({timeout: t(15000)});
+    assert.equal(await page.locator('#chat-composer textarea').count(), 0, 'no composer on its page');
+
+    // Add document: the terms from Files, from a new vendor, with a description.
+    await go(page, '#/rules/external');
+    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    const modal = page.locator('#ru-doc');
+    await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
+    await modal.locator('select[name=source]').selectOption('new');
+    await modal.locator('input[name=source_name]').fill('Northwind');
+    await modal.locator('[data-ru-seg="source_kind"] [data-v="vendor"]').click();
+    await modal.locator('textarea[name=note]').fill('We just signed with Northwind for texts.');
+    await modal.locator('button[type=submit]').click();
+    const done = modal.locator('.ru-done');
+    await done.waitFor({timeout: t(15000)});
+    const taskId = await done.getAttribute('data-ru-read');
+    const task = await call(hub, 'dana', 'GET', '/v2/tasks/' + taskId);
+    assert.equal((task.task || task).owner, 'bot:counsel', 'a Counsel task');
+    assert.match(await modal.locator('[data-ru-task]').getAttribute('href'), new RegExp(taskId));
+    await modal.locator('[data-ru-close]').first().click();
+
+    // Asked again while that task is open: the same task, and the dialog says it is already being read.
+    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
+    await modal.locator('select[name=source]').selectOption({label: 'Northwind'});
+    await modal.locator('button[type=submit]').click();
+    await modal.locator(`.ru-done[data-ru-read="${taskId}"]`, {hasText: 'already'}).waitFor({timeout: t(15000)});
+    await modal.locator('[data-ru-close]').first().click();
+
+    // Counsel suggests three rules: one with no Who (no department holds Northwind's access), two with one.
+    const read = {source: (await call(hub, 'dana', 'GET', '/v2/rule-sources')).sources.find(s => s.name === 'Northwind'),
+                  file: {id: (await call(hub, 'dana', 'GET', '/v2/files?limit=50')).files.find(f => f.title === 'Northwind Messaging Terms').id, version: 1}};
+    const open = await suggest(hub, read, 'Keep a consent record for five years.', {}, {section: '4. Messaging', quote: QUOTE});
+    const logs = await suggest(hub, read, 'Delete raw logs after 30 days.', {bots: ['engineering-lead']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
+    const optout = await suggest(hub, read, 'Every customer text has an opt-out line.', {bots: ['engineering-lead']});
+    assert.ok([open, logs, optout].every(r => r.status === 'suggested'));
+
+    // Suggested: no document name or quote on the rows; the row with no Who can't be added until one is picked.
+    await go(page, '#/rules/suggested');
+    const group = page.locator(`.ru-sg[data-group="${read.source.id}"]`);
+    const row = group.locator(`.ru-prop[data-rule="${open.id}"]`);
+    await row.waitFor({timeout: t(15000)});
+    assert.ok(await row.locator('[data-ru-accept]').isDisabled(), 'Add waits for a Who');
+    const groupText = await group.textContent();
+    assert.ok(!groupText.includes(QUOTE) && !groupText.includes('Northwind Messaging Terms'), 'no quote or document on the rows');
+
+    // The sentence opens the side panel, with the section and quote, linked to the version cited.
+    await row.locator('.ru-pt').click();
+    const quote = page.locator('#ru-side .ru-quote');
+    await quote.waitFor({timeout: t(10000)});
+    assert.ok((await quote.textContent()).includes(QUOTE));
+    assert.equal(await quote.locator('.ru-qsrc').textContent(), '4. Messaging');
+    assert.match(await quote.locator('.ru-qsrc').getAttribute('href'), new RegExp(`/api/v2/files/${read.file.id}\\?v=1$`));
+    assert.ok(await page.locator('#ru-side [data-ru-accept-one]').isDisabled(), "the panel's Add waits for a Who too");
+
+    // Add all adds the two rows with a Who and leaves the one without waiting.
+    await group.locator('[data-ru-add-all]', {hasText: 'Add all 2'}).click();
+    await group.locator(`.ru-prop[data-rule="${logs.id}"]`).waitFor({state: 'detached', timeout: t(15000)});
+    await group.locator(`.ru-prop[data-rule="${optout.id}"]`).waitFor({state: 'detached', timeout: t(15000)});
+    assert.equal((await call(hub, 'dana', 'GET', '/v2/rules/' + open.id)).status, 'suggested');
+
+    // Pick a Who, and Add works.
+    await row.locator('[data-ru-who]').selectOption('bots:engineering-lead');
+    assert.ok(await row.locator('[data-ru-accept]').isEnabled());
+    await row.locator('[data-ru-accept]').click();
+    await group.waitFor({state: 'detached', timeout: t(15000)});
+    const added = await call(hub, 'dana', 'GET', '/v2/rules/' + open.id);
+    assert.equal(added.status, 'active');
+    assert.deepEqual(added.who.bots.map(b => b.id), ['engineering-lead']);
+    assert.equal(added.cite.quote, QUOTE);
+
+    // The external rule's panel shows the quote.
+    await go(page, `#/rules/external?rule=${open.id}`);
+    await page.locator(`#ru-side form[data-rule="${open.id}"] .ru-quote`).waitFor({timeout: t(15000)});
+    await page.context().close();
+
+    if (process.env.RULES_SHOTS) await shots(browser, hub, read, open.id);
+    console.log('org-rules-counsel: ok');
+  } finally {
+    await browser?.close();
+    await hub.stop();
+  }
+})().catch(error => { console.error(error); process.exit(1); });
+
+// Add document (the terms picked, a new From), Suggested with Counsel's rows, and the external rule's panel with its
+// quote, at 1440 and 390, light and dark.
+async function shots(browser, hub, read, ruleId) {
+  const dir = process.env.RULES_SHOTS;
+  fs.mkdirSync(dir, {recursive: true});
+  await suggest(hub, read, 'Texts go out only between 8am and 9pm in the recipient’s time zone.', {});
+  await suggest(hub, read, 'Delete raw message logs after 30 days.', {bots: ['engineering-lead']}, {section: '5. Data', quote: 'Delete raw logs after 30 days.'});
+  const groups = await call(hub, 'dana', 'GET', '/v2/groups');
+  const team = (Array.isArray(groups) ? groups : groups.groups || []).find(g => g.name === 'Engineering');
+  await suggest(hub, read, 'Every marketing text says how to opt out.', team ? {groups: [team.id]} : {all_bots: true});
+  const addDoc = async page => {
+    await page.locator('.ru-ph [data-ru-add-doc]').click();
+    const modal = page.locator('#ru-doc');
+    await modal.locator('.ru-pick', {hasText: 'Northwind Messaging Terms'}).click();
+    await modal.locator('select[name=source]').selectOption('new');
+    await modal.locator('input[name=source_name]').fill('Contoso Retail');
+    await modal.locator('[data-ru-seg="source_kind"] [data-v="customer"]').click();
+    await modal.locator('textarea[name=note]').fill('Our signed order form with Contoso.');
+  };
+  const screens = [
+    ['p1c-add-document', '#/rules/external', '#ru-doc[open] .ru-doc:not([hidden])', addDoc, '.ru-ph [data-ru-add-doc]'],
+    ['p1c-suggested', '#/rules/suggested', '.ru-sg .ru-prop'],
+    ['p1c-external-quote', `#/rules/external?rule=${ruleId}`, `#ru-side form[data-rule="${ruleId}"] .ru-quote`],
+  ];
+  for (const theme of ['light', 'dark']) {
+    for (const phone of [false, true]) {
+      const page = await pageAs(browser, hub, 'dana', {phone});
+      try {
+        await ready(page);
+        await page.evaluate(v => window.ticoTheme.set(v), theme);
+        await page.locator('.needs-you [data-snooze]').click({timeout: t(3000)}).catch(() => {});
+        for (const [name, hash, wait, act, before] of screens) {
+          await go(page, '#/overview');
+          await go(page, hash);
+          if (act) { await page.locator(before).waitFor({timeout: t(10000)}); await act(page); }
+          await page.locator(wait).first().waitFor({timeout: t(15000)});
+          await page.waitForTimeout(400);
+          await page.screenshot({path: path.join(dir, `${name}-${phone ? 390 : 1440}-${theme}.png`)});
+          await page.keyboard.press('Escape');
+        }
+      } finally {
+        await page.context().close();
+      }
+    }
+  }
+}

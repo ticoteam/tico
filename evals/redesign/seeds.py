@@ -190,3 +190,33 @@ def pages(world):
             "text": "stage,visitors\nlanding,1200\nsignup,310\nactivated,140\n"}, who=token), "funnel.csv")
     if world.turn("engineering-lead", act=act) is None:
         raise RuntimeError("the Engineering Lead's turn did not run")
+
+
+COUNSEL = "counsel-test"
+VENDOR_TERMS = ("Northwind Messaging Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every "
+                "send. Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.\n")
+
+
+@seed("counsel")
+def counsel(world):
+    """Counsel on, as onboarding turns it on (its bot row and config, and a test token, "counsel"), and a vendor's terms
+    in Files, uploaded by Dana under the Engineering Lead, for Rules › External › Add document. No model runs: a test
+    writes Counsel's suggestions itself, through the API as Counsel."""
+    from backend.auth import Identity
+    from backend.blobs import register
+    from backend.store import H
+    from .harness import DANA_ID
+    with world.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES('counsel', '{}', '', ?)",
+                  (DANA_ID,))
+        c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
+                  ("counsel", "test", "x-counsel", H.now(), "human:" + DANA_ID))
+        data = VENDOR_TERMS.encode("utf-8")
+        digest = world.app.state.blobs.put(data, "text/plain")
+        item = register(c, Identity("human:" + DANA_ID, "owner"), digest, len(data), "northwind-terms.txt", "text/plain")
+        world.app.state.files.add_version(
+            c, bot="engineering-lead", actor="human:" + DANA_ID, scope="bot", task=None, conversation=None, attempt="",
+            identity="upload:northwind-terms", title="Northwind Messaging Terms", name="northwind-terms.txt",
+            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
+    world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:counsel", "bot", agent="test")
