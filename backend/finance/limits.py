@@ -19,7 +19,8 @@ PERIOD_WORDS = {"month": "monthly", "quarter": "quarterly", "year": "yearly", "o
 @dataclass(frozen=True)
 class Cutoff:
     """The budget a bot is held by: its id and name, its period's word, and when that period ends (UTC midnight after
-    its last day). No amounts: who reads a paused bot may not see the budget's numbers."""
+    its last day; "" for a one-time budget, which never turns over). No amounts: who reads a paused bot may not see
+    the budget's numbers."""
     budget_id: str
     name: str
     period: str
@@ -54,9 +55,10 @@ class Cutoffs:
                     continue
                 st = budgeting.state(ctx, b.id, today, "teammate:" + mate, path)
                 if st.at_limit:
-                    end = date.fromisoformat(st.period_end) + timedelta(days=1)
+                    end = date.fromisoformat(st.period_end)
+                    until = "" if end >= B.ONCE_END else (end + timedelta(days=1)).isoformat() + "T00:00:00Z"
                     return Cutoff(budget_id=b.id, name=b.name, period=PERIOD_WORDS.get(b.period, b.period),
-                                  until=end.isoformat() + "T00:00:00Z")
+                                  until=until)
         return None
 
 
