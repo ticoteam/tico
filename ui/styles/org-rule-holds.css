@@ -17,6 +17,7 @@
 .rh-why{font-size:var(--t-base);line-height:var(--lh);white-space:pre-wrap;overflow-wrap:anywhere}
 .rh-acts{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .rh-acts .spacer{flex:1}
+.rh-more{align-self:flex-start}
 .rh-btn{text-decoration:none;display:inline-flex;align-items:center;border:1px solid var(--line);border-radius:var(--r-ctl);
   padding:3px 10px;line-height:20px;color:var(--ink)}
 .rh-btn:hover{background:var(--surface2);text-decoration:none}

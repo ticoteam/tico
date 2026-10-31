@@ -1,8 +1,9 @@
 /* ui/app/org-rule-holds.js — What org rule checks show (backend/org_rule_check.py, docs/rules-plan.md §3, board Held):
    on a review task (tagged rule-review) each held output with its rule and the reviewer's three actions, Keep blocked,
    Send anyway and Edit rule; the one-line note a person sees in a chat when a bot's reply was held; and the checks line
-   in the Rules page header ("Checks on · 12 today · 0 unchecked · $48 left"). The held text is read from
-   GET /api/v2/rule-holds?task=<id>, which answers only the reviewer and the author bot.
+   in the Rules page header ("Checks on · 12 today · 0 unchecked · $48 left"). GET /api/v2/rule-holds?task=<id> lists a
+   task's holds a page at a time, as summaries; each card's text (and the reviewer's nonce) is read from
+   GET /api/v2/rule-holds/<hold>. Both answer only the reviewer and the author bot.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -20,13 +21,32 @@ function ruleHoldsAdopt(d, task) {
   d.rhEl = slot; slot.dataset.task = id;
   void ruleHoldsLoad(slot, id);
 }
-async function ruleHoldsLoad(slot, id) {
-  let holds = [];
-  try { holds = (await get('/v2/rule-holds?task=' + encodeURIComponent(id), {fresh: true})).holds || []; }
-  catch { holds = []; }
+// One page of summaries, then each hold opened for its text. `cursor` continues the list below the cards drawn.
+async function ruleHoldsLoad(slot, id, cursor = '') {
+  let page = {holds: []};
+  try {
+    page = await get('/v2/rule-holds?task=' + encodeURIComponent(id) + (cursor ? '&cursor=' + encodeURIComponent(cursor) : ''),
+      {fresh: true});
+  } catch { page = {holds: []}; }
+  const holds = await Promise.all((page.holds || []).map(h =>
+    get('/v2/rule-holds/' + encodeURIComponent(h.id), {fresh: true}).catch(() => h)));
   if (slot.dataset.task !== id) return;
-  slot.hidden = !holds.length;
-  slot.innerHTML = holds.map(ruleHoldHTML).join('');
+  $('.rh-more', slot)?.remove();
+  if (!cursor) slot.innerHTML = '';
+  slot.insertAdjacentHTML('beforeend', holds.map(ruleHoldHTML).join('') +
+    (page.next_cursor ? `<button class="ghost small rh-more" type="button">Show more</button>` : ''));
+  slot.hidden = !slot.querySelector('[data-hold]');
+  ruleHoldsWire(slot, id);
+  $('.rh-more', slot)?.addEventListener('click', ev => {
+    ev.currentTarget.disabled = true;
+    void ruleHoldsLoad(slot, id, page.next_cursor);
+  }, {once: true});
+}
+// A decided card is drawn again from its own hold: the cards around it keep their place.
+async function ruleHoldRedraw(slot, id, card) {
+  const h = await get('/v2/rule-holds/' + encodeURIComponent(card.dataset.hold), {fresh: true});
+  if (slot.dataset.task !== id) return;
+  card.outerHTML = ruleHoldHTML(h);
   ruleHoldsWire(slot, id);
 }
 function ruleHoldHTML(h) {
@@ -39,7 +59,7 @@ function ruleHoldHTML(h) {
   return `<article class="rh-card" data-hold="${esc(h.id)}">
     <header><span class="rh-pill ${cls}">${word}</span><span class="rh-to muted">${esc(h.author_name || actorLabel(h.author))}${
       (h.to || []).length ? ' → ' + esc(h.to.join(', ')) : ''}</span></header>
-    <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${esc(h.text || '')}</div></div>
+    <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${esc(h.text || '')}${h.text_cut ? '…' : ''}</div></div>
     <div><div class="rh-lbl">Rule</div>${rules || '<div class="rh-rule muted">A rule that no longer exists</div>'}</div>
     ${h.why ? `<div><div class="rh-lbl">Appeal</div><div class="rh-why">${esc(h.why)}</div></div>` : ''}
     ${decided ? `<p class="muted rh-done">${decided}</p>` : reviewer ? `<div class="rh-acts">
@@ -50,14 +70,15 @@ function ruleHoldHTML(h) {
   </article>`;
 }
 function ruleHoldsWire(slot, id) {
-  slot.querySelectorAll('[data-hold]').forEach(card => {
+  slot.querySelectorAll('[data-hold]:not([data-wired])').forEach(card => {
+    card.dataset.wired = '1';
     const hid = card.dataset.hold, err = $('.rh-err', card);
     const act = async (path, body, button) => {
       card.querySelectorAll('button').forEach(b => { b.disabled = true; });
       err.hidden = true;
       try {
         await post('/v2/rule-holds/' + encodeURIComponent(hid) + '/' + path, body);
-        await ruleHoldsLoad(slot, id);
+        await ruleHoldRedraw(slot, id, card);
       } catch (e) {
         err.textContent = e.message; err.hidden = false;
         card.querySelectorAll('button').forEach(b => { b.disabled = false; });

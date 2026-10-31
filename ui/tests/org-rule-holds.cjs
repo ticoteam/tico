@@ -1,6 +1,6 @@
 // Org rule checks in the app (ui/app/org-rule-holds.js, backend/org_rule_check.py): a rule review task shows each held
-// output with its rule and Keep blocked / Send anyway / Edit rule; Keep blocked and Send anyway post once and the card
-// says what was decided; a held reply in a chat is one line naming the rule, never the text; the Rules header carries
+// output with its rule and Keep blocked / Send anyway / Edit rule (the list is summaries, each card opens its hold for the
+// text, and Show more reads the next page); Keep blocked and Send anyway post once and the card says what was decided; a held reply in a chat is one line naming the rule, never the text; the Rules header carries
 // "Checks on · N today · N unchecked · $N left". No sideways scroll at phone width. Every request is intercepted.
 // TICO_SHOTS=<dir> saves the screenshots (1440 and 390, dark and light).
 const {chromium} = require('playwright');
@@ -27,12 +27,24 @@ async function shot(page, name) {
   await page.screenshot({path: path.join(SHOTS, name + '.png')});
 }
 
-async function review(browser, {viewport, theme}) {
+const SECOND = {...HOLD, id: 'h-2', outcome: 'blocked', text: 'Sent the Acme roster to a personal address.', why: null,
+  nonce: 'n-2', created: ago(20)};
+const summary = h => { const {text, why, nonce, ...rest} = h; return {...rest, appealed: !!why}; };
+
+async function review(browser, {viewport, theme, paged = false}) {
   const {page, errors} = await open(browser, {viewport, theme, hash: '#/tasks', baseTasks: [REVIEW]});
   let hold = {...HOLD};
   const posted = [];
-  await page.route(url => url.pathname === '/api/v2/rule-holds', route => route.fulfill({contentType: 'application/json',
-    body: JSON.stringify({holds: [hold], more: false})}));
+  await page.route(url => url.pathname === '/api/v2/rule-holds', route => {
+    const cursor = new URL(route.request().url()).searchParams.get('cursor');
+    const body = cursor === 'c-1' ? {holds: [summary(SECOND)], next_cursor: null}
+      : {holds: [summary(hold)], next_cursor: paged ? 'c-1' : null};
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify(body)});
+  });
+  await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+$/.test(url.pathname), route => {
+    const id = new URL(route.request().url()).pathname.split('/').pop();
+    return route.fulfill({contentType: 'application/json', body: JSON.stringify(id === 'h-2' ? SECOND : hold)});
+  });
   await page.route(url => /^\/api\/v2\/rule-holds\/[^/]+\/(keep|send)$/.test(url.pathname), route => {
     const [, id, act] = new URL(route.request().url()).pathname.match(/rule-holds\/([^/]+)\/([^/]+)$/);
     posted.push({id, act, body: route.request().postDataJSON()});
@@ -60,7 +72,16 @@ async function review(browser, {viewport, theme}) {
   try {
     for (const theme of ['dark', 'light']) {
       for (const viewport of [{width: 1440, height: 900}, {width: 390, height: 844}]) {
-        const {page, errors, card, posted} = await review(browser, {viewport, theme});
+        const paged = viewport.width === 1440 && theme === 'light';
+        const {page, errors, card, posted} = await review(browser, {viewport, theme, paged});
+        if (paged) {
+          await page.locator('#task-modal .rh-more').click();
+          const next = page.locator('#task-modal .rh-card[data-hold="h-2"]');
+          await next.waitFor();
+          assert.match(await next.innerText(), /personal address/);
+          assert.equal(await page.locator('#task-modal .rh-more').count(), 0, 'the last page has no Show more');
+          assert.equal(await page.locator('#task-modal .rh-card').count(), 2);
+        }
         await shot(page, `held-review-${viewport.width}-${theme}`);
         if (viewport.width === 1440 && theme === 'dark') {
           await card.locator('[data-hold-send]').click();
