@@ -516,13 +516,19 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         cells = [x for x in cells if f.keeps(x.team, x.teammate)]
     whole = _suppress(s, cells, vendor is not None or f.narrow(s.ctx.org), a, z)
     split = _suppress(s, cells, True, a, z)
+    # A vendor drill-down shows its seats and renewal date (spec §12); a contact of another book shows nothing.
+    contact = SAP.get(c, "fin_contacts", vendor) if vendor else None
+    if contact is not None and str(contact["book_id"]) != s.ctx.book.id:
+        contact = None
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole.hidden else sum(x.amount for x in whole.cells),
                 "excluded": split.excluded, "hidden": _hidden_labels(s, split.hidden | whole.hidden),
                 "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
                                              "unattributed": f.unattributed},
-                "next_month": _next_month(s, ids, f)}
+                "next_month": _next_month(s, ids, f),
+                "seats": contact["seats"] if contact is not None else None,
+                "renewal_on": (contact["renewal_on"] or None) if contact is not None else None}
     for by in ("vendor", "team", "teammate"):
         sums: dict[str, int] = {}
         for cell in split.cells:

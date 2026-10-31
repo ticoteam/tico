@@ -459,6 +459,8 @@ ADDED = (
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
     ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
+    # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
+    ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
 )
 
 

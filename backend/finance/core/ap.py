@@ -23,6 +23,8 @@ AGING = ("current", "1_30", "31_60", "61_90", "over_90")
 # Reminder stages: a bill a week out, a day out and on the day; an invoice a day, a week, a month... late.
 BILL_STAGES = (("due_in_7", 7), ("due_in_1", 1), ("due_today", 0))
 INVOICE_STAGES = (("overdue_1", 1), ("overdue_7", 7), ("overdue_30", 30), ("overdue_60", 60), ("overdue_90", 90))
+# A vendor renewal: a month out, then a week out (the tightest stage reached is the one raised).
+RENEWAL_STAGES = (("renewal_in_30", 30), ("renewal_in_7", 7))
 MAX_TERMS = 365
 SHARE_WHOLE = 10_000          # posting-rule splits are in basis points
 DEFAULT_PRIORITY = 100
@@ -81,6 +83,17 @@ def bill_stage(due: str | None, today: date) -> str | None:
         return None
     left = (dates.day(due) - today).days
     reached = [name for name, days in BILL_STAGES if left <= days]
+    return reached[-1] if reached else None
+
+
+def renewal_stage(renewal: str | None, today: date) -> str | None:
+    """The tightest renewal stage a vendor has reached; none without a date or once the date has passed."""
+    if not renewal:
+        return None
+    left = (dates.day(renewal) - today).days
+    if left < 0:
+        return None
+    reached = [name for name, days in RENEWAL_STAGES if left <= days]
     return reached[-1] if reached else None
 
 
