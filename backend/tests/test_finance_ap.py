@@ -7,6 +7,7 @@ import pytest
 from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.core import feeds as F
+from backend.finance.store import ledger as SL
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
 from backend.tests.test_finance_payments import HOURS, _checking, _payee
@@ -331,3 +332,66 @@ def test_due_soon_cash_below_and_period_ready_fire_once_per_stage_crossing_and_m
         assert not checklist["ready"] and {x["key"] for x in checklist["checks"]} >= {"reconciled", "draft_bills"}
         FA.drain_events(c, LATER)
         assert c.execute("SELECT count(*) FROM fin_events WHERE drained_at IS NULL").fetchone()[0] == 0
+
+
+def test_marked_paid_from_checking_then_its_bank_row_arrives_posts_cash_once_and_clears_ap_once(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        bank = _balance(c, "1000")
+        # A row the bank showed before anyone marked the bill paid: Other expenses, until the mark-paid links it.
+        early = _ingest(c, _txn("txn-m0", -99.0, day="2026-10-12"))
+        one, two, early_bill, outside = (
+            _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": n}], number=f"M-{n}")
+            for n in (25_000, 7_000, 9_900, 1_000))
+        for b in (one, two, early_bill, outside):
+            assert act(c, OWNER, "bill_approve", {"bill_id": b}).status == "committed"
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": one, "money_account_id": _checking(c), "date": "2026-10-13"})
+        assert paid.status == "committed", paid
+        assert (paid.result["from"], paid.result["status"]) == ("expected", "paid")
+        named = act(c, OWNER, "bill_mark_paid", {"bill_id": two, "account_id": account(c, "1000"), "date": "2026-10-13"})
+        assert named.result["from"] == "expected"                      # the account's own line names the account
+        assert _balance(c, "1000") - bank == -32_000 - 9_900
+        rows = [_ingest(c, _txn("txn-m1", -250.0, day="2026-10-14")), _ingest(c, _txn("txn-m2", -70.0, day="2026-10-15"))]
+        linked = [c.execute("SELECT entry_id, status FROM fin_feed_txns WHERE id=?", (r,)).fetchone() for r in rows]
+        assert [tuple(x) for x in linked] == [(paid.result["entry_id"], "posted"), (named.result["entry_id"], "posted")]
+        late = act(c, OWNER, "bill_mark_paid", {"bill_id": early_bill, "money_account_id": _checking(c)})
+        assert (late.result["from"], late.result["feed_id"]) == ("feed", early)
+        assert _balance(c, "1000") - bank == -32_000 - 9_900                # every bank row posted once
+        assert (_balance(c, "2000"), _balance(c, "6900"), _balance(c, "6100")) == (-1_000, 0, 42_900)
+        assert not {r for r, _ in _events(c, "finance.feed.needs_category")} & set(rows)
+        # Paid outside every connected account: a clearing line the feed never touches.
+        away = act(c, OWNER, "bill_mark_paid", {"bill_id": outside})
+        assert away.result["from"] == "account" and _balance(c, "1050") == -1_000 and _balance(c, "2000") == 0
+        # The bank cancels a linked row: the bill owes it again and its bank line is given back.
+        _ingest(c, {**_txn("txn-m1", -250.0, day="2026-10-14"), "status": "cancelled"}, LATER)
+        assert FR.bill(c, OWNER, one)["status"] == "open"
+        assert (_balance(c, "2000"), _balance(c, "1000") - bank) == (-25_000, -7_000 - 9_900)
+
+
+def test_a_posting_rule_categorizes_a_tico_card_charge_and_keeps_the_holder_card_use_and_liability(books):
+    from backend.tests.test_finance_banking import _arrives, _card_for_eve, _card_use, _card_holds
+    fake = FakeMercury()
+    fake.balances["credit-io"] = 0
+    connect(books, fake)
+    _, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Hosting", "when": {"counterparty": {"matches": "Cloud"}},
+                "outcome": {"outcome": "post", "account_id": account(c, "5100"),
+                            "tags": {"teammate": "human:gus", "project": "site"}},
+                "examples": [{"input": {"counterparty": "Acme Cloud"}, "expect": "post"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    _arrives(fake, MERCURY["txn_card_pending"], 1, "evt-0001")
+    sync_once(books, fake, HOURS[1])
+    _arrives(fake, MERCURY["txn_card_posted"], 2, "evt-0002")
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        entry = c.execute("SELECT entry_id FROM fin_feed_txns WHERE card_id=?", (card_id,)).fetchone()[0]
+        codes = {str(r[0]): str(r[1]) for r in c.execute("SELECT id, code FROM fin_accounts")}
+        lines = [(codes[x.account_id], dict(x.tags), x.amount) for _, x in SL.entry_lines(c, entry)]
+        assert ("5100", {"teammate": "human:eve", "team": "web", "project": "site"}, 4_500) in lines
+        assert [a for code, _, a in lines if code == "2100"] == [-4_500]        # still on the card liability
+        assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
+        assert not _events(c, "finance.feed.needs_category")

@@ -56,7 +56,7 @@ def _gl(ctx: Ctx, money: Any) -> L.Account:
     return account
 
 
-def _new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: str) -> L.Account:
+def new_account(ctx: Ctx, base: str, name: str, type_: str, subtype: str, who: str) -> L.Account:
     """The first free code from `base` (1000 → 1001, 1002...) for a provider account Tico maps."""
     taken = {a.code for a in ctx.accounts.values()}
     code = int(base)
@@ -124,7 +124,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             bank = by_code(ctx, BANK)
             used = bank is not None and any(str(r["account_id"]) == bank.id for r in SK.money_accounts(ctx.c,
                                                                                                         ctx.book.id))
-            gl = bank if bank is not None and not used else _new_account(
+            gl = bank if bank is not None and not used else new_account(
                 ctx, BANK, f"{a.get('name') or 'Mercury'} ••{a.get('last4') or ''}", "asset", "bank", who)
             mapped.append(_money(ctx, cid, a, "bank", subtype, gl, who))
         for a in credit:
@@ -137,7 +137,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             gl = cards if cards is not None and not any(
                 str(r["account_id"]) == cards.id for r in SK.money_accounts(ctx.c, ctx.book.id)) else None
             if gl is None:
-                gl = _new_account(ctx, CARDS, "Credit cards" if cards is None else "Mercury IO", "liability",
+                gl = new_account(ctx, CARDS, "Credit cards" if cards is None else "Mercury IO", "liability",
                                   "credit_card", who)
             mapped.append(_money(ctx, cid, {**a, "name": a.get("name") or "Mercury IO"}, "card_program", "credit", gl,
                                  who))
@@ -182,7 +182,7 @@ def set_balance(ctx: Ctx, money_id: str, current: int | None, available: int | N
 def _opening_line(ctx: Ctx) -> L.Account:
     """Opening balance equity: setup makes it; an older book gets it the first time an opening balance posts."""
     found = next((a for a in ctx.accounts.values() if a.type == "equity" and a.subtype == "opening"), None)
-    return found or _new_account(ctx, OPENING, "Opening balance equity", "equity", "opening", SYSTEM)
+    return found or new_account(ctx, OPENING, "Opening balance equity", "equity", "opening", SYSTEM)
 
 
 def opening_amount(ctx: Ctx, money: Any, through: str) -> int:
@@ -327,15 +327,22 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
             _transfer(ctx, row, money, other)
         return                      # one side of a move between our accounts: it posts when the other side arrives
     if program and card is not None:
-        # A charge or refund on a card Tico issued posts to the card's budget line against the card liability.
+        # A charge or refund on a card Tico issued posts against the card liability: to the line a posting rule picks,
+        # else the card's budget line, tagged with its holder either way.
         account, tags = card_line(ctx, card)
+        lines, ask = posting_rules.card_lines(ctx, row, money, account, tags)
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
-        entry = post_row(ctx, fid, t, [feed_line(account, -t.amount, tags, t.counterparty)], gl.id, holds)
+        entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
         _card_used(ctx, row, -t.amount, entry)
+        if ask:
+            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return
-    # Anything else: the one open bill or invoice it pays, else the first posting rule (or the counterparty's default
-    # line), else a debit posts to Other expenses and a credit waits, and a person is asked (needs_category).
+    # Anything else: a payment marked paid from this account, else the one open bill or invoice it pays, else the
+    # first posting rule (or the counterparty's default line), else a debit posts to Other expenses and a credit
+    # waits, and a person is asked (needs_category).
+    if documents.expected_match(ctx, row, money, t):
+        return                      # the bank row of a payment marked paid from this account: linked, posted once
     found = documents.match_feed(ctx, row, t)
     if found is not None:
         kind, doc = found
@@ -531,7 +538,8 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
         return False
     gl = str(money["account_id"])
     moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(row["entry_id"])) if line.account_id == gl)
-    shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1
+    # A transfer's two sides, or a row linked to a payment marked paid on a bill or invoice, keep their entry's day.
+    shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1 or str(entry["source"]) in L.DOC_SOURCES
     day, posted = str(row["txn_date"]), str(entry["entry_date"])
     # A row dated in a closed period posted on a later open day (`open_day`): that shift is not a change.
     same_day = posted == day or (posted > day and SL.closed_on(ctx.c, ctx.book.id, day))
@@ -847,4 +855,4 @@ def connection_map(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 __all__ = ["connection_create", "connection_sync", "connection_disconnect", "connection_map", "ingest", "categorize_feed", "reconcile", "reconcile_undo", "set_balance", "event",
-           "card_line", "undo", "reversal_locked"]
+           "card_line", "undo", "reversal_locked", "new_account", "MATCH_DAYS"]

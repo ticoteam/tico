@@ -9,16 +9,22 @@ network. Finance records on accrual underneath and derives the cash view from se
   document may be paid in parts and one row may pay several). A feed row that pays a document clears AP or AR; it never
   posts expense or income again. Each settlement moves the cash view by the document lines' share of what was paid
   (core/ap.recognized), at the day it was paid; a document's own entry is left out of the cash view (posting.post).
+- Marked paid from a connected money account, the payment posts to its bank line at once and waits (settlement
+  `expected`) for its bank row, which links to that entry when it arrives (`expected_match`), so cash posts once; a
+  bank row already in is linked instead. Marked paid with no money line, it posts to a clearing account the feed never
+  touches.
 - A write-off posts Dr the write-off line / Cr AR with basis `accrual`: the cash view never had that income.
 - Stage events: finance.bill.received once per bill, finance.bill.due_soon and finance.invoice.overdue once per
   document per stage (the hourly `watch`)."""
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
+from datetime import timedelta
 from typing import Any, cast
 
 from . import budgeting, posting
 from .context import Ctx
 from .core import ap as AP
+from .core import dates
 from .core import feeds as F
 from .core import kinds as K
 from .core import ledger as L
@@ -40,6 +46,7 @@ SIGN = {"bill": 1, "invoice": -1}       # a bill's lines are debits, an invoice'
 OPEN = {"bill": AP.OPEN_BILL, "invoice": AP.OPEN_INVOICE}
 LINE_TYPES = {"bill": ("expense", "asset"), "invoice": ("income",)}
 NAME_MIN = 4                            # a counterparty matches a contact's name on at least this many characters
+CLEARING = ("1050", "Payments clearing", "asset", "clearing")
 
 
 def _event(ctx: Ctx, name: str, subject: str, payload: Mapping[str, object], key: str = "") -> None:
@@ -736,6 +743,62 @@ def match_feed(ctx: Ctx, row: Any, t: F.FeedTxn) -> tuple[str, Any] | None:
     return (kind, found[0]) if len(found) == 1 else None
 
 
+def _window(day: str) -> tuple[str, str]:
+    from .banking import MATCH_DAYS
+    d = dates.day(day)
+    return (d - timedelta(days=MATCH_DAYS)).isoformat(), (d + timedelta(days=MATCH_DAYS)).isoformat()
+
+
+def _named(counterparty: str, name: str) -> bool:
+    """A bank row with no counterparty matches on amount, account and day alone."""
+    return not counterparty.strip() or _same_name(counterparty, name)
+
+
+def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> bool:
+    """Link a new settled row to the one payment marked paid from its money account that waits for it (same amount
+    and direction, marked within MATCH_DAYS of the row, the document's contact named like the counterparty): the row
+    takes that entry, nothing new posts, and the settlement now comes from the row (so a bank change or cancellation
+    makes the document owe it again). None or several waiting: False, and the row posts as usual."""
+    from .banking import mark_posted
+    kind = "bill" if t.amount < 0 else "invoice"
+    start, end = _window(t.txn_date)
+    found: list[Any] = []
+    for s in SAP.expected(ctx.c, kind, str(money["id"]), abs(t.amount), start, end):
+        entry = SL.entry_row(ctx.c, str(s["entry_id"] or "-"))
+        if entry is not None and str(entry["status"]) == "posted" and not SK.rows_of_entry(ctx.c, str(entry["id"])) \
+                and _named(t.counterparty, str(s["contact_name"] or "")):
+            found.append(s)
+    if len(found) != 1:
+        return False
+    s, fid = found[0], str(row["id"])
+    mark_posted(ctx, [fid], str(s["entry_id"]))
+    SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"from_kind": "feed", "from_id": fid})
+    return True
+
+
+def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -> Any:
+    """The bank row of this payment when it is in already (marked paid after the bank showed it): the one settled row
+    on the money account of exactly this amount, within MATCH_DAYS of `day`, named like the contact, not a Finance
+    payment, a transfer or already applied to a document."""
+    start, end = _window(day)
+    signed = -amount if kind == "bill" else amount
+    found = [r for r in SK.transfer_candidates(ctx.c, [str(money["id"])], signed, start, end)
+             if not r["request_id"] and not r["card_id"] and _named(str(r["counterparty"]), str(doc["contact_name"] or ""))
+             and not SAP.settled_from(ctx.c, "feed", str(r["id"]))
+             and not (r["entry_id"] and len(SK.rows_of_entry(ctx.c, str(r["entry_id"]))) > 1)]
+    return found[0] if len(found) == 1 else None
+
+
+def clearing(ctx: Ctx, who: str) -> L.Account:
+    """Where a payment made outside every connected account goes: an asset line no feed row ever posts to."""
+    found = [a for a in ctx.accounts.values() if a.active and a.subtype == CLEARING[3]]
+    if found:
+        return min(found, key=lambda a: a.code)
+    from .banking import new_account
+    code, name, type_, subtype = CLEARING
+    return new_account(ctx, code, name, type_, subtype, who)
+
+
 def feed_paid(ctx: Ctx, row: Any, kind: str, doc: Any, entry_id: str) -> None:
     """A feed row the books posted straight to AP or AR (match_feed) settles its document."""
     settle(ctx, kind, str(doc["id"]), amount=abs(int(row["amount"])), day=str(row["txn_date"]), from_kind="feed",
@@ -807,10 +870,12 @@ def _pay(kind: str) -> Any:
     words = {"bill": "bill_mark_paid", "invoice": "invoice_record_payment"}[kind]
 
     def planner(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-        """Record money paid on a bill (received on an invoice), in part or in full, from a feed row (linked, never
-        posting expense or income again) or from a money line with no feed in Finance. More than is left is refused."""
+        """Record money paid on a bill (received on an invoice), in part or in full: from a feed row (linked, never
+        posting expense or income again), from a money account (a connected one's bank row links when it comes, so
+        cash posts once), from another money line, or with none (a clearing account the feed never touches). More
+        than is left is refused."""
         from .banking import seen
-        V.only(p, (f"{kind}_id", "amount", "date", "feed_id", "account_id"))
+        V.only(p, (f"{kind}_id", "amount", "date", "feed_id", "money_account_id", "account_id"))
         doc = _doc(ctx, kind, V.text(p, f"{kind}_id", 80))
         _need_status(kind, doc, OPEN[kind], "only an open one is paid")
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
@@ -819,10 +884,34 @@ def _pay(kind: str) -> Any:
         amount = V.opt_amount(p) or left
         if not 0 < amount <= left:
             raise invalid(f"the amount is more than 0 and at most what is left ({left})")
-        if ("feed_id" in p) == ("account_id" in p):
-            raise invalid("say feed_id (the bank or card row) or account_id (the money line)")
+        if sum(k in p for k in ("feed_id", "money_account_id", "account_id")) > 1:
+            raise invalid("say one of feed_id (the bank or card row), money_account_id or account_id, or none")
         row: Any = None
         account: L.Account | None = None
+        money: Any = None
+        if "money_account_id" in p:
+            money = SK.get(ctx.c, "fin_money_accounts", V.text(p, "money_account_id", 80))
+            if money is None or str(money["book_id"]) != ctx.book.id:
+                raise FinanceError(NOT_FOUND, "no such money account")
+            account = ctx.accounts.get(str(money["account_id"] or ""))
+            if account is None:
+                raise invalid("that money account has no account in the books")
+        elif "account_id" in p:
+            account = ctx.accounts.get(V.text(p, "account_id", 80))
+            if account is None or not account.active or account.type not in ("asset", "liability") or \
+                    account.id == control(ctx, kind).id:
+                raise FinanceError(NOT_FOUND, "no such money account line")
+            # A connected money account's own line is that account: its bank row will come.
+            money = next((m for m in SK.money_accounts(ctx.c, ctx.book.id)
+                          if str(m["account_id"] or "") == account.id and m["connection_id"]), None)
+        if money is not None and str(money["kind"]) == "card_program":
+            raise invalid("a Tico card's charge pays a document through its feed row (feed_id)")
+        if account is not None and not may_write(ctx, who, account.id, {}):
+            raise denied("that line is outside your view")
+        day = V.opt_day(p, "date") or ctx.today
+        waits = str(money["id"]) if money is not None and money["connection_id"] else ""
+        if waits:
+            row = _arrived(ctx, kind, doc, money, amount, day)
         if "feed_id" in p:
             row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
             if row is None or not seen(ctx, who, row):
@@ -839,14 +928,8 @@ def _pay(kind: str) -> Any:
             if amount > free:
                 raise invalid(f"that row has {free} left to apply")
             day = V.opt_day(p, "date") or str(row["txn_date"])
-        else:
-            account = ctx.accounts.get(V.text(p, "account_id", 80))
-            if account is None or not account.active or account.type not in ("asset", "liability") or \
-                    account.id == control(ctx, kind).id:
-                raise FinanceError(NOT_FOUND, "no such money account line")
-            if not may_write(ctx, who, account.id, {}):
-                raise denied("that line is outside your view")
-            day = V.opt_day(p, "date") or ctx.today
+        elif row is not None:
+            day = V.opt_day(p, "date") or str(row["txn_date"])
 
         def apply(aid: str) -> Result:
             from .banking import open_day
@@ -854,19 +937,21 @@ def _pay(kind: str) -> Any:
                 entry = _from_feed(ctx, kind, doc, SK.get(ctx.c, "fin_feed_txns", str(row["id"])), amount)
                 src, src_id = "feed", str(row["id"])
             else:
-                assert account is not None
+                line = account or clearing(ctx, who)
                 s = SIGN[kind]
                 contact = str(doc[f"{CONTACT_OF[kind]}_id"])
                 done = posting.post_entry(ctx.c, {
                     "date": open_day(ctx, day), "source": kind, "source_id": f"{doc['id']}:paid:{aid}",
                     "memo": f"Pays {kind} {doc['number'] or doc['id']}"[:200],
                     "lines": [{"account_id": control(ctx, kind).id, "amount": s * amount, "contact_id": contact},
-                              {"account_id": account.id, "amount": -s * amount}]}, by=who, at=ctx.at)
-                entry, src, src_id = str(done["entry_id"]), "account", account.id
+                              {"account_id": line.id, "amount": -s * amount}]}, by=who, at=ctx.at)
+                entry = str(done["entry_id"])
+                src, src_id = ("expected", waits) if waits else ("account", line.id)
             sid = settle(ctx, kind, str(doc["id"]), amount=amount, day=day, from_kind=src, from_id=src_id,
                          entry_id=entry, action_id=aid, by=who)
             fresh = _doc(ctx, kind, str(doc["id"]))
-            return {f"{kind}_id": str(doc["id"]), "settlement_id": sid, "entry_id": entry,
+            return {f"{kind}_id": str(doc["id"]), "settlement_id": sid, "entry_id": entry, "from": src,
+                    "feed_id": str(row["id"]) if row is not None else None,
                     "status": str(fresh["status"]), "remaining": _left(kind, fresh)}
         return Plan(K.default_gate(ctx.org, who, words),
                     f"Record {_money(amount)} {'paid on' if kind == 'bill' else 'received on'} {kind} "
@@ -961,7 +1046,6 @@ def pay_due(ctx: Ctx) -> int:
 
 def watch(ctx: Ctx) -> int:
     """Raise each open bill's due-soon stage and each sent invoice's overdue stage, once per document per stage."""
-    from .core import dates
     today = dates.day(ctx.today)
     n = 0
     for bill in SAP.open_docs(ctx.c, "bill", ctx.book.id):

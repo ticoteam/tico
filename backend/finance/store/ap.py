@@ -187,6 +187,16 @@ def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any
                      "ORDER BY created_at", (kind, from_id)).fetchall()
 
 
+def expected(c: sqlite3.Connection, kind: str, money_account_id: str, amount: int, start: str, end: str) -> list[Any]:
+    """Payments marked from a connected money account still waiting for their bank row, of this amount in a window,
+    with the document's `contact_name`."""
+    table, _, _, _, contact = DOCS[kind]
+    return c.execute(f"SELECT s.*, k.name AS contact_name FROM fin_settlements s JOIN {table} d ON d.id=s.to_id "
+                     f"LEFT JOIN fin_contacts k ON k.id=d.{contact} WHERE s.from_kind='expected' AND s.to_kind=? AND "
+                     "s.from_id=? AND s.amount=? AND s.settled_on BETWEEN ? AND ? AND s.voided_at IS NULL "
+                     "ORDER BY s.created_at, s.id LIMIT 20", (kind, money_account_id, amount, start, end)).fetchall()
+
+
 def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_settlements WHERE entry_id=? AND voided_at IS NULL ORDER BY created_at",
                      (entry_id,)).fetchall()
