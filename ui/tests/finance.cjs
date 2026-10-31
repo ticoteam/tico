@@ -145,6 +145,8 @@ const TX = [
       {line_id: 'l6', account_id: 'a-6100', account: 'Software', amount: 20000, vendor: 'Linear', tags: {team: 'mkt'}}]},
   {kind: 'feed', id: 'f5', date: '2026-10-26', amount: -41000, currency: 'USD', counterparty: 'AWS', description: 'AWS', status: 'posted', pending: false, card_id: null, reconciled: true,
     money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: [{line_id: 'l7', account_id: 'a-5100', account: 'Hosting', amount: 41000, vendor: 'AWS', tags: {}}]},
+  {kind: 'feed', id: 'f7', date: '2026-10-25', amount: -500000, currency: 'USD', counterparty: 'Savings', description: 'Transfer to Savings', status: 'posted', pending: false, card_id: null,
+    provider_kind: 'internalTransfer', entry_id: 'e7', money_account: {id: 'm1', name: 'Checking', last4: '0001'}, lines: []},
   {kind: 'entry', id: 'l9', entry_id: 'e9', date: '2026-10-27', amount: 610000, account_id: 'a-6300', account: 'Contractors', vendor: 'Northwind Design', description: 'October design work',
     memo: '', source: 'manual', reversed: false, tags: {team: 'mkt'}}];
 const SOURCES = {groups: [
@@ -166,7 +168,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
-  const writes = [], reads = [], hub = {ask: ''};
+  const writes = [], reads = [], hub = {ask: '', hold: null};
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -204,6 +206,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/chart') return json({accounts: LINES.filter(l => !l[7]).map(([id, number, name, type, parent_id]) =>
       ({id, number, name, type, subtype: '', parent_id, company_wide: id !== 'a-6300'})), more: false, view_version: 'v1'});
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
+    if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.hold) await hub.hold;
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: {}});
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
     return json(unrouted(p));
@@ -506,6 +509,40 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       const forWant = {feed_id: 'f2', account_id: 'a-6300', tags: {team: 'eng'}};
       assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: forWant, dry_run: true}, {kind: 'categorize', payload: forWant, dry_run: true},
         {kind: 'categorize', payload: forWant}], tag + ': For is the line\'s tag, sent after Send, once');
+      // While a dry run is out: every Save is off, and an approval asked for picks since changed is not shown.
+      let release = () => {};
+      hub.ask = 'human:ana'; hub.hold = new Promise(r => { release = r; });
+      await page.locator(cat + ' select[name="account"]').selectOption('a-6100');
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => writes.length > n);
+      await page.locator(cat + ' select[name="account"]').selectOption('a-5100');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': no Save while a categorize is out');
+      release(); hub.hold = null;
+      await page.waitForFunction(() => !FIN.tx.busy);
+      assert.equal(await page.locator(cat + ' .fin-ask').count(), 0, tag + ': no approval prompt for picks changed since the dry run');
+      await page.locator(save).click();
+      await page.locator(cat + ' [data-fin-cat-yes]').click();
+      await settled(() => actions(writes.slice(n)).length >= 3);
+      hub.ask = '';
+      assert.deepEqual(actions(writes.slice(n)).at(-1), {kind: 'categorize', payload: {feed_id: 'f2', account_id: 'a-5100', tags: {}}}, tag + ': Send sends what was asked about');
+      assert.equal(actions(writes.slice(n)).filter(a => !a.dry_run).length, 1, tag + ': one categorize');
+      // Another row's unsaved picks outlive this row's save.
+      hub.hold = new Promise(r => { release = r; });
+      await page.locator(cat + ' select[name="account"]').selectOption('a-6100');
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => writes.length > n);
+      await page.locator('[data-fin-tx="feed:f1"]').click();
+      await page.locator(cat + ' select[name="team"]').selectOption('mkt');
+      release(); hub.hold = null;
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      await page.waitForFunction(() => !FIN.tx.busy && FIN.tx.sel === 'feed:f1');
+      assert.equal(await page.locator(cat + ' select[name="team"]').inputValue(), 'mkt', tag + ': row B keeps its picks when row A saves');
+      // A transfer between our own accounts has no line to pick.
+      await page.locator('[data-fin-tx="feed:f7"]').click();
+      await page.locator('#fin-rail .fin-rail-title').waitFor();
+      assert.equal(await page.locator('#fin-rail form').count(), 0, tag + ': no line picker on a transfer');
       // A reconciled row keeps its line, read only; its tags still change.
       await page.locator('[data-fin-tx="feed:f5"]').click();
       await page.locator('#fin-rail [data-fin-tag]').waitFor();
@@ -634,6 +671,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('[data-fin-tx="feed:f2"]').click();
       await page.locator('#fin-rail .fin-rail-title').waitFor();
       assert.equal(await page.locator('#fin-rail [data-fin-cat], #fin-rail [data-fin-tag]').count(), 0, tag + ': no line picker without finance.book');
+      // For's fallback follows the write rule: the manager, the teams they lead (and under), those teams' teammates.
+      assert.deepEqual(await page.evaluate(() => finTxForOpts({}).map(([v]) => v)),
+        ['teammate:human:cara', 'team:eng', 'team:platform', 'teammate:bot:eng-lead', 'teammate:bot:builder'], tag + ': For offers only what a write allows');
       await go(page, '#/finance/access', READY.access);
       assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
       await page.locator('[data-fin-mate="bot:builder"]').click();

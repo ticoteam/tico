@@ -217,7 +217,7 @@ function finTxPage() {
   const org = finFilterFrom(FIN.q); t.org = finFilterAny(org) ? org : null;
   // chart: the lines a bank row may go to (undefined until read, null while reading, false when there is no chart read);
   // cat: the selected bank row's picks (finTxCatState).
-  FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: [], chart: undefined, cat: null};
+  FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: [], chart: undefined, cat: null, busy: false};
   const orgChip = t.org ? `<span class="fin-chip">${esc([...finPicked(t.org).map(finPickName), ...(t.org.who !== 'both' ? [t.org.who === 'bots' ? 'Bots' : 'People'] : [])].join(', '))}<button type="button" data-fin-org-clear aria-label="Clear filter">✕</button></span>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><span class="sr-only">Search</span><input type="search" data-fin-q value="${esc(t.q)}" placeholder="Search" aria-label="Search"></label>
       ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries']], t.source)}
@@ -353,7 +353,11 @@ function finTxRail() {
 // Those who keep the books set a bank or card row's line and tags in one form; a row still pending at the bank, or
 // cleared by a done reconciliation, keeps its line (banking.py categorize_feed). Owners always may (finCaps().may).
 // Splits come from posting rules, not from here.
-const finTxCatOn = r => r.kind === 'feed' && !r.pending && !r.reconciled && !!finCaps()?.may('finance.book');
+const finTxCatOn = r => r.kind === 'feed' && !r.pending && !r.reconciled && !finTxTransfer(r) && !!finCaps()?.may('finance.book');
+// One side of a transfer between our own accounts (backend/finance/core/feeds.py TRANSFER_KINDS), which categorize
+// refuses: a transfer-kind row posted with no P&L line, or one whose entry another row on the page shares.
+const finTxTransfer = r => !!r.entry_id && ((['internalTransfer', 'treasuryTransfer'].includes(r.provider_kind) && !(r.lines || []).length)
+  || (FIN?.tx?.rows || []).some(x => x !== r && x.kind === 'feed' && x.entry_id === r.entry_id));
 const FIN_TX_MIXED = '*';   // a field the row's lines differ on
 
 // The lines the viewer may post to, each with whether it takes amounts from them with no team or teammate tag
@@ -381,11 +385,17 @@ function finTxCatRedraw() {
   if (r && finTxCatOn(r)) finTxCatDraw(r);
 }
 // Whom an amount on a line that is not company-wide for the viewer may be for: the chart's own list when it sends one,
-// else from the access read (the viewer, their teams, the teammates they see), the viewer first. [value, label].
+// else from the access read by the rule a write checks (handlers.py may_write): everyone for a viewer who sees
+// everything; else the viewer when they see their own expenses, the teams their view covers (the ones they lead, on the manager default, and live team grants, each with
+// the teams under it), and the teammates in those teams. The viewer first. [value, label].
 function finTxForOpts(line) {
-  const me = finCaps()?.who || '', acc = FIN.acc || {};
-  const tags = line?.attributable || [{teammate: me}, ...(acc.teams || []).map(t => ({team: t.id})),
-    ...(acc.teammates || []).filter(t => t.teammate !== me).map(t => ({teammate: t.teammate}))];
+  const caps = finCaps(), me = caps?.who || '', acc = FIN.acc || {}, row = caps?.row || {};
+  const below = id => [id, ...(acc.teams || []).filter(t => t.parent === id).flatMap(t => below(t.id))];
+  const covered = new Set([...(caps?.all ? (acc.teams || []).map(t => t.id) : row.default === 'team_expenses' ? (acc.teams || []).filter(t => t.lead === me).map(t => t.id) : []),
+    ...(row.grants || []).filter(g => g.live && g.status === 'active' && g.whose === 'team' && g.whose_team).map(g => g.whose_team)].flatMap(below));
+  const tags = line?.attributable || [...(caps?.all || ['team_expenses', 'own_expenses'].includes(row.default) ? [{teammate: me}] : []),
+    ...(acc.teams || []).filter(t => covered.has(t.id)).map(t => ({team: t.id})),
+    ...(acc.teammates || []).filter(t => t.teammate !== me && covered.has(t.team)).map(t => ({teammate: t.teammate}))];
   return [...tags.filter(t => t.teammate === me), ...tags.filter(t => t.teammate !== me)]
     .map(t => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
 }
@@ -425,8 +435,8 @@ function finTxCatDraw(r) {
     : moved() ? {feed_id: r.id, account_id: now.account, tags: moveTags()}
     : {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'};
   const footHtml = () => `<div class="fin-foot">${c.ask != null
-    ? `<span class="fin-ask">${esc(c.ask ? `Approval from ${finWho(c.ask)}` : 'Needs approval')}</span><button type="button" class="ghost" data-fin-cat-no>Cancel</button><button type="button" class="primary" data-fin-cat-yes>Send</button>`
-    : `<button type="submit" class="primary" data-fin-cat-save${ready() ? '' : ' disabled'}>Save</button>`}</div>`;
+    ? `<span class="fin-ask">${esc(c.ask.who ? `Approval from ${finWho(c.ask.who)}` : 'Needs approval')}</span><button type="button" class="ghost" data-fin-cat-no>Cancel</button><button type="button" class="primary" data-fin-cat-yes${state.busy ? ' disabled' : ''}>Send</button>`
+    : `<button type="submit" class="primary" data-fin-cat-save${ready() && !state.busy ? '' : ' disabled'}>Save</button>`}</div>`;
   const foot = () => { const f = form.querySelector('.fin-foot'); if (f) f.outerHTML = footHtml(); };
   const draw = focus => {
     const forOpts = !posted && scoped() ? finTxForOpts(lineOf(now.account)) : [];
@@ -439,21 +449,32 @@ function finTxCatDraw(r) {
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${now.project === M ? '' : esc(now.project)}"${now.project === M ? ' placeholder="Mixed"' : ''}></label>` : ''}${footHtml()}`;
     if (focus) form.querySelector(focus)?.focus();
   };
-  const send = async confirmed => {
-    const btn = form.querySelector(confirmed ? '[data-fin-cat-yes]' : '[data-fin-cat-save]');
-    if (btn) btn.disabled = true;
-    const p = payload();
+  // One categorize at a time on the tab (state.busy keeps every Save and Send off until it answers). An approval
+  // prompt holds the payload its dry run was for, and Send sends that payload; changing the form drops the prompt.
+  const send = async asked => {
+    if (state.busy) return;
+    const p = asked ? asked.p : payload(), sent = JSON.stringify(p);
+    state.busy = true; foot();
+    const live = () => FIN?.tx === state && state.cat === c && document.contains(form);
     try {
-      if (!confirmed) {
+      if (!asked) {
         const dry = await post('/v2/finance/actions', {kind: 'categorize', payload: p, dry_run: true});
-        if (dry?.status === 'needs_approval') { c.ask = dry.approver || ''; foot(); return; }
+        if (dry?.status === 'needs_approval') {
+          // Only for the row and the picks it was asked about; anything changed since means press Save again.
+          if (live() && JSON.stringify(payload()) === sent) c.ask = {who: dry.approver || '', p};
+          return;
+        }
         if (dry?.status !== 'committed') throw new Error(dry?.reason || 'Not done');
       }
       const res = await finAct('categorize', p);
       if (res.status === 'committed') toast('Saved');
-      if (FIN?.tx === state) state.cat = null;
+      if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;   // another row's unsaved picks stay
       void finTxLoad(false);
-    } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; }
+    } catch (e) { toast(e.message, true); }
+    finally {
+      state.busy = false;
+      finTxCatRedraw();
+    }
   };
   form.onchange = ev => {
     const el = ev.target;
@@ -470,8 +491,8 @@ function finTxCatDraw(r) {
   };
   form.onclick = ev => {
     if (ev.target.closest('[data-fin-cat-no]')) { c.ask = null; foot(); }
-    else if (ev.target.closest('[data-fin-cat-yes]')) void send(true);
+    else if (ev.target.closest('[data-fin-cat-yes]') && c.ask) void send(c.ask);
   };
-  form.onsubmit = ev => { ev.preventDefault(); if (ready() && c.ask == null) void send(false); };
+  form.onsubmit = ev => { ev.preventDefault(); if (ready() && c.ask == null) void send(null); };
   draw('');
 }
