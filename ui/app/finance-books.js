@@ -3,9 +3,11 @@
    that feed it; the totals are the route's. "+ Add" enters an invoice, bill or journal entry (finance-docs.js) or leads
    to Sources to connect one. Cards: each card with its holder, budget, limit and spend this period;
    the rail freezes, unfreezes and sets the limit. Transactions: bank feed rows and entries, searched and filtered,
-   paged by cursor; the rail tags a row's lines (categorize) for those who keep the books.
-   Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users.
-   Writes (POST /api/v2/finance/actions): card_create, card_freeze, card_unfreeze, card_update_limit, categorize.
+   paged by cursor; the rail tags a row's lines (categorize) for those who keep the books, and matches a new bank row
+   to the payments marked paid it is the bank side of (feed_match).
+   Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users,
+   /finance/feed/{id}/expected.
+   Writes (POST /api/v2/finance/actions): card_create, card_freeze, card_unfreeze, card_update_limit, categorize, feed_match.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -314,10 +316,12 @@ function finTxRail() {
     ${r.kind === 'feed' ? finKv('Account', esc(`${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}`)) + (r.description && r.description !== title ? finKv('Description', esc(r.description)) : '') : finKv('Source', esc(r.source || ''))}
     ${r.memo ? finKv('Memo', esc(r.memo)) : ''}
     ${lines.length ? `<h3 class="fin-h">Lines</h3>${lines.map(l => finKv(l.account || '', finCents(l.amount))).join('')}` : ''}
+    <div id="fin-tx-match"></div>
     ${may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', shown.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), shown.teammate)).join('')}</select></label>
       <label>Team<select name="team">${mixed('team')}${opt('', '—', shown.team)}${(acc.teams || []).map(t => opt(t.id, t.name, shown.team)).join('')}</select></label>
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${shown.project === FIN_MIXED ? '' : esc(shown.project)}"${shown.project === FIN_MIXED ? ' placeholder="Mixed"' : ''}></label>
       <div class="fin-foot"><button type="submit" class="primary">Save</button></div></form>` : ''}`);
+  void finTxExpected(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
   if (form) form.onsubmit = async ev => {
@@ -337,6 +341,44 @@ function finTxRail() {
     try {
       const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
       if (res.status === 'committed') toast('Saved');
+      void finTxLoad(false);
+    } catch (e) { toast(e.message, true); btn.disabled = false; }
+  };
+}
+// A new bank row whose automatic match to payments marked paid was unclear: the waiting payments it may be the bank
+// side of (GET /finance/feed/{id}/expected), checked off to one contact and the row's exact amount, then feed_match.
+// Only for those who may match (finance.ap or finance.ar); nothing shows when there are none.
+async function finTxExpected(r) {
+  const caps = finCaps(), state = FIN.tx, key = finTxKey(r);
+  if (r.kind !== 'feed' || r.pending || r.status !== 'new' || !(caps.may('finance.ap') || caps.may('finance.ar'))) return;
+  let d;
+  try { d = await get(`/v2/finance/feed/${encodeURIComponent(r.id)}/expected${finAs('?')}`, {fresh: true}); } catch { return; }
+  const box = $('#fin-tx-match');
+  if (FIN?.tx !== state || state.sel !== key || !box || !d?.expected?.length) return;
+  const rows = d.expected;
+  box.innerHTML = `<h3 class="fin-h">Match</h3>${rows.map(x => `<label class="fin-match"><input type="checkbox" value="${esc(x.settlement_id)}">
+      <span>${esc(x.contact_name || '—')}</span><span class="muted">${esc(x.number || '')}</span><span class="fin-n">${finUsd(x.amount)}</span><span class="muted">${esc(finDayLabel(x.marked_on))}</span></label>`).join('')}
+    <div class="fin-acts" data-fin-match-acts><button type="button" class="primary" data-fin-match disabled>Match</button></div>`;
+  const picked = () => rows.filter(x => box.querySelector(`input[value="${CSS.escape(x.settlement_id)}"]`)?.checked);
+  const sync = () => {
+    const p = picked(), btn = box.querySelector('[data-fin-match]');
+    if (btn) btn.disabled = !p.length || p.reduce((t, x) => t + x.amount, 0) !== d.amount || new Set(p.map(x => x.contact_id)).size !== 1;
+  };
+  box.addEventListener('change', sync);
+  box.onclick = async ev => {
+    const btn = ev.target.closest('[data-fin-match], [data-fin-ask-yes], [data-fin-ask-no]');
+    if (!btn) return;
+    const acts = box.querySelector('[data-fin-match-acts]'), payload = {feed_id: r.id, settlement_ids: picked().map(x => x.settlement_id)};
+    if (btn.matches('[data-fin-ask-no]')) { acts.innerHTML = '<button type="button" class="primary" data-fin-match>Match</button>'; sync(); return; }
+    btn.disabled = true;
+    try {
+      const res = await finDecide('feed_match', payload, btn.matches('[data-fin-ask-yes]') ? box.dataset.sig || '' : '');
+      if (res.ask != null) {
+        box.dataset.sig = res.sig;
+        acts.innerHTML = `<span class="fin-ask">${esc(finAskText(res.ask))}</span><button type="button" class="ghost" data-fin-ask-no>Cancel</button><button type="button" class="primary" data-fin-ask-yes>Send</button>`;
+        return;
+      }
+      if (res.status === 'committed') toast('Matched');
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
   };
