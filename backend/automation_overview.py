@@ -15,7 +15,7 @@ from .store import H, Problem
 
 # range: (seconds, buckets). 5m is 10 of 30s, 1h 12 of 5 min, 24h 24 of an hour, 7d 28 of 6 hours.
 RANGES = {"5m": (300, 10), "1h": (3600, 12), "24h": (86400, 24), "7d": (7 * 86400, 28)}
-KINDS = ("message", "task_received", "schedule", "webhook", "listening", "event", "system")
+KINDS = ("message", "task_received", "schedule", "webhook", "listening", "event", "due", "system")
 STATUSES = {"done": ("ok", "empty", "skipped"), "ok": ("ok", "empty", "skipped"), "failed": ("failed",),
             "waiting": ("waiting",), "running": ("queued", "running"), "held": ("held",)}
 JOB_PREFIX = "tico.builtin.job."
@@ -123,8 +123,8 @@ def _words(name):
 def started_by(payload, trigger_ref="", kind=""):
     """What started the run, in a few words: the sender and subject, the task's title, the webhook's event."""
     p = payload if isinstance(payload, dict) else {}
-    m, t, w, li, e = (p.get(k) if isinstance(p.get(k), dict) else None
-                      for k in ("message", "task", "webhook", "listening", "event"))
+    m, t, w, li, e, d = (p.get(k) if isinstance(p.get(k), dict) else None
+                         for k in ("message", "task", "webhook", "listening", "event", "due"))
     if m:
         if m.get("source") == "slack":
             words = [str(m.get("inbox") or "Slack").replace("slack:dm", "Slack DM").replace("slack:#", "Slack #"),
@@ -140,6 +140,8 @@ def started_by(payload, trigger_ref="", kind=""):
         words = [str(li.get("source") or "Listening"), str(li.get("url") or li.get("author") or "")]
     elif e:
         words = [_words(e.get("name")), str(e.get("subject") or "")]
+    elif d:
+        words = ["Due " + str(d.get("due_on") or "")]
     elif p.get("manual"):
         words = ["Run by hand"]
     elif kind in ("schedule", "system"):

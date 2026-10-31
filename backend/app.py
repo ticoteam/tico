@@ -1094,7 +1094,10 @@ def create_app(settings=None):
         value.pop("resume_json", None)
         if not value.get("snoozed_note"):
             value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
+        if not value.get("occurrence"):
+            value.pop("occurrence", None)       # only a due-date routine's task has one: a board of 500 carries none
         value.pop("labels_json", None)
+        value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only

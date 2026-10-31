@@ -136,6 +136,7 @@ export type Automation = {
   kind?: string;
   last_run?: Record<string, unknown> | null;
   name?: string;
+  next_due?: string | null;
   next_run?: string | null;
   owner?: string;
   paused?: boolean;
@@ -185,6 +186,7 @@ export type AutomationHeld = {
   last_run?: Record<string, unknown> | null;
   moved?: number;
   name?: string;
+  next_due?: string | null;
   next_run?: string | null;
   owner?: string;
   paused?: boolean;
@@ -234,7 +236,7 @@ export type AutomationOverviewRuns = {
   started_by?: string;
   status: string;
   step_count?: number | null;
-  trigger: "message" | "task_received" | "schedule" | "webhook" | "listening" | "event" | "system";
+  trigger: "message" | "task_received" | "schedule" | "webhook" | "listening" | "event" | "due" | "system";
 }>;
   since: string;
 };
@@ -2982,6 +2984,7 @@ export type Task = {
   labels: Array<string>;
   lane: string;
   number?: number | null;
+  occurrence?: string | null;
   open_asks?: number;
   owner: string;
   owner_name?: string;

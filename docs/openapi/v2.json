@@ -1485,7 +1485,7 @@
     },
     "/api/v2/automations/{aid}": {
       "get": {
-        "summary": "One automation with set questions filled in, today's counts and, for a schedule, next_run",
+        "summary": "One automation with set questions filled in, today's counts and, for a schedule or a due date, next_run (for a due date, next_due too)",
         "operationId": "getAutomation",
         "parameters": [
           {
@@ -27157,6 +27157,13 @@
               "null"
             ]
           },
+          "next_due": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A due-date trigger's next due day (YYYY-MM-DD); next_run is when its run starts"
+          },
           "pending": {
             "type": "integer"
           },
@@ -27350,6 +27357,13 @@
               "string",
               "null"
             ]
+          },
+          "next_due": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A due-date trigger's next due day (YYYY-MM-DD); next_run is when its run starts"
           },
           "pending": {
             "type": "integer"
@@ -27566,6 +27580,7 @@
                     "webhook",
                     "listening",
                     "event",
+                    "due",
                     "system"
                   ]
                 },
@@ -41325,6 +41340,13 @@
             "items": {
               "type": "string"
             }
+          },
+          "occurrence": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."
           },
           "owner_name": {
             "type": "string",
