@@ -430,6 +430,12 @@ def payment_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE provider_request_id=?", (request_id,)).fetchone()
 
 
+def direct_payment(c: sqlite3.Connection, transaction_id: str) -> Any:
+    """The direct send whose Mercury transaction is this bank row (a direct send has no approval request)."""
+    return c.execute("SELECT * FROM fin_payments WHERE mode='direct' AND provider_request_id=?",
+                     (transaction_id,)).fetchone()
+
+
 def payments_by_txn(c: sqlite3.Connection, feed_ids: Sequence[str]) -> list[Any]:
     """Payments whose bank row is one of these (provider_txn_id: set when it settled, by request or by its note)."""
     if not feed_ids:

@@ -104,7 +104,7 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     else:
         note = ""
     settings = {"approval_eligible": not note, "payments_enabled": not note, "approval_note": note or None,
-                "approver_email": approver or None, "direct_send": False,
+                "approver_email": approver or None,
                 "egress_ip": V.opt_text(p, "server_ip", 64) or probe.get("egress_ip") or None}
     name = V.opt_text(p, "name", 120) or "Mercury"
 
@@ -312,7 +312,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     gl = _gl(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
-        pay = _marked(ctx, money, t)
+        pay = SK.direct_payment(ctx.c, t.provider_id) or _marked(ctx, money, t)
     if pay is not None and t.amount < 0:
         tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
         rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))

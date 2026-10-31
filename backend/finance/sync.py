@@ -628,7 +628,8 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             with store.transaction() as c:
                 payments.cut_off(load(c, now), SK.get(c, "fin_payments", pid))
             continue
-        if status in ("awaiting_bank_approval", "submitted", "unknown") and p["provider_request_id"]:
+        if status in ("awaiting_bank_approval", "submitted", "unknown") and p["provider_request_id"] \
+                and str(p["mode"]) != "direct":
             answer = provider.send_request(str(p["provider_request_id"]))
             with store.transaction() as c:
                 ctx = load(c, now)
@@ -660,7 +661,9 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
             payments.reserve(ctx, row, fresh)         # with the claim: newly applicable limits move once
             rec = SK.get(c, "fin_recipients", str(p["recipient_id"]))
             claimed = SK.get(c, "fin_payments", pid)
-        answer = provider.request_send_money(account, payments.request_body(claimed, rec))
+        body = payments.request_body(claimed, rec)
+        answer = provider.create_transaction(account, body) if str(claimed["mode"]) == "direct" \
+            else provider.request_send_money(account, body)
         with store.transaction() as c:
             ctx = load(c, now)
             payments.sent(ctx, SK.get(c, "fin_payments", pid), answer)

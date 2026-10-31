@@ -31,7 +31,7 @@ from .store import ledger as SL
 from .store import tico
 
 CASH_BELOW_KEY = "finance_cash_below"   # the owner's cash alert floor (minor units; 0 or unset: off)
-DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2); v1 sends nothing directly either way
+DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2), off unless the owner turns it on
 METHODS = ("ach", "wire", "check")
 MERCURY_METHOD = {"ach": "ach", "wire": "domesticWire", "check": "check"}
 SENT, FAILED = "finance.payment.sent", "finance.payment.failed"
@@ -237,15 +237,17 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     payment posts to when it settles; `obligation` (a bill or any key) allows one live payment at a time."""
     V.only(p, ("recipient_id", "amount", "money_account_id", "memo", "obligation", "account_id", "tags", "mode",
                "purpose"))
-    if V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue") == "direct":
-        on = SL.setting(ctx.c, DIRECT_KEY) is True
-        raise FinanceError(NOT_AVAILABLE, "direct send is not available in this version; payments go through "
-                           "Mercury's approval queue" if on else "direct send is off for this company")
+    mode = V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue")
+    if mode == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
+        raise FinanceError(NOT_AVAILABLE, "direct send is off for this company")
     rec = SK.get(ctx.c, "fin_recipients", V.text(p, "recipient_id", 80))
     if rec is None:
         raise FinanceError(NOT_FOUND, "no such recipient")
     if str(rec["status"]) != "active":
         raise FinanceError(CONFLICT, "that recipient's details changed; pay its current version")
+    if mode == "direct" and not known(ctx, str(rec["id"])):
+        # §9: direct send is for recipients already paid; a new one waits for Mercury's approval queue (rule 1 asks too).
+        raise denied("direct send is only for a recipient that has been paid before")
     amount = V.amount(p)
     if amount <= 0:
         raise invalid("a payment is more than 0")
@@ -285,7 +287,7 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "recipient_id": str(rec["id"]), "recipient_version": int(rec["version"]),
             "money_account_id": str(bank["id"]), "amount": amount, "currency": ctx.book.base_currency,
             "method": method, "memo": memo, "obligation": obligation, "account_id": line.id,
-            "tags_json": SK.dump(tags), "mode": "approval_queue", "status": "queued",
+            "tags_json": SK.dump(tags), "mode": mode, "status": "queued",
             "hold_id": hold.hold_id if hold is not None else None,
             "purpose_json": SK.dump(purpose),
             "next_try_at": ctx.at, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
@@ -294,7 +296,7 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     return Plan(gate,
                 f"Pay {amount / 100:.2f} {ctx.book.base_currency} to {rec['name']} by {method}"
                 f"{' for ' + obligation if obligation else ''}", apply,
-                facts=_facts(ctx, rec, amount, line.code, obligation, tags, bank))
+                facts={**_facts(ctx, rec, amount, line.code, obligation, tags, bank), "mode": mode})
 
 
 def _facts(ctx: Ctx, rec: Any, amount: int, code: str, obligation: str, tags: Mapping[str, str], bank: Any
@@ -361,6 +363,8 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such payment")
     status = str(pay["status"])
     if status in ("awaiting_bank_approval", "submitted"):
+        if str(pay["mode"]) == "direct":
+            raise FinanceError(CONFLICT, "it was sent to Mercury directly: it cannot be cancelled here")
         raise FinanceError(CONFLICT, "it is already in Mercury: reject it in Mercury")
     lost = status == "unknown" and bool(pay["flagged_at"]) and R.is_admin(ctx.org, who, ctx.rights(who))
     if status == "unknown" and not lost:
@@ -385,8 +389,9 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def payment_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """The owner's company switches: direct send (§9; v1 builds the switch only, direct payments stay refused) and the
-    cash alert (finance.cash.below fires when the books' cash drops under `cash_below`; 0 turns it off)."""
+    """The owner's company switches: direct send (§9: payments may then go straight to Mercury, for recipients already
+    paid, past the same gate rules; off by default) and the cash alert (finance.cash.below fires when the books' cash
+    drops under `cash_below`; 0 turns it off)."""
     V.only(p, ("direct_send", "cash_below"))
     if not p:
         raise invalid("say direct_send or cash_below")
@@ -394,7 +399,7 @@ def payment_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     floor = V.integer(p, "cash_below", 0, 10**15) if "cash_below" in p else None
 
     def apply(aid: str) -> Result:
-        out: Result = {"direct_send": on, "available": False}
+        out: Result = {"direct_send": on, "available": True}
         if "direct_send" in p:
             SL.set_setting(ctx.c, DIRECT_KEY, on, who, ctx.at)
         if floor is not None:
@@ -602,9 +607,10 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
 
 
 def request_body(pay: Any, rec: Any) -> dict[str, object]:
-    """The request-send-money body. The key goes in `note` and leads `externalMemo` too: Mercury's list of requests
-    returns a memo (undocumented which field it echoes), not the idempotency key, so an unknown request is found by its
-    key in what comes back, its recipient and its amount."""
+    """The body for a payment's send: request-send-money (approval queue), or the same fields to a direct transaction.
+    The key goes in `note` and leads `externalMemo` too: Mercury's list of requests returns a memo (undocumented which
+    field it echoes), not the idempotency key, so an unknown request is found by its key in what comes back, its
+    recipient and its amount."""
     key = f"{NOTE}{pay['idempotency_key']}"
     memo = str(pay["memo"] or "")
     body: dict[str, object] = {
@@ -620,6 +626,17 @@ def request_body(pay: Any, rec: Any) -> dict[str, object]:
 
 
 def _accepted(ctx: Ctx, pay: Any, answer: Answer, attempts: int) -> None:
+    if str(pay["mode"]) == "direct":
+        # A direct send is Mercury's transaction at once (no approver): submitted, and settled when its bank row posts.
+        # Its id is kept where an approval request's id goes, and the bank row matches it (banking._settle).
+        gone = str(answer.body.get("status") or "").lower() in ("failed", "blocked", "cancelled")
+        SK.update(ctx.c, "fin_payments", str(pay["id"]), {
+            "status": "submitted", "provider_request_id": str(answer.body.get("id") or answer.body.get("requestId") or ""),
+            "attempts": attempts, "last_error": None, "unknown_since": None, "next_try_at": _later(ctx, 1),
+            "updated_at": ctx.at})
+        if gone:
+            end(ctx, pay, "failed", f"Mercury refused the direct send ({answer.body.get('status')})")
+        return
     status = F.request_status(answer.body.get("status")) or "awaiting_bank_approval"
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {
         "status": status, "provider_request_id": str(answer.body.get("requestId") or answer.body.get("id") or ""),
@@ -720,7 +737,7 @@ def not_found(ctx: Ctx, pay: Any) -> None:
         fields["flagged_at"] = ctx.at
         tico.needs_you(ctx.c, admin_person(ctx), f"Check Mercury for a {int(pay['amount']) / 100:.2f} payment",
                        f"Payment {pay['id']} may or may not have reached Mercury (no answer since {since}). Look for "
-                       f"a request with note {NOTE}{pay['idempotency_key']}. If it is not there, cancel the payment "
+                       f"a request or transaction with note {NOTE}{pay['idempotency_key']}. If it is not there, cancel the payment "
                        "in Finance; Finance will not send it again on its own.")
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
