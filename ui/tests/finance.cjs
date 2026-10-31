@@ -558,6 +558,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('#fin-rail [data-fin-tag]').waitFor();
       assert.equal(await page.locator(cat).count(), 0, tag + ': no line picker on a reconciled row');
       assert.match(await page.locator('#fin-rail').innerText(), /Hosting\s+410\.00/, tag + ': its line, read only');
+      await page.evaluate(() => { FIN.tx.busy = true; finTxRail(); });
+      assert.equal(await page.locator('#fin-rail [data-fin-tag] [type=submit]').isDisabled(), true, tag + ': its Save waits while a categorize is out');
+      await page.evaluate(() => { FIN.tx.busy = false; finTxRail(); });
       await page.evaluate(() => { FIN_TX.q = ''; FIN_TX.account = ''; });
       await go(page, '#/finance/cards', READY.cards);
       await go(page, '#/finance/transactions', READY.transactions);
@@ -691,6 +694,18 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
         Object.assign(row, keep);
         return out;
       }), [['teammate:human:cara'], []], tag + ': a live own grant on the line offers the viewer, and only on that line');
+      // With no chart read: a granted team the access read doesn't list is still offered; a company expenses grant
+      // makes expense lines company-wide (no For).
+      assert.deepEqual(await page.evaluate(() => {
+        const row = FIN.acc.teammates.find(t => t.teammate === 'human:cara'), keep = {...row}, chart = FIN.tx.chart;
+        row.grants = [{whose: 'team', whose_team: 'ops', what: 'expenses', account_ids: [], live: true, status: 'active'}];
+        const teams = finTxForOpts({id: 'a-6100'}).map(([v]) => v).filter(v => v.startsWith('team:'));
+        row.grants = [{whose: 'company', what: 'expenses', account_ids: [], live: true, status: 'active'}];
+        FIN.tx.chart = false;
+        const wide = finTxCatLines().find(l => l.id === 'a-6100')?.company_wide;
+        Object.assign(row, keep); FIN.tx.chart = chart;
+        return [teams, wide];
+      }), [['team:eng', 'team:platform', 'team:ops'], true], tag + ': granted teams and company grants count without the chart');
       await go(page, '#/finance/access', READY.access);
       assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
       await page.locator('[data-fin-mate="bot:builder"]').click();
