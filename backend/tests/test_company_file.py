@@ -1082,3 +1082,19 @@ def test_a_bet_added_to_a_plan_with_no_strategy_starts_the_block_and_undo_takes_
     assert "version: 0.3" in C.to_yaml(draft, CREATED)
     undone, _ = run(draft, ("undo", {}))
     assert "strategy" not in undone
+
+
+def test_a_saved_draft_with_a_retired_template_loses_that_seat_and_keeps_the_rest():
+    draft = started()
+    controller = next(b for b in draft["bots"] if b["template"] == "controller")
+    old = {**copy.deepcopy(controller), "id": "books", "template": "bookkeeping", "title": "Acme Books", "lead": False,
+           "reports_to": controller["id"]}
+    under = {**copy.deepcopy(controller), "id": "books-helper", "template": "billing", "title": "Acme Billing",
+             "lead": False, "reports_to": "books"}
+    built = {**copy.deepcopy(controller), "id": "old-books", "template": "bookkeeping", "title": "Our Books",
+             "lead": False, "existing": True, "runtime": "hermes"}
+    draft["bots"] = [b for b in draft["bots"] if b["template"] != "billing"] + [old, under, built]
+    out = D.check(draft)
+    by_id = {b["id"]: b for b in out["bots"]}
+    assert "books" not in by_id and "old-books" in by_id
+    assert "reports_to" not in by_id["books-helper"]

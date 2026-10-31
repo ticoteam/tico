@@ -63,7 +63,8 @@ EXCERPT = 6000                   # characters of the letter's text the Decide ca
 SUMMARY = 300
 TIMEOUT = 30
 LISTED = 100
-FINANCE_TEMPLATES = ("finance-lead", "controller", "bookkeeping", "accounts-payable", "tax")
+# `bookkeeper` is the built-in Bookkeeper; `bookkeeping` is the retired template, kept for the bots built from it.
+FINANCE_TEMPLATES = ("finance-lead", "controller", "bookkeeper", "bookkeeping", "accounts-payable", "tax")
 READABLE = {"application/pdf": "pdf", "image/png": "image", "image/jpeg": "image", "image/webp": "image",
             "image/gif": "image"}
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
