@@ -131,3 +131,17 @@ def test_one_huge_row_is_cut_inside_and_a_result_that_cannot_fit_says_so():
             return {"action_id": "act_1", "result": {"amounts": list(range(20_000))}}
     marker = hubtools.finance_action(Actions(), {"action_id": "act_1"})
     assert marker["error"] == "too_big" and marker["cap"] == hubtools.FINANCE_CHARS
+
+
+def test_inbox_pages_one_kind_through_the_cli_and_the_tool_passing_its_cursor(monkeypatch):
+    from clients import hubcli, remotecli
+
+    class Inbox(_Api):
+        def get(self, path, **query):
+            assert query.get("kind") == "uncategorized", query
+            return super().get(path, **query)
+    api = Inbox([{"id": f"fd_{i}", "kind": "uncategorized", "label": f"Row {i}"} for i in range(250)], key="items")
+    args = hubcli.parser().parse_args(["finance", "inbox", "--kind", "uncategorized", "--cursor", "200"])
+    out = remotecli.via_tool(api, args)
+    assert [r["id"] for r in out["items"]][0] == "fd_200" and len(out["items"]) == 50 and out["next_cursor"] is None
+    assert api.calls == [("finance/inbox", {"kind": "uncategorized", "cursor": "200"})]
