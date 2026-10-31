@@ -542,3 +542,62 @@ def test_a_re_dated_settled_card_charge_moves_its_use_to_the_new_month(books):
         assert [tuple(r) for r in rows] == [("2026-11-02", 8_000)]
         assert FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z").held == 20_000      # October: all free
         assert FA.budget_state(c, budget_id, "2026-11-20T12:00:00.000000Z").held == 20_000 - 8_000
+
+
+def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month(books):
+    """Round 4 #1: a September card charge corrected, re-dated or cancelled after September closes leaves its use in
+    September's rollup and counts only the net change in October, so the card's allocation reserve never frees more
+    than the books moved (remaining in October stays put)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)                       # budget 1,000.00; card allocation 200.00
+    sync_once(books, fake)
+    charge = _txn("txn-c10", "credit-io", -100.0, "creditCardTransaction", day="2026-09-20", cardId="card-eve")
+    moved = _txn("txn-c11", "credit-io", -50.0, "creditCardTransaction", day="2026-09-21", cardId="card-eve")
+    _arrives(fake, charge, 1, "evt-c10-1")
+    _arrives(fake, moved, 1, "evt-c11-1")
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+
+    def october(c):
+        s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
+        return s.actual, s.held, s.remaining
+
+    def uses(c):
+        return sorted(tuple(r) for r in c.execute("SELECT held_on, settled_amount FROM fin_holds WHERE target=? AND "
+                                                  "status='settled'", (f"card:{card_id}",)))
+    with books.read() as c:
+        assert october(c) == (0, 20_000, 80_000)
+    _arrives(fake, {**charge, "amount": -120.0}, 2, "evt-c10-2")                              # 100.00 -> 120.00
+    _arrives(fake, {**moved, "createdAt": "2026-10-03T10:00:00Z", "postedAt": "2026-10-03T10:00:00Z"}, 2, "evt-c11-2")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        # October nets +20.00 (reversal and repost) and 0 for the re-date; only those count against the allocation.
+        assert uses(c) == [("2026-09-20", 10_000), ("2026-09-21", 5_000), ("2026-10-16", 2_000)]
+        assert october(c) == (2_000, 18_000, 80_000)
+    _arrives(fake, {**charge, "amount": -130.0}, 3, "evt-c10-3")                              # again, same month
+    sync_once(books, fake, "2026-10-17T12:30:00.000000Z")
+    with books.read() as c:
+        assert uses(c) == [("2026-09-20", 10_000), ("2026-09-21", 5_000), ("2026-10-17", 3_000)]
+        assert october(c) == (3_000, 17_000, 80_000)
+    _arrives(fake, {**charge, "amount": -130.0, "status": "cancelled"}, 4, "evt-c10-4")         # the bank cancels it
+    sync_once(books, fake, "2026-10-18T12:30:00.000000Z")
+    with books.read() as c:
+        assert uses(c) == [("2026-09-20", 10_000), ("2026-09-21", 5_000), ("2026-10-17", -10_000)]
+        assert october(c) == (-10_000, 30_000, 80_000)
+
+
+def test_a_re_categorized_card_charge_still_uses_the_cards_allocation(books):
+    """Round 4 #1 (same rule): moving a settled card charge to another line reposts it; its use follows the new entry
+    instead of lapsing with the reversed one."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    _arrives(fake, _txn("txn-c12", "credit-io", -40.0, "creditCardTransaction", cardId="card-eve"), 1, "evt-c12-1")
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-c12'").fetchone()[0])
+        assert act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100")}).status == "committed"
+        assert FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z").held == 20_000 - 4_000

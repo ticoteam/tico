@@ -88,7 +88,8 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 def default_gate(org: Org, actor: str, kind: str, *, total: int = 0, new_account: bool = False) -> Gate:
     """The phase-0 defaults (§6.4): closing or reopening a period asks the owner (unless the owner asks); a bot's
-    categorization or entry totalling over $5,000, or a bot's new account, asks a finance admin."""
+    categorization or entry totalling over $5,000, a bot's new account, or a bot settling a cut-off card creation
+    (card_resolve) asks a finance admin."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
@@ -96,4 +97,7 @@ def default_gate(org: Org, actor: str, kind: str, *, total: int = 0, new_account
         return Gate("needs_approval", "finance_admin", "default:bot-over-5000")
     if actor in org.bots and new_account:
         return Gate("needs_approval", "finance_admin", "default:bot-new-account")
+    if actor in org.bots and kind == "card_resolve":
+        # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
+        return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
     return ALLOW

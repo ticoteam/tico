@@ -384,6 +384,12 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.waitForFunction(() => !document.querySelector('[data-fin-org-clear]'));
       await page.waitForTimeout(100);
       assert.ok(!txRead().includes('teams='), tag + ': cleared, the read is not filtered');
+      assert.match(await page.evaluate(() => location.hash), /^#\/finance\/transactions\?account_id=a-6100&q=GitHub$/, tag + ': cleared, the address drops it');
+      // A filtered visit, then the bare Transactions tab: the old filter does not come back.
+      await go(page, allTx.slice(allTx.indexOf('#')), READY.transactions);
+      await go(page, '#/finance/transactions', READY.transactions);
+      await page.waitForTimeout(100);
+      assert.ok(!txRead().includes('teams=') && !(await page.locator('[data-fin-org-clear]').count()), tag + ': the bare tab is unfiltered');
       // Balance sheet, cards (freeze), transactions, sources, access.
       await go(page, '#/finance/balance', READY.balance);
       const bsFirst = await page.locator('.fin-bs tbody td:first-child').allInnerTexts();

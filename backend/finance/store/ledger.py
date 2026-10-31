@@ -153,6 +153,11 @@ def mark_reversed(c: sqlite3.Connection, entry_id: str) -> int:
     return c.execute("UPDATE fin_entries SET status='reversed' WHERE id=? AND status='posted'", (entry_id,)).rowcount
 
 
+def reversal_of(c: sqlite3.Connection, entry_id: str) -> Any:
+    return c.execute("SELECT * FROM fin_entries WHERE reverses_id=? ORDER BY created_at DESC LIMIT 1",
+                     (entry_id,)).fetchone()
+
+
 def entry_row(c: sqlite3.Connection, entry_id: str) -> Any:
     return c.execute("SELECT * FROM fin_entries WHERE id=?", (entry_id,)).fetchone()
 

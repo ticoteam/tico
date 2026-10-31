@@ -5,6 +5,7 @@ admin's; Mercury's users are for teammates who may issue cards, emails masked an
 reaches lines, expenses and budgets."""
 import pytest
 
+from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance.actions import FinanceError
 from backend.finance.store import banking as SK
@@ -89,6 +90,29 @@ def test_a_line_opens_per_vendor_with_how_it_was_paid_and_next_month(books):
         assert tx(teammates=["human:gus"]) == [3_400] and tx(who="bots") == []
         with pytest.raises(FinanceError, match="company-wide"):
             FR.transactions(c, "human:cara", unattributed=True, at=AT)
+
+
+def test_transactions_by_line_and_team_match_on_the_same_split_line(books):
+    """Round 4 #3: a split feed row ($10 Engineering on Software, $90 Sales on Other expenses) is not a Software +
+    Sales match; it is for Software + Engineering and for Other expenses + Sales."""
+    with books.transaction() as c:
+        money = _bank(c)
+        software, other = account(c, "6100"), account(c, "6900")
+        entry = FA.post_entry(c, {"date": "2026-10-12", "source": "card", "source_id": "t-split", "lines": [
+            {"account_id": software, "amount": 1_000, "tags": {"team": "eng"}},
+            {"account_id": other, "amount": 9_000, "tags": {"team": "sales"}},
+            {"account_id": money["cards_gl"], "amount": -10_000}]}, at=AT)
+        SK.insert(c, "fin_feed_txns", {"currency": "USD", "created_at": AT, "created_by": "system:finance",
+                                       "status": "posted", "money_account_id": money["program"],
+                                       "provider_id": "t-split", "txn_date": "2026-10-12", "amount": -10_000,
+                                       "counterparty": "Acme Supplies", "card_id": money["eve"],
+                                       "entry_id": entry["entry_id"]})
+
+        def split(line, team):
+            rows = FR.transactions(c, OWNER, account_id=line, teams=[team], at=AT)["rows"]
+            return [r["kind"] for r in rows if abs(int(r["amount"])) == 10_000]
+        assert (split(software, "sales"), split(other, "eng")) == ([], [])
+        assert (split(software, "eng"), split(other, "sales")) == (["feed"], ["feed"])
 
 
 def test_sources_actions_are_a_finance_admins_and_mercury_users_are_cut_to_the_viewer(books):

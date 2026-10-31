@@ -288,9 +288,11 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         out: list[tuple[tuple[str, str], Row]] = []
         for r in rows:
             mine = lines.get(str(r["entry_id"] or ""), [])
-            if wanted and not any(x["account_id"] in wanted for x in mine):
+            # With a line filter, the org filter looks at the same lines: a split passes only when one line is both.
+            pick = [x for x in mine if x["account_id"] in wanted] if wanted else mine
+            if wanted and not pick:
                 continue
-            if org is not None and not _org_keeps(org, mine):
+            if org is not None and not _org_keeps(org, pick):
                 continue
             out.append((_key_of(r), _feed_row(ctx, r, money, lines)))
         return out

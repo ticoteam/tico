@@ -326,6 +326,14 @@ def test_a_person_can_not_adopt_another_users_card_and_none_on_an_active_card_is
         row = c.execute("SELECT provider_status, provider_card_id, sync_error FROM fin_cards WHERE id=?",
                         (card_id,)).fetchone()
         assert (row[0], row[1]) == ("uncertain", None) and "another user" in row[2]
+        # Round 4 #2: a bot with the cards right can not settle it alone; a finance admin decides.
+        act(c, OWNER, "right_grant", {"teammate": "bot:coder", "right": "finance.cards"})
+        act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
+        queued = c.execute("SELECT count(*) FROM fin_outbox").fetchone()[0]
+        for ask in ({"none": True}, {"provider_card_id": "card-fay"}):
+            bot = act(c, "bot:coder", "card_resolve", {"card_id": card_id, **ask})
+            assert (bot.status, bot.rule) == ("needs_approval", "default:bot-card-resolve"), bot
+        assert c.execute("SELECT count(*) FROM fin_outbox").fetchone()[0] == queued          # nothing sent
         assert act(c, OWNER, "card_resolve", {"card_id": card_id, "none": True}).status == "committed"
         assert _state(c, card_id)[4] == 20_000                                  # still reserved: issued again
     sync_once(books, fake, HOURS[2])

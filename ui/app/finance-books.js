@@ -210,8 +210,9 @@ function finTxPage() {
   const t = FIN_TX;
   if (FIN.q.has('q') || FIN.q.has('account_id')) {
     t.q = FIN.q.get('q') || ''; t.account = FIN.q.get('account_id') || ''; t.source = 'all'; t.status = '';
-    const org = finFilterFrom(FIN.q); t.org = finFilterAny(org) ? org : null;
   }
+  // The org filter lives in the address only: a bare Transactions link drops one an earlier link set.
+  const org = finFilterFrom(FIN.q); t.org = finFilterAny(org) ? org : null;
   FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: []};
   const orgChip = t.org ? `<span class="fin-chip">${esc([...finPicked(t.org).map(finPickName), ...(t.org.who !== 'both' ? [t.org.who === 'bots' ? 'Bots' : 'People'] : [])].join(', '))}<button type="button" data-fin-org-clear aria-label="Clear filter">✕</button></span>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><span class="sr-only">Search</span><input type="search" data-fin-q value="${esc(t.q)}" placeholder="Search" aria-label="Search"></label>
@@ -229,7 +230,14 @@ function finTxPage() {
     if (seg) { if (seg.dataset.v !== t.source) { t.source = seg.dataset.v; finSegSet(seg); void finTxLoad(false); } return; }
     if (ev.target.closest('[data-fin-more]')) { void finTxLoad(true); return; }
     const clear = ev.target.closest('[data-fin-org-clear]');
-    if (clear) { t.org = null; clear.closest('.fin-chip').remove(); void finTxLoad(false); return; }
+    if (clear) {
+      t.org = null; clear.closest('.fin-chip').remove();
+      for (const k of ['teams', 'teammates', 'who', 'unattributed']) FIN.q.delete(k);
+      const rest = FIN.q.toString();
+      history.replaceState(history.state, '', `${FIN_ROUTE}/transactions${rest ? '?' + rest : ''}`);
+      S.route = LAST_ROUTE = location.hash;
+      void finTxLoad(false); return;
+    }
     const tr = ev.target.closest('tr[data-fin-tx]');
     if (tr) { FIN.tx.sel = tr.dataset.finTx; finTxDraw(); finTxRail(); }
   };

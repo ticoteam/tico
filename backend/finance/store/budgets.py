@@ -140,6 +140,13 @@ def relink(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str, held
                      (amount, entry_id, held_on, hold_id)).rowcount
 
 
+def adjustments(c: sqlite3.Connection, source_id: str) -> list[Any]:
+    """A card charge's settled adjustment records (`<feed id>:adj`): what a correction after its month closed moved
+    into a later period."""
+    return c.execute("SELECT * FROM fin_holds WHERE source='card' AND source_id=? AND status='settled' "
+                     "ORDER BY held_on, created_at", (source_id,)).fetchall()
+
+
 def void_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:
     """A settled charge the bank cancelled or reversed: it no longer uses anything."""
     return c.execute("UPDATE fin_holds SET status='released', released_at=? WHERE id=? AND status='settled'",
