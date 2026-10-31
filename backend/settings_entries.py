@@ -274,7 +274,7 @@ ENTRIES = TEAM_RULES + [
     *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
         source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
-      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"))],
+      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"))],
     *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
         layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")

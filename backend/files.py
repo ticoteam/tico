@@ -145,6 +145,19 @@ def prime_visible(c, rows):
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
+def asked_to_read(c, who, row, version=None):
+    """A file a person asked Counsel to read (POST /api/v2/rules/read, backend/counsel.py `rule_reads`): Counsel reads
+    that file, whichever bot's it is. `version` narrows it to the exact version that was asked. The person had to be able
+    to read it when they asked. Nothing else widens Counsel's view."""
+    if who.role != "bot" or H.actor_id(who.actor) != H.COUNSEL:
+        return False
+    sql, args = "SELECT 1 FROM rule_reads WHERE file_id=?", [row["id"]]
+    if version is not None:
+        sql += " AND version=?"
+        args.append(int(version))
+    return c.execute(sql + " LIMIT 1", args).fetchone() is not None
+
+
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened."""
@@ -152,6 +165,8 @@ def file_visible(c, auth, who, row, cache):
         return False
     if row["task_id"] and not privacy.task_readable(c, who, H.task(c, row["task_id"])):
         return False
+    if asked_to_read(c, who, row):
+        return True
     # `cache` lives for one read: a run's tasks are read once, however many files it made.
     for version in read_cache.rows(c, VERSIONS_SQL, (row["id"],)):
         if not privacy.blob_readable(c, privacy.actor(who), version["blob_id"], memo=cache):
@@ -261,23 +276,24 @@ class Files:
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (now or H.now(), task))
 
     def open_row(self, c, *, bot, scope, identity, title, kind, mime, locator, url=None, provider=None,
-                 task, conversation, now):
+                 task, conversation, now, fid=None):
         row = self.find(c, bot, scope, identity)
         if row:
             return row, False
-        fid = new_id()
+        fid = fid or new_id()
         c.execute("INSERT INTO bot_files(id,bot,scope,identity,title,kind,mime,locator,url,provider,current_version,state,"
                   "task_id,conversation_id,first_activity_at,last_activity_at) VALUES(?,?,?,?,?,?,?,?,?,?,0,'ready',?,?,?,?)",
                   (fid, bot, scope, identity, title[:300], kind, mime, locator, url, provider, task, conversation, now, now))
         return c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone(), True
 
     def add_version(self, c, *, bot, actor, scope, task, conversation, attempt, identity, title, name, mime, blob_id,
-                    digest, size, source_digest=None, commit="", repo_path="", explicit_title=False):
-        """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch."""
+                    digest, size, source_digest=None, commit="", repo_path="", explicit_title=False, fid=None):
+        """One publish of bytes already in the blob store: a new file, a new version, or a no-op touch. `fid` names a new
+        file's id (for a caller that writes the file's id somewhere before the file exists)."""
         now = H.now()
         row, created = self.open_row(c, bot=bot, scope=scope, identity=identity, title=title or name,
                                      kind=BF.kind_of(name), mime=mime, locator="tico_blob", task=task,
-                                     conversation=conversation, now=now)
+                                     conversation=conversation, now=now, fid=fid)
         last = c.execute("SELECT * FROM bot_file_versions WHERE file_id=? AND version=?",
                          (row["id"], row["current_version"])).fetchone()
         changed = created or last is None or (source_digest or digest) != (last["source_digest"] or last["digest"])

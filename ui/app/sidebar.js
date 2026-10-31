@@ -21,7 +21,7 @@ document.querySelectorAll('[data-section-toggle]').forEach(button => button.oncl
 });
 renderNavSections();
 // The built-ins stay out of the team chart. Each person's one chat is their Assistant (Ask, and its own page,
-// ui/app/assistant-page.js); BotOps, the Strategy Bot and the Librarian are its helpers (state.js ASSISTANT_HELPERS),
+// ui/app/assistant-page.js); BotOps, the Strategy Bot, the Librarian and Counsel are its helpers (state.js ASSISTANT_HELPERS),
 // which nobody chats with. Search, bot pickers and a person's page list none of the four; Settings > Bots manages them,
 // and #/bot/<slug> opens each for its settings, runs and logs.
 const isHiddenBot = slug => slug === assistantBot() || isAssistantHelper(slug);
@@ -699,7 +699,7 @@ $('#org-history').onclick = () => {
 const isHelperBot = e => isBuiltInBot(e.name) || !!e.helper
   || (S.people || []).some(p => p.inbox_bot === e.name);
 // The order here and on Goals: the Assistant, then the other built-ins, then message bots.
-const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', 'inbox'];
+const HELPER_ORDER = ['botops', 'librarian', 'goal-manager', 'task-manager', COUNSEL_BOT, 'inbox'];
 const helperRank = e => e.name === assistantBot() ? -1 : HELPER_ORDER.includes(e.name) ? HELPER_ORDER.indexOf(e.name) : 99;
 function orgTreeWithHelpers(byParent) {
   const out = {}, bot = {}, parentOf = {};

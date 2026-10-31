@@ -17909,6 +17909,66 @@
         ]
       }
     },
+    "/api/v2/rules/ask": {
+      "post": {
+        "summary": "A can-I question: the active rules that share words with it, cited, and Counsel's answer on a task",
+        "operationId": "askRules",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleAsk"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Rules"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ]
+      }
+    },
     "/api/v2/rules/check": {
       "post": {
         "summary": "A bot checks a draft as the write it will be; sending that exact draft then costs no second check",
@@ -18098,6 +18158,66 @@
         },
         "tags": [
           "Rules"
+        ]
+      }
+    },
+    "/api/v2/rules/read": {
+      "post": {
+        "summary": "Add a document for Counsel to read: a file you can read, or a public link (saved as a file version); Counsel suggests the rules in it",
+        "operationId": "readRuleDocument",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RuleRead"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Rules"
+        ],
+        "parameters": [
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
         ]
       }
     },
@@ -41365,6 +41485,64 @@
         "type": "object",
         "title": "RoadmapSettings"
       },
+      "RuleAsk": {
+        "properties": {
+          "question": {
+            "type": "string",
+            "maxLength": 500,
+            "minLength": 3,
+            "title": "Question"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "question"
+        ],
+        "title": "RuleAsk"
+      },
+      "RuleCite": {
+        "properties": {
+          "file_id": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "File Id"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 1.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Version"
+          },
+          "section": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Section",
+            "default": ""
+          },
+          "quote": {
+            "type": "string",
+            "maxLength": 2000,
+            "minLength": 1,
+            "title": "Quote"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "file_id",
+          "quote"
+        ],
+        "title": "RuleCite",
+        "description": "The part of a document a rule rests on: a Files version (`file_id`, `version`; the current one by default), the\nsection it is in, and the quote, which must appear in that version's text (backend/counsel.py `check_cite`)."
+      },
       "RuleCreate": {
         "properties": {
           "kind": {
@@ -41418,6 +41596,16 @@
               }
             ],
             "title": "Source Id"
+          },
+          "cite": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RuleCite"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "if_broken": {
             "anyOf": [
@@ -41583,6 +41771,64 @@
           "version"
         ],
         "title": "RuleEdit"
+      },
+      "RuleRead": {
+        "properties": {
+          "file_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File Id"
+          },
+          "url": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 2000
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Url"
+          },
+          "source_id": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Source Id"
+          },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 20
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "source_id"
+        ],
+        "title": "RuleRead"
       },
       "RuleScope": {
         "properties": {
@@ -41761,6 +42007,22 @@
               }
             ],
             "title": "Watcher"
+          },
+          "document": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "warn",
+                  "hold"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document"
           },
           "patterns": {
             "anyOf": [
