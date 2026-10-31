@@ -543,6 +543,11 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
         from .finance import actions as finance
         kept = finance.mercury_delivery(c, None, payload if isinstance(payload, dict) else {})
         return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
+    if effective_preset(found) in ("intuit", "xero"):
+        # QuickBooks and Xero events are Finance's too (spec §3.4, §10): kept once by event id for the books worker.
+        from .finance import books_sync
+        status = books_sync.delivery(c, effective_preset(found), payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": status != "refused", "detail": status}]
     if builtin(trigger_id):
         # A notice from Tico Team is judged once, as `tico.notice`; `webhook.received` is for senders outside Tico.
         results = tico_notices.arrived(c, found, delivery, type_, via, body, payload, content, _judge)
