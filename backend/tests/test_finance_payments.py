@@ -652,6 +652,90 @@ def test_a_lost_send_whose_debit_posts_before_it_is_found_settles_on_its_line_on
         assert [r[0] for r in tagged] == ["eng"]
 
 
+def _update(fake, txn_id, event_id, version, **changes):
+    fake.txns[txn_id] = {**fake.txns[txn_id], **changes}
+    fake.events_list.append({"id": event_id, "resourceType": "transaction", "resourceId": txn_id,
+                             "operationType": "update", "resourceVersion": version})
+
+
+def _net(c):
+    net: dict[str, int] = {}
+    for code, amount in _lines(c):
+        net[code] = net.get(code, 0) + amount
+    return {k: v for k, v in net.items() if v}
+
+
+def test_a_debit_re_dated_in_the_sweep_that_finds_its_payment_settles_on_a_live_entry(books):
+    """Codex round 6 #1: the unknown payment's debit posted as an unknown spend; in the sweep that finds the payment,
+    Mercury re-dates the debit (its correction reposts the row) and the recovery reposts it again. Each repost has its
+    own source id, so the payment never settles on a reversed entry: the debit nets onto the payment's line."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _lost_send(books, fake)
+    _debit(fake, "txn-lost", "req-9", "evt-lost")
+    sync_once(books, fake, HOURS[2])                                          # not found yet: posts to 6900
+    _update(fake, "txn-lost", "evt-lost-2", 2, postedAt="2026-10-17T10:00:00Z")
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
+    sync_once(books, fake, HOURS[3])                                          # re-dated, then found, one sweep
+    with books.read() as c:
+        assert str(c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0]) == "settled"
+        assert _holds(c) == [(50_000, "settled")]
+        entry = c.execute("SELECT e.status, e.reverses_id FROM fin_feed_txns f JOIN fin_entries e ON e.id=f.entry_id "
+                          "WHERE f.provider_id='txn-lost'").fetchone()
+        assert tuple(entry) == ("posted", None)
+        assert _net(c) == {"1000": -50_000, "6100": 50_000}
+
+
+def test_a_debit_returned_before_its_lost_payment_is_found_ends_the_payment(books):
+    """Codex round 6 #4: the debit came back (returned) before the recovery found the payment: once found, the
+    payment is returned and its hold released, never left submitted holding budget."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _lost_send(books, fake)
+    _debit(fake, "txn-lost", "req-9", "evt-lost")
+    sync_once(books, fake, HOURS[2])
+    _update(fake, "txn-lost", "evt-lost-2", 2, status="reversed")
+    sync_once(books, fake, HOURS[3])
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
+    sync_once(books, fake, HOURS[4])
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
+            == ("returned", "req-9")
+        assert _holds(c) == [(50_000, "released")]
+        assert _net(c) == {}
+
+
+def test_a_reconciled_debit_found_as_a_lost_payment_takes_in_its_hold_once_without_a_repost(books):
+    """Codex round 6 #4: the debit was reconciled (as an unknown spend) before the recovery found its payment. It
+    stays as booked (no repost: the statement holds it) with a categorize event, the payment settles on it and its
+    hold is taken in once, never left reserving the budget."""
+    fake = FakeMercury()
+    connect(books, fake)
+    pid, key = _lost_send(books, fake)
+    _debit(fake, "txn-lost", "req-9", "evt-lost")
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-lost'").fetchone()[0])
+        args = {"money_account_id": _checking(c), "statement_end": "2026-10-16", "cleared": [fid]}
+        off = act(c, OWNER, "reconcile", {**args, "statement_balance": 0})
+        if off.result["status"] != "done":
+            c.execute("DELETE FROM fin_reconciliations")
+            done = act(c, OWNER, "reconcile", {**args, "statement_balance": -int(off.result["difference"])})
+            assert done.result["status"] == "done", done
+        posted = _lines(c)
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
+    sync_once(books, fake, HOURS[3])
+    sync_once(books, fake, HOURS[4])
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, provider_txn_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
+            == ("settled", fid)
+        assert _holds(c) == [(50_000, "settled")]
+        assert c.execute("SELECT entry_id IS NOT NULL FROM fin_holds WHERE source='payment'").fetchone()[0] == 1
+        assert _lines(c) == posted                                                # nothing reposted
+        assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.feed.needs_category' AND "
+                         "payload_json LIKE '%found after it was reconciled%'").fetchone()[0] == 1
+
+
 def test_a_debit_carrying_a_lost_sends_key_is_the_payment_when_it_arrives(books):
     """PR review P1-a (the marker): a debit whose note carries the payment's tico:<key> is that payment as it
     arrives, before any request is found: it posts once on the payment's line."""

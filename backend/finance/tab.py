@@ -370,6 +370,13 @@ def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None 
             "spent": spent, "expires_at": r["expires_at"], "created_at": str(r["created_at"])}
 
 
+def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
+    """Whether a card's spent total may show. Transactions shows a followed card's feed rows (their amounts) whatever
+    line they post to, but leaves a row out whole when it posts to a private line the viewer lacks full detail for;
+    so a total holding such a line is not shown (it would give that amount away)."""
+    return not any(str(x["account_id"]) in cut for x in lines)
+
+
 def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, holder: str | None = None,
           cursor: str | None = None, limit: int = 100, at: str | None = None) -> Row:
     """The cards the viewer follows (their own, their teams', or all for the owner), with each card's allocation and
@@ -384,6 +391,7 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     marks = decode_cursor(cursor)
     after = marks[0] if marks else ""
     accounts = _card_accounts(ctx)
+    cut = set(private_cut(ctx, view))
     out: list[Row] = []
     scanned = 0
     today = dates.day(ctx.today)
@@ -404,6 +412,9 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
                 st = budgeting.state(ctx, bid, today)
                 spent = SB.target_used(c, budgeting.subtree(ctx, bid), st.period_start, st.period_end,
                                        f"card:{r['id']}", absorbed=True)
+                if cut and not _card_spend_seen(cut, SB.card_lines(c, str(r["id"]), st.period_start,
+                                                                   st.period_end)):
+                    spent = None
             out.append(card_row(ctx, r, spent, alloc))
             if len(out) > most:
                 break

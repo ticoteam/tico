@@ -592,6 +592,33 @@ def test_a_closed_month_card_correction_counts_only_the_change_in_the_open_month
         assert uses(c) == [15_000, -10_000] and october(c) == (-10_000, 30_000, 80_000)
 
 
+def test_card_use_follows_each_entrys_posted_card_line_after_the_card_account_is_remapped(books):
+    """Codex round 6 #2: a September charge, September closed, the card program remapped to another liability line,
+    then the charge corrected in October: card use reads the card line each entry posted on (old line for the
+    reversal, new for the repost), never the current mapping, so October counts +20.00, not +120.00."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)                       # budget 1,000.00; card allocation 200.00
+    sync_once(books, fake)
+    charge = _txn("txn-c14", "credit-io", -100.0, "creditCardTransaction", day="2026-09-20", cardId="card-eve")
+    _arrives(fake, charge, 1, "evt-c14-1")
+    sync_once(books, fake, LATER)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        other = act(c, OWNER, "account_create", {"code": "2110", "name": "Acme card program", "type": "liability"})
+        program = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='credit-io'")
+                      .fetchone()[0])
+        moved = act(c, OWNER, "connection_map", {"money_account_id": program,
+                                                 "account_id": str(other.result["account_id"])})
+        assert moved.status == "committed", moved
+    _arrives(fake, {**charge, "amount": -120.0}, 2, "evt-c14-2")
+    sync_once(books, fake, NEXT_DAY)
+    with books.read() as c:
+        assert [_card_use(c, card_id, m) for m in ("2026-09", "2026-10")] == [10_000, 2_000]
+        s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
+        assert (s.actual, s.held, s.remaining) == (2_000, 18_000, 80_000)
+
+
 def test_a_re_categorized_card_charge_still_uses_the_cards_allocation(books):
     """Round 4 #1 (same rule): moving a settled card charge to another line reposts it; its use follows the new entry
     instead of lapsing with the reversed one."""

@@ -97,3 +97,28 @@ def test_payments_hide_private_lines_and_a_revoked_payer_keeps_only_the_status(b
         assert left["amount"] is None and left["recipient"] is None and left["account"] is None
         assert left["memo"] == "" and left["obligation"] is None and left["error"] is None
         assert set(left) == set(payments(OWNER)[0])
+
+
+def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
+    """Codex round 6 #3: a 100.00 card charge re-categorized onto a private line, attributed to someone else. The
+    holder's Transactions leave it out, so their Cards read shows no spent total either (it would give the amount
+    away); the owner, with full detail, still sees it."""
+    from backend.tests.test_finance_banking import LATER, _arrives, _card_for_eve, _txn
+    fake = FakeMercury()
+    connect(books, fake)
+    _, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    _arrives(fake, _txn("txn-c20", "credit-io", -100.0, "creditCardTransaction", cardId="card-eve"), 1, "evt-c20-1")
+    sync_once(books, fake, LATER)
+
+    def spent(c, who):
+        return next(x["spent"] for x in FR.cards(c, who, at=AT)["cards"] if x["id"] == card_id)
+    with books.transaction() as c:
+        assert spent(c, "human:eve") == 10_000
+        pay = _payroll_line(c)
+        feed = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-c20'").fetchone()[0])
+        done = act(c, OWNER, "categorize", {"feed_id": feed, "account_id": pay, "tags": {"teammate": "human:fay"}})
+        assert done.status == "committed", done
+        assert [r for r in FR.transactions(c, "human:eve", at=AT)["rows"] if r.get("id") == feed] == []
+        assert spent(c, "human:eve") is None
+        assert spent(c, OWNER) == 10_000
