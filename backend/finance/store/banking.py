@@ -738,6 +738,14 @@ def stripe_source(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[
                      (money_account_id, *kinds, link)).fetchone()
 
 
+def stripe_refunded(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> int:
+    """What the posted refunds, disputes and returned refunds of one charge add up to so far (a refund is positive)."""
+    return int(c.execute(f"SELECT COALESCE(SUM(-json_extract(raw_json, '$.amount')), 0) FROM fin_feed_txns WHERE "
+                         f"money_account_id=? AND kind IN ({_marks(kinds)}) AND json_extract(raw_json, '$.link')=? AND "
+                         "status='posted' AND entry_id IS NOT NULL",
+                         (money_account_id, *kinds, link)).fetchone()[0])
+
+
 def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:
     """Stripe rows marked for their day's summary entry that have not posted yet."""
     return c.execute("SELECT * FROM fin_feed_txns WHERE money_account_id=? AND status='new' AND entry_id IS NULL AND "

@@ -214,10 +214,46 @@ def _summarize(ctx: Ctx, money: Any) -> None:
 
 
 def _summarize_day(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
-    """One entry for a day's ordinary sales and Stripe charges: each sale's counter lines are summed per account, tags and
-    contact; the fees and Stripe's own charges are expenses, and the balance takes the nets. The first entry of a day takes
-    the day's id; a later batch's rows add an adjusting entry for their own rows only."""
-    counter: dict[tuple[str, tuple[tuple[str, str], ...], str], int] = {}
+    """A day's ordinary sales and Stripe charges, as summary entries: each sale's counter lines are summed per account,
+    tags and contact; the fees and Stripe's own charges are expenses, and the balance takes the nets. A day whose lines
+    would pass the journal cap posts as several journals, each balanced."""
+    for chunk in _journals(ctx, rows):
+        _post_summary(ctx, money, day, chunk)
+
+
+def _journals(ctx: Ctx, rows: list[Any]) -> list[list[Any]]:
+    """The day's rows in consecutive journals that each stay under the line cap: a line per account, tags and contact,
+    plus one for the fees and one for the balance."""
+    out: list[list[Any]] = []
+    current: list[Any] = []
+    keys: set[SummaryKey] = set()
+    for r in rows:
+        grown = keys | _row_keys(ctx, r)
+        if current and len(grown) + 2 > L.MAX_LINES:
+            out.append(current)
+            current, grown = [], _row_keys(ctx, r)
+        current.append(r)
+        keys = grown
+    if current:
+        out.append(current)
+    return out
+
+
+SummaryKey = tuple[str, tuple[tuple[str, str], ...], str]     # (account id, tags, contact id) of one summary line
+
+
+def _row_keys(ctx: Ctx, r: Any) -> set[SummaryKey]:
+    """The summary lines a row adds: none for a cost, its counter lines for a charge."""
+    if str(r["kind"]) not in F.STRIPE_CHARGES:
+        return set()
+    return {(account, tuple(sorted(tags.items())), contact) for account, _, tags, contact
+            in _carried(ctx, SK.loads(r["raw_json"]))}
+
+
+def _post_summary(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
+    """One balanced journal for these rows of a day. The first journal of a day takes the day's id; a later batch's rows
+    add an adjusting entry for their own rows only."""
+    counter: dict[SummaryKey, int] = {}
     fees = net = 0
     for r in rows:
         raw = SK.loads(r["raw_json"])
@@ -278,22 +314,29 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     if not counter:
         _ask(ctx, fid, "the sale it names has no lines to reverse")
         return
+    before = SK.stripe_refunded(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link)
+    now = before - gross
     lines = [banking.feed_line(account, amount, tags, contact) for account, amount, tags, contact
-             in _split(counter, -gross)]
+             in _reversal(counter, before, now)]
     if fee:
         lines.append(banking.feed_line(_fees(ctx).id, fee))
     entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
-    _give_back(ctx, original, row, -gross, entry)
+    _give_back(ctx, original, row, before, now, entry)
 
 
-def _give_back(ctx: Ctx, original: Any, row: Any, refunded: int, entry: str) -> None:
-    """What the refunded sale settled gives back its share of the refund, in proportion to each settlement: the document
-    owes it again and its status follows (a negative settlement from the refund's row, on its entry)."""
+def _give_back(ctx: Ctx, original: Any, row: Any, before: int, now: int, entry: str) -> None:
+    """What the refunded sale settled gives back, in proportion to each settlement, as the sale's refunds reach it: the
+    document owes it again and its status follows (a negative settlement from the refund's row, on its entry). No
+    settlement gives back more than it received, so the rest of a refund is a plain refund (the credit it leaves)."""
     live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
-    for s, part in zip(live, _shares([int(x["amount"]) for x in live], refunded), strict=True):
-        if part:
-            documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=-part, day=str(row["txn_date"]),
+    weights = [int(x["amount"]) for x in live]
+    cap = sum(weights)
+    after = _allocate(min(now, cap), weights)
+    prior = _allocate(min(before, cap), weights)
+    for s, new, old in zip(live, after, prior, strict=True):
+        if new != old:
+            documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=old - new, day=str(row["txn_date"]),
                              from_kind="feed", from_id=str(row["id"]), entry_id=entry)
 
 
@@ -310,31 +353,31 @@ def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
             if line.role != L.MONEY_ROLE and line.amount < 0]
 
 
-def _split(counter: Sequence[Share], total: int) -> list[Share]:
-    """Each counter line's share of `total`, in proportion to its own amount, in whole cents: the last line takes the
-    rounding, and a zero share is dropped. `counter` is non-empty and negative."""
-    parts = _shares([amount for _, amount, _, _ in counter], total)
-    return [(account, part, tags, contact) for (account, _, tags, contact), part in zip(counter, parts, strict=True)
-            if part]
-
-
-def _shares(weights: Sequence[int], total: int) -> list[int]:
-    """Each weight's share of `total`, in proportion, in whole cents: the last takes the rounding."""
-    base = sum(weights)
-    out: list[int] = []
-    left = total
-    for i, weight in enumerate(weights):
-        last = i == len(weights) - 1
-        part = left if last else (_trunc_div(weight * total, base) if base else 0)
-        out.append(part)
-        left -= part
+def _reversal(counter: Sequence[Share], before: int, now: int) -> list[Share]:
+    """The counter lines a refund reverses: each line's share of what the sale has refunded in all, so far, less its
+    share before this refund. The shares are cumulative, so separate refunds add up to the same as one, to the cent.
+    Counter lines are credits, so a refund debits them."""
+    weights = [abs(amount) for _, amount, _, _ in counter]
+    out: list[Share] = []
+    for (account, amount, tags, contact), new, old in zip(counter, _allocate(now, weights), _allocate(before, weights),
+                                                           strict=True):
+        part = (new - old) if amount < 0 else (old - new)
+        if part:
+            out.append((account, part, tags, contact))
     return out
 
 
-def _trunc_div(n: int, d: int) -> int:
-    """Division that rounds toward zero, so no share overshoots its total."""
-    q = abs(n) // abs(d)
-    return q if (n >= 0) == (d >= 0) else -q
+def _allocate(total: int, weights: Sequence[int]) -> list[int]:
+    """Each weight's share of `total` in whole cents, by largest remainder: the floors first, then the cents left over go
+    to the largest fractions, earlier weights first. The shares add up to `total` exactly."""
+    base = sum(weights)
+    if not base:
+        return [0] * len(weights)
+    shares = [total * w // base for w in weights]
+    left = total - sum(shares)
+    for i in sorted(range(len(weights)), key=lambda i: (-(total * weights[i] % base), i))[:left]:
+        shares[i] += 1
+    return shares
 
 
 # ------------------------------------------------------------------------------------------------ payouts

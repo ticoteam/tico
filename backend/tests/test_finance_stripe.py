@@ -575,6 +575,82 @@ def test_a_refund_of_an_invoice_paid_sale_takes_its_share_off_what_the_invoice_h
     assert _invoice_row(books, iid) == (6_000, "partial")
 
 
+def test_a_refund_gives_back_no_more_than_each_settlement_received_and_the_rest_is_a_plain_refund(books):
+    """A $100 sale a person applied $50 of to an invoice: the full refund gives the invoice its $50 back, and the rest
+    of the refund is paid out of the customer's credit. The invoice never owes a negative amount."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
+                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    stripe.add("charge", 10_000, 0, "Acme Hold")
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        held = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": held, "amount": 5_000})
+        assert made.status == "committed", made
+    stripe.add("refund", -10_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "1050")) == (5_000, 0)
+        assert _every_entry_balances(c)
+    assert _invoice_row(books, iid) == (0, "sent")
+
+
+def test_separate_refunds_of_a_sale_that_settled_two_invoices_leave_each_invoice_at_exactly_zero(books):
+    """A $101 sale settling invoices of $50 and $51, refunded in two parts: the rounding of the first refund is
+    carried into the second, so both invoices end at 0, not at a cent either way."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    customer = _customer(books, "Acme Retail")
+    first, second = _invoice(books, customer, 5_000), _invoice(books, customer, 5_100)
+    money = _stripe_money(books)
+    with books.transaction() as c:
+        for iid in (first, second):
+            paid = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": money,
+                                                            "date": "2026-10-10"})
+            assert paid.status == "committed", paid
+    stripe.add("charge", 10_100, 0, "Acme Retail")
+    stripe_pass(books, stripe)
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    stripe.add("refund", -5_100, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-16T13:00:00.000000Z")
+    assert _invoice_row(books, first) == (0, "sent")
+    assert _invoice_row(books, second) == (0, "sent")
+    with books.read() as c:
+        assert _every_entry_balances(c)
+        assert _sum(c, "1050") == 0
+
+
+def test_a_day_of_many_sales_under_a_split_rule_posts_as_journals_under_the_line_cap(books):
+    """100 buyers on one day under a five-account split: their counter lines alone reach the journal cap with the fees
+    and the balance, so the day posts as several balanced journals, and every row takes its entry."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    with books.transaction() as c:
+        accounts = [account(c, "4000")] + [
+            str(act(c, OWNER, "account_create", {"code": f"41{i}0", "name": f"Line {i}", "type": "income"}
+                    ).result["account_id"]) for i in range(1, 5)]
+        split = [{"account_id": a, "share": 2_000} for a in accounts]
+        rule = {"kind": "posting", "name": "Split", "when": {"direction": "in"},
+                "outcome": {"outcome": "post", "split": split},
+                "examples": [{"input": {"direction": "in"}, "expect": "post"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    for n in range(100):
+        stripe.add("charge", 1_000, 30, f"Buyer {n:03d}")
+    stripe_pass(books, stripe)
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_feed_txns WHERE kind='charge' AND status='posted'").fetchone()[0] == 100
+        sizes = [int(r[0]) for r in c.execute("SELECT COUNT(*) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                                              "WHERE e.status='posted' GROUP BY e.id")]
+        assert len(sizes) == 2 and max(sizes) <= 500, sizes
+        assert _every_entry_balances(c)
+        assert (_sum(c, "1050"), _sum(c, "6200")) == (97_000, 3_000)
+
+
 def test_summarized_sales_reconcile_to_the_statement_one_row_at_a_time(books):
     """Three sales in one day's summary: each row clears for its own net, so the statement of their nets reconciles."""
     stripe = FakeStripe()
