@@ -96,8 +96,8 @@ def money_posted(c: sqlite3.Connection, money_id: str) -> int:
 
 def live_payments(c: sqlite3.Connection, book_id: str) -> list[Any]:
     """Payments still on their way out (what a viewer's due-out totals are summed from, after their view)."""
-    return c.execute(f"SELECT id, money_account_id, account_id, tags_json, amount FROM fin_payments WHERE book_id=? AND "
-                     f"status IN ({_marks(LIVE_PAYMENT)})", (book_id, *LIVE_PAYMENT)).fetchall()
+    return c.execute("SELECT id, money_account_id, account_id, tags_json, amount, obligation FROM fin_payments "
+                     f"WHERE book_id=? AND status IN ({_marks(LIVE_PAYMENT)})", (book_id, *LIVE_PAYMENT)).fetchall()
 
 
 def set_provider_users(c: sqlite3.Connection, connection_id: str, users: Sequence[Mapping[str, object]],

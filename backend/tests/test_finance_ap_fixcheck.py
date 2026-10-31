@@ -83,6 +83,8 @@ def test_a_private_bills_payment_and_bank_row_stay_hidden_from_a_balance_sheet_v
         dan = [p["amount"] for p in FR.payments(c, "human:dan")["payments"]]
         assert dan == [2_500]                                                            # fix-check 2
         assert [p["amount"] for p in FR.payments(c, "human:gus")["payments"]] == []      # no payables view
+        due = [s["due_out"]["amount"] for a in FR.balance_sheet(c, "human:dan")["assets"] for s in a["sources"]]
+        assert sum(due) == 2_500                                                         # due-out totals too
         assert row in {x["id"] for x in FR.transactions(c, OWNER)["rows"]}
         assert row not in {x["id"] for x in FR.transactions(c, "human:dan")["rows"]}
 
