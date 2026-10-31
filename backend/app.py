@@ -184,6 +184,11 @@ def create_app(settings=None):
                 finance.ensure_setup(c, settings.owner_email)
         except Exception as exc:
             telemetry.capture("finance_setup", exc)
+        # Physical mail filed before bills and tax letters were private: those tasks go private, once.
+        try:
+            app.state.postal_mail.backfill_private()
+        except Exception as exc:
+            telemetry.capture("postal_mail_backfill", exc)
         # The Librarian gets the market posts from Listening, once (Settings > Listening).
         try:
             from . import listening

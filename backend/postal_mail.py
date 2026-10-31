@@ -477,18 +477,32 @@ class PostalMail:
             return self.fail(row, "file_failed:" + type(error).__name__)
 
     def over_cap(self, row):
-        """Whether `READS_PER_DAY` letters were read in the last 24 hours. Over it the letter waits an hour, with no
-        attempt counted, so a flood never files real mail unread. Under it the read is stamped first, so a reader that
-        fails still counts."""
+        """Whether `READS_PER_DAY` reads happened in the last 24 hours. Over it the letter waits an hour, with no
+        attempt counted, so a flood never files real mail unread. Under it the read is recorded first, one row per
+        try, so a reader that fails, and each retry of it, still counts."""
         now = H.now()
+        since = H.shift(now, days=-1)
         with self.store.transaction() as c:
-            read = c.execute("SELECT count(*) FROM mail_items WHERE read_at>?", (H.shift(now, days=-1),)).fetchone()[0]
+            c.execute("DELETE FROM mail_reads WHERE at<=?", (since,))
+            read = c.execute("SELECT count(*) FROM mail_reads WHERE at>?", (since,)).fetchone()[0]
             if read >= READS_PER_DAY:
                 c.execute("UPDATE mail_items SET next_try=?,error='daily_cap',updated_at=? WHERE id=?",
                           (H.shift(now, hours=1), now, row["id"]))
                 return True
+            c.execute("INSERT INTO mail_reads VALUES(?,?)", (row["id"], now))
             c.execute("UPDATE mail_items SET read_at=? WHERE id=?", (now, row["id"]))
         return False
+
+    def backfill_private(self):
+        """Bill, financial and tax letters filed before their tasks were private (listed once by the V3 migration):
+        those tasks go private now. The app runs it at start, after the migrations; the list empties, so a task made public
+        later stays public."""
+        with self.store.transaction() as c:
+            for (task_id,) in c.execute("SELECT task_id FROM mail_private_backfill").fetchall():
+                row = H.task(c, task_id)
+                if row and not H.task_private(c, row):
+                    H._made_private(c, H.KEEPER, task_id)
+            c.execute("DELETE FROM mail_private_backfill")
 
     def fail(self, row, code):
         attempts = row["attempts"] + 1

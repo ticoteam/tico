@@ -333,11 +333,53 @@ def test_reads_stop_at_the_daily_cap_and_wait_without_using_an_attempt(api, hq, 
     drain(api)
     assert items(api)[late]["status"] == "new"                           # waits its hour
     with api.app.state.store.transaction() as c:                          # a day later
-        c.execute("UPDATE mail_items SET read_at=?, next_try=NULL WHERE read_at IS NOT NULL",
-                  (H.shift(H.now(), days=-2),))
+        c.execute("UPDATE mail_reads SET at=?", (H.shift(H.now(), days=-2),))
         c.execute("UPDATE mail_items SET next_try=NULL")
     drain(api)
     assert items(api)[late]["status"] == "filed"
+
+
+def test_each_retry_of_a_letter_counts_against_the_daily_cap(api, hq, mail, monkeypatch):
+    monkeypatch.setattr(P, "READS_PER_DAY", 2)
+    for ident in ("411", "412"):
+        letter(api, ident, "other")
+        deliver(hq, ident)
+    service(api).tick()
+    svc = api.app.state.postal_mail
+    svc.reader.fail.add("411")
+    svc.process(items(api)["411"]["id"])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE mail_items SET next_try=NULL")
+    svc.process(items(api)["411"]["id"])                 # the retry is a second read of the one letter
+    assert items(api)["411"]["attempts"] == 2
+    svc.process(items(api)["412"]["id"])
+    assert (items(api)["412"]["status"], items(api)["412"]["error"]) == ("new", "daily_cap")
+
+
+def test_bills_filed_before_they_were_private_go_private_once(api, hq, mail):
+    from backend import postal_mail_schema
+    for ident, kind in (("421", "bill"), ("422", "government_tax"), ("423", "financial"), ("424", "legal"),
+                        ("425", "other")):
+        letter(api, ident, kind)
+        deliver(hq, ident)
+    service(api).tick()
+    drain(api)
+    got = {i: r["task_id"] for i, r in items(api).items()}
+    with api.app.state.store.transaction() as c:          # filed by the build before V2: the company could read them
+        c.execute("UPDATE tasks SET private=0, visibility='public'")    # (legal mail someone made public since)
+        c.execute("DELETE FROM mail_private_backfill")
+        H._apply(c, postal_mail_schema.V3)
+    api.app.state.postal_mail.backfill_private()
+
+    def private():
+        with api.app.state.store.read() as c:
+            return {i: c.execute("SELECT private FROM tasks WHERE id=?", (t,)).fetchone()[0] for i, t in got.items()}
+    assert private() == {"421": 1, "422": 1, "423": 1, "424": 0, "425": 0}
+    with api.app.state.store.transaction() as c:
+        assert c.execute("SELECT count(*) FROM mail_private_backfill").fetchone()[0] == 0
+        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id=?", (got["421"],))   # public again, on purpose
+    api.app.state.postal_mail.backfill_private()
+    assert private()["421"] == 0
 
 
 def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
