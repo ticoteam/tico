@@ -15,7 +15,7 @@ For showing the product working. Recorded in demo mode, with fictional data, nev
    .venv/bin/python -m backend.demo > ~/tico-demo/demo.log 2>&1 &
    ```
 
-   Wait until `demo.log` says `Tico demo is ready`. It serves http://localhost:8765, signed in as Ana, Acme's owner, and
+   Wait until `demo.log` says `Tico demo is ready`. It serves http://localhost:8765, signed in as the sample company's owner, and
    keeps its data in a temporary folder outside this repository. It needs Python 3.12 or newer. If it stops with
    "No matching Rust screen relay", install Rust 1.92 or newer (rustup) and start it again. Stop it with `kill` on the
    PID you started (`$!`), never by name. With Docker, the same release in one command, from `docs/demo.md`:
@@ -24,7 +24,7 @@ For showing the product working. Recorded in demo mode, with fictional data, nev
 3. Write the steps in `projects/<slug>/shots/shots.json`: a list of `goto`, `click`, `type`, `wait`, `scroll`, `zoom`,
    `highlight` and `pause` steps, each with a line on what the viewer should see. Tico's pages are hash routes, so a
    `goto` is `http://localhost:8765/#/tasks`, never `/tasks` (a `/` path is a file next to the shots file, and 404s).
-   Start with `http://localhost:8765/`: that first visit signs in as Ana.
+   Start with `http://localhost:8765/`: that first visit signs in.
 4. Record without `--as-bot`: `node software/video/record.mjs projects/<slug>/shots/shots.json --out
    projects/<slug>/shots/demo.mp4 --size 1920x1080`. The cursor is drawn on the recording, so a viewer can follow it.
 5. Time compression is a decision, not a fix. If you shorten a wait or skip a load, label it on screen ("sped up") and
