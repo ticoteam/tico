@@ -378,7 +378,7 @@ function finTxCatLines() {
   if (Array.isArray(state.chart)) return state.chart;
   if (state.chart !== false) return [];
   const wide = !!finCaps()?.all;
-  return state.lines.map(l => ({id: l.account_id, name: l.name, company_wide: wide}));
+  return state.lines.map(l => ({id: l.account_id, name: l.name, parent_id: l.parent_id || null, company_wide: wide}));
 }
 function finTxCatRedraw() {
   const r = FIN?.tx?.rows.find(x => finTxKey(x) === FIN.tx.sel);
@@ -386,14 +386,16 @@ function finTxCatRedraw() {
 }
 // Whom an amount on a line that is not company-wide for the viewer may be for: the chart's own list when it sends one,
 // else from the access read by the rule a write checks (handlers.py may_write): everyone for a viewer who sees
-// everything; else the viewer when they see their own expenses, the teams their view covers (the ones they lead, on the manager default, and live team grants, each with
+// everything; else the viewer when they see their own expenses (by default, or a live own grant on the line), the teams their view covers (the ones they lead, on the manager default, and live team grants, each with
 // the teams under it), and the teammates in those teams. The viewer first. [value, label].
 function finTxForOpts(line) {
   const caps = finCaps(), me = caps?.who || '', acc = FIN.acc || {}, row = caps?.row || {};
   const below = id => [id, ...(acc.teams || []).filter(t => t.parent === id).flatMap(t => below(t.id))];
   const covered = new Set([...(caps?.all ? (acc.teams || []).map(t => t.id) : row.default === 'team_expenses' ? (acc.teams || []).filter(t => t.lead === me).map(t => t.id) : []),
     ...(row.grants || []).filter(g => g.live && g.status === 'active' && g.whose === 'team' && g.whose_team).map(g => g.whose_team)].flatMap(below));
-  const tags = line?.attributable || [...(caps?.all || ['team_expenses', 'own_expenses'].includes(row.default) ? [{teammate: me}] : []),
+  const own = row.default === 'team_expenses' || row.default === 'own_expenses' || (row.grants || []).some(g => g.live && g.status === 'active'
+    && g.whose === 'own' && (!(g.account_ids || []).length || [line?.id, line?.parent_id].some(a => a && g.account_ids.includes(a))));
+  const tags = line?.attributable || [...(caps?.all || own ? [{teammate: me}] : []),
     ...(acc.teams || []).filter(t => covered.has(t.id)).map(t => ({team: t.id})),
     ...(acc.teammates || []).filter(t => t.teammate !== me && covered.has(t.team)).map(t => ({teammate: t.teammate}))];
   return [...tags.filter(t => t.teammate === me), ...tags.filter(t => t.teammate !== me)]
@@ -456,6 +458,7 @@ function finTxCatDraw(r) {
     const p = asked ? asked.p : payload(), sent = JSON.stringify(p);
     state.busy = true; foot();
     const live = () => FIN?.tx === state && state.cat === c && document.contains(form);
+    let saved = false;
     try {
       if (!asked) {
         const dry = await post('/v2/finance/actions', {kind: 'categorize', payload: p, dry_run: true});
@@ -468,12 +471,16 @@ function finTxCatDraw(r) {
       }
       const res = await finAct('categorize', p);
       if (res.status === 'committed') toast('Saved');
-      if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;   // another row's unsaved picks stay
-      void finTxLoad(false);
+      saved = true;
     } catch (e) { toast(e.message, true); }
     finally {
       state.busy = false;
-      finTxCatRedraw();
+      // After a save the reload redraws the rail, so the saved row's picks are rebuilt from its fresh read (another
+      // row's stay); otherwise the rail redraws now, with its Save back on.
+      if (saved) {
+        if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;
+        void finTxLoad(false);
+      } else finTxCatRedraw();
     }
   };
   form.onchange = ev => {
