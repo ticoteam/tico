@@ -164,7 +164,7 @@ def live(docs, url, token, only, wait=900):
             with urllib.request.urlopen(req, timeout=120) as response:
                 return json.load(response)
         except urllib.error.HTTPError as exc:
-            raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}")
+            raise SystemExit(f"{method} {path}: {exc.code} {exc.read()[:300]!r}") from None
 
     def run_ended(task_id):
         """(ended, status, runs, finished): ended once the task is finished and every run on it has finished."""
@@ -258,7 +258,7 @@ def main(argv):
     print(text)
     print(f"\nrecall {recall:.2f}; quotes not in source: {len(bad)}")
     if not args.no_write:
-        stamp = datetime.date.today().isoformat()
+        stamp = datetime.datetime.now(datetime.UTC).date().isoformat()
         body = (f"# Counsel eval results\n\nRun {stamp}: `{command}`\n\n{text}\n\nRecall (found / expected): {recall:.2f}."
                 f" Quotes not in the source: {len(bad)}.\n\nWrong scope counts suggestions that match a not-ours "
                 "sentence (a vendor's own duty). Extra counts suggestions that match no label.\n")
