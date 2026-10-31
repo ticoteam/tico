@@ -6,8 +6,7 @@
 // a click on a segment makes it Us, then Next, then neither, × removes one and one can be added by name; competitors are
 // removed and added by name or site; Publish stays off with its reason until one bet is active and What we won't do is
 // written; a member reads only the published version; old #/market links land on the Market tab keeping their query;
-// the Goals page's Bet picker saves bet_id and its chip opens the bet; the team chart's group Bet picker saves the
-// group's bet_id.
+// the Goals page's Bet picker saves bet_id and its chip opens the bet; a team group's row has no Bet flag.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');

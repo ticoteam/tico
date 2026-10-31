@@ -388,13 +388,45 @@ async function owner(browser) {
   await page.locator('#tree .dept-label', {hasText: /^EMEA$/}).waitFor();
   assert.deepEqual(calls.shift(), ['POST', 'groups', {name: 'EMEA', parent: 'sales'}]);
 
-  // On a narrow rail the tools never push the fold off the row: a long name shortens instead.
-  await page.evaluate(() => document.documentElement.style.setProperty('--rail-left', '190px'));
+  // On a narrow rail and on a phone the tools and the fold never push off the row: a long name shortens instead, and
+  // the fold still folds. Sales takes a long name for these checks and gets its own back after.
+  const LONG = 'Sales and partner operations for enterprise accounts';
   await row(page, 'Sales').hover();
-  const fold = await row(page, 'Sales').evaluate(el => { const b = x => x.getBoundingClientRect();
-    return {chev: b(el.querySelector('.chev')).right, side: b(document.querySelector('#side')).right, tools: b(el.querySelector('.org-group-tools')).width}; });
-  assert.ok(fold.tools > 0 && fold.chev <= fold.side - 4, `the fold stays on the row: ${JSON.stringify(fold)}`);
+  await page.locator('[data-group-rename=sales]').click();
+  await page.locator('#tree .org-name').fill(LONG);
+  await page.locator('#tree .org-name').press('Enter');
+  await page.locator('#tree .dept-label', {hasText: LONG}).waitFor();
+  assert.deepEqual(calls.shift(), ['PATCH', 'sales', {name: LONG}]);
+  const narrowFold = async margin => {
+    await node(page, 'g:sales').hover();
+    const fold = await node(page, 'g:sales').evaluate(el => {
+      const b = x => x.getBoundingClientRect(), chev = el.querySelector('.chev'), c = b(chev);
+      const hit = document.elementFromPoint(c.left + c.width / 2, c.top + c.height / 2);
+      return {chev: c.right, side: b(document.querySelector('#side')).right, tools: b(el.querySelector('.org-group-tools')).width,
+        truncated: el.querySelector('.dept-name').scrollWidth > el.querySelector('.dept-name').clientWidth, hit: chev.contains(hit)}; });
+    assert.ok(fold.tools > 0 && fold.chev <= fold.side - margin, `the fold stays on the row: ${JSON.stringify(fold)}`);
+    assert.equal(fold.truncated, true, 'the long name is cut short with an ellipsis');
+    assert.equal(fold.hit, true, 'the fold is what a click hits');
+    await node(page, 'g:sales').locator('.chev').click();
+    assert.equal(await page.locator('#tree .dept-label', {hasText: /^EMEA$/}).isVisible(), false, 'the fold folds the group');
+    await node(page, 'g:sales').locator('.chev').click();
+    assert.equal(await page.locator('#tree .dept-label', {hasText: /^EMEA$/}).isVisible(), true, 'and unfolds it');
+  };
+  await page.evaluate(() => document.documentElement.style.setProperty('--rail-left', '190px'));
+  await narrowFold(4);
   await page.evaluate(() => document.documentElement.style.removeProperty('--rail-left'));
+  await page.setViewportSize({width: 390, height: 844});
+  await page.locator('#mobile-more').click();
+  await node(page, 'g:sales').waitFor({state: 'visible'});
+  await narrowFold(0);
+  await page.setViewportSize({width: 1300, height: 900});
+  // Sales gets its name back.
+  await node(page, 'g:sales').hover();
+  await page.locator('[data-group-rename=sales]').click();
+  await page.locator('#tree .org-name').fill('Sales');
+  await page.locator('#tree .org-name').press('Enter');
+  await page.locator('#tree .dept-label', {hasText: /^Sales$/}).waitFor();
+  assert.deepEqual(calls.shift(), ['PATCH', 'sales', {name: 'Sales'}]);
   // Rename.
   await row(page, 'Sales').hover();
   await page.locator('[data-group-rename=sales]').click();
