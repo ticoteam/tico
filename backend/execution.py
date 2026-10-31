@@ -4529,7 +4529,10 @@ class Execution:
             task = H.task(c, work_task_id(msg, conv)) if work_task_id(msg, conv) else None
             # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
             same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
-            if not already and not same and (msg["kind"] in ("say", "ask", "steer") or task):
+            # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
+            # text still applies (held, the run keeps only the note), so `posting` decides only the post.
+            posting = not already and not same
+            if msg["kind"] in ("say", "ask", "steer") or task:
                 target = msg["from_actor"]
                 replyable = not str(target).startswith("bot:") or msg["kind"] == "ask"
                 if target == H.KEEPER and task:
@@ -4545,10 +4548,11 @@ class Execution:
                             task["status"] == "done" or (late and task["status"] == "closed"))
                     # Woken by Tico on a task finished before it started, a turn that wrote nothing has no news: the
                     # person would only read "nothing changed" again. Its text stays on the run (Dev 359).
-                    if replyable and quiet_recheck(c, aid, body, task, msg):
+                    if posting and replyable and quiet_recheck(c, aid, body, task, msg):
                         replyable = False
                         H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": row["bot"], "task": task["id"],
                                                                      "to": target, "reason": "no_change"})
+                replyable = replyable and posting
                 if target not in (H.KEEPER, actor):
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}

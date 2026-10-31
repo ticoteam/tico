@@ -189,8 +189,9 @@ def edit_version(c, auth, who, task_id, fid, number, body):
     return version_review(c, fid, number, actor=privacy.actor(who))
 
 
-def answer_text(c, auth, who, asked, text, *, unknown=False):
-    """Only a unique exact label for one question can stand in for a card pick."""
+def answer_text(c, auth, who, asked, text, *, unknown=False, warn=""):
+    """Only a unique exact label for one question can stand in for a card pick. `warn` (an org rule's Warn,
+    backend/org_rule_check.py) goes on the message the asker reads, after the pick is resolved on `text` itself."""
     from . import models as M
     if asked["to_actor"] != who.actor or asked["from_actor"] == who.actor:
         raise Problem("forbidden", "Only the question's recipient may answer it", 403)
@@ -201,14 +202,17 @@ def answer_text(c, auth, who, asked, text, *, unknown=False):
     if task_id and not unknown and len(questions) == 1 and len(matches) == 1:
         target = asked["refs"].get("target") or {"comment": asked["id"]}
         return answer_task(c, auth, who, task_id, M.TaskAnswer(
-            target=target, answers={questions[0]["id"]: matches}), wake=True)
+            target=target, answers={questions[0]["id"]: matches}), wake=True, warn=warn)
     # The original words stay on the task; an unmatched note cannot settle its question.
-    note = H.answer(c, who.actor, asked["id"], text, unknown=unknown)
+    note = H.answer(c, who.actor, asked["id"], warn + "\n\n" + text if warn else text, unknown=unknown,
+                    classify_text=text)
     return {**note, "decision_open": True,
             "feedback": "Note saved. Decision still open; choose one of the options."}
 
 
-def answer_task(c, auth, who, task_id, body, wake):
+def answer_task(c, auth, who, task_id, body, wake, warn=""):
+    """A structured answer. `warn` (an org rule's Warn) opens the answer comment its readers get; the answer itself
+    (its picks and Other text) is recorded as given."""
     mark = H.jobs_mark(c)
     comment_rights(c, auth, who, task_id)
     target = body.target.model_dump(exclude_none=True)
@@ -278,6 +282,8 @@ def answer_task(c, auth, who, task_id, body, wake):
             text += f" File: {subject}."
     if body.other:
         text += " " + body.other
+    if warn:
+        text = warn + "\n\n" + text
     value = {"target": target, "answers": body.answers, "other": body.other, "dismiss": body.dismiss,
              "by": who.actor, "at": H.now(), **({"not": {k: v for k, v in passed.items() if v}}
                                                  if any(passed.values()) else {})}

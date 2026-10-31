@@ -1374,6 +1374,20 @@ RULE_CHECKED = {"create_task": ("title", "body"), "assign": ("text", "note"), "l
                 "send_reply": ("body", "text")}
 
 
+def _rule_key(do, args):
+    """The argument a warned step's reader gets, which its warning line goes on: the first checked argument the step
+    sets; a post of the turn's own output, its `text` (what `_post_update` posts); an assign, its hand-off `note`."""
+    keys = RULE_CHECKED.get(do) or ()
+    key = next((k for k in keys if args.get(k)), None)
+    if key:
+        return key
+    if do == "post_update":
+        return "text"
+    if do == "assign" and args.get("owner"):
+        return "note"
+    return None
+
+
 def _reply_addresses(values):
     """The addresses a mail reply goes to: the message's sender and the others it was sent to."""
     message = A._message(values) or {}
@@ -1431,15 +1445,31 @@ def _rule_audience(c, auto, do, args, values):
     return sorted({a for a in out if a and a not in ("human:", "bot:")})
 
 
-def replay_step(c, bot, hold, replay, ingest):
-    """Send anyway on a held automation step: the step runs once, as its automation acts now, with no second check."""
+def _warned_args(gate, do, args, key, values):
+    """A warned step's arguments: the warning line on the argument its reader gets (`key`, from `_rule_key`): a post
+    of the turn's output posts that output with the line first; an assign's line goes on its hand-off note, written
+    whether or not the step had one."""
+    from . import org_rule_check
+    if not (gate and gate.get("warn") and key):
+        return args
+    said = args.get(key)
+    if not said and do == "post_update":
+        said = A._turn_output(values).get("text")
+    return {**args, key: org_rule_check.warned_text(gate, str(said or "")).rstrip()}
+
+
+def replay_step(c, bot, hold, replay, ingest, gate=None):
+    """Send anyway on a held automation step: the step runs once, as its automation acts now, with no second check of
+    the rules it was held on (a newer rule's Warn, `gate`, goes on the step's text)."""
     row = c.execute("SELECT * FROM automations WHERE id=?", (replay["automation"],)).fetchone()
     if not row:
         raise Problem("not_found", "The automation is gone", 409)
     auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    args = _warned_args(gate, replay["do"], replay["args"], _rule_key(replay["do"], replay["args"]),
+                        replay["values"])
     chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
     try:
-        return A.run(c, auto, replay["run"], replay["do"], replay["args"], replay["values"])
+        return A.run(c, auto, replay["run"], replay["do"], args, replay["values"])
     finally:
         H.VIA.reset(via)
         CHAIN.reset(chain)
@@ -1545,7 +1575,6 @@ class HubServices:
         keys = RULE_CHECKED.get(do)
         if not keys:
             return "", None
-        key = next((k for k in keys if args.get(k)), None)
         text = "\n\n".join(str(args[k]) for k in keys if args.get(k))
         if do == "post_update" and not text:
             text = str(A._turn_output(values).get("text") or "")
@@ -1556,8 +1585,7 @@ class HubServices:
                 task = None
             if task:
                 text = "\n\n".join(filter(None, (text, f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip())))
-                key = key or "note"
-        return text, key
+        return text, _rule_key(do, args)
 
     def _rule_check(self, do, args, values, step=None):
         """The org rule check of what this step writes, when the automation acts as a bot (backend/org_rule_check.py):
@@ -1587,17 +1615,19 @@ class HubServices:
                                         obj=f"{task['id']}@{task['version']}" if task else "")
 
     def _ruled(self, c, rule, do, args, values, step=None):
-        """The step inside its write: held by a rule, nothing is done and the run goes on with the step failed."""
+        """The step inside its write: held by a rule, nothing is done and the run goes on with the step failed. A task
+        an assign was checked on that changed since (its version) is not judged by that stale verdict: the step goes
+        through unchecked (`rules.unchecked`, reason `changed`), as any check that cannot run does."""
         if rule:
             from . import org_rule_check
             text, key = self._rule_text(c, do, args, values)
             gate = org_rule_check.apply(c, rule, text, {"automation": self.row["id"], "run": self.run_id, "do": do,
                                                         "args": args, "values": _trim(values),
-                                                        "chain": list(self.chain)}, tell=True)
+                                                        "chain": list(self.chain)}, tell=True,
+                                        obj_now=org_rule_check.current_obj(c, rule.get("obj")))
             if gate and gate.get("held"):
                 return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
-            if gate and gate.get("warn") and key:
-                args = {**args, key: org_rule_check.warned_text(gate, str(args.get(key) or ""))}
+            args = _warned_args(gate, do, args, key, values)
         return A.run(c, self.auto, self.run_id, do, args, values, step=step)
 
     def _screened_task(self, found, bot, args, values):

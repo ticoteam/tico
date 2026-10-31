@@ -1062,12 +1062,14 @@ def create_app(settings=None):
         def protected_write(c):
             source = getattr(request.state, "privacy_source", request.state.identity)
             token = H.PRIVATE_WRITE.set(H.PRIVATE_WRITE.get() or privacy.private_execution(c, source))
+            path = org_rule_check.PATH.set(request.url.path)     # a hold keeps its route, for Send anyway's guard
             try:
                 return fn(c)
             except H.Refused as exc:
                 exc.private = getattr(exc, "private", False) or H.PRIVATE_WRITE.get()
                 raise
             finally:
+                org_rule_check.PATH.reset(path)
                 H.PRIVATE_WRITE.reset(token)
         result = store.mutate(request.state.identity, request.url.path,
                               request.headers.get("idempotency-key"), body.model_dump(), protected_write, check=current_access)
@@ -2825,11 +2827,19 @@ def create_app(settings=None):
         return "\n\n".join(filter(None, (body.title, body.body, getattr(body, "public_title", None),
                                           getattr(body, "public_summary", None))))
 
-    def rule_warned_fields(gate, body, keys):
-        """A warned task write's recipient copy: the warning line on the first of `keys` the write sets (else the
-        first key), so whoever reads the change reads the warning with it."""
-        key = next((k for k in keys if getattr(body, k, None)), keys[0])
-        return {key: org_rule_check.warned_text(gate, getattr(body, key, None) or "")}
+    def rule_warned_fields(gate, body):
+        """A warned task write's recipient copies: the warning on every text field the write sets (a short one on a
+        title, which is one line), never on a field it leaves unset; whoever reads any of them reads the warning. A
+        hand-off alone (only the owner changes) carries it on its hand-off note, as an automation's assign does."""
+        out = {}
+        for key in ("title", "body", "note", "public_title", "public_summary"):
+            value = getattr(body, key, None)
+            if value:
+                out[key] = org_rule_check.warned_title(gate, value) if key in ("title", "public_title") else \
+                    org_rule_check.warned_text(gate, value)
+        if not out and getattr(body, "owner", None) and "note" in type(body).model_fields:
+            out["note"] = org_rule_check.warn_line(gate)
+        return out
 
     def rule_update_text(body, row):
         """What a task change says, as the rule check reads it: its text fields, and the task itself when it is handed
@@ -2915,8 +2925,10 @@ def create_app(settings=None):
         return message_ingest(bot, M.MessageCreate.model_validate(replay["body"]))
 
     @org_rule_check.replayer("message", prepare=rule_prepare_message)
-    def rule_replay_message(c, bot, hold, replay, ingest):
-        return message_write(c, bot, M.MessageCreate.model_validate(replay["body"]), None, ingest)
+    def rule_replay_message(c, bot, hold, replay, ingest, gate=None):
+        # `send` checks the destination as the bot and its run (task_privacy.require_destination).
+        return message_write(c, bot, M.MessageCreate.model_validate(replay["body"]), org_rule_check.decided(gate),
+                             ingest)
 
     def checked_write(request, body, who, operation, output, audience, write, replay, obj="", context=None):
         """A bot's write through the org rule check (backend/org_rule_check.py), for routes with no checks of their
@@ -3338,23 +3350,33 @@ def create_app(settings=None):
 
         def work(c):
             sent = message.model_copy(update={"to": conversation_target(c, who, cid)})
-            out = message_write(c, who, sent, rc if sent.to == target else None, ingest if sent.to == target else None)
+            check = rc
+            if sent.to != target:
+                # The recipient changed after the check: delivered unchecked (no engine call in the write), recorded.
+                author = org_rule_check.author_of(who, settings.assistant_bot)
+                check = org_rule_check.changed(c, rc, author, "message", rule_message_audience(c, who, sent))
+            out = message_write(c, who, sent, check, ingest if sent.to == target else None)
             if out.get("held"):
                 return out
             extra = {k: out.pop(k) for k in ("rule_warning",) if k in out}
             return {"message": out, **extra}
         return mutate(request, body, work)
 
-    def answer_write(c, who, mid, text, unknown=False):
+    def answer_write(c, who, mid, text, unknown=False, warn="", destination=False):
+        """One answer, as `/messages/{mid}/answer` writes it and Send anyway replays it. The pick is resolved on the
+        answer's own words; `warn` (an org rule's Warn) goes on the message its reader gets. `destination`: Send
+        anyway's check, as the run the answer came from, that the question's readers may read what it carries."""
         msg = H.message(c, mid)
         if not msg:
             raise Problem("not_found", "Message not found", 404)
         conversation = auth.conversation(c, who, msg["conversation_id"], write=True)
         lifecycle.refuse_send(c, who, msg["from_actor"], conversation, what="an answer")
+        if destination:
+            privacy.require_destination(c, who, msg["from_actor"], msg["conversation_id"], {}, msg)
         if H.has_pick_options(msg):
             from .task_review import answer_text
-            return answer_text(c, auth, who, msg, text, unknown=unknown)
-        return H.answer(c, who.actor, mid, text, unknown=unknown)
+            return answer_text(c, auth, who, msg, text, unknown=unknown, warn=warn)
+        return H.answer(c, who.actor, mid, warn + "\n\n" + text if warn else text, unknown=unknown, classify_text=text)
 
     def answer_audience(c, who, mid):
         msg = H.message(c, mid)
@@ -3367,14 +3389,15 @@ def create_app(settings=None):
     def answer(request: Request, mid: str, body: M.Answer):
         who = request.state.identity
         return checked_write(request, body, who, "answer", body.text, lambda c: answer_audience(c, who, mid),
-                             lambda c, gate: answer_write(c, who, mid, org_rule_check.warned_text(gate, body.text),
-                                                          body.unknown),
+                             lambda c, gate: answer_write(c, who, mid, body.text, body.unknown,
+                                                          org_rule_check.warn_line(gate)),
                              {"message": mid, "body": body.model_dump(mode="json", by_alias=True)})
 
     @org_rule_check.replayer("answer")
-    def rule_replay_answer(c, bot, hold, replay, ingest):
+    def rule_replay_answer(c, bot, hold, replay, ingest, gate=None):
         body = M.Answer.model_validate(replay["body"])
-        return answer_write(c, bot, replay["message"], body.text, body.unknown)
+        return answer_write(c, bot, replay["message"], body.text, body.unknown, org_rule_check.warn_line(gate),
+                            destination=True)
 
     @app.post("/api/v2/needs-you/clarify")
     def clarify_ask(request: Request, body: M.ClarifyAsk):
@@ -3580,8 +3603,11 @@ def create_app(settings=None):
         return mutate(request, body, lambda c: note_write(c, who, body, rc))
 
     @org_rule_check.replayer("note")
-    def rule_replay_note(c, bot, hold, replay, ingest):
-        return note_write(c, bot, M.NoteCreate.model_validate(replay["body"]))
+    def rule_replay_note(c, bot, hold, replay, ingest, gate=None):
+        body = M.NoteCreate.model_validate(replay["body"])
+        # The note's reader must read what the run it came from carries, as for any write to them.
+        privacy.require_destination(c, bot, auth.target(c, bot, body.to, need="write"), None, {})
+        return note_write(c, bot, body, org_rule_check.decided(gate))
 
     @app.get("/api/v2/notes")
     def notes(request: Request, to: str | None = None, sender: str | None = None, since: str | None = None,
@@ -3921,7 +3947,7 @@ def create_app(settings=None):
         if rule_gate and rule_gate.get("held"):
             return org_rule_check.answer(rule_gate)
         if rule_gate and rule_gate.get("warn"):
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body, ("body", "public_summary")))
+            body = body.model_copy(update=rule_warned_fields(rule_gate, body))
         # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. Sent back or FYI
         # with the filter on, it stays the bot's own task; the reply says why.
         gate = None
@@ -4137,8 +4163,10 @@ def create_app(settings=None):
         return ask_ingest.preflight(store_, app.state.judge, bot, body.get("owner"), body.get("title"), body.get("body"))
 
     @org_rule_check.replayer("task_create", prepare=rule_prepare_task)
-    def rule_replay_task(c, bot, hold, replay, ingest):
-        return task_create(c, bot, M.TaskCreate.model_validate(replay["body"]), ingest=ingest)
+    def rule_replay_task(c, bot, hold, replay, ingest, gate=None):
+        # The create's own privacy refusals run as the bot and its run (privacy.require_create).
+        return task_create(c, bot, M.TaskCreate.model_validate(replay["body"]), ingest=ingest,
+                           rule=org_rule_check.decided(gate))
 
     @app.post("/api/v2/tasks/dry-run")
     def task_dry_run(request: Request, body: M.TaskCreate):
@@ -4179,7 +4207,7 @@ def create_app(settings=None):
             return org_rule_check.answer(rule_gate)
         if rule_gate and rule_gate.get("warn"):
             # The warning line goes on the change itself, where the recipient reads it.
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body, ("note", "body", "public_summary")))
+            body = body.model_copy(update=rule_warned_fields(rule_gate, body))
         if body.close:
             if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,
@@ -4277,12 +4305,15 @@ def create_app(settings=None):
         return update_ingest(bot, replay["task"], M.TaskUpdate.model_validate(replay["body"]))
 
     @org_rule_check.replayer("task_update", prepare=rule_prepare_update)
-    def rule_replay_update(c, bot, hold, replay, ingest):
+    def rule_replay_update(c, bot, hold, replay, ingest, gate=None):
         body = M.TaskUpdate.model_validate(replay["body"])
         row = H.task(c, replay["task"])
         if row:
-            body = body.model_copy(update={"version": row["version"]})   # a reviewer's later Send sends it as it was
-        return task_update_one(c, bot, replay["task"], body, None, ingest=ingest or [])
+            # `send` refused it if the task changed since the hold (its version is the check's object), so this is
+            # the version it was checked at; the route's guard ran there too, as the bot and its run.
+            body = body.model_copy(update={"version": row["version"]})
+        return task_update_one(c, bot, replay["task"], body, None, ingest=ingest or [],
+                               rule=org_rule_check.decided(gate))
 
     org_rule_check.REPLAY["task_owner"] = rule_replay_update
     org_rule_check.REPLAY["bulk"] = rule_replay_update
@@ -4604,8 +4635,9 @@ def create_app(settings=None):
         return task_ask_ingest(bot, replay["task"], M.Answer.model_validate(replay["body"]))
 
     @org_rule_check.replayer("task_ask", prepare=rule_prepare_task_ask)
-    def rule_replay_task_ask(c, bot, hold, replay, ingest):
-        return task_ask_write(c, bot, replay["task"], M.Answer.model_validate(replay["body"]), ingest)
+    def rule_replay_task_ask(c, bot, hold, replay, ingest, gate=None):
+        return task_ask_write(c, bot, replay["task"], M.Answer.model_validate(replay["body"]), ingest,
+                              org_rule_check.decided(gate))
 
     def task_ask_write(c, who, tid, body, ingest=None, rc=None):
         task_id = auth.resolve_task(c, who, tid)
@@ -4742,8 +4774,9 @@ def create_app(settings=None):
         return comment_ingest(bot, replay["task"], M.TaskComment.model_validate(replay["body"]))
 
     @org_rule_check.replayer("comment", prepare=rule_prepare_comment)
-    def rule_replay_comment(c, bot, hold, replay, ingest):
-        return comment_write(c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]), ingest)
+    def rule_replay_comment(c, bot, hold, replay, ingest, gate=None):
+        return comment_write(c, bot, replay["task"], M.TaskComment.model_validate(replay["body"]), ingest,
+                             org_rule_check.decided(gate))
 
     @app.post("/api/v2/tasks/{tid}/comments")
     def task_comment(request: Request, tid: str, body: M.TaskComment):
@@ -4785,12 +4818,12 @@ def create_app(settings=None):
             auth.task(c, request.state.identity, task_id)
             return {"answers": [m["answer"] for m in H.task_comments(c, task_id, actor=privacy.actor(request.state.identity)) if m.get("answer")]}
 
-    def task_answer_write(c, who, tid, body):
+    def task_answer_write(c, who, tid, body, warn=""):
         from .task_review import answer_task
         task_id = auth.resolve_task(c, who, tid)
         row = auth.task(c, who, task_id)
         wake = who.role == "bot" or H.task_participant(c, who.actor, row) or mover(c, who)
-        return answer_task(c, auth, who, task_id, body, wake=wake)
+        return answer_task(c, auth, who, task_id, body, wake=wake, warn=warn)
 
     def task_answer_text(body):
         """What a task answer says, as the rule check reads it: each question's picks and the free text."""
@@ -4804,17 +4837,16 @@ def create_app(settings=None):
         who = request.state.identity
 
         def write(c, gate):
-            if gate and gate.get("warn") and body.other is not None:
-                return task_answer_write(c, who, tid, body.model_copy(
-                    update={"other": org_rule_check.warned_text(gate, body.other)}))
-            return task_answer_write(c, who, tid, body)
+            return task_answer_write(c, who, tid, body, org_rule_check.warn_line(gate))
         return checked_write(request, body, who, "task_answer", task_answer_text(body),
                              lambda c: rule_task_audience(c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor),
                              write, {"task": tid, "body": body.model_dump(mode="json", by_alias=True)})
 
     @org_rule_check.replayer("task_answer")
-    def rule_replay_task_answer(c, bot, hold, replay, ingest):
-        return task_answer_write(c, bot, replay["task"], M.TaskAnswer.model_validate(replay["body"]))
+    def rule_replay_task_answer(c, bot, hold, replay, ingest, gate=None):
+        # Its route's guard (`/tasks/{tid}/answers`: the task's readers may read the run's private work) ran in send.
+        return task_answer_write(c, bot, replay["task"], M.TaskAnswer.model_validate(replay["body"]),
+                                 org_rule_check.warn_line(gate))
 
     @app.get("/api/v2/tasks/{tid}/tree")
     def task_tree(request: Request, tid: str):
@@ -4894,8 +4926,9 @@ def create_app(settings=None):
                 **org_rule_check.answer(rule)}
 
     @org_rule_check.replayer("comment_edit")
-    def rule_replay_comment_edit(c, bot, hold, replay, ingest):
-        return comment_edit_write(c, bot, replay["task"], replay["message"], M.TaskComment.model_validate(replay["body"]))
+    def rule_replay_comment_edit(c, bot, hold, replay, ingest, gate=None):
+        body = M.TaskComment.model_validate(replay["body"])
+        return comment_edit_write(c, bot, replay["task"], replay["message"], body, org_rule_check.decided(gate))
 
     @app.post("/api/v2/tasks/{tid}/comments/{mid}/delete")
     def task_comment_delete(request: Request, tid: str, mid: str, body: M.Empty):
@@ -7434,7 +7467,7 @@ def create_app(settings=None):
         return mutate(request, body, finish)
 
     @org_rule_check.replayer("reply")
-    def rule_replay_reply(c, bot, hold, replay, ingest):
+    def rule_replay_reply(c, bot, hold, replay, ingest, gate=None):
         """A held turn reply, posted as the completion would have posted it."""
         from .execution import reply_target, split_runner_notices, work_task_id
         msg = H.message(c, replay["message"])
@@ -7450,10 +7483,11 @@ def create_app(settings=None):
         privacy.require_destination(c, Identity(bot.actor, "bot", attempt_id=replay["attempt"]), target, conv["id"],
                                     refs, msg)
         if msg["kind"] == "ask":
-            sent = H.answer(c, bot.actor, msg["id"], replay["text"])
+            sent = H.answer(c, bot.actor, msg["id"], org_rule_check.warned_text(gate, replay["text"]))
         else:
             text, _ = split_runner_notices(replay["text"])
-            sent = H.say(c, bot.actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"], refs=refs)
+            sent = H.say(c, bot.actor, target, org_rule_check.warned_text(gate, text), conversation_id=conv["id"],
+                         in_reply_to=msg["id"], refs=refs)
         return {"message": sent}
 
     def completion_rule_check(request, aid, body):
