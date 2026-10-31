@@ -311,6 +311,7 @@ impl GeminiHost {
             .current_dir(&t.settings.cwd)
             .env_clear()
             .envs(self.env(&t.settings));
+        super::new_group(&mut command);
         command
     }
 
