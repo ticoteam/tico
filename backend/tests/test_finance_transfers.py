@@ -539,3 +539,27 @@ def test_a_transfer_cut_off_before_midnight_settles_on_the_legs_of_its_submit_da
     sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
     assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "posted"
     assert fake.sent("create_transfer") == []
+
+
+def test_a_transfer_cut_off_mid_call_is_found_by_its_note_key_and_takes_mercurys_created_time(books):
+    """Mercury took the transfer and the answer was lost: it is unknown and never sent again. Its out-leg carries the
+    transfer's key in its note, so it is found in Mercury's transactions, and the created time Mercury gave it is the
+    submit day the legs post in (the claim time stands only until Mercury returns it)."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]          # sent, but no answer came back
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "unknown"
+    (sent,) = fake.sent("create_transfer")
+    assert str(sent["note"]).startswith("tico:")                 # the key travels in the note, as payments' do
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": sent["note"],
+                            "createdAt": "2026-10-16T00:04:00Z"}   # Mercury's own submit time, after midnight
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert tuple(_rows(books, "SELECT status, provider_txn_id, submitted_at FROM fin_transfers")[0]) == \
+        ("submitted", "leg-out", "2026-10-16T00:04:00.000000Z")
+    _arrive(fake, src[1], dst[1], 800.0, day="2026-10-16")
+    sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "posted"
+    assert len(fake.sent("create_transfer")) == 1

@@ -166,6 +166,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         row = SK.get(c, "fin_connections", cid)
         inbox = len(SK.inbox_waiting(c, 1, cid, now)) > 0
         owed = len(SK.outbox_due(c, now, 1, cid)) > 0 or len(SK.payments_due(c, now, 1, cid)) > 0 or \
+            len(SK.unknown_transfers(c, cid)) > 0 or \
             len(SK.outbox_stuck(c, _after(now, -CLAIM_MINUTES * 60), cid)) > 0
     if row is None or str(row["status"]) == "disconnected":
         return "gone"
@@ -190,6 +191,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
         problems += events(store, provider, cid, now)
     problems += process_inbox(store, provider, cid, now)
     problems += outbox(store, provider, now, cid)
+    problems += transfers_unknown(store, provider, now, cid)
     problems += pay(store, provider, now, cid)
     if due:
         problems += statements(store, provider, cid, now)
@@ -690,19 +692,44 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
 
 
 def _requests(provider: Provider, account: str) -> tuple[list[dict[str, Any]], bool]:
-    """Mercury's approval requests for one account, every page (up to REQUEST_PAGES). The flag says the whole list
-    was read (a failed or cut-short read never counts as "not there")."""
+    """Mercury's approval requests for one account, every page (up to REQUEST_PAGES)."""
+    return _every_page(lambda after: provider.send_requests(account, after), "requests")
+
+
+def _transactions(provider: Provider) -> tuple[list[dict[str, Any]], bool]:
+    """Mercury's transactions, every page (up to REQUEST_PAGES): where an unknown transfer's out-leg is looked for."""
+    return _every_page(provider.transactions, "transactions")
+
+
+def _every_page(read: Callable[[str | None], Answer], rows_key: str) -> tuple[list[dict[str, Any]], bool]:
+    """One of Mercury's lists read to the end, every page (up to REQUEST_PAGES). The flag says the whole list was
+    read (a failed or cut-short read never counts as "not there")."""
     out: list[dict[str, Any]] = []
     after: str | None = None
     for _ in range(REQUEST_PAGES):
-        page = provider.send_requests(account, after)
+        page = read(after)
         if not page.ok:
             return out, False
-        out += listed(page, "requests")
+        out += listed(page, rows_key)
         after = next_page(page)
         if not after:
             return out, True
     return out, False
+
+
+def transfers_unknown(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
+    """Transfers left unknown (a call that may have landed) from this connection's accounts: each is found by its key
+    in Mercury's transactions, as payments are found in its requests. Not found, it stays unknown; a finance admin was
+    asked when it went unknown, and nothing sends it again."""
+    with store.read() as c:
+        due = SK.unknown_transfers(c, cid)
+    if not due:
+        return []
+    txns, _ = _transactions(provider)
+    for t in due:
+        with store.transaction() as c:
+            transfers.found(load(c, now), SK.get(c, "fin_transfers", str(t["id"])), txns)
+    return []
 
 
 def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:

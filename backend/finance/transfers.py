@@ -113,10 +113,13 @@ def plan_internal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def request_body(payload: Mapping[str, Any]) -> dict[str, object]:
-    """Mercury's transfer body: the documented fields, the amount in dollars and Finance's key for this transfer."""
+    """Mercury's transfer body: the documented fields, the amount in dollars, and Finance's key for this transfer.
+    The key also goes in `note` (payments.request_body does the same): an unknown transfer is found by it in Mercury's
+    transactions. `note` is not among the documented transfer fields, so it must be confirmed against Mercury."""
+    key = str(payload["idempotency_key"])
     return {"sourceAccountId": str(payload["source_account"]),
             "destinationAccountId": str(payload["destination_account"]),
-            "amount": dollars(int(payload["amount"])), "idempotencyKey": str(payload["idempotency_key"])}
+            "amount": dollars(int(payload["amount"])), "idempotencyKey": key, "note": f"{payments.NOTE}{key}"}
 
 
 def _later(ctx: Ctx) -> str:
@@ -262,6 +265,43 @@ def sent(ctx: Ctx, payload: Mapping[str, Any], answer: Mapping[str, Any]) -> Non
         "status": "submitted", "provider_txn_id": str(answer.get("id") or "") or None, "last_error": None,
         "submitted_at": ctx.at, "updated_at": ctx.at})
     SK.settle_legs(ctx.c, tid, ctx.at, F.TRANSFER_KINDS)
+
+
+def matches(t: Any, account: str, row: Mapping[str, object]) -> bool:
+    """Whether one of Mercury's transactions is this transfer's out-leg: its key in the note, its amount, out of its
+    source account."""
+    return str(row.get("accountId") or "") == account and \
+        payments.keyed(str(t["idempotency_key"]), row, int(t["amount"]))
+
+
+def found(ctx: Ctx, t: Any, transactions: Sequence[Mapping[str, object]]) -> bool:
+    """Resolve an unknown transfer from Mercury's transactions (payments.found does the same for requests). Its
+    out-leg's created time is the submit day Mercury used, so the legs post from that day. With no such transaction,
+    the claim time stands. True when it was found."""
+    if t is None or str(t["status"]) != "unknown":
+        return False
+    src = SK.get(ctx.c, "fin_money_accounts", str(t["from_money_account_id"]))
+    account = str(src["provider_account_id"]) if src is not None else ""
+    mine = next((x for x in transactions if matches(t, account, x)), None)
+    if mine is None:
+        return False
+    tid = str(t["id"])
+    SK.update(ctx.c, "fin_transfers", tid, {
+        "status": "submitted", "provider_txn_id": str(mine.get("id") or "") or None, "last_error": None,
+        "submitted_at": _stamp(mine.get("createdAt")) or str(t["submitted_at"] or ctx.at), "updated_at": ctx.at})
+    SK.settle_legs(ctx.c, tid, ctx.at, F.TRANSFER_KINDS)
+    return True
+
+
+def _stamp(value: object) -> str:
+    """Mercury's timestamp in the store's form (UTC, microseconds), or "" when it is not one."""
+    try:
+        parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
 
 
 def not_sent(ctx: Ctx, payload: Mapping[str, Any], why: str, unknown: bool, *, started: object = None) -> None:

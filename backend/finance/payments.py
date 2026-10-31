@@ -709,18 +709,26 @@ def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
 
-def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
-    """Whether one of Mercury's requests is this payment: its key in a memo field that comes back, the same recipient
-    and the same amount. Mercury does not return the idempotency key."""
-    key = f"{NOTE}{pay['idempotency_key']}"
-    if not any(key in str(r.get(f) or "") for f in ("memo", "note", "externalMemo")):
-        return False
-    if rec is None or str(r.get("recipientId") or "") != str(rec["provider_recipient_id"] or ""):
+KEY_FIELDS = ("memo", "note", "externalMemo")     # the fields Mercury echoes a request's or a transfer's note in
+
+
+def keyed(key: str, row: Mapping[str, object], amount: int) -> bool:
+    """Whether one of Mercury's rows is the instruction with this idempotency key: the key (NOTE + key) in a field that
+    comes back, and this amount (Mercury's sign aside). Mercury does not return the idempotency key itself. Shared by
+    payments (requests) and transfers (transactions)."""
+    if not any(f"{NOTE}{key}" in str(row.get(f) or "") for f in KEY_FIELDS):
         return False
     try:
-        return F.cents(r.get("amount")) == int(pay["amount"])
+        return abs(F.cents(row.get("amount"))) == amount
     except FinanceError:
         return False
+
+
+def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
+    """Whether one of Mercury's requests is this payment: keyed, and to the same recipient."""
+    if rec is None or str(r.get("recipientId") or "") != str(rec["provider_recipient_id"] or ""):
+        return False
+    return keyed(str(pay["idempotency_key"]), r, int(pay["amount"]))
 
 
 def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]]) -> bool:

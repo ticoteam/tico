@@ -141,3 +141,60 @@ def test_an_open_watch_task_keeps_what_it_lists_and_adds_the_new_finding(environ
     (task,) = checks(api)
     assert task["id"] == opened["id"] and task["title"] == "Watch (2)", task
     assert "duplicate_charge:f9" in task["body"] and "duplicate_charge:f10" in task["body"], task["body"]
+
+
+def _long(kind: str, n: int) -> dict[str, object]:
+    """A finding with a long id and label, as a real one can be: fifty of them fill the body's bytes."""
+    return {"kind": kind, "key": f"{kind}:{'7' * 60}-{n:03d}", "stamp": {"n": n}, "label": "L" * 160}
+
+
+def _seen(api) -> set[str]:
+    with api.app.state.store.read() as c:
+        return {str(row[0]) for row in c.execute("SELECT key FROM bookkeeper_seen")}
+
+
+def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_is_not_stamped_seen(environment,
+                                                                                                    monkeypatch):
+    """Grok's repro: 25 long duplicate charges and 25 long price rises fill the body's bytes before runway, the most
+    important. Runway is still named, and a finding the body cannot hold is not stamped seen: it is news again once
+    there is room for it."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    runway = {"kind": "runway", "key": "runway:acme", "stamp": {"cash": 9}, "label": "Acme: cash covers 9 days of burn"}
+    rest = [_long("duplicate_charge", n) for n in range(25)] + [_long("price_increase", n) for n in range(25)]
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [runway] + rest)
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (task,) = checks(api)
+    assert "runway:acme" in task["body"]
+    dropped = [d for d in rest if d["key"] not in task["body"]]
+    assert dropped, "the body must not hold them all, or this does not test the cut"
+    assert "runway:acme" in _seen(api)
+    assert not any(d["key"] in _seen(api) for d in dropped)
+    # The others clear: what the body dropped is listed on the next pass.
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: list(dropped))
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
+    (task,) = checks(api)
+    assert all(d["key"] in task["body"] for d in dropped)
+
+
+def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_once_there_is_room(environment,
+                                                                                               monkeypatch):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    spend = [{"kind": "unusual_spend", "key": f"unusual_spend:{n:02d}", "stamp": {"n": n}, "label": f"Acme spend {n}"}
+             for n in range(BK.PER_KIND + 1)]
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: list(spend))
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (task,) = checks(api)
+    over = spend[-1]["key"]
+    assert over not in task["body"] and over not in _seen(api)
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [spend[-1]])
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
+    (task,) = checks(api)
+    assert over in task["body"]
