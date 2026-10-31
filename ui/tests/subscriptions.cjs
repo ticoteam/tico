@@ -32,7 +32,8 @@ function fixtures() {
   return {
     machines: [
       machine('r1', 'Tico Team box', 'ana', ['builder', 'writer', 'ops'], {claude: ready, codex: ready, musecode: ready},
-        {turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
+        {version: '0.5.4', release: '0.5.19',
+          turn_counts: {running: 1, starting: 0, waiting: 0, queued: 55, waits: []}, turn_summary: '1 running · 0 starting · 55 queued · 0 waiting'}),
       machine('r2', 'Cloud · shared', 'ana', ['scout'], {claude: missing, codex: missing}),
       machine('r3', 'Cloud · Video Producer', 'ana', ['video'], {claude: missing, codex: missing}, {cloud_machine: {state: 'stopped'}}),
       machine('r4', "Sam's Mac", 'sam', [], {claude: ready, codex: missing}, {version: '0.4.2',
@@ -340,6 +341,8 @@ async function computersTable(browser) {
   assert.deepEqual(await row('r1').locator('[data-subs-pick=codex] option').allInnerTexts(), ['Signed in here', 'ChatGPT Pro (Ana)', 'OpenAI key (company)']);
   assert.equal(await row('r4').locator('[data-subs-needs-update]').count(), 2, 'an older computer says Needs update');
   assert.equal(await row('r1').locator('.machine-chip').count(), 1, 'Muse Code shows its login as before');
+  // Under its own column a tool's chip says its state, not the tool's name again.
+  assert.equal((await row('r1').locator('.machine-chip').innerText()).trim(), 'Signed in');
   // No running tasks: the switch saves at once.
   await row('r2').locator('[data-subs-pick=codex]').selectOption('s3');
   await page.waitForFunction(() => document.querySelector('[data-computer-row=r2] [data-subs-pick=codex]')?.dataset.current === 's3');
@@ -366,6 +369,8 @@ async function computersTable(browser) {
   await row('r1').locator('.machine-name').click();
   const detail = page.locator('#set-machines dialog.computer-detail[open]');
   assert.match(await detail.locator('[data-turn-counts]').innerText(), /1 running · 0 starting · 55 queued/);
+  // The release it runs, not the runner's own version constant.
+  assert.match(await detail.locator('.computer-detail-facts').innerText(), /^Tico 0\.5\.19 · linux/);
   assert.deepEqual(await detail.locator('[data-connection]').evaluateAll(list => list.map(c => c.dataset.connection)), ['own:claude', 'own:codex', 'own:musecode']);
   await page.keyboard.press('Escape');
   // Add computer is a header button opening a small dialog with the enrollment fields.
