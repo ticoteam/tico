@@ -63,6 +63,12 @@ impl Fixture {
     fn writer_tasks(&self) -> usize {
         fs::read_to_string(self.0.join("writer-tasks")).map_or(0, |t| t.lines().count())
     }
+    fn watches(&self) -> usize {
+        fs::read_to_string(self.0.join("watches")).map_or(0, |t| t.trim().parse().unwrap())
+    }
+    fn reruns(&self) -> String {
+        fs::read_to_string(self.0.join("reruns")).unwrap_or_default()
+    }
     fn recover_run(&self) {
         let path = self.0.join("freeze.json");
         let mut state: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
@@ -138,9 +144,32 @@ fn a_lost_notes_task_response_is_reported_instead_of_filed_twice() {
     assert_eq!(f.writer_tasks(), 1);
 }
 #[test]
-fn failed_validation_never_tags() {
+fn cancelled_validation_is_rerun_once_then_tagged() {
+    let f = Fixture::new(json!({"cancelled_watches":1}));
+    passed(f.freeze());
+    passed(f.publish());
+    assert_eq!(f.reruns(), "run rerun 42 --repo acme/product\n");
+    assert_eq!(f.watches(), 2);
+    let tag: Value = serde_json::from_slice(&fs::read(f.0.join("tag")).unwrap()).unwrap();
+    assert_eq!(tag, json!({"sha":"a".repeat(40),"ref":"refs/tags/v1.0.1"}));
+    assert_eq!(f.writer_tasks(), 1);
+}
+#[test]
+fn validation_cancelled_three_times_refuses_after_two_reruns() {
+    let f = Fixture::new(json!({"cancelled_watches":3}));
+    passed(f.freeze());
+    refused(&f, f.publish(), "cancelled after 2 reruns");
+    assert_eq!(f.reruns().lines().count(), 2);
+    assert_eq!(f.watches(), 3);
+    assert_eq!(f.writer_tasks(), 0);
+    let state: Value = serde_json::from_slice(&fs::read(f.0.join("freeze.json")).unwrap()).unwrap();
+    assert_eq!(state["reruns"], 2);
+}
+#[test]
+fn failed_validation_never_tags_and_is_never_rerun() {
     let f = Fixture::new(json!({"failed":true}));
     passed(f.freeze());
     refused(&f, f.publish(), "validation failed");
+    assert_eq!(f.reruns(), "");
     assert_eq!(f.writer_tasks(), 0);
 }

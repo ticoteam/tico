@@ -59,6 +59,8 @@ struct Freeze {
     dispatching: bool,
     run: Option<u64>,
     #[serde(default)]
+    reruns: u32,
+    #[serde(default)]
     tagged: bool,
     #[serde(default)]
     writer_filing: bool,
@@ -172,6 +174,7 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
         candidate: None,
         dispatching: false,
         run: None,
+        reruns: 0,
         tagged: false,
         writer_filing: false,
         writer_task: None,
@@ -267,23 +270,25 @@ fn validate_and_tag(
         .ok_or("Dispatch not visible yet; inspect Actions and resume with --run")?;
     verify_run(state, candidate, id, false)?;
     // Release Manager runs this in the background; the durable record resumes the same run after interruption.
-    let status = Command::new("gh")
-        .args([
-            "run",
-            "watch",
-            &id.to_string(),
-            "--repo",
-            &state.repo,
-            "--exit-status",
-            "--interval",
-            "10",
-        ])
-        .status()
-        .map_err(|e| e.to_string())?;
-    require(
-        status.success(),
-        "Release validation failed or watch was interrupted; no tag pushed",
-    )?;
+    loop {
+        let status = Command::new("gh")
+            .args([
+                "run",
+                "watch",
+                &id.to_string(),
+                "--repo",
+                &state.repo,
+                "--exit-status",
+                "--interval",
+                "10",
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            break;
+        }
+        rerun_cancelled(state, candidate, id, path)?;
+    }
     verify_run(state, candidate, id, true)?;
     unchanged(candidate)?;
     git(&[
@@ -298,6 +303,41 @@ fn validate_and_tag(
         state.version
     );
     Ok(())
+}
+// A run a bot cancelled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
+fn rerun_cancelled(state: &mut Freeze, candidate: &str, id: u64, path: &PathBuf) -> Result<()> {
+    let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
+    require(
+        run["status"] == "completed" && run["conclusion"] == "cancelled",
+        "Release validation failed or watch was interrupted; no tag pushed",
+    )?;
+    require(
+        state.reruns < 2,
+        "Release validation was cancelled after 2 reruns; no tag pushed; inspect Actions",
+    )?;
+    verify_run(state, candidate, id, false)?;
+    unchanged(candidate)?;
+    // Saved before the rerun, so the count never falls behind a rerun GitHub may have started.
+    state.reruns += 1;
+    state.save(path)?;
+    command(
+        "gh",
+        &["run", "rerun", &id.to_string(), "--repo", &state.repo],
+    )?;
+    for _ in 0..20 {
+        let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
+        if run["status"] != "completed" {
+            println!(
+                "Validation run {id} was cancelled; rerunning it (attempt {} of 2).",
+                state.reruns
+            );
+            return Ok(());
+        }
+        thread::sleep(Duration::from_secs(3));
+    }
+    Err(format!(
+        "Validation run {id} did not restart after its rerun; inspect Actions and run publish again"
+    ))
 }
 // The Release workflow publishes the tag a few minutes after it is pushed; the notes task waits for that.
 fn published(state: &Freeze) -> Result<()> {
