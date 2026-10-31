@@ -32,6 +32,7 @@ import threading
 import time
 import urllib.parse
 import uuid
+from email.utils import parseaddr
 from types import SimpleNamespace
 
 import httpx
@@ -57,6 +58,8 @@ EVERY = 60                       # seconds between drains when nothing new came
 MAX_ATTEMPTS = 5                 # then the letter stays failed until a person retries it
 BACKOFF = (60, 300, 1800, 7200)  # seconds before attempt 2, 3, 4, 5
 BATCH = 10                       # letters per drain
+READS_PER_DAY = 100              # letters read (one Gateway call each) in any 24 hours; more wait for the next hour
+SENDERS = 20                     # addresses or @domains the email-in address takes scans from
 MAX_BYTES = 25 * 1024 * 1024     # a scan larger than this is refused at fetch
 READ_BYTES = 15 * 1024 * 1024    # ... and one larger than this is filed unread (the model's input cap)
 EXCERPT = 6000                   # characters of the letter's text the Decide call sees
@@ -69,6 +72,7 @@ READABLE = {"application/pdf": "pdf", "image/png": "image", "image/jpeg": "image
 DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 ID = re.compile(r"[A-Za-z0-9_.:-]{1,120}")
 SHA256 = re.compile(r"[0-9a-f]{64}")
+SENDER = re.compile(r"[a-z0-9._%+-]*@[a-z0-9-]+(\.[a-z0-9-]+)+")   # a whole address, or `@domain` for any address there
 KEEPER = SimpleNamespace(actor=H.KEEPER)
 
 
@@ -83,12 +87,13 @@ class Unavailable(Exception):
 # ----------------------------------------------------------------------------- routing: one table, editable later
 # Where each kind goes. `to` is `owner`, `finance` (the Finance bot, else the owner), `assistant` (the Assistant's
 # queue, else the owner) or None (archived, no task). `""` is a letter that could not be read: a person looks at it.
-# `private` keeps the task to the owner: legal papers and checks are not the whole company's to read.
+# `private` keeps the task to its parties (and the admins): legal papers, checks, bills, statements and tax letters
+# carry account numbers and amounts that are not the whole company's to read.
 ROUTES = {
     "legal": {"to": "owner", "title": "Legal mail: {summary}", "private": True},
-    "government_tax": {"to": "finance", "title": "Government or tax mail: {summary}"},
-    "bill": {"to": "finance", "title": "Bill by mail: {summary}"},
-    "financial": {"to": "finance", "title": "Financial mail: {summary}"},
+    "government_tax": {"to": "finance", "title": "Government or tax mail: {summary}", "private": True},
+    "bill": {"to": "finance", "title": "Bill by mail: {summary}", "private": True},
+    "financial": {"to": "finance", "title": "Financial mail: {summary}", "private": True},
     "check": {"to": "owner", "title": "Check received: {summary}", "private": True},
     "junk": {"to": None, "title": ""},
     "other": {"to": "assistant", "title": "Mail: {summary}"},
@@ -271,10 +276,33 @@ def intake_inbox(c):
     return row["inbox_id"] if row else None
 
 
+def intake_senders(c):
+    row = c.execute("SELECT senders_json FROM mail_intake WHERE singleton=1").fetchone()
+    try:
+        found = json.loads(row["senders_json"]) if row else []
+    except ValueError:
+        found = []
+    return [s for s in found if isinstance(s, str)] if isinstance(found, list) else []
+
+
+def sender_allowed(sender, allowed):
+    """Whether a message's From is one the email-in address takes scans from: the same address, or any address at an
+    `@domain` listed. No list takes nothing. From is what the message claims, so the list keeps out strangers and
+    floods, not a forger who knows the provider's address: the scan is still read as outside text."""
+    address = parseaddr(str(sender or ""))[1].strip().lower()
+    if "@" not in address:
+        return False
+    domain = "@" + address.rsplit("@", 1)[1]
+    return any(entry == address or entry == domain for entry in allowed)
+
+
 def emailed(c, item):
     """An inbound message (backend/inbound.py, inside its ingest transaction): when it reached the mail-intake inbox
-    with a PDF or image attached, each such attachment is a letter. Returns how many were new."""
+    from one of its senders (`sender_allowed`) with a PDF or image attached, each such attachment is a letter. Returns
+    how many were new."""
     if item.get("kind") != "email" or item.get("spam") or item.get("inbox_id") != intake_inbox(c):
+        return 0
+    if not sender_allowed(item.get("from"), intake_senders(c)):
         return 0
     attachments = item.get("attachments") if isinstance(item.get("attachments"), list) else []
     made = 0
@@ -418,6 +446,8 @@ class PostalMail:
         adapter = ADAPTERS.get(row["provider"])
         if adapter is None:
             return self.fail(row, "unknown_provider")
+        if self.over_cap(row):
+            return
         last = row["attempts"] + 1 >= MAX_ATTEMPTS
         try:
             data, mime, name = adapter.fetch(self, row)
@@ -445,6 +475,20 @@ class PostalMail:
             return self.fail(row, error.code)
         except Exception as error:  # noqa: BLE001 - rolled back whole: the next try starts clean
             return self.fail(row, "file_failed:" + type(error).__name__)
+
+    def over_cap(self, row):
+        """Whether `READS_PER_DAY` letters were read in the last 24 hours. Over it the letter waits an hour, with no
+        attempt counted, so a flood never files real mail unread. Under it the read is stamped first, so a reader that
+        fails still counts."""
+        now = H.now()
+        with self.store.transaction() as c:
+            read = c.execute("SELECT count(*) FROM mail_items WHERE read_at>?", (H.shift(now, days=-1),)).fetchone()[0]
+            if read >= READS_PER_DAY:
+                c.execute("UPDATE mail_items SET next_try=?,error='daily_cap',updated_at=? WHERE id=?",
+                          (H.shift(now, hours=1), now, row["id"]))
+                return True
+            c.execute("UPDATE mail_items SET read_at=? WHERE id=?", (now, row["id"]))
+        return False
 
     def fail(self, row, code):
         attempts = row["attempts"] + 1
@@ -776,14 +820,15 @@ def install(app, settings, store, auth):
 
     class Intake(Contract):
         inbox_id: str | None = Field(default=None, max_length=120)
+        senders: list[str] = Field(default_factory=list, max_length=SENDERS)
 
     def intake_view(c):
         row = c.execute("SELECT m.*, i.address FROM mail_intake m LEFT JOIN inbound_inboxes i ON i.inbox_id=m.inbox_id "
                         "WHERE m.singleton=1").fetchone()
         if not row:
             return {"intake": None}
-        return {"intake": {"inbox_id": row["inbox_id"], "address": row["address"] or "", "set_by": row["set_by"],
-                           "set_at": row["set_at"]}}
+        return {"intake": {"inbox_id": row["inbox_id"], "address": row["address"] or "", "senders": intake_senders(c),
+                           "set_by": row["set_by"], "set_at": row["set_at"]}}
 
     @app.get("/api/v2/postal/intake")
     def mail_intake_read(request: Request):
@@ -795,9 +840,16 @@ def install(app, settings, store, auth):
 
     @app.put("/api/v2/postal/intake")
     def mail_intake_set(request: Request, body: Intake):
-        """Name the email inbox other mail providers send their scans to (`inbox_id`), or stop (`null`). Owner or admin."""
+        """Name the email inbox other mail providers send their scans to (`inbox_id`) and who sends them (`senders`:
+        addresses or `@domain`s, at least one), or stop (`null`). Owner or admin."""
         who = request.state.identity
         need_admin(who, "sets the mail-intake address")
+        senders = list(dict.fromkeys(s.strip().lower() for s in body.senders if s.strip()))
+        if body.inbox_id is not None and not senders:
+            raise Problem("validation", "Name at least one sender: your mail provider's address or @domain", 422)
+        bad = next((s for s in senders if len(s) > 254 or not SENDER.fullmatch(s)), None)
+        if bad:
+            raise Problem("validation", f"Not an address or @domain: {bad[:60]}", 422)
         with store.transaction() as c:
             member(c, who)
             if body.inbox_id is None:
@@ -806,8 +858,8 @@ def install(app, settings, store, auth):
                 found = c.execute("SELECT kind FROM inbound_inboxes WHERE inbox_id=?", (body.inbox_id,)).fetchone()
                 if not found or found["kind"] != "email":
                     raise Problem("not_found", "No email inbox with that id", 404)
-                c.execute("INSERT OR REPLACE INTO mail_intake(singleton,inbox_id,set_by,set_at) VALUES(1,?,?,?)",
-                          (body.inbox_id, who.actor, H.now()))
+                c.execute("INSERT OR REPLACE INTO mail_intake(singleton,inbox_id,set_by,set_at,senders_json) "
+                          "VALUES(1,?,?,?,?)", (body.inbox_id, who.actor, H.now(), json.dumps(senders)))
             H.event(c, who.actor, "mail.intake", body.inbox_id or "", {})
             return intake_view(c)
 

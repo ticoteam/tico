@@ -113,11 +113,12 @@ async function pmIntake(run) {
     get('/v2/inbound/inboxes', {fresh: true}).then(d => (d.inboxes || []).filter(i => i.kind === 'email'), () => null)]);
   if (run !== PM.run) return;
   if (intake?.error) { host.innerHTML = `<p class="err">${esc(intake.error)}</p>`; return; }
-  const cur = intake?.inbox_id || '', line = '<p class="muted">PDFs and images emailed to this inbox become letters.</p>';
+  const cur = intake?.inbox_id || '', line = '<p class="muted">PDFs and images emailed to this inbox from these senders become letters.</p>';
+  const senders = (intake?.senders || []).join(', ');
   const list = [...(inboxes || [])];
   if (cur && !list.some(i => i.inbox_id === cur)) list.unshift({inbox_id: cur, name: '', address: intake.address || cur});
   if (!settingsIsAdmin()) {
-    host.innerHTML = `${line}<p data-pm-intake-shown>${cur ? esc(intake.address || cur) : 'None'}</p>`;
+    host.innerHTML = `${line}<p data-pm-intake-shown>${cur ? esc(intake.address || cur) : 'None'}</p>${cur && senders ? `<p class="muted" data-pm-intake-senders-shown>From ${esc(senders)}</p>` : ''}`;
     return;
   }
   if (!list.length) {
@@ -126,16 +127,28 @@ async function pmIntake(run) {
   }
   host.innerHTML = `${line}<label class="pm-intake">Inbox<select data-pm-intake-select>
       <option value="">None</option>${list.map(i => `<option value="${esc(i.inbox_id)}"${i.inbox_id === cur ? ' selected' : ''}>${esc(i.name ? `${i.name} · ${i.address}` : i.address)}</option>`).join('')}
-    </select></label>`;
-  const select = host.querySelector('[data-pm-intake-select]');
-  // A failed save goes back to what the server last took, not to what the page first loaded.
-  let saved = cur;
-  select.onchange = async () => {
-    settingsFieldClear(select); select.disabled = true;
-    try { await put('/v2/postal/intake', {inbox_id: select.value || null}); saved = select.value || ''; toast('Saved'); }
-    catch (e) { select.value = saved; settingsFieldError(select, e.message); }
-    finally { select.disabled = false; }
+    </select></label>
+    <label class="pm-intake">Senders<input data-pm-intake-senders value="${esc(senders)}" placeholder="scans@provider.com, @provider.com" autocomplete="off"></label>`;
+  const select = host.querySelector('[data-pm-intake-select]'), from = host.querySelector('[data-pm-intake-senders]');
+  // A failed save goes back to what the server last took, not to what the page first loaded. Picking an inbox also
+  // blurs the senders field, so one edit can fire both handlers: saves run one at a time and an unchanged one is skipped.
+  let saved = {inbox: cur, senders}, busy = Promise.resolve();
+  const save = field => (busy = busy.then(() => saveNow(field)));
+  const saveNow = async (field) => {
+    const list = [...new Set(from.value.toLowerCase().split(/[\s,;]+/).filter(Boolean))];
+    settingsFieldClear(select); settingsFieldClear(from);
+    if (select.value && !list.length) { settingsFieldError(from, 'Add your mail provider\'s address or @domain'); return; }
+    if (select.value === saved.inbox && (select.value ? list.join(', ') : '') === saved.senders) return;
+    select.disabled = from.disabled = true;
+    try {
+      const d = await put('/v2/postal/intake', {inbox_id: select.value || null, senders: select.value ? list : []});
+      saved = {inbox: d.intake?.inbox_id || '', senders: (d.intake?.senders || []).join(', ')};
+      from.value = saved.senders; toast('Saved');
+    } catch (e) { select.value = saved.inbox; from.value = saved.senders; settingsFieldError(field, e.message); }
+    finally { select.disabled = from.disabled = false; }
   };
+  select.onchange = () => save(select);
+  from.onchange = () => { if (select.value) save(from); };
 }
 
 // ---------------------------------------------------------------------------------------------------------- Letters

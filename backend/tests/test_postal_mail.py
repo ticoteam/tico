@@ -180,6 +180,13 @@ def test_each_kind_goes_where_the_routing_table_says(api, hq, mail):
             assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == owner, (ident, row)
     assert got["204"]["kind"] == "check" and task(api, got["204"]["task_id"])["title"].startswith("Check received: ")
     assert got["208"]["kind"] == "legal"
+    # Bills, statements and tax letters are private like legal mail and checks; only `other` is the company's to read.
+    with api.app.state.store.read() as c:
+        private = {i: c.execute("SELECT private FROM tasks WHERE id=?", (got[i]["task_id"],)).fetchone()[0]
+                   for i in ("201", "202", "203", "204", "206")}
+    assert private == {"201": 1, "202": 1, "203": 1, "204": 1, "206": 0}
+    for token in ("cara-test", "ben-test"):
+        assert scan(api, got["202"], token) == 404
     assert all("wire money" not in json.dumps(state["letter"]["summary"]) for state in api.app.state.postal_mail.engine.calls)
     # Without a Finance bot a bill goes to the owner.
     with api.app.state.store.transaction() as c:
@@ -280,19 +287,24 @@ def test_a_scan_emailed_to_the_intake_inbox_becomes_a_letter(api, hq, mail, monk
         for ident, address in (("ib_mail", "mail@acme.example"), ("ib_codes", "codes@acme.example")):
             c.execute("INSERT INTO inbound_inboxes(inbox_id,kind,name,address,state,created_by) VALUES(?,?,?,?,?,?)",
                       (ident, "email", ident, address, "active", "human:ana"))
-    put(api, "postal/intake", {"inbox_id": "ib_mail"}, "cara-test", expected=403)
-    assert put(api, "postal/intake", {"inbox_id": "ib_mail"})["intake"]["address"] == "mail@acme.example"
+    put(api, "postal/intake", {"inbox_id": "ib_mail", "senders": ["@provider.example"]}, "cara-test", expected=403)
+    put(api, "postal/intake", {"inbox_id": "ib_mail"}, expected=422)                       # needs a sender
+    put(api, "postal/intake", {"inbox_id": "ib_mail", "senders": ["provider"]}, expected=422)
+    set_ = put(api, "postal/intake", {"inbox_id": "ib_mail", "senders": [" @Provider.example ", "@provider.example"]})
+    assert set_["intake"]["address"] == "mail@acme.example" and set_["intake"]["senders"] == ["@provider.example"]
     digest = "ab" * 32
     attachment = {"name": "scan.pdf", "type": "application/pdf", "size": 9, "sha256": digest}
 
-    def message(seq, inbox, attachments):
+    def message(seq, inbox, attachments, sender="Provider Scans <Scans@Provider.example>"):
         return {"hq_seq": seq, "inbox_id": inbox, "delivery_id": f"msg_{seq}", "kind": "email",
-                "received_at": 1793350800.0, "from": "scans@provider.example", "subject": "New mail", "text": "Scan",
+                "received_at": 1793350800.0, "from": sender, "subject": "New mail", "text": "Scan",
                 "attachments": attachments}
-    inbound.ingest({"cursor": 3, "gaps": [], "deliveries": [
+    inbound.ingest({"cursor": 5, "gaps": [], "deliveries": [
         message(1, "ib_mail", [attachment, {"name": "logo.txt", "type": "text/plain", "size": 3, "sha256": "cd" * 32}]),
         message(2, "ib_codes", [attachment]),              # not the intake inbox
-        message(3, "ib_mail", [])]})                       # no scan attached
+        message(3, "ib_mail", []),                         # no scan attached
+        message(4, "ib_mail", [attachment], "billing@stranger.example"),     # not a listed sender
+        message(5, "ib_mail", [attachment], "scans@mail.provider.example")]})  # @domain is that domain only
     got = items(api)
     assert list(got) == ["msg_1:" + digest[:16]] and got["msg_1:" + digest[:16]]["provider"] == "email"
 
@@ -304,6 +316,28 @@ def test_a_scan_emailed_to_the_intake_inbox_becomes_a_letter(api, hq, mail, monk
     row = items(api)["msg_1:" + digest[:16]]
     assert row["status"] == "filed" and task(api, row["task_id"])["owner"] == "bot:finance"
     assert ("GET", f"/v1/inbound/messages/msg_1/attachments/{digest}") in mail.calls
+
+
+def test_reads_stop_at_the_daily_cap_and_wait_without_using_an_attempt(api, hq, mail, monkeypatch):
+    monkeypatch.setattr(P, "READS_PER_DAY", 2)
+    for ident in ("401", "402", "403"):
+        letter(api, ident, "other")
+        deliver(hq, ident)
+    service(api).tick()
+    drain(api)
+    got = items(api)
+    assert len([i for i in got if got[i]["status"] == "filed"]) == 2
+    (late,) = [i for i in got if got[i]["status"] != "filed"]
+    assert (got[late]["status"], got[late]["error"], got[late]["attempts"]) == ("new", "daily_cap", 0)
+    assert not any(path.endswith(f"/{late}/pdf") for _, path in mail.calls)   # not fetched (nor billed) either
+    drain(api)
+    assert items(api)[late]["status"] == "new"                           # waits its hour
+    with api.app.state.store.transaction() as c:                          # a day later
+        c.execute("UPDATE mail_items SET read_at=?, next_try=NULL WHERE read_at IS NOT NULL",
+                  (H.shift(H.now(), days=-2),))
+        c.execute("UPDATE mail_items SET next_try=NULL")
+    drain(api)
+    assert items(api)[late]["status"] == "filed"
 
 
 def test_addresses_and_orders_go_to_tico_gateway(api, hq, mail):
