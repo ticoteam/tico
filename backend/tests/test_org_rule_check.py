@@ -709,6 +709,31 @@ def test_a_task_room_reply_held_before_done_keeps_its_text_nowhere(ruled):
     assert "blue" not in api.get(f"/api/v2/turns/{aid}/steps", headers=headers()).text
 
 
+def test_sql_shows_a_watched_live_run_tool_steps_but_not_its_said_text(ruled):
+    from backend import hubdb
+    api, _ = ruled
+    color_rule(api)
+    r, _, attempt = review_turn(api)
+    aid = attempt["id"]
+    post(api, f"attempts/{aid}/events", {"events": [
+        {"seq": 1, "kind": "tool", "payload": {"name": "read"}},
+        {"seq": 2, "kind": "delta", "payload": {"text": "thinking about blue"}},
+        {"seq": 3, "kind": "message", "payload": {"text": "Acme's favorite color is blue."}}]}, token=r["token"])
+    with api.app.state.store.transaction() as c:
+        hubdb.delta_append(c, "bot:ops", aid, "favorite color is blue")
+
+    def read(sql):
+        res = api.post("/api/v2/sql", json={"sql": sql}, headers=headers())
+        assert res.status_code == 200, res.text
+        return json.dumps(res.json())
+    events_sql = f"SELECT kind, payload_json FROM attempt_events WHERE attempt_id='{aid}'"
+    assert "blue" not in read(events_sql) and '"tool"' in read(events_sql)
+    assert "blue" not in read(f"SELECT text FROM deltas WHERE turn_id='{aid}'")
+    # Once the run hands in a reply that passes, its stream reads again.
+    post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 3}, token=r["token"])
+    assert "thinking about blue" in read(events_sql)
+
+
 def test_a_review_reply_that_passes_records_its_verdict_from_the_delivered_text(ruled):
     api, _ = ruled
     color_rule(api, if_broken="warn")

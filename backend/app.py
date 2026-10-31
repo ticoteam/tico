@@ -666,11 +666,11 @@ def create_app(settings=None):
                 if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
                         None, counsel.refused, store, who, request.url.path, request.method):
                     raise Problem("forbidden", counsel.REFUSED, 403)
-                # While its run may publish a document's suggestions, Counsel reads only that document's task and version.
-                if counsel.is_counsel(who) and who.attempt_id and request.method in ("GET", "HEAD") and \
-                        await asyncio.get_running_loop().run_in_executor(
-                            None, counsel.read_refused, store, auth, who, request.url.path, dict(request.query_params)):
-                    raise Problem("privacy", counsel.READ_SCOPE, 403)
+                # Counsel reads no SQL, and a Counsel run reads only its own task, its read's document version and its
+                # own run, whatever the method (backend/counsel.py read_refused).
+                if counsel.is_counsel(who) and (reason := await asyncio.get_running_loop().run_in_executor(
+                        None, counsel.read_refused, store, auth, who, request.url.path, dict(request.query_params))):
+                    raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:

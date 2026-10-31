@@ -68,10 +68,11 @@ def sync(c, actor, row, rule_text, days, via=None):
     before = AU.flow_of(linked) if linked else None
     flow = AU._checked(c, _flow(row, rule_text, days, before), access=False)
     aid = linked["id"] if linked else "auto_" + H.new_id()
-    if flow != before:
-        AU._save(c, actor, aid, flow, before, via=via)
+    # The row names its routine first: only the routine a due date links may carry its id (automations._save).
     if row.get("routine_id") != aid:
         D.update_in_place(c, row["id"], {"routine_id": aid})
+    if flow != before:
+        AU._save(c, actor, aid, flow, before, via=via)
     return aid
 
 
