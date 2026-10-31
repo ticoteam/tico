@@ -32,6 +32,7 @@ from . import outcome_stats
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
+from .roadmaps import exact_approval
 from . import login_holds
 from . import cloud_access
 from . import counsel
@@ -2853,28 +2854,29 @@ def create_app(settings=None):
         return "\n\n".join(filter(None, (body.title, body.body, getattr(body, "public_title", None),
                                           getattr(body, "public_summary", None))))
 
-    def rule_warned_fields(gate, body, row=None):
+    def rule_warned_fields(gate, body, row=None, approved=False):
         """A warned task write's recipient copies: the warning on every multi-line text field the write sets. A title
-        (and public title) is kept whole and unmarked: a new task with one carries the line on its body; a change that
-        publishes (a public title, or making the task public) carries it on the public summary the roadmap shows; any
-        other change that sets no other text field (a title, or a hand-off alone) puts the line before the task's note
-        (`row`'s), which stays whole."""
+        (and public title) is kept whole and unmarked: a new task with one carries the line on its body. A write that
+        publishes (a public title on a task that is or becomes public, or making it public) carries the line on the
+        public summary the roadmap shows, unless the public text goes out only as a person approved it (`approved`,
+        roadmaps.exact_approval): that text is kept exactly as approved, the approver its safeguard. Any other change
+        that sets no other text field (a title, a hand-off alone) puts the line before the task's note (`row`'s), which
+        stays whole."""
         out = {}
-        for key in ("body", "note", "public_summary"):
+        for key in ("body", "note") if approved else ("body", "note", "public_summary"):
             value = getattr(body, key, None)
             if value:
                 out[key] = org_rule_check.warned_text(gate, value)
-        titled = getattr(body, "title", None) or getattr(body, "public_title", None)
-        if row is None:
-            if titled and "body" not in out:
-                out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
-            return out
-        if "public_summary" not in out and rule_shows_public(body, row):
+        if not approved and "public_summary" not in out and rule_shows_public(body, row):
             # The public roadmap shows the public title and summary, never the note: the line goes on the summary it
             # will show (the one kept, or the line alone when there is none), the title kept whole.
-            kept = body.public_summary if body.public_summary is not None else row.get("public_summary") or ""
+            summary = getattr(body, "public_summary", None)
+            kept = summary if summary is not None else (row or {}).get("public_summary") or ""
             out["public_summary"] = org_rule_check.warned_note(gate, kept)
-        if not out and (titled or getattr(body, "owner", None)):
+        if row is None:
+            if "body" not in out:
+                out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
+        elif not out:
             out["note"] = org_rule_check.warned_note(gate, row.get("note") or "")
         return out
 
@@ -2883,11 +2885,11 @@ def create_app(settings=None):
         everyone."""
         return getattr(body, "visibility", None) == "public" and row.get("visibility") != "public"
 
-    def rule_shows_public(body, row):
-        """Whether a task change puts public text before the public roadmap's readers without writing a summary: it
-        makes the task public, or gives one that is or becomes public a new public title."""
-        public = (getattr(body, "visibility", None) or row.get("visibility")) == "public"
-        return public and (rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))
+    def rule_shows_public(body, row=None):
+        """Whether a task write puts public text before the public roadmap's readers: it makes the task public (a new
+        public task, or a change), or gives one that is or becomes public a new public title."""
+        public = (getattr(body, "visibility", None) or (row or {}).get("visibility")) == "public"
+        return public and (row is None or rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))
 
     def rule_publishes(body, row):
         """Whether a task change puts text before the whole company: it writes public text, or makes the task
@@ -4047,7 +4049,8 @@ def create_app(settings=None):
         if rule_gate and rule_gate.get("held"):
             return org_rule_check.answer(rule_gate)
         if rule_gate and rule_gate.get("warn"):
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body))
+            body = body.model_copy(update=rule_warned_fields(rule_gate, body,
+                                                             approved=exact_approval(c, who.actor)))
         # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. Sent back or FYI
         # with the filter on, it stays the bot's own task; the reply says why.
         gate = None
@@ -4307,7 +4310,8 @@ def create_app(settings=None):
             return org_rule_check.answer(rule_gate)
         if rule_gate and rule_gate.get("warn"):
             # The warning line goes on the change itself, where the recipient reads it.
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body, row))
+            body = body.model_copy(update=rule_warned_fields(rule_gate, body, row,
+                                                             approved=exact_approval(c, who.actor)))
         if body.close:
             if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,

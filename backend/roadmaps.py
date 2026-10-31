@@ -130,17 +130,23 @@ def publication_payload(task_id, operation, values):
             'content_sha256': hashlib.sha256(text.encode()).hexdigest()}
 
 
-def approve(c, actor, task_id, operation, values, approval_id=None):
+def exact_approval(c, actor):
+    """Whether `actor`'s public text needs an exact approved publish payload (approve): a bot's, or one acting for a
+    person, when the team asks for approval; the Strategy Bot's whatever the setting."""
     if not H.is_bot(actor) and not H.VIA.get():
+        return False
+    from . import strategy_acts
+    return strategy_acts.is_strategy_bot(actor) or settings(c)['bot_public_approval']
+
+
+def approve(c, actor, task_id, operation, values, approval_id=None):
+    if not exact_approval(c, actor):
         return
     from . import strategy_acts
-    strategy_actor = strategy_acts.is_strategy_bot(actor)
-    if strategy_actor and not approval_id:
+    if strategy_acts.is_strategy_bot(actor) and not approval_id:
         # Publishing is the owner's at every level: the Strategy Bot publishes only what a person approved, whatever the
         # team's setting for other bots.
         strategy_acts.gate(c, actor, "publish", f"publish a change to a task on the public roadmap ({operation})")
-    if not strategy_actor and not settings(c)['bot_public_approval']:
-        return
     # From here the approval is checked exactly; for the Strategy Bot whatever the setting, so any id is not enough.
     expected = publication_payload(task_id, operation, values)
     row = H.approval(c, approval_id) if approval_id else None

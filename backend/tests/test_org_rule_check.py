@@ -1297,7 +1297,8 @@ def test_a_warning_goes_on_each_field_a_task_write_sets_and_never_on_a_title(rul
                (made.get("task", made)["id"],))[0]
     assert made["public_title"] == "Our favorite color is red" and made["title"] == "Ship the palette"
     assert made["body"].startswith("Warning:") and made["body"].endswith("Internal draft.")
-    assert not made["public_summary"]
+    # Published with no summary, the public roadmap shows the line as its summary, the title kept whole.
+    assert made["public_summary"].startswith("Warning:")
 
 
 def test_a_warned_hand_off_puts_its_line_before_the_note_already_there(ruled):
@@ -1635,6 +1636,37 @@ def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(
     assert got["rule_warning"]
     shown = public_output(api, bare["id"])
     assert shown["title"] == "Our favorite color is red" and shown["summary"].startswith("Warning:")
+
+
+def approved_publish(api, task_id, changes):
+    """Ops' publish approval for `changes` to a task, approved by Ana: its id."""
+    preview = post(api, f"tasks/{task_id}/publication-preview", changes, token="ops-test")
+    approval = post(api, "approvals", {"kind": "publish", "task_id": task_id, "payload": preview["payload"]},
+                    token="ops-test")
+    post(api, f"approvals/{approval['id']}", {"decision": "approved"})
+    return approval["id"]
+
+
+def test_a_warned_publish_a_person_approved_goes_out_exactly_as_approved(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": "Our favorite color is red."})
+    approval = approved_publish(api, drafted["id"], {"visibility": "public"})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public",
+                                               "approval_id": approval}, token="ops-test")
+    assert got["rule_warning"], got
+    assert public_output(api, drafted["id"])["summary"] == "Our favorite color is red."
+    assert sql(api, "SELECT note FROM tasks WHERE id=?", (drafted["id"],))[0]["note"].startswith("Warning:")
+    # A public summary the bot writes itself, approved, is kept exactly too; the line goes on the note.
+    task = get(api, f"tasks/{drafted['id']}")
+    task = task.get("task", task)
+    approval = approved_publish(api, drafted["id"], {"public_summary": "Our favorite color is teal."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": task["version"], "approval_id": approval,
+                                               "public_summary": "Our favorite color is teal."}, token="ops-test")
+    assert got["rule_warning"], got
+    assert public_output(api, drafted["id"])["summary"] == "Our favorite color is teal."
+    assert sql(api, "SELECT note FROM tasks WHERE id=?", (drafted["id"],))[0]["note"].startswith("Warning:")
 
 
 def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled):
