@@ -199,6 +199,8 @@ def run(args, who=None):
         return via_tool(client, _rules_args(args))
     if args.cmd == "mail":
         return via_tool(client, args)
+    if args.cmd == "finance":
+        return via_tool(client, args, **({"operation_id": args.operation_id} if getattr(args, "operation_id", None) else {}))
     if args.cmd == "settings":
         return via_tool(client, args)
     if args.cmd in ("card", "pin"):

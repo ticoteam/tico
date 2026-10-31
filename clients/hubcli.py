@@ -500,6 +500,17 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub health-monitor findings            the Health Monitor: what the last hourly scan found
     hub health-monitor report <key> | --process process:<name> --cpu N --mb N
                                            report a finding as a Tico bug, one ticket per signature
+    hub finance search [--kind entry|feed|bill|invoice|contact|rule] [--q words] [--status S] [--start D] [--end D]
+                    [--cursor C] [--limit N]   the books you may see; name a kind to page
+    hub finance report <pnl|balance_sheet|cash_flow|budget_vs_actual|ap_aging|ar_aging|spend_by> [--start D]
+                    [--end D] [--period month] [--compare prior] [--top-n N] [--by vendor]
+    hub finance metric <name> [--budget-id B] [--start D] [--end D] [--days N]   one number, with its as-of time
+    hub finance act <kind|help> [--payload JSON|-] [--dry-run] [--operation-id KEY]
+                                           ask for one Finance action; help lists kinds, `help --payload
+                                           '{"kind":"bill_create"}'` one kind's fields. The key makes a retry land once
+    hub finance action <action-id>         an action's status and result
+    hub finance inbox [--cursor C] [--limit N]   your Finance work queue, with counts per kind
+    hub finance card-fill                  fill your card into a checkout (not available yet)
     hub task-manager status                the Task Manager: bot, hourly report switch and schedule, last run, each department
     hub task-manager on|off                the hourly department report (the owner or an admin)
     hub task-manager schedule <business|hourly|4h|daily> [--at HH:MM]
@@ -722,6 +733,17 @@ def on_off(word):
     if word not in ("on", "off"):
         raise argparse.ArgumentTypeError("use on or off")
     return word == "on"
+
+
+def _finance_payload(text):
+    """`hub finance act --payload`: a JSON object, or `-` to read it from stdin."""
+    try:
+        value = json.loads(sys.stdin.read() if text == "-" else text)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"--payload is not JSON ({exc})") from None
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("--payload must be a JSON object")
+    return value
 
 
 def parser():
@@ -3065,6 +3087,50 @@ def parser():
     s.add_argument("--cpu", type=float, default=0, help="with --process: its CPU percent")
     s.add_argument("--mb", type=float, default=0, help="with --process: its memory in MB")
     s.set_defaults(fn="health-monitor report")
+    fin = sub.add_parser("finance", help="the books, as you: search, reports, metrics, actions, your work queue "
+                         "(docs/finance-tools.md)").add_subparsers(dest="sub")
+    s = fin.add_parser("search", help="entries, bank and card rows, bills, invoices, contacts and rules you may see")
+    s.add_argument("--kind", choices=["entry", "feed", "bill", "invoice", "contact", "rule"])
+    s.add_argument("--q")
+    for flag in ("--status", "--contact-id", "--account-id", "--money-account-id", "--start", "--end", "--cursor"):
+        s.add_argument(flag)
+    s.add_argument("--aging", choices=["current", "1_30", "31_60", "61_90", "over_90"])
+    s.add_argument("--contact-kind", choices=["vendor", "customer", "both"])
+    s.add_argument("--rule-kind", choices=["gate", "posting"])
+    s.add_argument("--active", type=lambda v: v.lower() in ("1", "true", "yes", "on"), help="contacts: true or false")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="finance search")
+    s = fin.add_parser("report", help="one report cut to your view; rows past --top-n fold into Other")
+    s.add_argument("kind", choices=["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging",
+                                    "spend_by"])
+    s.add_argument("--start"); s.add_argument("--end")
+    s.add_argument("--period", choices=["day", "week", "month", "quarter", "year"])
+    s.add_argument("--basis", choices=["cash", "accrual"])
+    s.add_argument("--compare", choices=["prior"])
+    s.add_argument("--top-n", type=int)
+    s.add_argument("--by", choices=["department", "team", "teammate", "bot", "person", "vendor", "account"])
+    s.set_defaults(fn="finance report")
+    s = fin.add_parser("metric", help="one number you may see, with when it was worked out")
+    s.add_argument("name", choices=["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining",
+                                    "budget_pct_used", "ap_due", "ar_overdue", "uncategorized_count",
+                                    "unreconciled_days"])
+    for flag in ("--budget-id", "--start", "--end", "--account-id", "--team", "--teammate"):
+        s.add_argument(flag)
+    s.add_argument("--days", type=int)
+    s.set_defaults(fn="finance metric")
+    s = fin.add_parser("act", help="ask for one Finance action (help lists kinds)")
+    s.add_argument("kind")
+    s.add_argument("--payload", type=_finance_payload, help="the kind's fields as JSON, or - to read stdin")
+    s.add_argument("--dry-run", action="store_true", default=None)
+    s.add_argument("--operation-id", help="the action's key (default: HUB_OPERATION_ID)")
+    s.set_defaults(fn="finance act")
+    s = fin.add_parser("action", help="an action's status and result")
+    s.add_argument("action_id")
+    s.set_defaults(fn="finance action")
+    s = fin.add_parser("inbox", help="your Finance work queue")
+    s.add_argument("--cursor"); s.add_argument("--limit", type=int)
+    s.set_defaults(fn="finance inbox")
+    fin.add_parser("card-fill", help="fill your card into a checkout (not available yet)").set_defaults(fn="finance card-fill")
     manager = sub.add_parser("task-manager", help="the Task Manager's hourly department check (docs/task-manager.md)").add_subparsers(dest="sub")
     manager.add_parser("status", help="bot, report switch and schedule, last run, each department's last check").set_defaults(fn="task-manager status")
     manager.add_parser("on", help="switch the hourly report on").set_defaults(fn="task-manager on")
