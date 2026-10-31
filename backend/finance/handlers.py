@@ -365,29 +365,53 @@ def _fits(ctx: Ctx, b: B.Budget, effective: str, amount: int) -> None:
         B.check_fit(b, mine, found, B.fit_points(dates.day(effective), every))
 
 
+def _kid_versions(ctx: Ctx, budget_id: str) -> dict[str, list[B.Version]]:
+    """Each active child budget's versions."""
+    kids = [x.id for x in ctx.budgets().values() if x.parent_id == budget_id and x.active]
+    return SB.versions(ctx.c, kids) if kids else {}
+
+
 def _cards_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int) -> None:
     """A version may not set `b` below what its cards reserve plus its child budgets' amounts (§4.4), on every day a
-    version changes from `effective` on (a child's later raise included, as `_fits` checks the children). A card
-    reserves the more of its allocation and what it has used in that period (holds and actuals). Names the cards to
-    lower first
-    where `who` may see them and the budget's numbers. Separate from `_fit`, which checks the children alone."""
+    version changes from `effective` on (a child's later raise included). A card reserves the more of its allocation
+    and what it has used in that period (holds and actuals). Names the cards to lower first where `who` may see them
+    and the budget's numbers. Separate from `_fit`, which checks the children alone."""
     if not b.id or amount == 0:      # a pause (0) freezes its cards instead (cards.freeze_paused)
         return
-    from .cards import sees as sees_card
-    tree = budgeting.subtree(ctx, b.id)
     mine = SB.versions(ctx.c, [b.id])[b.id]
     mine.append(B.Version(budget_id=b.id, version=10**9, effective_from=effective, amount=amount))
-    kids = [x.id for x in ctx.budgets().values() if x.parent_id == b.id and x.active]
-    found = SB.versions(ctx.c, kids) if kids else {}
-    every = [v for vs in found.values() for v in vs] + mine
+    _reserve_fit(ctx, who, b, mine, _kid_versions(ctx, b.id), effective)
+
+
+def _cards_fit_child(ctx: Ctx, who: str, child_id: str, parent: B.Budget, effective: str, amount: int) -> None:
+    """A child's version may not push its parent's cards and child budgets past the parent's amount: `_cards_fit` on
+    the parent, with this child's new version in the children's sum. A child's pause only lowers that sum."""
+    if amount == 0:
+        return
+    key = child_id or "new"
+    kids = {k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k != child_id}
+    own = SB.versions(ctx.c, [child_id])[child_id] if child_id else []
+    own.append(B.Version(budget_id=key, version=10**9, effective_from=effective, amount=amount))
+    kids[key] = own
+    _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
+
+
+def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
+                 effective: str) -> None:
+    """On every day from `effective` that a version of `b` or of a child takes effect, `b`'s cards and its children's
+    amounts must fit `mine`, b's amount. A day at 0 is skipped: a pause froze the cards, and `_fits` holds the
+    children to 0 under it."""
+    from .cards import sees as sees_card
+    tree = budgeting.subtree(ctx, b.id)
     allocs = [row for row in SB.allocations(ctx.c, [b.id]) if row["target_kind"] == "card"]
+    every = [v for vs in kids.values() for v in vs] + mine
     for at in B.fit_points(dates.day(effective), every):
         cap = B.amount_at(mine, at)
-        if cap is None:
+        if not cap:
             continue
         start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
         cards = _card_reserves(ctx, tree, allocs, start.isoformat(), end.isoformat())
-        owed = sum(B.amount_at(vs, at) or 0 for vs in found.values())
+        owed = sum(B.amount_at(vs, at) or 0 for vs in kids.values())
         total = sum(reserve for _, reserve in cards) + owed
         if not cards or total <= cap:
             continue
@@ -448,6 +472,8 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     effective = _effective(ctx, new, V.opt_day(p, "effective_from"))
     if amount is not None:
         _fit(ctx, who, new, effective, amount)
+        if new.parent_id:
+            _cards_fit_child(ctx, who, "", ctx.budgets()[new.parent_id], effective, amount)
 
     def apply(aid: str) -> Result:
         made = replace(new, id=SL.new_id())
@@ -486,6 +512,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None:
         _fit(ctx, who, old, effective, amount)
         _cards_fit(ctx, who, old, effective, amount)
+        if old.parent_id:
+            _cards_fit_child(ctx, who, old.id, ctx.budgets()[old.parent_id], effective, amount)
 
     def apply(aid: str) -> Result:
         SB.update_budget(ctx.c, new, ctx.at)

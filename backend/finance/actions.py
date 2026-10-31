@@ -53,7 +53,7 @@ STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withd
 DENIAL_CODES = (DENIED, NOT_AVAILABLE)
 SOURCE = "finance"                    # marks a Tico approval as Finance's, for the decide routes to route
 MAX_KEY = 200
-CARD_NUMBER_REFUSED = "a card number never goes into Finance: Tico does not take one (spec §8.3)"
+CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.

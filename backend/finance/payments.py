@@ -102,6 +102,8 @@ def _strip_tax_id(c: Any, out: dict[str, object]) -> tuple[dict[str, object], st
     if raw in (None, ""):
         out["tax_id_last4"] = ""
         return out, ""
+    if V.has_card_number(raw):
+        raise invalid(V.CARD_NUMBER_REFUSED)     # refused, never sealed
     if not isinstance(raw, str):
         raise invalid("tax_id is text")
     digits = "".join(ch for ch in raw if ch.isalnum())

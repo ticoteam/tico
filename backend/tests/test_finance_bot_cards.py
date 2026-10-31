@@ -503,7 +503,10 @@ def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
         assert held.allowed
         FA.drain_events(c, AT)
         assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
-        assert act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 20_000}).status == "committed"
+        # Releasing the hold gives Eng tools room (a raise would push Tools' cards past its amount). The warn budget
+        # above it blocks nothing.
+        assert budgeting.release_for(load(c, LATER), "manual", "cutoff-eng") == 1
+        FA.watch_documents(c, LATER)
         assert _status(c, kid) == "active" and _frozen_by(c, kid) is None
 
 
@@ -535,6 +538,37 @@ def test_unsave_finds_a_save_made_before_the_vendor_became_a_contact(books):
         assert FR.search(c, "bot:coder", kind="card", filters={"vendor": contact})["results"] == []
         assert act(c, OWNER, "card_unsave", {"card_id": coder, "vendor": contact}).code == "conflict"
         assert act(c, OWNER, "card_save", {"card_id": coder, "vendor": contact}).status == "committed"
+
+
+def test_a_child_budget_cannot_push_its_parents_cards_past_the_parent(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools 500.00, decline; coder and seller cards 200.00 each
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Ops tools", "account_id": account(c, "6100"),
+                                               "vendor": "Acme Cloud", "parent_id": budget, "amount": 20_000})
+        assert (made.status, made.code) == ("failed", "invalid") and "reserve 600.00" in made.reason   # 400 + 200
+        eng = str(act(c, OWNER, "budget_create", {"name": "Eng tools", "account_id": account(c, "6100"), "team": "eng",
+                                                  "parent_id": budget, "amount": 500}).result["budget_id"])
+        raised = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 20_000})      # 400 + 200
+        assert (raised.status, raised.code) == ("failed", "invalid") and "reserve 600.00" in raised.reason
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 9_000}).status == "committed"     # 400 + 90
+        # A later version of the child is fit on its own day too: 400.00 of cards + 110.00 is over Tools' 500.00.
+        later = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 11_000, "effective_from": "2026-11-01"})
+        assert (later.status, later.code) == ("failed", "invalid") and "reserve 510.00" in later.reason
+        ok = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 10_000, "effective_from": "2026-11-01"})
+        assert ok.status == "committed"                                                 # 400 + 100
+
+
+def test_a_card_number_entered_as_a_tax_id_is_refused_before_it_is_sealed(books):
+    with books.transaction() as c:
+        before = c.execute("SELECT count(*) FROM fin_contacts").fetchone()[0]
+        for typed in (4242424242424242, "4242 4242 4242 4242"):
+            refused = act(c, OWNER, "contact_create", {"name": "Acme Shop", "kind": "vendor", "tax_id": typed})
+            assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", V.CARD_NUMBER_REFUSED)
+        assert c.execute("SELECT count(*) FROM fin_contacts").fetchone()[0] == before
+        assert "4242424242424242" not in _stored_digits(c)
+        assert act(c, OWNER, "contact_create", {"name": "Acme Shop", "kind": "vendor",
+                                                "tax_id": "12-3456789"}).status == "committed"
 
 
 def test_migration_67_marks_a_cutoff_freeze_made_before_freeze_by_existed(books):

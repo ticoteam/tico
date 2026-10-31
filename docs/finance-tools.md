@@ -66,7 +66,7 @@ until a person unfreezes it. A pause (the budget set to 0, which takes effect no
 budget and under it, also as `frozen_by: budget`, and keeps their allocations; a raise that leaves room lifts them the
 same way. A budget can't be set to a non-zero amount below what its cards reserve (each card's allocation, or what it
 has used if more) plus its child budgets on any day from the change onward, including days a child's later version
-raises it; the refusal names the cards to lower first.
+raises it; the refusal names the cards to lower first. A child's amount is held to the same rule on its parent.
 
 Migration 67 backfills `frozen_by: budget` on cards the action log shows a cutoff froze before the column existed (only
 cards that still have an allocation; a card whose allocation is zero, or one a person froze, stays unset). An install

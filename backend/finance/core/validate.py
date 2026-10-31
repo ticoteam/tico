@@ -16,6 +16,7 @@ MAX_ITEMS = 500
 # only as a whole token: a digit next to a letter or a dash is part of an id, and a card number may carry a code after
 # it (`4242 4242 4242 4242 123`), so every run of groups is tried.
 CARD_NUMBER_KEYS = frozenset({"card_number", "cardnumber", "pan", "cvc", "cvv", "cvv2", "security_code"})
+CARD_NUMBER_REFUSED = "a card number never goes into Finance: Tico does not take one (spec §8.3)"
 _DIGITS = re.compile(r"\d+")
 _DASHES = "\\-\u2010-\u2015\u2212"
 _GAP = re.compile(rf"[\s\u00ad\u200b-\u200d\u2060\ufeff{_DASHES}]*")
