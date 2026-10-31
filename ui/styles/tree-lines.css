@@ -45,7 +45,7 @@
   left:calc(var(--tree-x) - var(--tree-w) / 2);top:calc(-1 * var(--tree-up,0px));bottom:0;
   border-left:var(--tree-w) solid var(--tree-line)}
 :where(
-  .tree li:has(>ul:not(.node-sources):not([hidden])>li)>:is(.noderow,.node-sources,.org-bet-pop),
+  .tree li:has(>ul:not(.node-sources):not([hidden])>li)>:is(.noderow,.node-sources),
   .upd-node:has(>.upd-sub>.upd-node)>:is(.upd-card,.upd-none),
   .gt-ind.gt-kids
 )::after{content:"";position:absolute;pointer-events:none;
