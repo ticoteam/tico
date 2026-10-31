@@ -163,6 +163,13 @@ def asked_to_read(c, who, file_id, version=None, cache=None):
     return bool(read) and read["file_id"] == file_id and (version is None or int(version) == read["version"])
 
 
+def read_version(c, who, file_id, cache=None):
+    """The one version of this file a Counsel run on its read may know of (asked_to_read), or None for any other caller
+    or file: a listing of the file's revisions shows that run only that one, never another's name, size or digest."""
+    cache = {} if cache is None else cache
+    return cache[("counsel_read", who.attempt_id)]["version"] if asked_to_read(c, who, file_id, cache=cache) else None
+
+
 def file_visible(c, auth, who, row, cache):
     """Whether `who` may know this file exists: its scope's visibility, or a person's pin of it to the Dashboard or a
     team page they see (backend/cards.py widened), and never a runner's. A private task's file is never widened, except
@@ -389,8 +396,12 @@ class Files:
                              "ORDER BY last_activity_at DESC", (task_id,)):
             if not self.visible(c, who, row, {}):
                 continue
+            only = read_version(c, who, row["id"])
+            shown = row["current_version"] if only is None else only
             versions = []
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (row["id"],)):
+                if only is not None and v["version"] != only:
+                    continue
                 fields = dict(v)
                 versions.append({"n": v["version"], "size": v["size"], "mime": v["mime"], "sha256": v["digest"],
                                  "created": v["created"], "by": v["actor"],
@@ -401,9 +412,9 @@ class Files:
                                  "url": f"/api/v2/files/{row['id']}?v={v['version']}"})
             if versions:
                 name = c.execute("SELECT name FROM bot_file_versions WHERE file_id=? AND version=?",
-                                 (row["id"], row["current_version"])).fetchone()[0]
+                                 (row["id"], shown)).fetchone()[0]
                 out.append({"id": row["id"], "name": name, "mime": row["mime"],
-                            "current_version": row["current_version"], "archived": bool(row["archived"]), "versions": versions})
+                            "current_version": shown, "archived": bool(row["archived"]), "versions": versions})
         for b in c.execute("SELECT b.*,m.width,m.height,m.duration_ms,m.media_state,m.poster_blob_id,m.thumb_blob_id "
                            "FROM blobs b JOIN task_assets a ON a.blob_id=b.id LEFT JOIN blob_media m ON m.blob_id=b.id WHERE a.task_id=? "
                            "AND NOT EXISTS(SELECT 1 FROM bot_file_versions v WHERE v.blob_id=b.id)", (task_id,)):
@@ -811,8 +822,11 @@ class Files:
         with self.store.read() as c:
             row = self.visible_file(c, who, fid)
             caches = {"repo": {}}
+            only = read_version(c, who, fid)
             out = []
             for v in c.execute("SELECT * FROM bot_file_versions WHERE file_id=? ORDER BY version DESC", (fid,)):
+                if only is not None and v["version"] != only:
+                    continue
                 out.append({"version": v["version"], "current": v["version"] == row["current_version"], "name": v["name"],
                             "size": v["size"], "mime": v["mime"], "digest": v["source_digest"] or v["digest"],
                             "actor": v["actor"], "created": v["created"], "url": f"/api/v2/files/{fid}/versions/{v['version']}",

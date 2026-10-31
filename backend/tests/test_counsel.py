@@ -306,6 +306,42 @@ def test_counsel_reads_no_sql_in_a_run_or_out_of_one(api):
     assert api.post("/api/v2/sql", headers=headers("ana-test"), json={"sql": "SELECT 1"}).status_code == 200
 
 
+def test_a_counsel_run_reads_no_other_runs_summary_or_any_run_history(api):
+    org(api)
+    counsel_on(api)
+    read_document(api, store_file(api, CONTRACT)[0])
+    r, attempt = counsel_run(api)
+    finish(api, r, attempt, text="Clause 9: the Acme price list is secret. Wrote 0 suggestions.")
+    post(api, "rules/ask", {"question": "Can I share the price list?"}, token="cara-test")
+    later = headers(next_counsel_run(api, r)["token"])
+    for path in ("bots/tico-counsel/turns", "bots/tico-counsel/history", "bots/tico-counsel/memory", "runs",
+                 f"turns/{attempt['id']}/steps"):
+        for token in (later, headers("counsel-test")):
+            got = api.get("/api/" + ("" if path == "runs" else "v2/") + path, headers=token)
+            assert got.status_code in (403, 404) and "price list" not in got.text, (path, got.text)
+    # The owner still reads the run list.
+    assert "price list" in api.get("/api/v2/bots/tico-counsel/turns", headers=headers("ana-test")).text
+
+
+def test_a_run_asked_for_one_version_lists_no_other_revision(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    read_document(api, file_id)
+    data = b"Merger draft."
+    with api.app.state.store.transaction() as c:
+        digest = api.app.state.blobs.put(data, "text/plain")
+        item = register(c, Identity("human:ana", "human"), digest, len(data), "merger.txt", "text/plain")
+        api.app.state.files.add_version(
+            c, bot="ops", actor="human:ana", scope="bot", task=None, conversation=None, attempt="",
+            identity="upload:Acme Vendor Terms", title="Acme Vendor Terms", name="globex-merger-draft.txt",
+            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
+    listed = api.get(f"/api/v2/files/{file_id}/versions", headers=read_run(api))
+    assert listed.status_code == 200, listed.text
+    assert [v["version"] for v in listed.json()["versions"]] == [1] and "merger" not in listed.text
+    assert len(get(api, f"files/{file_id}/versions")["versions"]) == 2
+
+
 def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):
     org(api)
     counsel_on(api)

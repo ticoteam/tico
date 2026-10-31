@@ -458,17 +458,31 @@ READ_SCOPE = "A Counsel run reads only its own task, the document version it was
 # SQL reads across the whole hub, past every scope above: never Counsel's, in a run or not.
 SQL_READS = re.compile(r"^/api/(v2/)?sql/?$")
 SQL_REFUSED = "Counsel reads no SQL: it reads its own task and the document version it was asked to read."
+# Every other way to read past runs, what they said or what a bot remembers: a bot's run list (each run's summary is
+# its reply's start), status history, memory and execution review, the run log, replays, recents, holds, the live brief,
+# learnings, file reviews and sessions. Counsel's runs are private reads of private tasks, and the ordinary rights of
+# its bot (it owns every one of those tasks) would hand one run's private text to the next: none of these is Counsel's,
+# in a run or not. Its own run it reads at /turns/{id} and /attempts/{id} (SCOPED_READS).
+HISTORY_READS = re.compile(r"^/api/(v2/)?(runs|replay|me/recent|company/history|rule-holds|live|learnings|file-reviews|"
+                           r"bots/[^/]+/(turns|history|memory|execution-review|transitions|updates)|"
+                           r"employees/[^/]+/(session|memory|history|turns))(/|$)")
+# A run's own steps and attempt: a Counsel run reads its own (SCOPED_READS), Counsel outside a run none.
+OWN_RUN_READS = re.compile(r"^/api/(v2/)?(turns|attempts)(/|$)")
+HISTORY_REFUSED = "Counsel reads no run history: each of its runs reads only its own run, task and document version."
 
 
 def read_refused(store, auth, who, path, query):
-    """Why a call by Counsel is outside what it reads, or None. SQL is refused to every Counsel caller. A Counsel run,
-    whatever the method, reads within SCOPED_READS only its own run, the tasks it carries (task_privacy.carried_tasks:
-    its read task, or the question it answers) and, on a document's read (run_read), that file at that version. A
-    call outside a run is left to the routes, which grant it nothing from `rule_reads` (backend/files.py asked_to_read)."""
+    """Why a call by Counsel is outside what it reads, or None. SQL and run history (HISTORY_READS) are refused to every
+    Counsel caller, and any run's steps or attempt (OWN_RUN_READS) to Counsel outside a run. A Counsel run, whatever
+    the method, reads within SCOPED_READS only its own run, the tasks it carries (task_privacy.carried_tasks: its read
+    task, or the question it answers) and, on a document's read (run_read), that file at that version. Any other call
+    outside a run is left to the routes, which grant it nothing from `rule_reads` (backend/files.py asked_to_read)."""
     if not is_counsel(who):
         return None
     if SQL_READS.match(path):
         return SQL_REFUSED
+    if HISTORY_READS.match(path) or (not who.attempt_id and OWN_RUN_READS.match(path)):
+        return HISTORY_REFUSED
     if not who.attempt_id or not SCOPED_READS.match(path):
         return None
     from .task_privacy import carried_tasks
