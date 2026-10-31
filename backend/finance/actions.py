@@ -372,6 +372,7 @@ open_next_period = jobs.open_next_period
 RunHold = runs.RunHold
 run_hold = runs.hold
 run_ended = runs.ended
+expire_holds = runs.expire
 post_usage = usage.post
 usage_snapshot = usage.snapshot
 gateway_start = gateway_sync.start

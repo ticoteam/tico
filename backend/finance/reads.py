@@ -2,10 +2,12 @@
 viewer's view first, cuts the numbers to it, runs them through the one suppression function, and only then sums, so
 every derived number (totals, percents, "Other") is built from what the viewer may see. Callers outside backend/finance
 read fin_* only through here."""
+import json
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import date
+from typing import cast
 
 from . import budgeting, limits, usage
 from . import context as _context
@@ -16,7 +18,8 @@ from .core import dates, money
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, invalid
 from .core.ledger import PNL_TYPES, descendants
-from .handlers import private_scope, sees_budget
+from .handlers import private_scope, sees_budget, sees_scope, shows_numbers
+from .store import actions as SX
 from .store import access as SA
 from .store import budgets as SB
 from .store import ledger as SL
@@ -405,3 +408,48 @@ is_set_up = _context.is_set_up
 def events_waiting(c: sqlite3.Connection) -> bool:
     """Whether a `finance.*` event waits to be handed to rules and automations."""
     return bool(SU.undrained(c, 1))
+
+
+def _covers(ctx: Ctx, viewer: str, payload: Mapping[str, object]) -> bool | None:
+    """Whether the viewer's current view covers every budget and line an action's payload names, with the numbers;
+    None when it names none."""
+    seen: list[bool] = []
+    budgets = ctx.budgets()
+    for key in ("budget_id", "parent_id"):
+        bid = payload.get(key)
+        if isinstance(bid, str) and bid:
+            b = budgets.get(bid)
+            seen.append(b is not None and shows_numbers(ctx, viewer, b))
+    scopes: list[Mapping[str, object]] = [payload] if isinstance(payload.get("account_id"), str) else []
+    raw = payload.get("lines")
+    for item in cast(list[object], raw) if isinstance(raw, list) else []:
+        if isinstance(item, Mapping):
+            scopes.append(cast(Mapping[str, object], item))
+    for one in scopes:
+        tags = one.get("tags")
+        tagged = cast(Mapping[str, object], tags) if isinstance(tags, Mapping) else one
+        seen.append(sees_scope(ctx, viewer, str(one.get("account_id") or ""), str(tagged.get("team") or ""),
+                               str(tagged.get("teammate") or "")))
+    return all(seen) if seen else None
+
+
+def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, object] | None:
+    """An action's status for `viewer`, read now: None unless they asked for it or their current view covers what it
+    is about. Its reason (which may carry amounts) only while their view covers that; else its code alone."""
+    row = SX.by_id(c, action_id)
+    if row is None:
+        return None
+    ctx = load(c)
+    try:
+        payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
+    except ValueError:
+        payload = dict[str, object]()
+    covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)
+    asked = viewer in {str(row["actor"]), str(row["on_behalf_of"] or "")}
+    if not asked and not covers:
+        return None
+    shown = covers is True or (covers is None and asked)
+    return {"action_id": str(row["id"]), "kind": str(row["kind"]), "status": str(row["status"]),
+            "code": str(row["code"] or ""), "reason": str(row["reason"] or "") if shown else "",
+            "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
+            "rule": str(row["rule_id"] or "")}

@@ -176,7 +176,7 @@ def due_months(c: Any, at: str) -> list[str]:
         return []
     last = cast(dict[str, str], state.get("months") or {})
     cutoff = _after(at, -FETCH_EVERY_HOURS * 3600)
-    return [m for m in U.months_to_fetch(datetime.fromisoformat(at[:10]).date()) if last.get(m, "") <= cutoff]
+    return [m for m in U.months_to_fetch(c, datetime.fromisoformat(at[:10]).date()) if last.get(m, "") <= cutoff]
 
 
 def fetch_state(c: Any) -> dict[str, object]:

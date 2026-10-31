@@ -13,6 +13,7 @@ from .setup import AI
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
+from .store import usage as SU
 from .usage import cents, nano
 
 FLOOR = 5                       # cents held for a bot with no Gateway-billed history
@@ -71,20 +72,41 @@ def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) ->
 
 
 def ended(c: sqlite3.Connection, job_id: str, turn_id: str, at: str | None = None) -> str:
-    """Settle the job's live run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed.
+    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed. A run
+    that outlived its hold's expiry still settles the released hold, so its cost counts until the usage posting.
     `settled`, `released` or `none`."""
     if SL.book(c) is None:
         return "none"
     row = SB.hold_for_source(c, "run", source_id(job_id))
-    if row is None:
-        return "none"
-    ctx = load(c, at)
     cost = tico.run_gateway_cost(c, turn_id)
+    if row is None:
+        late = SU.released_run_hold(c, source_id(job_id)) if cost is not None else None
+        if late is None:
+            return "none"
+        ctx = load(c, at)
+        if not SU.resettle(c, str(late["id"]), max(0, cents(nano(cost))), ctx.at):
+            return "none"
+        budgeting.crossings(ctx, budgeting.chain_of(ctx, str(late["budget_id"])))
+        return "settled"
+    ctx = load(c, at)
     if cost is None:
         budgeting.release(ctx, str(row["id"]))
         return "released"
     budgeting.settle(ctx, str(row["id"]), max(0, cents(nano(cost))), None, SYSTEM)
     return "settled"
+
+
+def expire(c: sqlite3.Connection, at: str, most: int = 500) -> int:
+    """Release holds past their expiry. A run hold whose job is still out with a runner is extended instead: its run
+    has not reported back yet. How many were released."""
+    holds = SU.expired_run_holds(c, at, most)
+    if holds:
+        live = tico.live_jobs(c, [sid.removeprefix("job:") for _, sid in holds])
+        later = _hours_after(at, EXPIRES_HOURS)
+        for hid, sid in holds:
+            if sid.removeprefix("job:") in live:
+                SU.extend_hold(c, hid, later)
+    return budgeting.holds_expire(c, at, most)
 
 
 def _hours_after(at: str, hours: int) -> str:

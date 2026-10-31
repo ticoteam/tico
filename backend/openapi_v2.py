@@ -1397,10 +1397,12 @@ STABLE.extend([
      "One line's spend by vendor, team and teammate, and its entries, as far as the caller sees", "FinanceReport"),
     ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
      "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
-     "the action's key; a retry returns the id and status only. dry_run writes nothing and says what would happen",
+     "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
+     "what would happen",
      "FinanceAction"),
     ("/api/v2/finance/actions/{action_id}", "get", "Finance", "getFinanceAction",
-     "An action's status, for whoever asked, the approver and the owner", "FinanceAction"),
+     "An action's status, for whoever asked or whose view covers it; its reason only while that view covers it",
+     "FinanceAction"),
 ])
 SCHEMAS.update({
     "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",

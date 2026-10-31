@@ -3,9 +3,9 @@ own view; requesting a Finance action (or a dry run of one); and reading an acti
 hub tools call these.
 
 A write goes through `mutate`, and its Idempotency-Key is the action's idempotency key too. `store.mutate` replays a
-saved answer without running the call again, so the saved answer is only the action's id and status: the first call
-also carries the result it just made, and a retry reads nothing but the status (finance data is always read fresh,
-through the caller's current view)."""
+saved answer without running the call again, so the saved answer is only the action's id, kind and status: the first
+call also carries the result it just made, and a retry reads the rest afresh through the caller's current view (a
+reason that names amounts shows only while that view still covers them)."""
 from typing import Any, Literal
 
 from fastapi import Query, Request
@@ -94,26 +94,26 @@ def install(app, store, auth, mutate):
         def work(c):
             done = finance.act(c, who.actor, body.kind, body.payload, key)
             first["result"] = done
-            return {"action_id": done.action_id, "kind": done.kind, "status": done.status, "code": done.code,
-                    "reason": done.reason, "approval_id": done.approval_id}
+            return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
         saved = mutate(request, body, work)
         done = first.get("result")
         if done is not None and done.action_id == saved.get("action_id"):
-            return {**saved, "result": dict(done.result), "approver": done.approver, "rule": done.rule,
+            return {**saved, "code": done.code, "reason": done.reason, "approval_id": done.approval_id,
+                    "approver": done.approver, "rule": done.rule, "result": dict(done.result),
                     "impact": dict(done.impact)}
-        return saved
+        if not saved.get("action_id"):
+            return saved
+        with store.read() as c:
+            now = finance_reads.action_for(c, who.actor, saved["action_id"])
+        return {**saved, **now} if now else saved
 
     @app.get("/api/v2/finance/actions/{action_id}")
     def finance_action(request: Request, action_id: ID):
-        """An action's status: for whoever asked or was asked to approve it, and the owner."""
+        """An action's status, for whoever asked for it or whose current view covers what it is about. Its reason
+        shows only while the caller's view covers that."""
         who = viewer(request)
         with store.read() as c:
-            row = c.execute("SELECT actor, on_behalf_of, approval_to, approval_by FROM fin_actions WHERE id=?",
-                            (action_id,)).fetchone()
-            if row is None or (who.role != "owner" and who.actor not in {row["actor"], row["on_behalf_of"],
-                                                                         row["approval_to"], row["approval_by"]}):
-                raise Problem("not_found", "No such Finance action", 404)
-            try:
-                return finance.action(c, action_id).as_dict()
-            except finance.FinanceError as e:
-                raise problem(e) from None
+            found = finance_reads.action_for(c, who.actor, action_id)
+        if found is None:
+            raise Problem("not_found", "No such Finance action", 404)
+        return found

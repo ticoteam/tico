@@ -42,11 +42,18 @@ class Cutoffs:
         return self._seen[bot]
 
     def _find(self, ctx: Ctx, bot: str) -> Cutoff | None:
+        """The first budget on the bot's path that is at its limit for the bot itself: money set aside for the bot
+        there is still its to spend, exactly as its run hold would see it."""
+        mate = "bot:" + bot
+        today = dates.day(ctx.today)
         for account in self.lines:
-            found = budgeting.leaf(ctx, account, teammate="bot:" + bot)
+            found = budgeting.leaf(ctx, account, teammate=mate)
+            path = budgeting.chain_of(ctx, found.id) if found else []
             for b in B.chain(ctx.budgets(), found.id) if found else []:
-                st = self.cut.get(b.id)
-                if st is not None:
+                if b.id not in self.cut:
+                    continue
+                st = budgeting.state(ctx, b.id, today, "teammate:" + mate, path)
+                if st.at_limit:
                     end = date.fromisoformat(st.period_end) + timedelta(days=1)
                     return Cutoff(budget_id=b.id, name=b.name, period=PERIOD_WORDS.get(b.period, b.period),
                                   until=end.isoformat() + "T00:00:00Z")
@@ -54,8 +61,9 @@ class Cutoffs:
 
 
 def cutoffs(c: sqlite3.Connection, at: str | None = None) -> Cutoffs:
-    """The `decline` budgets over AI services and Video production that are at their limit now. Cheap when Finance is
-    not set up or no such budget has an amount."""
+    """The `decline` budgets over AI services and Video production that are at their limit now, counting every
+    allocation (each bot's own allocations come off when its cutoff is read). Cheap when Finance is not set up or no
+    such budget has an amount."""
     book = SL.book(c)
     if book is None:
         return Cutoffs(ctx=None, cut={}, lines=())

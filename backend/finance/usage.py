@@ -5,12 +5,18 @@ price since the last posting, Dr AI services (category `image`: Video production
 Amounts stay in nanodollars until the posted total for the month rounds to cents, so each posting is the rounded
 month-to-date total less what is already on the books for that month and line, and a rounding remainder carries
 forward by itself. A posting's source id names (month, line, snapshot), so running the job again posts nothing twice.
-Each posted amount is split across bots by their share of Gateway-billed usage in the install's own records over the
-same window (runs on Tico models, and decision calls on the Gateway's model); the rest is Unattributed. Runs on the
-company's own keys, sign-ins and subscriptions are not on the meter and post nothing."""
+Each bot gets what the install itself recorded it spending on the Gateway over the same window (runs on Tico models,
+image models on Video production; decision calls on AI services), never more than the posting; the rest is
+Unattributed. When the records come to more than the meter moved (the meter lags), the bots share the posting in
+proportion. Runs on the company's own keys, sign-ins and subscriptions are not on the meter and post nothing.
+
+A posting also takes in the run holds the meter now covers: settled holds placed in the snapshot's month whose run
+ended by the snapshot's time, even when the meter did not move. A month stays on the fetch list until a snapshot taken
+at least FINAL_DAYS after its end is posted, so a server that was down over the turn of the month still reads it."""
+import json
 import sqlite3
-from collections.abc import Mapping
-from datetime import date, datetime, timezone
+from collections.abc import Mapping, Sequence
+from datetime import date, datetime, timedelta, timezone
 from typing import cast
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
@@ -21,6 +27,7 @@ from .core.ledger import MAX_LINES
 from .core.org import SYSTEM
 from .posting import post_entry
 from .setup import AI, VIDEO
+from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 from .store import usage as SU
@@ -32,6 +39,9 @@ LINES = (("ai", AI), ("video", VIDEO))
 VIDEO_CATEGORIES = frozenset({"image"})
 RECONCILE_KEY = "gateway_usage"         # the last reconcile per month: meter total against what is on the books
 KEEP_MONTHS = 3
+BACKLOG_KEY = "gateway_usage_months"    # months that still need a final read of the meter
+FINAL_DAYS = 3                          # charges the meter records late: a month's final read is this long after it
+MOST_BACKLOG = 12
 MAX_BOTS = MAX_LINES - 2                # bot lines in one entry; the rest goes Unattributed
 
 
@@ -90,45 +100,61 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
                      "calls": calls if isinstance(calls, int) and not isinstance(calls, bool) else 0,
                      "price_nano": price, "line": line})
     as_of = stamp(payload.get("as_of"), fetched_at)
+    remember(c, month, by, fetched_at)
     return SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
                            by=by, at=fetched_at)
 
 
+def video_models(snap: Mapping[str, object]) -> list[str]:
+    """The models a snapshot's meter puts in category `image`."""
+    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows_json"] or "[]")))
+    return sorted({str(r.get("model") or "") for r in rows if r.get("line") == "video" and r.get("model")})
+
+
 # ------------------------------------------------------------------------------------------------ attribution
-def weights(c: sqlite3.Connection, after: str, through: str) -> dict[str, int]:
-    """{teammate or "" (Unattributed): nanodollars} of Gateway-billed usage the install recorded in (after, through]."""
+def weights(c: sqlite3.Connection, after: str, through: str, line: str = "ai",
+            models: Sequence[str] = ()) -> dict[str, int]:
+    """{bot teammate: nanodollars} of Gateway-billed usage the install recorded on `line` in (after, through]: runs (an
+    image model's on `video`, the rest on `ai`) and, on `ai`, bots' decision calls."""
     out: dict[str, int] = {}
-    for bot, cost in tico.gateway_run_costs(c, after, through).items():
-        key = "bot:" + bot if bot else ""
-        out[key] = out.get(key, 0) + max(0, nano(cost))
-    for actor, cost in tico.gateway_decision_costs(c, after, through).items():
-        key = actor if actor.startswith("bot:") else ""
-        out[key] = out.get(key, 0) + max(0, nano(cost))
+    for (bot, on), cost in tico.gateway_run_costs(c, after, through, models).items():
+        if bot and on == line:
+            out["bot:" + bot] = out.get("bot:" + bot, 0) + max(0, nano(cost))
+    if line == "ai":
+        for actor, cost in tico.gateway_decision_costs(c, after, through).items():
+            if actor.startswith("bot:"):
+                out[actor] = out.get(actor, 0) + max(0, nano(cost))
     return {k: v for k, v in out.items() if v > 0}
 
 
-def split(amount: int, shares: Mapping[str, int], most: int = MAX_BOTS) -> list[tuple[str, int]]:
-    """`amount` cents split by `shares` (largest remainder, so the parts add up exactly), as (teammate, cents) with
-    "" for Unattributed. Past `most` bots, the smallest go to Unattributed. Parts of 0 are left out."""
-    if not shares or amount == 0:
+def _largest_remainder(total: int, exact: Sequence[tuple[str, Decimal]]) -> dict[str, int]:
+    """Whole cents for each exact share, adding up to `total` (largest remainder)."""
+    floors = {k: int(x) for k, x in exact}
+    left = total - sum(floors.values())
+    order = sorted(range(len(exact)), key=lambda i: (-(exact[i][1] - int(exact[i][1])), i))
+    for i in order[:max(0, left)]:
+        floors[exact[i][0]] += 1
+    return floors
+
+
+def split(amount: int, recorded: Mapping[str, int], most: int = MAX_BOTS) -> list[tuple[str, int]]:
+    """`amount` cents as (teammate, cents), "" for Unattributed. Each bot gets its own `recorded` nanodollars in cents;
+    when they come to more than `amount`, the bots share `amount` in proportion. Past `most` bots, the smallest go to
+    Unattributed; a negative amount (a correction) goes Unattributed. Parts of 0 are left out."""
+    if amount <= 0 or not recorded:
         return [("", amount)] if amount else []
-    ranked = sorted(shares.items(), key=lambda kv: (-kv[1], kv[0]))
-    named = [(k, v) for k, v in ranked if k][:most]
-    rest = sum(v for k, v in ranked if (k, v) not in named)
-    parts = [*named, ("", rest)] if rest else named
-    whole = sum(v for _, v in parts)
-    sign, total = (1 if amount > 0 else -1), abs(amount)
-    exact = [(k, Decimal(total) * v / whole) for k, v in parts]
-    floors = [(k, int(x)) for k, x in exact]
-    left = total - sum(v for _, v in floors)
-    order = sorted(range(len(exact)), key=lambda i: (-(exact[i][1] - floors[i][1]), i))
-    out = dict(floors)
-    for i in order[:left]:
-        out[exact[i][0]] = out[exact[i][0]] + 1
-    merged: dict[str, int] = {}
-    for k, v in out.items():
-        merged[k] = merged.get(k, 0) + v
-    return [(k, sign * v) for k, v in sorted(merged.items(), key=lambda kv: (kv[0] == "", kv[0])) if v]
+    ranked = sorted(((k, v) for k, v in recorded.items() if k and v > 0), key=lambda kv: (-kv[1], kv[0]))[:most]
+    whole = sum(v for _, v in ranked)
+    if whole <= 0:
+        return [("", amount)]
+    if whole <= amount * NANO_PER_CENT:
+        own = cents(whole)
+        parts = _largest_remainder(own, [(k, Decimal(v) / NANO_PER_CENT) for k, v in ranked])
+    else:
+        parts = _largest_remainder(amount, [(k, Decimal(amount) * v / whole) for k, v in ranked])
+    rest = amount - sum(parts.values())
+    out = [(k, v) for k, v in sorted(parts.items()) if v]
+    return [*out, ("", rest)] if rest else out
 
 
 # ------------------------------------------------------------------------------------------------ posting
@@ -153,45 +179,74 @@ def _entry_day(ctx: Ctx, month: str, as_of: str) -> str:
 
 
 def post(c: sqlite3.Connection, at: str | None = None, by: str = SYSTEM) -> list[dict[str, object]]:
-    """Post every month whose newest snapshot is not on the books yet; one entry per (month, line) that moved. What it
-    posted, as {month, line, entry_id, amount}. Safe to run again."""
+    """Post each month's newest snapshot that is not on the books yet; one entry per (month, line) that moved, and the
+    run holds that snapshot covers taken in. A snapshot older than the month's last posting is set aside, never taken
+    as the month's total. What it posted, as {month, line, entry_id, amount}. Safe to run again."""
     if not is_set_up(c):
         return []
     ctx = load(c, at)
-    ids = _code_ids(ctx)
     done: list[dict[str, object]] = []
-    for snap in SU.unposted(c):
-        month, as_of, sid = str(snap["month"]), str(snap["as_of"]), str(snap["id"])
-        prior = SU.last_posted(c, month)
-        after, through = _window(month, str(prior["as_of"]) if prior else None, as_of)
-        meter = {"ai": int(snap["ai_nano"]), "video": int(snap["video_nano"])}
-        report: dict[str, object] = {"as_of": as_of}
-        for line, code in LINES:
-            account = ids.get(code)
-            if not account or CREDIT not in ids:
-                continue
-            prefix = f"gateway:{month}:{line}:"
-            target = cents(meter[line])
-            delta = target - SU.posted_on(c, ctx.book.id, account, prefix)
-            if delta:
-                shares = weights(c, after, through) if line == "ai" else {}
-                lines: list[dict[str, object]] = []
-                for mate, part in split(delta, shares):
-                    item: dict[str, object] = {"account_id": account, "amount": part,
-                                               "description": f"Tico AI Gateway, {month}"}
-                    if mate:
-                        item["tags"] = {"teammate": mate}
-                    lines.append(item)
-                lines.append({"account_id": ids[CREDIT], "amount": -delta, "description": f"Tico AI Gateway, {month}"})
-                entry = {"date": _entry_day(ctx, month, as_of), "memo": f"Tico AI Gateway usage, {month}",
-                         "source": "usage", "source_id": prefix + sid, "lines": lines}
-                holds = SU.run_holds_settled(c, as_of) if line == "ai" else []
-                made = post_entry(c, entry, by=by, hold_ids=holds, at=ctx.at)
-                done.append({"month": month, "line": line, "entry_id": made["entry_id"], "amount": delta})
-            report[line] = {"meter_nano": meter[line], "posted": SU.posted_on(c, ctx.book.id, account, prefix)}
-        SU.mark_posted(c, month, as_of, ctx.at)
-        _reconciled(c, month, report, by, ctx.at)
+    for _ in range(100):
+        snaps = SU.unposted(c)
+        if not snaps:
+            break
+        for snap in snaps:
+            done += _post_one(ctx, snap, by)
     return done
+
+
+def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, object]]:
+    c, ids = ctx.c, _code_ids(ctx)
+    month, as_of, sid = str(snap["month"]), str(snap["as_of"]), str(snap["id"])
+    prior = SU.last_posted(c, month)
+    if prior is not None and as_of < str(prior["as_of"]):
+        SU.ignore(c, sid, ctx.at)
+        return []
+    after, through = _window(month, str(prior["as_of"]) if prior else None, as_of)
+    models = video_models(snap)
+    meter = {"ai": int(str(snap["ai_nano"])), "video": int(str(snap["video_nano"]))}
+    holds = _holds_by_line(c, month, as_of, models)
+    report: dict[str, object] = {"as_of": as_of}
+    done: list[dict[str, object]] = []
+    for line, code in LINES:
+        account = ids.get(code)
+        if not account or CREDIT not in ids:
+            continue
+        prefix = f"gateway:{month}:{line}:"
+        delta = cents(meter[line]) - SU.posted_on(c, ctx.book.id, account, prefix)
+        if delta:
+            lines: list[dict[str, object]] = []
+            for mate, part in split(delta, weights(c, after, through, line, models)):
+                item: dict[str, object] = {"account_id": account, "amount": part,
+                                           "description": f"Tico AI Gateway, {month}"}
+                if mate:
+                    item["tags"] = {"teammate": mate}
+                lines.append(item)
+            lines.append({"account_id": ids[CREDIT], "amount": -delta, "description": f"Tico AI Gateway, {month}"})
+            entry = {"date": _entry_day(ctx, month, as_of), "memo": f"Tico AI Gateway usage, {month}",
+                     "source": "usage", "source_id": prefix + sid, "lines": lines}
+            made = post_entry(c, entry, by=by, hold_ids=holds[line], at=ctx.at)
+            done.append({"month": month, "line": line, "entry_id": made["entry_id"], "amount": delta})
+        elif holds[line]:
+            # The meter already carries these runs: the month's last posting on this line stands for them.
+            last = SU.last_entry(c, ctx.book.id, prefix)
+            for hid in holds[line] if last else []:
+                SB.absorb(c, hid, last or "")
+        report[line] = {"meter_nano": meter[line], "posted": SU.posted_on(c, ctx.book.id, account, prefix)}
+    SU.mark_posted(c, month, as_of, ctx.at)
+    _backlog_done(c, month, str(snap["created_at"]), by, ctx.at)
+    _reconciled(c, month, report, by, ctx.at)
+    return done
+
+
+def _holds_by_line(c: sqlite3.Connection, month: str, as_of: str, models: Sequence[str]) -> dict[str, list[str]]:
+    """The settled run holds of `month` whose run ended by `as_of`, by the line their run cost lands on."""
+    held = SU.run_holds_settled(c, month, as_of)
+    video = tico.video_jobs(c, [sid.removeprefix("job:") for _, sid in held], models) if held else set[str]()
+    out: dict[str, list[str]] = {"ai": [], "video": []}
+    for hid, sid in held:
+        out["video" if sid.removeprefix("job:") in video else "ai"].append(hid)
+    return out
 
 
 def _reconciled(c: sqlite3.Connection, month: str, report: Mapping[str, object], by: str, at: str) -> None:
@@ -203,13 +258,39 @@ def _reconciled(c: sqlite3.Connection, month: str, report: Mapping[str, object],
     SL.set_setting(c, RECONCILE_KEY, {m: months[m] for m in keep}, by, at)
 
 
-def months_to_fetch(today: date) -> list[str]:
-    """This month, and last month too for the first three days (charges the meter records late)."""
+def _final_after(month: str) -> str:
+    """When a read of `month` counts as its final one: FINAL_DAYS after the month ends, as a Tico timestamp."""
+    end = datetime.combine(dates.add_months(dates.month(month), 1), datetime.min.time(), tzinfo=timezone.utc)
+    return (end + timedelta(days=FINAL_DAYS)).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+
+
+def backlog(c: sqlite3.Connection) -> list[str]:
+    """The months whose final meter read is not posted yet."""
+    stored = SL.setting(c, BACKLOG_KEY)
+    items = cast(list[object], stored) if isinstance(stored, list) else []
+    return sorted({str(m) for m in items if isinstance(m, str)})
+
+
+def remember(c: sqlite3.Connection, month: str, by: str, at: str) -> None:
+    """`month` was read: keep it on the fetch list until its final read is posted."""
+    months = backlog(c)
+    if month not in months and at < _final_after(month):
+        SL.set_setting(c, BACKLOG_KEY, sorted([*months, month])[-MOST_BACKLOG:], by, at)
+
+
+def _backlog_done(c: sqlite3.Connection, month: str, fetched_at: str, by: str, at: str) -> None:
+    months = backlog(c)
+    if month in months and fetched_at >= _final_after(month):
+        SL.set_setting(c, BACKLOG_KEY, [m for m in months if m != month], by, at)
+
+
+def months_to_fetch(c: sqlite3.Connection, today: date) -> list[str]:
+    """This month, last month for its first FINAL_DAYS days, and every month still waiting on its final read."""
     this = today.replace(day=1)
-    out = [this.isoformat()[:7]]
-    if today.day <= 3:
-        out.insert(0, dates.add_months(this, -1).isoformat()[:7])
-    return out
+    out = {this.isoformat()[:7], *backlog(c)}
+    if today.day <= FINAL_DAYS:
+        out.add(dates.add_months(this, -1).isoformat()[:7])
+    return sorted(out)
 
 
 def reconcile(c: sqlite3.Connection) -> dict[str, object]:
@@ -218,4 +299,4 @@ def reconcile(c: sqlite3.Connection) -> dict[str, object]:
     return dict(cast(dict[str, object], stored)) if isinstance(stored, dict) else {}
 
 
-__all__ = ["snapshot", "post", "split", "weights", "nano", "cents", "reconcile"]
+__all__ = ["snapshot", "post", "split", "weights", "nano", "cents", "reconcile", "months_to_fetch"]

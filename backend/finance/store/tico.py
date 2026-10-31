@@ -2,7 +2,7 @@
 owner, the company's usage cap, the audit log and approvals. Every function takes the caller's connection."""
 import json
 import sqlite3
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
 from ... import hubdb as _hubdb
@@ -162,7 +162,11 @@ def known_actor(c: sqlite3.Connection, actor: str) -> bool:
 # ------------------------------------------------------------------------------------------------ Gateway-billed usage
 # A run is Gateway-billed when it ran on a Tico model (`gateway_connection.is_tico`) and not on a subscription. Costs
 # come back as decimal text (SQLite's printf), so no float reaches Finance.
-_GATEWAY = "model LIKE 'tico-%' AND coalesce(billing, 'api') != 'subscription'"
+def _gateway(p: str = "") -> str:
+    return f"{p}model LIKE 'tico-%' AND coalesce({p}billing, 'api') != 'subscription'"
+
+
+_GATEWAY = _gateway()
 
 
 def _runs() -> str:
@@ -170,11 +174,48 @@ def _runs() -> str:
     return str(cast(Any, usage_records).RUNS)
 
 
-def gateway_run_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
-    """{bot slug: USD as decimal text} for Gateway-billed runs that finished in (after, through]."""
-    rows = c.execute(f"SELECT bot, printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
-                     "AND finished > ? AND finished <= ? GROUP BY bot", (after, through)).fetchall()
-    return {str(r[0] or ""): str(r[1]) for r in rows}
+def _video(models: Sequence[str], p: str = "") -> tuple[str, list[str]]:
+    """The SQL test for a run segment on one of the Gateway's image models (`tico-image*`, and any model a meter row
+    puts in category `image`), and its parameters."""
+    test = f"{p}model LIKE 'tico-image%'"
+    if not models:
+        return test, []
+    return f"({test} OR {p}model IN ({','.join('?' * len(models))}))", list(models)
+
+
+def gateway_run_costs(c: sqlite3.Connection, after: str, through: str,
+                      video_models: Sequence[str] = ()) -> dict[tuple[str, str], str]:
+    """{(bot slug, `ai` | `video`): USD as decimal text} for Gateway-billed runs that finished in (after, through]; a
+    segment on an image model counts on `video`."""
+    video, params = _video(video_models)
+    rows = c.execute(f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "
+                     f"printf('%.9f', sum(coalesce(est_cost_usd, 0))) FROM {_runs()} WHERE {_GATEWAY} "
+                     "AND finished > ? AND finished <= ? GROUP BY 1, 2", (*params, after, through)).fetchall()
+    return {(str(r[0] or ""), str(r[1])): str(r[2]) for r in rows}
+
+
+def video_jobs(c: sqlite3.Connection, job_ids: Sequence[str], video_models: Sequence[str] = ()) -> set[str]:
+    """The jobs whose Gateway-billed runs were all on image models."""
+    video, params = _video(video_models, "r.")
+    out: set[str] = set()
+    for i in range(0, len(job_ids), 500):
+        chunk = list(job_ids[i:i + 500])
+        rows = c.execute(f"SELECT a.job_id FROM attempts a JOIN {_runs()} r ON r.id = a.id WHERE a.job_id IN "
+                         f"({','.join('?' * len(chunk))}) AND {_gateway('r.')} GROUP BY a.job_id "
+                         f"HAVING sum(CASE WHEN {video} THEN 0 ELSE 1 END) = 0", (*chunk, *params)).fetchall()
+        out.update(str(r[0]) for r in rows)
+    return out
+
+
+def live_jobs(c: sqlite3.Connection, job_ids: Sequence[str]) -> set[str]:
+    """The jobs still out with a runner (leased, running, or not yet known to have ended)."""
+    out: set[str] = set()
+    for i in range(0, len(job_ids), 500):
+        chunk = list(job_ids[i:i + 500])
+        rows = c.execute(f"SELECT id FROM jobs WHERE id IN ({','.join('?' * len(chunk))}) "
+                         "AND state IN ('leased', 'running', 'uncertain')", chunk).fetchall()
+        out.update(str(r[0]) for r in rows)
+    return out
 
 
 def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
@@ -217,7 +258,8 @@ def emit(c: sqlite3.Connection, name: str, subject: str, data: Mapping[str, obje
     from ... import rules
     R: Any = rules
     facts = dict(data)
-    R.judge_event(c, name, {"subject": subject, "delivery": str(facts.get("event_id") or subject), "data": facts})
+    R.judge_event(c, name, {"subject": subject, "type": subject, "delivery": str(facts.get("event_id") or subject),
+                            "data": facts})
     _H.hook(c, name, subject, lambda: facts, _H.KEEPER)
 
 

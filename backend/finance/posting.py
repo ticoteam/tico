@@ -34,8 +34,9 @@ def with_team(ctx: Ctx, tags: Mapping[str, str]) -> dict[str, str]:
 
 
 def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str = "",
-         reversing: bool = False) -> tuple[str, list[str]]:
-    """Check and post one entry. The entry id and its line ids."""
+         reversing: bool = False, touch: bool = True) -> tuple[str, list[str]]:
+    """Check and post one entry. The entry id and its line ids. `touch=False` leaves the budget crossings to the
+    caller, for once everything that goes with the entry is written."""
     e = replace(e, lines=tuple(replace(x, tags=with_team(ctx, x.tags)) for x in e.lines))
     closed = SL.closed_on(ctx.c, ctx.book.id, e.entry_date)
     L.check(e, ctx.book, ctx.accounts, closed, reversing)
@@ -43,7 +44,8 @@ def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str
     entry_id = SL.new_id()
     line_ids = SL.insert_entry(ctx.c, e, entry_id=entry_id, period_id=period_id, action_id=action_id,
                                reverses_id=reverses_id, by=by, at=ctx.at)
-    touched(ctx, e.lines, by)
+    if touch:
+        touched(ctx, e.lines, by)
     return entry_id, line_ids
 
 
@@ -104,7 +106,7 @@ def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = 
         prior = SL.entry_by_source(c, ctx.book.id, e.source, e.source_id)
         if prior is not None:
             return {"entry_id": str(prior["id"]), "posted": False}
-    entry_id, line_ids = post(ctx, e, by=by)
+    entry_id, line_ids = post(ctx, e, by=by, touch=False)
     for hid in hold_ids:
         row = SB.hold(c, hid)
         if row is None:
@@ -114,4 +116,5 @@ def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = 
             SB.settle(c, hid, int(row["amount"]), entry_id, ctx.at)
         elif row["status"] == "settled":
             SB.absorb(c, hid, entry_id)
+    touched(ctx, e.lines, by)       # after the holds are taken in: the entry and its holds never count twice
     return {"entry_id": entry_id, "line_ids": line_ids, "posted": True}

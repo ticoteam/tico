@@ -6,12 +6,13 @@ from collections.abc import Mapping
 from typing import cast
 
 from . import handlers
-from .budgeting import LIMIT_EVENT, WARN_EVENT, state
+from .budgeting import LIMIT_EVENT, WARN_EVENT, actual, event_period, state, subtree
 from .context import is_set_up, load
 from .core import budgets as B
 from .core import dates
 from .posting import ensure_period
 from .setup import AI, VIDEO, setup
+from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 from .store import usage as SU
@@ -59,7 +60,8 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
         tico.after_commit(c, gateway_sync.ring)
     for row in rows:
         name, subject, eid = str(row["name"]), str(row["subject"]), str(row["id"])
-        tico.emit(c, name, subject, {"budget_id": subject, "event_id": eid, "period": str(row["period_key"])})
+        tico.emit(c, name, subject, {"budget_id": subject, "event_id": eid,
+                                        "period": event_period(str(row["period_key"]))})
         b = ctx.budgets().get(subject) if ctx is not None else None
         if ctx is not None and b is not None and name in (WARN_EVENT, LIMIT_EVENT):
             owner = b.owner if b.owner.startswith("human:") and handlers.sees_budget(ctx, b.owner, b) else ctx.org.owner
@@ -83,8 +85,10 @@ def open_next_period(c: sqlite3.Connection, at: str | None = None) -> str | None
     return ensure_period(ctx, dates.add_months(dates.day(ctx.today).replace(day=1), 1).isoformat())
 
 
-def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str, B.State] | None:
-    """The company-wide AI services budget (no team, teammate or vendor) and its state now, when it has an amount."""
+def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str, B.State, int] | None:
+    """The company-wide AI services budget (no team, teammate or vendor) when it has an amount: its at-limit action,
+    its state now, and what is really spent against it (actuals and holds; money set aside in allocations and not used
+    is not spent)."""
     if not is_set_up(c):
         return None
     ctx = load(c, at)
@@ -92,19 +96,24 @@ def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str
     for b in ctx.budgets().values():
         if b.active and not b.parent_id and b.account_id == ai and not (b.team or b.teammate or b.vendor):
             st = state(ctx, b.id, dates.day(ctx.today))
-            return (b.at_limit, st) if st.amount is not None else None
+            if st.amount is None:
+                return None
+            spent = actual(ctx, b, st.period_start, st.period_end) + \
+                SB.held(c, subtree(ctx, b.id), st.period_start, st.period_end)
+            return b.at_limit, st, spent
     return None
 
 
 def cap_wanted(c: sqlite3.Connection, at: str | None = None) -> tuple[str, str]:
     """What the Gateway self cap should be now, as (`cut` | `clear`, the budget month `YYYY-MM`): `cut` while the
-    company AI services budget is a `decline` budget at its limit."""
+    company AI services budget is a `decline` budget whose spending (not its unused allocations) reached its amount."""
     found = company_ai_budget(c, at)
     month = (at or tico.now())[:7]
     if found is None:
         return "clear", month
-    action, st = found
-    return ("cut" if action == "decline" and st.at_limit else "clear"), st.period_start[:7]
+    action, st, spent = found
+    over = st.amount is not None and spent >= st.amount
+    return ("cut" if action == "decline" and over else "clear"), st.period_start[:7]
 
 
 def cap_state(c: sqlite3.Connection) -> dict[str, object]:

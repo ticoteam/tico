@@ -140,21 +140,34 @@ def leaf(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: 
                   ctx.accounts, ctx.org)
 
 
+def event_key(period_start: str, version: int) -> str:
+    """An event's period key: the period and the budget's newest version, so a change of amount arms both again."""
+    return f"{period_start}/v{version}"
+
+
+def event_period(key: str) -> str:
+    return key.partition("/")[0]
+
+
 def crossings(ctx: Ctx, budget_ids: Sequence[str], by: str = SYSTEM) -> None:
-    """A `finance.budget.warn` / `.cutoff` event the first time in a period a budget reaches its warn level or its
-    amount, for Tico's triggers to drain."""
+    """A `finance.budget.warn` / `.cutoff` event the first time a budget reaches its warn level or its amount, once per
+    period and version (a raise arms it again), for Tico's triggers to drain. A budget of 0 is at its cutoff at once:
+    it allows no spending."""
     at = dates.day(ctx.today)
     for bid in dict.fromkeys(budget_ids):
         b = ctx.budgets().get(bid)
         if b is None or not b.active:
             continue
         s = state(ctx, bid, at)
+        if not (s.crossed_warn or s.at_limit):
+            continue
+        version = max((v.version for v in SB.versions(ctx.c, [bid])[bid]), default=0)
         facts: dict[str, object] = {"budget_id": bid, "name": b.name, "amount": s.amount, "used": s.actual + s.held,
                                     "remaining": s.remaining, "pct": str(s.pct) if s.pct is not None else None}
         if s.crossed_warn:
-            SB.event(ctx.c, WARN_EVENT, bid, s.period_start, facts, by, ctx.at)
-        if s.at_limit and s.amount:
-            SB.event(ctx.c, LIMIT_EVENT, bid, s.period_start, facts, by, ctx.at)
+            SB.event(ctx.c, WARN_EVENT, bid, event_key(s.period_start, version), facts, by, ctx.at)
+        if s.at_limit and s.amount is not None:
+            SB.event(ctx.c, LIMIT_EVENT, bid, event_key(s.period_start, version), facts, by, ctx.at)
 
 
 def chain_of(ctx: Ctx, budget_id: str) -> list[str]:

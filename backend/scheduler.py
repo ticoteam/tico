@@ -202,7 +202,7 @@ class Scheduler:
             if waiting:
                 steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))
             if self.finance_due("holds", at, timedelta(minutes=10)):
-                steps.append(("finance_holds", lambda c: finance.holds_expire(c, stamp(at))))
+                steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
             if self.finance_due("usage", at, timedelta(hours=1)):
                 steps.append(("finance_usage", lambda c: finance.post_usage(c, stamp(at))))
             if self.finance_due("period", at, timedelta(days=1)):

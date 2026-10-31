@@ -218,7 +218,7 @@ CREATE TABLE IF NOT EXISTS fin_events (
 
 CREATE TABLE IF NOT EXISTS fin_usage_snapshots (
   id TEXT PRIMARY KEY, month TEXT NOT NULL, as_of TEXT NOT NULL, ai_nano BIGINT NOT NULL DEFAULT 0,
-  video_nano BIGINT NOT NULL DEFAULT 0, rows_json TEXT NOT NULL DEFAULT '[]', posted_at TEXT,
+  video_nano BIGINT NOT NULL DEFAULT 0, rows_json TEXT NOT NULL DEFAULT '[]', posted_at TEXT, ignored_at TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, UNIQUE (month, as_of));
 
 CREATE TABLE IF NOT EXISTS fin_rights (

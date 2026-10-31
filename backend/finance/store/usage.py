@@ -11,25 +11,37 @@ from .ledger import new_id
 # ------------------------------------------------------------------------------------------------ meter snapshots
 def add_snapshot(c: sqlite3.Connection, *, month: str, as_of: str, ai_nano: int, video_nano: int,
                  rows: Sequence[Mapping[str, object]], by: str, at: str) -> str | None:
-    """Keep one fetch of the meter. None when that (month, as_of) is already kept: the meter has not moved."""
+    """Keep one fetch of the meter. A fetch with the same (month, as_of) and a higher total replaces the kept row under
+    a new id (so its posting is a new source id) and makes it unposted again. None when nothing changed."""
     sid = new_id()
     made = c.execute("INSERT INTO fin_usage_snapshots(id, month, as_of, ai_nano, video_nano, rows_json, created_at, "
-                     "created_by) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(month, as_of) DO NOTHING",
+                     "created_by) VALUES(?,?,?,?,?,?,?,?) ON CONFLICT(month, as_of) DO UPDATE SET id=excluded.id, "
+                     "ai_nano=excluded.ai_nano, video_nano=excluded.video_nano, rows_json=excluded.rows_json, "
+                     "created_at=excluded.created_at, created_by=excluded.created_by, posted_at=NULL, ignored_at=NULL "
+                     "WHERE excluded.ai_nano + excluded.video_nano > "
+                     "fin_usage_snapshots.ai_nano + fin_usage_snapshots.video_nano",
                      (sid, month, as_of, ai_nano, video_nano, json.dumps([dict(r) for r in rows], sort_keys=True),
                       at, by)).rowcount
     return sid if made else None
 
 
 def unposted(c: sqlite3.Connection, most: int = 24) -> list[Any]:
-    """The newest unposted snapshot of each month (a newer one carries everything an older one did)."""
-    return c.execute("SELECT s.* FROM fin_usage_snapshots s WHERE s.posted_at IS NULL AND s.as_of = (SELECT max(as_of) "
-                     "FROM fin_usage_snapshots t WHERE t.month = s.month) ORDER BY s.month LIMIT ?", (most,)).fetchall()
+    """Per month, the unposted snapshot fetched last (by created_at): it carries everything an earlier fetch did."""
+    return c.execute("SELECT s.* FROM fin_usage_snapshots s WHERE s.id = (SELECT t.id FROM fin_usage_snapshots t "
+                     "WHERE t.month = s.month AND t.posted_at IS NULL AND t.ignored_at IS NULL "
+                     "ORDER BY t.created_at DESC, t.as_of DESC, t.id DESC LIMIT 1) ORDER BY s.month LIMIT ?",
+                     (most,)).fetchall()
 
 
 def mark_posted(c: sqlite3.Connection, month: str, through: str, at: str) -> None:
     """Every snapshot of `month` up to `through` is done: the newest one's posting covered them."""
-    c.execute("UPDATE fin_usage_snapshots SET posted_at=? WHERE month=? AND as_of<=? AND posted_at IS NULL",
-              (at, month, through))
+    c.execute("UPDATE fin_usage_snapshots SET posted_at=? WHERE month=? AND as_of<=? AND posted_at IS NULL "
+              "AND ignored_at IS NULL", (at, month, through))
+
+
+def ignore(c: sqlite3.Connection, snapshot_id: str, at: str) -> None:
+    """A snapshot older than what is already posted: kept, never posted, never taken as the month's total."""
+    c.execute("UPDATE fin_usage_snapshots SET ignored_at=? WHERE id=? AND posted_at IS NULL", (at, snapshot_id))
 
 
 def last_posted(c: sqlite3.Connection, month: str) -> Any:
@@ -49,11 +61,48 @@ def posted_on(c: sqlite3.Connection, book_id: str, account_id: str, prefix: str)
     return int(row[0])
 
 
-def run_holds_settled(c: sqlite3.Connection, through: str, most: int = 2000) -> list[str]:
-    """Run holds settled at or before `through` that no entry has taken in yet."""
-    return [str(r[0]) for r in c.execute("SELECT id FROM fin_holds WHERE source='run' AND status='settled' "
-                                         "AND entry_id IS NULL AND settled_at<=? ORDER BY settled_at LIMIT ?",
-                                         (through, most))]
+def last_entry(c: sqlite3.Connection, book_id: str, prefix: str) -> str | None:
+    """The newest usage entry whose source id starts `prefix`."""
+    row = c.execute("SELECT id FROM fin_entries WHERE book_id=? AND source='usage' AND substr(source_id, 1, ?) = ? "
+                    "ORDER BY created_at DESC, id DESC LIMIT 1", (book_id, len(prefix), prefix)).fetchone()
+    return str(row[0]) if row else None
+
+
+def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int = 1000) -> list[tuple[str, str]]:
+    """(hold id, source id) of every run hold placed in `month` (YYYY-MM) whose run ended (settled) at or before
+    `through` and that no entry has taken in yet, read a page at a time."""
+    out: list[tuple[str, str]] = []
+    last = ""
+    while True:
+        rows = c.execute("SELECT id, source_id FROM fin_holds WHERE source='run' AND status='settled' AND entry_id IS NULL "
+                         "AND substr(held_on, 1, 7)=? AND settled_at<=? AND id>? ORDER BY id LIMIT ?",
+                         (month, through, last, page)).fetchall()
+        out += [(str(r[0]), str(r[1])) for r in rows]
+        if len(rows) < page:
+            return out
+        last = str(rows[-1][0])
+
+
+def expired_run_holds(c: sqlite3.Connection, at: str, most: int) -> list[tuple[str, str]]:
+    return [(str(r[0]), str(r[1])) for r in c.execute(
+        "SELECT id, source_id FROM fin_holds WHERE source='run' AND status='held' AND expires_at IS NOT NULL "
+        "AND expires_at<=? ORDER BY expires_at LIMIT ?", (at, most))]
+
+
+def extend_hold(c: sqlite3.Connection, hold_id: str, expires_at: str) -> int:
+    return c.execute("UPDATE fin_holds SET expires_at=? WHERE id=? AND status='held'", (expires_at, hold_id)).rowcount
+
+
+def released_run_hold(c: sqlite3.Connection, source_id: str) -> Any:
+    """The run hold for `source_id` that expiry released, newest first."""
+    return c.execute("SELECT * FROM fin_holds WHERE source='run' AND source_id=? AND status='released' "
+                     "ORDER BY released_at DESC, id DESC LIMIT 1", (source_id,)).fetchone()
+
+
+def resettle(c: sqlite3.Connection, hold_id: str, amount: int, at: str) -> int:
+    """A released run hold settles after all: the run reported back after its hold expired."""
+    return c.execute("UPDATE fin_holds SET status='settled', settled_amount=?, settled_at=?, released_at=NULL "
+                     "WHERE id=? AND status='released'", (amount, at, hold_id)).rowcount
 
 
 # ------------------------------------------------------------------------------------------------ events
