@@ -7924,6 +7924,8 @@ def create_app(settings=None):
     install_model_subscriptions(app, store, auth, mutate, settings)
     from .groups import install as install_groups
     install_groups(app, store, auth, mutate, settings)
+    from .team_build import install as install_team_build
+    install_team_build(app, store, auth, mutate, onboarding)
     from .report_order import install as install_report_order
     install_report_order(app, store, auth, mutate)
     from .settings_catalog import install as install_settings_catalog

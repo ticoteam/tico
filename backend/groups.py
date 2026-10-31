@@ -205,13 +205,27 @@ def _lead_move(c, who, gid, body, roster):
     if any(v is not None for v in (body.name, body.parent, body.lead, body.bet_id)) or body.remove.people \
             or body.remove.bots or not (body.add.people or body.add.bots):
         return False
+    return _led_add(c, who, gid, roster, body.add.people, body.add.bots)
+
+
+def _led_add(c, who, gid, roster, people=(), bots=()):
+    """Whether a lead may add these people and bots to `gid`: a group it leads or one below, and each of them already
+    in such a group. A bot being hired has no group yet, so a hire passes none and asks only about the group."""
     led = led_groups(c, who.actor, roster)
     if gid not in led:
         return False
     configs = _configs(c)
-    homes = [P.team_of(slug, configs, roster) for slug in body.add.bots] + \
-        [(P.person(pid, roster) or {}).get("team") for pid in body.add.people]
+    homes = [P.team_of(slug, configs, roster) for slug in bots] + \
+        [(P.person(pid, roster) or {}).get("team") for pid in people]
     return all(home in led for home in homes)
+
+
+def may_add(c, auth, who, gid, people=(), bots=()):
+    """Refuse (403) unless `who` may add these to group `gid`, the same rule `update` applies to an add: an owner, an
+    admin, or a lead of the group or of one above it. Any route that puts a bot in a group asks this first."""
+    if who.role == "owner" or auth.bot_admin(who) or _led_add(c, who, gid, _roster(c), people, bots):
+        return
+    raise Problem("forbidden", "Only an owner, an admin or the team's lead can add to it", 403)
 
 
 def _snapshot(c):
