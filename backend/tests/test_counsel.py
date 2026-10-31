@@ -323,23 +323,87 @@ def test_a_counsel_run_reads_no_other_runs_summary_or_any_run_history(api):
     assert "price list" in api.get("/api/v2/bots/tico-counsel/turns", headers=headers("ana-test")).text
 
 
-def test_a_run_asked_for_one_version_lists_no_other_revision(api):
+def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
     org(api)
     counsel_on(api)
     file_id, _ = store_file(api, CONTRACT)
-    read_document(api, file_id)
-    data = b"Merger draft."
-    with api.app.state.store.transaction() as c:
-        digest = api.app.state.blobs.put(data, "text/plain")
-        item = register(c, Identity("human:ana", "human"), digest, len(data), "merger.txt", "text/plain")
-        api.app.state.files.add_version(
-            c, bot="ops", actor="human:ana", scope="bot", task=None, conversation=None, attempt="",
-            identity="upload:Acme Vendor Terms", title="Acme Vendor Terms", name="globex-merger-draft.txt",
-            mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
-    listed = api.get(f"/api/v2/files/{file_id}/versions", headers=read_run(api))
-    assert listed.status_code == 200, listed.text
-    assert [v["version"] for v in listed.json()["versions"]] == [1] and "merger" not in listed.text
-    assert len(get(api, f"files/{file_id}/versions")["versions"]) == 2
+    read = read_document(api, file_id)
+    new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
+    run = read_run(api)
+    asked = [("GET", f"answers?ids={read['task_id']}"), ("GET", f"pages/{file_id}"), ("GET", "replay"),
+             ("GET", f"file-approvals?file={file_id}&version=2"), ("GET", "bots/tico-counsel/turns"),
+             ("GET", f"files/{file_id}/versions"), ("GET", f"files/{file_id}/meta?v=2"),
+             ("GET", f"tasks/{read['task_id']}/answers"), ("GET", "rules/stats"),
+             ("POST", "task-questions"), ("POST", "pages")]
+    for method, path in asked:
+        for token in (run, headers("counsel-test")):
+            got = api.request(method, "/api/v2/" + path, headers=token, json={} if method == "POST" else None)
+            assert got.status_code == 403 and "merger" not in got.text, (method, path, got.text)
+    # A person still reads the run list and the file's versions.
+    for path in ("bots/tico-counsel/turns", f"files/{file_id}/versions"):
+        assert api.get("/api/v2/" + path, headers=headers("ana-test")).status_code == 200, path
+
+
+def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monkeypatch):
+    from backend.tests.test_automation_cli import Client
+    from backend.tests.test_org_rules_surfaces import mcp
+    from clients import hubtools
+
+    class Turn(Client):
+        """The run's own hub client, as clients/hubmcp.py gives the harness its tools (the turn's token)."""
+        def request(self, method, path, binary=False):
+            got = self.api.request(method, path, headers=headers(self.token))
+            assert got.status_code == 200, got.text
+            return got.content
+
+    def tools(token, *calls):
+        protocol = hubtools.Protocol(Turn(api, token), local=True)
+        for name, args in calls:
+            reply = protocol.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                     "params": {"name": name, "arguments": args}})
+            assert not reply["result"]["isError"], (name, reply)
+        return reply["result"]["structuredContent"]
+
+    org(api)
+    counsel_on(api)
+    file_id, version = store_file(api, CONTRACT)
+    read = read_document(api, file_id)
+    seen, real = [], counsel.read_refused
+
+    def watch(store, auth, who, method, path, query):
+        reason = real(store, auth, who, method, path, query)
+        if counsel.is_counsel(who):
+            seen.append((method, path, reason))
+        return reason
+    monkeypatch.setattr(counsel, "read_refused", watch)
+    r, attempt = counsel_run(api)
+    token = attempt["token"]
+    # What the computer running it asks with the run's token: its task, its credentials.
+    assert api.get(f"/api/v2/tasks/{read['task_id']}", headers=headers(token)).status_code == 200
+    api.get("/api/v2/credential-runtime", headers=headers(token))
+    cite = {"file_id": file_id, "version": version, "section": "4. Messaging",
+            "quote": "Keep a record of each consent for five years."}
+    rule_id = tools(token, ("hub_rules_list", {}), ("hub_rules_list", {"mine": True}),
+                    ("hub_file_read", {"id": file_id, "version": version}),
+                    ("hub_rules_add", {"kind": "external", "text": "Keep a consent record for five years.",
+                                       "source_id": "Acme Vendor", "cite": cite}))["id"]
+    tools(token, ("hub_rules_get", {"id": rule_id}),
+          ("hub_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}))
+    assert not mcp(api, "hub_rules_list", {}, token=token)[0]           # the same tools over the hub's own MCP
+    finish(api, r, attempt)
+    # A question's run: the rules in force, one rule and a note on its task. Closing it reaches the route, which says
+    # only the person who asked closes it.
+    ask = post(api, "rules/ask", {"question": "Can I keep consent records?"}, token="cara-test")
+    token = next_counsel_run(api, r)["token"]
+    tools(token, ("hub_rules_list", {}), ("hub_rules_list", {"bot": "ops"}), ("hub_rules_get", {"id": rule_id}),
+          ("hub_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}))
+    with pytest.raises(Exception, match="only they or their managers close it"):
+        hubtools.task_close(Turn(api, token), {"id": ask["task_id"], "note": "Answered."})
+    assert seen and all(reason is None for _, _, reason in seen), [s for s in seen if s[2]]
+    paths = {re.sub(r"/(tasks|files|rules)/[^/]+", r"/\1/{id}", path) for _, path, _ in seen}
+    assert {"/api/v2/mcp", "/api/v2/me", "/api/v2/rules", "/api/v2/rules/{id}", "/api/v2/tasks/{id}",
+            "/api/v2/tasks/{id}/comments", "/api/v2/files/{id}/versions/1"} <= paths, paths
+    assert ("POST", "/api/v2/tasks/" + ask["task_id"], None) in seen
 
 
 def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):

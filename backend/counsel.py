@@ -242,9 +242,9 @@ def _store_link(c, blobs, files, plan, task_id, text, title):
     file_library.index(c, saved["id"], saved["current_version"], saved["title"], text)
 
 
-# Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py). A denylist, so the runner's
-# plumbing (attempts, heartbeats, completion, claims that are not sends) and every read stay open. Counsel speaks only on
-# its own task: a task comment is allowed there and nowhere else (TASK_COMMENT).
+# Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py), said in their own words;
+# COUNSEL_ROUTES below refuses every route it does not name in any case. Counsel speaks only on its own task: a task
+# comment is allowed there and nowhere else (TASK_COMMENT).
 OUTWARD = tuple(re.compile(pattern) for pattern in (
     r"^/api/v2/gateway/(search|fetch|images)$",                 # the Gateway: web search, page fetch, images
     r"^/api/v2/messages(/[^/]+/answer)?$",                      # a message to anyone, or an answer to a question
@@ -448,62 +448,65 @@ def private_suggestion(c, who, data):
         raise Problem("validation", f"Quote at least {PRIVATE_QUOTE_MIN} characters of the document, copied exactly", 422)
 
 
-# Reads that could return text other than a Counsel run's own: another task, a file or version, a run, a chat. A Counsel
-# run reads its own run, the tasks it carries and, on a document's read (attempt_read), that file at that version; nothing
-# else here, whatever the method.
-SCOPED_READS = re.compile(r"^/api/(v2/)?(tasks|deleted-tasks|files|uploads|conversations|messages|inbox|inboxes|events|"
-                          r"runs|turns|attempts|search|context/search|bots/[^/]+/(files|task-tabs)|employees/[^/]+/files)"
-                          r"(/|$)")
-READ_SCOPE = "A Counsel run reads only its own task, the document version it was asked to read and its own run."
-# SQL reads across the whole hub, past every scope above: never Counsel's, in a run or not.
+# Every call Counsel may make, as (methods, path under /api/v2/), and nothing else: an allowlist, so a transport added
+# later is not Counsel's until it is named here. It is what Counsel is offered and what runs it: its tools
+# (clients/hubtools.py COUNSEL_TOOLS: hub_rules_list/get/add, hub_file_read, hub_task_comment, hub_task_close) and the
+# calls they make, the MCP that carries them (each call inside comes back through here), `me` (which tools it is
+# offered), and what the computer running it asks with the run's own token (its task, sessions.rs task_closed; its
+# credentials, env.rs credential-runtime). Its runner's plumbing (claim, start, events, complete) is the runner's own
+# token, not Counsel's. Each call is then scoped (read_refused): its own run, the tasks it carries, its read's version.
+GET, WRITE, ANY = frozenset({"GET", "HEAD"}), frozenset({"POST"}), frozenset({"GET", "HEAD", "POST", "PUT", "PATCH",
+                                                                              "DELETE"})
+COUNSEL_ROUTES = tuple((methods, re.compile(r"^/api/v2/" + pattern + r"$")) for methods, pattern in (
+    (WRITE, r"mcp"),
+    (GET, r"me"),
+    (GET, r"credential-runtime"),
+    (GET, r"rules"),
+    (GET, r"rules/(?!counts$|due$|stats$)[^/]+"),
+    (WRITE, r"rules"),
+    (GET | WRITE, r"tasks/[^/]+"),
+    (WRITE, r"tasks/[^/]+/comments"),
+    (GET, r"files/[^/]+"),
+    (GET, r"files/[^/]+/versions/\d+"),
+    (ANY, r"(attempts|turns)/[^/]+(/.*)?"),
+))
+READ_SCOPE = "Counsel reads only its own task, the document version it was asked to read and its own run."
+# SQL reads across the whole hub: never Counsel's, in a run or not (outside the allowlist too; its own words).
 SQL_READS = re.compile(r"^/api/(v2/)?sql/?$")
 SQL_REFUSED = "Counsel reads no SQL: it reads its own task and the document version it was asked to read."
-# Every other way to read past runs, what they said or what a bot remembers: a bot's run list (each run's summary is
-# its reply's start), status history, memory and execution review, the run log, replays, recents, holds, the live brief,
-# learnings, file reviews and sessions. Counsel's runs are private reads of private tasks, and the ordinary rights of
-# its bot (it owns every one of those tasks) would hand one run's private text to the next: none of these is Counsel's,
-# in a run or not. Its own run it reads at /turns/{id} and /attempts/{id} (SCOPED_READS).
-HISTORY_READS = re.compile(r"^/api/(v2/)?(runs|replay|me/recent|company/history|rule-holds|live|learnings|file-reviews|"
-                           r"bots/[^/]+/(turns|history|memory|execution-review|transitions|updates)|"
-                           r"employees/[^/]+/(session|memory|history|turns))(/|$)")
-# A run's own steps and attempt: a Counsel run reads its own (SCOPED_READS), Counsel outside a run none.
-OWN_RUN_READS = re.compile(r"^/api/(v2/)?(turns|attempts)(/|$)")
-HISTORY_REFUSED = "Counsel reads no run history: each of its runs reads only its own run, task and document version."
 
 
-def read_refused(store, auth, who, path, query):
-    """Why a call by Counsel is outside what it reads, or None. SQL and run history (HISTORY_READS) are refused to every
-    Counsel caller, and any run's steps or attempt (OWN_RUN_READS) to Counsel outside a run. A Counsel run, whatever
-    the method, reads within SCOPED_READS only its own run, the tasks it carries (task_privacy.carried_tasks: its read
-    task, or the question it answers) and, on a document's read (run_read), that file at that version. Any other call
-    outside a run is left to the routes, which grant it nothing from `rule_reads` (backend/files.py asked_to_read)."""
+def read_refused(store, auth, who, method, path, query):
+    """Why a call by Counsel is refused, or None. Only COUNSEL_ROUTES are its, whatever else its bot's rights would
+    allow (another run's summary, an answer to another run's question, a page or a review of another version). On those:
+    a run's attempt and steps are its own run's alone, and Counsel outside a run reads none; a Counsel run reads only
+    the tasks it carries (task_privacy.carried_tasks: its read task, or the question it answers) and, on a document's
+    read (run_read), that file at that version, which it names. Counsel outside a run is left to those routes, which
+    grant it nothing from `rule_reads` (backend/files.py asked_to_read)."""
     if not is_counsel(who):
         return None
     if SQL_READS.match(path):
         return SQL_REFUSED
-    if HISTORY_READS.match(path) or (not who.attempt_id and OWN_RUN_READS.match(path)):
-        return HISTORY_REFUSED
-    if not who.attempt_id or not SCOPED_READS.match(path):
+    method = method.upper()
+    if not any(method in methods and pattern.match(path) for methods, pattern in COUNSEL_ROUTES):
+        return READ_SCOPE
+    parts = path.split("/")[3:]
+    kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
+    if kind in ("attempts", "turns"):
+        return READ_SCOPE if ident != who.attempt_id else None
+    if not who.attempt_id or kind not in ("tasks", "files"):
         return None
     from .task_privacy import carried_tasks
     with store.read() as c:
-        parts = path.split("/")[2:]
-        parts = parts[1:] if parts[:1] == ["v2"] else parts
-        kind, ident, rest = parts[0], (parts[1] if len(parts) > 1 else ""), parts[2:]
-        if kind in ("attempts", "turns"):
-            refused = ident != who.attempt_id
-        elif kind == "tasks" and ident:
+        if kind == "tasks":
             try:
                 refused = auth.resolve_task(c, who, ident) not in carried_tasks(c, who.attempt_id)
             except Problem:
                 refused = True
-        elif kind == "files" and (read := run_read(c, who)) and ident == read["file_id"]:
-            if rest == ["versions", str(read["version"])] or rest in (["meta"], ["versions"]):
-                refused = False
-            else:
-                refused = not (not rest and _version(query.get("v")) == read["version"])
         else:
-            refused = True
+            read = run_read(c, who)
+            refused = not read or ident != read["file_id"] or (
+                rest != ["versions", str(read["version"])] if rest else _version(query.get("v")) != read["version"])
     return READ_SCOPE if refused else None
 
 
