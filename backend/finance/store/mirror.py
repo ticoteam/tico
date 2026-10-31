@@ -26,6 +26,12 @@ def ref_insert(c: sqlite3.Connection, *, cid: str, local_table: str, local_id: s
               (new_id(), cid, local_table, local_id, external_id, kind, revision, status, at, by, at))
 
 
+def ref_drop_unmapped(c: sqlite3.Connection, cid: str, external_id: str, keep: str) -> None:
+    """Drop the unmapped rows a record left in other tables: once it is in the books, its mapped row is the one that counts."""
+    c.execute("DELETE FROM fin_external_refs WHERE connection_id=? AND external_id=? AND local_table<>? "
+              "AND status='unmapped'", (cid, external_id, keep))
+
+
 def ref_set(c: sqlite3.Connection, ref_id: str, *, local_id: str, revision: str, status: str, at: str) -> None:
     c.execute("UPDATE fin_external_refs SET local_id=?, revision=?, status=?, updated_at=? WHERE id=?",
               (local_id, revision, status, at, ref_id))
@@ -238,6 +244,12 @@ def set_connection_status(c: sqlite3.Connection, cid: str, status: str, error: s
 def books_status(c: sqlite3.Connection, cid: str) -> str:
     row = c.execute("SELECT status FROM fin_connections WHERE id=?", (cid,)).fetchone()
     return str(row[0]) if row else ""
+
+
+def pending_writes(c: sqlite3.Connection, cid: str) -> list[Any]:
+    """This connection's writes not yet answered, oldest first: one of them may already be at the provider."""
+    return c.execute("SELECT * FROM fin_outbox WHERE connection_id=? AND status='pending' ORDER BY created_at, id",
+                     (cid,)).fetchall()
 
 
 def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:

@@ -2,7 +2,7 @@
 transport that answers in Xero's shapes, so paging, If-Modified-Since, Idempotency-Keys, 401 and 429 are the client's."""
 import json
 import re
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
@@ -26,9 +26,11 @@ LATER2 = "2026-10-15T14:00:00.000000Z"
 TENANT = "acme-tenant"
 BASE_PATH = "/api.xro/2.0"
 BASE = "https://api.xero.test" + BASE_PATH
-ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions")
+ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
+             "BankTransfers")
 IDS = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
-       "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID"}
+       "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
+       "BankTransfers": "BankTransferID"}
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 RETRY_AT = "2026-10-15T13:02:00.000000Z"       # the first retry: after the 60 second wait, before the change feed is due
 _MS = re.compile(r"/Date\((-?\d+)")
@@ -74,24 +76,33 @@ class XeroBooks:
             return xero.Reply(401, {"Message": "token expired"})
         if headers.get("xero-tenant-id") != TENANT:
             return xero.Reply(403, {"Message": "Forbidden"})
+        key = headers.get("Idempotency-Key", "")
         if method == "GET":
+            if path.startswith("CreditNotes/"):
+                return self._one("CreditNotes", path.split("/", 1)[1])
             return self._list(path, query, headers.get("If-Modified-Since", ""))
         if method == "PUT":
-            key = headers.get("Idempotency-Key", "")
-            if key in self.keys:
-                return self.keys[key]
-            if self.refuse_writes:
-                return self.refuse_writes.pop(0)
-            answer = self._create(path, body)
-            if key and answer.status == 200:
-                self.keys[key] = answer
-            if self.lost and answer.status == 200:
-                self.lost -= 1
-                return xero.Reply(0, note="Xero did not answer")
-            return answer
-        if method == "POST" and path.startswith("ManualJournals/"):
-            return self._void(path.split("/", 1)[1])
+            if path.endswith("/Allocations"):
+                return self._answer(key, lambda: self._allocate(path.split("/")[1], body))
+            return self._answer(key, lambda: self._create(path, body))
+        if method == "POST" and "/" in path and path.split("/")[0] in ("ManualJournals", "Invoices"):
+            name, ident = path.split("/", 1)
+            return self._void(name, ident)
         return xero.Reply(404, {"Message": "no such endpoint"})
+
+    def _answer(self, key: str, make: Callable[[], xero.Reply]) -> xero.Reply:
+        """A write's answer: the one Xero gave its key before, else what the books answer now."""
+        if key in self.keys:
+            return self.keys[key]
+        if self.refuse_writes:
+            return self.refuse_writes.pop(0)
+        answer = make()
+        if key and answer.status == 200:
+            self.keys[key] = answer
+        if self.lost and answer.status == 200:
+            self.lost -= 1
+            return xero.Reply(0, note="Xero did not answer")
+        return answer
 
     def _list(self, name: str, query: Mapping[str, str], since: str) -> xero.Reply:
         if name not in self.rows:
@@ -103,6 +114,9 @@ class XeroBooks:
             self.fail.discard((name, page))
             return xero.Reply(503, {"Message": "the service is down"})
         rows = [dict(r) for r in self.rows[name]]
+        if name == "BankTransfers":           # no paging and no change time: the whole list, deleted ones when asked
+            rows = [r for r in rows if r.get("Status") != "DELETED" or query.get("includeDeleted") == "true"]
+            return xero.Reply(200, {name: rows})
         if name == "Contacts" and query.get("includeArchived") != "true":
             rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
         if since:
@@ -115,16 +129,37 @@ class XeroBooks:
             return xero.Reply(200, {name: rows})
         return xero.Reply(200, {name: rows[(page - 1) * 100:page * 100]})
 
+    def _one(self, name: str, ident: str) -> xero.Reply:
+        for row in self.rows[name]:
+            if row[IDS[name]] == ident:
+                return xero.Reply(200, {name: [dict(row)]})
+        return xero.Reply(400, {"Message": f"{name} {ident} was not found"})
+
     def _create(self, name: str, body: Mapping[str, Any]) -> xero.Reply:
         made: list[dict[str, Any]] = []
         for raw in [body] if name == "Accounts" else body.get(name) or []:     # PUT /Accounts takes the account itself
             row = dict(raw)
-            if name == "ManualJournals" and sum(Decimal(str(x["LineAmount"])) for x in row["JournalLines"]) != 0:
+            if name == "ManualJournals" and self._unbalanced(row):
                 return xero.Reply(400, {"Message": "A validation exception occurred", "Elements": [
                     {"ValidationErrors": [{"Message": "Journal lines do not balance"}]}]})
             if name == "BankTransactions" and not isinstance(row.get("BankAccount"), dict):
                 return xero.Reply(400, {"Message": "A validation exception occurred", "Elements": [
                     {"ValidationErrors": [{"Message": "A bank account is required"}]}]})
+            if name == "BankTransactions" and not isinstance(row.get("Contact"), dict):
+                return xero.Reply(400, {"Message": "A validation exception occurred", "Elements": [
+                    {"ValidationErrors": [{"Message": "A contact is required"}]}]})
+            if name == "Payments":
+                target = dict(row.get("Invoice") or {})
+                invoice = next((r for r in self.rows["Invoices"] if r["InvoiceID"] == target.get("InvoiceID")), None)
+                if invoice is None:
+                    return xero.Reply(400, {"Message": "An invoice is required"})
+                row.setdefault("PaymentType", "ACCPAYPAYMENT" if invoice["Type"] == "ACCPAY" else "ACCRECPAYMENT")
+                row["Invoice"] = {"InvoiceID": invoice["InvoiceID"], "Type": invoice["Type"]}
+                row.setdefault("Status", "AUTHORISED")
+            if name in ("Invoices", "CreditNotes"):
+                row.setdefault("Status", "AUTHORISED")
+            if name == "CreditNotes":
+                row.setdefault("Allocations", [])
             self.serial += 1
             row.setdefault(IDS[name], f"{name.lower()}-{self.serial}")
             row["UpdatedDateUTC"] = ms(_now())
@@ -132,12 +167,36 @@ class XeroBooks:
             made.append(row)
         return xero.Reply(200, {name: made})
 
-    def _void(self, ident: str) -> xero.Reply:
-        for row in self.rows["ManualJournals"]:
-            if row["ManualJournalID"] == ident:
+    def _allocate(self, ident: str, body: Mapping[str, Any]) -> xero.Reply:
+        """A credit note applied to invoices: each allocation is kept on the note, which takes a new change time."""
+        note = next((r for r in self.rows["CreditNotes"] if r["CreditNoteID"] == ident), None)
+        if note is None:
+            return xero.Reply(400, {"Message": f"CreditNote {ident} was not found"})
+        side = "ACCREC" if note["Type"] == "ACCRECCREDIT" else "ACCPAY"
+        made: list[dict[str, Any]] = []
+        for raw in body.get("Allocations") or []:
+            self.serial += 1
+            made.append({"AllocationID": f"allocation-{self.serial}", "Invoice": {"InvoiceID": raw["Invoice"]["InvoiceID"],
+                         "Type": side}, "Amount": raw["Amount"], "Date": raw["Date"], "IsDeleted": False})
+        note.setdefault("Allocations", []).extend(made)
+        note["UpdatedDateUTC"] = ms(_now())
+        return xero.Reply(200, {"Allocations": made})
+
+    @staticmethod
+    def _unbalanced(row: Mapping[str, Any]) -> bool:
+        """Xero's rule: the lines' amounts balance, and on an exclusive journal the tax on top of them does too."""
+        lines = row["JournalLines"]
+        total = sum(Decimal(str(x["LineAmount"])) for x in lines)
+        if row.get("LineAmountTypes") == "Exclusive":
+            total += sum(Decimal(str(x.get("TaxAmount") or 0)) for x in lines)
+        return total != 0
+
+    def _void(self, name: str, ident: str) -> xero.Reply:
+        for row in self.rows[name]:
+            if row[IDS[name]] == ident:
                 row["Status"], row["UpdatedDateUTC"] = "VOIDED", ms(_now())
-                return xero.Reply(200, {"ManualJournals": [row]})
-        return xero.Reply(400, {"Message": f"ManualJournal {ident} was not found"})
+                return xero.Reply(200, {name: [row]})
+        return xero.Reply(400, {"Message": f"{name} {ident} was not found"})
 
     def change(self, name: str, row: dict[str, Any]) -> None:
         """A row as Xero holds it after an edit: the row with its id is replaced, else it is added."""
@@ -146,6 +205,7 @@ class XeroBooks:
             self.rows[name][self.rows[name].index(found[0])] = row
         else:
             self.rows[name].append(row)
+
 
 
 def _client(xbooks: XeroBooks, sleep: Any = lambda seconds: None) -> xero.Xero:
@@ -253,8 +313,47 @@ def _bank_row(c: Any, amount: int, day: str) -> tuple[str, str]:
     return money, fid
 
 
+def _no_system(name: str) -> str:
+    """Xero holds no system account of any name: for records that name none."""
+    return ""
+
+
+def _with_unspecified(xbooks: XeroBooks) -> None:
+    """Xero's Unspecified contact, which a bank transaction with no counterparty is written against."""
+    xbooks.rows["Contacts"].append({"ContactID": "contact-unspecified", "Name": "Unspecified", "IsCustomer": False,
+                                    "IsSupplier": False, "ContactStatus": "ACTIVE",
+                                    "UpdatedDateUTC": ms("2026-10-01T00:00:00Z")})
+
+
+def _doc_body(number: str) -> dict[str, Any]:
+    """A document as the outbox translates it: its party and its lines by their provider keys."""
+    return {"party": "Contact:contact-1", "number": number, "day": "2026-10-05", "due": "2026-11-04", "memo": "Consulting",
+            "lines": [{"account": "Account:acct-4000", "amount": 10000, "description": "Consulting"}]}
+
+
+def _pay_body(doc: str, amount: int) -> dict[str, Any]:
+    """A payment of one bill or invoice from the bank account, as the outbox translates it."""
+    return {"kind": "invoice", "day": "2026-10-10", "memo": "Acme payment", "party": "Contact:contact-1",
+            "bank": "Account:acct-1000", "total": amount, "links": [[doc, amount]], "feed_id": "", "card": False}
+
+
+def _pass_setup(books: Any, xbooks: XeroBooks, monkeypatch: Any, transport: Any = None) -> str:
+    """A mirrored Xero connection whose books pass (books_sync.pass_once) runs the real adapter against the fake."""
+    cid = _connection(books)
+    with books.transaction() as c:
+        SX.set_books_settings(c, cid, {"provider": "xero", "tenant_id": TENANT})
+        SX.set_connection_status(c, cid, "active", "", AT)
+    _mirror(books, cid)
+    real = xero.Xero
+    monkeypatch.setattr("backend.hook_relay.link_of", lambda c, vault, settings: object())
+    monkeypatch.setattr(books_link, "access_token", lambda *a, **k: "token-1")
+    monkeypatch.setattr(xero, "Xero", lambda tenant, tokens: real(
+        tenant, tokens, base=BASE, transport=transport or xbooks, sleep=lambda s: None))
+    return cid
+
+
 # ------------------------------------------------------------------------------------------------ the client
-def test_a_backfill_page_that_fails_resumes_at_its_position_without_duplicates(books):
+def test_a_backfill_read_that_fails_is_read_again_from_its_start_without_duplicates(books):
     xbooks = XeroBooks()
     _chart(xbooks)
     xbooks.rows["Contacts"] = [{"ContactID": f"contact-{n}", "Name": f"Acme Contact {n:03d}", "IsCustomer": True,
@@ -263,10 +362,10 @@ def test_a_backfill_page_that_fails_resumes_at_its_position_without_duplicates(b
     xbooks.fail.add(("Contacts", 2))
     cid = _connection(books)
     problems = _drain(books, _client(xbooks), cid, passes=4)
-    assert problems == ["backfill parties from 101: the service is down"]
+    assert problems == ["backfill parties from 1: the service is down"]
     assert _drain(books, _client(xbooks), cid, passes=6) == []
     pages = [c["query"].get("page") for c in xbooks.calls if c["path"] == "Contacts"]
-    assert pages[:3] == ["1", "2", "2"]                                       # the failed page is asked for again
+    assert pages[:4] == ["1", "2", "1", "2"]                                  # the failed read is asked for again
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_external_refs WHERE connection_id=? AND kind='Contact'",
                          (cid,)).fetchone()[0] == 150
@@ -321,6 +420,7 @@ def test_a_list_counts_every_row_even_the_drafts_the_books_do_not_take_in(books)
 def test_a_write_is_confirmed_by_xero_before_the_local_book_changes(books):
     xbooks = XeroBooks()
     _chart(xbooks)
+    _with_unspecified(xbooks)
     cid = _connection(books)
     _mirror(books, cid)
     client = _client(xbooks)
@@ -453,12 +553,11 @@ def test_a_document_in_another_currency_waits_as_unmapped(books):
 def test_the_records_take_exact_money_and_net_the_tax_out_of_inclusive_lines():
     assert xero._reply(200, b'{"x": 0.10, "y": 0.20}', None).body == {"x": Decimal("0.10"), "y": Decimal("0.20")}
     assert X.amount_text(1500) == "15.00" and X.amount_text(-5) == "-0.05"
-    tax = lambda: "Account:acct-2300"  # noqa: E731
     row = _invoice("inv-inc")
     row.update({"LineAmountTypes": "Inclusive", "LineItems": [
         {"LineAmount": "120.00", "TaxAmount": "20.00", "AccountID": "acct-4000", "Description": "Consulting"}]})
-    (doc,) = X.records("invoices", [row], tax, lambda: "")
-    assert [(x.account, x.amount) for x in doc.lines] == [("Account:acct-4000", 10000), ("Account:acct-2300", 2000)]
+    (doc,) = X.records("invoices", [row], _no_system)
+    assert [(x.account, x.amount) for x in doc.lines] == [("Account:acct-4000", 10000)] and doc.tax == 2000
     assert doc.total == 12000 and doc.currency == "USD" and doc.party == "Contact:contact-1"
 
 
@@ -474,12 +573,13 @@ def test_accounts_map_to_the_books_types_and_the_control_accounts_by_their_syste
 
 
 def test_a_voided_or_deleted_row_is_a_deleted_record_and_a_supplier_credit_note_is_a_vendor_credit():
-    voided = X.document_record(_invoice("inv-x", status="VOIDED"), tax=lambda: "", rounding=lambda: "")
+    voided = X.document_record(_invoice("inv-x", status="VOIDED"), _no_system)
     assert isinstance(voided, M.Ext) and voided.deleted and voided.kind == "Invoice"
     supplier = _credit_note("cn-s", "bill-1", "10.00", kind="ACCPAYCREDIT")
-    (credit,) = X.records("credit_notes", [supplier], lambda: "", lambda: "")
-    assert isinstance(credit, M.Document) and credit.ext.kind == "VendorCredit"
-    assert credit.links == (("Bill:bill-1", 1000),)
+    credit, applied = X.records("credit_notes", [supplier], _no_system)
+    assert isinstance(credit, M.Document) and credit.ext.kind == "VendorCredit" and credit.total == 1000
+    assert isinstance(applied, M.Settlement) and applied.links == (("Bill:bill-1", 1000),)
+    assert applied.credits == (("VendorCredit:cn-s", 1000),)
 
 
 def test_the_bodies_sent_carry_exact_decimals_and_xeros_codes():
@@ -509,6 +609,7 @@ def test_a_relayed_xero_event_is_kept_once_for_the_company_it_names(books):
 # ------------------------------------------------------------------------------------------------ writes that may have landed
 def _categorized(books: Any, xbooks: XeroBooks) -> tuple[str, xero.Xero, str]:
     """A mirrored connection on the chart, read through once, with one bank row categorized as an expense."""
+    _with_unspecified(xbooks)
     cid = _connection(books)
     _mirror(books, cid)
     client = _client(xbooks)
@@ -633,7 +734,7 @@ def test_a_long_rate_limit_stops_the_pass_without_sleeping_and_the_next_pass_res
 
     client = xero.Xero(TENANT, lambda force: "token-1", base=BASE, transport=limited, sleep=sleeps.append)
     first = client.page("accounts", 1, 100)
-    assert not first.ok and first.error == "rate limit"
+    assert not first.ok and first.error == "rate limit" and client.hold == 120.0
     assert sleeps == [] and len(calls) == 1                           # past the budget: no sleep, the pass stops
     assert not client.page("invoices", 1, 100).ok
     assert len(calls) == 1                                            # the rest of the pass makes no call
@@ -654,11 +755,11 @@ def test_a_backfill_that_meets_an_edit_mid_way_reads_every_contact_once(books):
                                for n in range(150)]
     cid = _connection(books)
     client = _client(xbooks)
-    assert mirror.sync_once(books, client, cid, AT) == []             # accounts
-    assert mirror.sync_once(books, client, cid, AT) == []             # contacts, the first hundred
+    assert mirror.sync_once(books, client, cid, AT, size=100) == []             # accounts
+    assert mirror.sync_once(books, client, cid, AT, size=100) == []             # contacts, the first hundred
     row = next(r for r in xbooks.rows["Contacts"] if r["ContactID"] == "contact-060")
     xbooks.change("Contacts", {**row, "Name": "Acme Contact 060 renamed", "UpdatedDateUTC": ms(_now())})
-    assert mirror.sync_once(books, client, cid, AT) == []             # the rest of the contacts
+    assert mirror.sync_once(books, client, cid, AT, size=100) == []             # the rest of the contacts
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_external_refs WHERE connection_id=? AND kind='Contact'",
                          (cid,)).fetchone()[0] == 150
@@ -702,15 +803,12 @@ def test_archived_contacts_are_read_with_the_archived_ones_and_kept_inactive(boo
 ])
 def test_a_bank_transaction_takes_its_tax_by_its_line_type_and_its_direction(
         kind, lat, account_id, line, tax_text, bank, expense, tax):
-    def tax_account() -> str:
-        return "Account:acct-2300"
-
     row = _spend("bt-tax", [_line(account_id, line, tax_text)], kind=kind, lat=lat)
-    (journal,) = X.records("bank_transactions", [row], tax_account, lambda: "")
+    (journal,) = X.records("bank_transactions", [row], _no_system)
     by_account = {x.account: x.amount for x in journal.lines}
     assert by_account["Account:acct-1000"] == bank
     assert by_account[f"Account:{account_id}"] == expense
-    assert by_account.get("Account:acct-2300", 0) == tax
+    assert by_account.get(M.TAX_ACCOUNT, 0) == tax
     assert sum(x.amount for x in journal.lines) == 0 and journal.currency == "USD"
 
 
@@ -744,15 +842,15 @@ def test_a_categorized_bank_row_is_sent_as_a_bank_transaction_in_its_direction()
 
 def test_a_payment_keeps_the_kind_its_type_names_even_once_deleted():
     stamp_ = ms("2026-10-15T00:00:00Z")
-    bill_gone = X.payment_record({"PaymentID": "p-b", "Status": "DELETED", "PaymentType": "ACCPAYPAYMENT",
+    bill_gone = _recorded({"PaymentID": "p-b", "Status": "DELETED", "PaymentType": "ACCPAYPAYMENT",
                                   "UpdatedDateUTC": stamp_})
-    received_gone = X.payment_record({"PaymentID": "p-r", "Status": "DELETED", "PaymentType": "ACCRECPAYMENT",
+    received_gone = _recorded({"PaymentID": "p-r", "Status": "DELETED", "PaymentType": "ACCRECPAYMENT",
                                       "UpdatedDateUTC": stamp_})
-    untyped_gone = X.payment_record({"PaymentID": "p-u", "Status": "DELETED",
+    untyped_gone = _recorded({"PaymentID": "p-u", "Status": "DELETED",
                                      "Invoice": {"InvoiceID": "bill-1", "Type": "ACCPAY"}, "UpdatedDateUTC": stamp_})
     assert [x.kind for x in (bill_gone, received_gone, untyped_gone)] == ["BillPayment", "Payment", "BillPayment"]
     assert all(isinstance(x, M.Ext) and x.deleted for x in (bill_gone, received_gone, untyped_gone))
-    paid = X.payment_record({"PaymentID": "p-c", "Status": "AUTHORISED", "PaymentType": "ACCPAYPAYMENT",
+    paid = _recorded({"PaymentID": "p-c", "Status": "AUTHORISED", "PaymentType": "ACCPAYPAYMENT",
                              "Amount": "50.00", "Date": stamp_, "Account": {"AccountID": "acct-1000"},
                              "Invoice": {"InvoiceID": "bill-1", "Type": "ACCPAY"}, "UpdatedDateUTC": stamp_})
     assert isinstance(paid, M.Settlement) and paid.ext.kind == "BillPayment"
@@ -806,11 +904,12 @@ def test_a_supplier_credit_note_settles_its_bill_without_moving_cash(books):
     assert sum(r[-1] for r in cash_after) - sum(r[-1] for r in cash_before) == -pnl
 
 
-def test_a_taxed_manual_journal_moves_its_tax_to_the_tax_account_and_still_balances(books):
+def test_a_tax_exclusive_manual_journal_keeps_its_amounts_and_posts_its_tax_on_top(books):
     xbooks = XeroBooks()
     _chart(xbooks)
-    row = _journal("mj-tax", "110.00")
-    row["JournalLines"][0]["TaxAmount"] = "10.00"
+    row = {**_journal("mj-tax", "100.00"), "LineAmountTypes": "Exclusive", "JournalLines": [
+        {"LineAmount": "100.00", "TaxAmount": "10.00", "AccountID": "acct-6100", "Description": "tool"},
+        {"LineAmount": "-110.00", "TaxAmount": "0.00", "AccountID": "acct-1000", "Description": "bank"}]}
     xbooks.rows["ManualJournals"] = [row]
     cid = _connection(books)
     _mirror(books, cid)
@@ -828,7 +927,7 @@ def test_a_taxed_manual_journal_moves_its_tax_to_the_tax_account_and_still_balan
 def test_a_journal_kept_out_of_the_cash_basis_reports_is_accrual_only(books):
     plain = _journal("mj-plain", "15.00")
     accrual = {**_journal("mj-acc", "15.00"), "ShowOnCashBasisReports": False}
-    both, only_accrual = X.records("manual_journals", [plain, accrual], lambda: "", lambda: "")
+    both, only_accrual = X.records("manual_journals", [plain, accrual], _no_system)
     assert (both.basis, only_accrual.basis) == ("both", "accrual")
     xbooks = XeroBooks()
     _chart(xbooks)
@@ -861,7 +960,7 @@ def test_an_account_without_a_code_is_kept_by_its_id_and_an_archived_one_is_inac
 def test_a_rounding_amount_is_a_line_on_the_rounding_account_and_the_total_is_xeros(books):
     xbooks = XeroBooks()
     _chart(xbooks)
-    xbooks.rows["Accounts"].append(_account_row("4900", "Rounding", "EXPENSE", "EXPENSE"))
+    xbooks.rows["Accounts"].append(_account_row("4900", "Rounding", "EXPENSE", "EXPENSE", "ROUNDING"))
     row = _invoice("inv-r", total="100.00")
     row.update({"Total": "100.01", "RoundingAmount": "0.01"})
     xbooks.rows["Invoices"] = [row]
@@ -921,3 +1020,360 @@ def test_a_contact_read_with_no_customer_or_supplier_flag_keeps_the_kind_the_boo
     assert X.contact_record({**xbooks.rows["Contacts"][0], "IsCustomer": False, "IsSupplier": False}).kind == ""
     assert "IsCustomer" not in X.party_body({"name": "Acme Client", "active": True})
     assert "IsSupplier" not in X.party_body({"name": "Acme Client", "active": True})
+
+
+# ------------------------------------------------------------------------------------------------ the books beyond the basics
+def _recorded(row: dict[str, Any]) -> Any:
+    """A payment mapped with no system account: for payments that name none."""
+    return X.payment_record(row, _no_system)
+
+
+def _refund(ident: str, kind: str, amount: str, status: str = "AUTHORISED",
+            updated: str = "2026-10-12T00:00:00Z") -> dict[str, Any]:
+    """A payment of a credit note back to a customer (ARCREDITPAYMENT) or to a supplier (APCREDITPAYMENT)."""
+    return {"PaymentID": ident, "PaymentType": kind, "Status": status, "Date": ms("2026-10-12T00:00:00Z"),
+            "DateString": "2026-10-12T00:00:00", "Amount": amount, "Account": {"AccountID": "acct-1000"},
+            "CreditNote": {"CreditNoteID": f"cn-{ident}"}, "UpdatedDateUTC": ms(updated)}
+
+
+def test_every_document_payment_write_off_and_void_is_sent_to_xero_and_answered_with_its_kind():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    client = _client(xbooks)
+    invoice = client.send("invoice.create", _doc_body("INV-A"), "key-inv-a")
+    second = client.send("invoice.create", _doc_body("INV-B"), "key-inv-b")
+    bill = client.send("bill.create", _doc_body("BILL-1"), "key-bill")
+    voided = client.send("invoice.void", {"ext": f"Invoice:{second.external_id}", "revision": ""}, "key-void-inv")
+    gone = client.send("bill.void", {"ext": f"Bill:{bill.external_id}", "revision": ""}, "key-void-bill")
+    paid = client.send("payment.invoice", _pay_body(f"Invoice:{invoice.external_id}", 1000), "key-pay")
+    paid_bill = client.send("payment.bill", _pay_body(f"Bill:{bill.external_id}", 1000), "key-pay-bill")
+    credit = client.send("writeoff.create", {"party": "Contact:contact-1", "account": "Account:acct-6100",
+                                             "day": "2026-10-10", "memo": "Bad debt", "total": 500,
+                                             "invoice": f"Invoice:{invoice.external_id}"}, "key-writeoff")
+    applied = client.send("credit.apply", {"invoice": f"Invoice:{invoice.external_id}",
+                                           "credit": f"CreditMemo:{credit.external_id}", "party": "Contact:contact-1",
+                                           "invoice_id": invoice.external_id, "amount": 500, "day": "2026-10-10",
+                                           "memo": "Bad debt"}, "key-apply")
+    sent = [invoice, second, bill, voided, gone, paid, paid_bill, credit, applied]
+    assert all(s.ok for s in sent), [s.error for s in sent]
+    assert [s.kind for s in sent] == ["Invoice", "Invoice", "Bill", "Invoice", "Bill", "Payment", "BillPayment",
+                                      "CreditMemo", "Payment"]
+    assert any(c["method"] == "PUT" and c["path"].endswith("/Allocations") for c in xbooks.calls)
+    assert not any("has no write" in (s.error or "") for s in sent)
+
+
+def test_a_lost_invoice_write_is_found_by_its_marker_and_bound_not_sent_again():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    client = _client(xbooks)
+    xbooks.lost = 1                                                   # the write lands; its answer never arrives
+    lost = client.send("invoice.create", _doc_body("INV-L"), "key-lost-inv")
+    assert not lost.ok and not lost.final and lost.error == "Xero did not answer"
+    found = client.find("invoice.create", _doc_body("INV-L"), "key-lost-inv")
+    assert found is not None and found.ok and found.kind == "Invoice" and found.external_id and found.revision
+    assert client.find("invoice.create", _doc_body("INV-L"), "another-key") is None
+    assert len(xbooks.rows["Invoices"]) == 1
+
+
+def test_a_lost_payment_write_is_found_by_its_marker_and_bound_not_sent_again():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    client = _client(xbooks)
+    invoice = client.send("invoice.create", _doc_body("INV-P"), "key-inv-p")
+    body = _pay_body(f"Invoice:{invoice.external_id}", 1000)
+    xbooks.lost = 1
+    lost = client.send("payment.invoice", body, "key-pay-lost")
+    assert not lost.ok and not lost.final
+    found = client.find("payment.invoice", body, "key-pay-lost")
+    assert found is not None and found.ok and found.kind == "Payment" and found.external_id
+    assert len(xbooks.rows["Payments"]) == 1
+
+
+def test_a_write_older_than_thirty_days_is_still_found_by_its_marker():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    key = "outbox-key-old"
+    bank = _spend("bt-old", [_line("acct-6100", "15.00")])
+    bank.update({"Reference": f"Software {xero._marker(key)}", "UpdatedDateUTC": ms("2020-01-01T00:00:00Z")})
+    xbooks.rows["BankTransactions"] = [bank]
+    found = _client(xbooks).find("journal.create", {"feed": True}, key)
+    assert found is not None and found.ok and found.external_id == "bt-old"
+
+
+def test_a_bank_row_with_no_counterparty_is_written_against_one_unspecified_contact_created_once():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    lines = [{"account": "Account:acct-1000", "amount": -1500, "role": L.MONEY_ROLE, "party": ""},
+             {"account": "Account:acct-6100", "amount": 1500, "role": "", "party": "", "description": "tool"}]
+    body = {"date": "2026-10-05", "memo": "Acme Software", "source": "feed", "lines": lines, "export": True,
+            "feed": True}
+    sent = [_client(xbooks).send("journal.create", {**body, "memo": f"Acme Software {n}"}, f"key-bank-{n}")
+            for n in (1, 2)]
+    sent.append(_client(xbooks).send("journal.create", {**body, "memo": "Acme Software 3"}, "key-bank-3"))
+    assert all(s.ok for s in sent), [s.error for s in sent]
+    contact_puts = [c for c in xbooks.calls if c["path"] == "Contacts" and c["method"] == "PUT"]
+    assert len(contact_puts) == 1
+    (unspecified,) = [r for r in xbooks.rows["Contacts"] if r["Name"] == "Unspecified"]
+    puts = [c for c in xbooks.calls if c["path"] == "BankTransactions" and c["method"] == "PUT"]
+    assert len(puts) == 3
+    assert all(p["body"]["BankTransactions"][0]["Contact"] == {"ContactID": unspecified["ContactID"]} for p in puts)
+    raw = xbooks("PUT", BASE + "/BankTransactions", {"xero-tenant-id": TENANT, "Idempotency-Key": "raw-key"},
+                 json.dumps({"BankTransactions": [{"Type": "SPEND", "BankAccount": {"AccountID": "acct-1000"},
+                                                   "LineItems": [{"AccountID": "acct-6100", "LineAmount": "15.00"}]}]}
+                            ).encode())
+    assert raw.status == 400 and "contact" in json.dumps(raw.body).lower()
+
+
+def test_a_negative_rounding_within_a_penny_is_a_rounding_line_and_a_larger_one_waits(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Accounts"].append(_account_row("4900", "Rounding", "EXPENSE", "EXPENSE", "ROUNDING"))
+    xbooks.rows["Invoices"] = [{**_invoice("inv-neg"), "Total": "99.90", "RoundingAmount": "-0.10"},
+                               {**_invoice("inv-big"), "Total": "99.89", "RoundingAmount": "-0.11"}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_invoices WHERE number='INV-inv-neg'").fetchone()[0] == 9990
+        entry = c.execute("SELECT entry_id FROM fin_invoices WHERE number='INV-inv-neg'").fetchone()[0]
+        lines = {r[0]: r[1] for r in c.execute("SELECT account_id, SUM(amount) FROM fin_lines WHERE entry_id=? "
+                                               "GROUP BY account_id", (entry,))}
+        assert sum(lines.values()) == 0
+        assert lines[account(c, "4000")] == -10000 and lines[account(c, "4900")] == 10
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Invoice:inv-big'").fetchone()[0] \
+            == "unmapped"
+
+
+def test_a_bank_transfer_is_one_entry_and_its_legs_are_not_counted_again(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Accounts"].append(_account_row("1010", "Savings", "ASSET", "BANK"))
+    xbooks.rows["BankTransactions"] = [
+        _spend("bt-out", [], kind="SPEND-TRANSFER"),
+        {**_spend("bt-in", [], kind="RECEIVE-TRANSFER"), "BankAccount": {"AccountID": "acct-1010"}}]
+    xbooks.rows["BankTransfers"] = [{"BankTransferID": "bxf-1", "Status": "AUTHORISED",
+                                     "CreatedDateUTC": ms("2026-10-05T00:00:00Z"), "Date": ms("2026-10-05T00:00:00Z"),
+                                     "Amount": "100.00", "FromBankAccount": {"AccountID": "acct-1000"},
+                                     "ToBankAccount": {"AccountID": "acct-1010"}}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_external_refs WHERE external_id LIKE 'BankTransaction:%'") \
+            .fetchone()[0] == 0
+        entry = c.execute("SELECT local_id FROM fin_external_refs WHERE external_id='BankTransfer:bxf-1'").fetchone()[0]
+        lines = {r[0]: r[1] for r in c.execute("SELECT account_id, amount FROM fin_lines WHERE entry_id=?", (entry,))}
+        assert lines == {account(c, "1010"): 10000, account(c, "1000"): -10000}
+    xbooks.calls.clear()
+    _client(xbooks).changed("2026-10-15T11:55:00Z")
+    (read,) = [c for c in xbooks.calls if c["method"] == "GET" and c["path"] == "BankTransfers"]
+    assert read["query"].get("includeDeleted") == "true" and "If-Modified-Since" not in read["headers"]
+
+
+def test_a_refund_of_a_credit_note_is_a_journal_that_moves_the_bank_once(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Payments"] = [_refund("pay-ar", "ARCREDITPAYMENT", "50.00"),
+                               _refund("pay-ap", "APCREDITPAYMENT", "30.00")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        sums = {r[0]: r[1] for r in c.execute("SELECT account_id, SUM(amount) FROM fin_lines GROUP BY account_id")}
+        assert sums == {account(c, "1200"): 5000, account(c, "2000"): -3000, account(c, "1000"): -2000}
+        assert [r[0] for r in c.execute("SELECT DISTINCT source FROM fin_entries")] == ["sync"]
+    xbooks.change("Payments", _refund("pay-ar", "ARCREDITPAYMENT", "50.00", status="DELETED",
+                                      updated="2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_lines WHERE account_id=?",
+                         (account(c, "1200"),)).fetchone()[0] == 0
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
+                         (account(c, "1000"),)).fetchone()[0] == 3000
+
+
+def test_refunds_post_against_their_control_account_and_the_bank_in_opposite_directions():
+    def system(name: str) -> str:
+        return {"DEBTORS": "Account:acct-1200", "CREDITORS": "Account:acct-2000"}.get(name, "")
+
+    ar = X.payment_record(_refund("pay-ar", "ARCREDITPAYMENT", "50.00"), system)
+    ap = X.payment_record(_refund("pay-ap", "APCREDITPAYMENT", "30.00"), system)
+    assert isinstance(ar, M.Journal) and ar.source == "sync"
+    assert {x.account: x.amount for x in ar.lines} == {"Account:acct-1200": 5000, "Account:acct-1000": -5000}
+    assert {x.account: x.amount for x in ap.lines} == {"Account:acct-2000": -3000, "Account:acct-1000": 3000}
+
+
+def test_an_overpayment_is_a_journal_and_its_application_settles_the_invoice_once(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "AmountCredited": "50.00"}]
+    xbooks.rows["BankTransactions"] = [{
+        "BankTransactionID": "bt-ov", "Type": "RECEIVE-OVERPAYMENT", "Status": "AUTHORISED",
+        "Date": ms("2026-10-08T00:00:00Z"), "DateString": "2026-10-08T00:00:00",
+        "BankAccount": {"AccountID": "acct-1000"}, "Contact": {"ContactID": "contact-1"}, "CurrencyCode": "USD",
+        "LineAmountTypes": "NoTax", "LineItems": [], "Total": "50.00", "OverpaymentID": "ov-1",
+        "UpdatedDateUTC": ms("2026-10-08T00:00:00Z")}]
+    applied = {"PaymentID": "pay-ov", "PaymentType": "AROVERPAYMENTPAYMENT", "Status": "AUTHORISED",
+               "Date": ms("2026-10-09T00:00:00Z"), "DateString": "2026-10-09T00:00:00", "Amount": "50.00",
+               "Account": {"AccountID": "acct-1000"}, "Invoice": {"InvoiceID": "inv-1", "Type": "ACCREC"},
+               "Overpayment": {"OverpaymentID": "ov-1"}, "UpdatedDateUTC": ms("2026-10-09T00:00:00Z")}
+    xbooks.rows["Payments"] = [applied]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("partial", 5000)
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
+                         (account(c, "1000"),)).fetchone()[0] == 5000
+    xbooks.change("Payments", {**applied, "Status": "DELETED", "UpdatedDateUTC": ms("2026-10-15T12:45:00Z")})
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("sent", 0)
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
+                         (account(c, "1000"),)).fetchone()[0] == 5000
+
+
+def test_an_unknown_payment_type_waits_unmapped_and_the_read_moves_past_it(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    xbooks.rows["Payments"] = [{**_payment("pay-x", "inv-1", "10.00"), "PaymentType": "XYZ"},
+                               _payment("pay-ok", "inv-1", "100.00")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Payment:pay-x'").fetchone()[0] \
+            == "unmapped"
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("paid", 10000)
+        assert not mirror.reading(c, cid)
+
+
+def test_a_payment_in_another_currency_waits_unmapped(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    xbooks.rows["Payments"] = [{**_payment("pay-eur", "inv-1", "100.00"), "BankAmount": "90.00"}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Payment:pay-eur'").fetchone()[0] \
+            == "unmapped"
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("sent", 0)
+
+
+def test_a_payment_in_another_currency_or_of_an_unknown_type_is_refused_by_the_mapping():
+    row = _payment("p-fx", "inv-1", "100.00")
+    assert isinstance(_recorded({**row, "CurrencyRate": "1.1"}), M.Refused)
+    assert isinstance(_recorded({**row, "BankAmount": "90.00"}), M.Refused)
+    assert isinstance(_recorded({**row, "PaymentType": "XYZ"}), M.Refused)
+
+
+def test_a_tax_inclusive_and_exclusive_manual_journal_each_balance_with_its_tax_on_the_tax_account():
+    bank = {"LineAmount": "-110.00", "TaxAmount": "0.00", "AccountID": "acct-1000", "Description": "bank"}
+    exclusive = {**_journal("mj-ex", "100.00"), "LineAmountTypes": "Exclusive", "JournalLines": [
+        {"LineAmount": "100.00", "TaxAmount": "10.00", "AccountID": "acct-6100", "Description": "tool"}, bank]}
+    inclusive = {**_journal("mj-in", "100.00"), "LineAmountTypes": "Inclusive", "JournalLines": [
+        {"LineAmount": "110.00", "TaxAmount": "10.00", "AccountID": "acct-6100", "Description": "tool"}, bank]}
+    for row in (exclusive, inclusive):
+        journal = X.manual_journal_record(row, _no_system)
+        by_account = {x.account: x.amount for x in journal.lines}
+        assert by_account == {"Account:acct-6100": 10000, M.TAX_ACCOUNT: 1000, "Account:acct-1000": -11000}
+
+
+def test_account_body_sends_a_bank_account_as_xeros_bank_type():
+    assert X.account_body({"code": "1010", "name": "Savings", "type": "asset", "subtype": "bank"})["Type"] == "BANK"
+    receivable = X.account_body({"code": "1200", "name": "Customers", "type": "asset", "subtype": "receivable"})
+    assert receivable["Type"] == "CURRENT"
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    made = _client(xbooks).send("account.create", {"code": "1010", "name": "Savings", "type": "asset",
+                                                   "subtype": "bank", "active": True}, "key-bank-account")
+    assert made.ok and made.kind == "Account"
+    put = [c for c in xbooks.calls if c["path"] == "Accounts" and c["method"] == "PUT"][-1]
+    assert put["body"]["Type"] == "BANK" and put["body"]["BankAccountType"] == "BANK"
+
+
+def test_a_credit_note_voided_after_it_settled_an_invoice_unwinds_it(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.change("CreditNotes", _credit_note("cn-v", "inv-1", "100.00", updated="2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    xbooks.change("CreditNotes", {**_credit_note("cn-v", "inv-1", "100.00", updated="2026-10-15T13:30:00Z"),
+                                  "Status": "VOIDED"})
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("sent", 0)
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='CreditMemo:cn-v'").fetchone()[0] \
+            == "deleted"
+
+
+def test_a_backfill_page_of_a_thousand_is_read_as_ten_xero_pages():
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Contacts"] = [{"ContactID": f"contact-{n:04d}", "Name": f"Acme Contact {n:04d}", "IsCustomer": True,
+                                "ContactStatus": "ACTIVE", "UpdatedDateUTC": ms("2026-10-01T00:00:00Z")}
+                               for n in range(1050)]
+    client = _client(xbooks)
+    first = client.page("parties", 1, 1000)
+    assert first.ok and first.seen == 1000 and len(first.records) == 1000
+    gets = [c for c in xbooks.calls if c["method"] == "GET" and c["path"] == "Contacts"]
+    assert len(gets) == 10
+    last = client.page("parties", 1001, 1000)
+    assert last.ok and last.seen == 50
+
+
+def test_a_rate_limit_that_outlasts_a_pass_holds_the_books_until_retry_after_passes(books, monkeypatch):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    limited = [True]
+    calls: list[str] = []
+
+    def transport(method: str, url: str, headers: Mapping[str, str], data: bytes | None) -> xero.Reply:
+        calls.append(url)
+        if limited[0]:
+            return xero.Reply(429, {"Message": "rate limit"}, 3600.0)
+        return xbooks(method, url, headers, data)
+
+    cid = _pass_setup(books, xbooks, monkeypatch, transport=transport)
+    held = M.stamp(AT, 3600_000_000)
+    first = books_sync.pass_once(books, object(), None, now=AT)
+    assert first and "rate limit" in first[0]
+    with books.read() as c:
+        assert SX.mirror_state(c, cid)["held_until"] == held
+    made = len(calls)
+    waiting = books_sync.pass_once(books, object(), None, now=M.stamp(AT, 60_000_000))
+    assert waiting == [f"Xero is rate limiting; the books wait until {held}"]
+    assert len(calls) == made
+    limited[0] = False
+    assert books_sync.pass_once(books, object(), None, now=M.stamp(AT, 3601_000_000)) == []
+    assert len(calls) > made
+    with books.read() as c:
+        assert SX.mirror_state(c, cid).get("held_until", "") == ""
+
+
+def test_the_xero_pass_reads_its_change_feed_at_least_every_five_minutes(books, monkeypatch):
+    assert 0 < xero.CHANGE_EVERY <= 300
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    _pass_setup(books, xbooks, monkeypatch)
+    seen: list[dict[str, Any]] = []
+    real = mirror.sync_once
+
+    def spy(*args: Any, **kwargs: Any) -> list[str]:
+        seen.append(kwargs)
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(mirror, "sync_once", spy)
+    assert books_sync.pass_once(books, object(), None, now=AT) == []
+    assert seen and all(kwargs.get("every") == xero.CHANGE_EVERY for kwargs in seen)

@@ -8,6 +8,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from .gateway_sync import Bell
+from .core import mirror as M
 from .core import qbo as Q
 from .store import banking as SK
 from .store import ledger as SL
@@ -96,6 +97,9 @@ def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str
         found = SX.books_settings(c, cid)
         realm, tenant = found.get("realm_id"), found.get("tenant_id")
         waiting = [str(row["id"]) for row in SK.inbox_waiting(c, 50, cid, now)]
+        held_until = str(SX.mirror_state(c, cid).get("held_until") or "") if provider == "xero" else ""
+    if held_until and M.parse(held_until) > M.parse(now):
+        return [f"Xero is rate limiting; the books wait until {held_until}"]
     if link is None:
         return ["the Gateway key is not set, so the books cannot be reached"]
 
@@ -107,7 +111,13 @@ def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str
         adapter: mirror.Books = xero.Xero(str(tenant), token)
     else:
         adapter = qbo.QuickBooks(str(realm or ""), token)
-    problems = mirror.sync_once(store, adapter, cid, now, waiting=bool(waiting))
+    every = xero.CHANGE_EVERY if provider == "xero" else M.CDC_EVERY
+    problems = mirror.sync_once(store, adapter, cid, now, waiting=bool(waiting), every=every)
+    if provider == "xero":
+        hold = float(getattr(adapter, "hold", 0.0) or 0.0)
+        if hold or held_until:
+            with store.transaction() as c:
+                SX.set_mirror_state(c, cid, {"held_until": M.stamp(now, int(hold * 1_000_000)) if hold else ""})
     if waiting and not any(p.startswith("changes") for p in problems):
         with store.transaction() as c:
             for inbox_id in waiting:
@@ -150,14 +160,26 @@ def withhold(store: Any, *, now: str) -> int:
         return SX.withhold_writes(c, book.mirror_connection_id, REHEARSAL_WHY, now)
 
 
+def _reading(store: Any) -> bool:
+    """Whether this install's mirrored books are still being read in full: then the next page is read at once."""
+    with store.read() as c:
+        book = SL.book(c)
+        if book is None or book.mode != "mirror" or not book.mirror_connection_id:
+            return False
+        return mirror.reading(c, book.mirror_connection_id)
+
+
 def _loop(store: Any, vault: object, settings: Any, rehearsal: bool, halt: threading.Event) -> None:
     while not halt.is_set():
         seen = BELL.rung
+        more = False
         try:
             if rehearsal:
                 withhold(store, now=tico.now())
             else:
-                pass_once(store, vault, settings, now=tico.now())
+                problems = pass_once(store, vault, settings, now=tico.now())
+                more = not problems and _reading(store)
         except Exception:
             log.exception("Finance books sync failed")
-        BELL.wait(seen, SWEEP)
+        if not more:
+            BELL.wait(seen, SWEEP)

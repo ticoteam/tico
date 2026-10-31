@@ -1,6 +1,7 @@
 """Mirror mode (spec §10): the rules by which a book copies a provider's books, with no I/O. Which revision of a provider
 record the books take, how a bank row finds the entry it is, how a backfill pages through a provider's records, when
 the change feed is read, and which provider class a tag sends. The store and the sync call these."""
+import uuid
 from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
@@ -8,11 +9,16 @@ from typing import Any, cast
 
 from . import dates
 
-BACKFILL_SIZE = 100     # records per provider read: one page is one read and one transaction
+BACKFILL_SIZE = 1000    # records per provider read (QuickBooks returns at most 1000 a query): one page, one transaction
 MATCH_DAYS = 3          # a bank row finds an entry this many days either side of its own date
 CDC_DAYS = 30           # how far back a change feed reaches (QuickBooks keeps 30 days of changes)
 CDC_OVERLAP = 300       # seconds read again before the last pass, so a change made during it is not missed
 CDC_EVERY = 900         # seconds between change feed reads (the safety net under the webhooks)
+# A write's reference: the id a provider keeps on the record it makes, so a record that comes in can be bound to the
+# write that made it (the write's idempotency key, in this namespace). Providers store the same string in their notes.
+REFERENCE_NAMESPACE = uuid.UUID("6f0c5a1e-2b7d-4c8e-9a13-5d2f7e4b9c01")
+TAX_ACCOUNT = "Tax:sales"     # a provider line that is the sales tax on a document: the books' sales tax account
+SALES_TAX = "sales tax"       # the subtype of the account a taxed record's tax lands on
 
 # What the books do with one provider record (decide).
 CREATE = "create"       # new to the books
@@ -21,21 +27,23 @@ DELETE = "delete"       # deleted at the provider: an entry is reversed; an acco
 SAME = "same"           # the revision the books hold
 OLDER = "older"         # a revision older than the books hold arrived late: nothing changes
 GONE = "gone"           # deleted at the provider and never in the books: nothing to do
+
 BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
     "quickbooks": ("accounts", "parties", "documents", "payments", "entries"),
     "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
-              "bank_transactions"),
+             "bank_transactions", "bank_transfers"),
 }
 
 
 @dataclass(frozen=True)
 class Ext:
     """A provider record's identity: its entity kind, its id within that kind, and its revision (a counter the provider
-    bumps on each change)."""
+    bumps on each change). `reference` is the write reference the provider holds on the record, when it holds one."""
     kind: str
     external_id: str
     revision: str
     deleted: bool = False
+    reference: str = ""
 
     @property
     def key(self) -> str:
@@ -68,6 +76,7 @@ class EntryLine:
     amount: int         # minor units, debits positive
     party: str = ""     # the provider's key for the vendor or customer ("Vendor:9"), "" for none
     description: str = ""
+    rounding: bool = False  # the provider's rounding on a document: the one line that may be negative
 
 
 @dataclass(frozen=True)
@@ -96,6 +105,7 @@ class Document:
     lines: tuple[EntryLine, ...]
     memo: str = ""
     links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
+    tax: int = 0                                # the sales tax in its total, posted on TAX_ACCOUNT
     currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
 
 
@@ -110,7 +120,22 @@ class Settlement:
     bank: str           # the provider's key for the money account, "" when the provider names none
     total: int          # minor units, positive
     links: tuple[tuple[str, int], ...] = ()
+    credits: tuple[tuple[str, int], ...] = ()    # a payment's applied credit memos ("CreditMemo:7", amount)
     currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
+
+
+@dataclass(frozen=True)
+class Refused:
+    """A provider record the books refuse to take in, with the reason a person reads. It waits like any record the
+    books could not take in, and is refused again on each read until the provider's record changes."""
+    ext: Ext
+    why: str
+
+
+def reference(key: str) -> str:
+    """The write reference for an idempotency key: what a provider's write notes carry, and what a record's `reference`
+    is compared with."""
+    return str(uuid.uuid5(REFERENCE_NAMESPACE, key))
 
 
 def revision_order(a: str, b: str) -> int:
@@ -128,8 +153,9 @@ def decide(have: tuple[str, str] | None, ext: Ext) -> str:
         return GONE if ext.deleted else CREATE
     revision, status = have
     if status == "deleted":
-        # The same revision again is our own write echoing back (a void the books made), not a new record.
-        return SAME if ext.deleted or ext.revision == revision else CREATE
+        # A deleted record stays deleted: the provider cannot bring it back, so a revision that arrives later (a parked
+        # one, or the echo of a void the books made) is the same record.
+        return SAME
     if ext.deleted:
         return DELETE
     order = revision_order(ext.revision, revision)
@@ -189,9 +215,9 @@ def cdc_since(cursor: str | None, now: str) -> str:
     return max(base, floor).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def cdc_due(cursor: str | None, now: str) -> bool:
-    """Whether the change feed is due: never read, or last read CDC_EVERY seconds ago or more."""
-    return cursor is None or (parse(now) - parse(cursor)).total_seconds() >= CDC_EVERY
+def cdc_due(cursor: str | None, now: str, every: int = CDC_EVERY) -> bool:
+    """Whether the change feed is due: never read, or last read `every` seconds ago or more."""
+    return cursor is None or (parse(now) - parse(cursor)).total_seconds() >= every
 
 
 def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]) -> dict[str, str]:
@@ -206,7 +232,7 @@ def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]
 
 
 # ------------------------------------------------------------------------------------------------ parked records
-Record = ChartAccount | Party | Journal | Document | Settlement | Ext
+Record = ChartAccount | Party | Journal | Document | Settlement | Ext | Refused
 
 
 def encode(r: Record) -> dict[str, Any]:
@@ -215,12 +241,13 @@ def encode(r: Record) -> dict[str, Any]:
 
 
 def _ext(d: Mapping[str, Any]) -> Ext:
-    return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)))
+    return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)),
+               str(d.get("reference", "")))
 
 
 def _lines(raw: Any) -> tuple[EntryLine, ...]:
     return tuple(EntryLine(str(x["account"]), int(x["amount"]), str(x.get("party", "")),
-                           str(x.get("description", ""))) for x in raw)
+                           str(x.get("description", "")), bool(x.get("rounding", False))) for x in raw)
 
 
 def _pairs(raw: Any) -> tuple[tuple[str, int], ...]:
@@ -245,8 +272,10 @@ def decode(d: Mapping[str, Any]) -> Record:
     if kind == "Document":
         return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
                         _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),
-                        str(d.get("currency", "")))
+                        int(d.get("tax", 0)), str(d.get("currency", "")))
     if kind == "Settlement":
         return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
-                          _pairs(d.get("links", [])), str(d.get("currency", "")))
+                          _pairs(d.get("links", [])), _pairs(d.get("credits", [])), str(d.get("currency", "")))
+    if kind == "Refused":
+        return Refused(ext, str(d["why"]))
     raise ValueError(f"not a mirror record: {kind}")

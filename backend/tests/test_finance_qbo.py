@@ -416,21 +416,21 @@ def test_voids_and_payments_are_the_quickbooks_writes_they_name_and_apply_to_wha
     assert got["Line"] == [{"Amount": "15.00", "LinkedTxn": [{"TxnId": "12", "TxnType": "Bill"}]}]
 
 
-def test_a_credit_memo_applied_to_an_invoice_carries_the_invoice_it_settles_and_its_amount():
+def test_a_credit_memo_settles_nothing_itself_its_applications_come_as_payments():
     items = Q.item_accounts([{"Id": "7", "IncomeAccountRef": {"value": "40"}}])
     memo = Q.document_record({"Id": "20", "SyncToken": "1", "DocNumber": "CM-20", "TxnDate": "2026-10-10",
                               "TotalAmt": "5.00", "CustomerRef": {"value": "4"}, "Line": [
                                   {"Amount": "5.00", "DetailType": "SalesItemLineDetail", "Description": "consulting",
                                    "SalesItemLineDetail": {"ItemRef": {"value": "7"}},
                                    "LinkedTxn": [{"TxnType": "Invoice", "TxnId": "12"}]}]}, "CreditMemo", items)
-    assert (memo.party, memo.total, memo.links) == ("Customer:4", 500, (("Invoice:12", 500),))
+    assert (memo.party, memo.total, memo.links) == ("Customer:4", 500, ())
 
 
 WRITE_OFF = {"party": "Customer:4", "account": "Account:2", "day": "2026-10-12", "memo": "Uncollectible",
-             "total": 2000, "links": [["Invoice:12", 2000]]}
+             "total": 2000, "invoice": "Invoice:12"}
 
 
-def test_a_write_off_is_billed_by_the_bad_debt_item_that_sells_to_its_account_and_applied_to_its_invoice():
+def test_a_write_off_is_one_credit_memo_billed_by_the_bad_debt_item_that_sells_to_its_account():
     wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "2"}}]}}),
                 QC.Reply(200, {"CreditMemo": {"Id": "901", "SyncToken": "0"}}))
     sent = _client(wire).send("writeoff.create", WRITE_OFF, "wo-key")
@@ -439,7 +439,7 @@ def test_a_write_off_is_billed_by_the_bad_debt_item_that_sells_to_its_account_an
     assert memo["CustomerRef"] == {"value": "4"} and memo["TxnDate"] == "2026-10-12"
     line = memo["Line"][0]
     assert line["SalesItemLineDetail"] == {"ItemRef": {"value": "7"}, "Qty": 1, "UnitPrice": "20.00"}
-    assert line["Amount"] == "20.00" and line["LinkedTxn"] == [{"TxnId": "12", "TxnType": "Invoice"}]
+    assert line["Amount"] == "20.00" and "LinkedTxn" not in line and len(memo["Line"]) == 1
     assert f"requestid={uuid.uuid5(QC.NAMESPACE, 'wo-key')}" in wire.sent[1][1]
 
 
@@ -450,8 +450,7 @@ def test_a_missing_bad_debt_item_is_created_once_with_its_own_request_id_and_the
     sent = _client(wire).send("writeoff.create", WRITE_OFF, "wo-key-2")
     assert (sent.ok, sent.external_id) == (True, "902")
     item = json.loads(wire.sent[1][3] or b"{}")
-    assert item == {"Name": "Bad debt", "Type": "Service", "IncomeAccountRef": {"value": "2"},
-                    "ExpenseAccountRef": {"value": "2"}}
+    assert item == {"Name": "Bad debt", "Type": "NonInventory", "IncomeAccountRef": {"value": "2"}}
     assert f"requestid={uuid.uuid5(QC.NAMESPACE, 'wo-key-2:item')}" in wire.sent[1][1]
     assert json.loads(wire.sent[2][3] or b"{}")["Line"][0]["SalesItemLineDetail"]["ItemRef"] == {"value": "8"}
 
@@ -484,3 +483,95 @@ def test_a_retry_finds_a_bill_the_cut_off_call_made_by_its_tico_reference_and_sa
     assert unknown is not None and unknown.final is True and unknown.error.startswith("UNKNOWN")
     retry = _client(Wire(QC.Reply(503, {}))).find("bill.create", body, "bill-key")
     assert retry is not None and retry.ok is False and retry.final is False
+
+
+def test_a_credit_applied_to_an_invoice_is_a_payment_of_nothing_that_links_the_invoice_and_the_credit():
+    wire = Wire(QC.Reply(200, {"Payment": {"Id": "930", "SyncToken": "0"}}))
+    sent = _client(wire).send("credit.apply", {"invoice": "Invoice:12", "credit": "CreditMemo:20", "party": "Customer:4",
+                                               "amount": 500, "day": "2026-10-11", "memo": "", "marker": ""}, "ca-1")
+    assert (sent.ok, sent.kind, sent.external_id) == (True, "Payment", "930")
+    got = json.loads(wire.sent[0][3] or b"{}")
+    assert got["TotalAmt"] == "0.00" and got["CustomerRef"] == {"value": "4"}
+    assert got["Line"] == [{"Amount": "5.00", "LinkedTxn": [{"TxnId": "12", "TxnType": "Invoice"}]},
+                           {"Amount": "5.00", "LinkedTxn": [{"TxnId": "20", "TxnType": "CreditMemo"}]}]
+    pay = Q.settlement_record({"Id": "30", "SyncToken": "1", "TxnDate": "2026-10-11", "TotalAmt": "0",
+                               "CustomerRef": {"value": "4"}, "Line": got["Line"]}, "Payment")
+    assert (pay.total, pay.links, pay.credits) == (0, (("Invoice:12", 500),), (("CreditMemo:20", 500),))
+
+
+def test_a_bill_paid_from_a_credit_card_goes_out_as_a_card_payment_on_that_card_account():
+    wire = Wire(QC.Reply(200, {"BillPayment": {"Id": "940", "SyncToken": "0"}}))
+    client = _client(wire)
+    sent = client.send("payment.bill", {"party": "Vendor:9", "bank": "Account:1", "total": 1500, "day": "2026-10-12",
+                                        "memo": "", "links": [["Bill:12", 1500]], "card": True}, "pay-card")
+    assert (sent.ok, sent.kind) == (True, "BillPayment")
+    got = json.loads(wire.sent[0][3] or b"{}")
+    assert got["PayType"] == "CreditCard" and got["CreditCardPayment"] == {"CCAccountRef": {"value": "1"}}
+    assert "CheckPayment" not in got
+
+
+def test_a_foreign_currency_record_is_refused_not_posted():
+    row = {"Id": "5", "SyncToken": "0", "TxnDate": "2026-10-10", "TotalAmt": "5.00", "CustomerRef": {"value": "4"},
+           "CurrencyRef": {"value": "EUR"}, "ExchangeRate": "1.1", "Line": []}
+    [made] = Q.records("Invoice", [row], {})
+    assert isinstance(made, M.Refused) and made.why == Q.FOREIGN
+
+
+def test_a_taxed_invoice_keeps_its_tax_apart_from_its_lines():
+    items = Q.item_accounts([{"Id": "7", "IncomeAccountRef": {"value": "40"}}])
+    doc = Q.document_record({"Id": "12", "SyncToken": "0", "DocNumber": "I-12", "TxnDate": "2026-10-05",
+                             "TotalAmt": "105.00", "CustomerRef": {"value": "4"}, "TxnTaxDetail": {"TotalTax": "5.00"},
+                             "Line": [{"Amount": "100.00", "DetailType": "SalesItemLineDetail",
+                                       "SalesItemLineDetail": {"ItemRef": {"value": "7"}}}]}, "Invoice", items)
+    assert (doc.total, doc.tax) == (10500, 500)
+
+
+def test_quickbooks_account_types_keep_payables_receivables_and_sales_tax():
+    base = {"Id": "9", "SyncToken": "1", "Name": "Tax", "AcctNum": "2300", "Active": True}
+    tax = Q.account_record({**base, "AccountType": "Other Current Liability", "AccountSubType": "SalesTaxPayable"})
+    payable = Q.account_record({**base, "AccountType": "Accounts Payable"})
+    receivable = Q.account_record({**base, "AccountType": "Accounts Receivable"})
+    assert tax is not None and tax.subtype == M.SALES_TAX
+    assert payable is not None and (payable.type, payable.subtype) == ("liability", "payable")
+    assert receivable is not None and (receivable.type, receivable.subtype) == ("asset", "receivable")
+
+
+def test_a_change_feed_cut_at_its_cap_is_complete_only_to_a_second_before_its_newest_change():
+    def obj(i: int, when: str) -> dict[str, object]:
+        return {"Id": str(i), "SyncToken": "0", "MetaData": {"LastUpdatedTime": when}}
+
+    whole = {"CDCResponse": [{"QueryResponse": [{"Account": [obj(i, "2026-10-15T12:00:00-07:00") for i in range(10)]}]}]}
+    assert Q.change_through(whole) == ""
+    cut = {"CDCResponse": [{"QueryResponse": [{"Invoice": [obj(i, "2026-10-15T12:00:00-07:00") for i in range(999)]
+                                                          + [obj(1000, "2026-10-15T12:00:05-07:00")]}]}]}
+    assert Q.change_through(cut) == "2026-10-15T19:00:04.000000Z"
+
+
+def test_items_are_read_page_by_page_past_a_thousand_and_active_or_not():
+    first = [{"Id": str(i), "IncomeAccountRef": {"value": "40"}} for i in range(1000)]
+    second = [{"Id": str(i), "IncomeAccountRef": {"value": "40"}} for i in range(1000, 1003)]
+    wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": first}}), QC.Reply(200, {"QueryResponse": {"Item": second}}))
+    known = _client(wire)._item_accounts()
+    assert isinstance(known, dict) and len(known) == 1003
+    urls = [urllib.parse.unquote_plus(sent[1]) for sent in wire.sent]
+    assert len(urls) == 2 and all("WHERE Active IN (true,false)" in url for url in urls)
+    assert "STARTPOSITION 1001" in urls[1]
+
+
+def test_a_change_feed_answer_cut_at_its_cap_is_read_through_to_a_second_before_its_newest_change():
+    objects = [{"Id": str(i), "SyncToken": "0", "MetaData": {"LastUpdatedTime": "2026-10-15T12:00:00-07:00"}}
+               for i in range(999)]
+    objects.append({"Id": "1000", "SyncToken": "0", "MetaData": {"LastUpdatedTime": "2026-10-15T12:00:05-07:00"}})
+    wire = Wire(QC.Reply(200, {"CDCResponse": [{"QueryResponse": [{"Invoice": objects}]}]}),
+                QC.Reply(200, {"QueryResponse": {"Item": []}}))
+    read = _client(wire).changed("2026-10-15T10:00:00Z")
+    assert read.ok and read.through == "2026-10-15T19:00:04.000000Z"
+
+
+def test_a_purchase_is_read_as_an_entry_between_its_bank_and_its_expense_account():
+    row = {"Id": "50", "SyncToken": "0", "TxnDate": "2026-10-09", "TotalAmt": "100.00", "PaymentType": "Cash",
+           "AccountRef": {"value": "1"}, "Line": [{"Amount": "100.00", "DetailType": "AccountBasedExpenseLineDetail",
+                                                   "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "40"}}}]}
+    [made] = Q.records("Purchase", [row], {})
+    assert isinstance(made, M.Journal)
+    assert sorted((x.account, x.amount) for x in made.lines) == [("Account:1", -10000), ("Account:40", 10000)]

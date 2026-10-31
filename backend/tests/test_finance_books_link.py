@@ -1,0 +1,221 @@
+"""QuickBooks and Xero books connections (spec §3.4): the routes that start, finish and drop a consent against a fake
+HQ, the refresh's vault write retried, and the refusals that keep the claim the only way to make a books connection.
+Nothing here calls HQ or the provider: `books_link._call` answers from lists."""
+import json
+from typing import Any
+from urllib.parse import parse_qs, urlparse
+
+import pytest
+
+from backend import company_server, hook_relay
+from backend.finance import actions as FA
+from backend.finance import books_link
+from backend.finance.store import mirror as SX
+from backend.finance.store import tico as T
+from backend.tests.test_api import api, get, headers  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
+
+COMPANY = "2f7c1d3e-5b8a-4c6d-9e0f-1a2b3c4d5e6f"            # a fictional company id
+CONSENT = "https://consent.acme.example/start/1"
+LATER = "2026-10-15T12:40:00Z"
+LINK = hook_relay.Link("gk_test", "https://updates.tico.team/v1/gateway", "fp")
+BOOKS_RETURN = "/api/v2/finance/books/return/"
+
+
+class HQ:
+    """HQ's books broker in place of the network: each endpoint answers from its list in order (an exception is
+    raised), and every call is recorded as (path, body)."""
+
+    def __init__(self, **answers: list[Any]) -> None:
+        self.answers = answers
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def __call__(self, link: object, path: str, body: dict[str, Any]) -> dict[str, Any]:
+        self.calls.append((path, dict(body)))
+        answer = self.answers[path.rsplit("/", 1)[1]].pop(0)
+        if isinstance(answer, Exception):
+            raise answer
+        return dict(answer)
+
+
+def tokens(access: str, refresh: str, expires: str = "2026-10-15T12:30:00Z") -> dict[str, Any]:
+    return {"access_token": access, "refresh_token": refresh, "expires_at": expires, "refresh_expires_at": None,
+            "realm_id": "123", "tenant_id": None}
+
+
+def claims(hq: HQ) -> int:
+    return sum(1 for path, _ in hq.calls if path.endswith("/claim"))
+
+
+def return_path(api: Any, hq: HQ) -> str:
+    """The path HQ sends the browser to after the last connect: this server's return route, with its flow id."""
+    base = api.app.state.store.settings.public_url
+    to = str(hq.calls[-1][1]["return_to"])
+    assert to.startswith(base + BOOKS_RETURN)
+    return to[len(base):]
+
+
+def result_of(location: str) -> dict[str, list[str]]:
+    """The query of the Finance page a return redirects to (the page is a hash route, so the query is in the fragment)."""
+    return parse_qs(urlparse(location).fragment.partition("?")[2])
+
+
+@pytest.fixture
+def linked(api, monkeypatch):
+    """This server as the owner's: Finance set up, linked to a fictional company with a Gateway key, and HQ's books
+    broker answering in place of the network."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+    monkeypatch.setattr(company_server, "view", lambda c: {"company": {"id": COMPANY, "name": "Acme", "slug": "acme"}})
+    monkeypatch.setattr(hook_relay, "link_of", lambda c, vault, settings: LINK)
+    hq = HQ(connect=[{"url": CONSENT, "expires_in": 900}], claim=[tokens("acc-1", "ref-1")],
+            disconnect=[{"ok": True, "disconnected": True}])
+    monkeypatch.setattr(books_link, "_call", hq)
+    return hq
+
+
+def test_connect_returns_the_consent_page_and_sends_hq_tico_s_own_return_route(api, linked):
+    r = api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"}, headers=headers())
+    assert r.status_code == 200 and r.json() == {"url": CONSENT, "expires_in": 900}
+    path, body = linked.calls[0]
+    assert path == "oauth/quickbooks/connect"
+    assert body["company_id"] == COMPANY and body["user_id"] == OWNER
+    assert str(body["return_to"]).startswith(api.app.state.store.settings.public_url + BOOKS_RETURN)
+
+
+def test_the_return_claims_the_grant_once_and_keeps_its_tokens_in_the_vault(api, linked):
+    store = api.app.state.store
+    api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"}, headers=headers())
+    back = return_path(api, linked)
+    r = api.get(back + "?finance=connected&claim=clm_1", headers=headers(), follow_redirects=False)
+    assert r.status_code == 302 and result_of(r.headers["location"]) == {"books": ["connected"]}
+    assert claims(linked) == 1
+    with store.read() as c:
+        row = c.execute("SELECT id, provider, purpose, status, settings_json FROM fin_connections").fetchone()
+        assert (row["provider"], row["purpose"], row["status"]) == ("quickbooks", "books", "active")
+        assert "ref-1" not in row["settings_json"] and "acc-1" not in row["settings_json"]
+        refresh = str(SX.books_settings(c, row["id"])["refresh"])
+        assert T.credential_secret(c, api.app.state.vault, refresh) == "ref-1"
+    again = api.get(back + "?finance=connected&claim=clm_1", headers=headers(), follow_redirects=False)
+    assert again.status_code == 409 and claims(linked) == 1                 # the consent's flow is spent
+    accounting = next(g for g in get(api, "finance/sources")["groups"] if g["group"] == "accounting")
+    assert [(r["provider"], r["sync"]["status"]) for r in accounting["rows"]] == [("quickbooks", "active")]
+    assert "ref-1" not in json.dumps(accounting) and "acc-1" not in json.dumps(accounting)
+
+
+def test_a_consent_that_came_back_with_an_error_claims_nothing(api, linked):
+    store = api.app.state.store
+    api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"}, headers=headers())
+    back = return_path(api, linked)
+    r = api.get(back + "?finance=error&reason=access_denied&claim=clm_9", headers=headers(), follow_redirects=False)
+    assert r.status_code == 302
+    assert result_of(r.headers["location"]) == {"books": ["error"], "reason": ["access_denied"]}
+    assert claims(linked) == 0
+    with store.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_connections").fetchone()[0] == 0
+
+
+def test_a_teammate_who_may_not_connect_is_refused_at_connect_disconnect_and_return(api, linked):
+    store = api.app.state.store
+    with store.transaction() as c:
+        SX.books_connection_insert(c, cid="conn-qb", provider="quickbooks", name="Acme books", by=OWNER, at=AT)
+        SX.set_books_settings(c, "conn-qb", {"provider": "quickbooks", "company_id": COMPANY})
+    api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"}, headers=headers())
+    back = return_path(api, linked)
+    linked.calls.clear()
+    assert api.post("/api/v2/finance/books/connect", json={"provider": "quickbooks"},
+                    headers=headers("cara-test")).status_code == 403
+    assert api.post("/api/v2/finance/books/conn-qb/disconnect", headers=headers("cara-test")).status_code == 403
+    assert api.get(back + "?finance=connected&claim=clm_2", headers=headers("cara-test"),
+                   follow_redirects=False).status_code == 403
+    assert linked.calls == []                                               # HQ is never asked for them
+
+
+def test_a_return_is_claimed_only_by_the_person_who_started_the_consent_and_once(store, monkeypatch):
+    hq = HQ(connect=[{"url": CONSENT, "expires_in": 900}], claim=[tokens("acc-1", "ref-1")])
+    monkeypatch.setattr(books_link, "_call", hq)
+    books_link.start(store, LINK, provider="quickbooks", company_id=COMPANY, user=OWNER,
+                     return_base="https://tico.acme.example" + BOOKS_RETURN.rstrip("/"))
+    flow = str(hq.calls[0][1]["return_to"]).rsplit("/", 1)[1]
+    vault = T._VAULT[0]
+    with pytest.raises(books_link.NotStarted):
+        books_link.finish(store, vault, LINK, flow=flow, user="human:ben", outcome="connected", reason="",
+                          claim_id="clm_1")
+    cid = books_link.finish(store, vault, LINK, flow=flow, user=OWNER, outcome="connected", reason="", claim_id="clm_1")
+    with store.read() as c:
+        assert SX.books_status(c, cid) == "active"
+    with pytest.raises(books_link.NotStarted):
+        books_link.finish(store, vault, LINK, flow=flow, user=OWNER, outcome="connected", reason="", claim_id="clm_1")
+
+
+def _claimed(books: Any, vault: object) -> str:
+    return books_link.connect_claim(books, vault, LINK, provider="quickbooks", company_id=COMPANY, claim_id="clm_r",
+                                    name="Acme books", by=OWNER, now=AT)
+
+
+def test_a_refresh_whose_vault_write_fails_once_keeps_the_connection_active(books, monkeypatch):
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], refresh=[tokens("acc-2", "ref-2", "2026-10-15T13:30:00Z")])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    real_save, tries = books_link.save, []
+
+    def flaky(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        tries.append(fresh.refresh_token)
+        if len(tries) == 1:
+            raise RuntimeError("vault is busy")
+        real_save(c, cid_, fresh, by=by, at=at)
+
+    monkeypatch.setattr(books_link, "save", flaky)
+    assert books_link.access_token(books, vault, LINK, cid, "quickbooks", now=LATER, force=True) == "acc-2"
+    assert tries == ["ref-2", "ref-2"]                                      # the same pair, written again
+    assert [path for path, _ in hq.calls].count("oauth/quickbooks/refresh") == 1
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+
+
+def test_a_refresh_whose_vault_write_always_fails_asks_for_a_reconnect_and_raises(books, monkeypatch):
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], refresh=[tokens("acc-2", "ref-2", "2026-10-15T13:30:00Z")])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    tries, asks = [], []
+
+    def down(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        tries.append(fresh.refresh_token)
+        raise RuntimeError("vault is down")
+
+    monkeypatch.setattr(books_link, "save", down)
+    monkeypatch.setattr(T, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    with pytest.raises(books_link.ReconnectRequired) as err:
+        books_link.access_token(books, vault, LINK, cid, "quickbooks", now=LATER, force=True)
+    assert err.value.code == "vault_write_failed"
+    assert len(tries) == books_link.VAULT_TRIES and asks == [(OWNER, "Connect quickbooks again")]
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "reconnect"
+    assert [path for path, _ in hq.calls].count("oauth/quickbooks/refresh") == 1
+
+
+def test_a_disconnect_HQ_no_longer_holds_a_grant_for_still_drops_the_local_tokens(books, monkeypatch):
+    vault = T._VAULT[0]
+    hq = HQ(claim=[tokens("acc-1", "ref-1")], disconnect=[books_link.ReconnectRequired("reconnect_required")])
+    monkeypatch.setattr(books_link, "_call", hq)
+    cid = _claimed(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "disconnected"
+        assert not T.credential_exists(c, str(before["access"]))
+        assert not T.credential_exists(c, str(before["refresh"]))
+
+
+def test_connection_create_refuses_books_providers_so_the_claim_makes_every_books_connection(books):
+    with books.transaction() as c:
+        for provider in ("quickbooks", "xero"):
+            done = act(c, OWNER, "connection_create", {"provider": provider, "credential_id": "cred-books", "probe": {}})
+            assert done.status == "failed" and done.code == "invalid"
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_connections").fetchone()[0] == 0

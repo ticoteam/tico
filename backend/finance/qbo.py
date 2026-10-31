@@ -27,19 +27,27 @@ PRODUCTION = "https://quickbooks.api.intuit.com"
 SANDBOX = "https://sandbox-quickbooks.api.intuit.com"
 BASE_ENV = "TICO_QUICKBOOKS_BASE"     # a developer's override: the sandbox, or a local fake (scripts/fake_quickbooks.py)
 OVERRIDE_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "sandbox-quickbooks.api.intuit.com"})
-NAMESPACE = uuid.UUID("6f0c5a1e-2b7d-4c8e-9a13-5d2f7e4b9c01")   # RequestIds are uuid5 of the outbox key in this namespace
+NAMESPACE = M.REFERENCE_NAMESPACE      # RequestIds are uuid5 of the outbox key in this namespace (core/mirror.reference)
 TIMEOUT = 20
 TRIES_429 = 3
 MAX_WAIT = 30.0
 MAX_TEXT = 300
+PAGE = 1000                            # QuickBooks' most rows in one query or one change-feed entity
+MAX_PAGES = 100                        # a list of items larger than this is refused rather than read forever
 # The transactions a retry looks for first, by entity: a cut-off call may already have landed in QuickBooks.
 TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.create": "JournalEntry",
-                "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo"}
+                "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo",
+                "credit.apply": "Payment"}
 
 
 def _marker(key: str) -> str:
     """The Tico reference a write carries in its private note: the RequestId of its outbox key, so a retry finds it."""
-    return f"[tico:{uuid.uuid5(NAMESPACE, key)}]"
+    return f"[tico:{M.reference(key)}]"
+
+
+def _where(entity: str) -> str:
+    """The filter that reads inactive records too, for the entities that have an active flag."""
+    return " WHERE Active IN (true,false)" if entity in Q.ACTIVE_FILTERED else ""
 
 
 def _quote(value: object) -> str:
@@ -169,7 +177,7 @@ class QuickBooks:
             return reply
 
     def _count(self, entity: str) -> int | str:
-        reply = self._call("GET", "query", query={"query": f"SELECT COUNT(*) FROM {entity}"})
+        reply = self._call("GET", "query", query={"query": f"SELECT COUNT(*) FROM {entity}{_where(entity)}"})
         if reply.status != 200:
             return _fault(reply.body, reply.status)
         found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
@@ -177,24 +185,34 @@ class QuickBooks:
         return int(total) if isinstance(total, int) else 0
 
     def _item_accounts(self) -> dict[str, dict[str, str]] | str:
-        """Each item's income and expense account, read once per pass; a line that names an item posts to its account."""
+        """Each item's income and expense account, read once per pass (every page of items, active or not); a line that
+        names an item posts to its account."""
         if self._items is None:
-            reply = self._call("GET", "query", query={"query": "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 1000"})
-            if reply.status != 200:
-                return _fault(reply.body, reply.status)
-            found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
-            self._items = Q.item_accounts(Q.as_list(found.get("Item")))
+            rows: list[object] = []
+            for page in range(MAX_PAGES):
+                start = page * PAGE + 1
+                reply = self._call("GET", "query", query={"query": (
+                    f"SELECT * FROM Item{_where('Item')} STARTPOSITION {start} MAXRESULTS {PAGE}")})
+                if reply.status != 200:
+                    return _fault(reply.body, reply.status)
+                found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
+                got = Q.as_list(found.get("Item"))
+                rows += got
+                if len(got) < PAGE:
+                    self._items = Q.item_accounts(rows)
+                    return self._items
+            return f"more than {MAX_PAGES * PAGE} items: the item list is too long to read"
         return self._items
 
     def _query(self, entity: str, start: int, size: int) -> Read:
-        sql = f"SELECT * FROM {entity} STARTPOSITION {start} MAXRESULTS {size}"
+        sql = f"SELECT * FROM {entity}{_where(entity)} STARTPOSITION {start} MAXRESULTS {size}"
         reply = self._call("GET", "query", query={"query": sql})
         if reply.status != 200:
             return Read(False, error=_fault(reply.body, reply.status))
         found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
         rows = Q.as_list(found.get(entity))
         items: dict[str, dict[str, str]] = {}
-        if entity in Q.DOCUMENTS:
+        if entity in Q.DOCUMENTS or entity in Q.POSTED:
             known = self._item_accounts()
             if isinstance(known, str):
                 return Read(False, error=known)
@@ -243,7 +261,7 @@ class QuickBooks:
         known = self._item_accounts()
         if isinstance(known, str):
             return Read(False, error=known)
-        return Read(True, tuple(Q.change_records(reply.body, known)))
+        return Read(True, tuple(Q.change_records(reply.body, known)), through=Q.change_through(reply.body))
 
     def _write_off_item(self, account_key: str, key: str) -> str | Sent:
         """The item a write-off is billed by: found by name, else created once (its RequestId comes from the write-off's
@@ -360,6 +378,8 @@ def _write_of(op: str, body: Mapping[str, Any],
         return "Invoice", "invoice", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "void"}
     if op == "writeoff.create":
         return "CreditMemo", "creditmemo", Q.writeoff_body(body), {}
+    if op == "credit.apply":
+        return "Payment", "payment", Q.credit_apply_body(body), {}
     if op == "payment.bill":
         return "BillPayment", "billpayment", Q.bill_payment_body(body), {}
     if op == "payment.invoice":

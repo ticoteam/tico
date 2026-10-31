@@ -1,6 +1,6 @@
 """A stand-in for Xero's accounting API for end-to-end runs on a developer's computer: stdlib only, on 127.0.0.1, in
-memory. It answers the calls backend/finance/xero.py makes (lists with page and If-Modified-Since, the GST account
-lookup, PUT creates with Idempotency-Key replay, and the manual journal void), in the shapes that client parses. Point
+memory. It answers the calls backend/finance/xero.py makes (lists with page and If-Modified-Since, the whole lists of accounts and bank transfers, the system account lookup,
+creates and credit-note allocations with Idempotency-Key replay, and voids), in the shapes that client parses. Point
 Tico at it with TICO_XERO_BASE=http://127.0.0.1:<port>/api.xro/2.0. Nothing here reaches the network.
 
 Calls must carry a bearer token and the tenant id (--tenant, default acme-tenant); anything else is refused as Xero
@@ -28,9 +28,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
-ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions")
+ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
+             "BankTransfers")
 ID_KEY = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
-          "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID"}
+          "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
+          "BankTransfers": "BankTransferID"}
 ACCOUNT_TYPES = {"BANK", "CURRENT", "CURRLIAB", "EQUITY", "EXPENSE", "REVENUE", "FIXED", "SALES", "OVERHEADS"}
 PAGE = 100
 PREFIX = "/api.xro/2.0/"
@@ -67,6 +69,29 @@ def _balanced(lines: object) -> bool:
     return total == 0
 
 
+def _has_id(value: object, key: str) -> bool:
+    return isinstance(value, dict) and bool(value.get(key))
+
+
+def _find(endpoint: str, ident: str) -> dict[str, object] | None:
+    for row in STATE["books"][endpoint]:  # type: ignore[index,union-attr]
+        if row.get(ID_KEY[endpoint]) == ident:
+            return row
+    return None
+
+
+def _defaults(endpoint: str, row: dict[str, object]) -> None:
+    """What Xero fills in: a status, a credit note's allocations, and a payment's type from the invoice it settles."""
+    if endpoint in ("Invoices", "CreditNotes", "Payments"):
+        row.setdefault("Status", "AUTHORISED")
+    if endpoint == "CreditNotes":
+        row.setdefault("Allocations", [])
+    if endpoint == "Payments" and not row.get("PaymentType") and isinstance(row.get("Invoice"), dict):
+        target = _find("Invoices", str(row["Invoice"].get("InvoiceID") or ""))  # type: ignore[index,union-attr]
+        if target is not None:
+            row["PaymentType"] = "ACCPAYPAYMENT" if target.get("Type") == "ACCPAY" else "ACCRECPAYMENT"
+
+
 def _check(endpoint: str, row: dict[str, object]) -> str:
     if endpoint == "Accounts" and (not row.get("Name") or row.get("Type") not in ACCOUNT_TYPES):
         return "Account Name and a valid Type are required"
@@ -76,6 +101,14 @@ def _check(endpoint: str, row: dict[str, object]) -> str:
         return "Journal lines do not balance"
     if endpoint == "BankTransactions" and (not isinstance(row.get("BankAccount"), dict) or not row.get("LineItems")):
         return "A bank account and at least one line item are required"
+    if endpoint == "BankTransactions" and not _has_id(row.get("Contact"), "ContactID"):
+        return "A contact is required"
+    if endpoint == "Invoices" and (row.get("Type") not in ("ACCREC", "ACCPAY") or not _has_id(row.get("Contact"), "ContactID")):
+        return "An invoice needs a type and a contact"
+    if endpoint == "CreditNotes" and not _has_id(row.get("Contact"), "ContactID"):
+        return "A credit note needs a contact"
+    if endpoint == "Payments" and (not _has_id(row.get("Invoice"), "InvoiceID") or not row.get("PaymentType")):
+        return "A payment needs an invoice that Xero holds"
     return ""
 
 
@@ -104,6 +137,7 @@ def create(endpoint: str, body: dict[str, Any], key: str) -> tuple[int, dict[str
     raws = [body] if endpoint == "Accounts" else body.get(endpoint) or []
     for raw in raws:
         row = dict(raw)
+        _defaults(endpoint, row)
         problem = _check(endpoint, row)
         if problem:
             return _error(problem)
@@ -114,17 +148,49 @@ def create(endpoint: str, body: dict[str, Any], key: str) -> tuple[int, dict[str
     return answer
 
 
-def void_journal(ident: str) -> tuple[int, dict[str, object]]:
-    for row in STATE["books"]["ManualJournals"]:  # type: ignore[index,union-attr]
-        if row.get("ManualJournalID") == ident:
-            row["Status"] = "VOIDED"
-            row["UpdatedDateUTC"] = now_ms()
-            return 200, {"ManualJournals": [row]}
-    return _error(f"ManualJournal {ident} was not found")
+def void(endpoint: str, ident: str) -> tuple[int, dict[str, object]]:
+    row = _find(endpoint, ident)
+    if row is None:
+        return _error(f"{endpoint} {ident} was not found")
+    row["Status"] = "VOIDED"
+    row["UpdatedDateUTC"] = now_ms()
+    return 200, {endpoint: [row]}
+
+
+def credit_note(ident: str) -> tuple[int, dict[str, object]]:
+    row = _find("CreditNotes", ident)
+    if row is None:
+        return _error(f"CreditNote {ident} was not found")
+    return 200, {"CreditNotes": [dict(row)]}
+
+
+def allocate(note_id: str, body: dict[str, Any], key: str) -> tuple[int, dict[str, object]]:
+    """Applies a credit note to invoices: each allocation is kept on the note with its own id."""
+    if key and key in STATE["keys"]:  # type: ignore[operator]
+        return STATE["keys"][key]  # type: ignore[index,return-value]
+    note = _find("CreditNotes", note_id)
+    if note is None:
+        return _error(f"CreditNote {note_id} was not found")
+    made: list[dict[str, object]] = []
+    for raw in body.get("Allocations") or []:
+        STATE["next_id"] = int(STATE["next_id"]) + 1  # type: ignore[call-overload]
+        made.append({**raw, "AllocationID": f"fake-allocation-{STATE['next_id']}", "IsDeleted": False})
+    if not made:
+        return _error("An allocation is required")
+    note.setdefault("Allocations", []).extend(made)  # type: ignore[union-attr]
+    note["UpdatedDateUTC"] = now_ms()
+    answer: tuple[int, dict[str, object]] = (200, {"Allocations": made})
+    if key:
+        STATE["keys"][key] = answer  # type: ignore[index]
+    return answer
 
 
 def listing(endpoint: str, query: dict[str, str], since: int | None) -> tuple[int, dict[str, object]]:
     rows = [dict(r) for r in STATE["books"][endpoint]]  # type: ignore[index,union-attr]
+    if endpoint == "BankTransfers":           # no paging and no change time: the whole list, deleted ones when asked
+        if query.get("includeDeleted") != "true":
+            rows = [r for r in rows if r.get("Status") != "DELETED"]
+        return 200, {endpoint: rows}
     if endpoint == "Contacts" and query.get("includeArchived") != "true":
         rows = [r for r in rows if r.get("ContactStatus") != "ARCHIVED"]
     if since is not None:
@@ -190,8 +256,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._send(*listing(parts[0], query, since))
             if method == "PUT" and len(parts) == 1:
                 return self._send(*create(parts[0], body, key))
-            if method == "POST" and parts[0] == "ManualJournals" and len(parts) == 2:
-                return self._send(*void_journal(parts[1]))
+            if method == "POST" and parts[0] in ("ManualJournals", "Invoices") and len(parts) == 2:
+                return self._send(*void(parts[0], parts[1]))
+            if method == "GET" and parts[0] == "CreditNotes" and len(parts) == 2:
+                return self._send(*credit_note(parts[1]))
+            if method == "PUT" and parts[0] == "CreditNotes" and len(parts) == 3 and parts[2] == "Allocations":
+                return self._send(*allocate(parts[1], body, key))
             self._send(404, {})
 
     def _control(self, path: str, body: dict[str, Any]) -> None:
