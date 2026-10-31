@@ -2,7 +2,8 @@
 the company's shared one or, for a developer or the video producer, its own. A machine is made on first work with a
 one-time enrollment code and bound to the bots set to run there only; it is started for work, kept with a heartbeat,
 stopped after its size's break-even idle time unless Always on (the shared one once every member is idle), never
-started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. Off cloud
+started out of credit, and retried with backoff when HQ refuses. A size change applies at the next start. A stopped
+machine whose computer is behind this server's release is started once to update, then stops as usual. Off cloud
 nothing changes. HQ is a fake client and the clock is a fake one."""
 
 import json
@@ -152,7 +153,7 @@ def events(cloud, action):
 # ----------------------------------------------------------------------------- the policy, pure
 def facts(**kw):
     return {"active": True, "turns": False, "activity": 0, "want": None, "want_at": 0, "frozen": False,
-            "retry_now": False, **kw}
+            "retry_now": False, "updating": False, **kw}
 
 
 def machine_row(**kw):
@@ -243,6 +244,24 @@ def test_decide_makes_a_failed_machine_again_and_never_starts_it():
     # Its last machines never enrolled: nothing more is made until a person looks.
     assert CM.decide({**failed, "enroll_fails": CM.ENROLL_TRIES}, facts(want="job:a"), 2000, 300) == (
         None, "no_enroll")
+
+
+def test_decide_wakes_a_stopped_machine_once_per_server_release_to_update():
+    behind = facts(want="update:0.5.21")
+    assert CM.decide(machine_row(), behind, 1000, 300) == ("start", None)
+    assert CM.decide(machine_row(), facts(want="update:0.5.21", frozen=True), 1000, 300) == (None, "out_of_credit")
+    # Woken for this release and its runner never reported it: not again for it, and nothing is flagged stuck.
+    woke = machine_row(wake_key="update:0.5.21", woke_at=1000)
+    assert CM.decide(woke, behind, 2000, 300) == (None, None)
+    assert CM.decide(woke, facts(want="update:0.5.22"), 2000, 300) == ("start", None)
+    assert CM.decide(woke, facts(want="job:a"), 2000, 300) == ("start", None)
+
+
+def test_decide_holds_the_idle_stop_while_its_runner_is_updating():
+    on = machine_row(state="running", active_at=1000, heartbeat_at=1000)
+    assert CM.decide(on, facts(), 1300, 300) == ("stop", None)
+    assert CM.decide(on, facts(updating=True), 1300, 300) == ("heartbeat", None)
+    assert CM.decide(on, facts(updating=True), 2000, 300) == ("heartbeat", None)
 
 
 # ----------------------------------------------------------------------------- the manager, against a fake HQ
@@ -1156,3 +1175,110 @@ def test_a_slow_look_still_reserves_the_stop_for_its_full_hold(cloud, monkeypatc
     cloud.manager.synced = None
     cloud.tick()
     assert cloud.hq.actions() == ["stop"] and answers[0]["attempt"] is None
+
+
+# ----------------------------------------------------------------------------- waking a computer behind the server
+def reported(cloud, computer, release="", update=None):
+    """The computer's heartbeat as its runner sends it: its release (none when blank) and how its self-update stands."""
+    body = {"version": "test", "platform": "test", "release": release, "kind": "linux"}
+    if update:
+        body["update"] = {"state": update}
+    return post(cloud.api, "runners/heartbeat", body, token=computer["token"])
+
+
+def stopped_when_idle(cloud, key="ops"):
+    """Nothing queued for the machine and its clock at the break-even idle time: it is stopped."""
+    idle(cloud)
+    cloud.hq.calls.clear()
+    cloud.at[0] = cloud.row(key)["active_at"] + 300
+    cloud.tick()
+    assert cloud.hq.actions() == ["stop"] and cloud.row(key)["state"] == "stopped"
+    cloud.hq.calls.clear()
+
+
+def draining(cloud, bot, value):
+    with cloud.store.transaction() as c:
+        c.execute("INSERT INTO bot_control(bot,draining) VALUES(?,?) ON CONFLICT(bot) DO UPDATE SET "
+                  "draining=excluded.draining", (bot, value))
+
+
+def test_a_stopped_machine_behind_its_server_starts_once_to_update_then_idles(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20")
+    stopped_when_idle(cloud)
+    assert cloud.tick(10) == ["start"] and cloud.hq.calls[-1] == ("start", "m1", None)
+    assert cloud.row()["wake_key"] == "update:0.5.21"
+    cloud.hq.calls.clear()
+    cloud.at[0] = cloud.row()["active_at"] + 300                # woken for the update, and its runner never reports it
+    cloud.tick()
+    assert cloud.hq.actions() == ["stop"]
+    cloud.hq.calls.clear()
+    assert cloud.tick(10) == [] and cloud.tick(600) == [] and cloud.row()["problem"] == ""
+    monkeypatch.setenv("TICO_VERSION", "0.5.22")                # a new server release is a new wake
+    assert cloud.tick(10) == ["start"]
+
+
+@pytest.mark.parametrize("server, release", [("0.5.21", "0.5.21"), ("0.5.21", "0.5.22"), ("0.5.21", "dev"),
+                                             ("0.5.21", ""), ("", "0.5.20")])
+def test_a_stopped_machine_is_not_woken_for_a_release_its_computer_is_not_behind(cloud, monkeypatch, server, release):
+    """The same release, a newer one, a dev or blank one, and a development server: nothing wakes."""
+    monkeypatch.setenv("TICO_VERSION", server)
+    computer = enrolled(cloud)
+    reported(cloud, computer, release)
+    stopped_when_idle(cloud)
+    assert cloud.tick(600) == [] and cloud.row()["state"] == "stopped" and cloud.row()["problem"] == ""
+
+
+@pytest.mark.parametrize("update", ["pinned", "blocked"])
+def test_a_computer_that_will_not_follow_the_server_is_not_woken_to_update(cloud, monkeypatch, update):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20", update=update)
+    stopped_when_idle(cloud)
+    assert cloud.tick(600) == [] and cloud.row()["state"] == "stopped"
+
+
+def test_out_of_credit_starts_nothing_to_update_until_open_again(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    reported(cloud, computer, "0.5.20")
+    stopped_when_idle(cloud)
+    cloud_access.apply(cloud.store, cloud_access.parse(signals("frozen", "out_of_credit")))
+    assert cloud.tick(10) == [] and cloud.row()["problem"] == "out_of_credit"
+    cloud_access.apply(cloud.store, cloud_access.parse(signals("open")))
+    assert cloud.tick(10) == ["start"]
+
+
+def test_a_shared_machine_behind_its_server_wakes_for_an_active_member_only(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    for bot in ("ops", "finance"):
+        adopt(cloud, bot, "shared")
+    work(cloud, "ops")
+    assert cloud.tick() == ["create"]
+    computer = post(cloud.api, "runners/enroll", {"code": cloud.hq.calls[-1][3], "label": "boat-vm",
+                                                  "platform": "linux"})
+    reported(cloud, computer, "0.5.20")
+    draining(cloud, "finance", 1)                               # paused: ops alone is active
+    stopped_when_idle(cloud, CM.SHARED)
+    assert cloud.tick(10) == ["start"]
+    cloud.hq.calls.clear()
+    draining(cloud, "ops", 1)                                   # now no member is active: it stops and stays stopped
+    cloud.tick(10)
+    assert cloud.hq.actions() == ["stop"]
+    cloud.hq.calls.clear()
+    assert cloud.tick(600) == [] and cloud.row(CM.SHARED)["state"] == "stopped"
+
+
+def test_a_runner_still_updating_keeps_its_machine_up_past_the_idle_time(cloud, monkeypatch):
+    monkeypatch.setenv("TICO_VERSION", "0.5.21")
+    computer = enrolled(cloud)
+    idle(cloud)
+    reported(cloud, computer, "0.5.20", update="updating")
+    cloud.hq.calls.clear()
+    cloud.at[0] = cloud.row()["active_at"] + 300
+    cloud.tick()
+    assert cloud.hq.actions() == ["heartbeat"]                  # its update is under way: not stopped mid-update
+    cloud.at[0] = cloud.row()["active_at"] + CM.UPDATE_STALE + 60   # no report since: a dead runner's last word
+    cloud.tick()
+    assert cloud.hq.actions()[-1] == "stop"
