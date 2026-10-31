@@ -304,3 +304,35 @@ def test_an_approved_over_budget_bill_payment_sends_and_a_later_drop_does_not_ho
                                                "amount": 1_000}).status == "committed"
         assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == ""          # the approval covers it
         assert SK.get(c, "fin_payments", pid)["status"] == "queued"
+
+
+def test_an_approval_for_one_budget_never_covers_another_now_over(books):  # noqa: F811
+    from backend import hubdb as H
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        a = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 5_000,
+                                            "at_limit": "hold_payment"}).result["budget_id"]
+        made = act(c, OWNER, "budget_create", {"name": "Freight", "account_id": account(c, "6900"), "amount": 50_000,
+                                               "at_limit": "hold_payment"})
+        assert made.status == "committed", made
+        b = made.result["budget_id"]
+        bid = _bill(c, _vendor(c, recipient_id=rid), [{"account_id": account(c, "6100"), "amount": 10_000},
+                                                       {"account_id": account(c, "6900"), "amount": 5_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        FA.grant_defaults(c, "bot:seller", at=AT)
+        act(c, OWNER, "view_grant", {"subject": "bot:seller", "what": "everything"})
+        asked = act(c, "bot:seller", "payment_create", {"recipient_id": rid, "money_account_id": _checking(c),
+                                                        "obligation": f"bill:{bid}", "amount": 15_000,
+                                                        "account_id": account(c, "2000")})
+        assert (asked.status, asked.rule) == ("needs_approval", f"budget:{a}"), asked
+        H.approval_decide(c, OWNER, asked.approval_id, "approved")
+        pid = str(FA.approval_decided(c, asked.approval_id, AT).result["payment_id"])
+        assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == ""
+        act(c, OWNER, "budget_update", {"budget_id": a, "amount": 100_000})               # A recovers
+        act(c, OWNER, "budget_update", {"budget_id": b, "amount": 1_000})                 # B is over now
+        # Codex r4: the approval was for budget A; B asks a person again (the bot may not approve it itself).
+        assert FP.recheck(load(c, AT), SK.get(c, "fin_payments", pid)) == "wait"
+        assert SK.get(c, "fin_payments", pid)["last_error"] == "the Freight budget is over"

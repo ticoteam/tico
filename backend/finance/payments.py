@@ -498,18 +498,14 @@ def decided_by(ctx: Ctx, action: Any) -> str:
     return str(appr.get("decided_by") or "") if appr is not None and appr.get("decision") == "approved" else ""
 
 
-def _approved_gate(ctx: Ctx, action: Any, rule: str) -> bool:
-    """Whether the payment's action was approved for this very gate (its rule, say `budget:<id>`)."""
-    return bool(rule) and action is not None and str(action["rule_id"] or "") == rule and bool(decided_by(ctx, action))
-
-
-def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str) -> bool:
-    """Whether what a rule asks for now was already given: the payer is who would approve it (as at the action), or
-    the person who approved the payment's action may approve it."""
+def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str, rule: str) -> bool:
+    """Whether what a gate asks for now was already given: the payer may approve it themselves now (as at the action),
+    or the payment's action was approved for this very gate (its rule: an approval for one rule or budget never covers
+    another) by someone who may approve it."""
     if O.approver(ctx.org, who_needed, who, ctx.approver_setting()) == who:
         return True
     by = decided_by(ctx, action)
-    if not by:
+    if not by or not rule or str(action["rule_id"] or "") != rule:
         return False
     if ctx.org.owner and by == ctx.org.owner:
         return True
@@ -563,7 +559,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         why = verdict.reason or "a finance rule now refuses it"
         end(ctx, pay, "cancelled", why)
         return why
-    if verdict.outcome == "needs_approval" and (verdict.stale or not _approved_for(ctx, action, who, verdict.who)):
+    if verdict.outcome == "needs_approval" and (verdict.stale or
+                                                not _approved_for(ctx, action, who, verdict.who, verdict.rule)):
         return _hold(ctx, pay, f"{verdict.reason or 'a finance rule asks for approval'}"
                                f"{' (its data is stale)' if verdict.stale else ''}")
     hold = SB.hold(ctx.c, str(pay["hold_id"])) if pay["hold_id"] else None
@@ -590,9 +587,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         from .documents import bill_budget
         asks = bill_budget(ctx, str(pay["obligation"]).removeprefix("bill:"))
         # Approved for this budget at the action: it goes, even if that budget dropped further since (the person
-        # approved paying this bill past it; a different budget now over asks again).
-        if asks.outcome == "needs_approval" and not (_approved_gate(ctx, action, asks.rule) or
-                                                     _approved_for(ctx, action, who, asks.who)):
+        # approved paying this bill past it). A different budget now over asks again, unless the payer may approve.
+        if asks.outcome == "needs_approval" and not _approved_for(ctx, action, who, asks.who, asks.rule):
             budget = ctx.budgets().get(asks.rule.removeprefix("budget:"))
             return _hold(ctx, pay, f"the {budget.name if budget else 'bill'} budget is over")
     if fresh is not None:
