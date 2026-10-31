@@ -22,6 +22,17 @@ async function themed(page, name) {
   await page.evaluate(() => window.ticoTheme.set('dark'));
 }
 
+// A run the route answered while another drain still held it: wait until it ends and read it back.
+async function settled(page, aid, run) {
+  const end = Date.now() + t(10000);
+  let r = run;
+  while (['queued', 'running'].includes(r.status) && Date.now() < end) {
+    await page.waitForTimeout(200);
+    r = (await ok(page, 'GET', `automations/${aid}/runs?limit=25`)).runs.find(x => x.id === run.id) || r;
+  }
+  return r;
+}
+
 run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone, hash: '#/automations', time: HUB_NOW});
   await page.locator('tr.au-row').first().waitFor({timeout: t(10000)});
@@ -119,8 +130,8 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   // Runs for two due days (the scheduler's payload, sent by hand): each opens the bot's task due that day.
   const opened = [];
   for (const day of ['2026-10-15', '2026-11-30']) {
-    const r = await ok(page, 'POST', `automations/${made.id}/run`, {input: {due: {due_on: day, tz: 'UTC'}}});
-    assert.equal(r.run.status, 'ok', `${tag}: the run for ${day} (${JSON.stringify(r.run).slice(0, 300)})`);
+    const r = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {input: {due: {due_on: day, tz: 'UTC'}}})).run);
+    assert.equal(r.status, 'ok', `${tag}: the run for ${day} (${JSON.stringify(r).slice(0, 300)})`);
   }
   const tasks = (await ok(page, 'GET', 'tasks?limit=200')).tasks || [];
   for (const day of ['2026-10-15', '2026-11-30']) {
@@ -156,8 +167,8 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
 
   // A no-input run starts the next due day, as the scheduler would: its task is due at the end of Mar 1 in New York,
   // which is Mar 2 in UTC. A viewer whose zone is UTC still reads the task's due day as Mar 1.
-  const manual = await ok(page, 'POST', `automations/${made.id}/run`, {});
-  assert.equal(manual.run.status, 'ok', `${tag}: the no-input run (${JSON.stringify(manual.run).slice(0, 300)})`);
+  const manual = await settled(page, made.id, (await ok(page, 'POST', `automations/${made.id}/run`, {})).run);
+  assert.equal(manual.status, 'ok', `${tag}: the no-input run (${JSON.stringify(manual).slice(0, 300)})`);
   const ny = ((await ok(page, 'GET', 'tasks?limit=200')).tasks || []).find(x => x.occurrence === `${made.id}:2027-03-01`);
   assert.ok(ny, `${tag}: the no-input run made the Mar 1 task`);
   assert.equal(ny.due, '2027-03-01T23:59:59-05:00', `${tag}: due at the end of its day in the trigger's zone`);
