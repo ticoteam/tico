@@ -1,10 +1,11 @@
 """The tax tables and the rows the tax workpapers read (spec §11). All SQL for the tax tables and their workpapers lives
-here; the rows are cut to the caller's view by finance/tax.py."""
+here; finance/tax.py reads these rows whole, only for a caller who sees everything."""
 import sqlite3
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
-CARD_FEED_KINDS = ("debitCardTransaction",)     # feed kinds that are card charges, even on a bank money account
+# Feed kinds that are card charges, credit or debit, even on a bank money account.
+CARD_FEED_KINDS = ("debitCardTransaction", "creditCardTransaction")
 # The SQL test that a feed row (f, with its money account m) is a card charge. The values are constants, not input.
 _CARD_KINDS_SQL = ", ".join(f"'{kind}'" for kind in CARD_FEED_KINDS)
 _CARD_ROW = (f"CASE WHEN f.card_id IS NOT NULL OR f.kind IN ({_CARD_KINDS_SQL}) "
@@ -50,55 +51,29 @@ def vendors_1099(c: sqlite3.Connection, book_id: str) -> list[Any]:
                      "AND is_1099=1 AND kind IN ('vendor','both') ORDER BY name", (book_id,)).fetchall()
 
 
-def invoice_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, left_out: Iterable[str] = ()) -> list[Any]:
+def invoice_lines(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
     """Every line of the posted invoices dated in the window, with its account's type and subtype and whether it is
-    taxable, except the invoices `left_out` names (the ones with a line on an account the viewer may not see)."""
-    skip = [str(x) for x in left_out]
-    cut = f" AND i.id NOT IN ({_marks(skip)})" if skip else ""
+    taxable."""
     return c.execute("SELECT i.id AS invoice_id, i.invoice_date, l.account_id, l.amount, l.taxable, a.type, a.subtype "
                      "FROM fin_invoice_lines l JOIN fin_invoices i ON i.id=l.invoice_id "
-                     "JOIN fin_accounts a ON a.id=l.account_id WHERE i.book_id=? AND i.status IN ('sent','partial','paid') "
-                     f"AND i.invoice_date BETWEEN ? AND ?{cut} ORDER BY i.id, l.id", (book_id, start, end, *skip)).fetchall()
+                     "JOIN fin_accounts a ON a.id=l.account_id WHERE i.book_id=? "
+                     "AND i.status IN ('sent','partial','paid') AND i.invoice_date BETWEEN ? AND ? "
+                     "ORDER BY i.id, l.id", (book_id, start, end)).fetchall()
 
 
-def invoices_on(c: sqlite3.Connection, account_ids: Sequence[str]) -> list[str]:
-    if not account_ids:
-        return []
-    return [str(r[0]) for r in c.execute(f"SELECT DISTINCT invoice_id FROM fin_invoice_lines WHERE account_id IN "
-                                         f"({_marks(account_ids)})", tuple(account_ids)).fetchall()]
-
-
-def bills_on(c: sqlite3.Connection, account_ids: Sequence[str]) -> list[str]:
-    if not account_ids:
-        return []
-    return [str(r[0]) for r in c.execute(f"SELECT DISTINCT bill_id FROM fin_bill_lines WHERE account_id IN "
-                                         f"({_marks(account_ids)})", tuple(account_ids)).fetchall()]
-
-
-def remittance_lines(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str],
-                     left_out: Iterable[str] = ()) -> list[Any]:
+def remittance_lines(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str]) -> list[Any]:
     """The lines on these sales tax accounts of the bills not void, each with its bill's total and what has been paid on
-    the bill, so a partial payment counts for its share of the line. The bills `left_out` names are left out whole."""
+    the bill, so a partial payment counts for its share of the line."""
     if not account_ids:
         return []
-    skip = [str(x) for x in left_out]
-    cut = f" AND b.id NOT IN ({_marks(skip)})" if skip else ""
     return c.execute(
         "SELECT bl.account_id, bl.tags_json, bl.amount, "
         "(SELECT COALESCE(SUM(x.amount), 0) FROM fin_bill_lines x WHERE x.bill_id=b.id) AS bill_total, "
         "(SELECT COALESCE(SUM(s.amount), 0) FROM fin_settlements s WHERE s.to_kind='bill' AND s.to_id=b.id "
         "AND s.voided_at IS NULL) AS bill_paid "
         "FROM fin_bill_lines bl JOIN fin_bills b ON b.id=bl.bill_id "
-        f"WHERE b.book_id=? AND b.status<>'void' AND bl.account_id IN ({_marks(account_ids)}){cut} ORDER BY bl.id",
-        (book_id, *account_ids, *skip)).fetchall()
-
-
-def bill_lines(c: sqlite3.Connection, bill_ids: Sequence[str]) -> list[Any]:
-    """Every line of these bills: the bill, its account, its amount and its tags as JSON."""
-    if not bill_ids:
-        return []
-    return c.execute(f"SELECT bill_id, account_id, amount, tags_json FROM fin_bill_lines WHERE bill_id IN "
-                     f"({_marks(bill_ids)}) ORDER BY id", tuple(bill_ids)).fetchall()
+        f"WHERE b.book_id=? AND b.status<>'void' AND bl.account_id IN ({_marks(account_ids)}) ORDER BY bl.id",
+        (book_id, *account_ids)).fetchall()
 
 
 def settlements(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
@@ -120,22 +95,19 @@ def settlements(c: sqlite3.Connection, book_id: str, start: str, end: str) -> li
         "AND b.vendor_id IS NOT NULL ORDER BY s.id", (book_id, start, end)).fetchall()
 
 
-def expense_lines(c: sqlite3.Connection, book_id: str, start: str, end: str, left_out: Iterable[str] = ()) -> list[Any]:
+def expense_lines(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
     """Expense lines a vendor is named on, in the window, each with whether it came from a card: the feed row that posted
     its entry, or the feed row a reclassification beside it settled. A reversal takes its original's row, and an entry from
     no feed row is a card charge when it posted under the card source. Bank and card rows post straight to an expense (a
     bill's lines post under the bill, so they are not here); a reversal keeps its source, so the two net."""
-    skip = [str(x) for x in left_out]
-    cut = f" AND l.account_id NOT IN ({_marks(skip)})" if skip else ""
     origin = "COALESCE(e.reverses_id, e.id)"
     posted = (f"(SELECT {_CARD_ROW} FROM fin_feed_txns f LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id "
               f"WHERE f.entry_id={origin} LIMIT 1)")
     reclass = (f"(SELECT {_CARD_ROW} FROM fin_settlements s JOIN fin_feed_txns f ON f.id=s.from_id "
                "LEFT JOIN fin_money_accounts m ON m.id=f.money_account_id "
                f"WHERE s.from_kind='feed' AND s.voided_at IS NULL AND s.entry_id={origin} LIMIT 1)")
-    return c.execute("SELECT l.id AS line_id, l.account_id, l.contact_id AS vendor_key, l.amount, "
+    return c.execute("SELECT l.account_id, l.contact_id AS vendor_key, l.amount, "
                      f"COALESCE({posted}, {reclass}, CASE WHEN e.source='card' THEN 1 ELSE 0 END) AS by_card "
                      "FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id JOIN fin_accounts a ON a.id=l.account_id "
                      "WHERE l.book_id=? AND l.entry_date BETWEEN ? AND ? AND e.source IN ('bank','card') "
-                     f"AND a.type='expense' AND l.contact_id<>''{cut} ORDER BY l.id",
-                     (book_id, start, end, *skip)).fetchall()
+                     "AND a.type='expense' AND l.contact_id<>'' ORDER BY l.id", (book_id, start, end)).fetchall()

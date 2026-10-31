@@ -76,23 +76,10 @@ def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01")
     return bill
 
 
-def _split_bill(c, vendor, parts, source):
-    """A bill with one expense line per (amount, teammate) part, approved and paid from `source`."""
-    lines = [{"account_id": account(c, "6100"), "amount": amount, "tags": {"teammate": teammate}}
-             for amount, teammate in parts]
-    made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-05-01", "lines": lines})
-    assert made.status == "committed", made
-    bill = str(made.result["bill_id"])
-    assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
-    paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "date": "2026-06-01", **source})
-    assert paid.status == "committed", paid
-
-
-def _expense(c, vendor, amount, source, source_id, credit_code, teammate=""):
-    """A bank or card row posted straight to an expense with the vendor on it, tagged with a teammate when one is given."""
-    tags = {"teammate": teammate} if teammate else {}
+def _expense(c, vendor, amount, source, source_id, credit_code):
+    """A bank or card row posted straight to an expense with the vendor on it."""
     FA.post_entry(c, {"date": "2026-06-02", "source": source, "source_id": source_id, "lines": [
-        {"account_id": account(c, "6100"), "amount": amount, "contact_id": vendor, "tags": tags},
+        {"account_id": account(c, "6100"), "amount": amount, "contact_id": vendor},
         {"account_id": account(c, credit_code), "amount": -amount}]}, at=AT)
 
 
@@ -253,35 +240,43 @@ def test_due_dates_wait_for_finance_and_the_bookkeeper_then_seed_once(store):
             assert (repeats, first_due) == first[key], key
 
 
-def test_a_teammate_without_payables_and_receivables_cannot_read_the_workpapers(keeper):
+def test_a_teammate_who_does_not_see_everything_is_refused_the_workpapers(keeper):
+    with keeper.transaction() as c:
+        authority = _contact(c, "Testland Revenue")
+        made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority})
+        assert made.status == "committed", made
+        _grant(c, PAYABLES, "payables")
+        _grant(c, PAYABLES, "receivables")
+        _grant(c, PAYABLES, "expenses", whose="own")
+    reads = [FR.sales_tax_report, FR.sales_tax_csv, FR.form_1099_report, FR.form_1099_csv]
     with keeper.read() as c:
-        with pytest.raises(FinanceError) as sales:
-            FR.sales_tax_report(c, PLAIN, 2026, AT)
-        with pytest.raises(FinanceError) as form:
-            FR.form_1099_csv(c, PLAIN, 2026, AT)
-    assert (sales.value.code, form.value.code) == ("denied", "denied")
+        for who in (PLAIN, PAYABLES):
+            for read in reads:
+                with pytest.raises(FinanceError) as refused:
+                    read(c, who, 2026, AT)
+                assert refused.value.code == "denied", (who, read.__name__)
+    with keeper.transaction() as c:
+        # Without the amount owed there is no bill to make: the owed figure is read off the workpaper.
+        assert act(c, PAYABLES, "tax_remit", {"jurisdiction": "TL", "period": "2026-Q1"}).code == "denied"
 
 
-def test_a_payables_teammate_sees_only_the_1099_lines_their_view_covers(keeper):
+def test_an_everything_grant_reads_the_workpapers_whole(keeper):
     with keeper.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         bank = _bank(c)
-        _grant(c, PAYABLES, "payables")
-        _grant(c, PAYABLES, "expenses", whose="own")
-        _expense(c, acme, 20_000, "bank", "b1", "1000", teammate=PAYABLES)
-        _expense(c, acme, 5_000, "bank", "b2", "1000", teammate="human:ben")
-        _split_bill(c, acme, [(30_000, PAYABLES), (10_000, "human:ben")], {"money_account_id": bank})
+        _grant(c, PAYABLES, "everything", whose="company")
+        _expense(c, acme, 20_000, "bank", "b1", "1000")
+        _pay(c, acme, 40_000, {"money_account_id": bank})
     with keeper.read() as c:
         mine = FR.form_1099_report(c, PAYABLES, 2026, AT)
         mine_csv = FR.form_1099_csv(c, PAYABLES, 2026, AT)
         everyone = FR.form_1099_report(c, OWNER, 2026, AT)
-    # The bill's 40,000 is settled in full; the teammate sees the 30,000 of its lines their view covers.
-    assert _vendor_row(mine, "Acme Consulting")["cash_paid"] == 50_000
-    assert mine_csv.splitlines()[1] == "2026,Acme Consulting,yes,500.00,0.00,2000.00,no"
-    assert _vendor_row(everyone, "Acme Consulting")["cash_paid"] == 65_000
+    assert _vendor_row(mine, "Acme Consulting")["cash_paid"] == 60_000
+    assert mine_csv.splitlines()[1] == "2026,Acme Consulting,yes,600.00,0.00,2000.00,no"
+    assert mine == everyone
 
 
-def test_a_remittance_bill_with_a_private_line_is_left_out_whole(keeper):
+def test_a_private_line_the_viewer_lacks_full_detail_on_refuses_the_workpapers(keeper):
     with keeper.transaction() as c:
         authority = _contact(c, "Testland Revenue")
         made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority,
@@ -299,27 +294,45 @@ def test_a_remittance_bill_with_a_private_line_is_left_out_whole(keeper):
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "account_id": account(c, "1000")}).status == "committed"
         assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6100"), "private": True,
                                                    "others_see": "hidden"}).status == "committed"
-        _grant(c, PAYABLES, "receivables")
-        _grant(c, PAYABLES, "payables")
+        _grant(c, PAYABLES, "everything", whose="company")
+    with keeper.read() as c:
+        with pytest.raises(FinanceError) as refused:
+            FR.sales_tax_report(c, PAYABLES, 2026, AT)
+    assert refused.value.code == "denied"
+    with keeper.transaction() as c:
+        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6100"), "private": True,
+                                                   "others_see": "hidden",
+                                                   "full_detail": [PAYABLES]}).status == "committed"
     with keeper.read() as c:
         mine = FR.sales_tax_report(c, PAYABLES, 2026, AT)["rows"]
         everyone = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
-    # The invoice is visible to them, the paid remittance is not: its tax line goes out with the whole bill.
-    assert _quarter(mine, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 0,
-                                         "due": 1_600}
-    assert _quarter(everyone, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 1_600,
-                                             "due": 0}
+    assert mine == everyone
+    assert _quarter(mine, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 1_600,
+                                         "due": 0}
 
 
-def test_a_debit_card_row_on_a_bank_account_is_a_card_payment(keeper):
+def test_1099_payments_count_in_the_year_they_were_paid(keeper):
     with keeper.transaction() as c:
         acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
         bank = _bank(c)
-        debit = SK.insert(c, "fin_feed_txns", {
+        _pay(c, acme, 20_000, {"money_account_id": bank}, bill_day="2025-12-01", paid_on="2026-01-05")
+        _pay(c, acme, 30_000, {"money_account_id": bank}, bill_day="2025-11-01", paid_on="2025-12-28")
+    with keeper.read() as c:
+        y2025 = _vendor_row(FR.form_1099_report(c, OWNER, 2025, AT), "Acme Consulting")
+        y2026 = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
+    assert (y2025["cash_paid"], y2026["cash_paid"]) == (30_000, 20_000)
+
+
+@pytest.mark.parametrize("kind", ["debitCardTransaction", "creditCardTransaction"])
+def test_a_card_row_on_a_bank_account_is_a_card_payment(keeper, kind):
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        bank = _bank(c)
+        card = SK.insert(c, "fin_feed_txns", {
             "money_account_id": bank, "provider_id": "t3", "txn_date": "2026-06-01", "amount": -40_000,
             "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
-            "status": "posted", "raw_json": "{}", "kind": "debitCardTransaction"})
-        _pay(c, acme, 40_000, {"feed_id": debit})
+            "status": "posted", "raw_json": "{}", "kind": kind})
+        _pay(c, acme, 40_000, {"feed_id": card})
         _pay(c, acme, 10_000, {"money_account_id": bank})
     with keeper.read() as c:
         row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")

@@ -289,7 +289,8 @@ def install(app, store, auth, mutate):
     @app.get("/api/v2/finance/tax/sales-tax")
     def finance_sales_tax(request: Request, year: int | None = Query(None, ge=2000, le=2100), view_as: str | None = None):
         """The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters, with taxable sales,
-        tax collected, tax remitted, what is due and the day the return falls due. Needs receivables and payables."""
+        tax collected, tax remitted, what is due and the day the return falls due. Tax workpapers need full view: anyone
+        who does not see everything is refused, CSV included."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.sales_tax_report(c, actor, year))
 
@@ -307,7 +308,8 @@ def install(app, store, auth, mutate):
     def finance_form_1099(request: Request, year: int | None = Query(None, ge=2000, le=2100),
                           view_as: str | None = None):
         """The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments
-        left out, the threshold, whether a 1099-NEC is due and the day it falls due. Needs payables."""
+        left out, the threshold, whether a 1099-NEC is due and the day it falls due. Tax workpapers need full view: anyone
+        who does not see everything is refused, CSV included."""
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.form_1099_report(c, actor, year))
 
