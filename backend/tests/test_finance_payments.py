@@ -159,7 +159,7 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
         assert status == "unknown" and _holds(c) == [(50_000, "held")]
         assert act(c, OWNER, "payment_create", body).code == "conflict"         # one live payment per bill
         assert act(c, OWNER, "payment_cancel", {"payment_id": pid}).code == "conflict"   # not looked for long yet
-    sent = {"recipientId": "rcp-1", "amount": 500.0, "note": f"tico:{key}"}
+    sent = {"recipientId": "rcp-1", "amount": 500.0, "note": f"tico:{key}", "externalMemo": f"tico:{key} Acme"}
     fake.land({**sent, "amount": 499.0}, "req-other-amount")                    # its key, another amount
     fake.land({**sent, "recipientId": "rcp-9"}, "req-other-payee")              # its key, another payee
     fake.page_size = 1
@@ -176,6 +176,7 @@ def test_an_unknown_payment_is_never_sent_again_and_is_found_by_memo_recipient_a
     with books.read() as c:
         assert c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()[:] == \
             ("awaiting_bank_approval", "req-9")
+    assert all(str(b["externalMemo"]).startswith("tico:pay-") for b in fake.sent("request_send_money"))
     fake.requests["req-9"] = {**fake.requests["req-9"], "status": "rejected"}
     sync_once(books, fake, HOURS[6])
     with books.transaction() as c:
@@ -427,18 +428,30 @@ def test_a_wire_needs_its_purpose_and_a_refusal_is_never_silent(books):
                 "money_account_id": _checking(c)}
         bare = act(c, OWNER, "payment_create", body)
         assert bare.code == "invalid" and "purpose" in bare.reason
+        # C19: Mercury's categories, with additional_info exactly where the category takes it.
+        for purpose in ({"category": "nonsense"}, {"category": "vendor"}, {"category": "other"},
+                        {"category": "employee", "additional_info": "Eve"}):
+            assert act(c, OWNER, "payment_create", {**body, "purpose": purpose}).code == "invalid", purpose
+        assert act(c, OWNER, "payment_create", {**body, "amount": 1_000, "purpose": {"category": "subsidiary"}}
+                   ).status == "committed"
         paid = act(c, OWNER, "payment_create", {**body, "purpose": {"category": "vendor", "additional_info": "Q4"}})
         assert paid.status == "committed", paid
-        again = act(c, OWNER, "payment_create", {**body, "amount": 30_001, "purpose": {"category": "nonsense"}})
+        again = act(c, OWNER, "payment_create", {**body, "amount": 30_001, "purpose": {"category": "travel"}})
+        fixable = act(c, OWNER, "payment_create", {**body, "amount": 30_002, "purpose": {"category": "expenses"}})
     fake.queue["request_send_money"] = [Answer(200, MERCURY["send_request_created"]),
+                                        Answer(200, MERCURY["send_request_created"]),
+                                        Answer(400, {"message": "amount is over the daily wire limit"}),
                                         Answer(400, {"message": "purpose.simple.category is invalid"})]
     sync_once(books, fake, HOURS[1])
-    assert fake.sent("request_send_money")[0]["purpose"] == {"simple": {"category": "vendor", "additionalInfo": "Q4"}}
+    assert fake.sent("request_send_money")[1]["purpose"] == {"simple": {"category": "vendor", "additionalInfo": "Q4"}}
     with books.read() as c:
-        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (again.result["payment_id"],)).fetchone()[0] == \
-            "failed"
+        def status(made):
+            return c.execute("SELECT status FROM fin_payments WHERE id=?", (made.result["payment_id"],)).fetchone()[0]
+        assert status(again) == "failed"
         assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.payment.failed'").fetchone()[0] == 1
         assert _asks(c, "Payment of 300.01 failed") == 1
+        assert status(fixable) == "queued" and _asks(c, "Payment of 300.02 is waiting") == 1   # a fixable refusal
+        assert (30_002, "held") in _holds(c)
 
 
 # ------------------------------------------------------------------------------------------------ sealed bank details
@@ -522,3 +535,33 @@ def test_a_denied_or_declined_payee_leaves_no_bank_numbers_and_no_vault_row(api)
         assert FA.approval_decided(c, asked["approval_id"], AT).status == "denied"
         assert _sealed_rows(c) == 0 and _plaintext_anywhere(c) == []
     assert fake.sent("create_recipient") == []
+
+
+def test_a_limit_added_after_payments_were_queued_is_reserved_at_send_once(books):
+    """N6: queued payments a new monthly limit now covers reserve its counter with their send claim, owned by each
+    payment: the first fits and counts once (a retried send doesn't count it again); the next is over and cancelled."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "money_account_id": _checking(c)}
+        first = act(c, OWNER, "payment_create", {**body, "amount": 10_000})
+        second = act(c, OWNER, "payment_create", {**body, "amount": 10_000, "memo": "second"})
+        assert first.status == second.status == "committed"
+        cap = _rule(c, OWNER, "Monthly cap", {"kind": "payment_create"},
+                    {"outcome": "limit", "limit": 15_000, "per": "month"},
+                    [{"input": {"kind": "payment_create", "amount": 10}, "expect": "limit"}])
+        assert cap.status == "committed", cap
+        rule_id = str(cap.result["rule_id"])
+    fake.queue["request_send_money"] = [Answer(429, {})]                  # the first try is turned back: retried
+    sync_once(books, fake, HOURS[1])
+    sync_once(books, fake, HOURS[3])
+    sync_once(books, fake, HOURS[5])
+    assert len(fake.sent("request_send_money")) == 2                       # the 429, then the send
+    with books.read() as c:
+        assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
+                               (rule_id,)).fetchone()) == (10_000, 1)
+        status = dict(c.execute("SELECT id, status || ':' || coalesce(last_error, '') FROM fin_payments"))
+        assert sorted(status.values())[0].startswith("awaiting_bank_approval")
+        assert sorted(status.values())[1].startswith("cancelled:Monthly cap"), status

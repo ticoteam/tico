@@ -35,6 +35,8 @@ STATEMENT_HOURS = 24
 RETRY = (60, 300, 1800, 3600)
 NO_KEY_OPS = ("card_create", "recipient_create")   # Mercury documents no idempotency for these creates
 CLAIM_MINUTES = 10                # a write claimed this long ago with no answer recorded was cut off mid-call
+UNOWNED_HOURS = 24               # an event no connection could read (404) is retried this long before it is nobody's
+MISSING = "404"                   # in an inbox row's tried list: some connection's read came back 404 this round
 GONE_TRIES = 5                    # a transaction Mercury keeps answering 404 for is given up after this many reads
 REQUEST_PAGES = 10                # pages of Mercury's approval requests read to find an unknown payment
 Make = Callable[[str], Provider]
@@ -361,7 +363,7 @@ def process_inbox(store: Any, provider: Provider, cid: str, now: str) -> list[st
                     SK.inbox_later(c, str(r["id"]), attempts=attempts, tried=tried,
                                    next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]))
                 else:
-                    _tried(c, r, tried + [cid], others, now)
+                    _tried(c, r, tried + [cid], others, now, missing=True)
                 continue
             ctx = load(c, now)
             raw = str(body.get("resourceVersion") or "0")
@@ -379,12 +381,21 @@ def process_inbox(store: Any, provider: Provider, cid: str, now: str) -> list[st
     return []
 
 
-def _tried(c: Any, r: Any, tried: list[str], connections: list[str], now: str) -> None:
-    """An unowned event this connection could not take in: once every connection has tried it, nobody's."""
-    if set(connections) <= set(tried):
-        SK.inbox_done(c, str(r["id"]), "ignored", now)
-    else:
+def _tried(c: Any, r: Any, tried: list[str], connections: list[str], now: str, missing: bool = False) -> None:
+    """An unowned event this connection could not take in. Once every connection has tried it: when each saw the
+    transaction on an account it doesn't map, it is nobody's; when one got a 404 (`missing`: maybe not visible yet), a
+    new round starts after a backoff, until UNOWNED_HOURS after it arrived, and only then is it given up."""
+    if missing and MISSING not in tried:
+        tried = tried + [MISSING]
+    if not set(connections) <= set(tried):
         SK.inbox_later(c, str(r["id"]), attempts=int(r["attempts"]), next_try_at=r["next_try_at"], tried=tried)
+        return
+    if MISSING in tried and str(r["created_at"]) > _after(now, -UNOWNED_HOURS * 3600):
+        attempts = int(r["attempts"]) + 1
+        SK.inbox_later(c, str(r["id"]), attempts=attempts, tried=[],
+                       next_try_at=_after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]))
+        return
+    SK.inbox_done(c, str(r["id"]), "ignored", now)
 
 
 # ------------------------------------------------------------------------------------------------ writes
@@ -588,10 +599,12 @@ def pay(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
         with store.transaction() as c:
             ctx = load(c, now)
             row = SK.get(c, "fin_payments", pid)
-            if str(row["status"]) != "queued" or payments.recheck(ctx, row):
+            fresh: list[Any] = []
+            if str(row["status"]) != "queued" or payments.recheck(ctx, row, fresh):
                 continue
             if not SK.payment_claim(c, pid, now, _after(now, payments.SENDING_MINUTES * 60)):
                 continue
+            payments.reserve(ctx, row, fresh)         # with the claim: newly applicable limits move once
             rec = SK.get(c, "fin_recipients", str(p["recipient_id"]))
             claimed = SK.get(c, "fin_payments", pid)
         answer = provider.request_send_money(account, payments.request_body(claimed, rec))

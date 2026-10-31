@@ -233,7 +233,7 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     pid = SL.new_id()
 
     def apply(aid: str) -> Result:
-        hold = budgeting.place(ctx, budget_scope={"account_id": line.id, **tags, "vendor": str(rec["contact_id"])},
+        hold = budgeting.place(ctx, budget_scope={"account_id": line.id, **tags, "vendor": vendor_of(rec)},
                                amount=amount, currency=ctx.book.base_currency, source="payment", source_id=pid,
                                expires_at=None, by=who)
         if not hold.allowed:
@@ -264,9 +264,18 @@ def _facts(ctx: Ctx, rec: Any, amount: int, code: str, obligation: str, tags: Ma
             G.AGES: {"balance": _age(ctx, bank["balance_as_of"])}}
 
 
+# Mercury's requestSendMoney purpose.simple.category values, and what each says about additionalInfo: required for a
+# vendor, contractor (their name) or other (a description), optional for a subsidiary, refused for the rest.
+PURPOSE_CATEGORIES = ("employee", "landlord", "vendor", "contractor", "subsidiary", "transferToMyExternalAccount",
+                      "familyMemberOrFriend", "forGoodsOrServices", "angelInvestment", "savingsOrInvestments",
+                      "expenses", "travel", "other")
+PURPOSE_NEEDS_INFO = ("vendor", "contractor", "other")
+PURPOSE_MAY_INFO = ("subsidiary",)
+
+
 def _purpose(p: V.Payload, method: str) -> dict[str, str]:
-    """A wire's purpose, which Mercury requires (purpose.simple.category, and additionalInfo where the category needs
-    it). Other methods carry none."""
+    """A wire's purpose, which Mercury requires, checked as Mercury checks it before it is queued: a known category,
+    and additional_info exactly where that category takes it. Other methods carry none."""
     if method != "wire":
         if "purpose" in p:
             raise invalid("only a wire takes a purpose")
@@ -276,8 +285,20 @@ def _purpose(p: V.Payload, method: str) -> dict[str, str]:
     category = V.opt_text(raw, "category", 80) or ""
     if not category:
         raise invalid("a wire needs a purpose: {category, additional_info}")
+    if category not in PURPOSE_CATEGORIES:
+        raise invalid(f"a wire's purpose category is one of {', '.join(PURPOSE_CATEGORIES)}")
     info = V.opt_text(raw, "additional_info", 140) or ""
+    if category in PURPOSE_NEEDS_INFO and not info:
+        raise invalid(f"a {category} wire needs additional_info ("
+                      f"{'a description' if category == 'other' else 'their name'})")
+    if info and category not in PURPOSE_NEEDS_INFO + PURPOSE_MAY_INFO:
+        raise invalid(f"a {category} wire takes no additional_info")
     return {"category": category, **({"additional_info": info} if info else {})}
+
+
+def vendor_of(rec: Any) -> str:
+    """The vendor a payment to this recipient holds and settles under: one key for both."""
+    return str(rec["contact_id"] or rec["name"] or "")
 
 
 def ring() -> None:
@@ -367,8 +388,13 @@ def _hold(ctx: Ctx, pay: Any, why: str) -> str:
 
 
 def _own_counts(ctx: Ctx, pay: Any) -> set[tuple[str, str, str]]:
-    """The rule counters this payment's own action already moved (so the recheck does not count it twice)."""
+    """The rule counters this payment already moved: its own action's, and those reserved when it was claimed to send
+    (so a recheck or a retried send never counts it twice)."""
     out: set[tuple[str, str, str]] = set()
+    for raw in SK.loads_list(pay["counted_json"]):
+        if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
+            rule, key, subject = cast(list[Any], raw)
+            out.add((str(rule), str(key), str(subject)))
     run = SK.last_rule_run(ctx.c, str(pay["action_id"] or ""))
     if run is None:
         return out
@@ -378,6 +404,18 @@ def _own_counts(ctx: Ctx, pay: Any) -> set[tuple[str, str, str]]:
         if h.get("outcome") == "limit" and h.get("period_key"):
             out.add((str(h.get("rule")), str(h.get("period_key")), str(h.get("subject") or "")))
     return out
+
+
+def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
+    """Move the counters of limits that apply now but did not when the payment's action committed (a rule added
+    since, a new period), in the transaction that claims it to send; the payment owns them, so they move once."""
+    if not hits:
+        return
+    owned = [list(x) for x in SK.loads_list(pay["counted_json"])]
+    for h in hits:
+        SK.count(ctx.c, h.rule, h.period_key, h.subject, int(pay["amount"]), ctx.at)
+        owned.append([h.rule, h.period_key, h.subject])
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": SK.dump(owned)})
 
 
 def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str) -> bool:
@@ -395,12 +433,13 @@ def _approved_for(ctx: Ctx, action: Any, who: str, who_needed: str) -> bool:
     return who_needed == "manager" or R.is_admin(ctx.org, by, ctx.rights(by))
 
 
-def recheck(ctx: Ctx, pay: Any) -> str:
+def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     """Right before the provider call, the same judgment as at the action (§9): the payer still has the right and the
     line in view, the recipient is still that version, payments are on, the gate rules (with their counters, less this
     payment's own, and their inputs' ages) and the budget still let it through. "" to go ahead; "wait" when it stays
     queued (the recipient is not at Mercury yet, or a person must look: it is held and asked about); else why it was
-    cancelled (a deny or a declined budget ends it and releases its hold)."""
+    cancelled (a deny or a declined budget ends it and releases its hold). On "" the limits it fits that it has not
+    counted yet are added to `fresh`, for `reserve` once the send is claimed."""
     from . import gating
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     money = SK.get(ctx.c, "fin_money_accounts", str(pay["money_account_id"]))
@@ -460,16 +499,21 @@ def recheck(ctx: Ctx, pay: Any) -> str:
         why = "its budget hold is gone"
         end(ctx, pay, "cancelled", why)
         return why
+    if fresh is not None:
+        fresh.extend(h for h in verdict.counts if (h.rule, h.period_key, h.subject) not in mine)
     return ""
 
 
 def request_body(pay: Any, rec: Any) -> dict[str, object]:
-    """The request-send-money body. The key goes in `note` too: Mercury's list of requests returns a memo, not the
-    idempotency key, so an unknown request is found by its key in what comes back, its recipient and its amount."""
+    """The request-send-money body. The key goes in `note` and leads `externalMemo` too: Mercury's list of requests
+    returns a memo (undocumented which field it echoes), not the idempotency key, so an unknown request is found by its
+    key in what comes back, its recipient and its amount."""
+    key = f"{NOTE}{pay['idempotency_key']}"
+    memo = str(pay["memo"] or "")
     body: dict[str, object] = {
         "recipientId": str(rec["provider_recipient_id"]), "amount": dollars(int(pay["amount"])),
         "paymentMethod": MERCURY_METHOD[str(pay["method"])], "idempotencyKey": str(pay["idempotency_key"]),
-        "note": f"{NOTE}{pay['idempotency_key']}", "externalMemo": str(pay["memo"] or "")[:140] or None}
+        "note": key, "externalMemo": f"{key} {memo}".strip()[:140]}
     purpose = cast(dict[str, str], SK.loads(pay["purpose_json"]))
     if purpose.get("category"):
         body["purpose"] = {"simple": {"category": purpose["category"],
@@ -512,7 +556,13 @@ def sent(ctx: Ctx, pay: Any, answer: Answer) -> None:
             "status": "queued", "attempts": attempts, "last_error": IP_HINT if answer.refused_write else
             error_text(answer, True), "next_try_at": _later(ctx, attempts), "updated_at": ctx.at})
         return
-    end(ctx, pay, "failed", error_text(answer, True))
+    why = error_text(answer, True)
+    if answer.status == 400 and "purpose" in why.lower():
+        # A fixable refusal: it stays queued with its hold, and a finance admin is asked.
+        SK.update(ctx.c, "fin_payments", str(pay["id"]), {"attempts": attempts})
+        _hold(ctx, pay, f"Mercury refused its wire purpose ({why})")
+        return
+    end(ctx, pay, "failed", why)
 
 
 def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:

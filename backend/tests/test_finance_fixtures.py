@@ -187,9 +187,10 @@ class FakeMercury:
 
     def land(self, body, request_id: str, status: str = "pendingApproval") -> None:
         """A request as Mercury keeps it: only the documented list fields. Which request field Mercury shows as
-        `memo` is not documented; Finance's key travels in `note`, so the fake shows that."""
+        `memo` is not documented; Finance's key travels in `note` and leads `externalMemo`, so the fake shows the
+        external memo (the recipient-facing one, the likelier echo)."""
         self.requests[request_id] = {"requestId": request_id, "status": status, "amount": body.get("amount"),
-                                     "recipientId": body.get("recipientId"), "memo": body.get("note")}
+                                     "recipientId": body.get("recipientId"), "memo": body.get("externalMemo")}
 
     def send_request(self, request_id):
         return self._answer("send_request", request_id, self.requests.get(request_id) or self.Answer(404, {}))

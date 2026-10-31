@@ -274,7 +274,7 @@ CREATE TABLE IF NOT EXISTS fin_payments (
   mode TEXT NOT NULL DEFAULT 'approval_queue' CHECK (mode IN ('approval_queue','direct')),
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','sending','awaiting_bank_approval','submitted',
                                                           'settled','returned','failed','cancelled','unknown')),
-  purpose_json TEXT NOT NULL DEFAULT '{}', unknown_since TEXT, flagged_at TEXT,
+  purpose_json TEXT NOT NULL DEFAULT '{}', counted_json TEXT NOT NULL DEFAULT '[]', unknown_since TEXT, flagged_at TEXT,
   provider_request_id TEXT, provider_txn_id TEXT, hold_id TEXT REFERENCES fin_holds(id), attempts INTEGER NOT NULL DEFAULT 0,
   next_try_at TEXT, last_error TEXT, settled_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   updated_at TEXT);

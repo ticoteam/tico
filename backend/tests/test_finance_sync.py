@@ -284,3 +284,28 @@ def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_mercury_s
         assert _state(c, card_id) == ("cancelled", "cancelled", 20_000, 20_000, 0)
         assert c.execute("SELECT provider_card_id FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "card-found"
         assert _state(c, other_id)[1] == "cancelled" and _state(c, other_id)[4] == 0
+
+
+def test_an_unowned_event_no_connection_can_read_yet_is_retried_for_a_day(books):
+    """G8: an event that came with no connection, which every connection reads as 404, is kept and retried (it may
+    not be visible yet) until a day after it arrived; only then is it nobody's."""
+    fake = FakeMercury()
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        first = c.execute("SELECT * FROM fin_connections").fetchone()
+        SK.insert(c, "fin_connections", {"provider": "mercury", "purpose": "bank", "status": "active",
+                                         "name": "Mercury 2", "credential_ref": first["credential_ref"],
+                                         "created_at": AT, "created_by": OWNER})
+        for event, txn, at in (("evt-soon", "txn-dep", AT), ("evt-never", "txn-none", "2026-10-14T10:00:00.000000Z")):
+            SK.inbox_add(c, connection_id=None, provider="mercury", event_id=event,
+                         payload={"resourceType": "transaction", "resourceId": txn, "resourceVersion": 1}, at=at)
+    sync_once(books, fake, HOURS[0])                    # both connections: 404
+    with books.read() as c:
+        status = dict(c.execute("SELECT provider_event_id, status FROM fin_inbox WHERE provider_event_id LIKE 'evt-%'"))
+        assert status == {"evt-soon": "new", "evt-never": "ignored"}        # a day old: given up
+    fake.txns["txn-dep"] = dict(MERCURY["txn_deposit"])                    # now Mercury shows it
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt-soon'").fetchone()[0] == "done"
+        assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE provider_id='txn-dep'").fetchone()[0] == 1
