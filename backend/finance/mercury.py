@@ -3,6 +3,7 @@ time and never logged. It is only ever called outside a transaction, by the sync
 connect probe. Every call returns (status, JSON); it never raises for an HTTP answer. A 429 waits out Retry-After a
 few times; 401/403 on a write means the token's IP allowlist lacks this server. The Vault host (full card numbers)
 is never called."""
+import http.client
 import json
 import time
 import urllib.error
@@ -80,7 +81,10 @@ class Mercury:
         query = urllib.parse.urlencode([(k, str(v)) for k, v in (params or {}).items() if v not in (None, "")],
                                        doseq=True)
         url = self._base + path + (f"?{query}" if query else "")
-        data = json.dumps(body, default=_json_default).encode() if body is not None else None
+        try:
+            data = json.dumps(body, default=_json_default).encode() if body is not None else None
+        except ValueError:                       # an amount too big to send exactly (see _json_default)
+            return Answer(None, {})
         headers = {"Authorization": "Bearer " + self._token, "Accept": "application/json"}
         if data is not None:
             headers["Content-Type"] = "application/json"
@@ -96,10 +100,10 @@ class Mercury:
                     continue
                 try:
                     raw = exc.read()
-                except OSError:
+                except (OSError, http.client.HTTPException):
                     raw = b""
                 return Answer(exc.code, _parse(raw))
-            except (urllib.error.URLError, TimeoutError, OSError, ValueError):
+            except (urllib.error.URLError, TimeoutError, OSError, ValueError, http.client.HTTPException):
                 return Answer(None, {})
         return Answer(429, {})
 
@@ -167,8 +171,13 @@ class Mercury:
 
 
 def _json_default(value: object) -> object:
-    """Decimal amounts go out as JSON numbers (Mercury takes 0.01 steps); anything else as its text."""
-    return float(value) if isinstance(value, Decimal) else str(value)
+    """Decimal amounts go out as JSON numbers (Mercury takes 0.01 steps); anything else as its text.
+    Floats hold cents exactly below 2**53 cents, so amounts of 10**13 dollars or more are refused."""
+    if isinstance(value, Decimal):
+        if abs(value) >= 10**13:
+            raise ValueError("amount too large to send exactly")
+        return float(value)
+    return str(value)
 
 
 def _parse(raw: bytes) -> dict[str, Any]:
