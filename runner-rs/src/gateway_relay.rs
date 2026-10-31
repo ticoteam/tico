@@ -205,6 +205,12 @@ fn turn_dir(env: &Env, aid: &str) -> std::path::PathBuf {
     std::path::PathBuf::from(root).join("runtime").join("pi-gateway").join(if name.is_empty() { "turn".into() } else { name })
 }
 
+/// At the runner's start, before any turn: no relay runs yet, so each turn's pi configuration left by a runner that
+/// was killed mid-turn (its relay URL and token name nothing now) goes. Under `projects_dir`, like `turn_dir`.
+pub fn sweep(projects_dir: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(projects_dir.join("runtime").join("pi-gateway"));
+}
+
 /// Whether a claimed attempt may call the Gateway (the server's `gateway` flag on the claim).
 pub fn wanted(attempt: &Value) -> bool {
     crate::util::truthy(attempt.get("gateway"))
@@ -510,6 +516,19 @@ async fn serve(mut socket: TcpStream, s: &Shared) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_start_removes_turn_configurations_left_by_a_killed_runner() {
+        let ws = std::env::temp_dir().join(format!("tico-gw-sweep-{}", uuid::Uuid::new_v4().simple()));
+        let left = ws.join("runtime/pi-gateway/att-1");
+        std::fs::create_dir_all(&left).unwrap();
+        std::fs::write(left.join("models.json"), "{}").unwrap();
+        std::fs::create_dir_all(ws.join("runtime/other")).unwrap();
+        sweep(&ws);
+        assert!(!ws.join("runtime/pi-gateway").exists());
+        assert!(ws.join("runtime/other").exists());
+        let _ = std::fs::remove_dir_all(&ws);
+    }
+
     use super::*;
     use std::sync::Mutex;
 
