@@ -19,6 +19,7 @@ from typing import Any, cast
 from . import handlers
 from .context import Ctx
 from .core import kinds as K
+from .core.budgets import amount_at
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
@@ -396,9 +397,10 @@ def _state(kind: str) -> handlers.Planner:
                 raise FinanceError(CONFLICT, "that card is cancelled")
         if kind == "card_unfreeze":
             from .core import dates
-            name = blocked_by(ctx, str(cards[0]["budget_id"] or ""), dates.day(ctx.today))
-            if name:
-                raise denied(f"the {name} budget is used up; raise it before unfreezing")
+            leaf = str(cards[0]["budget_id"] or "")
+            blocker = blocking_budget(ctx, leaf, dates.day(ctx.today))
+            if blocker:
+                raise denied(_unfreeze_refusal(ctx, who, leaf, blocker))
 
         def apply(aid: str) -> Result:
             for card in cards:
@@ -441,7 +443,7 @@ def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
     lifted = 0
     for card in SK.budget_frozen_cards(ctx.c, scope):
         leaf = str(card["budget_id"] or "")
-        if leaf not in budgets or blocked_by(ctx, leaf, today):
+        if leaf not in budgets or blocking_budget(ctx, leaf, today):
             continue
         cid = str(card["id"])
         SK.update(ctx.c, "fin_cards", cid, {"status": "active", "freeze_by": None, "freeze_budget_id": None,
@@ -475,16 +477,34 @@ def _over(ctx: Ctx, budget_id: str, at: date) -> bool:
 BLOCKING = ("decline", "hold_payment")     # the at-limit actions that refuse spend: a card under one stays frozen
 
 
-def blocked_by(ctx: Ctx, leaf: str, at: date) -> str:
-    """The name of the first budget on a card's path (its own, then its parents) that refuses spend and is at its
-    amount on `at`, or "". A freeze made at a cutoff reaches a card through these same parent links, so a card is
-    lifted, or unfrozen by hand, only when none of them is still at its cutoff. A warn or ask budget blocks nothing."""
+def blocking_budget(ctx: Ctx, leaf: str, at: date) -> str:
+    """The id of the first budget on a card's path (its own, then its parents) that stops the card on `at`, or "": one
+    at zero (a pause, whatever its at-limit: a zero budget means no spending, §12), or one at its amount whose at-limit
+    refuses spend. A pause or a cutoff reaches a card through these same parent links, so a card is lifted, or unfrozen
+    by hand, only when none of them stops it. A warn or ask budget above zero blocks nothing."""
     from .budgeting import chain_of
     budgets = ctx.budgets()
     for bid in chain_of(ctx, leaf):
-        if budgets[bid].at_limit in BLOCKING and _over(ctx, bid, at):
-            return budgets[bid].name
+        if _paused(ctx, bid, at) or (budgets[bid].at_limit in BLOCKING and _over(ctx, bid, at)):
+            return bid
     return ""
+
+
+def _paused(ctx: Ctx, budget_id: str, at: date) -> bool:
+    """Whether a budget's amount is zero on `at`, an explicit pause. A budget with no amount in force is not paused:
+    it never cuts off."""
+    return amount_at(SB.versions(ctx.c, [budget_id])[budget_id], at) == 0
+
+
+def _unfreeze_refusal(ctx: Ctx, who: str, leaf: str, blocker: str) -> str:
+    """Why a card cannot be unfrozen yet. The blocking budget is named only where `who` may see it (§7.5): a budget
+    above the card's own that `who` cannot see is not named."""
+    b = ctx.budgets()[blocker]
+    if handlers.sees_budget(ctx, who, b):
+        return f"the {b.name} budget is used up; raise it before unfreezing"
+    if blocker == leaf:
+        return "this card's budget is used up; raise it before unfreezing"
+    return "a budget above this one is used up; raise it before unfreezing"
 
 
 def check_lower(ctx: Ctx, card: Any, amount: int) -> None:

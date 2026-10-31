@@ -396,17 +396,22 @@ def _cards_fit_child(ctx: Ctx, who: str, child_id: str, parent: B.Budget, effect
     _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
 
 
-def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget) -> None:
-    """A budget that comes back active adds its current amount from today on, so it must fit as a version of today
-    would: among its siblings (`_fit`), over its own cards and children, and within its parent's cards and children."""
-    today = dates.day(ctx.today)
-    current = B.amount_at(SB.versions(ctx.c, [b.id])[b.id], today)
-    if not current:
-        return
-    _fit(ctx, who, b, today.isoformat(), current)
-    _cards_fit(ctx, who, b, today.isoformat(), current)
+def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int | None) -> None:
+    """A budget that comes back active adds its whole schedule from `effective` on (today, or the day of the version
+    this change sets), so every version day from there must fit, zero today or not: among its siblings (`_fit`), over
+    its own cards and children, and within its parent's cards and children. Unlike a version change, no day is skipped
+    for a budget at zero: a pause today does not excuse a later version. `amount` is the version this change sets, if
+    any."""
+    mine = SB.versions(ctx.c, [b.id])[b.id]
+    if amount is not None:
+        mine.append(B.Version(budget_id=b.id, version=10**9, effective_from=effective, amount=amount))
+    _fit(ctx, who, b, effective, B.amount_at(mine, dates.day(effective)) or 0)
+    _reserve_fit(ctx, who, b, mine, _kid_versions(ctx, b.id), effective)
     if b.parent_id:
-        _cards_fit_child(ctx, who, b.id, ctx.budgets()[b.parent_id], today.isoformat(), current)
+        parent = ctx.budgets()[b.parent_id]
+        kids = {k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k != b.id}
+        kids[b.id] = mine
+        _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
 
 
 def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
@@ -523,15 +528,15 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount == 0 and dates.day(effective) > dates.day(ctx.today):
         raise invalid("a pause takes effect now: leave effective_from out")
     reactivates = new.active and not old.active
-    if amount is not None:
-        if reactivates and dates.day(effective) > dates.day(ctx.today):
-            raise invalid("a budget that comes back active takes its amount from today: leave effective_from out")
+    if amount is not None and reactivates and dates.day(effective) > dates.day(ctx.today):
+        raise invalid("a budget that comes back active takes its amount from today: leave effective_from out")
+    if reactivates:
+        _reactivate_fit(ctx, who, old, effective if amount is not None else dates.day(ctx.today).isoformat(), amount)
+    elif amount is not None:
         _fit(ctx, who, old, effective, amount)
         _cards_fit(ctx, who, old, effective, amount)
         if old.parent_id:
             _cards_fit_child(ctx, who, old.id, ctx.budgets()[old.parent_id], effective, amount)
-    elif reactivates:
-        _reactivate_fit(ctx, who, old)
 
     def apply(aid: str) -> Result:
         SB.update_budget(ctx.c, new, ctx.at)
