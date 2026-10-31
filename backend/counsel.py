@@ -18,7 +18,7 @@ and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
   opens a private Counsel task for the full answer. Every answer carries the one line that it is not legal advice.
 
 Counsel is a helper (backend/assistant.py `HELPERS`): built in, off the org chart, seeded by onboarding like the
-Librarian (templates/catalog/counsel). Its tasks are private by default (backend/hubdb.py PRIVATE_BY_TEMPLATE). Only the
+Librarian (templates/catalog/tico-counsel). Its tasks are private by default (backend/hubdb.py PRIVATE_BY_TEMPLATE). Only the
 owner can turn it on or off.
 """
 import hashlib
@@ -44,7 +44,7 @@ from .blobs import register
 from .models import Contract
 from .store import Problem
 
-SLUG = "counsel"
+SLUG = H.COUNSEL
 NAME = "Counsel"
 NOT_ADVICE = "Not legal advice. For real exposure, ask a lawyer."
 QUESTION_MAX = 500

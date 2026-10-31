@@ -207,11 +207,11 @@ def counsel(world):
     from backend.store import H
     from .harness import DANA_ID
     with world.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('counsel', 'Counsel', 'active')")
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES('counsel', '{}', '', ?)",
-                  (DANA_ID,))
+        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES(?, 'Counsel', 'active')", (H.COUNSEL,))
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES(?, '{}', '', ?)",
+                  (H.COUNSEL, DANA_ID))
         c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
-                  ("counsel", "test", "x-counsel", H.now(), "human:" + DANA_ID))
+                  (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
         data = VENDOR_TERMS.encode("utf-8")
         digest = world.app.state.blobs.put(data, "text/plain")
         item = register(c, Identity("human:" + DANA_ID, "owner"), digest, len(data), "northwind-terms.txt", "text/plain")
@@ -219,4 +219,4 @@ def counsel(world):
             c, bot="engineering-lead", actor="human:" + DANA_ID, scope="bot", task=None, conversation=None, attempt="",
             identity="upload:northwind-terms", title="Northwind Messaging Terms", name="northwind-terms.txt",
             mime="text/plain", blob_id=item["id"], digest=digest, size=len(data))
-    world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:counsel", "bot", agent="test")
+    world.app.state.auth.settings.test_identities[COUNSEL] = Identity("bot:" + H.COUNSEL, "bot", agent="test")

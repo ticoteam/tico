@@ -50,10 +50,10 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     await ready(page);
 
     // Counsel is a hidden helper: on the roster, but not on the Team list, and its bot page has no composer.
-    assert.ok(await page.evaluate(() => S.emps.some(e => e.name === 'counsel')), 'Counsel is on the roster');
+    assert.ok(await page.evaluate(() => S.emps.some(e => e.name === 'tico-counsel')), 'Counsel is on the roster');
     await page.locator('[data-org^="b:"]').first().waitFor({timeout: t(15000)});
-    assert.equal(await page.locator('[data-org="b:counsel"], #side a[href="#/bot/counsel"]').count(), 0, 'Counsel is not on the Team list');
-    await go(page, '#/bot/counsel');
+    assert.equal(await page.locator('[data-org="b:tico-counsel"], #side a[href="#/bot/tico-counsel"]').count(), 0, 'Counsel is not on the Team list');
+    await go(page, '#/bot/tico-counsel');
     await page.locator('#chat-composer [data-ask-open]').waitFor({timeout: t(15000)});
     assert.equal(await page.locator('#chat-composer textarea').count(), 0, 'no composer on its page');
 
@@ -71,7 +71,7 @@ const suggest = (hub, read, text, who, cite) => call(hub, 'counsel', 'POST', '/v
     await done.waitFor({timeout: t(15000)});
     const taskId = await done.getAttribute('data-ru-read');
     const task = await call(hub, 'dana', 'GET', '/v2/tasks/' + taskId);
-    assert.equal((task.task || task).owner, 'bot:counsel', 'a Counsel task');
+    assert.equal((task.task || task).owner, 'bot:tico-counsel', 'a Counsel task');
     assert.match(await modal.locator('[data-ru-task]').getAttribute('href'), new RegExp(taskId));
     await modal.locator('[data-ru-close]').first().click();
 

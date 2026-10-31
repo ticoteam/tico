@@ -6249,14 +6249,15 @@ def kind_of(me):
         return "member"
     if role == "bot":
         return "agent" if me.get("agent") else "botops" if actor == "bot:botops" else \
-            "counsel" if actor == "bot:counsel" else "bot"
+            "counsel" if actor == "bot:" + COUNSEL_BOT else "bot"
     return None
 
 
 # Counsel (backend/counsel.py) has no credentials and sends nothing, so it is offered only the tools it needs: its rules,
 # the document it reads, and its own task. A web search or fetch, a message to anyone, and every other tool are not its
 # to call. The server still decides every call; this keeps those tools out of its list and refuses them if it asks.
-COUNSEL = "counsel"
+COUNSEL = "counsel"                 # its kind of caller, the role offered_to names
+COUNSEL_BOT = "tico-counsel"        # its slug (backend/hubdb.py COUNSEL)
 COUNSEL_TOOLS = frozenset({"hub_rules_list", "hub_rules_get", "hub_rules_add", "hub_file_read", "hub_task_comment",
                            "hub_task_close"})
 

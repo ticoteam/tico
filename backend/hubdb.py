@@ -3638,7 +3638,10 @@ def private_tasks_default(conn, actor, declared=None):
 
 # The templates whose tasks are private unless their config says otherwise: a general counsel's, and Counsel's (a
 # document's text and a can-I question are a company's own, so a teammate who cannot read the source cannot read them).
-PRIVATE_BY_TEMPLATE = ("general-counsel", "counsel")
+PRIVATE_BY_TEMPLATE = ("general-counsel", "tico-counsel")
+# The built-in Counsel's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
+# "counsel" (a legal team's, say) is never taken for it.
+COUNSEL = "tico-counsel"
 
 
 

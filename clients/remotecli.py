@@ -201,7 +201,7 @@ def counsel_held(args):
     """Counsel runs a shell, so its CLI is held to the tools it is offered as its MCP is (hubtools.COUNSEL_TOOLS): a web
     search or fetch, a message, and every other command outside that list are refused before anything is sent."""
     from clients import hubtools
-    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != "counsel":
+    if (os.environ.get("HUB_BOT") or os.environ.get("HUB_EMPLOYEE") or "").strip() != hubtools.COUNSEL_BOT:
         return
     fn = getattr(args, "fn", None)
     entry = hubtools.BY_NAME.get(tool_name(fn)) if fn else None

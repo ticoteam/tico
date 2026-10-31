@@ -25,7 +25,7 @@ from . import people as P
 from . import task_caps
 from .store import Problem, encode
 
-SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager", "counsel")
+SYSTEM_BOTS = ("assistant", "botops", "librarian", "goal-manager", "health-monitor", "task-manager", H.COUNSEL)
 
 
 def _roster(c):

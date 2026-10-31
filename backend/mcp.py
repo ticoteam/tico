@@ -133,7 +133,7 @@ def caller_kind(auth, who):
         return "admin" if auth.bot_admin(who) else "member"
     if who.role == "bot":
         return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else \
-            "counsel" if who.actor == "bot:counsel" else "bot"
+            "counsel" if who.actor == "bot:" + H.COUNSEL else "bot"
     return None
 
 

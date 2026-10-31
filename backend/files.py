@@ -149,7 +149,7 @@ def asked_to_read(c, who, row, version=None):
     """A file a person asked Counsel to read (POST /api/v2/rules/read, backend/counsel.py `rule_reads`): Counsel reads
     that file, whichever bot's it is. `version` narrows it to the exact version that was asked. The person had to be able
     to read it when they asked. Nothing else widens Counsel's view."""
-    if who.role != "bot" or H.actor_id(who.actor) != "counsel":
+    if who.role != "bot" or H.actor_id(who.actor) != H.COUNSEL:
         return False
     sql, args = "SELECT 1 FROM rule_reads WHERE file_id=?", [row["id"]]
     if version is not None:
