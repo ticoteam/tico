@@ -887,7 +887,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 
 # ------------------------------------------------------------------------------------------------ search
-SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule")
+SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card")
 SEARCH_EACH = 10            # results per kind when no kind is named
 
 
@@ -919,10 +919,11 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
 def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
            filters: Mapping[str, object] | None = None, limit: int = 50, cursor: str | None = None,
            at: str | None = None) -> Row:
-    """Search entries' lines, feed rows, bills, invoices, contacts and rules (§7.1) the viewer may see. With a `kind`
-    it pages (`next_cursor`); without one it returns the first few of each kind it can show. Filters per kind:
+    """Search entries' lines, feed rows, bills, invoices, contacts, rules and cards (§7.1) the viewer may see. With a
+    `kind` it pages (`next_cursor`); without one it returns the first few of each kind it can show. Filters per kind:
     entry/feed: account_id, money_account_id, status (feed), start, end; bill/invoice: status, contact_id, start, end,
-    aging; contact: kind, active; rule: kind (gate|posting)."""
+    aging; contact: kind, active; rule: kind (gate|posting); card: status, vendor (the cards saved on that vendor, so
+    `vendor` answers "which of my cards works at X")."""
     if kind is not None and kind not in SEARCH_KINDS:
         raise invalid(f"kind is {'|'.join(SEARCH_KINDS)}")
     if cursor and kind is None:
@@ -963,6 +964,12 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "kind": "contact", "contact_kind": r["kind"], "label": r["name"]}
                             for r in cast(list[Row], found["contacts"])]
                 nxt = cast(str | None, found["next_cursor"])
+            elif k == "card":
+                found = tab.cards(c, viewer, status=_filter(f, "status"), vendor=_filter(f, "vendor"), q=text,
+                                  cursor=cursor, limit=most, at=at)
+                results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
+                            for r in cast(list[Row], found["cards"])]
+                nxt = cast(str | None, found["next"])
             else:
                 rows, after = _search_rules(ctx, viewer, text, f, most, (tab.decode_cursor(cursor) or [""])[0])
                 results += rows

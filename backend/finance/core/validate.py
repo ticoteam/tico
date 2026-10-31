@@ -1,4 +1,5 @@
 """Reading an action's payload: every field is checked and typed here, so nothing downstream handles raw JSON."""
+import re
 from collections.abc import Mapping, Sequence
 from typing import cast
 
@@ -8,6 +9,68 @@ from .errors import invalid
 Payload = Mapping[str, object]
 MAX_TEXT = 500
 MAX_ITEMS = 500
+
+
+# Field names a card number goes under. A card number is 13 to 19 digits that pass the Luhn check every card number
+# passes, written as digit groups joined by whitespace or dashes (any kind), or as a JSON number. A group run is one
+# only as a whole token: a digit next to a letter or a dash is part of an id, and a card number may carry a code after
+# it (`4242 4242 4242 4242 123`), so every run of groups is tried.
+CARD_NUMBER_KEYS = frozenset({"card_number", "cardnumber", "pan", "cvc", "cvv", "cvv2", "security_code"})
+CARD_NUMBER_REFUSED = "a card number never goes into Finance: Tico does not take one (spec §8.3)"
+_DIGITS = re.compile(r"\d+")
+_DASHES = "\\-\u2010-\u2015\u2212"
+_GAP = re.compile(rf"[\s\u00ad\u200b-\u200d\u2060\ufeff{_DASHES}]*")
+_EDGE = re.compile(rf"[\w{_DASHES}]")
+
+
+def _luhn(digits: str) -> bool:
+    total = 0
+    for i, ch in enumerate(reversed(digits)):
+        d = int(ch) * (2 if i % 2 else 1)
+        total += d - 9 if d > 9 else d
+    return total % 10 == 0
+
+
+def _card_int(n: int) -> bool:
+    return 10**12 <= abs(n) < 10**19 and _luhn(str(abs(n)))
+
+
+def _card_text(text: str) -> bool:
+    spans = [m.span() for m in _DIGITS.finditer(text)]
+    for i, (start, _) in enumerate(spans):
+        if _EDGE.match(text[start - 1:start]):
+            continue
+        digits = ""
+        for j in range(i, len(spans)):
+            if j > i and _GAP.fullmatch(text, spans[j - 1][1], spans[j][0]) is None:
+                break
+            digits += text[spans[j][0]:spans[j][1]]
+            if len(digits) > 19:
+                break
+            end = spans[j][1]
+            if len(digits) >= 13 and not _EDGE.match(text[end:end + 1]) and _luhn(digits):
+                return True
+    return False
+
+
+def has_card_number(value: object) -> bool:
+    """Whether a payload (or part of one) holds a card number: a field named like one, or text or a JSON number with a
+    Luhn-valid run of 13 to 19 digits standing as its own token (not inside an id). Tico never takes or keeps one (spec
+    §8.3), so such a payload is refused before it is stored."""
+    if isinstance(value, Mapping):
+        items_ = cast(Mapping[object, object], value).items()
+        return any(str(k).lower() in CARD_NUMBER_KEYS or has_card_number(v) for k, v in items_)
+    if isinstance(value, (list, tuple)):
+        return any(has_card_number(v) for v in cast(Sequence[object], value))
+    if isinstance(value, str):
+        return _card_text(value)
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, float):
+        return value.is_integer() and _card_int(int(value))
+    if isinstance(value, int):
+        return _card_int(value)
+    return False
 
 
 def obj(value: object, what: str = "payload") -> Payload:

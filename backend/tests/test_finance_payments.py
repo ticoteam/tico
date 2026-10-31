@@ -89,8 +89,12 @@ def test_a_decline_budget_at_cutoff_freezes_its_cards_and_unfreezing_waits_for_r
     sync_once(books, fake, HOURS[0])
     assert fake.sent("card_state") == [("card-eve", "freeze")]
     with books.transaction() as c:
-        act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 60_000})
-        assert act(c, OWNER, "card_unfreeze", {"card_id": eve}).status == "committed"
+        # 60.00 leaves room (30.00 spent, 20.00 reserved), so the cutoff freeze lifts with the raise (§8.2).
+        assert act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 60_000}).status == "committed"
+        assert _card(c, eve)["status"] == "active"
+        assert act(c, OWNER, "card_unfreeze", {"card_id": eve}).code == "conflict"
+    sync_once(books, fake, HOURS[1])
+    assert ("card-eve", "unfreeze") in fake.sent("card_state")
 
 
 def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
@@ -110,6 +114,7 @@ def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
         paused = pause(c, "rule-3", OWNER, {}, values, event="finance.budget.warn", subject="e2", revision=None)
         assert paused["ok"]
         assert FA.budget_state(c, budget_id, AT).amount == 0
+        assert _card(c, eve)["status"] == "frozen"         # a pause freezes the budget's cards, keeping allocations
         rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
         assert tuple(rule_of)[1] == OWNER
 

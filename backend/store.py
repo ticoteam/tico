@@ -1737,6 +1737,12 @@ class Store:
                     from .finance.store import schema as _finance_schema
                     _finance_schema.phase2(c)
                     c.execute("INSERT INTO cloud_migrations VALUES(66,?)", (H.now(),))
+                if not c.execute("SELECT 1 FROM cloud_migrations WHERE version=67").fetchone():
+                    # Finance phase 3 (bot cards): the saved-card record, which vendor accounts a card is saved on.
+                    # Idempotent like 65 and 66.
+                    from .finance.store import schema as _finance_schema
+                    _finance_schema.phase3(c)
+                    c.execute("INSERT INTO cloud_migrations VALUES(67,?)", (H.now(),))
                 from .public_roadmaps import migrate as migrate_public_roadmaps
                 migrate_public_roadmaps(c)
                 # Notes a completed run carried are settled (hubdb.notes_settle): one pass settles the ones from before the

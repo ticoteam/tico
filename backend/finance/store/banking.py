@@ -9,7 +9,8 @@ from typing import Any, cast
 from .ledger import new_id
 
 TABLES = frozenset({"fin_connections", "fin_money_accounts", "fin_feed_txns", "fin_statements", "fin_reconciliations",
-                    "fin_cards", "fin_card_auths", "fin_recipients", "fin_payments", "fin_inbox", "fin_outbox",
+                    "fin_cards", "fin_card_auths", "fin_card_saves", "fin_recipients", "fin_payments", "fin_inbox",
+                    "fin_outbox",
                     "fin_rules", "fin_rule_runs"})
 LIVE_PAYMENT = ("queued", "sending", "awaiting_bank_approval", "submitted", "unknown")
 
@@ -390,6 +391,41 @@ def cards_on_budgets(c: sqlite3.Connection, budget_ids: Sequence[str]) -> list[A
         return []
     return c.execute(f"SELECT * FROM fin_cards WHERE budget_id IN ({_marks(budget_ids)}) AND status='active'",
                      list(budget_ids)).fetchall()
+
+
+def budget_frozen_cards(c: sqlite3.Connection, budget_ids: Sequence[str] | None) -> list[Any]:
+    """Cards a budget's cutoff froze and no person has claimed since, on these budgets (every budget when None)."""
+    if budget_ids is not None and not budget_ids:
+        return []
+    scope = "" if budget_ids is None else f" AND budget_id IN ({_marks(budget_ids)})"
+    sql = "SELECT * FROM fin_cards WHERE status='frozen' AND freeze_by='budget'" + scope
+    return c.execute(sql + " ORDER BY created_at, id", [] if budget_ids is None else list(budget_ids)).fetchall()
+
+
+def card_save_rows(c: sqlite3.Connection, card_id: str, vendor_keys: Sequence[str]) -> list[Any]:
+    """A card's saved-card records at any of a vendor's keys (its contact id and the names it went by), active or
+    removed, oldest first."""
+    if not vendor_keys:
+        return []
+    return c.execute(f"SELECT * FROM fin_card_saves WHERE card_id=? AND vendor_key IN ({_marks(vendor_keys)}) "
+                     "ORDER BY saved_at, id", [card_id, *vendor_keys]).fetchall()
+
+
+def card_saves(c: sqlite3.Connection, card_ids: Sequence[str]) -> list[Any]:
+    """The vendor accounts these cards are saved on now, oldest first."""
+    if not card_ids:
+        return []
+    return c.execute(f"SELECT * FROM fin_card_saves WHERE active=1 AND card_id IN ({_marks(card_ids)}) "
+                     "ORDER BY saved_at, id", list(card_ids)).fetchall()
+
+
+def cards_saved_at(c: sqlite3.Connection, book_id: str, vendor_keys: Sequence[str]) -> set[str]:
+    """The ids of the cards saved now on any of these vendor keys (a vendor's keys: its contact id and names)."""
+    if not vendor_keys:
+        return set()
+    rows = c.execute(f"SELECT card_id FROM fin_card_saves WHERE book_id=? AND active=1 AND vendor_key IN "
+                     f"({_marks(vendor_keys)})", [book_id, *vendor_keys]).fetchall()
+    return {str(r[0]) for r in rows}
 
 
 def cards_unsynced(c: sqlite3.Connection, most: int) -> list[Any]:

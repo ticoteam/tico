@@ -8606,6 +8606,34 @@
             }
           },
           {
+            "name": "vendor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vendor"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "default": "",
+              "title": "Q"
+            }
+          },
+          {
             "name": "cursor",
             "in": "query",
             "required": false,
@@ -10891,7 +10919,8 @@
                     "bill",
                     "invoice",
                     "contact",
-                    "rule"
+                    "rule",
+                    "card"
                   ],
                   "type": "string"
                 },
@@ -10928,6 +10957,23 @@
                 }
               ],
               "title": "Status"
+            }
+          },
+          {
+            "name": "vendor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 120
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Vendor"
             }
           },
           {
