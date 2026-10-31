@@ -914,7 +914,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       // The Balance sheet's "+ Add".
       await go(page, '#/finance/balance', READY.balance);
       await page.locator('[data-fin-add]').click();
-      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Bank or card account', 'Stripe', 'Invoice', 'Bill', 'Loan', 'Asset', 'Journal entry', 'Import history'],
+      assert.deepEqual(await page.locator('#fin-add [role=menuitem]').allInnerTexts(), ['Mercury', 'Stripe', 'Invoice', 'Bill', 'Loan', 'Asset', 'Journal entry', 'Import history'],
         tag + ': what the owner may add');
       await shot(page, 'balance-add-desktop');
       await page.locator('[data-fin-add-item="journal"]').click();

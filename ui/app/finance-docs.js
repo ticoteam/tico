@@ -568,7 +568,7 @@ function finAddMenuHtml() {
   const items = [caps.receivables && caps.may('finance.ar') ? ['invoice', 'Invoice'] : null, caps.payables && caps.may('finance.ap') ? ['bill', 'Bill'] : null,
     book ? ['loan', 'Loan'] : null, book ? ['asset', 'Asset'] : null, book ? ['journal', 'Journal entry'] : null,
     book && caps.all ? ['import', 'Import history'] : null].filter(Boolean);
-  const connect = caps.sources && caps.may('finance.admin') ? [['mercury', 'Bank or card account'], ['stripe', 'Stripe']] : [];
+  const connect = caps.sources && caps.may('finance.admin') ? [['mercury', 'Mercury'], ['stripe', 'Stripe']] : [];
   if (!items.length && !connect.length) return '';
   const item = ([v, l]) => `<button type="button" role="menuitem" data-fin-add-item="${v}">${l}</button>`;
   return `<span class="fin-pop-at"><button type="button" class="primary" data-fin-add aria-haspopup="menu" aria-expanded="false" aria-controls="fin-add">+ Add</button>

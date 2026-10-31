@@ -198,7 +198,7 @@ function finConnectMercury() {
 // "+ Source": a bank or card account (Mercury), Stripe, or the company's books (QuickBooks, Xero). Finance admins only.
 function finSourceMenuHtml(caps) {
   if (!caps.may('finance.admin')) return '';
-  const items = [['mercury', 'Bank or card account'], ['stripe', 'Stripe'], ['quickbooks', 'QuickBooks'], ['xero', 'Xero']];
+  const items = [['mercury', 'Mercury'], ['stripe', 'Stripe'], ['quickbooks', 'QuickBooks'], ['xero', 'Xero']];
   return `<span class="fin-pop-at"><button type="button" class="primary" data-fin-connect aria-haspopup="menu" aria-expanded="false" aria-controls="fin-connect">+ Source</button>
     <div class="fin-pop fin-menu" id="fin-connect" role="menu" aria-label="Connect" hidden>${items.map(([v, l]) =>
       `<button type="button" role="menuitem" data-fin-connect-item="${v}">${l}</button>`).join('')}</div></span>`;
