@@ -60,7 +60,30 @@ def insert_version(c: sqlite3.Connection, budget_id: str, effective_from: str, a
     return number
 
 
+def seeded_version(c: sqlite3.Connection, budget_id: str) -> bool:
+    """Whether the budget's only version is setup's copy of the usage cap: written with the budget itself, by the same
+    writer at the same moment, on a budget no `budget_create` action made (a person's new budget with an amount is
+    written the same way, and leaves that action). Any version a person set later comes at a later moment."""
+    rows = c.execute("SELECT v.created_at = b.created_at AND v.created_by = b.created_by FROM fin_budget_versions v "
+                     "JOIN fin_budgets b ON b.id = v.budget_id WHERE v.budget_id=? LIMIT 2", (budget_id,)).fetchall()
+    if len(rows) != 1 or not rows[0][0]:
+        return False
+    return c.execute("SELECT 1 FROM fin_actions WHERE kind='budget_create' "
+                     "AND json_extract(result_json, '$.budget_id')=? LIMIT 1", (budget_id,)).fetchone() is None
+
+
+def drop_versions(c: sqlite3.Connection, budget_id: str) -> None:
+    """Remove a budget's versions and the warn/cutoff events they raised, so its next amount starts at v1, armed."""
+    c.execute("DELETE FROM fin_budget_versions WHERE budget_id=?", (budget_id,))
+    c.execute("DELETE FROM fin_events WHERE subject=? AND name LIKE 'finance.budget.%'", (budget_id,))
+
+
 # ------------------------------------------------------------------------------------------------ holds
+# The period sums read only the period's live and settled holds through fin_holds_budget (budget_id, status, held_on),
+# never a budget's whole history of released ones; INDEXED BY keeps the planner off the target index as targets grow.
+LIVE = "status IN ('held','settled')"
+
+
 def held(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str, target: str = "") -> int:
     """What holds placed in the window reserve on these budgets (for one `target` when given): active holds at their
     amount, and settled ones no entry has absorbed yet at what they settled for (a run's priced tokens before its
@@ -69,8 +92,8 @@ def held(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str,
         return 0
     marks = ",".join("?" * len(budget_ids))
     sql = (f"SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN status='settled' AND entry_id IS NULL "
-           f"THEN settled_amount ELSE 0 END), 0) FROM fin_holds WHERE budget_id IN ({marks}) AND status<>'released' "
-           f"AND held_on>=? AND held_on<=?")
+           f"THEN settled_amount ELSE 0 END), 0) FROM fin_holds INDEXED BY fin_holds_budget "
+           f"WHERE budget_id IN ({marks}) AND {LIVE} AND held_on>=? AND held_on<=?")
     args: list[object] = [*budget_ids, start, end]
     if target:
         sql += " AND target=?"
@@ -96,8 +119,9 @@ def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, en
                "e.id=fin_holds.entry_id AND e.status='posted'))") if absorbed else \
         "status='settled' AND entry_id IS NULL"
     return int(c.execute(f"SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN {settled} THEN settled_amount "
-                         f"ELSE 0 END), 0) FROM fin_holds WHERE budget_id IN ({marks}) AND target=? AND held_on>=? "
-                         f"AND held_on<=?", [*budget_ids, target, start, end]).fetchone()[0])
+                         f"ELSE 0 END), 0) FROM fin_holds INDEXED BY fin_holds_budget WHERE budget_id IN ({marks}) "
+                         f"AND {LIVE} AND target=? AND held_on>=? AND held_on<=?",
+                         [*budget_ids, target, start, end]).fetchone()[0])
 
 
 def card_used(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, start: str, end: str) -> int:

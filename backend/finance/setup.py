@@ -1,5 +1,6 @@
 """Setting Finance up on an install: the book, the default chart, this fiscal year's monthly periods, the default views
-and the three default budgets. Safe to run again: it fills in what is missing and changes nothing that exists."""
+and the three default budgets, none with an amount until a person sets one (the company usage cap keeps its own pause in
+backend/usage_limits.py). Safe to run again: it fills in what is missing and changes nothing a person set."""
 import sqlite3
 from dataclasses import dataclass
 
@@ -43,7 +44,6 @@ class SetupResult:
     created: bool
     accounts: dict[str, str]          # code -> id
     budgets: dict[str, str]           # name -> id
-    ai_amount: int | None             # the AI services budget's first amount (the company usage cap), if any
 
 
 def _actor(owner_id: str) -> str:
@@ -88,8 +88,6 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
     existing = SB.budgets(c, book.id)
     named = {(b.account_id, b.catch_all): b.id for b in existing.values() if not b.parent_id}
     ids: dict[str, str] = {}
-    ai_amount: int | None = None
-    cap = tico.company_monthly_cap(c)
     for name, code, at_limit in BUDGETS:
         account_id = accounts[code].id if code else ""
         key = (account_id, not code)
@@ -101,10 +99,21 @@ def setup(c: sqlite3.Connection, owner_id: str, at: str | None = None, *, base_c
                      created_at=at)
         SB.insert_budget(c, b, by, at)
         ids[name] = b.id
-        if code == AI and cap is not None and book.base_currency == "USD":
-            ai_amount = money.from_major(cap, "USD")
-            SB.insert_version(c, b.id, dates.month_bounds(dates.day(at))[0].isoformat(), ai_amount, "USD", by, at)
+    for old in existing.values():
+        if old.account_id == accounts[AI].id and not old.parent_id:
+            _unseed(c, old)
     if created:
         tico.audit(c, by, "finance.setup", book.id, {"accounts": len(accounts), "budgets": sorted(ids)})
     return SetupResult(book_id=book.id, created=created, accounts={k: v.id for k, v in accounts.items()},
-                       budgets=ids, ai_amount=ai_amount)
+                       budgets=ids)
+
+
+def _unseed(c: sqlite3.Connection, b: B.Budget) -> None:
+    """Drop the amount an earlier setup copied from the company usage cap into a company-wide AI services budget,
+    active or not (a person may have switched it off and on again): its only version, written by setup itself with the
+    budget. The copy never followed the cap, so a raised or removed cap left bots paused. Its events go too, so the
+    first amount a person sets arms warn and cutoff again."""
+    if b.team or b.teammate or b.vendor:
+        return
+    if SB.seeded_version(c, b.id):
+        SB.drop_versions(c, b.id)

@@ -249,3 +249,20 @@ def test_asking_again_for_a_source_resizes_its_hold_or_says_why_not(books):
         assert not refused.allowed and refused.hold_id == first.hold_id and "kept" in refused.reason
         assert FA.budget_state(c, ai, AT).held == 900
         assert again(300).allowed and FA.budget_state(c, ai, AT).held == 300
+
+
+def test_period_hold_sums_search_the_budget_index_by_period(books):
+    from backend.finance.store import budgets as SB
+    seen: list[str] = []
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        c.set_trace_callback(seen.append)
+        SB.held(c, [ai], "2026-10-01", "2026-10-31")
+        SB.held(c, [ai], "2026-10-01", "2026-10-31", target="teammate:bot:coder")
+        SB.target_used(c, [ai], "2026-10-01", "2026-10-31", "teammate:bot:coder", absorbed=True)
+        c.set_trace_callback(None)
+        sums = [q for q in seen if "FROM fin_holds" in q]
+        assert len(sums) == 3
+        for q in sums:
+            plan = " ".join(str(r[3]) for r in c.execute("EXPLAIN QUERY PLAN " + q))
+            assert "fin_holds_budget (budget_id=? AND status=? AND held_on>? AND held_on<?)" in plan, plan

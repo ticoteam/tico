@@ -67,3 +67,29 @@ def test_the_images_route_answers_429_with_retry_after_while_its_slots_are_full(
     # The slot a call holds goes back when it returns, so every slot is free again.
     assert all(slots.acquire(blocking=False) for _ in range(GATEWAY_IMAGE_SLOTS))
     assert not slots.acquire(blocking=False)
+
+
+def test_a_video_production_budget_at_its_cutoff_refuses_new_images(api, monkeypatch):
+    from datetime import datetime, timezone
+
+    from backend.finance import actions as FA
+    from backend.tests.test_finance_fixtures import act, budget, spend
+    connect(api)
+    calls = []
+    monkeypatch.setattr(G, "image",
+                        lambda *args: calls.append(args) or (200, {"model": "tico-images-1.0", "images": []}, ""))
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.setup(c, "human:ana", now)
+        video = budget(c, "Video production")
+        assert act(c, "human:ana", "budget_update", {"budget_id": video, "amount": 100}, at=now).status == "committed"
+        spend(c, "5200", 100, day=now[:10])
+    refused = api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "photo"}, headers=headers("ana-test"))
+    assert refused.status_code == 409 and refused.json()["error"]["code"] == "video_budget_reached", refused.text
+    assert not calls
+    with store.transaction() as c:
+        act(c, "human:ana", "budget_update", {"budget_id": video, "amount": 1_000}, at=now)
+    assert api.post("/api/v2/gateway/images", json={"prompt": "x", "category": "photo"},
+                    headers=headers("ana-test")).status_code == 200
+    assert len(calls) == 1
