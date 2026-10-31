@@ -36,10 +36,11 @@ def test_the_catalog_names_aliases_and_pass_throughs():
     assert C.canonical("release_published") == "release.published" and C.canonical("recording.ready") == "meeting.ready"
     assert C.canonical("task.done") == "task.done" and C.canonical("webhook.shop") == "webhook.shop"
     assert C.canonical("custom.order-paid") == "custom.order-paid" and C.canonical("nope") is None
+    assert C.canonical("finance.budget.cutoff") == "finance.budget.cutoff"
     assert C.canonical("Task.Done") is None and C.canonical(None) is None
     assert C.matches("task.*", "task.done") and C.matches("*", "bot.held") and not C.matches("task.*", "approval.requested")
     assert C.matches("task.done", "task.done") and not C.matches("task.done", "task.done2")
     groups = {e["group"] for e in C.listing()}
     assert groups == {"task", "approval", "needs_you", "bot", "release", "meeting", "strategy", "market", "inbound",
-                      "health", "webhook", "tico", "custom"}
+                      "health", "webhook", "tico", "finance", "custom"}
     assert all(e["example"] and e["description"] for e in C.listing()) and C.listing("task")[0]["name"] == "task.created"
