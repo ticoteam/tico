@@ -402,3 +402,37 @@ def test_a_person_s_task_distinguishes_a_structured_answer_from_a_note(api):
             assert (row["status"], row["step_id"]) == ("waiting", steps[tid]), tid
             assert row["blocked_reason"] == f"Nothing left to wait on: {ana} answered {ops}'s question", tid
             assert row["holds_cleared_at"], tid
+
+
+def test_a_person_s_plain_reply_ends_a_wait_with_no_question_open(api):
+    """A wait on a person with no question or ask card behind it (one recorded before ask cards) ends when they
+    comment: a bot's task goes back to work."""
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Report month")
+        wait(c, tid, note="Which month should the report use?")
+        # Legacy waits can name a person without an ask card. This task still has a tracked dependency hold.
+        c.execute("UPDATE tasks SET waiting_on='human:ana', blocked_kind='dependency' WHERE id=?", (tid,))
+        task_holds.refresh(c, tid)
+        assert H.task(c, tid)["blocked_reason"] == f"Waiting on {task_holds.name(c, 'human:ana')}"
+        assert not H.open_task_asks(c, H.task(c, tid))
+    post(api, f"tasks/{tid}/comments", {"text": "July, please."})
+    with api.app.state.store.read() as c:
+        row = H.task(c, tid)
+        assert (row["status"], row["waiting_on"]) == ("open", None), row["blocked_reason"]
+        assert row["note"] == f"{task_holds.name(c, 'human:ana')} replied; nothing left to wait on"
+
+
+def test_taking_off_a_stale_finished_blocker_releases_nothing(api):
+    """A finished blocker held nothing: removing a stale relation must not send a stranded bot task back to work."""
+    from backend import task_relations as TR
+    with api.app.state.store.transaction() as c:
+        tid = bot_task(c, "Ship the form")
+        blocker = bot_task(c, "Pick the form vendor", owner="bot:cpo")
+        TR.add_blocker(c, H.KEEPER, tid, blocker)
+        wait(c, tid)
+        assert H.task(c, tid)["status"] == "waiting"
+        # A legacy completed blocker can retain its relation after a crash between the status and cleanup writes.
+        c.execute("UPDATE tasks SET status='done', done_at=? WHERE id=?", (H.now(), blocker))
+        TR.remove_blocker(c, H.KEEPER, tid, blocker)
+        row = H.task(c, tid)
+        assert (row["status"], row["blocked_reason"]) == ("waiting", "Nothing tracked to wait on")
