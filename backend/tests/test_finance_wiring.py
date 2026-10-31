@@ -112,6 +112,14 @@ def test_a_decline_budget_at_its_cutoff_pauses_the_bots_it_covers(books):
         assert usage_limits.blocked(c, "coder", at=NOON) is None
 
 
+def test_a_video_production_cutoff_pauses_no_bot(books):
+    with books.transaction() as c:
+        act(c, OWNER, "budget_update", {"budget_id": budget(c, "Video production"), "amount": 100})
+        spend(c, "5200", 100, teammate="bot:coder")
+        assert usage_limits.blocked(c, "coder", at=NOON) is None
+        assert not FA.run_hold(c, "coder", "job4", at=AT).refused
+
+
 def test_warn_and_cutoff_fire_once_per_period_and_tell_the_owner(books):
     def notices(c):
         return c.execute("SELECT count(*) FROM messages WHERE to_actor=? AND kind='notice'", (OWNER,)).fetchone()[0]

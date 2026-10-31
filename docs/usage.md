@@ -49,10 +49,12 @@ Usage row and Settings > Bots open its limit too. None is set until someone sets
 - What counts is the estimate of the runs the bots finished that started in the UTC half hour, the UTC day, the week from Monday 00:00 UTC, or the UTC month. An hourly limit is saved as the half hour
   at the same rate: half of it, rounded up to $0.10. Subscription runs count their API-equivalent unless the team turns off "Count subscription runs" (in
   the default limit), for every level.
-- A Finance budget that refuses spend at its limit, on AI services or Video production, is one more limit: at its cutoff every
+- A Finance budget that refuses spend at its limit on AI services is one more limit: at its cutoff every
   bot it covers takes no new job and reads "Paused: AI services budget reached" (no amounts) until the budget is raised or its
   period ends. Limits and budgets both apply; whichever is reached first holds the bot. Only spend billed through the Tico AI
-  Gateway counts against a budget: runs on the company's own keys, sign-ins or subscriptions do not.
+  Gateway counts against a budget: runs on the company's own keys, sign-ins or subscriptions do not. The Video production budget
+  pauses no bot (a run need not make images); at its limit the budget's owner is told. A new team's budgets start with no amount,
+  so nothing is cut off until a person sets one; the team's monthly limit here is separate and does not set a budget.
 - Separate from these cost limits, each bot has a run budget (runs per hour and per day, default 300 and 2500) that stops a runaway loop; see [Run budgets](how-it-works.md).
 - A message is sent once per bot or pool, period and limit, so raising a limit arms it again.
 

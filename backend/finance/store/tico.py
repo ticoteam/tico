@@ -1,5 +1,5 @@
 """What Finance reads from and calls in the rest of Tico, typed at the border: the roster and org chart, the install
-owner, the company's usage cap, the audit log and approvals. Every function takes the caller's connection."""
+owner, the audit log and approvals. Every function takes the caller's connection."""
 import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
@@ -109,14 +109,6 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
             reports[actor] = _actor(str(config["reports_to"]), slugs)
     return Org(owner=owner, teams=teams, team_of=team_of, reports_to=reports, humans=frozenset(humans),
                bots=frozenset("bot:" + s for s in slugs))
-
-
-def company_monthly_cap(c: sqlite3.Connection) -> object | None:
-    """The company pool's monthly usage cap in USD (backend/usage_limits.py), or None when none is set."""
-    from ... import usage_limits
-    U: Any = usage_limits
-    caps = cast(Mapping[str, object], U.pool(c, U.COMPANY))
-    return caps.get("monthly_usd")
 
 
 def audit(c: sqlite3.Connection, actor: str, action: str, target: str, detail: Mapping[str, object]) -> None:

@@ -1,6 +1,7 @@
-"""Budget cutoffs as usage limits (spec §9): a `decline` budget at its limit is one more limit a bot can be over, for
-every bot it covers, so the bot takes no new job and reads "Paused: AI services budget reached". One `Cutoffs` serves a
-whole pass over many bots: the budgets' states are read once."""
+"""Budget cutoffs as usage limits (spec §9): a `decline` budget at its limit on the bot's AI services path is one more
+limit a bot can be over, so the bot takes no new job and reads "Paused: AI services budget reached". Video production is
+not a run limit: a run need not make images, so its cutoff pauses no bot. One `Cutoffs` serves a whole pass over many
+bots: the budgets' states are read once."""
 import sqlite3
 from dataclasses import dataclass, field
 from datetime import date, timedelta
@@ -9,7 +10,7 @@ from . import budgeting
 from .context import Ctx, load
 from .core import budgets as B
 from .core import dates
-from .setup import AI, VIDEO
+from .setup import AI
 from .store import budgets as SB
 from .store import ledger as SL
 
@@ -63,7 +64,7 @@ class Cutoffs:
 
 
 def cutoffs(c: sqlite3.Connection, at: str | None = None) -> Cutoffs:
-    """The `decline` budgets over AI services and Video production that are at their limit now, counting every
+    """The `decline` budgets that are at their limit now, read against each bot's AI services path, counting every
     allocation (each bot's own allocations come off when its cutoff is read). Cheap when Finance is not set up or no
     such budget has an amount."""
     book = SL.book(c)
@@ -76,7 +77,7 @@ def cutoffs(c: sqlite3.Connection, at: str | None = None) -> Cutoffs:
     if not any(versions.get(bid) for bid in budgets):
         return Cutoffs(ctx=None, cut={}, lines=())
     ctx = load(c, at)
-    lines = tuple(a.id for a in ctx.accounts.values() if a.code in (AI, VIDEO))
+    lines = tuple(a.id for a in ctx.accounts.values() if a.code == AI)
     today = dates.day(ctx.today)
     cut: dict[str, B.State] = {}
     for bid in budgets:

@@ -32,8 +32,9 @@ def ensure_setup(c: sqlite3.Connection, owner_email: str = "", at: str | None = 
     return True
 
 
-def _words(b: B.Budget, name: str, bots: bool) -> str:
-    """The owner's notice. No amounts: the words name the budget and what happens next."""
+def _words(b: B.Budget, name: str, bots: bool, refuses: bool = True) -> str:
+    """The owner's notice. No amounts: the words name the budget and what happens next (`refuses`: something stops
+    new spend under it; nothing stops image making at a Video production cutoff yet)."""
     period = PERIOD_WORDS.get(b.period, b.period)
     if name == WARN_EVENT:
         return f"The {b.name} budget is at {b.warn_pct}% of this {period}'s amount."
@@ -41,7 +42,9 @@ def _words(b: B.Budget, name: str, bots: bool) -> str:
         if bots:
             return (f"The {b.name} budget is used up for this {period}: the bots it covers take no new work until it "
                     f"is raised or the {period} ends.")
-        return f"The {b.name} budget is used up for this {period}: new spend under it is refused until it is raised."
+        if refuses:
+            return (f"The {b.name} budget is used up for this {period}: new spend under it is refused until it is "
+                    "raised.")
     if b.at_limit == "ask":
         return f"The {b.name} budget is used up for this {period}: new spend under it needs approval."
     return f"The {b.name} budget is used up for this {period}."
@@ -54,7 +57,7 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
     if not rows:
         return 0
     ctx = load(c, at) if is_set_up(c) else None
-    usage = frozenset(a.id for a in ctx.accounts.values() if a.code in (AI, VIDEO)) if ctx is not None else frozenset[str]()
+    lines = {a.code: a.id for a in ctx.accounts.values() if a.code in (AI, VIDEO)} if ctx is not None else {}
     if any(str(r["name"]) == LIMIT_EVENT for r in rows):
         from . import gateway_sync
         tico.after_commit(c, gateway_sync.ring)
@@ -68,7 +71,8 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
             if owner:
                 c.execute("SAVEPOINT fin_notice")
                 try:
-                    tico.notice(c, owner, _words(b, name, b.account_id in usage))
+                    tico.notice(c, owner, _words(b, name, b.account_id == lines.get(AI),
+                                                 b.account_id != lines.get(VIDEO)))
                     c.execute("RELEASE fin_notice")
                 except tico.Refused:
                     c.execute("ROLLBACK TO fin_notice")
