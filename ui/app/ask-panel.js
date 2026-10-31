@@ -105,9 +105,9 @@ function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
   document.querySelectorAll('[data-ask-dot]').forEach(d => d._ldotFly?.cancel());   // a flight the other way lands at once
   const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askHomeDot()?.getBoundingClientRect();
-  const row = open && !askPhone() ? $('#ask-row')?.getBoundingClientRect() : null;
+  const foot = open ? askFootNow() : null;
   const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
-  if (row?.height) $('#ask-panel').style.setProperty('--ask-foot', `${Math.round(innerHeight - row.top + 6)}px`);
+  askFoot(foot);
   ASK.open = open;
   askSync();
   const to = askLiveDot();
@@ -118,6 +118,10 @@ function askToggle(open = !ASK?.open, focus = true) {
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
   else if (!open && focus && inside) (askPhone() ? $('#mobile-ask') : $('#ask-row'))?.focus();
 }
+// Where the panel's foot goes on a computer: just over the Ask row (ask.css --ask-foot). Read with the other boxes before
+// anything moves, then written; a phone's sheet has its own place.
+const askFootNow = () => { const r = askPhone() ? null : $('#ask-row')?.getBoundingClientRect(); return r?.height ? Math.round(innerHeight - r.top + 6) : null; };
+const askFoot = px => { if (px != null) $('#ask-panel')?.style.setProperty('--ask-foot', px + 'px'); };
 // Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
 function askDraft(text) {
   ASK ||= {open: false, mounted: false};
@@ -517,6 +521,7 @@ async function askLoad(chat) {
     return;
   }
   messages = info.messages || []; execution = info.execution || null; pending = info.pending || [];
+  if (!el._dropZone) { el._dropZone = true; chatDropZone(el, () => ASK?.live ? ASK.composer : null); }   // a dropped file attaches
   chat.composer = makePill({mode: 'chat', label: 'Message ' + askName(), placeholder: 'Message ' + askName(),
                             send: (P, text) => send(text)});
   pq(chat.composer, '.p-text').maxLength = 4000;
@@ -581,5 +586,5 @@ document.addEventListener('tico:support', () => { askPeople(); ASK?.draw?.(); })
 document.addEventListener('focusout', ev => { if (askTypes(ev.target)) setTimeout(askPeek, 0); });
 liveOn('needs-list', () => { ASK?.draw?.(); askPeek(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
-addEventListener('resize', () => askSync());
+addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
 setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);

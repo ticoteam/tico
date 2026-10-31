@@ -62,6 +62,7 @@ async function pageAssistant() {
   }
   const P = assistantPill(), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
+  chatDropZone($('#pane-chat'), P);
   bindChatSwipe(thread);
   thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b) assistantSend(P, b.dataset.hint); });
   void v2ChatLoad(slug, {conv: {id: d.room_id}, messages: d.messages, execution: d.execution, nextBefore: d.next_before,

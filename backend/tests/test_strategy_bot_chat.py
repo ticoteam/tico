@@ -364,6 +364,39 @@ def test_a_file_in_an_assistant_chat_lands_on_the_persons_own_message_only(api):
     assert refs["page"] == {"path": "#/tasks", "title": "Tasks"} and refs["assistant"] is True
     [picture] = refs["attachments"]
     assert picture["kind"] == "image" and picture["name"] == "image.png"
-    # Ben cannot read hers.
-    assert api.get(f"/api/v2/files/{picture['file_id']}", headers=headers("ana-test")).status_code == 200
-    assert api.get(f"/api/v2/files/{picture['file_id']}", headers=headers("ben-test")).status_code in (403, 404)
+    # Each reads their own and not the other's, by the file or by its blob, the owner included.
+    with api.app.state.store.read() as c:
+        bens = json.loads(c.execute("SELECT refs_json FROM messages WHERE id=?",
+                                    (sent["ben-test"]["message"]["id"],)).fetchone()[0])["attachments"][0]
+    for mine, theirs, token in ((picture, bens, "ana-test"), (bens, picture, "ben-test")):
+        for url in (f"/api/v2/files/{mine['file_id']}", mine["url"]):
+            assert api.get(url, headers=headers(token)).status_code == 200, (token, url)
+        for url in (f"/api/v2/files/{theirs['file_id']}", theirs["url"]):
+            assert api.get(url, headers=headers(token)).status_code in (403, 404), (token, url)
+
+
+def test_an_assistant_upload_retried_with_its_key_is_stored_once(api):
+    import json
+    strategy_bot(api)
+    get(api, "assistant")
+
+    def send(text, picture, page="#/tasks"):
+        return api.post("/api/v2/uploads/assistant/messages",
+                        data={"text": text, "page": json.dumps({"path": page, "title": "Tasks"})},
+                        files={"files": ("image.png", picture, "image/png")}, headers=headers("ana-test", "paste-1"))
+
+    def stored():
+        with api.app.state.store.read() as c:
+            return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
+                    for table in ("messages", "message_assets", "bot_files", "blobs")]
+    picture = png() + uuid.uuid4().bytes
+    first = send("Look", picture)
+    assert first.status_code == 200, first.text
+    after = stored()
+    again = send("Look", picture)       # the response was lost: the same request again
+    assert again.status_code == 200 and again.json()["message"]["id"] == first.json()["message"]["id"]
+    assert stored() == after
+    # The same key with other words, another picture or another page is not that request.
+    for changed in (send("Look again", picture), send("Look", png() + uuid.uuid4().bytes), send("Look", picture, "#/docs")):
+        assert changed.status_code in (409, 422), changed.text
+    assert stored() == after

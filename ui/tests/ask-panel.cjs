@@ -281,6 +281,15 @@ const words = text => text.trim().split(/\s+/).length;
     await page.waitForFunction(() => document.querySelector('#ask-panel .p-text').value === '');
     assert.deepEqual(state.uploaded, [{text: 'Read this', page: {path: '#/tasks', title: state.uploaded[0].page.title}, files: ['plan.pdf']}]);
     assert.equal(state.sent.length, 1, 'with a file it goes up as an upload');
+    // A file dropped anywhere on the panel attaches too.
+    await page.evaluate(() => { const dt = new DataTransfer(), panel = document.querySelector('#ask-panel');
+      dt.items.add(new File(['notes'], 'notes.txt', {type: 'text/plain'}));
+      for (const type of ['dragenter', 'dragover', 'drop']) panel.querySelector('[data-ask-thread]').dispatchEvent(new DragEvent(type, {dataTransfer: dt, bubbles: true, cancelable: true})); });
+    await panel.locator('.p-chips > *').first().waitFor();
+    await box.fill('And this');
+    await box.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('#ask-panel .p-chips')?.children.length);
+    assert.deepEqual(state.uploaded.map(u => u.files), [['plan.pdf'], ['notes.txt']]);
     await panel.getByRole('link', {name: 'Loop in Tico support'}).first().click();
     await page.locator('#support-pop[open]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'the page behind stays');
