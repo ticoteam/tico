@@ -401,7 +401,8 @@ def write_entry(ctx: Ctx, e: L.Entry, *, by: str, action_id: str) -> handlers.Re
 
 def write_reversal(ctx: Ctx, entry_id: str, *, day: str, memo: str, by: str, action_id: str) -> handlers.Result:
     ref = _entry_ref(ctx, entry_id)
-    body = {"ext": str(ref["external_id"]), "entry_id": entry_id, "date": day, "memo": memo, "feed_id": ""}
+    body = {"ext": str(ref["external_id"]), "revision": str(ref["revision"]), "entry_id": entry_id, "date": day,
+            "memo": memo, "feed_id": ""}
     oid = _queue(ctx.c, _cid(ctx), "journal.delete", body, by=by, action_id=action_id, at=ctx.at)
     return {"outbox_id": oid, "reverses": entry_id}
 
@@ -583,13 +584,13 @@ def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
     return ""
 
 
-def _changes(store: Any, books: Books, cid: str, now: str) -> str:
-    """The change feed, once the backfill is through and it is due."""
+def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False) -> str:
+    """The change feed, once the backfill is through and it is due, or at once when a webhook is waiting."""
     with store.read() as c:
         st = SX.mirror_state(c, cid)
     raw = st.get("changed_at")
     since = raw if isinstance(raw, str) else None
-    if not M.backfill_done(_backfill_state(st), ENTITIES) or not M.cdc_due(since, now):
+    if not M.backfill_done(_backfill_state(st), ENTITIES) or not (waiting or M.cdc_due(since, now)):
         return ""
     read = books.changed(M.cdc_since(since, now))
     if not read.ok:
@@ -634,10 +635,11 @@ def _export(store: Any, cid: str, now: str, size: int) -> None:
         SX.set_mirror_state(c, cid, {"export": {"until": until, "after": cursor, "done": len(rows) < size}})
 
 
-def sync_once(store: Any, books: Books, cid: str, now: str, *, size: int = M.BACKFILL_SIZE) -> list[str]:
-    """One pass over a mirrored connection: a backfill page, the change feed when due, the export page, then the
-    writes out. Provider calls run outside transactions; the pass's outcome is recorded on the connection."""
-    problems = [p for p in (_backfill(store, books, cid, now, size), _changes(store, books, cid, now)) if p]
+def sync_once(store: Any, books: Books, cid: str, now: str, *, size: int = M.BACKFILL_SIZE,
+              waiting: bool = False) -> list[str]:
+    """One pass over a mirrored connection: a backfill page, the change feed when due (or when a webhook waits), the
+    export page, then the writes out. Provider calls run outside transactions; the outcome is recorded on the connection."""
+    problems = [p for p in (_backfill(store, books, cid, now, size), _changes(store, books, cid, now, waiting)) if p]
     _export(store, cid, now, size)
     problems += outbox(store, books, cid, now)
     with store.transaction() as c:

@@ -1,0 +1,108 @@
+"""The books worker and the accounting webhooks (spec §3.4, §10). A relayed QuickBooks or Xero event is kept once in
+fin_inbox by its event id, and the worker reads the provider's changes at once instead of at the next scheduled pass.
+The worker runs the mirror's pass for this install's books connection, outside any transaction, and calls no provider
+in rehearsal (a rehearsal copy never pays)."""
+import logging
+import threading
+from collections.abc import Mapping
+from typing import Any
+
+from .gateway_sync import Bell
+from .store import banking as SK
+from .store import ledger as SL
+from .store import mirror as SX
+from .store import tico
+from . import books_link, mirror, qbo
+
+log = logging.getLogger(__name__)
+PROVIDERS = {"intuit": "quickbooks", "xero": "xero"}      # a trigger's preset -> the provider's name
+ENVELOPE = "tico.finance.webhook"                          # the body HQ relays for one provider event
+REFUSED, KEPT, SEEN = "refused", "kept", "seen"
+SWEEP = 300.0                                              # seconds between passes without a ring
+BELL = Bell()
+_worker: dict[str, Any] = {"thread": None, "stop": threading.Event(), "lock": threading.Lock(), "args": None}
+
+
+def ring() -> None:
+    BELL.ring()
+
+
+def delivery(c: Any, preset: str, body: Mapping[str, object]) -> str:
+    """A relayed accounting webhook (backend/triggers.py routes it here): kept once by event id, and the worker rung.
+    Refused when the envelope is not one HQ sends for this provider, or names a company no books connection holds."""
+    provider = PROVIDERS.get(preset, "")
+    eid = str(body.get("external_id") or "")
+    company = str(body.get("company_id") or "")
+    if not provider or body.get("type") != ENVELOPE or body.get("provider") != provider or not eid or not company:
+        return REFUSED
+    held = [cid for cid, _, co in SX.books_connections(c, provider) if co == company]
+    if len(held) != 1:
+        return REFUSED
+    kept = SK.inbox_add(c, connection_id=held[0], provider=provider, event_id=eid, payload=body, at=tico.now())
+    if kept:
+        tico.after_commit(c, ring)
+    return KEPT if kept else SEEN
+
+
+def pass_once(store: Any, vault: object, settings: Any, *, now: str) -> list[str]:
+    """One pass over this install's books connection, when its book is a provider's. Returns what the pass recorded.
+    A webhook waiting means the change feed is read now; the events it waited on are done once that read lands."""
+    from ..hook_relay import link_of
+    with store.read() as c:
+        book = SL.book(c)
+        if book is None or book.mode != "mirror" or not book.mirror_connection_id:
+            return []
+        cid = book.mirror_connection_id
+        held = [row for row in SX.books_connections(c) if row[0] == cid]
+        if not held or held[0][1] != "quickbooks" or SX.books_status(c, cid) not in ("active", "error"):
+            return []
+        provider = held[0][1]
+        link = link_of(c, vault, settings)
+        realm = SX.books_settings(c, cid).get("realm_id")
+        waiting = [str(row["id"]) for row in SK.inbox_waiting(c, 50, cid, now)]
+    if link is None:
+        return ["the Gateway key is not set, so the books cannot be reached"]
+    adapter = qbo.QuickBooks(str(realm or ""), lambda force: books_link.access_token(
+        store, vault, link, cid, provider, now=now, force=force))
+    problems = mirror.sync_once(store, adapter, cid, now, waiting=bool(waiting))
+    if waiting and not any(p.startswith("changes") for p in problems):
+        with store.transaction() as c:
+            for inbox_id in waiting:
+                SK.inbox_done(c, inbox_id, "done", now)
+    return problems
+
+
+def start(store: Any, vault: object, settings: Any, *, rehearsal: bool = False) -> None:
+    """Start the worker (or restart it if it died). Safe to call on every scheduler tick."""
+    tico.use_vault(vault)
+    with _worker["lock"]:
+        _worker["args"] = (store, vault, settings, rehearsal)
+        thread = _worker["thread"]
+        if thread is not None and thread.is_alive():
+            return
+        if _worker["stop"].is_set():
+            _worker["stop"] = threading.Event()
+        made = threading.Thread(target=_loop, args=(store, vault, settings, rehearsal, _worker["stop"]),
+                                name="finance-books", daemon=True)
+        made.start()
+        _worker["thread"] = made
+
+
+def stop() -> None:
+    _worker["stop"].set()
+    BELL.ring()
+    thread = _worker["thread"]
+    if thread is not None:
+        thread.join(5)
+    _worker["thread"] = None
+
+
+def _loop(store: Any, vault: object, settings: Any, rehearsal: bool, halt: threading.Event) -> None:
+    while not halt.is_set():
+        seen = BELL.rung
+        if not rehearsal:
+            try:
+                pass_once(store, vault, settings, now=tico.now())
+            except Exception:
+                log.exception("Finance books sync failed")
+        BELL.wait(seen, SWEEP)

@@ -18,6 +18,9 @@ Unix seconds. Nothing here touches the database, so each can be tested with a pu
   (`slack_challenge`) before it counts as a delivery.
 - `mercury`: `Mercury-Signature: t=<unix>,v1=<hex>`, HMAC-SHA256 over `<t>.<body>` with the endpoint's secret (Mercury
   returns it once when the webhook is made). Within five minutes. A Mercury trigger's deliveries go to Finance only.
+- `intuit`: `intuit-signature: <base64>`, base64 of HMAC-SHA256 over the raw body with the app's verifier token. Finance's
+  (QuickBooks, spec §10); a relayed delivery from Tico HQ was checked there and carries no signature here.
+- `xero`: `x-xero-signature: <base64>`, base64 of HMAC-SHA256 over the raw body with the app's webhook key. Finance's.
 """
 import base64
 import binascii
@@ -27,9 +30,9 @@ import json
 import re
 import secrets
 
-PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack", "mercury")
+PRESETS = ("none", "hmac", "github", "standard", "stripe", "slack", "mercury", "intuit", "xero")
 # A trigger on one of these is Finance's (spec §3.4): its calls go to Finance, and only a finance admin manages it.
-FINANCE = ("mercury",)
+FINANCE = ("mercury", "intuit", "xero")
 TOLERANCE = 300                         # seconds a timestamped signature stays good, either side of now
 TYPE_FROM = {"github": "X-GitHub-Event", "stripe": "/type", "standard": "/type",
              "slack": "/event/type|/type", "mercury": "/resourceType"}      # a preset's default `type_from`; `a|b` tries a, then b
@@ -142,6 +145,25 @@ def _mercury(headers, body, secret, now):
     return _stripe(headers, body, secret, now, "mercury-signature", "Mercury-Signature")
 
 
+def _b64_signed(headers, body, secret, header, shown):
+    """A base64 HMAC-SHA256 of the raw body, as Intuit and Xero send it: the whole body is signed, no timestamp."""
+    sent = str(headers.get(header) or "").strip()
+    if not sent:
+        return False, f"This trigger needs a signed body ({shown})"
+    want = base64.b64encode(hmac.new(secret.encode(), body, hashlib.sha256).digest()).decode()
+    if _constant(sent, want):
+        return True, ""
+    return False, "The signature does not match the body and this trigger's signing secret"
+
+
+def _intuit(headers, body, secret, now):
+    return _b64_signed(headers, body, secret, "intuit-signature", "Intuit-Signature")
+
+
+def _xero(headers, body, secret, now):
+    return _b64_signed(headers, body, secret, "x-xero-signature", "X-Xero-Signature")
+
+
 def _slack(headers, body, secret, now):
     sent, stamp = (str(headers.get(n) or "").strip() for n in ("x-slack-signature", "x-slack-request-timestamp"))
     if not (sent and stamp):
@@ -166,7 +188,7 @@ def slack_challenge(body):
 
 
 VERIFY = {"hmac": _hmac, "github": _github, "standard": _standard, "stripe": _stripe, "slack": _slack,
-          "mercury": _mercury}
+          "mercury": _mercury, "intuit": _intuit, "xero": _xero}
 
 
 def verify(preset, headers, body, secret, now):

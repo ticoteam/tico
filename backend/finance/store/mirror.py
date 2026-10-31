@@ -191,3 +191,49 @@ def last_ok(c: sqlite3.Connection, cid: str) -> str | None:
 
 def disconnect(c: sqlite3.Connection, cid: str, at: str) -> None:
     c.execute("UPDATE fin_connections SET status='disconnected', updated_at=? WHERE id=?", (at, cid))
+
+
+def books_settings(c: sqlite3.Connection, cid: str) -> dict[str, object]:
+    """A books connection's own settings: its company, its realm or tenant, and the credential ids of its tokens (the
+    secrets stay in the vault; the token expiry times are kept here)."""
+    return as_map(_settings(c, cid).get("books"))
+
+
+def set_books_settings(c: sqlite3.Connection, cid: str, fields: Mapping[str, object]) -> None:
+    settings = _settings(c, cid)
+    settings["books"] = {**books_settings(c, cid), **fields}
+    c.execute("UPDATE fin_connections SET settings_json=? WHERE id=?", (json.dumps(settings, sort_keys=True), cid))
+
+
+def books_connections(c: sqlite3.Connection, provider: str | None = None) -> list[tuple[str, str, str]]:
+    """(id, provider, company id) for each books connection that is not disconnected, optionally of one provider."""
+    sql = "SELECT id, provider, settings_json, status FROM fin_connections WHERE purpose='books' AND status!='disconnected'"
+    args: list[object] = []
+    if provider:
+        sql += " AND provider=?"
+        args.append(provider)
+    out: list[tuple[str, str, str]] = []
+    for row in c.execute(sql + " ORDER BY created_at, id", args).fetchall():
+        books = as_map(_settings(c, str(row[0])).get("books"))
+        out.append((str(row[0]), str(row[1]), str(books.get("company_id") or "")))
+    return out
+
+
+def books_connection_insert(c: sqlite3.Connection, *, cid: str, provider: str, name: str, by: str, at: str) -> None:
+    c.execute("INSERT INTO fin_connections(id, provider, purpose, status, created_at, created_by, updated_at, name) "
+              "VALUES(?,?,'books','active',?,?,?,?)", (cid, provider, at, by, at, name))
+
+
+def set_connection_status(c: sqlite3.Connection, cid: str, status: str, error: str, at: str) -> None:
+    """A connection's status and why: `reconnect` stops the worker from calling the provider until a person reconnects."""
+    c.execute("UPDATE fin_connections SET status=?, last_error=?, updated_at=? WHERE id=?", (status, error, at, cid))
+
+
+def books_status(c: sqlite3.Connection, cid: str) -> str:
+    row = c.execute("SELECT status FROM fin_connections WHERE id=?", (cid,)).fetchone()
+    return str(row[0]) if row else ""
+
+
+def connection_owner(c: sqlite3.Connection, cid: str) -> str:
+    row = c.execute("SELECT created_by FROM fin_connections WHERE id=?", (cid,)).fetchone()
+    return str(row[0]) if row else ""
