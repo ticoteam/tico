@@ -429,9 +429,10 @@ def _route(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], effective: st
 
 def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> int | None:
     """The amount b's parent must go to from `effective` for b to fit: the most its family would total on any day
-    before the parent's next version. None when a later parent version would still be passed, since one raise cannot
-    reach that day, or when the parent has no amount from `effective`."""
-    _, children, parent_versions = _parent_side(ctx, b, mine)
+    before the parent's next version, its children and the cards on it together (the sum `_reserve_fit` checks). None
+    when a later parent version would still be passed, since one raise cannot reach that day, or when the parent has no
+    amount from `effective`."""
+    parent, children, parent_versions = _parent_side(ctx, b, mine)
     start = dates.day(effective)
     cap = B.amount_at(parent_versions, start)
     if cap is None:
@@ -439,9 +440,15 @@ def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> i
     later = [dates.day(v.effective_from) for v in parent_versions if dates.day(v.effective_from) > start]
     ends = min(later, default=None)
     every = [v for vs in children.values() for v in vs] + parent_versions
+    tree = budgeting.subtree(ctx, parent.id)
+    allocs = [row for row in SB.allocations(ctx.c, [parent.id]) if row["target_kind"] == "card"]
     need = 0
     for at in B.fit_points(start, every):
         total = sum(B.amount_at(v, at) or 0 for v in children.values())
+        if allocs:
+            period_start, period_end = B.period_of(parent, at, ctx.book.fiscal_year_start, parent_versions)
+            total += sum(reserve for _, reserve in
+                         _card_reserves(ctx, tree, allocs, period_start.isoformat(), period_end.isoformat()))
         if ends is None or at < ends:
             need = max(need, total)
         elif (later_cap := B.amount_at(parent_versions, at)) is not None and total > later_cap:
@@ -516,9 +523,12 @@ def _cards_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int) -> 
     _reserve_fit(ctx, who, b, mine, _kid_versions(ctx, b.id), effective)
 
 
-def _cards_fit_child(ctx: Ctx, who: str, child_id: str, parent: B.Budget, effective: str, amount: int) -> None:
+def _cards_fit_child(ctx: Ctx, who: str, child_id: str, parent: B.Budget, effective: str, amount: int,
+                     raise_to: int | None = None) -> None:
     """A child's version may not push its parent's cards and child budgets past the parent's amount: `_cards_fit` on
-    the parent, with this child's new version in the children's sum. A child's pause only lowers that sum."""
+    the parent, with this child's new version in the children's sum. A child's pause only lowers that sum. `raise_to`
+    is the parent's amount a routed change raises it to (`_Route`): the check then runs on the parent as it will stand
+    once that raise is approved, on every version day, not on its current amount."""
     if amount == 0:
         return
     key = child_id or "new"
@@ -526,27 +536,33 @@ def _cards_fit_child(ctx: Ctx, who: str, child_id: str, parent: B.Budget, effect
     own = SB.versions(ctx.c, [child_id])[child_id] if child_id else []
     own.append(B.Version(budget_id=key, version=10**9, effective_from=effective, amount=amount))
     kids[key] = own
-    _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
+    parent_versions = _raised(SB.versions(ctx.c, [parent.id])[parent.id], parent.id, effective, raise_to)
+    _reserve_fit(ctx, who, parent, parent_versions, kids, effective)
 
 
-def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int | None,
-                    route: bool = False) -> _Route | None:
+def _raised(versions: list[B.Version], budget_id: str, effective: str, raise_to: int | None) -> list[B.Version]:
+    """A budget's versions as they stand once a routed raise to `raise_to` from `effective` is approved."""
+    if raise_to is None:
+        return versions
+    return [*versions, B.Version(budget_id=budget_id, version=10**9, effective_from=effective, amount=raise_to)]
+
+
+def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int | None) -> None:
     """A budget that comes back active adds its whole schedule from `effective` on (today, or the day of the version
     this change sets), so every version day from there must fit, zero today or not: among its siblings (`_fit`), over
     its own cards and children, and within its parent's cards and children. Unlike a version change, no day is skipped
     for a budget at zero: a pause today does not excuse a later version. `amount` is the version this change sets, if
-    any. `route` as in `_fit`: a change that would pass its parent is routed to the parent's owner, and returned."""
+    any. Never routed to the parent's owner: a child coming back active that would not fit is refused."""
     mine = SB.versions(ctx.c, [b.id])[b.id]
     if amount is not None:
         mine.append(B.Version(budget_id=b.id, version=10**9, effective_from=effective, amount=amount))
-    found = _fit(ctx, who, b, effective, B.amount_at(mine, dates.day(effective)) or 0, route=route)
+    _fit(ctx, who, b, effective, B.amount_at(mine, dates.day(effective)) or 0)
     _reserve_fit(ctx, who, b, mine, _kid_versions(ctx, b.id), effective)
     if b.parent_id:
         parent = ctx.budgets()[b.parent_id]
         kids = {k: vs for k, vs in _kid_versions(ctx, parent.id).items() if k != b.id}
         kids[b.id] = mine
         _reserve_fit(ctx, who, parent, SB.versions(ctx.c, [parent.id])[parent.id], kids, effective)
-    return found
 
 
 def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
@@ -653,7 +669,7 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     words, impact = _raise_note(ctx, route, effective) if route is not None else ("", {})
     raise_to = route.raise_to if route is not None else None
     if amount is not None and new.parent_id:
-        _cards_fit_child(ctx, who, "", ctx.budgets()[new.parent_id], effective, amount)
+        _cards_fit_child(ctx, who, "", ctx.budgets()[new.parent_id], effective, amount, raise_to)
 
     def apply(aid: str) -> Result:
         made = replace(new, id=SL.new_id())
@@ -700,7 +716,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("a budget that comes back active takes its amount from today: leave effective_from out")
     fit_from = effective if amount is not None else dates.day(ctx.today).isoformat()
     if reactivates:
-        route = _reactivate_fit(ctx, who, old, fit_from, amount, route=True)
+        _reactivate_fit(ctx, who, old, fit_from, amount)     # refused, never routed (a child coming back active)
+        route = None
     else:
         route = _fit(ctx, who, old, effective, amount, route=True) if amount is not None else None
     words, impact = _raise_note(ctx, route, fit_from) if route is not None else ("", {})
@@ -708,7 +725,7 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and not reactivates:
         _cards_fit(ctx, who, old, effective, amount)
         if old.parent_id:
-            _cards_fit_child(ctx, who, old.id, ctx.budgets()[old.parent_id], effective, amount)
+            _cards_fit_child(ctx, who, old.id, ctx.budgets()[old.parent_id], effective, amount, raise_to)
 
     def apply(aid: str) -> Result:
         SB.update_budget(ctx.c, new, ctx.at)

@@ -495,11 +495,14 @@ def test_a_fit_refusal_keeps_no_amounts_and_a_replay_gives_the_viewer_its_senten
         root = str(act(c, OWNER, "budget_create", tools).result["budget_id"])
         eng = str(act(c, OWNER, "budget_create", {"name": "Eng tools", "account_id": acct, "team": "eng",
                                                   "parent_id": root, "amount": 10_000}).result["budget_id"])
-        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 60_000}, key="too-big")
-        assert refused.status == "failed" and "Tools" in refused.reason and "60000" in refused.reason, refused
+        # A child under Eng tools: lowering Eng tools below it is refused outright (it is not routed to an owner).
+        act(c, OWNER, "budget_create", {"name": "Web tools", "account_id": acct, "team": "web",
+                                        "parent_id": eng, "amount": 6_000})
+        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 5_000}, key="too-small")
+        assert refused.status == "failed" and "Eng tools" in refused.reason and "6000" in refused.reason, refused
         stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (refused.action_id,)).fetchone()[0]
         assert stored == "it does not fit: not enough left"
-        replay = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 60_000}, key="too-big")
+        replay = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 5_000}, key="too-small")
         assert replay.replayed and replay.reason == refused.reason
 
 

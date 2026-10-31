@@ -9,11 +9,13 @@ import uuid
 
 import pytest
 
+from backend import hubdb as H
 from backend.finance import actions as FA
 from backend.finance import budgeting
 from backend.finance import reads as FR
 from backend.finance.context import load
 from backend.finance.core import validate as V
+from backend.finance.store import budgets as SB
 from backend.finance.store import schema as FS
 from backend.tests.test_api import api, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -810,6 +812,25 @@ def test_migration_67_adds_the_saved_card_record_to_an_install_from_66(store):
     with store.read() as c:
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_card_saves'").fetchone()
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=67").fetchone()[0] == 1
+
+
+def test_a_routed_raise_is_checked_at_the_raised_amount_with_the_parents_cards(books):
+    """A child change that would pass its parent asks the parent's owner to raise it (spec §4.4). The raise covers the
+    parent's cards as well as its children, and the cards are checked at the raised amount: a raise that fits is not
+    refused up front with "lower these cards first"."""
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools 500.00; coder and seller each reserve 200.00 of it
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "owner": "human:dan"}).status == "committed"
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 52_000}, key="routed-cards")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.code, asked.reason)
+        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done is not None and done.status == "committed", (done and done.reason)
+        amounts = {bid: max(SB.versions(c, [bid])[bid], key=lambda v: (v.effective_from, v.version)).amount
+                   for bid in (budget, eng)}
+        assert amounts == {budget: 92_000, eng: 52_000}      # 520.00 children + 400.00 cards = 920.00
 
 
 def test_a_cards_refusal_names_the_cards_only_while_the_asker_can_see_them(books):
