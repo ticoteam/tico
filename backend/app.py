@@ -389,7 +389,7 @@ def create_app(settings=None):
         demo_task = None
         if settings.demo:
             from . import demo
-            demo_task = asyncio.create_task(demo.keep_alive(store, stop))
+            demo_task = asyncio.create_task(demo.keep_alive(store, stop, app.state.vault))
         try:
             yield
         finally:

@@ -125,9 +125,14 @@ def network_blocked():
 
 
 # ----------------------------------------------------------------------------- the running demo
-async def keep_alive(store, stop):
+async def keep_alive(store, stop, vault=None):
     """What a real install's scheduler and a runner's heartbeat would keep true: the computers look
     online, the scheduler looks alive, and a message to a bot is answered (once) that this is a demo."""
+    # The demo's scheduler is off, so Finance's bank worker would never sync. With TICO_MERCURY_BASE set (a local
+    # fake Mercury: scripts/finance_e2e.sh), the worker runs and reads only that base. Without it, nothing starts.
+    if vault is not None and os.environ.get("TICO_MERCURY_BASE", "").strip():
+        from .finance import actions as finance
+        finance.banking_start(store, vault)
     while not stop.is_set():
         try:
             await asyncio.to_thread(tick, store)

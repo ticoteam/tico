@@ -4,6 +4,7 @@ connect probe. Every call returns (status, JSON); it never raises for an HTTP an
 few times; 401/403 on a write means the token's IP allowlist lacks this server. The Vault host (full card numbers)
 is never called."""
 import json
+import os
 import time
 import urllib.error
 import urllib.parse
@@ -15,6 +16,7 @@ from typing import Any, Protocol, cast
 
 BASE = "https://api.mercury.com/api/v1"
 SANDBOX = "https://api-sandbox.mercury.com/api/v1"
+BASE_ENV = "TICO_MERCURY_BASE"          # a developer's override: the sandbox, or a local fake (scripts/fake_mercury.py)
 TIMEOUT = 15
 MAX_WAIT = 30.0                       # seconds one 429 may make us wait
 TRIES_429 = 3
@@ -58,6 +60,11 @@ class Provider(Protocol):
     def request_send_money(self, account_id: str, body: Mapping[str, object]) -> Answer: ...
     def send_request(self, request_id: str) -> Answer: ...
     def send_requests(self, account_id: str, start_after: str | None = None) -> Answer: ...
+
+
+def base_url() -> str:
+    """The API base the bank worker calls: TICO_MERCURY_BASE when set, else Mercury's own."""
+    return os.environ.get(BASE_ENV, "").strip() or BASE
 
 
 def dollars(cents: int) -> Decimal:
