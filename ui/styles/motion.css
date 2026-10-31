@@ -24,7 +24,7 @@
 :where(dialog.gpanel[open]){animation:m-from-right var(--dur) var(--ease)}
 @media (min-width:761px){:where(#task-peek[open]){animation:m-from-right var(--dur) var(--ease)}}
 
-/* ---- Ask (ui/app/ask-panel.js): the panel rises 8px as it fades in and sinks back as it fades out; on a phone the
+/* ---- Ask (ui/app/ask-panel.js): the panel rises 8px out of the Ask row as it fades in and sinks back as it fades out; on a phone the
    sheet comes up from the bottom. It always has its box (ask.css): opening draws it at once, and closing stops drawing
    it (visibility, content-visibility) only once the fade is done; it takes no press from the start of the close. */
 @media (prefers-reduced-motion:no-preference){

@@ -99,11 +99,11 @@ function fixture() {
       await page.locator('#ptabs [data-pt="assistant"]').click();
       await page.waitForURL(/#\/assistant$/);
 
-      // A page of its own: one header line, no person header or tabs, the bot chat's composer, no attach.
+      // A page of its own: one header line, no person header or tabs, the bot chat's composer with its clip.
       await box.waitFor();
       assert.equal(await page.locator('#main .asst-top h1').innerText(), 'Assistant', tag + ': the header is the name');
       assert.equal(await page.locator('#ptabs, .bothead').count(), 0, tag + ': no person header or tabs');
-      assert.equal(await page.locator('#chat-composer .p-attach').count(), 0, tag + ': text only');
+      assert.equal(await page.locator('#chat-composer .p-attach').count(), 1, tag + ': files attach');
       // Empty: suggestions as chips, and one tap asks it.
       const hints = page.locator('#conv-thread .asst-hints button');
       assert.equal(await hints.first().innerText(), "What's waiting on me?", tag + ': suggestions in the empty chat');
