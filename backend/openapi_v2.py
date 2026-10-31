@@ -1424,6 +1424,19 @@ STABLE.extend([
     ("/api/v2/finance/payments", "get", "Finance", "listFinancePayments",
      "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a "
      "finance admin", "FinancePayments"),
+    ("/api/v2/finance/transfers", "get", "Finance", "listFinanceTransfers",
+     "Internal transfers between two money accounts the caller sees, newest first, with their status and a cursor; "
+     "errors only for the maker or a finance admin", "FinanceTransfers"),
+    ("/api/v2/finance/tax/sales-tax", "get", "Finance", "getFinanceSalesTax",
+     "The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters with taxable and exempt "
+     "sales, tax collected and remitted, what is due and when. Full view only", "FinanceSalesTax"),
+    ("/api/v2/finance/tax/sales-tax.csv", "get", "Finance", "getFinanceSalesTaxCsv",
+     "The sales tax workpaper as CSV, the same lines as on screen. Full view only", None),
+    ("/api/v2/finance/tax/1099", "get", "Finance", "getFinance1099",
+     "The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments left "
+     "out, the threshold, whether a 1099-NEC is due and when. Full view only", "Finance1099"),
+    ("/api/v2/finance/tax/1099.csv", "get", "Finance", "getFinance1099Csv",
+     "The 1099 workpaper as CSV, the same lines as on screen. Full view only", None),
     ("/api/v2/finance/recipients", "get", "Finance", "listFinanceRecipients",
      "Current payment recipients, last 4 only, for teammates who may pay", "FinanceRecipients"),
     ("/api/v2/finance/mercury-users", "get", "Finance", "listFinanceMercuryUsers",
@@ -1593,6 +1606,25 @@ SCHEMAS.update({
             "money_account_id": "s", "created_by": "s", "created_at": "s", "settled_at": "n", "error": "n"},
             required=["id", "status", "amount", "currency"])),
         "next_cursor": "n"}),
+    "FinanceTransfers": obj({
+        "transfers": items(obj({
+            "id": "s", "status": {"type": "string", "enum": ["queued", "submitted", "unknown", "failed", "posted",
+                                                             "cancelled"]},
+            "amount": "i", "currency": "s", "memo": "s",
+            "from": obj({"id": "s", "name": "s", "last4": "n"}), "to": obj({"id": "s", "name": "s", "last4": "n"}),
+            "created_by": "s", "created_at": "s", "settled_at": "n", "last_error": "n"},
+            required=["id", "status", "amount", "currency", "from", "to"])),
+        "next_cursor": "n"}),
+    "FinanceSalesTax": obj({
+        "year": "i", "currency": "s",
+        "rows": items(obj({"period": "s", "code": "s", "jurisdiction": "s", "taxable_sales": "i", "exempt_sales": "i",
+                           "tax_collected": "i", "tax_remitted": "i", "due": "i", "due_on": "n"},
+                          required=["period", "code", "taxable_sales", "exempt_sales", "tax_collected", "due"]))}),
+    "Finance1099": obj({
+        "year": "i", "currency": "s", "threshold": "i", "due_on": "s",
+        "rows": items(obj({"vendor_id": "s", "vendor": "s", "tin_on_file": "b", "cash_paid": "i",
+                           "card_paid_excluded": "i", "threshold": "i", "reportable": "b"},
+                          required=["vendor_id", "vendor", "cash_paid", "reportable"]))}),
     "FinanceRecipients": obj({"recipients": items(obj({
         "id": "s", "name": "s", "method": "s", "last4": "n", "version": "i", "replaces_id": "n", "known": "b",
         "synced": "b", "created_at": "s"}, required=["id", "name", "method", "version"]))}),
@@ -2279,6 +2311,9 @@ def spec(app):
         if method == "get" and path.startswith("/api/v2/files/") and path.endswith("/versions/{number}"):
             responses["200"] = {"description": "The file's bytes (application/octet-stream, sent as an attachment)",
                                 "content": {"application/octet-stream": {"schema": {"type": "string", "format": "binary"}}}}
+        if method == "get" and path.startswith("/api/v2/finance/tax/") and path.endswith(".csv"):
+            responses["200"] = {"description": "The workpaper as CSV (text/csv, sent as an attachment)",
+                                "content": {"text/csv": {"schema": {"type": "string"}}}}
         if path == "/auth/login":
             responses = {"302": {"description": "Redirect to the identity provider"},
                          "400": {"description": "next is not an allowed origin, or code_challenge is missing"}}

@@ -11386,6 +11386,314 @@
         ]
       }
     },
+    "/api/v2/finance/tax/1099": {
+      "get": {
+        "summary": "The 1099 workpaper for a year (this year when omitted): each flagged vendor's cash paid with card payments left out, the threshold, whether a 1099-NEC is due and when. Full view only",
+        "operationId": "getFinance1099",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2100,
+                  "minimum": 2000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Finance1099"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/tax/1099.csv": {
+      "get": {
+        "summary": "The 1099 workpaper as CSV, the same lines as on screen. Full view only",
+        "operationId": "getFinance1099Csv",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2100,
+                  "minimum": 2000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workpaper as CSV (text/csv, sent as an attachment)",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/tax/sales-tax": {
+      "get": {
+        "summary": "The sales tax workpaper for a year (this year when omitted): each jurisdiction's quarters with taxable and exempt sales, tax collected and remitted, what is due and when. Full view only",
+        "operationId": "getFinanceSalesTax",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2100,
+                  "minimum": 2000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceSalesTax"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/tax/sales-tax.csv": {
+      "get": {
+        "summary": "The sales tax workpaper as CSV, the same lines as on screen. Full view only",
+        "operationId": "getFinanceSalesTaxCsv",
+        "parameters": [
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2100,
+                  "minimum": 2000
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The workpaper as CSV (text/csv, sent as an attachment)",
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/transactions": {
       "get": {
         "summary": "Feed rows and entries the caller sees, newest first, with filters, search and a cursor",
@@ -11626,6 +11934,94 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceTransactions"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/transfers": {
+      "get": {
+        "summary": "Internal transfers between two money accounts the caller sees, newest first, with their status and a cursor; errors only for the maker or a finance admin",
+        "operationId": "listFinanceTransfers",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceTransfers"
                 }
               }
             }
@@ -37036,6 +37432,67 @@
         "type": "object",
         "title": "FilterIn"
       },
+      "Finance1099": {
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "threshold": {
+            "type": "integer"
+          },
+          "due_on": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "vendor_id": {
+                  "type": "string"
+                },
+                "vendor": {
+                  "type": "string"
+                },
+                "tin_on_file": {
+                  "type": "boolean"
+                },
+                "cash_paid": {
+                  "type": "integer"
+                },
+                "card_paid_excluded": {
+                  "type": "integer"
+                },
+                "threshold": {
+                  "type": "integer"
+                },
+                "reportable": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "cash_paid",
+                "reportable",
+                "vendor",
+                "vendor_id"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "currency",
+          "due_on",
+          "rows",
+          "threshold",
+          "year"
+        ],
+        "additionalProperties": true
+      },
       "FinanceAccess": {
         "type": "object",
         "properties": {
@@ -39761,6 +40218,70 @@
         ],
         "additionalProperties": true
       },
+      "FinanceSalesTax": {
+        "type": "object",
+        "properties": {
+          "year": {
+            "type": "integer"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "period": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "jurisdiction": {
+                  "type": "string"
+                },
+                "taxable_sales": {
+                  "type": "integer"
+                },
+                "exempt_sales": {
+                  "type": "integer"
+                },
+                "tax_collected": {
+                  "type": "integer"
+                },
+                "tax_remitted": {
+                  "type": "integer"
+                },
+                "due": {
+                  "type": "integer"
+                },
+                "due_on": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "code",
+                "due",
+                "exempt_sales",
+                "period",
+                "tax_collected",
+                "taxable_sales"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "currency",
+          "rows",
+          "year"
+        ],
+        "additionalProperties": true
+      },
       "FinanceSearch": {
         "type": "object",
         "properties": {
@@ -40044,6 +40565,126 @@
           "next",
           "rows",
           "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceTransfers": {
+        "type": "object",
+        "properties": {
+          "transfers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string",
+                  "enum": [
+                    "queued",
+                    "submitted",
+                    "unknown",
+                    "failed",
+                    "posted",
+                    "cancelled"
+                  ]
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "memo": {
+                  "type": "string"
+                },
+                "from": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "last4": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "last4",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "to": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "last4": {
+                      "type": [
+                        "string",
+                        "null"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "last4",
+                    "name"
+                  ],
+                  "additionalProperties": true
+                },
+                "created_by": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string"
+                },
+                "settled_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "amount",
+                "currency",
+                "from",
+                "id",
+                "status",
+                "to"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "next_cursor",
+          "transfers"
         ],
         "additionalProperties": true
       },

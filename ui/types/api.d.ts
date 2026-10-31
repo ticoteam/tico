@@ -1086,6 +1086,22 @@ export type FilterIn = {
   task_types?: Array<string>;
 };
 
+export type Finance1099 = {
+  currency: string;
+  due_on: string;
+  rows: Array<{
+  card_paid_excluded?: number;
+  cash_paid: number;
+  reportable: boolean;
+  threshold?: number;
+  tin_on_file?: boolean;
+  vendor: string;
+  vendor_id: string;
+}>;
+  threshold: number;
+  year: number;
+};
+
 export type FinanceAccess = {
   can_edit_defaults: boolean;
   can_view_as: boolean;
@@ -1658,6 +1674,22 @@ export type FinanceRules = {
 }>;
 };
 
+export type FinanceSalesTax = {
+  currency: string;
+  rows: Array<{
+  code: string;
+  due: number;
+  due_on?: string | null;
+  exempt_sales: number;
+  jurisdiction?: string;
+  period: string;
+  tax_collected: number;
+  tax_remitted?: number;
+  taxable_sales: number;
+}>;
+  year: number;
+};
+
 export type FinanceSearch = {
   currency: string;
   next_cursor: string | null;
@@ -1720,6 +1752,31 @@ export type FinanceTransactions = {
   vendor_name?: string;
 }>;
   view_version: number;
+};
+
+export type FinanceTransfers = {
+  next_cursor: string | null;
+  transfers: Array<{
+  amount: number;
+  created_at?: string;
+  created_by?: string;
+  currency: string;
+  from: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+  id: string;
+  last_error?: string | null;
+  memo?: string;
+  settled_at?: string | null;
+  status: "queued" | "submitted" | "unknown" | "failed" | "posted" | "cancelled";
+  to: {
+  id: string;
+  last4: string | null;
+  name: string;
+};
+}>;
 };
 
 export type FinanceWebhookDeliveries = {
@@ -5566,6 +5623,22 @@ export type GetFileVersionParams = {
 export type GetFileVersionBody = never;
 export type GetFileVersionResponse = string;
 
+/** GET /api/v2/finance/tax/1099 */
+export type GetFinance1099Params = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099Body = never;
+export type GetFinance1099Response = Finance1099;
+
+/** GET /api/v2/finance/tax/1099.csv */
+export type GetFinance1099CsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinance1099CsvBody = never;
+export type GetFinance1099CsvResponse = string;
+
 /** GET /api/v2/finance/access */
 export type GetFinanceAccessParams = Record<string, never>;
 export type GetFinanceAccessBody = never;
@@ -5706,6 +5779,22 @@ export type GetFinanceReportParams = {
 };
 export type GetFinanceReportBody = never;
 export type GetFinanceReportResponse = FinanceReportOf;
+
+/** GET /api/v2/finance/tax/sales-tax */
+export type GetFinanceSalesTaxParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxBody = never;
+export type GetFinanceSalesTaxResponse = FinanceSalesTax;
+
+/** GET /api/v2/finance/tax/sales-tax.csv */
+export type GetFinanceSalesTaxCsvParams = {
+  view_as?: string | null;
+  year?: number | null;
+};
+export type GetFinanceSalesTaxCsvBody = never;
+export type GetFinanceSalesTaxCsvResponse = string;
 
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
@@ -6372,7 +6461,9 @@ export type ListFinanceCardsParams = {
   cursor?: string | null;
   holder?: string | null;
   limit?: number;
+  q?: string;
   status?: "active" | "frozen" | "cancelled" | null;
+  vendor?: string | null;
   view_as?: string | null;
 };
 export type ListFinanceCardsBody = never;
@@ -6492,6 +6583,15 @@ export type ListFinanceTransactionsParams = {
 };
 export type ListFinanceTransactionsBody = never;
 export type ListFinanceTransactionsResponse = FinanceTransactions;
+
+/** GET /api/v2/finance/transfers */
+export type ListFinanceTransfersParams = {
+  cursor?: string | null;
+  limit?: number;
+  view_as?: string | null;
+};
+export type ListFinanceTransfersBody = never;
+export type ListFinanceTransfersResponse = FinanceTransfers;
 
 /** GET /api/v2/finance/webhook-deliveries */
 export type ListFinanceWebhookDeliveriesParams = {
@@ -7561,13 +7661,14 @@ export type SearchFinanceParams = {
   contact_kind?: "vendor" | "customer" | "both" | null;
   cursor?: string | null;
   end?: string | null;
-  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | null;
+  kind?: "entry" | "feed" | "bill" | "invoice" | "contact" | "rule" | "card" | null;
   limit?: number;
   money_account_id?: string | null;
   q?: string;
   rule_kind?: "gate" | "posting" | null;
   start?: string | null;
   status?: string | null;
+  vendor?: string | null;
   view_as?: string | null;
 };
 export type SearchFinanceBody = never;
