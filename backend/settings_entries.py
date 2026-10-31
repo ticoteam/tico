@@ -376,8 +376,6 @@ ALIASES = {
     ("POST", "inbound/phone-requests/{x}"): "inbound.phone_request.accept",
     ("POST", "system-routines/{x}"): "rules.system",
     ("POST", "tags/{x}"): "tasks.tag",
-    # subscriptions.js removes a subscription through a path it builds in a variable (`writeRequest('DELETE', path)`).
-    ("DELETE", "{x}"): "models.subscription.remove",
 }
 
 # Writes on a Settings page that change no setting: one-off actions, and why each needs no entry.

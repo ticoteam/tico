@@ -290,9 +290,8 @@ async function subsRemove(sub) {
   const count = (sub.computers || []).length;
   const text = count ? `${subsPlural(count, 'computer')} stop using it.` : 'Tico deletes the saved value.';
   if (!await settingsConfirm({title: `Remove ${sub.name}?`, text, ok: 'Remove'})) return;
-  const path = `/v2/model-subscriptions/${encodeURIComponent(sub.id)}`;
   try {
-    const done = await subsConfirmed(confirm => writeRequest('DELETE', confirm ? `${path}?confirm=1` : path),
+    const done = await subsConfirmed(confirm => writeRequest('DELETE', `/v2/model-subscriptions/${encodeURIComponent(sub.id)}${confirm ? '?confirm=1' : ''}`),
       running => ({title: `Remove ${sub.name}?`, text: `${subsStopWords(running)}, and their sessions start fresh.`, ok: 'Remove'}));
     if (!done) return;
     toast(`${sub.name} removed`);
