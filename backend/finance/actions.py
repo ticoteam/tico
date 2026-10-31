@@ -295,7 +295,8 @@ def _recorded(e: FinanceError) -> dict[str, object]:
     if e.named is None:
         return {}
     n = e.named
-    return {"named": {"budgets": list(n.budgets), "template": n.template, "numbers": n.numbers}}
+    return {"named": {"budgets": list(n.budgets), "cards": list(n.cards), "template": n.template,
+                      "numbers": n.numbers}}
 
 
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,

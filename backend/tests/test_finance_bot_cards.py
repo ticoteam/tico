@@ -810,3 +810,26 @@ def test_migration_67_adds_the_saved_card_record_to_an_install_from_66(store):
     with store.read() as c:
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_card_saves'").fetchone()
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=67").fetchone()[0] == 1
+
+
+def test_a_cards_refusal_names_the_cards_only_while_the_asker_can_see_them(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00; coder reserves 200.00 and seller 200.00 of it
+    with books.transaction() as c:
+        _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.budgets"}).status == "committed"
+        grant = act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "everything"})
+        assert grant.status == "committed"
+        refused = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
+        assert refused.code == "invalid" and "lower these cards first" in refused.reason
+        assert "coder" in refused.reason and "reserves 200.00" in refused.reason
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (refused.action_id,)).fetchone()[0]
+        assert "coder" not in stored and "seller" not in stored and "200.00" not in stored
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        replay = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
+        assert replay.replayed and "coder" not in replay.reason and "200.00" not in replay.reason
+        seen = FR.action_for(c, "human:ben", refused.action_id)
+        assert "coder" not in seen["reason"] and "200.00" not in seen["reason"]
+        assert act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "everything"}).status == "committed"
+        again = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
+        assert again.replayed and "coder" in again.reason and "reserves 200.00" in again.reason

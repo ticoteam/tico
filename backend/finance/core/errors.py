@@ -22,6 +22,7 @@ class Named:
     template: str
     fallback: str
     numbers: bool = False
+    cards: tuple[str, ...] = ()
 
 
 class FinanceError(Exception):

@@ -129,13 +129,17 @@ def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], d
     recorded = result.get("named")
     if not recorded:
         return fallback
+    from .cards import sees as sees_card
     budgets = ctx.budgets()
     shown = [budgets[str(bid)] for bid in recorded["budgets"] if str(bid) in budgets]
-    if len(shown) != len(recorded["budgets"]):
+    rows = [SK.get(ctx.c, "fin_cards", str(cid)) for cid in recorded.get("cards", [])]
+    if len(shown) != len(recorded["budgets"]) or any(row is None for row in rows):
         return fallback
-    if not decider and not named_visible(ctx, who, shown, bool(recorded["numbers"])):
+    cards = [row for row in rows if row is not None]
+    if not decider and not (named_visible(ctx, who, shown, bool(recorded["numbers"]))
+                            and all(sees_card(ctx, who, card) for card in cards)):
         return fallback
-    return str(recorded["template"]).format(*[b.name for b in shown])
+    return str(recorded["template"]).format(*[b.name for b in shown], *[_card_label(card) for card in cards])
 
 
 def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> list[Result]:
@@ -472,12 +476,17 @@ def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: d
         total = sum(reserve for _, reserve in cards) + owed
         if not cards or total <= cap:
             continue
-        if not shows_numbers(ctx, who, b) or not all(sees_card(ctx, who, card) for card, _ in cards):
-            raise invalid("it does not fit: its cards reserve more than that")
-        names = "; ".join(f"{card['nickname'] or card['holder']} ••{card['last4'] or '----'} "
-                          f"reserves {reserve / 100:.2f}" for card, reserve in cards)
-        raise invalid(f"it does not fit: its cards and child budgets reserve {total / 100:.2f}; "
-                      f"lower these cards first: {names}")
+        parts = "; ".join(f"{{{n}}} reserves {reserve / 100:.2f}" for n, (_, reserve) in enumerate(cards, start=1))
+        named = Named((b.id,), f"it does not fit: its cards and child budgets reserve {total / 100:.2f}; "
+                      f"lower these cards first: {parts}", "it does not fit: its cards reserve more than that",
+                      numbers=True, cards=tuple(str(card["id"]) for card, _ in cards))
+        shown = shows_numbers(ctx, who, b) and all(sees_card(ctx, who, card) for card, _ in cards)
+        raise named_refusal(INVALID, named, [b.name, *(_card_label(card) for card, _ in cards)], shown)
+
+
+def _card_label(card: Any) -> str:
+    """A card as a refusal names it: its nickname or holder, and its last four digits."""
+    return f"{card['nickname'] or card['holder']} ••{card['last4'] or '----'}"
 
 
 def _card_reserves(ctx: Ctx, tree: list[str], allocs: list[Any], start: str, end: str) -> list[tuple[Any, int]]:
