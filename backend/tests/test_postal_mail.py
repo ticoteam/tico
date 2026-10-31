@@ -430,24 +430,24 @@ def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
     drain(api)
     task_id = items(api)["441"]["task_id"]
     with api.app.state.store.transaction() as c:
-        sub = H.task_create(c, H.KEEPER, "Pay it", "", "bot:finance", parent_id=task_id, lint=False,
-                            deduplicate=False)["id"]
-        moved = H.task_create(c, H.KEEPER, "File it", "", "bot:finance", parent_id=task_id, lint=False,
-                              deduplicate=False)["id"]
+        sub, moved, shredded = (H.task_create(c, H.KEEPER, title, "", "bot:finance", parent_id=task_id, lint=False,
+                                              deduplicate=False)["id"] for title in ("Pay it", "File it", "Shred it"))
         other = H.task_create(c, H.KEEPER, "Office upkeep", "", "bot:finance", lint=False, deduplicate=False)["id"]
     with api.app.state.store.transaction() as c:          # filed public by the build before V2, then deleted
-        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id IN (?,?,?,?)", (task_id, sub, moved, other))
+        c.execute("UPDATE tasks SET private=0, visibility='public'")
         assert task_delete.delete_tasks(c, [task_id], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
-        c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'parent',?)",
-                  (moved, other, H.now()))
+        for each in (moved, shredded):                    # moved under another task since; one of them deleted too
+            c.execute("INSERT INTO task_relations(from_task,to_task,kind,created) VALUES(?,?,'parent',?)",
+                      (each, other, H.now()))
+        assert task_delete.delete_tasks(c, [shredded], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
         c.execute("DELETE FROM mail_private_backfill")
         H._apply(c, postal_mail_schema.V3)
     api.app.state.postal_mail.backfill_private()
     with api.app.state.store.transaction() as c:
-        assert task_delete.restore_tasks(c, [task_id])["restored"] == [task_id]
+        assert task_delete.restore_tasks(c, [task_id, shredded])["restored"] == [task_id, shredded]
     assert (task(api, task_id)["private"], task(api, task_id)["visibility"]) == (1, "private")
     assert task(api, sub)["private"] == 1                 # its subtask, kept live, goes private with it
-    assert task(api, moved)["private"] == 0               # one moved under another task since is not the bill's
+    assert task(api, moved)["private"] == task(api, shredded)["private"] == 0   # now another task's, not the bill's
 
 
 def test_a_subtask_deleted_before_the_backfill_comes_back_private_under_its_bill(api, hq, mail):

@@ -373,6 +373,19 @@ def classify(reading, decided, thresholds, checks=False):
     return "other" if hint == "junk" else hint
 
 
+def parent_now(c, task_id):
+    """A task's parent: its live link, or for a deleted task the one its trash copy would put back."""
+    live = c.execute("SELECT to_task FROM task_relations WHERE kind='parent' AND from_task=?", (task_id,)).fetchone()
+    if live:
+        return live[0]
+    kept = c.execute("SELECT rows_json FROM task_trash WHERE task_id=? AND purged_at IS NULL", (task_id,)).fetchone()
+    rows = json.loads(kept[0]).get("rows", {}) if kept else {}
+    for r in rows.get("task_relations", []):
+        if r.get("kind") == "parent" and r.get("from_task") == task_id:
+            return r["to_task"]
+    return (rows.get("tasks") or [{}])[0].get("parent_id")
+
+
 # ----------------------------------------------------------------------------- the service
 class PostalMail:
     def __init__(self, store, settings, app, auth=None):
@@ -515,15 +528,14 @@ class PostalMail:
                 todo += [r[0] for r in c.execute(
                     "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?", (task_id,))]
                 # A deleted task keeps its parent links (either end) in its trash copy; older copies on the task row.
-                # A link whose child has a parent again could not go back (one parent a task): not followed.
-                todo += [r[0] for r in c.execute(
+                # One whose child has another parent now (live, or in the child's own trash copy) is not followed.
+                linked = c.execute(
                     "SELECT json_extract(r.value,'$.from_task') FROM task_trash t, "
                     "json_each(t.rows_json,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
                     "AND json_extract(r.value,'$.kind')='parent' AND json_extract(r.value,'$.to_task')=? "
-                    "AND NOT EXISTS (SELECT 1 FROM task_relations p WHERE p.kind='parent' "
-                    "AND p.from_task=json_extract(r.value,'$.from_task')) "
                     "UNION SELECT task_id FROM task_trash WHERE purged_at IS NULL "
-                    "AND json_extract(rows_json,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)) if r[0]]
+                    "AND json_extract(rows_json,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)).fetchall()
+                todo += [r[0] for r in linked if r[0] and parent_now(c, r[0]) in (None, task_id)]
             c.execute("DELETE FROM mail_private_backfill")
 
     def fail(self, row, code):
