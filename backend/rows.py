@@ -41,6 +41,8 @@ class TaskRow(TypedDict):
     next_run: int
     carried_by: str | None
     resume_json: str | None
+    occurrence: str | None
+    occurrence_step: str | None
     checkpoint: str | None
     checkpoint_at: str | None
     checkpoint_by: str | None

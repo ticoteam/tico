@@ -263,17 +263,27 @@ function parseServerTime(value) {
 }
 // A task's due date is one of two things. For a bot's task it is when the bot looks again (the scheduler wakes it
 // then: a parked task), shown as a muted "Wakes Oct 2". For a person's open task it is a deadline: amber within two
-// days, red once passed.
+// days, red once passed. A task a due-date routine opened (`occurrence` set) is that day's deadline whoever owns it.
+// An occurrence of a due routine (backend/automation_actions.py) is due at the last second of its due day in the
+// trigger's zone, and that day is the routine's due_on: it reads as that calendar day in any viewer's zone. A step that
+// set its own due keeps the instant, as any task does. Null for other tasks.
+function occurrenceDay(t) {
+  const m = /:(\d{4}-\d{2}-\d{2})$/.exec(t?.occurrence || ''), due = String(t?.due || '');
+  if (!m || !due.startsWith(m[1] + 'T23:59:59')) return null;
+  const [y, mo, d] = m[1].split('-').map(Number);
+  return new Date(y, mo - 1, d);
+}
 function taskDueInfo(t) {
   if (!t?.due || taskFinished(t)) return null;
   const at = parseServerTime(t.due); if (!at) return null;
-  const day = new Date(at).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
-  if (actorSlug(t.owner)) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
+  const shown = occurrenceDay(t) || new Date(at);
+  const day = shown.toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  if (actorSlug(t.owner) && !t.occurrence) return {at, day, kind: 'wake', late: false, words: at > Date.now() ? `Wakes ${day}` : `Woke ${day}`};
   const late = at < Date.now();
   // Within the coming week a deadline reads as its weekday ("Due Wed"), further out as its date.
-  const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(at) - start(Date.now())) / 864e5);
+  const start = d => new Date(d).setHours(0, 0, 0, 0), days = Math.round((start(shown) - start(Date.now())) / 864e5);
   const when = days === 0 ? 'today' : days === 1 ? 'tomorrow' : days > 1 && days < 7
-    ? new Date(at).toLocaleDateString(undefined, {weekday: 'short'}) : day;
+    ? shown.toLocaleDateString(undefined, {weekday: 'short'}) : day;
   return {at, day, kind: 'deadline', late, soon: !late && at - Date.now() < 2 * 864e5, words: late ? `Overdue ${day}` : `Due ${when}`};
 }
 // Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then.
