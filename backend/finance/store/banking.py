@@ -248,15 +248,22 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
     """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
     line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
     dated through that day; `live`, its current posted entry, whatever its date. A Stripe row in a day's summary shares
-    its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line."""
+    its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line. A row
+    that left its summary keeps that summary's amount through the days before the summary was reversed (`summary_entry`),
+    since the closed period it was booked in still holds it."""
     summary = "json_extract(f.raw_json, '$.summary')=1"
+    left = "json_extract(f.raw_json, '$.summary_entry')"
+    left_share = (f"CASE WHEN {left} IS NOT NULL AND EXISTS (SELECT 1 FROM fin_entries e WHERE e.id={left} AND "
+                  f"e.entry_date<=:through) AND NOT EXISTS (SELECT 1 FROM fin_entries r WHERE r.reverses_id={left} AND "
+                  "r.status='posted' AND r.entry_date<=:through) THEN f.amount ELSE 0 END")
     return c.execute(
-        f"SELECT f.id, CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
+        f"SELECT f.id, (CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted' AND e.entry_date<=:through) THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
         "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
         "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
-        "AND instr(e.source_id, f.id)>0))), 0) END AS through_amount, "
+        "AND instr(e.source_id, f.id)>0))), 0) END) + "
+        f"{left_share} AS through_amount, "
         f"CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
         "AND e.status='posted') THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id AND e.status='posted' "
@@ -744,6 +751,16 @@ def stripe_refunded(c: sqlite3.Connection, money_account_id: str, kinds: Sequenc
                          f"money_account_id=? AND kind IN ({_marks(kinds)}) AND json_extract(raw_json, '$.link')=? AND "
                          "status='posted' AND entry_id IS NOT NULL",
                          (money_account_id, *kinds, link)).fetchone()[0])
+
+
+def stripe_given(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> dict[str, int]:
+    """What the posted refunds, disputes and returned refunds of one charge gave back to each settlement (settlement id
+    to cents; a restore is negative). Each refund keeps its shares in raw_json.gave."""
+    rows = c.execute("SELECT j.key, COALESCE(SUM(j.value), 0) FROM fin_feed_txns f, json_each(f.raw_json, '$.gave') j "
+                     f"WHERE f.money_account_id=? AND f.kind IN ({_marks(kinds)}) AND "
+                     "json_extract(f.raw_json, '$.link')=? AND f.status='posted' AND f.entry_id IS NOT NULL "
+                     "GROUP BY j.key", (money_account_id, *kinds, link)).fetchall()
+    return {str(key): int(total) for key, total in rows}
 
 
 def stripe_summary_rows(c: sqlite3.Connection, money_account_id: str) -> list[Any]:

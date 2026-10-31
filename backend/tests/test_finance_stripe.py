@@ -14,6 +14,7 @@ from backend import trigger_presets as P
 from backend.finance import actions as FA
 from backend.finance import banking, stripe_sync, sync
 from backend.finance.context import load
+from backend.finance.store import banking as store_banking
 from backend.finance.core import feeds as F
 from backend.finance.mercury import Answer
 from backend.tests.test_api import api, get, headers  # noqa: F401
@@ -753,6 +754,90 @@ def test_a_held_sale_applied_by_hand_to_an_invoice_posts_its_gross_and_fee_so_a_
         assert (_sum(c, "1200"), _sum(c, "6200"), _sum(c, "1050")) == (10_000, 300, -300)
         assert _every_entry_balances(c)
     assert _invoice_row(books, iid) == (0, "sent")
+
+
+def test_a_refund_before_anything_settles_the_sale_gives_nothing_back_to_a_settlement_made_later(books):
+    """A $100 sale refunded $50 before anything settled it: a plain refund, the credit it leaves. Then $50 of the sale is
+    applied to a $50 invoice and the last $50 is refunded. The invoice owes its $50 again; the earlier refund never
+    reached it."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
+    stripe.add("charge", 10_000, 0, "Acme Shop")
+    stripe_pass(books, stripe)
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.transaction() as c:
+        sale = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": sale, "amount": 5_000})
+        assert made.status == "committed", made
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    assert _invoice_row(books, iid) == (0, "sent")
+    with books.read() as c:
+        assert _every_entry_balances(c)
+
+
+def test_a_stripe_charge_with_a_fee_is_linked_to_marked_payments_that_add_up_to_its_gross(books):
+    """Four invoices of one customer, $60, $40, $60 and $40, all marked paid through Stripe, and a $100 charge with a $3.20
+    fee that names none of them: the match asks. A person links the $60 and $40 marks to it. They add up to the gross, so
+    the fee posts, the balance gets the net, and a full refund gives both invoices back."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    money = _stripe_money(books)
+    customer = _customer(books, "Acme Retail")
+    iids = [_invoice(books, customer, amount) for amount in (6_000, 4_000, 6_000, 4_000)]
+    with books.transaction() as c:
+        for iid in iids:
+            paid = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "money_account_id": money,
+                                                            "date": "2026-10-10"})
+            assert paid.status == "committed", paid
+    stripe.add("charge", 10_000, 320, "Unknown Shopper")
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        row = str(_feed(c, "txn_0001")["id"])
+        assert _feed(c, "txn_0001")["status"] == "new"
+        pair = [str(r[0]) for r in c.execute(
+            "SELECT id FROM fin_settlements WHERE to_id IN (?, ?) AND from_kind='expected' AND voided_at IS NULL "
+            "ORDER BY amount DESC", (iids[0], iids[1])).fetchall()]
+        linked = act(c, OWNER, "feed_match", {"feed_id": row, "settlement_ids": pair})
+        assert linked.status == "committed", linked
+    with books.read() as c:
+        assert (_sum(c, "1050"), _sum(c, "6200"), _sum(c, "1200")) == (19_680, 320, 0)
+        assert _every_entry_balances(c)
+    assert _invoice_row(books, iids[0]) == (6_000, "paid")
+    assert _invoice_row(books, iids[1]) == (4_000, "paid")
+    stripe.add("refund", -10_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.read() as c:
+        assert (_sum(c, "1050"), _sum(c, "6200"), _sum(c, "1200")) == (9_680, 320, 10_000)
+        assert _every_entry_balances(c)
+    assert _invoice_row(books, iids[0]) == (0, "sent")
+    assert _invoice_row(books, iids[1]) == (0, "sent")
+
+
+def test_a_summarized_sale_recategorized_after_its_month_closed_still_reconciles_that_month(books):
+    """A $100 sale with a $3.20 fee in October's summary, recategorized in November after October closed: October still
+    holds the sale's $96.80 net for reconciliation, and the row no longer carries its summary mark."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    october = int(datetime(2026, 10, 14, 12, tzinfo=timezone.utc).timestamp())
+    stripe.add("charge", 10_000, 320, "Acme Buyer", created=october)
+    stripe_pass(books, stripe)
+    money = _stripe_money(books)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at="2026-11-05T12:00:00.000000Z").status == "committed"
+        row = str(_feed(c, "txn_0001")["id"])
+        moved = act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "4000")},
+                    at="2026-11-05T12:00:00.000000Z")
+        assert moved.status == "committed", moved
+    with books.read() as c:
+        gl = str(c.execute("SELECT account_id FROM fin_money_accounts WHERE id=?", (money,)).fetchone()[0])
+        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+        effects = [(int(r["through_amount"]), int(r["live_amount"]))
+                   for r in store_banking.row_effects(c, book, money, gl, "2026-10-31") if str(r["id"]) == row]
+        assert effects == [(9_680, 9_680)]
+        assert "summary" not in json.loads(_feed(c, "txn_0001")["raw_json"])
 
 
 def test_a_webhook_with_a_bad_or_stale_signature_is_refused():

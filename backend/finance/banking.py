@@ -624,8 +624,17 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
         if e is not None and str(e["status"]) == "posted" and not e["reverses_id"]:
             # Its period may be closed by now: the reversal posts on an open day, as a late item does.
             posting.reverse(ctx, str(e["id"]), day=open_day(ctx, str(e["entry_date"])), memo=memo, by=SYSTEM)
+    from .stripe_post import SUMMARY, SUMMARY_ENTRY  # local: stripe_post imports this module
     for r in SK.rows_of_entry(ctx.c, entry_id):
-        SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "new", "entry_id": None, "updated_at": ctx.at})
+        raw = dict(SK.loads(r["raw_json"]))
+        changes: dict[str, object] = {"status": "new", "entry_id": None, "updated_at": ctx.at}
+        if raw.get(SUMMARY):
+            # The summary is reversed, but its closed period still holds this row's amount (see store row_effects).
+            raw[SUMMARY_ENTRY] = entry_id
+            if str(r["id"]) == str(row["id"]):
+                raw.pop(SUMMARY)        # this row leaves its summary; its own posting comes next
+            changes["raw_json"] = SK.dump(raw)
+        SK.update(ctx.c, "fin_feed_txns", str(r["id"]), changes)
     # A bill or invoice it paid is owed again.
     documents.feed_gone(ctx, str(row["id"]), [str(e["id"]) for e in [entry, *later] if e is not None])
 

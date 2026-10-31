@@ -1072,19 +1072,22 @@ def expected_for(ctx: Ctx, who: str, row: Any) -> tuple[list[Any], bool]:
 
 
 def _candidates(ctx: Ctx, who: str, row: Any, money: Any, ids: Sequence[str] = ()) -> tuple[list[Any], bool]:
-    """`expected_for` uncapped (only `ids` when given), and whether more waited than were looked at."""
+    """`expected_for` uncapped (only `ids` when given), and whether more waited than were looked at. A provider's fee
+    comes out of what the row carries, so the payments may add up to its gross."""
+    from .banking import provider_fee
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
     start, end = _window(str(row["txn_date"]))
+    gross = abs(int(row["amount"])) + provider_fee(row, money)
     waiting, cut = _waiting(ctx, kind, money, 0, start, end, ids)
-    return [s for s in waiting if int(s["amount"]) <= abs(int(row["amount"]))
+    return [s for s in waiting if int(s["amount"]) <= gross
             and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))], cut
 
 
 def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Link a settled bank row to the payments marked paid it is the bank side of (the ones the automatic match could
     not tell apart): exactly as that match does, so the bank moves once and nothing new is expensed. The payments'
-    amounts add up to the row's; the documents are ones the asker sees and may record payments on."""
-    from .banking import seen
+    amounts add up to the row's gross (its amount and any provider fee); the documents are ones the asker sees and may record payments on."""
+    from .banking import provider_fee, provider_fee_line, seen
     V.only(p, ("feed_id", "settlement_ids"))
     row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
     if row is None or not seen(ctx, who, row):
@@ -1106,14 +1109,16 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such payment waiting for this row in your view")
     if len({str(s["contact_id"] or "") for s in group}) > 1:
         raise invalid("one row pays one contact's payments")
+    gross = abs(int(row["amount"])) + provider_fee(row, money)
     total = sum(int(s["amount"]) for s in group)
-    if total != abs(int(row["amount"])):
-        raise invalid(f"those payments add up to {total}, the row to {abs(int(row['amount']))}")
+    if total != gross:
+        raise invalid(f"those payments add up to {total}, the row to {gross}")
     docs = [str(s["to_id"]) for s in group]
 
     def apply(aid: str) -> Result:
         fresh = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
-        entry = _link(ctx, fresh, money, _row_txn(fresh), group)
+        fee = provider_fee_line(ctx, fresh, money)
+        entry = _link(ctx, fresh, money, _row_txn(fresh), group, [] if fee is None else [fee])
         return {"feed_id": str(row["id"]), "entry_id": entry, "settlement_ids": ids, f"{kind}_ids": docs}
     names = ", ".join(f"{kind} {SAP.get(ctx.c, SAP.DOCS[kind][0], d)['number'] or d}" for d in docs)
     return Plan(K.default_gate(ctx.org, who, "feed_match"),

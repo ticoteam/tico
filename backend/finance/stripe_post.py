@@ -29,6 +29,8 @@ TRANSIT_CODE, TRANSIT_NAME = "1060", "Stripe payouts in transit"
 STALE_DAYS = 7                   # an item still waiting after this many days is asked about
 SUMMARY = "summary"              # the raw copy's mark: the row posts in its day's summary entry
 COUNTER = "counter"              # a summarized sale's own counter lines: [account, amount, tags, contact] each
+GAVE = "gave"                    # a refund's shares: settlement id -> what it gave that settlement (negative: took back)
+SUMMARY_ENTRY = "summary_entry"  # a row that left its summary: the summary entry it was in (reversed; its period holds it)
 WAITING = (*F.STRIPE_UNWINDS, *F.STRIPE_PAYOUT_BACK)     # rows that wait for the sale or payout they are about
 WAITING_MOST = 200
 FAR_PAST = "0000-01-01"
@@ -323,22 +325,33 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
         lines.append(banking.feed_line(_fees(ctx).id, fee))
     entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
-    _give_back(ctx, original, row, before, now, entry)
+    gave = _give_back(ctx, original, row, link, gross, entry)
+    if gave:
+        raw = {**SK.loads(row["raw_json"]), GAVE: gave}
+        SK.update(ctx.c, "fin_feed_txns", fid, {"raw_json": SK.dump(raw), "updated_at": ctx.at})
 
 
-def _give_back(ctx: Ctx, original: Any, row: Any, before: int, now: int, entry: str) -> None:
-    """What the refunded sale settled gives back, in proportion to each settlement, as the sale's refunds reach it: the
-    document owes it again and its status follows (a negative settlement from the refund's row, on its entry). No
-    settlement gives back more than it received, so the rest of a refund is a plain refund (the credit it leaves)."""
+def _give_back(ctx: Ctx, original: Any, row: Any, link: str, gross: int, entry: str) -> dict[str, int]:
+    """What the refunded sale's settlements give back for this refund, and what a restored refund takes back again. A
+    refund shares out over what each settlement still holds after the refunds before it (what they gave, kept on those
+    refunds as `gave`), so a settlement made later never takes a share of an earlier refund. Once nothing is left, the
+    rest is a plain refund (the credit it leaves). Each document owes what its settlement gave back (a negative
+    settlement from the refund's row, on its entry). Returns what this refund gave each settlement."""
     live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
-    weights = [int(x["amount"]) for x in live]
-    cap = sum(weights)
-    after = _allocate(min(now, cap), weights)
-    prior = _allocate(min(before, cap), weights)
-    for s, new, old in zip(live, after, prior, strict=True):
-        if new != old:
-            documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=old - new, day=str(row["txn_date"]),
+    given = SK.stripe_given(ctx.c, str(original["money_account_id"]), F.STRIPE_UNWINDS, link)
+    held = [max(given.get(str(s["id"]), 0), 0) for s in live]
+    if gross < 0:
+        remaining = [max(int(s["amount"]) - h, 0) for s, h in zip(live, held, strict=True)]
+        moves = _allocate(min(-gross, sum(remaining)), remaining)
+    else:
+        moves = [-x for x in _allocate(min(gross, sum(held)), held)]
+    gave: dict[str, int] = {}
+    for s, move in zip(live, moves, strict=True):
+        if move:
+            gave[str(s["id"])] = move
+            documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=-move, day=str(row["txn_date"]),
                              from_kind="feed", from_id=str(row["id"]), entry_id=entry)
+    return gave
 
 
 def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
