@@ -181,9 +181,14 @@ def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: s
 
 def hidden_bills(ctx: Ctx, cut: Sequence[str] | set[str], bill_ids: Sequence[str]) -> set[str]:
     """Of these bills, the ones with a line on a cut (private) account."""
-    if not cut or not bill_ids:
+    return hidden_documents(ctx, cut, "bill", bill_ids)
+
+
+def hidden_documents(ctx: Ctx, cut: Sequence[str] | set[str], kind: str, doc_ids: Sequence[str]) -> set[str]:
+    """Of these bills or invoices, the ones with a line on a cut (private) account."""
+    if not cut or not doc_ids:
         return set()
-    lines = SAP.lines(ctx.c, "bill", list(dict.fromkeys(bill_ids)))
+    lines = SAP.lines(ctx.c, kind, list(dict.fromkeys(doc_ids)))
     return {b for b, xs in lines.items() if any(str(x["account_id"] or "") in cut for x in xs)}
 
 
@@ -232,19 +237,31 @@ def _feed_origin(r: Any) -> str:
     return str(r["source_id"]).split(":")[0] if str(r["source"]) in ("bank", "card") else ""
 
 
-def _pays_labels(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, str]:
-    """What a bank or card row's "Pays bill" entry shows as its line: the documents it pays ("Bill AC-105"), not the
-    line it moves the spend off (that spend now counts on the bill's own lines), to a viewer who sees those documents."""
+def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str, str], set[str]]:
+    """For these lines (entry_id, source, source_id): what a "Pays bill" entry shows as its line, the documents it pays
+    ("Bill AC-105") rather than the line it moves the spend off (that spend now counts on the bill's own lines), to a
+    viewer who can open those documents. Also the entries naming a bill or invoice this viewer can't open (one that
+    pays it, or its own entry and that entry's reversal), whose memo and description must not show."""
     from .tab_ap import sees_side
     cut = set(private_cut(ctx, view))
     out: dict[str, str] = {}
-    for eid, docs in SAP.documents_paid_by(ctx.c, sorted(set(entry_ids))).items():
-        kind = str(docs[0]["to_kind"])
-        if any(str(d["to_kind"]) != kind for d in docs) or not sees_side(ctx, view, kind) or \
-                (kind == "bill" and hidden_bills(ctx, cut, [str(d["to_id"]) for d in docs])):
-            continue
-        out[eid] = f"{kind.capitalize()} " + ", ".join(str(d["number"] or d["to_id"])[:40] for d in docs)
-    return out
+    named: dict[str, list[tuple[str, str]]] = {}
+    for r in rows:
+        if str(r["source"]) in ("bill", "invoice"):
+            named.setdefault(str(r["entry_id"]), []).append((str(r["source"]), str(r["source_id"]).split(":")[0]))
+    paid = SAP.documents_paid_by(ctx.c, sorted({str(r["entry_id"]) for r in rows}))
+    for eid, docs in paid.items():
+        named.setdefault(eid, []).extend((str(d["to_kind"]), str(d["to_id"])) for d in docs)
+    kinds = {k for docs in named.values() for k, _ in docs}
+    hidden = {(k, i) for k in kinds if sees_side(ctx, view, k)
+              for i in hidden_documents(ctx, cut, k, sorted({i for docs in named.values() for x, i in docs if x == k}))}
+    closed = {eid for eid, docs in named.items()
+              if any(not sees_side(ctx, view, k) or (k, i) in hidden for k, i in docs)}
+    for eid, docs in paid.items():
+        if eid not in closed and len({str(d["to_kind"]) for d in docs}) == 1:
+            out[eid] = f"{str(docs[0]['to_kind']).capitalize()} " + \
+                ", ".join(str(d["number"] or d["to_id"])[:40] for d in docs)
+    return out, closed
 
 
 def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, list[Row]]:
@@ -386,7 +403,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
         cut = private_feed(ctx, view, [*stands.values(), *history.values()])
         names = vendor_labels(ctx, view, [str(r["contact_id"]) for r in batch])
-        pays = _pays_labels(ctx, view, [str(r["entry_id"]) for r in batch if origins[str(r["line_id"])]])
+        pays, closed = pays_labels(ctx, view, batch)
         out: list[tuple[tuple[str, str], Row]] = []
         for r in batch:
             account = ctx.accounts[str(r["account_id"])]
@@ -400,11 +417,13 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
                                      "amount": int(r["amount"]), "currency": ctx.book.base_currency,
                                      "entry_id": str(r["entry_id"]), "account_id": account.id,
-                                     "account": pays.get(str(r["entry_id"]), account.name),
+                                     "account": pays.get(str(r["entry_id"]), account.name)
+                                     if origins[str(r["line_id"])] else account.name,
                                      "vendor": str(r["contact_id"]),
                                      "vendor_name": names.get(str(r["contact_id"]), ""),
-                                     "description": str(r["description"]),
-                                     "memo": str(r["memo"]), "source": str(r["source"]),
+                                     "description": "" if str(r["entry_id"]) in closed else str(r["description"]),
+                                     "memo": "" if str(r["entry_id"]) in closed else str(r["memo"]),
+                                     "source": str(r["source"]),
                                      "reversed": str(r["entry_status"]) == "reversed", "tags": tagged}))
         return out
 

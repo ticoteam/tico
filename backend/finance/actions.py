@@ -80,14 +80,17 @@ class ActionResult:
 
 
 def _canonical(payload: object) -> dict[str, object]:
-    """The payload as stored and hashed: plain JSON, keys sorted."""
+    """The payload as stored and hashed: plain JSON, keys sorted, its top-level ids (`*_id`, `obligation`) trimmed as
+    the planners read them, so a stored id always matches the record it names (a bill's waiting asks are found by
+    it)."""
     if not isinstance(payload, Mapping):
         raise FinanceError(INVALID, "payload is an object")
     try:
         loaded: object = json.loads(json.dumps(payload, sort_keys=True))
     except (TypeError, ValueError):
         raise FinanceError(INVALID, "payload is plain JSON") from None
-    return dict(cast(dict[str, object], loaded))
+    return {k: v.strip() if isinstance(v, str) and (k.endswith("_id") or k == "obligation") else v
+            for k, v in cast(dict[str, object], loaded).items()}
 
 
 def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
@@ -332,8 +335,8 @@ def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]
     out: list[str] = []
     for row in SX.waiting(ctx.c, ("payment_create", "bill_schedule")):
         body = json.loads(str(row["payload_json"] or "{}"))
-        mine = body.get("obligation") == f"bill:{bill_id}" if row["kind"] == "payment_create" else \
-            body.get("bill_id") == bill_id
+        mine = str(body.get("obligation") or "").strip() == f"bill:{bill_id}" if row["kind"] == "payment_create" \
+            else str(body.get("bill_id") or "").strip() == bill_id  # trimmed as the planners read them
         if not mine or str(row["id"]) == keep:
             continue
         if row["approval_id"]:

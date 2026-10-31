@@ -559,9 +559,13 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
                             "status": str(r["entry_status"]), "reverses": r["reverses_id"] or None,
                             "tags": tags.get(r["line_id"], {})})
         more = more or len(rows) > most * 4
+        shown = {e["line_id"] for e in entries}
         names = tab_ap.vendor_labels(s.ctx, s.view, [str(e["vendor"] or "") for e in entries])
+        _, closed = tab.pays_labels(s.ctx, s.view, [r for r in rows if r["line_id"] in shown])
         for e in entries:
             e["vendor_name"] = names.get(str(e["vendor"] or ""), "")
+            if e["entry_id"] in closed:
+                e["description"], e["memo"] = "", ""
         out["paid_by"] = _paid_by(s, seen)
     else:
         out["paid_by"] = None

@@ -878,7 +878,7 @@ def payment_ended(ctx: Ctx, pay: Any) -> None:
 def payment_ask_ended(ctx: Ctx, action_id: str, body: Mapping[str, object], status: str, reason: str) -> None:
     """The payment a scheduled bill asked for ended without running (denied, expired, withdrawn or failed on its
     approval): the bill is open again with no schedule, and says how the ask ended."""
-    obligation = str(body.get("obligation") or "")
+    obligation = str(body.get("obligation") or "").strip()
     bill = SAP.get(ctx.c, "fin_bills", obligation.removeprefix("bill:")) if obligation.startswith("bill:") else None
     if bill is None or str(bill["status"]) != "scheduled":
         return

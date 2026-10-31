@@ -306,7 +306,7 @@ async function finBillSchedule(d) {
   const today = finToday(), again = d.status === 'scheduled', want = again && d.pay_on ? d.pay_on : d.due_date;
   const on = want && want > today ? want : today, word = again ? 'Reschedule' : 'Schedule';
   finDecideDialog(word, `<label>Pay on<input type="date" name="on" required value="${on}" min="${today}"></label>
-    <label>From<select name="from" required>${finOpts(banks)}</select></label>`, word, form => {
+    <label>From<select name="from" required>${finOpts(banks, again ? d.schedule?.money_account_id || '' : '')}</select></label>`, word, form => {
     const pay_on = form.elements.on.value, from = form.elements.from.value;
     if (!pay_on) throw new Error('Pick a day');
     if (!from) throw new Error('No bank account to pay from');

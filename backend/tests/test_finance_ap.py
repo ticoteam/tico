@@ -1,5 +1,6 @@
 """Finance phase 2: bills, invoices, contacts, settlements and the cash view, posting rules, the remaining defaults,
 the new events, the close, and the reads that show them (search, report, metric, inbox) cut to each viewer."""
+import json
 import random
 import time
 
@@ -769,6 +770,67 @@ def test_a_bill_paid_by_a_bank_row_already_on_other_expenses_counts_once_on_its_
         assert moved == [("Bill AC-105", -3_000)]                          # labelled with the bill it pays
 
 
+def _no_number(rows, number):
+    return [r for r in rows if number in f"{r.get('account')} {r.get('description')} {r.get('memo')}"]
+
+
+def test_a_pays_bill_line_never_names_the_bill_to_a_teammate_without_payables(books):
+    """Grok fix check: gus sees the P&L but not payables. The row's "Pays bill" line still shows, on its own line,
+    with no bill number in its line, description or memo; in Transactions and in the line's detail."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _ingest(c, _txn("txn-ac105", -30.0, who="ACME CLOUD", day="2026-10-14"))
+        bid = _bill(c, _vendor(c, "Acme Cloud"), [{"account_id": account(c, "6100"), "amount": 3_000}],
+                    number="AC-105")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)}).status == \
+            "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}).status == "committed"
+    with books.read() as c:
+        rows = FR.transactions(c, "human:gus", start="2026-10-01", end="2026-10-31", source="entry")["rows"]
+        moved = [(r["account"], r["amount"]) for r in rows if r["entry_id"] and r["amount"] == -3_000]
+        assert moved == [("Other expenses", -3_000)], rows
+        assert _no_number(rows, "AC-105") == [], _no_number(rows, "AC-105")
+        detail = FR.line_detail(c, "human:gus", account(c, "6900"), "2026-10-01", "2026-10-31", at=AT)
+        assert len(detail["entries"]) == 2 and _no_number(detail["entries"], "AC-105") == []
+        mine = FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31", at=AT)
+        assert "Pays bill AC-105" in {e["memo"] for e in mine["entries"]}
+
+
+def test_a_pays_invoice_line_never_names_an_invoice_with_a_private_line(books):
+    """Grok fix check: an invoice with a line on a private account is cut from dan's receivables (keep_docs), so its
+    "Pays invoice" line shows the line it moved off, with no invoice number, to dan; the owner sees the invoice.
+    Private lines are expense lines today, so the income line is made private in the store, as a later rule might."""
+    from backend.finance.store import access as SA
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "4100", "name": "Advisory", "type": "income",
+                                                "parent_id": account(c, "4000")})
+        private = str(made.result["account_id"])
+        SA.set_private(c, private, "totals", [], OWNER, AT)
+        SA.bump_view(c, f"private {private}", AT)
+        row = _ingest(c, _txn("txn-inv", 500.0, who="ACME RETAIL", day="2026-10-14", kind="incomingDomesticWire"))
+        assert act(c, OWNER, "categorize", {"feed_id": row, "account_id": account(c, "4000")}).status == "committed"
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        made = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-01",
+                                                "terms_days": 30, "lines": [{"account_id": private, "amount": 50_000}]})
+        assert made.status == "committed", made
+        iid = str(made.result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
+        got = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "amount": 50_000,
+                                                       "account_id": account(c, "1000")})
+        assert (got.result["from"], got.result["status"]) == ("feed", "paid"), got
+        for what in ("pnl", "receivables"):
+            assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": what}).status == "committed"
+    with books.read() as c:
+        assert FR.invoices(c, "human:dan")["invoices"] == []                    # cut from dan's receivables
+        mine = FR.transactions(c, OWNER, start="2026-10-01", end="2026-10-31", source="entry")["rows"]
+        assert [r["account"] for r in mine if r["memo"] == "Pays invoice INV-0001"] == ["Invoice INV-0001"]
+        rows = FR.transactions(c, "human:dan", start="2026-10-01", end="2026-10-31", source="entry")["rows"]
+        assert [r for r in rows if r["entry_id"] and r["amount"] == 50_000], rows
+        assert _no_number(rows, "INV-0001") == [], rows
+
+
 def test_sync_now_polls_payments_waiting_on_the_bank_so_a_rejection_lands_at_once(books):
     """E2E re-test: Sync now on a connection also makes its payments waiting in Mercury's approval queue due for a
     poll, so a rejection there cancels the payment on that sync, not on the poll cadence."""
@@ -796,6 +858,28 @@ def test_sync_now_polls_payments_waiting_on_the_bank_so_a_rejection_lands_at_onc
     sync_once(books, fake, soon)
     with books.read() as c:
         assert status(c) == "cancelled"
+
+
+def test_padded_ids_are_stored_trimmed_so_a_reschedule_still_withdraws_the_ask(books):
+    """Codex fix check: a payment_create for " bill:<id> " waits on dan; a reschedule sent with " <id> " withdraws it,
+    and both payloads are stored with the trimmed ids the planners read."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        bid = _scheduled_today(c, ask=True)
+        rid = str(c.execute("SELECT id FROM fin_recipients").fetchone()[0])
+        ask = act(c, OWNER, "payment_create", {"recipient_id": f" {rid} ", "amount": 50_000, "obligation": f" bill:{bid} ",
+                                               "account_id": account(c, "2000"), "money_account_id": _checking(c)})
+        assert ask.status == "needs_approval", ask
+        moved = act(c, OWNER, "bill_schedule", {"bill_id": f"  {bid} ", "pay_on": "2026-11-15",
+                                                "money_account_id": f"{_checking(c)} "})
+        assert moved.status == "committed", moved
+        assert FA.action(c, ask.action_id).status == "withdrawn"
+
+        def stored(aid):
+            return json.loads(c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (aid,)).fetchone()[0])
+        assert (stored(ask.action_id)["obligation"], stored(ask.action_id)["recipient_id"]) == (f"bill:{bid}", rid)
+        assert stored(moved.action_id)["bill_id"] == bid
+        assert FR.bill(c, OWNER, bid)["status"] == "scheduled"
 
 
 def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_never_pays(books):

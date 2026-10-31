@@ -200,7 +200,7 @@ const docDetail = r => ({...r, terms_days: 30, view_version: 'v1',
     {id: 's-2', from_kind: 'expected', from_id: 'm1', amount: r.paid - 60000, settled_on: '2026-10-29', entry_id: 'e10', voided_at: null, created_by: 'human:ana'}] : [],
   actions: r.id === 'bill-1' ? [{action_id: 'act-b1', kind: 'bill_approve', status: 'needs_approval', actor: 'bot:bookkeeper', approval_id: 'ap-1',
     approval_to: 'human:ana', rule_id: 'r-1', created_at: '2026-10-20T09:01:00Z'}] : [],
-  ...(r.kind === 'bill' ? {schedule: null} : {})});
+  ...(r.kind === 'bill' ? {schedule: r.pay_on && !r.payment ? {pay_on: r.pay_on, money_account_id: 'm2', action_id: null} : null} : {})});
 const CONTACTS = [{id: 'v-figma', name: 'Figma', kind: 'vendor'}, {id: 'v-northwind', name: 'Northwind Design', kind: 'vendor'},
   {id: 'c-bright', name: 'Brightline Studio', kind: 'customer'}, {id: 'c-pine', name: 'Pine & Co', kind: 'customer'}]
   .map(c => ({...c, emails: [], default_account: null, is_1099: false, has_tax_id: false, tax_id_last4: null, recipient_id: null, active: true, owed: {}}));
@@ -818,12 +818,13 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       await page.locator('#fin-rail [data-fin-do="schedule"]').click();
       await page.locator('dialog.fin-dlg[open] select[name="from"] option[value="m1"]').waitFor({state: 'attached'});
       assert.equal(await page.locator('dialog.fin-dlg input[name="on"]').inputValue(), '2099-12-18', tag + ': Reschedule starts at its day');
+      assert.equal(await page.locator('dialog.fin-dlg select[name="from"]').inputValue(), 'm2', tag + ': Reschedule keeps its bank account');
       await page.locator('dialog.fin-dlg input[name="on"]').fill('2099-12-20');
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.locator('dialog.fin-dlg [data-ask]:not([hidden])').waitFor();
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
-      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_schedule', payload: {bill_id: 'bill-6', pay_on: '2099-12-20', money_account_id: 'm1'}}, tag + ': Reschedule is bill_schedule');
+      assert.deepEqual(sent(writes).at(-1), {kind: 'bill_schedule', payload: {bill_id: 'bill-6', pay_on: '2099-12-20', money_account_id: 'm2'}}, tag + ': Reschedule is bill_schedule');
       // + Bill naming an existing vendor in another case picks that vendor; no second contact is made.
       await page.locator('[data-fin-doc-add]').click();
       await page.locator('dialog.fin-dlg select[name="contact"]').selectOption('+');
