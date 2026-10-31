@@ -15,7 +15,10 @@ def run(candidate=FROZEN, title=None):
     return dict(id=42, path='.github/workflows/ci.yml', event='workflow_dispatch', head_branch='main',
                 head_sha=candidate, display_title=title or f'Validate {FROZEN} as v1.0.1 from v1.0.0',
                 status='completed' if (root / 'watched').exists() else 'in_progress', conclusion=conclusion,
-                created_at='2026-01-02T01:00:00Z')
+                created_at='2026-01-02T01:00:00Z', run_attempt=1 + reruns())
+
+def reruns():
+    return len((root / 'reruns').read_text().splitlines()) if (root / 'reruns').exists() else 0
 
 if name == 'git':
     if args[:1] == ['fetch'] or args[:1] == ['status']:

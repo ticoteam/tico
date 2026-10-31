@@ -59,8 +59,6 @@ struct Freeze {
     dispatching: bool,
     run: Option<u64>,
     #[serde(default)]
-    reruns: u32,
-    #[serde(default)]
     tagged: bool,
     #[serde(default)]
     writer_filing: bool,
@@ -174,7 +172,6 @@ fn freeze(options: &HashMap<String, String>, path: &PathBuf) -> Result<()> {
         candidate: None,
         dispatching: false,
         run: None,
-        reruns: 0,
         tagged: false,
         writer_filing: false,
         writer_task: None,
@@ -287,7 +284,7 @@ fn validate_and_tag(
         if status.success() {
             break;
         }
-        rerun_cancelled(state, candidate, id, path)?;
+        rerun_cancelled(state, candidate, id)?;
     }
     verify_run(state, candidate, id, true)?;
     unchanged(candidate)?;
@@ -305,21 +302,20 @@ fn validate_and_tag(
     Ok(())
 }
 // A run a bot cancelled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
-fn rerun_cancelled(state: &mut Freeze, candidate: &str, id: u64, path: &PathBuf) -> Result<()> {
+fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
     let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
     require(
         run["status"] == "completed" && run["conclusion"] == "cancelled",
         "Release validation failed or watch was interrupted; no tag pushed",
     )?;
+    // GitHub counts attempts itself, so an interrupted publish can neither lose nor repeat a rerun.
+    let attempt = run["run_attempt"].as_u64().unwrap_or(1);
     require(
-        state.reruns < 2,
+        attempt <= 2,
         "Release validation was cancelled after 2 reruns; no tag pushed; inspect Actions",
     )?;
     verify_run(state, candidate, id, false)?;
     unchanged(candidate)?;
-    // Saved before the rerun, so the count never falls behind a rerun GitHub may have started.
-    state.reruns += 1;
-    state.save(path)?;
     command(
         "gh",
         &["run", "rerun", &id.to_string(), "--repo", &state.repo],
@@ -327,10 +323,7 @@ fn rerun_cancelled(state: &mut Freeze, candidate: &str, id: u64, path: &PathBuf)
     for _ in 0..20 {
         let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
         if run["status"] != "completed" {
-            println!(
-                "Validation run {id} was cancelled; rerunning it (attempt {} of 2).",
-                state.reruns
-            );
+            println!("Validation run {id} was cancelled; rerunning it (rerun {attempt} of 2).");
             return Ok(());
         }
         thread::sleep(Duration::from_secs(3));

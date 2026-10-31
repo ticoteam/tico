@@ -162,8 +162,6 @@ fn validation_cancelled_three_times_refuses_after_two_reruns() {
     assert_eq!(f.reruns().lines().count(), 2);
     assert_eq!(f.watches(), 3);
     assert_eq!(f.writer_tasks(), 0);
-    let state: Value = serde_json::from_slice(&fs::read(f.0.join("freeze.json")).unwrap()).unwrap();
-    assert_eq!(state["reruns"], 2);
 }
 #[test]
 fn failed_validation_never_tags_and_is_never_rerun() {
