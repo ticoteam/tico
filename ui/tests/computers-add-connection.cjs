@@ -130,8 +130,9 @@ const shot = async (locator, name) => { if (SHOTS) await locator.screenshot({pat
     await page.keyboard.press('Escape');
     // Hosted enrollment leaves the browser with no code or installer command.
     assert.equal(await page.locator('#machine-kind option[value="hosted"]').count(), 0);
-    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('.machine-enroll').remove(); return loadSettings(); });
+    await page.evaluate(() => { S.config.hosted = 'invited'; document.querySelector('#machine-add-dialog').remove(); return loadSettings(); });
     await page.evaluate(() => { window.hostedOpened = []; window.open = (...args) => window.hostedOpened.push(args); });
+    await page.locator('#machine-add-open').click();
     await page.locator('#machine-kind').selectOption('hosted');
     assert.equal(await page.locator('#machine-label').isVisible(), false);
     const beforeHosted = writes.length;

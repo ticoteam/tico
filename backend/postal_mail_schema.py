@@ -15,3 +15,12 @@ CREATE INDEX IF NOT EXISTS mail_items_due ON mail_items(status, next_try);
 CREATE TABLE IF NOT EXISTS mail_intake (
   singleton INTEGER PRIMARY KEY CHECK(singleton=1), inbox_id TEXT NOT NULL, set_by TEXT NOT NULL, set_at TEXT NOT NULL);
 """
+
+# Appended after SCHEMA shipped to main: the scan lookup on every file download (`scan_access`) gets its index, a read
+# is stamped for the daily cap (`READS_PER_DAY`), and the email-in address names who may send it scans.
+V2 = """
+CREATE INDEX IF NOT EXISTS mail_items_blob ON mail_items(blob_id);
+ALTER TABLE mail_items ADD COLUMN read_at TEXT;
+CREATE INDEX IF NOT EXISTS mail_items_read ON mail_items(read_at);
+ALTER TABLE mail_intake ADD COLUMN senders_json TEXT NOT NULL DEFAULT '[]';
+"""

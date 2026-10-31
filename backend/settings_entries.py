@@ -15,7 +15,7 @@ SETTINGS_FILES = sorted(
     ["settings.js", "settings-access.js", "settings-bot-editor.js", "settings-bots.js", "settings-strategy-bot.js",
      "settings-company.js", "settings-devices.js", "settings-history.js", "settings-hosted.js", "settings-listening.js",
      "settings-mail.js", "settings-people.js", "settings-providers.js", "settings-recurring.js", "settings-release.js",
-     "settings-repositories.js", "settings-storage.js", "settings-webhooks.js",
+     "settings-repositories.js", "settings-storage.js", "settings-webhooks.js", "subscriptions.js",
      "bot-budget.js", "bot-profile.js", "usage.js", "task-pipelines.js", "tags.js", "roadmaps.js", "inbound.js",
      "cloud-machines.js"])
 
@@ -28,6 +28,7 @@ GENERAL, PEOPLE, COMPUTERS, BOTS = "Settings > General", "Settings > Humans", "S
 RULES, HOOKS, TASKS, REPOS = "Settings > System", "Settings > Webhooks", "Settings > Tasks", "Settings > Repositories"
 INBOUND, STRATEGY = "Settings > Email & Phone", "Settings > System > Strategy bot"
 MAIL = "Settings > Mail"
+MODELS = "Settings > Models"
 
 _RULE_NAMES = {
     "assistant_direct": ("Assistant acts without asking", "confirm", ""),
@@ -123,8 +124,8 @@ ENTRIES = TEAM_RULES + [
     S("owner.transfer", "Transfer ownership", PEOPLE + " > Owner", "owner", "confirm", "POST", "access/owner",
       value="json", card=_card("people")),
     # Computers
-    S("team.turn_levels", "Company turn levels", COMPUTERS + " > Company turn levels", "admin", "confirm", "POST",
-      "settings/turn-levels", value="json", card=_card("devices"), words="warning stop per person"),
+    S("team.turn_levels", "Company turn levels", MODELS + " > Limits", "admin", "confirm", "POST",
+      "settings/turn-levels", value="json", card=_card("models", "settings-limits"), words="warning stop per person"),
     S("bot.agent_credential", "Agent credential", COMPUTERS + " > Connect an agent", "bot", "person", "POST",
       "bots/{bot}/agent-credential", value="json", card=_card("devices"),
       why="A new agent credential is shown once, to the person, in Settings"),
@@ -155,15 +156,30 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("devices")),
     S("sleep.hours", "Sleep when idle", COMPUTERS + " > Sleep when idle", "admin", "direct", "POST", "sleep", "hours",
       "number", _card("devices", "settings-sleep"), "sleep#hours"),
-    S("models.providers", "Models", COMPUTERS + " > Models", "owner", "confirm", "PUT", "providers", value="json",
-      card=_card("devices", "settings-models"), read="providers", words="model provider fallback"),
-    S("models.gateway", "Tico AI Gateway", COMPUTERS + " > Models", "owner", "person", "PUT", "providers/gateway",
-      value="json", card=_card("devices", "settings-models"), why="A gateway key is typed in Settings, never passed "
+    S("models.providers", "Models", MODELS + " > Defaults", "owner", "confirm", "PUT", "providers", value="json",
+      card=_card("models", "settings-defaults"), read="providers", words="model provider fallback"),
+    S("models.gateway", "Tico AI Gateway", MODELS + " > Tico Gateway", "owner", "person", "PUT", "providers/gateway",
+      value="json", card=_card("models", "settings-gateway-card"), why="A gateway key is typed in Settings, never "
+      "passed through a bot"),
+    S("models.gateway.automatic", "Tico AI Gateway, automatic", MODELS + " > Tico Gateway", "owner", "confirm", "POST",
+      "providers/gateway/automatic", value="json", card=_card("models", "settings-gateway-card")),
+    S("models.gateway.remove", "Remove the Tico AI Gateway", MODELS + " > Tico Gateway", "owner", "confirm", "DELETE",
+      "providers/gateway", value="json", card=_card("models", "settings-gateway-card")),
+    # Company subscriptions (backend/model_subscriptions.py): a value is pasted only in Settings; giving one to a
+    # computer, or removing one in use, restarts that computer's runs on that runtime.
+    S("models.subscription.add", "Add a subscription", MODELS + " > Subscriptions", "admin", "person",
+      "POST", "model-subscriptions", value="json", card=_card("models", "settings-subs"),
+      words="claude max chatgpt plan setup token api key login", why="A subscription's token, key or login is "
+      "pasted in Settings, never passed through a bot"),
+    S("models.subscription.change", "Rename or reconnect a subscription", MODELS + " > Subscriptions",
+      "admin", "person", "POST", "model-subscriptions/{id}", value="json", card=_card("models", "settings-subs"),
+      words="rename reconnect", why="A subscription's token, key or login is pasted in Settings, never passed "
       "through a bot"),
-    S("models.gateway.automatic", "Tico AI Gateway, automatic", COMPUTERS + " > Models", "owner", "confirm", "POST",
-      "providers/gateway/automatic", value="json", card=_card("devices", "settings-models")),
-    S("models.gateway.remove", "Remove the Tico AI Gateway", COMPUTERS + " > Models", "owner", "confirm", "DELETE",
-      "providers/gateway", value="json", card=_card("devices", "settings-models")),
+    S("models.subscription.remove", "Remove a subscription", MODELS + " > Subscriptions", "admin",
+      "confirm", "DELETE", "model-subscriptions/{id}", value="json", card=_card("models", "settings-subs")),
+    S("models.computer_subscription", "A computer's subscription", MODELS + " > Subscriptions", "admin",
+      "confirm", "PUT", "computer-subscriptions", value="json", card=_card("models", "settings-subs"),
+      read="computer-subscriptions", words="give assign subscription computer claude codex"),
     # Bots
     S("bot.fallback", "Fallback model", BOTS, "bot", "direct", "POST", "bots/{bot}/fallback", "fallback", "text",
       _card("bots")),
@@ -258,7 +274,7 @@ ENTRIES = TEAM_RULES + [
     *[S("screening." + source, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
         source, "choice:off|warn" + ("" if source == "mail" else "|hold"), _card("system", "set-screening-card"),
         "screening#modes." + source, words="prompt injection screening")
-      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"))],
+      for source, name in (("webhook", "Webhooks"), ("mail", "Mail"), ("idea", "Ideas"), ("watcher", "Watchers"), ("document", "Documents"))],
     *[S("screening." + layer, "Screening: " + name, RULES + " > Screening", "admin", "direct", "PUT", "screening",
         layer, card=_card("system", "set-screening-card"), read="screening#layers." + layer,
         words="prompt injection screening detector")

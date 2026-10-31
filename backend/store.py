@@ -1166,6 +1166,8 @@ class Store:
             c.executescript(_company_storage.SCHEMA)
             from . import tico_storage as _tico_storage
             c.executescript(_tico_storage.SCHEMA)
+            from . import model_subscriptions as _model_subscriptions
+            c.executescript(_model_subscriptions.SCHEMA)
             from . import google_connect as _google_connect
             _google_connect.ensure_schema(c)
             from . import support as _support
@@ -1769,6 +1771,9 @@ class Store:
                 # Their verdict cache (backend/org_rule_check.py). Unversioned the same way.
                 from .org_rule_check import ensure as ensure_org_rule_check
                 ensure_org_rule_check(c)
+                # Counsel's documents: the versions it was asked to read, the only versions it may cite (backend/counsel.py).
+                from .counsel import ensure as ensure_rule_reads
+                ensure_rule_reads(c)
                 # Lens runs (backend/lenses.py): the exercises run against the strategy or the market. Unversioned too.
                 from .lenses import ensure as ensure_lenses
                 ensure_lenses(c)

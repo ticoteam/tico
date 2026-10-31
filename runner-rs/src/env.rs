@@ -114,6 +114,8 @@ pub struct Vault {
     /// The turn's relay to the Tico AI Gateway (gateway_relay.rs), stopped with the vault.
     pub relay: Option<crate::gateway_relay::Relay>,
     pub turn_user: Option<crate::turn_users::Lease>,
+    /// The company subscriptions this turn signs in with (crate::model_subscriptions).
+    pub subscriptions: Vec<crate::model_subscriptions::Delivered>,
 }
 
 impl Vault {
@@ -162,6 +164,8 @@ impl Drop for Vault {
         // Revoke the connection before a cleaned UID can be lent to another turn.
         self.relay.take();
         self.remove_files();
+        // A turn that ended before its own `finish` (an error, a panic) still lets go of its subscription homes.
+        crate::model_subscriptions::finish(&mut self.subscriptions);
         self.turn_user.take();
     }
 }
@@ -245,6 +249,9 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
             }
             vault_keys.insert(key.to_string());
         }
+        // A company subscription the claim handed this turn: after the grants, so it decides how the runtime signs in.
+        vault.subscriptions = crate::model_subscriptions::apply(ctx.state_dir, &granted["subscriptions"], &mut env,
+                                                                 &mut vault.values, &mut vault_keys);
     }
     // 1Password references among the grants are read now (crate::op), with the token from `_shared.env`.
     let mut refs: BTreeMap<String, String> =

@@ -690,7 +690,7 @@ async function settingsLinks(browser) {
     if(p==='/api/v2/support/tickets')return json({enabled:false});
     return json(unrouted(p));
   });
-  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'devices'],   // Models is on Computers
+  for (const [why, name, tab] of [['missing_provider', 'Add an AI provider', 'models'],
     ['model_sign_in', 'Sign in on Settings > Computers', 'devices']]) {
     reason=why;
     // Settings was last left on another tab, which a plain link to #/settings would reopen.
