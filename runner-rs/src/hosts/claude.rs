@@ -643,6 +643,9 @@ impl ClaudeHost {
                 c
             }
         };
+        // Claude, or its reaping parent with Claude under it, leads a group of its own: a stop ends what the turn
+        // started too, and a background-wait end, which kills Claude alone, leaves the shells it keeps in that group.
+        super::new_group(&mut command);
         #[cfg(test)]
         if reaping.is_some() {
             command.args(["reap::tests::as_parent", "--exact", "--test-threads=1", "-q"]);
@@ -1930,6 +1933,52 @@ mod tests {
         assert!(shell_alive, "the kept shell was killed");
         let stopped = &got.iter().find(|e| e["kind"] == "background_kept").unwrap()["stopped"];
         assert!(stopped.as_array().unwrap().contains(&json!(mcp)), "{stopped}");
+    }
+
+    #[tokio::test]
+    async fn a_stopped_turn_leaves_nothing_it_started_running() {
+        let dir = std::env::temp_dir().join(format!("claude-stop-group-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("claude");
+        // A tool command, and one that ignores SIGTERM (a server that traps it), left running while Claude works.
+        crate::util::write_script(
+            &path,
+            "#!/bin/sh\ncase \"$1\" in --version) echo '2.1.296 (Claude Code)'; exit 0;; --help) exit 0;; esac\nIFS= read -r line\necho $$ > group.pid\nsleep 900 </dev/null >/dev/null 2>&1 &\necho $! > tool.pid\nsh -c 'trap \"\" TERM; exec sleep 900' </dev/null >/dev/null 2>&1 &\necho $! > deaf.pid\nwhile :; do sleep 1 >/dev/null; done\n",
+        );
+        let (tx, _rx) = mpsc::unbounded_channel();
+        let host = ClaudeHost::new("acme", vec![path.display().to_string()], tx);
+        host.start().await.unwrap();
+        let mut settings = Settings { cwd: dir.display().to_string(), ..Default::default() };
+        settings.env.insert("PATH".into(), "/usr/bin:/bin".into());
+        let thread = host.start_thread(&settings);
+        host.start_turn(&thread, "hello", None).unwrap();
+        let read = |name: &str| std::fs::read_to_string(dir.join(name)).ok().and_then(|s| s.trim().parse::<i32>().ok());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while read("deaf.pid").is_none() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (group, tool, deaf) = (read("group.pid").unwrap(), read("tool.pid").unwrap(), read("deaf.pid").unwrap());
+        // SAFETY: getpgid only reads.
+        assert_eq!(unsafe { libc::getpgid(tool) }, group, "the tool runs in Claude's own group");
+        host.stop().await;
+        let gone = || {
+            // SAFETY: signal 0 only checks whether any process of the group is left.
+            unsafe { libc::kill(-group, 0) == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
+        };
+        let deadline = Instant::now() + Duration::from_secs(3);
+        while !gone() && Instant::now() < deadline {
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        let (tool_alive, deaf_alive, group_gone) = (alive(tool), alive(deaf), gone());
+        // SAFETY: processes this test's fake started.
+        unsafe {
+            libc::kill(tool, libc::SIGKILL);
+            libc::kill(deaf, libc::SIGKILL);
+        }
+        std::fs::remove_dir_all(&dir).unwrap();
+        assert!(!tool_alive, "the turn's tool command outlived the stop");
+        assert!(!deaf_alive, "a process ignoring SIGTERM outlived the stop");
+        assert!(group_gone, "something of the turn's group outlived the stop");
     }
 
     type Hook = Box<dyn Fn(&ClaudeHost) + Send + Sync>;

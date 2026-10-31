@@ -27,6 +27,7 @@ mod appdriver;
 mod backlog;
 mod capture;
 mod client;
+mod cloud_machine;
 mod commands;
 mod config;
 mod credential_imports;
@@ -422,6 +423,7 @@ async fn start(command: Command, config: config::Config) -> i32 {
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
     // No turn runs yet: a company subscription's sign-in file left from one that was cut off goes.
     model_subscriptions::sweep(&state_dir);
+    gateway_relay::sweep(&config.projects_dir());
     follow::record_revision(&state_dir);
     follow::init(&config.data, &state_dir);
     if isolation::enabled() {

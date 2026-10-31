@@ -1740,9 +1740,9 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         # A Tico Cloud company out of credit: no new turn that would spend it. A bot on its own subscription or keys
         # still runs; this one starts again once credit lands, with no restart.
         return "out_of_credit", None
-    if gateway_connection.is_tico(filled.get("model")) and not models_preset.isolated(ready):
-        # A Tico model runs only where bots run as their own user (runner-rs/src/gateway_relay.rs): elsewhere the
-        # runner would refuse the turn, so the work waits here instead of failing there.
+    if gateway_connection.is_tico(filled.get("model")) and not models_preset.runs_gateway(ready):
+        # A Tico model runs only where bots run as their own user, or on a cloud machine (runner-rs/src/gateway_relay.rs
+        # Separation): elsewhere the runner would refuse the turn, so the work waits here instead of failing there.
         return ("not_isolated" if ready.get("isolated") is False else "isolation_unknown"), None
     check = bot_readiness(ready, bot)
     if models_preset.waiting(record, ready, filled):
@@ -1866,7 +1866,7 @@ def fallback_choice(c, settings, runner_id, bot, config, job_id=None, ctx=None):
         if providers.gateway_model(choice["model"]):
             # Signs in with the turn's relay: no login of its own to hold, but only where bots run as their own user
             # (a company row is listed only then; one the bot names is checked here).
-            if not models_preset.isolated(ready):
+            if not models_preset.runs_gateway(ready):
                 continue
             return "", choice["runtime"]
         signed = (ready.get("runtimes") or {}).get(choice["runtime"]) or {}

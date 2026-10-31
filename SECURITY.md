@@ -100,6 +100,11 @@ work of any bot assigned to that computer, so code a bot runs must not be able t
   leased user's descendants, removes private state and temporary files, and returns workspace ownership to the
   ordinary bot user before returning the lease. Startup sweeps crash leftovers; failed or incomplete cleanup
   quarantines a UID instead of reusing it. The pool holds up to 64 concurrent leased turns.
+  **Tico cloud machines** (docs/cloud-machines.md) have no leased users: all of one company's bots there run as the
+  machine's one user, with sudo, so they are that company's trust group. Gateway turns run there anyway (readiness
+  says `trust: "cloud_machine"`, never `isolated: true`); the key still stays in the runner's relay, never in a turn's
+  environment or files, and the accepted risk is that the company's own bots on that machine could read it from the
+  runner.
   **Turn users for other harnesses:** a turn on a harness whose manifest sets `isolated_user` (pi, which reads its
   key from the turn's environment) leases a user the same way, with a private HOME, temporary directory and copies of
   its file credentials. Every checkout and worktree root has a group of its own (owner `bot`, mode 0770, and an ACL entry for the runner's
