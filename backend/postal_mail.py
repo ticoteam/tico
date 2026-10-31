@@ -495,19 +495,32 @@ class PostalMail:
 
     def backfill_private(self):
         """Bill, financial and tax letters filed before their tasks were private (listed once by the V3 migration):
-        those tasks go private now. The app runs it at start, after the migrations; the list empties, so a task made public
+        those tasks and every subtask below them go private now, a deleted one in its trash copy, so a restore brings
+        it back private. The app runs it at start, after the migrations; the list empties, so a task made public
         later stays public."""
         with self.store.transaction() as c:
-            for (task_id,) in c.execute("SELECT task_id FROM mail_private_backfill").fetchall():
+            todo, seen = [r[0] for r in c.execute("SELECT task_id FROM mail_private_backfill")], set()
+            while todo:
+                task_id = todo.pop()
+                if task_id in seen:
+                    continue
+                seen.add(task_id)
                 row = H.task(c, task_id)
-                if not row:      # deleted: the trash copy goes private, so a restore brings it back private
+                if row and not H.task_private(c, row):
+                    H._made_private(c, H.KEEPER, task_id)
+                elif not row:
                     c.execute("UPDATE task_trash SET private=1,rows_json=json_set(rows_json,'$.rows.tasks[0].private',"
                               "1,'$.rows.tasks[0].visibility','private') WHERE task_id=? AND purged_at IS NULL",
                               (task_id,))
-                    continue
-                for each in [row, *H.descendants(c, task_id)]:   # a subtask of a private task is private too
-                    if not H.task_private(c, each):
-                        H._made_private(c, H.KEEPER, each["id"])
+                todo += [r[0] for r in c.execute(
+                    "SELECT from_task FROM task_relations WHERE kind='parent' AND to_task=?", (task_id,))]
+                # A deleted task keeps its parent links (either end) in its trash copy; older copies on the task row.
+                todo += [r[0] for r in c.execute(
+                    "SELECT json_extract(r.value,'$.from_task') FROM task_trash t, "
+                    "json_each(t.rows_json,'$.rows.task_relations') r WHERE t.purged_at IS NULL "
+                    "AND json_extract(r.value,'$.kind')='parent' AND json_extract(r.value,'$.to_task')=? "
+                    "UNION SELECT task_id FROM task_trash WHERE purged_at IS NULL "
+                    "AND json_extract(rows_json,'$.rows.tasks[0].parent_id')=?", (task_id, task_id)) if r[0]]
             c.execute("DELETE FROM mail_private_backfill")
 
     def fail(self, row, code):

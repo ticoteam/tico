@@ -442,3 +442,24 @@ def test_a_bill_deleted_before_the_backfill_comes_back_private(api, hq, mail):
         assert task_delete.restore_tasks(c, [task_id])["restored"] == [task_id]
     assert (task(api, task_id)["private"], task(api, task_id)["visibility"]) == (1, "private")
     assert task(api, sub)["private"] == 1                 # its subtask, kept live, goes private with it
+
+
+def test_a_subtask_deleted_before_the_backfill_comes_back_private_under_its_bill(api, hq, mail):
+    from backend import postal_mail_schema, task_delete
+    letter(api, "451", "bill")
+    deliver(hq, "451")
+    service(api).tick()
+    drain(api)
+    task_id = items(api)["451"]["task_id"]
+    with api.app.state.store.transaction() as c:
+        sub = H.task_create(c, H.KEEPER, "Pay it", "", "bot:finance", parent_id=task_id, lint=False,
+                            deduplicate=False)["id"]
+    with api.app.state.store.transaction() as c:          # both public before V2; the subtask deleted, the bill not
+        c.execute("UPDATE tasks SET private=0, visibility='public' WHERE id IN (?,?)", (task_id, sub))
+        assert task_delete.delete_tasks(c, [sub], apply=True, actor=H.KEEPER, keep_work=True)["applied"]
+        c.execute("DELETE FROM mail_private_backfill")
+        H._apply(c, postal_mail_schema.V3)
+    api.app.state.postal_mail.backfill_private()
+    with api.app.state.store.transaction() as c:
+        assert task_delete.restore_tasks(c, [sub])["restored"] == [sub]
+    assert (task(api, task_id)["private"], task(api, sub)["private"], task(api, sub)["visibility"]) == (1, 1, "private")
