@@ -267,6 +267,34 @@ async function finPayFrom() {
   return FIN.payFrom = (r?.accounts || []).map(a => ({id: a.id, name: `${a.name}${a.last4 ? ' ••' + a.last4 : ''}`}));
 }
 const finOpts = (rows, val = '') => rows.map(r => `<option value="${esc(r.id)}"${r.id === val ? ' selected' : ''}>${esc(r.name)}</option>`).join('');
+// Whom a viewer without company-wide view of a line may attribute it to (backend/finance/handlers.py may_write): the
+// viewer first where they see their own spending, then the teams their view covers on that line, then the teammates
+// in those teams. Each is a tag: {teammate} or {team}.
+function finAttribution(line) {
+  const caps = finCaps(), acc = FIN?.acc || FIN_ACCESS, me = caps?.who || '', teams = acc?.teams || [];
+  if (!caps || !line) return [];
+  const below = id => {
+    const out = new Set([id]);
+    for (let grew = true; grew;) { grew = false; for (const t of teams) if (t.parent && out.has(t.parent) && !out.has(t.id)) { out.add(t.id); grew = true; } }
+    return out;
+  };
+  const expense = line.type === 'expense', pnl = expense || line.type === 'income';
+  const covers = g => g.what === 'everything' || (g.what === 'pnl' && pnl) || (g.what === 'expenses' && expense)
+    || (g.what === 'pnl_lines' && (g.account_ids || []).includes(line.id));
+  const scope = new Set();
+  let own = expense && ['team_expenses', 'own_expenses'].includes(caps.row.default);
+  if (expense && caps.row.default === 'team_expenses') for (const t of teams) if (t.lead === me) below(t.id).forEach(x => scope.add(x));
+  for (const g of (caps.row.grants || []).filter(g => g.live && g.status === 'active' && covers(g))) {
+    if (g.whose === 'own') own = true;
+    else if (g.whose === 'team' && g.whose_team) below(g.whose_team).forEach(x => scope.add(x));
+  }
+  const mates = (acc?.teammates || []).filter(m => m.teammate !== me && scope.has(m.team || ''));
+  return [...(own ? [{id: 'teammate:' + me, name: finWho(me)}] : []),
+    ...[...scope].map(t => ({id: 'team:' + t, name: finTeamName(t)})),
+    ...mates.map(m => ({id: 'teammate:' + m.teammate, name: finWho(m.teammate)}))];
+}
+// A "For" pick as a line's tags.
+const finAttrTags = v => { const i = v.indexOf(':'); return i > 0 ? {[v.slice(0, i)]: v.slice(i + 1)} : null; };
 
 // ----------------------------------------------------------------- decisions with a form
 async function finBillSchedule(d) {
@@ -312,11 +340,14 @@ async function finDocAdd(kind) {
     <label>Number<input name="number" maxlength="60" autocomplete="off"></label>
     <div class="fin-pair"><label>Date<input type="date" name="date" required value="${finToday()}"></label><label>Due<input type="date" name="due"></label></div>
     <label>Line<select name="line" required>${finOpts(lines)}</select></label>
+    <label data-fin-for hidden>For<select name="for"></select></label>
     <label>Amount<input name="amount" inputmode="decimal" required autocomplete="off"></label>
     <label>Memo<input name="memo" maxlength="200" autocomplete="off"></label>`, 'Save', async form => {
     const el = form.elements, amount = finParseCents(el.amount.value);
     if (!amount) throw new Error('A dollar amount, like 500');
     if (!el.line.value) throw new Error('No line in your view');
+    const line = lines.find(l => l.id === el.line.value), tags = line?.company_wide === false ? finAttrTags(el.for.value) : null;
+    if (line?.company_wide === false && !tags) throw new Error('Pick who it is for');
     if (!el.date.value) throw new Error('Pick a date');
     let contact = el.contact.value;
     if (contact === '+') {
@@ -327,7 +358,7 @@ async function finDocAdd(kind) {
     }
     if (!contact) throw new Error('Pick a ' + k.who.toLowerCase());
     const payload = {[bill ? 'vendor_id' : 'customer_id']: contact, [bill ? 'bill_date' : 'invoice_date']: el.date.value,
-      lines: [{account_id: el.line.value, amount}]};
+      lines: [{account_id: el.line.value, amount, ...(tags ? {tags} : {})}]};
     if (el.number.value.trim()) payload.number = el.number.value.trim();
     if (el.due.value) payload.due_date = el.due.value;
     if (el.memo.value.trim()) payload.memo = el.memo.value.trim();
@@ -337,6 +368,18 @@ async function finDocAdd(kind) {
   const form = dlg.querySelector('form'), pick = form.elements.contact;
   const sync = () => { form.querySelector('[data-fin-new]').hidden = pick.value !== '+'; };
   pick.addEventListener('change', sync); sync();
+  finForSync(form, () => [lines.find(l => l.id === form.elements.line.value)]);
+  form.elements.line.addEventListener('change', () => finForSync(form, () => [lines.find(l => l.id === form.elements.line.value)]));
+}
+// Shows the "For" pick when a chosen line is not company-wide for the viewer, with whom they may attribute it to
+// (the choices every such line allows) and their own scope first; keeps the pick when it still applies.
+function finForSync(form, chosen) {
+  const scoped = chosen().filter(l => l && l.company_wide === false), box = form.querySelector('[data-fin-for]'), sel = form.elements.for;
+  box.hidden = !scoped.length;
+  if (!scoped.length) return;
+  const sets = scoped.map(l => finAttribution(l)), opts = sets[0].filter(o => sets.every(s => s.some(x => x.id === o.id)));
+  const keep = sel.value;
+  sel.innerHTML = finOpts(opts, opts.some(o => o.id === keep) ? keep : opts[0]?.id || '');
 }
 // A new vendor or customer; its id is the action's result.
 async function finContactCreate(name, kind) {
@@ -353,15 +396,18 @@ async function finJournalAdd() {
   const dlg = finDecideDialog('Journal entry', `<label>Date<input type="date" name="date" required value="${finToday()}"></label>
     <label>Memo<input name="memo" maxlength="200" autocomplete="off"></label>
     <div class="fin-jl fin-jl-head" aria-hidden="true"><span>Line</span><span>Debit</span><span>Credit</span></div>
-    <div data-fin-jl>${row()}${row()}</div><button type="button" class="ghost fin-jl-add" data-fin-jl-add>+ Line</button>`, 'Post', form => {
-    const out = [];
+    <div data-fin-jl>${row()}${row()}</div><button type="button" class="ghost fin-jl-add" data-fin-jl-add>+ Line</button>
+    <label data-fin-for hidden>For<select name="for"></select></label>`, 'Post', form => {
+    const out = [], who = finAttrTags(form.elements.for.value);
     for (const r of form.querySelectorAll('[data-fin-jl] .fin-jl')) {
       const acct = r.querySelector('[name=acct]').value, dr = r.querySelector('[name=dr]').value.trim(), cr = r.querySelector('[name=cr]').value.trim();
       if (!acct && !dr && !cr) continue;
       const d = dr ? finParseCents(dr) : 0, c = cr ? finParseCents(cr) : 0;
       if (!acct) throw new Error('Pick a line for each amount');
       if (d == null || c == null || (d && c) || !(d || c)) throw new Error('A debit or a credit on each line, like 500');
-      out.push({account_id: acct, amount: d - c});
+      const scoped = lines.find(l => l.id === acct)?.company_wide === false;
+      if (scoped && !who) throw new Error('Pick who it is for');
+      out.push({account_id: acct, amount: d - c, ...(scoped ? {tags: who} : {})});
     }
     if (out.length < 2) throw new Error('Two lines or more');
     const off = out.reduce((s, l) => s + l.amount, 0);
@@ -370,6 +416,9 @@ async function finJournalAdd() {
     return ['journal', {date: form.elements.date.value, ...(memo ? {memo} : {}), lines: out}];
   }, 'Posted');
   dlg.querySelector('[data-fin-jl-add]').onclick = () => dlg.querySelector('[data-fin-jl]').insertAdjacentHTML('beforeend', row());
+  const form = dlg.querySelector('form');
+  const chosen = () => [...form.querySelectorAll('[data-fin-jl] [name=acct]')].map(s => lines.find(l => l.id === s.value));
+  form.addEventListener('change', ev => { if (ev.target.name === 'acct') finForSync(form, chosen); });
 }
 
 // ----------------------------------------------------------------- the Balance sheet's "+ Add"
