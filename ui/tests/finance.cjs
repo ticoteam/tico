@@ -168,7 +168,9 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
-  const writes = [], reads = [], hub = {ask: '', hold: null};
+  // hub.ask: dry runs need this approver; hub.hold: dry runs wait for it; hub.apply: a categorize that moves a bank row
+  // to a line shows in the next transactions read (this page's own copy of TX).
+  const writes = [], reads = [], hub = {ask: '', hold: null, apply: false}, tx = structuredClone(TX);
   const page = await browser.newPage({viewport, serviceWorkers: 'block', hasTouch: viewport === PHONE});
   const errors = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -200,7 +202,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
       {id: 'mu-2', name: 'Ops Card User', connection_id: 'c1', email: 'o•••@acme.example', updated_at: '2026-10-30T10:00:00Z'}]});
     if (p === '/api/v2/finance/balance-sheet') return viewer === 'ana' ? json(BS) : denied();
     if (p === '/api/v2/finance/cards') return json({cards: viewer === 'ana' ? CARDS : CARDS.filter(c => c.holder !== 'bot:writer'), next: null});
-    if (p === '/api/v2/finance/transactions') return json({rows: TX, next: null});
+    if (p === '/api/v2/finance/transactions') return json({rows: tx, next: null});
     // The lines one may post to (backend/finance/tab_ap.py chart); Contractors stands in for a line that is not
     // company-wide for the viewer, so its amounts need a For.
     if (p === '/api/v2/finance/chart') return json({accounts: LINES.filter(l => !l[7]).map(([id, number, name, type, parent_id]) =>
@@ -208,6 +210,9 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/finance/sources') return viewer === 'ana' ? json(SOURCES) : denied();
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.hold) await hub.hold;
     if (p === '/api/v2/finance/actions' && method === 'POST' && body.dry_run && hub.ask) return json({kind: body.kind, status: 'needs_approval', approver: hub.ask, dry_run: true, impact: {}});
+    const moved = body?.kind === 'categorize' && !body.dry_run && hub.apply && tx.find(r => r.id === body.payload?.feed_id);
+    if (moved) moved.lines = [{line_id: 'l-' + moved.id, account_id: body.payload.account_id, account: LINES.find(l => l[0] === body.payload.account_id)?.[2],
+      amount: -moved.amount, vendor: moved.counterparty, tags: body.payload.tags}];
     if (p === '/api/v2/finance/actions' && method === 'POST') return json({action_id: 'act-' + writes.length, kind: body.kind, status: 'committed', code: null, reason: null, approver: null, result: {}});
     return json(unrouted(p));
   });
@@ -459,10 +464,15 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator(cat + ' select[name="account"]').selectOption('a-5100');
       await page.locator(cat + ' input[name="project"]').fill('Q4');
       n = writes.length;
+      hub.apply = true;
       await page.locator(save).click();
       await settled(() => actions(writes.slice(n)).length >= 2);
+      hub.apply = false;
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {feed_id: 'f1', account_id: 'a-5100', tags: {teammate: 'bot:eng-lead', project: 'Q4'}}},
         tag + ': a new line sends feed_id, account_id and the tags');
+      await page.waitForFunction(() => FIN.tx.rows.find(r => r.id === 'f1')?.lines[0]?.account_id === 'a-5100');
+      assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-5100', tag + ': after the reload the rail shows the new line');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': and nothing left to save');
       // A row a rule split: Mixed where its lines differ; the same line changes only the field set.
       await page.locator('[data-fin-tx="feed:f4"]').click();
       assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
@@ -548,6 +558,9 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('#fin-rail [data-fin-tag]').waitFor();
       assert.equal(await page.locator(cat).count(), 0, tag + ': no line picker on a reconciled row');
       assert.match(await page.locator('#fin-rail').innerText(), /Hosting\s+410\.00/, tag + ': its line, read only');
+      await page.evaluate(() => { FIN.tx.busy = true; finTxRail(); });
+      assert.equal(await page.locator('#fin-rail [data-fin-tag] [type=submit]').isDisabled(), true, tag + ': its Save waits while a categorize is out');
+      await page.evaluate(() => { FIN.tx.busy = false; finTxRail(); });
       await page.evaluate(() => { FIN_TX.q = ''; FIN_TX.account = ''; });
       await go(page, '#/finance/cards', READY.cards);
       await go(page, '#/finance/transactions', READY.transactions);
@@ -674,6 +687,25 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       // For's fallback follows the write rule: the manager, the teams they lead (and under), those teams' teammates.
       assert.deepEqual(await page.evaluate(() => finTxForOpts({}).map(([v]) => v)),
         ['teammate:human:cara', 'team:eng', 'team:platform', 'teammate:bot:eng-lead', 'teammate:bot:builder'], tag + ': For offers only what a write allows');
+      assert.deepEqual(await page.evaluate(() => {
+        const row = FIN.acc.teammates.find(t => t.teammate === 'human:cara'), keep = {...row};
+        Object.assign(row, {default: 'none', grants: [{whose: 'own', what: 'pnl_lines', account_ids: ['a-6100'], live: true, status: 'active'}]});
+        const out = [finTxForOpts({id: 'a-6100'}), finTxForOpts({id: 'a-5100'})].map(o => o.map(([v]) => v));
+        Object.assign(row, keep);
+        return out;
+      }), [['teammate:human:cara'], []], tag + ': a live own grant on the line offers the viewer, and only on that line');
+      // With no chart read: a granted team the access read doesn't list is still offered; a company expenses grant
+      // makes expense lines company-wide (no For).
+      assert.deepEqual(await page.evaluate(() => {
+        const row = FIN.acc.teammates.find(t => t.teammate === 'human:cara'), keep = {...row}, chart = FIN.tx.chart;
+        row.grants = [{whose: 'team', whose_team: 'ops', what: 'expenses', account_ids: [], live: true, status: 'active'}];
+        const teams = finTxForOpts({id: 'a-6100'}).map(([v]) => v).filter(v => v.startsWith('team:'));
+        row.grants = [{whose: 'company', what: 'expenses', account_ids: [], live: true, status: 'active'}];
+        FIN.tx.chart = false;
+        const wide = finTxCatLines().find(l => l.id === 'a-6100')?.company_wide;
+        Object.assign(row, keep); FIN.tx.chart = chart;
+        return [teams, wide];
+      }), [['team:eng', 'team:platform', 'team:ops'], true], tag + ': granted teams and company grants count without the chart');
       await go(page, '#/finance/access', READY.access);
       assert.equal(await page.locator('[data-fin-defaults], [data-fin-viewas]').count(), 0, tag + ': no defaults or View as');
       await page.locator('[data-fin-mate="bot:builder"]').click();

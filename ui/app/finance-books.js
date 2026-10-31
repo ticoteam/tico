@@ -323,7 +323,7 @@ function finTxRail() {
     ${cat ? '<form class="fin-form fin-rail-form fin-cat" data-fin-cat novalidate></form>' : may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', shown.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), shown.teammate)).join('')}</select></label>
       <label>Team<select name="team">${mixed('team')}${opt('', '—', shown.team)}${(acc.teams || []).map(t => opt(t.id, t.name, shown.team)).join('')}</select></label>
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${shown.project === FIN_MIXED ? '' : esc(shown.project)}"${shown.project === FIN_MIXED ? ' placeholder="Mixed"' : ''}></label>
-      <div class="fin-foot"><button type="submit" class="primary">Save</button></div></form>` : ''}`);
+      <div class="fin-foot"><button type="submit" class="primary"${state.busy ? ' disabled' : ''}>Save</button></div></form>` : ''}`);
   if (cat) finTxCatDraw(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
@@ -340,12 +340,15 @@ function finTxRail() {
       for (const [k, v] of changed) { if (v) next[k] = v; else delete next[k]; }
       return next;
     };
-    const btn = form.querySelector('[type=submit]'); btn.disabled = true;
+    if (state.busy) return;   // one categorize at a time on the tab (finTxCatDraw)
+    const btn = form.querySelector('[type=submit]'); btn.disabled = true; state.busy = true;
     try {
       const res = await finAct('categorize', {lines: lines.map(l => ({line_id: l.line_id, tags: pick(l)})), mode: 'replace'});
       if (res.status === 'committed') toast('Saved');
+      state.busy = false;
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
+    finally { state.busy = false; }
   };
 }
 
@@ -377,8 +380,10 @@ function finTxCatLines() {
   const state = FIN.tx;
   if (Array.isArray(state.chart)) return state.chart;
   if (state.chart !== false) return [];
-  const wide = !!finCaps()?.all;
-  return state.lines.map(l => ({id: l.account_id, name: l.name, company_wide: wide}));
+  // Company-wide: an everything view, or a live company grant on the P&L (or its expenses, for an expense line).
+  const caps = finCaps(), grants = (caps?.row?.grants || []).filter(g => g.live && g.status === 'active' && g.whose === 'company');
+  const wide = l => !!caps?.all || grants.some(g => g.what === 'pnl' || (g.what === 'expenses' && l.type === 'expense'));
+  return state.lines.map(l => ({id: l.account_id, name: l.name, parent_id: l.parent_id || null, company_wide: wide(l)}));
 }
 function finTxCatRedraw() {
   const r = FIN?.tx?.rows.find(x => finTxKey(x) === FIN.tx.sel);
@@ -386,15 +391,20 @@ function finTxCatRedraw() {
 }
 // Whom an amount on a line that is not company-wide for the viewer may be for: the chart's own list when it sends one,
 // else from the access read by the rule a write checks (handlers.py may_write): everyone for a viewer who sees
-// everything; else the viewer when they see their own expenses, the teams their view covers (the ones they lead, on the manager default, and live team grants, each with
-// the teams under it), and the teammates in those teams. The viewer first. [value, label].
+// everything; else the viewer when they see their own expenses (by default, or a live own grant on the line), the
+// teams their view covers (the ones they lead, on the manager default, and live team grants, each with the teams under
+// it that the access read lists), and the teammates in those teams. The viewer first. [value, label]. A granted team
+// the access read does not list shows by its id (the grant row carries no name).
 function finTxForOpts(line) {
   const caps = finCaps(), me = caps?.who || '', acc = FIN.acc || {}, row = caps?.row || {};
   const below = id => [id, ...(acc.teams || []).filter(t => t.parent === id).flatMap(t => below(t.id))];
   const covered = new Set([...(caps?.all ? (acc.teams || []).map(t => t.id) : row.default === 'team_expenses' ? (acc.teams || []).filter(t => t.lead === me).map(t => t.id) : []),
     ...(row.grants || []).filter(g => g.live && g.status === 'active' && g.whose === 'team' && g.whose_team).map(g => g.whose_team)].flatMap(below));
-  const tags = line?.attributable || [...(caps?.all || ['team_expenses', 'own_expenses'].includes(row.default) ? [{teammate: me}] : []),
-    ...(acc.teams || []).filter(t => covered.has(t.id)).map(t => ({team: t.id})),
+  const own = row.default === 'team_expenses' || row.default === 'own_expenses' || (row.grants || []).some(g => g.live && g.status === 'active'
+    && g.whose === 'own' && (!(g.account_ids || []).length || [line?.id, line?.parent_id].some(a => a && g.account_ids.includes(a))));
+  const listed = (acc.teams || []).map(t => t.id);
+  const tags = line?.attributable || [...(caps?.all || own ? [{teammate: me}] : []),
+    ...[...listed.filter(id => covered.has(id)), ...[...covered].filter(id => !listed.includes(id))].map(id => ({team: id})),
     ...(acc.teammates || []).filter(t => t.teammate !== me && covered.has(t.team)).map(t => ({teammate: t.teammate}))];
   return [...tags.filter(t => t.teammate === me), ...tags.filter(t => t.teammate !== me)]
     .map(t => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
@@ -456,6 +466,7 @@ function finTxCatDraw(r) {
     const p = asked ? asked.p : payload(), sent = JSON.stringify(p);
     state.busy = true; foot();
     const live = () => FIN?.tx === state && state.cat === c && document.contains(form);
+    let saved = false;
     try {
       if (!asked) {
         const dry = await post('/v2/finance/actions', {kind: 'categorize', payload: p, dry_run: true});
@@ -468,12 +479,16 @@ function finTxCatDraw(r) {
       }
       const res = await finAct('categorize', p);
       if (res.status === 'committed') toast('Saved');
-      if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;   // another row's unsaved picks stay
-      void finTxLoad(false);
+      saved = true;
     } catch (e) { toast(e.message, true); }
     finally {
       state.busy = false;
-      finTxCatRedraw();
+      // After a save the reload redraws the rail, so the saved row's picks are rebuilt from its fresh read (another
+      // row's stay); otherwise the rail redraws now, with its Save back on.
+      if (saved) {
+        if (FIN?.tx === state && state.cat?.key === c.key) state.cat = null;
+        void finTxLoad(false);
+      } else finTxCatRedraw();
     }
   };
   form.onchange = ev => {
