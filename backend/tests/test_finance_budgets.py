@@ -540,3 +540,35 @@ def test_a_rule_test_never_reads_the_fingerprint_of_a_hidden_raise(books):
                     dry_run=True)
         assert probe.status == "committed", probe
         assert probe.impact["test"]["changed_count"] == 0
+
+
+def test_a_set_aside_adds_only_the_part_its_target_does_not_already_hold(books):
+    """A live 4,000 hold for a Gateway key already counts against a 10,000 budget, so setting that key aside at 7,000 adds
+    3,000 to the reserve (4,000 held and 3,000 unspent), not the whole 7,000. Totals up to 10,000 fit; 10,001 does not."""
+    with books.transaction() as c:
+        bid = str(act(c, OWNER, "budget_create", {"name": "Gateway", "account_id": account(c, "6900"),
+                                                  "amount": 10_000}).result["budget_id"])
+        assert FA.hold_place(c, budget_scope=bid, amount=4_000, currency="USD", source="run", source_id="gw-run",
+                             expires_at=None, target="gateway_key:gw-1", at=AT).allowed
+        ask = {"budget_id": bid, "target_kind": "gateway_key", "target_id": "gw-1"}
+        assert act(c, OWNER, "allocation_set", {**ask, "amount": 7_000}).status == "committed"
+        s = FA.budget_state(c, bid, AT)
+        assert (s.held, s.remaining) == (7_000, 3_000), s
+        assert act(c, OWNER, "allocation_set", {**ask, "amount": 10_000}, dry_run=True).status == "committed"
+        over = act(c, OWNER, "allocation_set", {**ask, "amount": 10_001}, dry_run=True)
+        assert over.code == "invalid" and "3000 left" in over.reason, over
+
+
+def test_a_set_aside_on_a_parent_counts_a_child_hold_once(books):
+    """A 4,000 hold for a Gateway key sits on a child of a 10,000 budget. Setting the key aside on the parent at 7,000
+    reserves 3,000 more there, since the child's hold is already in the parent's use: the parent holds 7,000 in all."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("web", 5_000),))
+        assert FA.hold_place(c, budget_scope=kids["web"], amount=4_000, currency="USD", source="run", source_id="gw-run",
+                             expires_at=None, target="gateway_key:gw-1", at=AT).allowed
+        ask = {"budget_id": pid, "target_kind": "gateway_key", "target_id": "gw-1"}
+        assert act(c, OWNER, "allocation_set", {**ask, "amount": 7_000}).status == "committed"
+        s = FA.budget_state(c, pid, AT)
+        assert (s.held, s.remaining) == (7_000, 3_000), s
+        over = act(c, OWNER, "allocation_set", {**ask, "amount": 10_001}, dry_run=True)
+        assert over.code == "invalid" and "3000 left" in over.reason, over

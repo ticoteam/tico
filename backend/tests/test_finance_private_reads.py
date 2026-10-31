@@ -656,3 +656,131 @@ def test_a_once_budget_over_a_private_payroll_account_reads_for_a_viewer_without
         rows = FR.budgets(c, "human:gus", at=AT)["budgets"]
         FR.budget_vs_actual(c, "human:gus", at=AT)
     assert [r["name"] for r in rows if r["name"] == "Once"] == ["Once"], rows
+
+
+DEC = "2026-12-15T12:00:00.000000Z"
+
+
+def _gateway_hold_on_the_october_debit(c, budget_id: str) -> None:
+    """A 40.00 Gateway key hold on Other expenses, settled by the October debit (the feed row a private payroll bill
+    paid). The owner's Gateway reserve for October holds it; a reader without payroll detail nets it out."""
+    debit = str(c.execute("SELECT entry_id FROM fin_feed_txns WHERE provider_id='txn-pay'").fetchone()[0])
+    placed = FA.hold_place(c, budget_scope=budget_id, amount=4_000, currency="USD", source="run",
+                           source_id="gw-run", expires_at=None, target="gateway_key:gw-1", at=AT)
+    assert placed.allowed, placed
+    assert FA.hold_settle(c, str(placed.hold_id), 4_000, debit, at=AT)
+
+
+def _gateway_allocation(c, budget_id: str, amount: int = 1) -> None:
+    assert act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1",
+                                            "amount": amount}, at=AT).status == "committed"
+
+
+def _readers_grants(c, *rights: str) -> None:
+    assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}, at=AT).status == "committed"
+    for right in rights:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:gus", "right": right}, at=AT).status == "committed"
+
+
+def test_a_child_budget_under_a_parent_with_a_hidden_figure_gets_one_outcome_for_every_amount(books):
+    """A P&L grantee with the budgets right and no payroll detail creates a child of Other expenses. Their figure for the
+    parent is not the true one (a settled private payroll part is netted out of it), so every amount gets the same
+    outcome and no figure. The owner still gets the true fit: 6,000 fits, 6,001 does not, and the reserve is named."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        _gateway_allocation(c, budget_id)
+        _gateway_hold_on_the_october_debit(c, budget_id)
+        _readers_grants(c, "finance.budgets")
+
+        def child(amount: int, who: str, key: str) -> FA.ActionResult:
+            return act(c, who, "budget_create", {"name": "Sales meals", "account_id": account(c, "6900"), "team": "sales",
+                                                 "parent_id": budget_id, "amount": amount}, key, dry_run=True, at=AT)
+        owner = {amount: child(amount, OWNER, f"own-{amount}") for amount in (6_000, 6_001)}
+        gus = {amount: child(amount, "human:gus", f"gus-{amount}") for amount in (3_000, 6_000, 6_001, 12_000)}
+    assert owner[6_000].status == "committed", owner[6_000]
+    assert owner[6_001].status == "failed" and "40.00" in owner[6_001].reason, owner[6_001]
+    assert {r.status for r in gus.values()} == {"needs_approval"}, {a: r.status for a, r in gus.items()}
+    assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
+
+
+def test_a_retroactive_budget_change_gets_one_outcome_for_a_reader_whose_figure_for_that_period_is_not_true(books):
+    """A P&L grantee with the budgets right changes Other expenses back to October, in December. Their December figure is
+    true, but October's is not, and the fit reads October: every amount gets the owner's decision and no figure. The
+    owner still gets October's true fit (its 40.00 reserve is named below 4,000)."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        _gateway_allocation(c, budget_id)
+        _gateway_hold_on_the_october_debit(c, budget_id)
+        _readers_grants(c, "finance.budgets")
+
+        def change(amount: int, who: str, key: str) -> FA.ActionResult:
+            return act(c, who, "budget_update", {"budget_id": budget_id, "amount": amount, "effective_from": "2026-10-01"},
+                       key, dry_run=True, at=DEC)
+        owner = {amount: change(amount, OWNER, f"own-{amount}") for amount in (3_999, 4_000)}
+        gus = {amount: change(amount, "human:gus", f"gus-{amount}") for amount in (3_999, 4_000, 4_001, 9_000)}
+    assert owner[3_999].status == "failed" and "40.00" in owner[3_999].reason, owner[3_999]
+    assert owner[4_000].status == "committed", owner[4_000]
+    assert {r.status for r in gus.values()} == {"needs_approval"}, {a: r.status for a, r in gus.items()}
+    assert not any(ch.isdigit() for r in gus.values() for ch in r.reason), gus
+
+
+def test_every_budget_and_card_fit_gives_a_reader_who_cannot_check_one_outcome_and_no_figure(books):
+    """Each action that runs a budget or card fit (create, update, a set-aside, a card's creation and its limit) gives a
+    P&L grantee with the budgets and cards rights, and no payroll detail, one outcome for every amount and no figure in
+    the reason. The check runs over every period the fit reads, before any fit runs."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        _gateway_allocation(c, budget_id)
+        _gateway_hold_on_the_october_debit(c, budget_id)
+        assert act(c, OWNER, "card_create", {"holder": "human:gus", "budget_id": budget_id, "amount": 1_000,
+                                             "provider_user_id": "user-gus"}, at=AT).status == "committed"
+        card_id = str(c.execute("SELECT id FROM fin_cards WHERE holder='human:gus'").fetchone()[0])
+        _readers_grants(c, "finance.budgets", "finance.cards")
+
+        def walk(kind: str, body: dict[str, object], amounts: tuple[int, ...]) -> list[FA.ActionResult]:
+            return [act(c, "human:gus", kind, {**body, "amount": amount}, f"{kind}-{amount}", dry_run=True, at=AT)
+                    for amount in amounts]
+        walks = {
+            "budget_create": walk("budget_create", {"name": "Sales meals", "account_id": account(c, "6900"),
+                                                    "team": "sales", "parent_id": budget_id}, (3_000, 6_000, 6_001, 12_000)),
+            "budget_update": walk("budget_update", {"budget_id": budget_id}, (3_000, 6_000, 6_001, 12_000)),
+            "allocation_set": walk("allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
+                                                      "target_id": "gw-1"}, (3_000, 9_000, 9_001, 12_000)),
+            "card_create": walk("card_create", {"holder": "human:eve", "budget_id": budget_id,
+                                                "provider_user_id": "user-eve"}, (3_000, 6_000, 6_001, 12_000)),
+            "card_update_limit": walk("card_update_limit", {"card_id": card_id}, (500, 3_999, 4_000, 4_001, 9_000)),
+        }
+    for kind, results in walks.items():
+        assert {r.status for r in results} == {"needs_approval"}, (kind, [(r.status, r.reason) for r in results])
+        assert not any(ch.isdigit() for r in results for ch in r.reason), (kind, [r.reason for r in results])
+
+
+def test_a_hidden_child_budget_is_judged_on_the_true_figures_when_its_owner_approves_it(books):
+    """A P&L grantee's child asks are all sent to the owner with one outcome. Approval runs the fit on the true figures:
+    6,001 does not fit the 40.00 reserve and fails at approval, and 6,000 fits and commits."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        _gateway_allocation(c, budget_id)
+        _gateway_hold_on_the_october_debit(c, budget_id)
+        _readers_grants(c, "finance.budgets")
+        asked = {}
+        for amount in (6_001, 6_000):
+            asked[amount] = act(c, "human:gus", "budget_create", {"name": f"Sales {amount}",
+                                                                  "account_id": account(c, "6900"), "team": "sales",
+                                                                  "parent_id": budget_id, "amount": amount},
+                                f"ask-{amount}", at=AT)
+            assert (asked[amount].status, asked[amount].approver) == ("needs_approval", OWNER), asked[amount]
+        H.approval_decide(c, OWNER, asked[6_001].approval_id, "approved")
+        too_big = FA.approval_decided(c, asked[6_001].approval_id, AT)
+        assert too_big.status in ("failed", "denied") and too_big.code == "invalid", too_big
+        H.approval_decide(c, OWNER, asked[6_000].approval_id, "approved")
+        fits = FA.approval_decided(c, asked[6_000].approval_id, AT)
+        assert fits.status == "committed", fits

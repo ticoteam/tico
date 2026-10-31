@@ -248,18 +248,23 @@ def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[
     return base + B.carry(history)
 
 
-def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None = None
-             ) -> list[tuple[str, str, int]]:
+def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None = None,
+             overlay: tuple[str, str, str, int] | None = None) -> list[tuple[str, str, int]]:
     """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
     target used under it, never below zero. A target's use (its holds, settled holds, for a teammate their posted
     lines, for a card its entries in the ledger) draws down only the nearest allocation for that target above it,
-    never every one up the tree."""
+    never every one up the tree. `overlay` (budget id, target kind, target id, amount) reads one allocation as it would
+    stand: it replaces the stored row or adds one, and 0 is no row (reserve_growth)."""
     budgets = ctx.budgets()
+    allocs = [(str(r["budget_id"]), str(r["target_kind"]), str(r["target_id"]), int(r["amount"]))
+              for r in SB.allocations(ctx.c, budget_ids)]
+    if overlay is not None and overlay[0] in budget_ids:
+        allocs = [r for r in allocs if r[:3] != overlay[:3]] + ([overlay] if overlay[3] > 0 else [])
     by_target: dict[str, list[tuple[str, int]]] = {}
-    for row in SB.allocations(ctx.c, budget_ids):
-        b = budgets.get(row["budget_id"])
+    for bid, kind, tid, amount in allocs:
+        b = budgets.get(bid)
         if b is not None and b.active:
-            by_target.setdefault(f"{row['target_kind']}:{row['target_id']}", []).append((b.id, int(row["amount"])))
+            by_target.setdefault(f"{kind}:{tid}", []).append((b.id, amount))
     out: list[tuple[str, str, int]] = []
     for target, rows in by_target.items():
         kind, _, tid = target.partition(":")
@@ -280,6 +285,20 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
             nearest = [x for x in under if not any(y != x and x in subtree(ctx, y) for y in under)]
             out.append((bid, target, max(0, amount - usage(bid) + sum(usage(x) for x in nearest))))
     return out
+
+
+def reserve_growth(ctx: Ctx, budget_id: str, allocation_on: str, target_kind: str, target_id: str, amount: int,
+                   at: date) -> int:
+    """What setting a target's allocation on `allocation_on` to `amount` adds to `budget_id`'s reserve on `at`: the reserve
+    over the budget's whole subtree in its period as it would stand, less as it stands. A target's use already counts
+    against the budget, and an allocation draws down only the use no nearer allocation holds, so the part of the amount
+    that use already covers is not counted again."""
+    start, end = period_window(ctx, budget_id, at.isoformat())
+    tree = subtree(ctx, budget_id)
+    before = sum(v for _, _, v in _reserve(ctx, tree, start, end))
+    after = sum(v for _, _, v in _reserve(ctx, tree, start, end,
+                                          overlay=(allocation_on, target_kind, target_id, amount)))
+    return after - before
 
 
 def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[str] = (),

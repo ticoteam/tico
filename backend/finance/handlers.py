@@ -744,10 +744,14 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and amount < 0:
         raise invalid("a budget amount is 0 or more")
     effective = _effective(ctx, new, V.opt_day(p, "effective_from"))
-    route = _fit(ctx, who, new, effective, amount, route=True) if amount is not None else None
+    # The fit reads the parent's figures from `effective` on: a reader whose figure is not the true one gets the owner's
+    # decision and no amount, before any fit runs (figure_route).
+    hidden = amount is not None and bool(new.parent_id) and \
+        bool(figure_route(ctx, who, new.parent_id, effective=effective))
+    route = _fit(ctx, who, new, effective, amount, route=True) if amount is not None and not hidden else None
     words, impact = _raise_note(ctx, route, effective) if route is not None else ("", {})
     raise_to = route.raise_to if route is not None else None
-    if amount is not None and new.parent_id:
+    if amount is not None and new.parent_id and not hidden:
         _cards_fit_child(ctx, who, "", ctx.budgets()[new.parent_id], effective, amount, raise_to)
 
     def apply(aid: str) -> Result:
@@ -759,7 +763,10 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             _raise_parent(ctx, route, effective, who)
         ctx.changed()
         return {"budget_id": made.id, "effective_from": effective if amount is not None else None}
-    gate = K.default_gate(ctx.org, who, "budget_create") if route is None else _budget_owner_gate(route)
+    if hidden:
+        gate = HIDDEN_GATE
+    else:
+        gate = K.default_gate(ctx.org, who, "budget_create") if route is None else _budget_owner_gate(route)
     head = f"Create budget {new.name}" + \
         (f" at {amount / 100:.2f} {ctx.book.base_currency} per {new.period}" if amount is not None else "")
     return Plan(gate, head + words,
@@ -795,8 +802,9 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise invalid("a budget that comes back active takes its amount from today: leave effective_from out")
     fit_from = effective if amount is not None else dates.day(ctx.today).isoformat()
     # A figure the actor cannot check must not tell them anything about the amount: every amount gets one outcome, an
-    # owner decides it on the true figures at approval (figure_route). So nothing is checked up front for them.
-    hidden = bool(figure_route(ctx, who, old.id)) if amount is not None else False
+    # owner decides it on the true figures at approval (figure_route). So nothing is checked up front for them. A
+    # reactivation reads the same figures with or without an amount.
+    hidden = bool(figure_route(ctx, who, old.id, effective=fit_from)) if amount is not None or reactivates else False
     if hidden:
         route = None
     elif reactivates:
@@ -844,25 +852,50 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 HIDDEN_GATE = K.Gate("needs_approval", "owner", "default:figures-hidden")
 
 
-def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None) -> str:
-    """How an amount the actor asks for on a budget (a set-aside, a card, a budget change) is decided. Where their figure
-    for the budget or a parent (or, for a card, its own spend) is the true one, "" (decided here, as before). Where it is
-    not, the amount must not tell them the difference, so every amount gets one outcome: "hidden" (an approver decides
-    on the true figures) or "request" (they lack finance.budgets, so the gate sends it to their manager)."""
+def figure_route(ctx: Ctx, who: str, budget_id: str, card: Any = None, effective: str = "") -> str:
+    """How an amount the actor asks for on a budget (a set-aside, a card, a budget change) is decided: the one gate every
+    action that runs a budget or card fit calls first. Where their figure is the true one on every period the fit reads,
+    "" (decided here, as before). Where it is not, the amount must not tell them the difference, so every amount gets one
+    outcome: "hidden" (an approver decides on the true figures) or "request" (they lack finance.budgets, so the gate sends
+    it to their manager). The fit reads the budget, its parents and their children from `effective` on (today when none),
+    on each day a version of one of them takes effect (`_fit_days`). A card's own spend counts too."""
     b = ctx.budgets().get(budget_id)
     if b is None or ctx.deciding:
         return ""
-    day = dates.day(ctx.today)
     from .cards import figure_hidden
-    hidden = card is not None and figure_hidden(ctx, who, card)
-    for one in B.chain(ctx.budgets(), b.id) if not hidden else ():
-        true = budgeting.state(ctx, one.id, day).remaining
-        if budgeting.state(ctx, one.id, day, read=budgeting.Netted(ctx.view(who))).remaining != true:
-            hidden = True
-            break
+    days = _fit_days(ctx, b, effective)
+    hidden = any(_figure_differs(ctx, who, bid, day) for bid in _figure_ids(ctx, b) for day in days) or \
+        (card is not None and any(figure_hidden(ctx, who, card, on=day.isoformat()) for day in days))
     if not hidden:
         return ""
     return "request" if K.authority(ctx.org, who, "allocation_set", ctx.rights(who)) is not None else "hidden"
+
+
+def _figure_ids(ctx: Ctx, b: B.Budget) -> list[str]:
+    """The budgets whose figures a fit on `b` reads: `b`, each budget above it, and each of those budgets' active children
+    (a fit reserves what the children hold, and a child's spend and holds sit in its own figure)."""
+    budgets = ctx.budgets()
+    out: list[str] = []
+    for one in B.chain(budgets, b.id):
+        for bid in (one.id, *(x.id for x in budgets.values() if x.parent_id == one.id and x.active)):
+            if bid not in out:
+                out.append(bid)
+    return out
+
+
+def _fit_days(ctx: Ctx, b: B.Budget, effective: str) -> list[date]:
+    """The days a fit from `effective` (today when none) reads: that day, and each later day a version of a budget in
+    `_figure_ids` takes effect (B.fit_points, the same days `_reserve_fit` walks)."""
+    every = [v for vs in SB.versions(ctx.c, _figure_ids(ctx, b)).values() for v in vs]
+    return B.fit_points(dates.day(effective or ctx.today), every)
+
+
+def _figure_differs(ctx: Ctx, who: str, budget_id: str, day: date) -> bool:
+    """Whether `who`'s figure for a budget, in the period holding `day`, is not the true one: its spend, holds or what
+    remains. Only a settled private part netted out of a read makes them differ."""
+    true = budgeting.state(ctx, budget_id, day)
+    seen = budgeting.state(ctx, budget_id, day, read=budgeting.Netted(ctx.view(who)))
+    return (true.actual, true.held, true.remaining) != (seen.actual, seen.held, seen.remaining)
 
 
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -904,7 +937,12 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload, route: str = "") -> Plan:
     if grow > 0 and route not in ("hidden", "request"):
         for one in B.chain(ctx.budgets(), b.id):
             s = budgeting.state(ctx, one.id, at)
-            if s.remaining is not None and grow > s.remaining:
+            if s.remaining is None:
+                continue
+            # What the set-aside adds to this budget's reserve. A target's use already counts against the budget (its
+            # holds, its posted lines), so only the part of the amount that use does not cover is new.
+            added = budgeting.reserve_growth(ctx, one.id, b.id, kind, target, amount, at)
+            if added > max(s.remaining, 0):
                 numbers = shows_numbers(ctx, who, one)
                 # The record keeps the true figure, and each reader sees it only where their own figure is that one now
                 # (named_reason). The sentence for this refusal names the figure only when the viewer's figure is the same.
