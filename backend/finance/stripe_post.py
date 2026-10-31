@@ -327,6 +327,10 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
         if not source:
             _ask(ctx, fid, "it names no refund to restore")
             return
+        # A refund fails once. A repeat of a failure already undone changes nothing, so the row is recorded and left.
+        if SK.stripe_restored(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, source):
+            SK.update(ctx.c, "fin_feed_txns", fid, {"status": "ignored", "updated_at": ctx.at})
+            return
         failed = SK.stripe_reversal(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, source)
         if failed is None:
             return

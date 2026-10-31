@@ -296,6 +296,35 @@ def test_a_refund_that_fails_restores_what_it_gave_back_and_not_a_share_of_the_o
         assert _every_entry_balances(c)
 
 
+def test_a_second_failure_of_the_same_refund_changes_nothing(books):
+    """The refund-failure case above, and then refund A fails a second time. It was undone once already, so the repeat
+    posts nothing: the books and the invoice stay where the first failure left them."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
+    stripe.add("charge", 10_000, 0, "Acme Shop")
+    stripe_pass(books, stripe)
+    refund_a = stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.transaction() as c:
+        sale = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": sale, "amount": 5_000})
+        assert made.status == "committed", made
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    stripe.add("refund_failure", 5_000, link="ch_txn_0001", source=f"re_{refund_a}")
+    stripe_pass(books, stripe, "2026-10-15T15:00:00.000000Z")
+    with books.read() as c:
+        before = (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "1050"))
+    repeat = stripe.add("refund_failure", 5_000, link="ch_txn_0001", source=f"re_{refund_a}")
+    stripe_pass(books, stripe, "2026-10-15T16:00:00.000000Z")
+    assert _invoice_row(books, iid) == (0, "sent")
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "1050")) == before
+        assert _feed(c, repeat)["status"] == "ignored"
+        assert _every_entry_balances(c)
+
+
 def test_a_balance_type_nothing_posts_is_asked_and_posts_nothing(books):
     stripe = FakeStripe()
     connect_stripe(books, stripe)
