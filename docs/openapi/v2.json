@@ -35942,6 +35942,12 @@
             "maxLength": 200,
             "title": "Seat Id",
             "default": ""
+          },
+          "team": {
+            "type": "string",
+            "maxLength": 100,
+            "title": "Team",
+            "default": ""
           }
         },
         "additionalProperties": false,

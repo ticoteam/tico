@@ -349,6 +349,7 @@ def hire(auth, onboarding, c, who, seat_id, body):
         raise Problem("filled", f"This seat is already filled by {name}", 409)
     row = lifecycle.seat(c, seat_id)
     _may_hire(auth, c, who, row)
+    lifecycle.refuse_if_requested(row)
     _, cards = _recruitable(onboarding)
     card = next((card["raw"] for card in cards if card["template"] == body.template), None)
     if not card:

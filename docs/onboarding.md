@@ -233,17 +233,21 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   places a seat anywhere; anyone else under themselves or someone below them.
 - A seat is filled by recruiting it ([Recruiting a seat](#recruiting-a-seat)); the bot it gets starts Onboarding.
 - **A cloud agent** Tico does not connect yet is a request, not a bot: `POST /api/v2/cloud-agents/{id}/request` (or
-  `POST /api/v2/seats/{id}/request-agent` for a seat that has none) keeps a seat with `agent` and `request_state`
-  (`requested`; nothing moves it past that yet), and files the request with Tico's team through support as a feedback
-  ticket carrying only its message, with no install ID. A repeated key, or an identical request sent at the same time,
-  shares that one seat and ticket. A first task whose title matches an open task is refused (`409`, `duplicate`) before
-  Tico hears of it. The first task waits on the seat as a task its person owns; `GET /api/v2/seats/{id}/request` shows it
-  to anyone who may read it. A seat with a request cannot be closed (`409`): **Cancel request**
-  (`POST /api/v2/seats/{id}/cancel-request`) tells Tico on the same ticket, declines the first task and closes the seat.
-  If Tico cannot be reached nothing changes, so it can be tried again.
+  `POST /api/v2/seats/{id}/request-agent` for a seat that has none) makes a seat with `agent` and `request_state`, and
+  files the request with Tico's team through support as a feedback ticket carrying only its message, with no install ID.
+  The seat and its first task are made first and the seat is `filing` until Tico's ticket is kept, then `requested`. A
+  repeated key, or an identical request sent at the same time, shares that one seat and ticket. A first task whose title
+  matches an open task is refused (`409`, `duplicate`) before Tico hears of it. The first task waits on the seat as a task
+  its person owns; `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. While a request is filing, being
+  cancelled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
+  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `cancelling`, tells Tico on the same
+  ticket, closes the seat and lets go of the first task: it is declined if the person may update it, else it stays with
+  its owner. If Tico cannot be reached, or the last step fails, the seat goes back to `requested` and can be tried again.
+  A request a stopped process left `filing` is released when the store starts.
 - **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` hires a bot on that
   harness with the current recommended model, owned by the person. With `{seat_id}` it fills the seat, in the seat's
-  place on the chart; with `{reports_to}` it is placed under that line. It runs under its own bot identity, with no
+  place on the chart, and joins the seat's team; with `{reports_to}` (and an optional `team`) it is placed under that
+  line. It runs under its own bot identity, with no
   personal token issued (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their

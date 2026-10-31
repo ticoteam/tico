@@ -1,6 +1,6 @@
 """Cloud agents (backend/cloud_agents.py): a seat asks Tico's team to connect an agent it does not connect yet, and a
 supported agent is added as a Tico bot. A request is reserved under its key, checked before Tico hears of it, and kept in
-the transaction that keeps its ticket; cancelling it tells Tico and declines the first task."""
+the transaction that keeps its ticket; cancelling it tells Tico and lets go of the first task."""
 import json
 import threading
 import time
@@ -28,12 +28,12 @@ def ask(api, path, body, headers=None, expected=200):
     return r.json()
 
 
-def hold_tico(monkeypatch, entered, release, during=None):
-    """Hold the first ticket sent to Tico until `release` is set; `during` runs while it is held."""
+def hold_call(monkeypatch, match, entered, release, during=None):
+    """Hold the first call to Tico that `match(method, path)` picks until `release` is set; `during` runs while it is held."""
     real = support._ask_hq
 
     def held(method, path, **kwargs):
-        if method == "POST" and path == "/v1/support" and not entered.is_set():
+        if match(method, path) and not entered.is_set():
             entered.set()
             if during:
                 during()
@@ -41,6 +41,13 @@ def hold_tico(monkeypatch, entered, release, during=None):
         return real(method, path, **kwargs)
 
     monkeypatch.setattr(support, "_ask_hq", held)
+
+
+def hold_tico(monkeypatch, entered, release, during=None):
+    """Hold the first ticket sent to Tico until `release` is set; `during` runs while it is held."""
+    hold_call(monkeypatch, lambda method, path: method == "POST" and path == "/v1/support", entered, release, during)
+
+
 
 
 def test_the_catalog_lists_eight_agents_and_only_claude_code_and_codex_connect(environment, hq):
@@ -332,3 +339,150 @@ def test_the_listing_is_the_catalog_the_route_serves_and_a_copy(environment):
     assert cloud_agents.listing() == served
     cloud_agents.listing()[0]["name"] = "Changed"
     assert cloud_agents.listing()[0]["name"] == "Claude Code"
+
+
+def bot_count(api):
+    with api.app.state.store.read() as c:
+        return c.execute("SELECT COUNT(*) FROM bot_config").fetchone()[0]
+
+
+def test_a_manager_who_cancels_does_not_decline_a_private_first_task_they_cannot_read(environment, hq):
+    api = environment()
+    riley = as_person(api, "riley")                  # on the roster from the environment's people
+    seat = ask(api, "cloud-agents/devin/request", {"first_task": "Draft the board memo", "reports_to": "human:riley"})
+    task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, seat["created_by"], task["id"], private=True)
+    assert api.get(f"/api/v2/seats/{seat['id']}/request", headers=riley).json()["tasks"] == []
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {}, headers=riley)["request_state"] == "cancelled"
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "open"
+        assert c.execute("SELECT first_task FROM seats WHERE id=?", (seat["id"],)).fetchone()[0] == ""
+
+
+def test_a_seat_being_filed_or_requested_takes_no_bot_and_no_hire(environment, hq, monkeypatch):
+    api = environment()
+    seat = ask(api, "seats", {"title": "Support lead"})
+    before = bot_count(api)
+    entered, release, during = threading.Event(), threading.Event(), []
+
+    def refused_meanwhile():
+        for path, body in (("cloud-agents/claude/add", {"seat_id": seat["id"]}),
+                           (f"seats/{seat['id']}/hire", {"template": "any"})):
+            r = api.post("/api/v2/" + path, json=body, headers=signed_in())
+            during.append((r.status_code, r.json()["error"]["code"]))
+
+    hold_tico(monkeypatch, entered, release, during=refused_meanwhile)
+    answer = {}
+    asking = threading.Thread(target=lambda: answer.update(r=api.post(
+        f"/api/v2/seats/{seat['id']}/request-agent", json={"agent": "copilot"}, headers=signed_in())))
+    asking.start()
+    assert entered.wait(10)
+    release.set()
+    asking.join(20)
+    assert answer["r"].status_code == 200 and during == [(409, "filing"), (409, "filing")]
+    assert bot_count(api) == before
+    added = api.post("/api/v2/cloud-agents/claude/add", json={"seat_id": seat["id"]}, headers=signed_in())
+    assert added.status_code == 409 and added.json()["error"]["code"] == "requested"
+    hired = api.post(f"/api/v2/seats/{seat['id']}/hire", json={"template": "any"}, headers=signed_in())
+    assert hired.status_code == 409 and hired.json()["error"]["code"] == "requested"
+    assert bot_count(api) == before
+
+
+def test_two_requests_with_the_same_first_task_at_once_file_one_ticket(environment, hq, monkeypatch):
+    api = environment()
+    entered, release, answers = threading.Event(), threading.Event(), {}
+    hold_tico(monkeypatch, entered, release)
+
+    def send(name):
+        answers[name] = api.post("/api/v2/cloud-agents/devin/request", json={"first_task": "Map the sign-in errors"},
+                                 headers={**signed_in(), "Idempotency-Key": str(uuid.uuid4())})
+
+    first = threading.Thread(target=send, args=("first",))
+    first.start()
+    assert entered.wait(10)
+    send("second")             # the first task is already open, so this one is refused before Tico is called
+    release.set()
+    first.join(20)
+    assert answers["first"].status_code == 200
+    assert answers["second"].status_code == 409 and answers["second"].json()["error"]["code"] == "duplicate"
+    assert len(filed(hq)) == 1 and len(seats(api)) == 1
+
+
+def test_a_cancel_holds_its_seat_so_no_change_lands_while_tico_is_told(environment, hq, monkeypatch):
+    api = environment()
+    seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
+    other = ask(api, "seats", {"title": "Ops lead"})
+    entered, release, during = threading.Event(), threading.Event(), []
+
+    def refused_meanwhile():
+        during.append(api.patch(f"/api/v2/seats/{seat['id']}", json={"title": "Renamed"}, headers=signed_in()).status_code)
+        during.append(api.patch(f"/api/v2/seats/{seat['id']}", json={"reports_to": f"seat:{other['id']}"},
+                                headers=signed_in()).status_code)
+        during.append(api.post(f"/api/v2/seats/{seat['id']}/close", json={}, headers=signed_in()).status_code)
+
+    hold_call(monkeypatch, lambda method, path: method == "POST" and path.endswith("/messages"), entered, release,
+              during=refused_meanwhile)
+    answer = {}
+    cancelling = threading.Thread(target=lambda: answer.update(r=api.post(
+        f"/api/v2/seats/{seat['id']}/cancel-request", json={}, headers=signed_in())))
+    cancelling.start()
+    assert entered.wait(10)
+    release.set()
+    cancelling.join(20)
+    assert during == [409, 409, 409]
+    assert answer["r"].status_code == 200 and answer["r"].json()["request_state"] == "cancelled"
+    [hq_id] = list(hq.tickets)
+    assert len([m for m in hq.tickets[hq_id]["messages"] if "Cancelled" in m["body"]]) == 1
+
+
+def test_a_cancel_whose_last_step_fails_leaves_the_request_requested_so_it_can_be_tried_again(environment, hq, monkeypatch):
+    api = environment()
+    seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"})
+    task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
+    real, calls = cloud_agents._cancelled, []
+
+    def failing_once(c, seat_id):
+        calls.append(seat_id)
+        if len(calls) == 1:
+            raise Problem("unavailable", "The cancel could not be finished. Try again.", 503, retryable=True)
+        return real(c, seat_id)
+
+    monkeypatch.setattr(cloud_agents, "_cancelled", failing_once)
+    ask(api, f"seats/{seat['id']}/cancel-request", {}, expected=503)
+    [still] = seats(api)
+    assert still["request_state"] == "requested"
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "open"
+    assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
+
+
+def test_an_added_bot_joins_the_seats_team_or_the_team_the_request_names(environment, hq):
+    api = environment()
+    seat = ask(api, "seats", {"title": "Support lead", "team": "support"})
+    added = ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]})
+    line = ask(api, "seats", {"title": "Ops lead"})["reports_to"]
+    named = ask(api, "cloud-agents/codex/add", {"reports_to": line, "team": "operations"})
+    with api.app.state.store.read() as c:
+        teams = {bot: c.execute("SELECT team FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
+                 for bot in (added["bot"], named["bot"])}
+    assert teams == {added["bot"]: "support", named["bot"]: "operations"}
+
+
+def test_a_request_a_stopped_process_left_filing_is_released_when_the_store_starts(environment, hq):
+    api = environment()
+    key = str(uuid.uuid4())
+    headers = {**signed_in(), "Idempotency-Key": key}
+    seat = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"}, headers=headers)
+    task = api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).json()["tasks"][0]
+    with api.app.state.store.transaction() as c:           # the process stopped before Tico answered
+        c.execute("UPDATE seats SET request_state=?,request_ticket='' WHERE id=?", (lifecycle.FILING, seat["id"]))
+        c.execute("UPDATE seat_requests SET state='filing',ticket_id='',created=? WHERE seat_id=?",
+                  ("2000-01-01T00:00:00+00:00", seat["id"]))
+    cloud_agents.release_abandoned(api.app.state.store)
+    assert seats(api) == []
+    with api.app.state.store.read() as c:
+        assert H.task(c, task["id"])["status"] == "declined"
+        assert c.execute("SELECT COUNT(*) FROM seat_requests").fetchone()[0] == 0
+    again = ask(api, "cloud-agents/devin/request", {"first_task": "Map the sign-in errors"}, headers=headers)
+    assert again["id"] != seat["id"] and [s["id"] for s in seats(api)] == [again["id"]]

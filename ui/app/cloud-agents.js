@@ -146,7 +146,8 @@
       event.preventDefault();
       submit.disabled = true; error.hidden = true;
       try {
-        await post(`/v2/cloud-agents/${encodeURIComponent(agent.id)}/add`, ctx.seat ? {seat_id: ctx.seat} : {reports_to: reportsTo});
+        await post(`/v2/cloud-agents/${encodeURIComponent(agent.id)}/add`,
+          ctx.seat ? {seat_id: ctx.seat} : {reports_to: reportsTo, team: ctx.team || ''});
         dialog.close();
         void refresh(true);
         toast(`${agent.name} added`);

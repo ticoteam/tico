@@ -155,7 +155,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       assert.equal(await page.locator('dialog.connect-agent').count(), 0, 'Add does not open the personal connect steps');
       await add.locator('button[type="submit"]').click();
       await add.waitFor({state: 'detached'});
-      assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer'}});
+      assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer', team: 'eng'}});
 
       // Another agent: the typed name is the agent, and the request says so.
       await grid.locator('input[name="name"]').fill('Acme Agent');
@@ -185,7 +185,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await add.waitFor();
       await add.locator('button[type="submit"]').click();
       await add.waitFor({state: 'detached'});
-      assert.deepEqual(calls.slice(count), [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer'}}]);
+      assert.deepEqual(calls.slice(count), [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer', team: 'eng'}}]);
 
       assert.deepEqual(errors, []);
       console.log('cloud-agents: desktop ok');
