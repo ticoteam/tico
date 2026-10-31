@@ -226,9 +226,9 @@ def test_a_budget_on_other_expenses_never_shows_a_payroll_payment_to_a_viewer_wi
             read = FR.budget_vs_actual(c, who, "2026-10-01", "2026-11-30", "month", at=NOV)
             (row,) = [r for r in read["budgets"] if r["id"] == budget_id]
             assert row["actual"] == months, who
-            assert row["excl_payroll"] is excluded and read["excl_payroll"] is excluded, who
+            assert row["excluded"] is excluded and read["excluded"] is excluded, who
             (cloud_row,) = [r for r in read["budgets"] if r["name"] == "Cloud"]
-            assert cloud_row["excl_payroll"] is False, who
+            assert cloud_row["excluded"] is False, who
             (state,) = [r for r in FR.budgets(c, who, at=NOV)["budgets"] if r["id"] == budget_id]
             assert state["state"]["actual"] == months[1], who
         ctx = load(c, NOV)
@@ -287,7 +287,7 @@ def test_a_card_allocation_never_recovers_a_settled_payroll_charge_for_a_viewer_
         gus = _state_on(c, "human:gus", budget_id, "2026-10-15")
         assert (owner["actual"], owner["held"], owner["remaining"]) == (4_000, 1_000, 5_000)
         assert (gus["actual"], gus["held"], gus["remaining"]) == (0, 5_000, 5_000)
-        assert owner["excl_payroll"] is False and gus["excl_payroll"] is True
+        assert owner["excluded"] is False and gus["excluded"] is True
         st = budgeting.state(load(c, NOV), budget_id, date(2026, 10, 15))
         assert (st.actual, st.held) == (4_000, 1_000)
 
@@ -312,7 +312,7 @@ def test_a_gateway_key_allocation_never_recovers_a_settled_payroll_charge_for_a_
         gus = _state_on(c, "human:gus", budget_id, "2026-10-15")
         assert (owner["actual"], owner["held"], owner["remaining"]) == (4_000, 1_000, 5_000)
         assert (gus["actual"], gus["held"], gus["remaining"]) == (0, 5_000, 5_000)
-        assert owner["excl_payroll"] is False and gus["excl_payroll"] is True
+        assert owner["excluded"] is False and gus["excluded"] is True
 
 
 def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll_line(books):

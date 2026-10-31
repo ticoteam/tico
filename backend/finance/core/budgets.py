@@ -75,7 +75,7 @@ class State:
     pct: Decimal | None
     crossed_warn: bool
     at_limit: bool
-    excluded: bool = False          # a budget read netted out settled private lines (marked excl_payroll)
+    excluded: bool = False          # a budget read netted out settled private lines (marked excluded)
 
 
 @dataclass(frozen=True)

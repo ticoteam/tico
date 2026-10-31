@@ -70,7 +70,7 @@ def test_dry_run_reports_the_approval_and_budget_impact(books):
             {"account_id": account(c, "6100"), "amount": 1_000}, {"account_id": account(c, "1000"), "amount": -1_000}]},
             dry_run=True)
         assert spend.impact["budgets"] == [{"budget_id": parent, "name": "Software", "remaining": 50_000,
-                                            "remaining_after": 49_000, "excl_payroll": False}]
+                                            "remaining_after": 49_000, "excluded": False}]
 
 
 def test_approval_commits_once(books):

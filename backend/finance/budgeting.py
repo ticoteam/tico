@@ -64,7 +64,7 @@ def scope_accounts(ctx: Ctx, b: B.Budget) -> list[str]:
 class Netted:
     """A budget read: its viewer, and whether the figures it gives net out settled private lines (tab.settled_lines,
     the P&L's rule, and the holds and card lines of the same feed rows). `excluded` is set once something is netted; the
-    read then marks itself excl_payroll. Enforcement reads with no Netted and takes the true figures."""
+    read then marks itself excluded. Enforcement reads with no Netted and takes the true figures."""
     view: VW.View
     excluded: bool = False
 

@@ -625,7 +625,7 @@ def _state_row(s: _Seen, b: B.Budget, st: B.State) -> Row:
             "remaining": None if cut else st.remaining, "pct": None if cut or st.pct is None else str(st.pct),
             "crossed_warn": None if cut else st.crossed_warn, "at_limit": None if cut else st.at_limit,
             "period_start": st.period_start, "period_end": st.period_end,
-            "excl_payroll": st.excluded and not cut}
+            "excluded": st.excluded and not cut}
 
 
 def _budget_row(b: B.Budget) -> Row:
@@ -653,10 +653,10 @@ def budgets(c: sqlite3.Connection, viewer: str, *, include_inactive: bool = Fals
     for b in seen[:most]:
         st = budgeting.state(s.ctx, b.id, day, read=budgeting.Netted(s.view))
         state_row = _state_row(s, b, st)
-        netted = netted or bool(state_row["excl_payroll"])
+        netted = netted or bool(state_row["excluded"])
         rows.append({**_budget_row(b), "state": state_row})
     return {"budgets": rows, "more": len(seen) > most, "on": day.isoformat(), "view_version": s.view.version,
-            "excl_payroll": netted}
+            "excluded": netted}
 
 
 def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None,
@@ -679,12 +679,12 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
                                   for p, q in buckets]
         rows.append({**_budget_row(b),
                      "budget": [B.in_window(b, versions[b.id], q, s.ctx.book.fiscal_year_start) for q in buckets],
-                     "actual": spent, "excl_payroll": read.excluded and not cut})
+                     "actual": spent, "excluded": read.excluded and not cut})
     return {"start": a.isoformat(), "end": z.isoformat(), "period": period,
             "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
                         for p, q in buckets],
             "budgets": rows, "more": len(seen) > most, "view_version": s.view.version,
-            "excl_payroll": any(r["excl_payroll"] for r in rows)}
+            "excluded": any(r["excluded"] for r in rows)}
 
 
 METRICS = ("cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
@@ -760,8 +760,8 @@ def metric(c: sqlite3.Connection, viewer: str, name: str, *, budget_id: str | No
         row = _state_row(s, b, budgeting.state(s.ctx, b.id, today, read=budgeting.Netted(s.view)))
         if name == "budget_remaining":
             return {**base, "value": row["remaining"], "unit": "minor", "currency": currency,
-                    "excl_payroll": row["excl_payroll"]}
-        return {**base, "value": row["pct"], "unit": "percent", "excl_payroll": row["excl_payroll"]}
+                    "excluded": row["excluded"]}
+        return {**base, "value": row["pct"], "unit": "percent", "excluded": row["excluded"]}
     if name in ("cash", "runway_months"):
         if not (s.view.everything or s.view.balance_sheet or s.view.bs_lines):
             raise denied("cash is on the balance sheet, the owner's unless granted")
@@ -1139,7 +1139,7 @@ def _inbox_kind(s: _Seen, kind: str, n: int, skip: int = 0) -> tuple[list[Row], 
             st = _state_row(s, b, budgeting.state(ctx, b.id, today, read=budgeting.Netted(view)))
             if st["crossed_warn"]:
                 near.append({"id": b.id, "budget_id": b.id, "amount": st["remaining"], "pct": st["pct"],
-                             "excl_payroll": st["excl_payroll"], "label": f"{b.name} · {st['pct'] or '?'}% used"})
+                             "excluded": st["excluded"], "label": f"{b.name} · {st['pct'] or '?'}% used"})
         return near[skip:skip + n], len(near) > skip + n
     if kind == "sync_failed":
         if not (view.everything or view.sources or R.is_admin(ctx.org, s.view.viewer, held)):
