@@ -914,3 +914,34 @@ def test_a_routed_raise_covers_the_parents_own_holds_with_its_children(books):
         assert amounts == {software: 65_000, eng: 50_000}
         lowered = act(c, OWNER, "budget_update", {"budget_id": software, "amount": 60_000}, key="held-lower")
         assert (lowered.status, lowered.code) == ("failed", "invalid"), (lowered.status, lowered.code, lowered.reason)
+
+
+def test_a_routed_raise_covers_the_grandparents_teammate_and_gateway_allocations(books):
+    """A teammate's allocation and a gateway key's allocation on a grandparent reserve their money as a card's allocation
+    does, so a routed raise of the parent must fit them too. Company 900.00 holds a 200.00 allocation to eve and a 150.00
+    allocation to gateway key gw-1; Software 300.00 sits under it, Engineering 300.00 under Software. Raising Engineering
+    to 500.00 needs Software at 500.00, and Company at 850.00 with the allocations: that fits, and Software's owner
+    approves it. Raising Engineering to 600.00 would need 950.00 at Company: refused, since one raise cannot pass the
+    grandparent. Lowering Company to 840.00 is refused the same way."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        company = _budget(c, name="Company", amount=90_000)
+        software = _budget(c, name="Software", amount=30_000, team="eng", parent_id=company)
+        eng = _budget(c, name="Engineering", amount=30_000, team="eng", vendor="Acme Cloud", parent_id=software)
+        assert act(c, OWNER, "budget_update", {"budget_id": software, "owner": "human:dan"}).status == "committed"
+        for kind, target, amount in (("teammate", "human:eve", 20_000), ("gateway_key", "gw-1", 15_000)):
+            made = act(c, OWNER, "allocation_set", {"budget_id": company, "target_kind": kind, "target_id": target,
+                                                    "amount": amount})
+            assert made.status == "committed", (kind, made.status, made.reason)
+        asked = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 50_000}, key="alloc-raise")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:dan"), (asked.status, asked.code, asked.reason)
+        H.approval_decide(c, "human:dan", asked.approval_id, "approved")
+        done = FA.approval_decided(c, asked.approval_id, AT)
+        assert done is not None and done.status == "committed", (done and done.reason)
+        amounts = {bid: max(SB.versions(c, [bid])[bid], key=lambda v: (v.effective_from, v.version)).amount
+                   for bid in (software, eng)}
+        assert amounts == {software: 50_000, eng: 50_000}
+        over = act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 60_000}, key="alloc-over")
+        assert (over.status, over.code) == ("failed", "invalid"), (over.status, over.code, over.reason)
+        lowered = act(c, OWNER, "budget_update", {"budget_id": company, "amount": 84_000}, key="alloc-lower")
+        assert (lowered.status, lowered.code) == ("failed", "invalid"), (lowered.status, lowered.code, lowered.reason)

@@ -453,7 +453,7 @@ def _route(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], effective: st
 
 def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> int | None:
     """The amount b's parent must go to from `effective` for b to fit: the most its family would total on any day
-    before the parent's next version, its children and the cards on it together (the sum `_reserve_fit` checks). None
+    before the parent's next version, its children and its allocations together (the sum `_reserve_fit` checks). None
     when a later parent version would still be passed, since one raise cannot reach that day, or when the parent has no
     amount from `effective`."""
     parent, children, parent_versions = _parent_side(ctx, b, mine)
@@ -464,14 +464,12 @@ def _raise_to(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> i
     later = [dates.day(v.effective_from) for v in parent_versions if dates.day(v.effective_from) > start]
     ends = min(later, default=None)
     every = [v for vs in children.values() for v in vs] + parent_versions
-    tree = budgeting.subtree(ctx, parent.id)
-    allocs = [row for row in SB.allocations(ctx.c, [parent.id]) if row["target_kind"] == "card"]
     need = 0
     for at in B.fit_points(start, every):
         total = sum(B.amount_at(v, at) or 0 for v in children.values())
         period_start, period_end = B.period_of(parent, at, ctx.book.fiscal_year_start, parent_versions)
-        cards, direct = _reserves(ctx, parent.id, tree, allocs, period_start.isoformat(), period_end.isoformat())
-        total += sum(reserve for _, reserve in cards) + direct
+        reserves, direct = _reserves(ctx, parent, period_start.isoformat(), period_end.isoformat())
+        total += sum(reserve for _, _, reserve in reserves) + direct
         if ends is None or at < ends:
             need = max(need, total)
         elif (later_cap := B.amount_at(parent_versions, at)) is not None and total > later_cap:
@@ -590,63 +588,83 @@ def _reactivate_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int
 
 def _reserve_fit(ctx: Ctx, who: str, b: B.Budget, mine: list[B.Version], kids: dict[str, list[B.Version]],
                  effective: str) -> None:
-    """On every day from `effective` that a version of `b` or of a child takes effect, `b`'s cards and its children's
+    """On every day from `effective` that a version of `b` or of a child takes effect, `b`'s allocations and its children's
     amounts must fit `mine`, b's amount. A day at 0 is skipped: a pause froze the cards, and `_fits` holds the
     children to 0 under it."""
     from .cards import sees as sees_card
-    tree = budgeting.subtree(ctx, b.id)
-    allocs = [row for row in SB.allocations(ctx.c, [b.id]) if row["target_kind"] == "card"]
     every = [v for vs in kids.values() for v in vs] + mine
     for at in B.fit_points(dates.day(effective), every):
         cap = B.amount_at(mine, at)
         if not cap:
             continue
         start, end = B.period_of(b, at, ctx.book.fiscal_year_start, mine)
-        cards, direct = _reserves(ctx, b.id, tree, allocs, start.isoformat(), end.isoformat())
+        reserves, direct = _reserves(ctx, b, start.isoformat(), end.isoformat())
         owed = sum(B.amount_at(vs, at) or 0 for vs in kids.values())
-        total = sum(reserve for _, reserve in cards) + direct + owed
-        if (not cards and not direct) or total <= cap:
+        total = sum(reserve for _, _, reserve in reserves) + direct + owed
+        if (not reserves and not direct) or total <= cap:
             continue
         on = at.isoformat()
-        if not cards:
+        if not reserves:
             named = Named((b.id,), f"it does not fit: its holds and child budgets reserve {total / 100:.2f}",
                           "it does not fit: its holds and child budgets reserve more than that", numbers=True, on=on)
             raise named_refusal(INVALID, named, [b.name], shows_numbers(ctx, who, b))
-        parts = "; ".join(f"{{{n}}} reserves {reserve / 100:.2f}" for n, (_, reserve) in enumerate(cards, start=1))
-        whose = "its cards, holds and child budgets" if direct else "its cards and child budgets"
-        named = Named((b.id,), f"it does not fit: {whose} reserve {total / 100:.2f}; "
-                      f"lower these cards first: {parts}", "it does not fit: its cards reserve more than that",
-                      numbers=True, cards=tuple(str(card["id"]) for card, _ in cards), on=on)
-        shown = shows_numbers(ctx, who, b) and all(sees_card(ctx, who, card) for card, _ in cards)
-        raise named_refusal(INVALID, named, [b.name, *(_card_label(card) for card, _ in cards)], shown)
+        labels, parts = _reserve_parts(reserves)
+        cards_only = all(card is not None for _, card, _ in reserves)
+        subject = "cards" if cards_only else "allocations"
+        whose = f"its {subject}, holds and child budgets" if direct else f"its {subject} and child budgets"
+        lower = "lower these cards first" if cards_only else "lower these first"
+        fallback = "it does not fit: its cards reserve more than that" if cards_only \
+            else "it does not fit: its allocations reserve more than that"
+        named = Named((b.id,), f"it does not fit: {whose} reserve {total / 100:.2f}; {lower}: {parts}", fallback,
+                      numbers=True, cards=tuple(str(card["id"]) for _, card, _ in reserves if card is not None), on=on)
+        shown = shows_numbers(ctx, who, b) and all(sees_card(ctx, who, card) for _, card, _ in reserves
+                                                   if card is not None)
+        raise named_refusal(INVALID, named, [b.name, *labels], shown)
 
 
-def _reserves(ctx: Ctx, budget_id: str, tree: list[str], allocs: list[Any], start: str, end: str
-              ) -> tuple[list[tuple[Any, int]], int]:
-    """What a budget reserves in a period beyond its children's amounts: each allocated card's reserve (_card_reserves)
-    and the holds placed directly on the budget with no target (SB.budget_holds). A child's holds sit inside the child's
-    own amount, so they are not counted again here."""
-    return _card_reserves(ctx, tree, allocs, start, end), SB.budget_holds(ctx.c, budget_id, start, end)
+def _reserves(ctx: Ctx, b: B.Budget, start: str, end: str) -> tuple[list[tuple[Any, Any, int]], int]:
+    """What a budget's allocations reserve in a period beyond its children's amounts, for every target kind (card,
+    gateway_key, teammate), and the holds placed directly on it with no target. Returns (allocation row, card row or None,
+    reserve) for each reserve above zero, and the direct holds. Each allocation reserves its amount, or what its target
+    used under the budget if that is more: a card's or a gateway key's holds and settled spend, and a teammate's the same
+    plus the posted lines of that teammate under the budget, as budgeting._reserve counts them. A child's holds sit inside
+    the child's own amount, so they are not counted again here (SB.budget_holds)."""
+    tree = budgeting.subtree(ctx, b.id)
+    out: list[tuple[Any, Any, int]] = []
+    for row in SB.allocations(ctx.c, [b.id]):
+        kind, tid = str(row["target_kind"]), str(row["target_id"])
+        card = None
+        if kind == "card":
+            card = SK.get(ctx.c, "fin_cards", tid)
+            if card is None:
+                continue
+        used = SB.target_used(ctx.c, tree, start, end, f"{kind}:{tid}", absorbed=kind != "teammate")
+        if kind == "teammate":
+            used += budgeting.actual(ctx, b, start, end, teammate=tid)
+        reserve = max(int(row["amount"]), used)
+        if reserve > 0:
+            out.append((row, card, reserve))
+    return out, SB.budget_holds(ctx.c, b.id, start, end)
+
+
+def _reserve_parts(reserves: list[tuple[Any, Any, int]]) -> tuple[list[str], str]:
+    """A refusal's names for its reserves (a card's label; the template's {n} stands for it) and the sentence part that
+    lists each reserve. A teammate's or a gateway key's allocation is named by its kind, never by its id."""
+    labels: list[str] = []
+    parts: list[str] = []
+    for row, card, reserve in reserves:
+        if card is not None:
+            labels.append(_card_label(card))
+            parts.append(f"{{{len(labels)}}} reserves {reserve / 100:.2f}")
+        else:
+            name = "a teammate's allocation" if row["target_kind"] == "teammate" else "a gateway key's allocation"
+            parts.append(f"{name} reserves {reserve / 100:.2f}")
+    return labels, "; ".join(parts)
 
 
 def _card_label(card: Any) -> str:
     """A card as a refusal names it: its nickname or holder, and its last four digits."""
     return f"{card['nickname'] or card['holder']} ••{card['last4'] or '----'}"
-
-
-def _card_reserves(ctx: Ctx, tree: list[str], allocs: list[Any], start: str, end: str) -> list[tuple[Any, int]]:
-    """Each card allocated on a budget with what it reserves in the period: its allocation, or what it used if that is
-    more (its holds and settled spend under the tree)."""
-    out: list[tuple[Any, int]] = []
-    for row in allocs:
-        card = SK.get(ctx.c, "fin_cards", str(row["target_id"]))
-        if card is None:
-            continue
-        used = SB.target_used(ctx.c, tree, start, end, f"card:{card['id']}", absorbed=True)
-        reserve = max(int(row["amount"]), used)
-        if reserve > 0:
-            out.append((card, reserve))
-    return out
 
 
 def _under_parent(ctx: Ctx, b: B.Budget, mine: list[B.Version], effective: str) -> None:
