@@ -5501,6 +5501,7 @@ export type GetFinanceExpensesResponse = FinanceReport;
 /** GET /api/v2/finance/inbox */
 export type GetFinanceInboxParams = {
   cursor?: string | null;
+  kind?: string | null;
   limit?: number;
   view_as?: string | null;
 };

@@ -34,7 +34,7 @@ KEEP_DAYS = 7               # the ledger forgets an item this long after it was 
 STATEMENT_DAYS = 35         # a money account reconciled longer ago than a statement month and its arrival is listed
 PER_KIND = 25               # lines one kind contributes to the body; the rest are counted
 BODY_BYTES = 12000          # the body is cut here
-INBOX_PAGES = 10            # pages of 200 read from the Finance queue per check: past every kind's 200-item cap
+INBOX_PAGES = 10            # pages of 200 read per kind of the Finance queue per check (its own query, past the 200)
 ORDER = ("sync_failed", "bill_to_enter", "bill_email", "unmatched_receipt", "uncategorized", "missing_receipt",
          "unreconciled", "budget_near_limit")
 ON_EVENT = ("bill_due", "invoice_overdue", "period_ready")   # its bot.yaml routines answer these, one task per event
@@ -123,20 +123,20 @@ def collect(c):
     from .finance import actions as FA
     from .finance import reads as FR
     from . import bills_address
-    items, counts, queue, cursor = [], {}, [], None
-    for _ in range(INBOX_PAGES):
-        try:
-            page = FR.inbox(c, ACTOR, limit=200, cursor=cursor)
-        except FA.FinanceError:
-            break
-        if cursor is None:
-            counts.update(page.get("counts") or {})
-        queue.extend(page.get("items") or [])
-        cursor = page.get("next_cursor")
-        if not cursor:
-            break
-    for kind in ON_EVENT:
-        counts.pop(kind, None)
+    items, counts, queue = [], {}, []
+    for kind in [k for k in FR.INBOX_KINDS if k not in ON_EVENT]:
+        cursor = None
+        for _ in range(INBOX_PAGES):        # each kind from its own query, past the inbox's 200 per kind
+            try:
+                page = FR.inbox(c, ACTOR, limit=200, cursor=cursor, kind=kind)
+            except FA.FinanceError:
+                break
+            got = [row for row in page.get("items") or [] if row.get("kind") == kind]
+            queue.extend(got)
+            counts[kind] = counts.get(kind, 0) + len(got)
+            cursor = page.get("next_cursor")
+            if not cursor:
+                break
     emailed = bills_address.for_bookkeeper(c)
     names = bills_address.labels(c, [str(row.get("file_id") or "") for row in queue
                                      if row.get("kind") == "unmatched_receipt"])
