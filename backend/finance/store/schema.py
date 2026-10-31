@@ -343,6 +343,13 @@ CREATE TABLE IF NOT EXISTS fin_raw_imports (
   basis TEXT NOT NULL CHECK (basis IN ('cash','accrual')), source_name TEXT NOT NULL DEFAULT '',
   periods INTEGER NOT NULL CHECK (periods > 0), row_count INTEGER NOT NULL, gross BIGINT NOT NULL,
   action_id TEXT NOT NULL, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS fin_close_snapshots (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  period_id TEXT NOT NULL UNIQUE REFERENCES fin_periods(id), month TEXT NOT NULL,
+  accounts_json TEXT NOT NULL, pnl_json TEXT NOT NULL, balances_json TEXT NOT NULL,
+  restated_json TEXT NOT NULL DEFAULT '[]', created_at TEXT NOT NULL, created_by TEXT NOT NULL,
+  UNIQUE (book_id, month));
 """
 
 INDEXES = """
@@ -586,6 +593,12 @@ def phase2(c: sqlite3.Connection) -> None:
 
 def raw_import(c: sqlite3.Connection) -> None:
     """Cloud migration 71: the history imports' table (spec §4.1). The same statements as `create`."""
+    create(c)
+
+
+def close_snapshots(c: sqlite3.Connection) -> None:
+    """Cloud migration 72: the close snapshot table on an install that closed months before it. Months closed before
+    it have no snapshot and read live. The same statements as `create` again, so it is idempotent."""
     create(c)
 
 

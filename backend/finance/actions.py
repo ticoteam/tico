@@ -17,7 +17,6 @@ from . import raw_totals, runs
 from . import setup as setup_mod
 from . import rights, sync, tax, usage
 from .context import Ctx, load
-from .core import gates as G
 from .core import kinds as K
 from .core import org as O
 from .core import validate as V
@@ -58,7 +57,10 @@ CARD_NUMBER_REFUSED = V.CARD_NUMBER_REFUSED
 STALE_DAYS = 14                        # hubdb.APPROVAL_STALE_DAYS: a withdrawal after this long is an expiry
 # Payload fields a planner fills in when the asker leaves them out (Plan.resolved): a retry without them is the same
 # request.
-RESOLVED_KEYS = frozenset({"effective_from", "date"})
+RESOLVED_KEYS = frozenset({"effective_from", "date", "raise_check"})
+# Resolved values kept on the stored action only: a fingerprint of a hidden total must not reach the approval, where
+# requesters and approvers read it. Drift still compares it, from the stored body.
+SERVER_ONLY_KEYS = frozenset({"raise_check"})
 
 
 @dataclass(frozen=True)
@@ -112,8 +114,8 @@ def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
 
 
 def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], what: str) -> dict[str, object]:
-    out: dict[str, object] = {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what,
-                              "payload": dict(payload)}
+    shown = {k: v for k, v in payload.items() if k not in SERVER_ONLY_KEYS}
+    out: dict[str, object] = {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what, "payload": shown}
     if kind in K.SPEND:
         # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
         out["amount"] = payload.get("amount")
@@ -170,7 +172,7 @@ def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
     """The one person the gate sends this to now, or "" when it needs nobody (it allows, or its approver asked)."""
     if gate.outcome != "needs_approval":
         return ""
-    approver = O.approver(ctx.org, gate.who, who, ctx.approver_setting())
+    approver = O.approver(ctx.org, gate.who, who, ctx.approver_setting(), gate.person)
     if not approver:
         raise FinanceError(DENIED, "nobody can approve this: the install has no owner")
     return "" if approver == who else approver
@@ -185,8 +187,8 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
     plan = PLANNERS[kind](ctx, p.who, payload)
     gate = by_right or plan.gate
-    if by_right is not None and plan.gate.outcome == "needs_approval":
-        gate = gating.stricter(by_right, G.Verdict("needs_approval", plan.gate.who, plan.gate.rule))
+    if by_right is not None:
+        gate = gating.combine(by_right, plan.gate, p.who)
     judged = gating.judge(ctx, p, kind, gate, plan, action_id)
     return judged.gate, judged.plan
 
@@ -308,7 +310,7 @@ def _ask(ctx: Ctx, action_id: str, kind: str, body: Mapping[str, object], what: 
     payload = _approval_payload(action_id, kind, body, what)
     approval_id = tico.approval_request(ctx.c, requester, K.approval_kind(kind), payload, approver)
     SX.asked(ctx.c, action_id, approval_id=approval_id, approval_hash=tico.payload_hash(payload), requester=requester,
-             to=approver, rule_id=rule, at=ctx.at)
+             to=approver, rule_id=rule, payload=body, at=ctx.at)
     return approval_id
 
 
@@ -400,8 +402,10 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
     try:
         gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _approver(ctx, gate, p.who)
-        if now_to and now_to != row["approval_to"]:
-            # The person who decides this changed since it was asked (a new manager, a finance approver named).
+        if now_to and (now_to != row["approval_to"] or _drifted(body, plan)):
+            # The person who decides this changed since it was asked (a new manager, a finance approver named), or the
+            # planner would now fix a value differently from the approved one (a parent raise that moved). When nobody
+            # needs to decide it any more, it runs below with the plan as it now stands.
             _rollback(c, "fin_decide", mark)
             return _reask(ctx, row, p, kind, body)
         tico.approval_consume(c, str(row["approval_by"]), approval_id)
@@ -423,24 +427,31 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         raise
 
 
+def _drifted(body: Mapping[str, object], plan: handlers.Plan) -> bool:
+    """Whether the planner would now fix a value differently from the one asked (Plan.resolved): what was approved
+    is then not what would run."""
+    return any(body.get(k) != v for k, v in plan.resolved.items())
+
+
 def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body: Mapping[str, object]) -> ActionResult:
-    """The approved payload is not the one about to run: that approval is void for this action, and the right person
-    is asked again for the real one."""
+    """The approved payload is not the one about to run, so that approval is void. The change is planned again and asked
+    again for the payload it would now run, of the person who decides it now. Never the requester."""
+    action_id = str(row["id"])
     try:
-        gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
+        gate, plan = _plan(ctx, p, kind, body, action_id)
+        approver = _approver(ctx, gate, p.who)
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
-    try:
-        approver = _approver(ctx, gate, p.who) or ctx.org.owner
-    except FinanceError as e:
-        return _close(ctx, row, "denied", e.code, e.message)
-    what = f"{plan.summary} (Finance action {row['id']})"
-    SX.finish(ctx.c, str(row["id"]), status="needs_approval", result={"what": what}, code="",
+    if not approver:
+        return _close(ctx, row, "failed", DENIED, "nobody else decides this now; ask again")
+    fresh = {**body, **plan.resolved}
+    what = f"{plan.summary} (Finance action {action_id})"
+    SX.finish(ctx.c, action_id, status="needs_approval", result={"what": what}, code="",
               reason="the approved payload did not match; asked again", at=ctx.at)
-    approval_id = _ask(ctx, str(row["id"]), kind, body, what, p.who, approver, gate.rule or str(row["rule_id"]))
-    _audit(ctx.c, p, str(row["id"]), kind, "needs_approval", "reask", {"void": row["approval_id"],
-                                                                         "approval_id": approval_id})
-    return _stored(SX.by_id(ctx.c, str(row["id"])))
+    approval_id = _ask(ctx, action_id, kind, fresh, what, p.who, approver, gate.rule or str(row["rule_id"]))
+    _audit(ctx.c, p, action_id, kind, "needs_approval", "reask", {"void": row["approval_id"],
+                                                                  "approval_id": approval_id, "to": approver})
+    return _stored(SX.by_id(ctx.c, action_id))
 
 
 def approvals_sweep(c: sqlite3.Connection, at: str | None = None, most: int = 200) -> list[ActionResult]:

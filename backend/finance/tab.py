@@ -7,6 +7,7 @@ import sqlite3
 from collections.abc import Callable, Mapping, Sequence
 from typing import Any, cast
 
+from . import closing as CL
 from .context import Ctx, load
 from .core import dates
 from .core import rights as R
@@ -90,11 +91,15 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
     mapped to it and the kinds of entry posted to it. Owner-only unless granted; a line grant shows that whole line.
     Equity includes the P&L's running total so the sheet balances; it shows only with the whole balance sheet."""
     ctx = load(c, at)
+    day = dates.day(as_of or ctx.today).isoformat()
+    closed = CL.frozen(ctx, day[:7])
+    snap = CL.marker(c, ctx.book.id, day[:7]) if closed is not None else None
+    if closed is not None:
+        ctx = closed
     view = ctx.view(viewer)
     whole = view.everything or view.balance_sheet
     if not whole and not view.bs_lines:
         raise denied("the balance sheet is the owner's unless granted")
-    day = dates.day(as_of or ctx.today).isoformat()
     shown = [a for a in ctx.accounts.values() if a.type not in PNL_TYPES and (whole or a.id in view.bs_lines)]
     sums = SK.balances(c, ctx.book.id, day, [a.id for a in shown])
     kinds = SK.sources_by_account(c, ctx.book.id, day, [a.id for a in shown])
@@ -130,7 +135,8 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
             "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
             "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version,
             # The sheet has no basis of its own: it is stated in the book's.
-            "imported": imported_months(c, ctx, view, "0001-01", day[:7], ctx.book.basis)}
+            "imported": imported_months(c, ctx, view, "0001-01", day[:7], ctx.book.basis),
+            "snapshot": snap}
 
 
 # ------------------------------------------------------------------------------------------------ transactions

@@ -14,6 +14,9 @@ from .errors import invalid
 OUTCOMES = ("allow", "deny", "needs_approval", "limit")
 RANK = {"allow": 0, "limit": 1, "needs_approval": 2, "deny": 3}
 WHO = ("manager", "finance_admin", "owner")          # lowest to highest
+# Who decides, lowest to highest. A parent budget's owner (budget_owner) is not a rule's choice, but a parent raise
+# asks them, and that outranks the manager a missing right sends to (§4.4).
+RANK_WHO = ("manager", "budget_owner", "finance_admin", "owner")
 OPS = ("gt", "gte", "lt", "lte", "not", "matches")
 PERIODS = ("action", "day", "week", "month")
 SUBJECTS = ("company", "actor", "recipient")
@@ -279,8 +282,8 @@ def strictest(hits: Sequence[Hit], counts: Sequence[Hit] = ()) -> Verdict:
 
 
 def higher(a: str, b: str) -> str:
-    """The higher of two approvers (owner > finance_admin > manager)."""
-    return max(a, b, key=lambda w: WHO.index(w) if w in WHO else -1)
+    """The higher of two approvers (owner > finance_admin > budget_owner > manager)."""
+    return max(a, b, key=lambda w: RANK_WHO.index(w) if w in RANK_WHO else -1)
 
 
 # ------------------------------------------------------------------------------------------------ examples
