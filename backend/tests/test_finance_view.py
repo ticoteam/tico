@@ -218,3 +218,45 @@ def test_who_may_grant(books):
         assert act(c, "human:eve", "view_grant", {"subject": "human:eve", "what": "everything"}).code == "denied"
         assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "balance_sheet",
                                             "whose": "team", "whose_team": "web"}).code == "invalid"
+
+
+def test_a_vendor_or_org_filter_on_a_line_never_rebuilds_a_payroll_cell(books):
+    """N5: a closed four-person run shows whole; a vendor that paid three of them, or a filter narrower than the
+    department, shows no payroll cell, so the fourth person's pay can't be found by subtraction."""
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                "parent_id": account(c, "6000")})
+        pay = str(made.result["account_id"])
+        assert act(c, OWNER, "private_lines_set", {"account_id": pay, "others_see": "totals"}).status == "committed"
+        for mate in ENG:
+            spend(c, "6200", PAY[mate], day="2026-09-30", teammate=mate,
+                  vendor="" if mate == "human:fay" else "payroll-co")
+        _close(c, "2026-07", "2026-08", "2026-09")
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
+        run = sum(PAY[m] for m in ENG)
+
+        def total(**kw):
+            return FR.line_detail(c, "human:eve", pay, "2026-09-01", "2026-09-30", at=AT, **kw)["total"]
+        assert total() == run
+        assert total(teams=["eng"]) == run                                  # a whole department is its own cohort
+        own = PAY["human:eve"]
+        for kw in ({"vendor": "payroll-co"}, {"vendor": ""}, {"teammates": ["human:ben", "human:cara", "human:eve"]},
+                   {"who": "people"}):
+            assert total(**kw) in (None, own), kw                           # at most her own pay, never a cohort
+        three = FR.line_detail(c, "human:eve", pay, "2026-09-01", "2026-09-30", vendor="payroll-co", at=AT)
+        assert run - PAY["human:fay"] not in [r["amount"] for k in ("by_vendor", "by_team") for r in three[k]]
+
+
+def test_a_hidden_payroll_row_shows_no_budget_either(books):
+    """Grok round 2: a narrow filter's "Payroll (private)" row has no amount, its budget included."""
+    with books.transaction() as c:
+        pay = _payroll(c)
+        top = act(c, OWNER, "budget_create", {"name": "Payroll", "account_id": pay, "amount": 200_000})
+        made = act(c, OWNER, "budget_create", {"name": "Fay pay", "account_id": pay, "teammate": "human:fay",
+                                               "amount": 14_000, "parent_id": top.result["budget_id"]})
+        assert made.status == "committed", (made.code, made.reason)
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "expenses"}).status == "committed"
+        rows = FR.pnl(c, "human:eve", "2026-09-01", "2026-09-30", view="expenses", teammates=["human:fay"],
+                      at=AT)["rows"]
+        (row,) = [r for r in rows if r["account_id"] == pay]
+        assert row["private"] and row["budget"] is None and row["actual"] is None

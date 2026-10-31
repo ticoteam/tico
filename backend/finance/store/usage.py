@@ -101,7 +101,7 @@ def resettle(c: sqlite3.Connection, hold_id: str, amount: int, at: str) -> int:
 
 # ------------------------------------------------------------------------------------------------ events
 def undrained(c: sqlite3.Connection, most: int) -> list[Any]:
-    return c.execute("SELECT id, name, subject, period_key FROM fin_events WHERE drained_at IS NULL "
+    return c.execute("SELECT id, name, subject, period_key, payload_json FROM fin_events WHERE drained_at IS NULL "
                      "ORDER BY created_at, id LIMIT ?", (most,)).fetchall()
 
 

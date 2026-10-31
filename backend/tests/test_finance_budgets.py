@@ -203,11 +203,11 @@ def test_impacts_and_errors_show_only_numbers_the_actor_may_see(books):
 def test_an_allocation_serves_only_spend_on_its_own_branch(books):
     with books.transaction() as c:
         pid, kids = _tree(c, 10_000, (("web", 5_000), ("sales", 5_000)))
-        act(c, OWNER, "allocation_set", {"budget_id": kids["sales"], "target_kind": "card", "target_id": "c1",
-                                         "amount": 3_000})
+        act(c, OWNER, "allocation_set", {"budget_id": kids["sales"], "target_kind": "teammate",
+                                         "target_id": "bot:coder", "amount": 3_000})
         spend(c, "6100", 3_000, team="sales")             # Software: 10,000 - 3,000 spent - 3,000 set aside
         d = FA.hold_place(c, budget_scope=kids["web"], amount=4_500, currency="USD", source="card", source_id="w1",
-                          expires_at=None, target="card:c1", at=AT)
+                          expires_at=None, target="teammate:bot:coder", at=AT)
         assert not d.allowed and d.limit_budget_id == pid
 
 
@@ -215,12 +215,12 @@ def test_a_settled_hold_draws_its_allocation_down_once(books):
     with books.transaction() as c:
         soft = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 100})
         bid = str(soft.result["budget_id"])
-        act(c, OWNER, "allocation_set", {"budget_id": bid, "target_kind": "card", "target_id": "c1", "amount": 100})
+        act(c, OWNER, "allocation_set", {"budget_id": bid, "target_kind": "teammate", "target_id": "bot:coder", "amount": 100})
         d = FA.hold_place(c, budget_scope=bid, amount=100, currency="USD", source="card", source_id="t1",
-                          expires_at=None, target="card:c1", at=AT)
+                          expires_at=None, target="teammate:bot:coder", at=AT)
         assert d.allowed
         FA.post_entry(c, {"date": "2026-10-10", "source": "import", "source_id": "t1", "lines": [
-            {"account_id": account(c, "6100"), "amount": 100}, {"account_id": account(c, "1000"), "amount": -100}]},
+            {"account_id": account(c, "6100"), "amount": 100, "tags": {"teammate": "bot:coder"}}, {"account_id": account(c, "1000"), "amount": -100}]},
             hold_ids=[str(d.hold_id)], at=AT)
         s = FA.budget_state(c, bid, AT)
         assert (s.actual, s.held, s.remaining) == (100, 0, 0)

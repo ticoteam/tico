@@ -34,9 +34,9 @@ def test_same_key_same_result_and_dry_runs_write_nothing(books):
         assert first.result["account_id"] and again.result == {}
         assert _count(c, "fin_accounts") == before["fin_accounts"] + 1
         assert act(c, OWNER, "account_create", {**body, "name": "Trips"}, "a1").code == "conflict"
-        denied = act(c, OWNER, "payment_create", {"amount": 1}, "p1")
+        denied = act(c, OWNER, "bill_create", {"amount": 1}, "p1")
         assert (denied.status, denied.code) == ("denied", "not_available")
-        assert act(c, OWNER, "payment_create", {"amount": 1}, "p1").action_id == denied.action_id
+        assert act(c, OWNER, "bill_create", {"amount": 1}, "p1").action_id == denied.action_id
         assert act(c, OWNER, "teleport", {}, "t1").code == "invalid"
         audit = c.execute("SELECT detail_json FROM events WHERE action='finance.account_create' AND target=?",
                           (first.action_id,)).fetchone()

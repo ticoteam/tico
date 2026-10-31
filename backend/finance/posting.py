@@ -97,12 +97,16 @@ def system_entry(raw: object, ctx: Ctx) -> L.Entry:
 
 
 def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = SYSTEM,
-               hold_ids: Sequence[str] = (), at: str | None = None, touch: bool = True) -> dict[str, object]:
+               hold_ids: Sequence[str] = (), at: str | None = None, touch: bool = True,
+               roles: Mapping[int, str] | None = None) -> dict[str, object]:
     """Post an entry from Tico itself (Gateway and video usage, imports) and absorb the settled holds it stands for,
     so the spend counts once. A re-sent (source, source_id) returns the first entry and posts nothing. `touch=False`
-    leaves the budget crossings to a caller posting several entries that belong together."""
+    leaves the budget crossings to a caller posting several entries that belong together. `roles` marks lines by
+    index (L.MONEY_ROLE: a feed row's money account line); a reversal keeps them."""
     ctx = load(c, at)
     e = system_entry(entry, ctx)
+    if roles:
+        e = replace(e, lines=tuple(replace(x, role=roles.get(i, "")) for i, x in enumerate(e.lines)))
     if e.source_id:
         prior = SL.entry_by_source(c, ctx.book.id, e.source, e.source_id)
         if prior is not None:

@@ -346,6 +346,9 @@ def create_app(settings=None):
             # rehearsal copy runs it only to record what it would send as withheld.
             from .finance import actions as finance
             finance.gateway_start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
+            # Finance's bank worker (backend/finance/sync.py): Mercury balances, feed, payments and card writes; a
+            # rehearsal copy reads nothing and records its writes as withheld.
+            finance.banking_start(store, app.state.vault, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
@@ -442,6 +445,7 @@ def create_app(settings=None):
             if webhooks_on:
                 await asyncio.to_thread(webhook_delivery.stop)
                 await asyncio.to_thread(finance.gateway_stop)
+                await asyncio.to_thread(finance.banking_stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,

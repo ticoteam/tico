@@ -12,8 +12,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from typing import cast
 
-from . import budgeting, gateway_sync, handlers, jobs, posting, runs, setup as setup_mod, usage
+from . import banking, budgeting, cards, gateway_sync, gating, handlers, jobs, payments, posting, runs
+from . import setup as setup_mod
+from . import sync, usage
 from .context import Ctx, load
+from .core import gates as G
 from .core import kinds as K
 from .core import org as O
 from .core.errors import DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, CONFLICT, FinanceError
@@ -35,6 +38,14 @@ budget_state = budgeting.budget_state
 budget_for = budgeting.budget_for
 SYSTEM = O.SYSTEM
 Principal = O.Principal
+
+# Every live kind's planner: phase 0's in handlers, then banking, cards, payments and gate rules.
+PLANNERS: dict[str, handlers.Planner] = {
+    **handlers.PLANNERS, "connection_create": banking.connection_create, "reconcile": banking.reconcile,
+    "reconcile_undo": banking.reconcile_undo,
+    "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
+    "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS}
+assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
 DENIAL_CODES = (DENIED, NOT_AVAILABLE)
@@ -122,7 +133,7 @@ def _same_request(prior: Mapping[str, object], body: Mapping[str, object]) -> bo
     if prior == body:
         return True
     extra = set(prior) - set(body)
-    return extra <= RESOLVED_KEYS and all(prior.get(k) == v for k, v in body.items())
+    return extra <= RESOLVED_KEYS | {"details_ref"} and all(prior.get(k) == v for k, v in body.items())
 
 
 def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
@@ -135,14 +146,19 @@ def _approver(ctx: Ctx, gate: K.Gate, who: str) -> str:
     return "" if approver == who else approver
 
 
-def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object]) -> tuple[K.Gate, handlers.Plan]:
+def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
+          action_id: str) -> tuple[K.Gate, handlers.Plan]:
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
-    kind's own checks and default gate."""
+    kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
-    plan = handlers.PLANNERS[kind](ctx, p.who, payload)
-    return by_right or plan.gate, plan
+    plan = PLANNERS[kind](ctx, p.who, payload)
+    gate = by_right or plan.gate
+    if by_right is not None and plan.gate.outcome == "needs_approval":
+        gate = gating.stricter(by_right, G.Verdict("needs_approval", plan.gate.who, plan.gate.rule))
+    judged = gating.judge(ctx, p, kind, gate, plan, action_id)
+    return judged.gate, judged.plan
 
 
 def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload: Mapping[str, object],
@@ -154,9 +170,11 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
     if not key or len(key) > MAX_KEY:
         return ActionResult(status="failed", kind=kind, code=INVALID, reason=f"an idempotency key is 1-{MAX_KEY} chars")
     try:
-        body = _canonical(payload)
+        body, sealed = payments.strip_details(c, kind, _canonical(payload))
     except FinanceError as e:
         return ActionResult(status="failed", kind=kind, code=e.code, reason=e.message)
+    except tico.Refused as e:
+        return ActionResult(status="failed", kind=kind, code=NOT_AVAILABLE, reason=str(e)[:300])
     if not dry_run:
         prior = SX.by_key(c, key)
         if prior is not None:
@@ -178,7 +196,9 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         handlers.suspend_unstanding(ctx)
     _savepoint(c, "fin_act")
     try:
-        gate, plan = _plan(ctx, p, kind, body)
+        if sealed and not dry_run:
+            body = payments.seal_details(c, body, sealed, p.actor, ctx.at)
+        gate, plan = _plan(ctx, p, kind, body, action_id)
         approver = _approver(ctx, gate, p.who)
         body = {**body, **plan.resolved}
         would = "needs_approval" if approver else "committed"
@@ -207,6 +227,8 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
                             impact=plan.impact)
     except FinanceError as e:
         _rollback(c, "fin_act")
+        if isinstance(e, gating.Denied) and not dry_run:
+            gating.logged_denial(ctx, e, action_id)
         return _finish_refused(c, p, kind, body, key, action_id, e, dry_run, at)
     except (sqlite3.IntegrityError, tico.Refused) as e:
         _rollback(c, "fin_act")
@@ -216,10 +238,21 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
         raise
 
 
+def receipt_payload(c: sqlite3.Connection, kind: str, payload: Mapping[str, object]) -> dict[str, object]:
+    """The payload as a route's idempotency receipt may hash it: bank account and routing numbers become a keyed
+    fingerprint and the last 4, so no receipt holds (or a plain hash of) the numbers."""
+    try:
+        return payments.strip_details(c, kind, _canonical(payload))[0]
+    except (FinanceError, tico.Refused):
+        return {k: v for k, v in payload.items() if k not in payments.BANK_FIELDS}
+
+
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,
                     action_id: str, e: FinanceError, dry_run: bool, at: str | None) -> ActionResult:
-    """A denial or failure is recorded under its key too, so a retry gets the same answer."""
+    """A denial or failure is recorded under its key too, so a retry gets the same answer. Bank details it sealed
+    were rolled back with its savepoint, so the stored payload does not name them."""
     status = "denied" if e.code in DENIAL_CODES else "failed"
+    body = {k: v for k, v in body.items() if k != "details_ref"}
     if dry_run:
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
@@ -266,6 +299,7 @@ def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: 
     key)."""
     action_id = str(row["id"])
     budgeting.release_for(ctx, "action", action_id)
+    payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
     SX.finish(ctx.c, action_id, status=status, result={}, code=code, reason=reason, at=ctx.at)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
@@ -306,7 +340,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         return _close(ctx, row, "denied", DENIED, f"the approval does not stand: {problem}")
     _savepoint(c, "fin_decide")
     try:
-        gate, plan = _plan(ctx, p, kind, body)
+        gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
         now_to = _approver(ctx, gate, p.who)
         if now_to and now_to != row["approval_to"]:
             # The person who decides this changed since it was asked (a new manager, a finance approver named).
@@ -320,6 +354,8 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         return _stored(SX.by_id(c, str(row["id"])), full=True)
     except FinanceError as e:
         _rollback(c, "fin_decide")
+        if isinstance(e, gating.Denied):
+            gating.logged_denial(ctx, e, str(row["id"]))
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
     except (sqlite3.IntegrityError, tico.Refused) as e:
         _rollback(c, "fin_decide")
@@ -333,7 +369,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
     """The approved payload is not the one about to run: that approval is void for this action, and the right person
     is asked again for the real one."""
     try:
-        gate, plan = _plan(ctx, p, kind, body)
+        gate, plan = _plan(ctx, p, kind, body, str(row["id"]))
     except FinanceError as e:
         return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
     try:
@@ -381,6 +417,44 @@ usage_snapshot = usage.snapshot
 gateway_start = gateway_sync.start
 gateway_ensure = gateway_sync.ensure
 gateway_stop = gateway_sync.stop
+banking_start = sync.start
+use_vault = tico.use_vault
+BANK_FIELDS = payments.BANK_FIELDS
+banking_ensure = sync.ensure
+banking_stop = sync.stop
+banking_ring = sync.ring
+banking_step = sync.step
+mercury_delivery = sync.delivery
+mercury_probe = sync.probe_credential
+
+
+# ------------------------------------------------------------------------------------------------ watch rules
+WATCH_ACTIONS = ("finance_freeze_cards", "finance_pause_budget", "finance_act")
+
+
+def watch(c: sqlite3.Connection, rule_id: str, by: str, action: str, params: Mapping[str, object],
+          data: Mapping[str, object], key: str, at: str | None = None) -> ActionResult:
+    """A Tico rule's Finance action (spec §6.1 watch rules), run as an ordinary action by the rule's maker under that
+    rule, so it gets exactly the maker's rights and gates. A keeper-made rule acts as Finance itself (system work,
+    which may only freeze cards). `budget_id` defaults to the event's own budget. One key per rule and event: the
+    same event never acts twice."""
+    who = SYSTEM if by in ("", "keeper") else by
+    p = O.Principal(actor=who, rule=rule_id)
+    budget = str(params.get("budget_id") or data.get("budget_id") or "")
+    if action == "finance_freeze_cards":
+        return act(c, p, "card_freeze", {"budget_id": budget, "reason": f"finance rule {rule_id}"}, key, at=at)
+    if action == "finance_pause_budget":
+        return act(c, p, "budget_update", {"budget_id": budget, "amount": 0, "at_limit": "decline"}, key, at=at)
+    if action == "finance_act":
+        payload = params.get("payload")
+        return act(c, p, str(params.get("kind") or ""), cast(Mapping[str, object], payload)
+                   if isinstance(payload, Mapping) else {}, key, dry_run=params.get("dry_run") is True, at=at)
+    return ActionResult(status="failed", kind=action, code=INVALID, reason=f"no Finance watch action {action}")
+
+
+def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
+    """"View as" is audited (spec §7.5): the owner reads Finance exactly as `target` sees it."""
+    tico.audit(c, owner, "finance.view_as", target, {})
 
 
 # ------------------------------------------------------------------------------------------------ dev copies

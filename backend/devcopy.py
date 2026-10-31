@@ -90,9 +90,10 @@ EMPTY = (
     # A hard delete's queue of bytes still to remove from storage: the copy never deletes from the source's stores.
     "blob_purges",
     # Finance: what moves money or calls a provider (connections and their tokens, cursors and id maps, the outbox and
-    # inbox, cards and their authorizations) and spend holds. Its pending actions and undrained events are trimmed
+    # inbox, cards and their authorizations, payees and payments) and spend holds. Its pending actions and undrained events are trimmed
     # in prune; the books, budgets, views and rules are kept.
     "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
+    "fin_recipients", "fin_payments", "fin_provider_users",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
@@ -136,8 +137,8 @@ KEEP = frozenset((
     "fin_budget_versions", "fin_budgets", "fin_contacts", "fin_dimensions", "fin_entries", "fin_events",
     "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
     "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_rights", "fin_rollups",
-    "fin_rule_runs", "fin_rules", "fin_settings", "fin_usage_snapshots", "fin_view_defaults", "fin_view_grants",
-    "fin_view_versions",
+    "fin_rule_counters", "fin_rule_runs", "fin_rules", "fin_settings", "fin_statements", "fin_usage_snapshots",
+    "fin_view_defaults", "fin_view_grants", "fin_view_versions",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

@@ -46,6 +46,10 @@ class Line:
     contact_id: str = ""
     description: str = ""
     tags: Mapping[str, str] = field(default_factory=lambda: dict[str, str]())
+    role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
+
+
+MONEY_ROLE = "money"        # a feed row's own line: the money account's side (for a card, the card program's)
 
 
 @dataclass(frozen=True)
@@ -150,10 +154,29 @@ def check(e: Entry, book: Book, accounts: Mapping[str, Account], closed: bool, r
 
 
 def reversal(lines: Iterable[Line]) -> tuple[Line, ...]:
-    """The lines that undo `lines`: every amount negated, tags and contacts kept."""
+    """The lines that undo `lines`: every amount negated, tags, contacts and roles kept."""
     return tuple(Line(account_id=x.account_id, amount=-x.amount, currency=x.currency,
                       original_amount=-x.original_amount, fx_rate=x.fx_rate, contact_id=x.contact_id,
-                      description=x.description, tags=dict(x.tags)) for x in lines)
+                      description=x.description, tags=dict(x.tags), role=x.role) for x in lines)
+
+
+PNL_SECTIONS = ("revenue", "cost_of_revenue", "operating", "other")
+OTHER_SUBTYPES = ("other_income", "other_expense")
+
+
+def pnl_section(accounts: Mapping[str, Account], account: Account) -> str:
+    """Where a P&L line sits: revenue, cost of revenue (a `cogs` line or one under it), operating expenses, or other
+    income and expense (an `other_income` / `other_expense` line or one under it)."""
+    at: Account | None = account
+    seen: set[str] = set()
+    while at is not None and at.id not in seen:
+        seen.add(at.id)
+        if at.subtype in OTHER_SUBTYPES:
+            return "other"
+        if at.subtype == "cogs" and account.type == "expense":
+            return "cost_of_revenue"
+        at = accounts.get(at.parent_id) if at.parent_id else None
+    return "revenue" if account.type == "income" else "operating"
 
 
 def descendants(accounts: Mapping[str, Account], root: str) -> set[str]:

@@ -34,13 +34,16 @@ def update_budget(c: sqlite3.Connection, b: Budget, at: str) -> None:
               "WHERE id=?", (b.name, b.owner, b.warn_pct, b.at_limit, b.rollover, int(b.active), at, b.id))
 
 
-def versions(c: sqlite3.Connection, budget_ids: Sequence[str]) -> dict[str, list[Version]]:
+def versions(c: sqlite3.Connection, budget_ids: Sequence[str], made_by: str = "") -> dict[str, list[Version]]:
+    """Each budget's versions; with `made_by` (an ISO time) only those made by then: the budget as it stood."""
     out: dict[str, list[Version]] = {bid: [] for bid in budget_ids}
     if not budget_ids:
         return out
     marks = ",".join("?" * len(budget_ids))
+    cut = " AND created_at<=?" if made_by else ""
     for r in c.execute(f"SELECT budget_id, version, effective_from, amount FROM fin_budget_versions "
-                       f"WHERE budget_id IN ({marks}) ORDER BY version", list(budget_ids)):
+                       f"WHERE budget_id IN ({marks}){cut} ORDER BY version",
+                       [*budget_ids, *([made_by] if made_by else [])]):
         out[r["budget_id"]].append(Version(budget_id=r["budget_id"], version=int(r["version"]),
                                            effective_from=r["effective_from"], amount=int(r["amount"])))
     return out
@@ -101,15 +104,55 @@ def held(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str,
 def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, end: str, target: str,
                 absorbed: bool) -> int:
     """What a target's holds placed in the window used on these budgets: live holds at their amount, settled ones at
-    what they settled for (with `absorbed`, also those an entry has taken in, for targets no line is tagged with)."""
+    what they settled for (with `absorbed`, also those an entry has taken in, for targets no line is tagged with). A
+    card (`card:<id>`) is read from the ledger instead (`card_used`) plus its authorizations still held."""
     if not budget_ids:
         return 0
     marks = ",".join("?" * len(budget_ids))
-    settled = "status='settled'" if absorbed else "status='settled' AND entry_id IS NULL"
+    if target.startswith("card:"):
+        live = c.execute(f"SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN status='settled' AND entry_id "
+                         f"IS NULL THEN settled_amount ELSE 0 END), 0) FROM fin_holds WHERE budget_id IN ({marks}) "
+                         f"AND target=? AND held_on>=? AND held_on<=?", [*budget_ids, target, start, end]).fetchone()
+        return int(live[0]) + card_used(c, budget_ids, target.partition(":")[2], start, end)
+    # A settled hold whose entry was reversed (and not re-linked) no longer stands for any spend.
+    settled = ("status='settled' AND (entry_id IS NULL OR EXISTS (SELECT 1 FROM fin_entries e WHERE "
+               "e.id=fin_holds.entry_id AND e.status='posted'))") if absorbed else \
+        "status='settled' AND entry_id IS NULL"
     return int(c.execute(f"SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN {settled} THEN settled_amount "
                          f"ELSE 0 END), 0) FROM fin_holds INDEXED BY fin_holds_budget WHERE budget_id IN ({marks}) "
                          f"AND {LIVE} AND target=? AND held_on>=? AND held_on<=?",
                          [*budget_ids, target, start, end]).fetchone()[0])
+
+
+def card_used(c: sqlite3.Connection, budget_ids: Sequence[str], card_id: str, start: str, end: str) -> int:
+    """What a card's settled transactions used in the window, straight from the ledger: what every entry ever posted
+    for its feed rows (originals, their reversals and replacements, each at its own date) put on the card program's
+    side. That side is the line posted with the money role (finance/banking.py `_post` records it, reversals keep
+    it), on whatever account it was posted to, never the account's current GL mapping. So a correction, re-date, cancellation,
+    re-categorization, reopened month or remapped account counts exactly as the books do. Transfers (paying the card
+    bill) are `bank` entries and never count. Only while the card is on one of these budgets."""
+    if not budget_ids:
+        return 0
+    marks = ",".join("?" * len(budget_ids))
+    row = c.execute(
+        f"SELECT COALESCE(-SUM(l.amount), 0) FROM fin_feed_txns f JOIN fin_cards k ON k.id=f.card_id "
+        f"JOIN fin_entries e ON e.source='card' AND e.source_id>=f.id AND e.source_id<f.id || ';' "
+        f"AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
+        f"JOIN fin_lines l ON l.entry_id=e.id AND l.role='money' "
+        f"WHERE f.card_id=? AND k.budget_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?",
+        [card_id, *budget_ids, start, end]).fetchone()
+    return int(row[0])
+
+
+def card_lines(c: sqlite3.Connection, card_id: str, start: str, end: str) -> list[Any]:
+    """The spend side of a card's entries in the window (every line but the card program's money line): which lines a
+    card's use is made of, so a read can tell whether the viewer may see it."""
+    return c.execute(
+        "SELECT l.id AS line_id, l.account_id FROM fin_feed_txns f "
+        "JOIN fin_entries e ON e.source='card' AND e.source_id>=f.id AND e.source_id<f.id || ';' "
+        "AND (e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':') "
+        "JOIN fin_lines l ON l.entry_id=e.id AND l.role<>'money' "
+        "WHERE f.card_id=? AND l.entry_date>=? AND l.entry_date<=?", (card_id, start, end)).fetchall()
 
 
 def resize_hold(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
@@ -144,6 +187,17 @@ def settle(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str | Non
     """Any amount, over the hold or the budget included: a provider has already charged it."""
     return c.execute("UPDATE fin_holds SET status='settled', settled_amount=?, entry_id=?, settled_at=? "
                      "WHERE id=? AND status='held'", (amount, entry_id, at, hold_id)).rowcount
+
+
+def set_settled_amount(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
+    """A settled hold's real amount (a card charge that settled for more or less than it was authorized for)."""
+    return c.execute("UPDATE fin_holds SET settled_amount=? WHERE id=? AND status='settled'", (amount, hold_id)).rowcount
+
+
+def void_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:
+    """A settled charge the bank cancelled or reversed: it no longer uses anything."""
+    return c.execute("UPDATE fin_holds SET status='released', released_at=? WHERE id=? AND status='settled'",
+                     (at, hold_id)).rowcount
 
 
 def absorb(c: sqlite3.Connection, hold_id: str, entry_id: str) -> int:

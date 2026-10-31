@@ -108,6 +108,13 @@ def closed_months(c: sqlite3.Connection, book_id: str) -> frozenset[str]:
                                                        "status='closed'", (book_id,)))
 
 
+def closed_through(c: sqlite3.Connection, book_id: str) -> str | None:
+    """The last day of the latest closed period (a reopened one no longer counts)."""
+    found = c.execute("SELECT max(end_date) FROM fin_periods WHERE book_id=? AND status='closed'",
+                      (book_id,)).fetchone()[0]
+    return str(found) if found else None
+
+
 # ------------------------------------------------------------------------------------------------ entries and lines
 def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: str, action_id: str,
                  reverses_id: str, by: str, at: str) -> list[str]:
@@ -121,10 +128,10 @@ def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: s
         lid = new_id()
         ids.append(lid)
         c.execute("INSERT INTO fin_lines(id, entry_id, book_id, line_no, entry_date, account_id, amount, currency, "
-                  "original_amount, fx_rate, contact_id, description, created_at, created_by) "
-                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  "original_amount, fx_rate, contact_id, description, role, created_at, created_by) "
+                  "VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                   (lid, entry_id, e.book_id, n, e.entry_date, item.account_id, item.amount, item.currency,
-                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, at, by))
+                   item.original_amount, str(item.fx_rate), item.contact_id, item.description, item.role, at, by))
         for kind, value in item.tags.items():
             c.execute("INSERT INTO fin_line_tags(line_id, kind, value, created_at, created_by) VALUES(?,?,?,?,?)",
                       (lid, kind, value, at, by))
@@ -156,6 +163,13 @@ def entry_by_source(c: sqlite3.Connection, book_id: str, source: str, source_id:
                      "ORDER BY created_at LIMIT 1", (book_id, source, source_id)).fetchone()
 
 
+def posted_by_source_prefix(c: sqlite3.Connection, book_id: str, source: str, prefix: str) -> list[Any]:
+    """Live original entries from a source whose id is `prefix` or starts with `prefix:`."""
+    return c.execute("SELECT * FROM fin_entries WHERE book_id=? AND source=? AND (source_id=? OR (source_id>? AND "
+                     "source_id<?)) AND status='posted' AND reverses_id IS NULL ORDER BY created_at",
+                     (book_id, source, prefix, prefix + ":", prefix + ";")).fetchall()
+
+
 def line_tags(c: sqlite3.Connection, line_ids: Sequence[str]) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {lid: {} for lid in line_ids}
     for chunk in _chunks(line_ids):
@@ -182,10 +196,35 @@ def entry_lines(c: sqlite3.Connection, entry_id: str) -> list[tuple[Any, Line]]:
     return [(r, _line(r, tags.get(r["id"], {}))) for r in rows]
 
 
+def entries_touching(c: sqlite3.Connection, entry_ids: Sequence[str], account_ids: Sequence[str]) -> set[str]:
+    """Which of these entries have a line on any of these accounts."""
+    if not entry_ids or not account_ids:
+        return set()
+    out: set[str] = set()
+    accounts = ",".join("?" * len(account_ids))
+    for chunk in _chunks(list(entry_ids)):
+        marks = ",".join("?" * len(chunk))
+        out |= {str(r[0]) for r in c.execute(
+            f"SELECT DISTINCT entry_id FROM fin_lines WHERE entry_id IN ({marks}) AND account_id IN ({accounts})",
+            [*chunk, *account_ids])}
+    return out
+
+
+def posted_total(c: sqlite3.Connection, entry_ids: Sequence[str], account_id: str) -> int:
+    """What these entries, where still posted (not reversed), moved on one account."""
+    total = 0
+    for chunk in _chunks(list(dict.fromkeys(entry_ids))):
+        marks = ",".join("?" * len(chunk))
+        total += int(c.execute(f"SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON "
+                               f"e.id=l.entry_id WHERE l.entry_id IN ({marks}) AND l.account_id=? AND "
+                               f"e.status='posted'", [*chunk, account_id]).fetchone()[0])
+    return total
+
+
 def _line(r: Any, tags: Mapping[str, str]) -> Line:
     return Line(account_id=r["account_id"], amount=int(r["amount"]), currency=r["currency"],
                 original_amount=int(r["original_amount"]), fx_rate=Decimal(r["fx_rate"]), contact_id=r["contact_id"],
-                description=r["description"], tags=dict(tags))
+                description=r["description"], tags=dict(tags), role=str(r["role"] or ""))
 
 
 def set_line_tags(c: sqlite3.Connection, row: Any, old: Mapping[str, str], new: Mapping[str, str], by: str,
@@ -246,12 +285,18 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
 
 
 def entries_on(c: sqlite3.Connection, book_id: str, account_ids: Sequence[str], start: str, end: str,
-               most: int) -> list[Any]:
-    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries."""
+               most: int, vendor: str | None = None) -> list[Any]:
+    """Lines on `account_ids` in the window with their entry, newest first: a drill-down's entries (one vendor's when
+    `vendor` is given; "" is lines with none). Each says the card or money account its feed row came through."""
     if not account_ids:
         return []
     marks = ",".join("?" * len(account_ids))
+    cut, args = ("", []) if vendor is None else (" AND l.contact_id=?", [vendor])
     return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
-                     f"l.description, e.memo, e.source FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
-                     f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=? "
-                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?", (book_id, *account_ids, start, end, most)).fetchall()
+                     f"l.description, e.memo, e.source, (SELECT f.card_id FROM fin_feed_txns f WHERE f.entry_id=l.entry_id "
+                     f"AND f.card_id IS NOT NULL LIMIT 1) AS card_id, (SELECT f.money_account_id FROM fin_feed_txns f "
+                     f"WHERE f.entry_id=l.entry_id LIMIT 1) AS money_account_id "
+                     f"FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
+                     f"WHERE l.book_id=? AND l.account_id IN ({marks}) AND l.entry_date>=? AND l.entry_date<=?{cut} "
+                     f"ORDER BY l.entry_date DESC, l.id LIMIT ?",
+                     (book_id, *account_ids, start, end, *args, most)).fetchall()

@@ -23,6 +23,10 @@ MANAGER_DEFAULTS = ("team_expenses", "own_expenses")
 MEMBER_DEFAULTS = ("own_expenses", "none")
 PAYROLL_DEFAULTS = ("totals", "hidden")
 OTHERS_SEE = ("totals", "hidden")
+# What each role sees by default (`fin_view_defaults`, spec §7.5); the owner always sees everything.
+MANAGER_POLICIES = ("team_expenses", "own_expenses")
+MEMBER_POLICIES = ("own_expenses", "none")
+PAYROLL_POLICIES = ("totals", "hidden")
 PRIVATE_LABEL = "Payroll (private)"
 MIN_PAID = 3                         # a department's payroll cell shows only with at least this many paid people
 

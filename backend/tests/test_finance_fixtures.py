@@ -4,10 +4,12 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 import pytest
 
 from backend import hubdb as H
+from backend.credentials import Vault
 from backend.finance import actions as FA
 from backend.store import Store
 from backend.tests.test_api import api_settings
@@ -54,6 +56,7 @@ def store(tmp_path: Path, finance_template: Path) -> Store:
     s = Store(api_settings(tmp_path))
     with closing(sqlite3.connect(finance_template)) as source, closing(sqlite3.connect(s.settings.db_path)) as target:
         source.backup(target)
+    FA.use_vault(Vault(s))                 # a local data key beside this test's database
     return s
 
 
@@ -101,3 +104,147 @@ def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
         groups[team].pop("lead", None)
     c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
               (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),))
+
+
+# ------------------------------------------------------------------------------------------------ a fake Mercury
+MERCURY = json.loads((Path(__file__).parent / "fixtures" / "mercury" / "responses.json").read_text())
+
+
+class FakeMercury:
+    """A Mercury that answers from the recorded responses and remembers what Finance sent. `txns` is what
+    /transactions holds (by id), `events` the Events API in order, `queue[name]` answers to give `name` first."""
+
+    def __init__(self) -> None:
+        from backend.finance.mercury import Answer
+        self.Answer = Answer
+        self.txns: dict[str, dict[str, object]] = {}
+        self.events_list: list[dict[str, object]] = []
+        self.requests: dict[str, dict[str, object]] = {}
+        self.queue: dict[str, list[object]] = {}
+        self.calls: list[tuple[str, object]] = []
+        self.cards_list: list[dict[str, object]] = []
+        self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
+        self.card_page = 500
+
+    def _answer(self, name: str, arg: object, default: object):
+        self.calls.append((name, arg))
+        waiting = self.queue.get(name)
+        found = waiting.pop(0) if waiting else default
+        return found if isinstance(found, self.Answer) else self.Answer(200, dict(found))  # type: ignore[arg-type]
+
+    def sent(self, name: str) -> list[object]:
+        return [arg for n, arg in self.calls if n == name]
+
+    def _balanced(self, recorded: dict[str, object]) -> dict[str, object]:
+        listed = cast(list[dict[str, object]], recorded["accounts"])
+        return {"accounts": [{**a, "currentBalance": self.balances[str(a["id"])]} if str(a["id"]) in self.balances
+                             else a for a in listed]}
+
+    def accounts(self):
+        return self._answer("accounts", None, self._balanced(MERCURY["accounts"]))
+
+    def credit(self):
+        return self._answer("credit", None, self._balanced(MERCURY["credit"]))
+
+    def users(self):
+        return self._answer("users", None, MERCURY["users"])
+
+    def transactions(self, start_after, limit=500):
+        return self._answer("transactions", start_after, {"transactions": list(self.txns.values()), "page": {}})
+
+    def transaction(self, txn_id):
+        raw = self.txns.get(txn_id)
+        return self._answer("transaction", txn_id, raw if raw is not None else self.Answer(404, {}))
+
+    def events(self, start_after, limit=500, newest=False):
+        found = list(reversed(self.events_list))[:limit] if newest else self.events_list
+        if start_after and not newest:
+            ids = [str(e["id"]) for e in found]
+            found = found[ids.index(start_after) + 1:] if start_after in ids else found
+        return self._answer("events", start_after, {"events": found})
+
+    def statements(self, account_id, start, end):
+        return self._answer("statements", account_id, {"statements": [MERCURY["bank_statement"]]})
+
+    def credit_statements(self, account_id):
+        return self._answer("credit_statements", account_id, {"statements": [MERCURY["credit_statement_new"]]})
+
+    def cards(self, user_id, start_after=None):
+        """One page of `card_page` cards (nextPage names the last card when more follow)."""
+        mine = [k for k in self.cards_list if k.get("userId") == user_id]
+        ids = [str(k["id"]) for k in mine]
+        start = ids.index(start_after) + 1 if start_after in ids else 0
+        page = mine[start:start + self.card_page]
+        more = start + self.card_page < len(mine)
+        return self._answer("cards", (user_id, start_after),
+                            {"cards": page, "page": {"nextPage": str(page[-1]["id"]) if more and page else None}})
+
+    def card(self, card_id):
+        found = next((k for k in self.cards_list if k.get("id") == card_id), None)
+        return self._answer("card", card_id, found if found is not None else self.Answer(404, {}))
+
+    def create_card(self, user_id, nickname, monthly_cents):
+        return self._answer("create_card", (user_id, monthly_cents), MERCURY["card_created"])
+
+    def card_limit(self, card_id, monthly_cents):
+        return self._answer("card_limit", (card_id, monthly_cents), {})
+
+    def card_state(self, card_id, op):
+        return self._answer("card_state", (card_id, op), {})
+
+    def create_recipient(self, body):
+        return self._answer("create_recipient", dict(body), {"id": f"rcp-{len(self.sent('create_recipient')) + 1}"})
+
+    def recipient(self, recipient_id):
+        return self._answer("recipient", recipient_id, {"id": recipient_id})
+
+    def request_send_money(self, account_id, body):
+        answer = self._answer("request_send_money", dict(body), MERCURY["send_request_created"])
+        if answer.ok:
+            self.land(body, str(answer.body.get("requestId")), str(answer.body.get("status") or "pendingApproval"))
+        return answer
+
+    def land(self, body, request_id: str, status: str = "pendingApproval") -> None:
+        """A request as Mercury keeps it: only the documented list fields. Which request field Mercury shows as
+        `memo` is not documented; Finance's key travels in `note` and leads `externalMemo`, so the fake shows the
+        external memo (the recipient-facing one, the likelier echo)."""
+        self.requests[request_id] = {"requestId": request_id, "status": status, "amount": body.get("amount"),
+                                     "recipientId": body.get("recipientId"), "memo": body.get("externalMemo")}
+
+    def send_request(self, request_id):
+        return self._answer("send_request", request_id, self.requests.get(request_id) or self.Answer(404, {}))
+
+    page_size = 1000
+
+    def send_requests(self, account_id, start_after=None):
+        rows = list(self.requests.values())
+        ids = [str(r["requestId"]) for r in rows]
+        rows = rows[ids.index(start_after) + 1:] if start_after in ids else rows
+        page, more = rows[:self.page_size], len(rows) > self.page_size
+        return self._answer("send_requests", (account_id, start_after),
+                            {"requests": page, "page": {"nextPage": str(page[-1]["requestId"]) if more else None}})
+
+
+def connect(store: Store, fake: FakeMercury, *, approver: str = "ben@acme.example",
+            creator: str = "ana@acme.example") -> dict[str, object]:
+    """Connect Acme's Mercury (checking, savings and IO) as the owner; the connection_create result."""
+    from backend.finance import sync
+    found, why = sync.probe(fake)  # type: ignore[arg-type]
+    assert not why, why
+    with store.transaction() as c:
+        done = act(c, OWNER, "connection_create", {"provider": "mercury", "credential_id": "cred-mercury",
+                                                   "probe": found, "approver_email": approver,
+                                                   "token_creator_email": creator})
+    assert done.status == "committed", done
+    return dict(done.result)
+
+
+def sync_once(store: Store, fake: FakeMercury, at: str = AT, **kw: object) -> str:
+    """One pass of the bank worker over every connection, with `fake` as Mercury."""
+    from backend.finance import sync
+    with store.read() as c:
+        ids = [str(r[0]) for r in c.execute("SELECT id FROM fin_connections")]
+    out = ""
+    for cid in ids:
+        out = sync.connection(store, None, cid, make=lambda _token: fake, at=at, **kw)  # type: ignore[arg-type]
+    return out

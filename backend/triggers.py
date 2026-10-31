@@ -27,6 +27,10 @@ matched, at most `HOURLY` an hour, so a stranger cannot fill the log.
 Each accepted call is kept (raw body, headers) for the trigger's `keep_days`, so a person can read it, a bot
 that was given it can read it in parts, and one delivery can be run again. A call's type comes from the
 trigger's `type_from` (a header name, or a JSON pointer starting with /).
+
+A trigger on a Finance preset (`mercury`, trigger_presets.FINANCE) is Finance's: its calls go to Finance, never to
+rules or automations; only a finance admin makes one, changes, signs, replays, recovers or deletes it, whoever made it;
+and its kept calls are read only in Finance (GET /api/v2/finance/webhook-deliveries), never here.
 """
 import asyncio
 import hashlib
@@ -173,6 +177,36 @@ def effective_preset(trigger):
     return trigger["preset"] if trigger["preset"] != "none" else ("hmac" if trigger["signing_secret"] else "none")
 
 
+def finance_owned(trigger):
+    """A trigger whose calls are Finance's (a Mercury one, spec §3.4): bank payloads, kept from automations and rules,
+    managed only by a finance admin, and read only in Finance."""
+    return effective_preset(trigger) in P.FINANCE
+
+
+def _finance_admin(c, who):
+    from .finance import reads as finance_reads
+    return finance_reads.hook_admin(c, who.actor)
+
+
+def _finance_only(c, who, what):
+    if not _finance_admin(c, who):
+        raise Problem("forbidden", f"This trigger belongs to Finance: only a finance admin may {what} it", 403)
+
+
+def _may_change(c, who, trigger, what):
+    """A Finance trigger is a finance admin's to change, whoever made it; any other follows `may_manage`."""
+    if finance_owned(trigger):
+        _finance_only(c, who, what)
+    else:
+        may_manage(c, who, trigger)
+
+
+def _leave_finance(c, found, preset):
+    """A trigger moved off Finance takes no bank payloads with it: its kept calls go (Finance has its own copy)."""
+    if finance_owned(found) and preset not in P.FINANCE:
+        c.execute("DELETE FROM trigger_bodies WHERE trigger_id=?", (found["id"],))
+
+
 def type_spec(trigger):
     return trigger["type_from"] or P.TYPE_FROM.get(effective_preset(trigger), "")
 
@@ -250,7 +284,7 @@ def show(c, settings, trigger_id):
 
 
 def rotate(c, who, settings, trigger_id):
-    may_manage(c, who, _row(c, trigger_id))
+    _may_change(c, who, _row(c, trigger_id), "give a new address")
     _no_change(trigger_id, "given a new secret")
     secret = secrets.token_urlsafe(24)
     c.execute("UPDATE triggers SET secret_hash=?,updated_at=? WHERE id=?", (digest(secret), H.now(), trigger_id))
@@ -261,9 +295,10 @@ def rotate(c, who, settings, trigger_id):
 def sign(c, who, vault, trigger_id, body):
     """Set, replace or turn off the signing secret. The answer carries the secret once, for the sender's settings."""
     found = _row(c, trigger_id)
-    may_manage(c, who, found)
+    _may_change(c, who, found, "sign")
     _no_change(trigger_id, "signed")
     if body.off:
+        _leave_finance(c, found, "none")
         c.execute("UPDATE triggers SET signing_secret=NULL,preset='none',updated_at=? WHERE id=?", (H.now(), trigger_id))
         H.event(c, who.actor, "trigger.signing_off", trigger_id, {})
         return {"id": trigger_id, "signed": False, "preset": "none"}
@@ -271,9 +306,12 @@ def sign(c, who, vault, trigger_id, body):
     if preset not in P.PRESETS or preset == "none":
         raise Problem("trigger", "A preset is one of: " + ", ".join(p for p in P.PRESETS if p != "none")
                       + " (to stop checking, turn signing off)", 422)
+    if preset in P.FINANCE:
+        _finance_only(c, who, "make a Finance trigger of")     # its calls would go to Finance
     key = body.secret or P.new_secret(preset)
     if (why := P.secret_problem(preset, key)):
         raise Problem("trigger", why, 422)
+    _leave_finance(c, found, preset)
     c.execute("UPDATE triggers SET signing_secret=?,preset=?,updated_at=? WHERE id=?",
               (vault.cipher.seal(c, sealed_as(trigger_id), key), preset, H.now(), trigger_id))
     H.event(c, who.actor, "trigger.signing_set", trigger_id, {"preset": preset})
@@ -284,7 +322,9 @@ def update(c, who, settings, vault, trigger_id, body):
     """Name, verification preset, where the type is read from, the hourly cap, how long calls are kept, and what an
     unheard call does."""
     found = _row(c, trigger_id)
-    may_manage(c, who, found)
+    _may_change(c, who, found, "change")
+    if body.preset in P.FINANCE:
+        _finance_only(c, who, "make a Finance trigger of")
     if builtin(trigger_id) and any(v is not None for k, v in body.model_dump().items() if k != "keep_days"):
         raise Problem("trigger", f"Only how long calls are kept can change on {tico_notices.NAME}", 422)
     sets = {}
@@ -321,6 +361,7 @@ def update(c, who, settings, vault, trigger_id, body):
             if (why := P.secret_problem(body.preset, key)):
                 raise Problem("trigger", why + "; set a new one with hub trigger sign", 422)
             sets["preset"] = body.preset
+        _leave_finance(c, found, body.preset)
     if sets:
         c.execute("UPDATE triggers SET " + ",".join(f"{k}=?" for k in sets) + ",updated_at=? WHERE id=?",
                   (*sets.values(), H.now(), trigger_id))
@@ -341,8 +382,10 @@ def _base(c, trigger_id, delivery):
     return base_of(delivery)
 
 
-def deliveries(c, trigger_id):
-    _row(c, trigger_id)
+def deliveries(c, trigger_id, who=None):
+    found = _row(c, trigger_id)
+    if who is not None and finance_owned(found):
+        _finance_only(c, who, "list the calls of")
     rows = [dict(r) for r in c.execute(
         "SELECT delivery,sent_id,received_at,bytes,tasks,outcome,reason,type,via,rules FROM trigger_deliveries "
         "WHERE trigger_id=? ORDER BY received_at DESC LIMIT ?", (trigger_id, LOGGED)).fetchall()]
@@ -396,7 +439,7 @@ def _refused(c, found, ident, body, headers, at, status, code, reason, via, secr
 
 
 def remove(c, who, trigger_id):
-    may_manage(c, who, _row(c, trigger_id))
+    _may_change(c, who, _row(c, trigger_id), "delete")
     _no_change(trigger_id, "deleted")
     c.execute("UPDATE triggers SET deleted_at=?,updated_at=? WHERE id=?", (H.now(), H.now(), trigger_id))
     for table in ("trigger_bodies", "trigger_seen"):    # what senders posted goes with it; a new trigger of this id starts clean
@@ -489,6 +532,11 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
     shown = content + (f"\nThe rest: hub trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
     payload = _payload_of(body)
     fired = []
+    if effective_preset(found) == "mercury":
+        # Mercury's events are Finance's alone (backend/finance/sync.py): kept once by event id, never shown to rules.
+        from .finance import actions as finance
+        kept = finance.mercury_delivery(c, None, payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
     if builtin(trigger_id):
         # A notice from Tico Team is judged once, as `tico.notice`; `webhook.received` is for senders outside Tico.
         results = tico_notices.arrived(c, found, delivery, type_, via, body, payload, content, _judge)
@@ -583,7 +631,7 @@ def replay(c, who, auth, trigger_id, delivery):
     one is recovered, so it is checked again)."""
     _no_change(trigger_id, "run again")
     found = _row(c, trigger_id)
-    may_manage(c, who, found)
+    _may_change(c, who, found, "run a call of")
     base = _base(c, trigger_id, delivery)
     refused = c.execute("SELECT sent_id FROM trigger_deliveries WHERE trigger_id=? AND delivery=? AND outcome='refused'",
                         (trigger_id, base)).fetchone()
@@ -623,7 +671,7 @@ def recover(c, who, auth, vault, trigger_id, since_hours=24):
     found = _row(c, trigger_id)
     if who.role not in ("human", "owner"):
         raise Problem("forbidden", "Only a person who manages this trigger recovers its refused calls", 403)
-    may_manage(c, who, found)
+    _may_change(c, who, found, "recover")
     if not 1 <= since_hours <= MAX_RECOVER_HOURS:
         raise Problem("trigger", f"Recover reaches back 1 to {MAX_RECOVER_HOURS} hours", 422)
     now = H.now()
@@ -683,6 +731,9 @@ def read(c, who, trigger_id, delivery, part=1):
     get the whole body; a bot gets it in fenced parts, and only a bot that manages the trigger or was given this call
     (a task made from it, or a notice from Tico naming it). Anyone else finds nothing."""
     found = _row(c, trigger_id)
+    if finance_owned(found):
+        # Bank payloads: read in Finance, by a finance admin who sees sources (GET /api/v2/finance/webhook-deliveries).
+        raise Problem("forbidden", "This trigger belongs to Finance: read its calls in Finance", 403)
     base = _base(c, trigger_id, delivery)
     allowed = (who.role in ("human", "owner") and manages(who, found)) or (
         who.role == "bot" and (manages(who, found) or given_to(c, who.actor, trigger_id, base)))
@@ -791,9 +842,9 @@ def install(app, settings, store, auth, mutate):
     @app.get("/api/v2/triggers/{trigger_id}/deliveries")
     def trigger_deliveries(request: Request, trigger_id: str):
         """The latest calls to this trigger, accepted and refused, newest first."""
-        readers(request)
+        who = readers(request)
         with store.read() as c:
-            return {"deliveries": deliveries(c, trigger_id)}
+            return {"deliveries": deliveries(c, trigger_id, who)}
 
     @app.post("/api/v2/triggers/{trigger_id}/deliveries/{delivery:path}/replay")
     def trigger_replay(request: Request, trigger_id: str, delivery: str, body: M.Empty):
