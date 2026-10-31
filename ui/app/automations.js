@@ -43,9 +43,13 @@ function auActorName(a) {
 }
 const auGroupName = g => (AU?.groups || []).find(x => x.id === g || 'group:' + x.id === g)?.name || titleCase(String(g || '').replace(/^group:/, ''));
 
-const AU_TRIGGER_ICONS = {message: 'mail', task_received: 'task_alt', schedule: 'schedule', webhook: 'api', listening: 'travel_explore', event: 'campaign'};
+const AU_TRIGGER_ICONS = {message: 'mail', task_received: 'task_alt', schedule: 'schedule', webhook: 'api', listening: 'travel_explore', event: 'campaign',
+  due: 'event'};
 const AU_TRIGGER_WORDS = {message: 'Message received', task_received: 'Task received', schedule: 'Schedule', webhook: 'Webhook',
-  listening: 'Listening match', event: 'Event'};
+  listening: 'Listening match', event: 'Event', due: 'Before a due date'};
+// The triggers + New and the trigger editor offer; the others (a message, a webhook...) are made where they come from.
+const AU_WHEN = [['schedule', 'On a schedule'], ['event', 'When something happens'], ['due', 'Before a due date']];
+const AU_REPEATS = [['once', 'Once'], ['weekly', 'Weekly'], ['monthly', 'Monthly'], ['quarterly', 'Quarterly'], ['yearly', 'Yearly']];
 const auCap = s => String(s || '').charAt(0).toUpperCase() + String(s || '').slice(1);
 // An event trigger's event in a few words: the catalog's (backend/event_catalog.py, old spellings too) and the
 // built-ins' tico.builtin.* (backend/redesign_migration.py). The dotted name is only ever a chip's tooltip.
@@ -77,6 +81,26 @@ function auCronWords(cron) {
   }
   return cronWords(cron || '');
 }
+// The viewer's time zone, the default for a new schedule or due date.
+function auZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } }
+// A day (YYYY-MM-DD, a calendar day with no zone) as "Mar 1"; with `year`, "Mar 1, 2027" outside this year.
+function auDay(iso, year = false) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
+  if (!m) return '';
+  const d = new Date(+m[1], +m[2] - 1, +m[3]);
+  return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(year && d.getFullYear() !== new Date().getFullYear() ? {year: 'numeric'} : {})});
+}
+// A local day `n` days from today, as YYYY-MM-DD.
+function auInDays(n) {
+  const d = new Date(); d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+// A fresh trigger of each kind + New and the trigger editor make (backend/automation_due.py for a due date).
+function auNewTrigger(type) {
+  if (type === 'event') return {type, name: 'task.created'};
+  if (type === 'due') return {type, first_due: auInDays(30), repeats: 'yearly', open_days: 14, tz: auZone()};
+  return {type: 'schedule', cron: '0 9 * * 1-5', tz: auZone()};
+}
 // Where an automation's work comes from, in a few words: the list's "· source" and the trigger card's chip.
 function auSource(t = {}) {
   if (t.type === 'message') return t.inbox || '';
@@ -85,6 +109,8 @@ function auSource(t = {}) {
   if (t.type === 'webhook') return t.name || t.id || '';
   if (t.type === 'listening') return t.destination ? 'Listening · ' + t.destination : 'Listening';
   if (t.type === 'event') return t.name ? auEventWords(t.name) : '';
+  // A repeat reads as its day ("Due Mar 1 · yearly"); only a one-off says its year.
+  if (t.type === 'due') return [`Due ${auDay(t.first_due, t.repeats === 'once')}`, t.repeats, `${t.open_days ?? 14}d before`].filter(Boolean).join(' · ');
   return '';
 }
 const auSpendWords = a => a.spend_cap?.per_30m != null ? `$${Number(a.spend_cap.per_30m).toFixed(2)} / 30 min` : 'Bot’s limit';
@@ -140,7 +166,8 @@ const auNormal = x => { const a = x?.automation || x || {}; a.steps ||= []; a.tr
 
 function auShell() {
   $('#main').innerHTML = `<div class="au" id="au-root">
-    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="primary au-new" type="button">+ New</button></header>
+    <header class="au-ph"><h1>Automations</h1><div class="au-seg au-range" role="group" aria-label="Time range"></div><span class="au-sp"></span><button class="docs-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><span class="au-newbox"><button class="primary au-new" type="button" aria-haspopup="menu" aria-expanded="false">+ New</button>
+      <div class="au-newm" role="menu" hidden>${AU_WHEN.map(([k, l]) => `<button type="button" role="menuitem" data-new="${k}"><span class="nav-icon" aria-hidden="true">${AU_TRIGGER_ICONS[k]}</span>${l}</button>`).join('')}</div></span></header>
     <div class="au-body">
       <aside class="au-rail" aria-label="Filters">
         <div class="au-s"><input class="au-q" type="search" placeholder="Search" aria-label="Search automations"></div>
@@ -155,27 +182,35 @@ function auShell() {
   </div>`;
   const root = AU.root = $('#au-root');
   auOverviewWire(root);
-  root.querySelector('.au-new').onclick = e => void auBlank(e.currentTarget);
+  root.querySelector('.au-new').onclick = () => auNewMenu(root.querySelector('.au-newm').hidden);
+  root.querySelector('.au-newm').onclick = e => { const m = e.target.closest('[data-new]'); if (m) void auBlank(m.dataset.new); };
   root.querySelector('.au-scrim').onclick = () => auEdClose();
   root.addEventListener('change', auOnSwitch);
   root.addEventListener('click', auOnClick);
   root.addEventListener('keydown', e => {
-    if (e.key === 'Escape') { if (AU.menu) auMenuClose(); else if (AU.ed) auEdClose(); return; }
+    if (e.key === 'Escape') { if (!root.querySelector('.au-newm').hidden) auNewMenu(false); else if (AU.menu) auMenuClose(); else if (AU.ed) auEdClose(); return; }
     if ((e.key === 'Enter' || e.key === ' ') && e.target.matches('[role="button"]')) { e.preventDefault(); e.target.click(); }
   });
   auEdWire(root.querySelector('.au-ed'));
 }
 
-// + New: the viewer's own, off, weekdays at 9 in their zone, no steps (POST /v2/automations), then open it. Ask
-// (the Ask panel) has the Assistant build one instead.
-async function auBlank(button) {
-  const state = AU;
+// + New's menu: which trigger the new one starts with.
+function auNewMenu(open) {
+  const menu = AU.root.querySelector('.au-newm');
+  menu.hidden = !open;
+  AU.root.querySelector('.au-new').setAttribute('aria-expanded', String(open));
+  if (open) menu.querySelector('button')?.focus();
+}
+// + New: the viewer's own, off, no steps, on the trigger picked (a schedule is weekdays at 9 in their zone; a due date a
+// month out, yearly; auNewTrigger), POST /v2/automations, then open it. Ask (the Ask panel) has the Assistant build
+// one instead.
+async function auBlank(type) {
+  const state = AU, button = state.root.querySelector('.au-new');
+  auNewMenu(false);
   button.disabled = true;
   try {
-    let tz = 'UTC';
-    try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { /* UTC */ }
     const out = auNormal(await post('/v2/automations', {name: 'New automation', owner: 'person:' + S.me.id, enabled: false,
-      builtin: false, trigger: {type: 'schedule', cron: '0 9 * * 1-5', tz}, steps: []}));
+      builtin: false, trigger: auNewTrigger(type), steps: []}));
     if (AU !== state) return;
     await auLoadList(state);
     if (AU === state) location.hash = auHref(out.id);
@@ -334,6 +369,7 @@ async function auOnSwitch(e) {
 function auOnClick(e) {
   const t = e.target;
   if (!t.closest) return;
+  if (!t.closest('.au-newbox') && !AU.root.querySelector('.au-newm').hidden) auNewMenu(false);
   if (AU.menu && !t.closest('.au-menu') && !t.closest('[data-add],[data-more]')) auMenuClose();
   if (auOverviewClick(t)) return;
   let m;

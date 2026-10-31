@@ -158,8 +158,8 @@ reports. The same rule decides whose profile, goals, bot settings and routines y
 your own, and anyone's below you.
 
 **How do I add a routine?**
-**Automations → New automation**: pick a Schedule (a cron in a time zone), an Event or a Webhook
-trigger, then add a Bot turn step with the bot and the text it is told each time. A bot can set up
+**Automations → + New**: pick a Schedule (a cron in a time zone), an Event, a Webhook or Before a
+due date (a task N days before a date that repeats), then add a Bot turn step with the bot and the text it is told each time. A bot can set up
 its own with `hub automation create`. Details: [Routines](routines.md).
 
 **How do I change what a bot does?**

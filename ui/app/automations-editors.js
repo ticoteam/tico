@@ -10,7 +10,7 @@ const AU_LEVELS = [['low', 'Low'], ['medium', 'Medium'], ['high', 'High']];
 const AU_QTYPES = [['choice', 'Choice'], ['noul', 'Yes/no'], ['score', 'Score']];
 const AU_TRIGGER_FIELDS = {message: ['message.from', 'message.to', 'message.subject', 'message.body'],
   task_received: ['task.title', 'task.body', 'task.from', 'task.tag'], listening: ['item.title', 'item.score', 'item.source'],
-  event: ['event.name'], webhook: ['payload.type'], schedule: []};
+  event: ['event.name'], webhook: ['payload.type'], schedule: [], due: ['due.due_on', 'due.repeats']};
 
 function auEdOpen(ed) {
   auMenuClose();
@@ -134,10 +134,14 @@ function auTriggerFields(t, ed) {
     schedule: () => auFld('Cron', auIn('trigger.cron', t.cron, '0 7 * * 1-5')) + auFld('Time zone', auIn('trigger.tz', t.tz)),
     webhook: () => auFld('Webhook', `<input type="text" value="${esc(t.name || t.id || '')}" disabled>`),
     listening: () => auFld('Destination', auIn('trigger.destination', t.destination)),
-    event: () => auEventField(t, ed)}[t.type];
-  // An event trigger's one field names its event; the others say what kind of trigger it is first.
-  const kind = t.type === 'event' ? '' : auFld('Event', `<input type="text" value="${esc(AU_TRIGGER_WORDS[t.type] || t.type || '')}" disabled>`);
-  return kind + (src ? src() : '')
+    event: () => auEventField(t, ed),
+    due: () => auFld('First due', `<input type="date" data-b="trigger.first_due" value="${esc(t.first_due || '')}"${auDis()}>`)
+      + auFld('Repeats', auSel('trigger.repeats', AU_REPEATS, t.repeats || 'yearly'))
+      + auBox('Open task', `<span class="au-ir au-days"><input type="number" data-b="trigger.open_days" data-num min="0" max="366" step="1" value="${esc(t.open_days ?? 14)}" aria-label="Days before"${auDis()}><span class="muted">days before</span></span>`)
+      + auFld('Time zone', auIn('trigger.tz', t.tz))}[t.type];
+  // When: a schedule, an event or a due date (a kind made elsewhere, such as a message, shows as itself).
+  const when = auFld('When', auSel('ttype', auWithCur(AU_WHEN, t.type, AU_TRIGGER_WORDS[t.type] || t.type), t.type));
+  return when + (src ? src() : '')
     + auBox('Filters', auCondRows('trigger.filters', t.filters) + auPlus('trigger.filters', 'cond', 'Filter'));
 }
 function auFilterFields(s) {
@@ -211,8 +215,9 @@ function auActionFields(s) {
   const a = s.args || {};
   const who = [...auPeople(), ...auBots()];
   const args = {
-    create_task: () => auFld('Assign to', auSel('step.args.to', [['', 'Owner'], ...auWithCur(who, a.to, auActorName(a.to))], a.to || '')),
-    assign: () => auFld('Assign to', auSel('step.args.to', auWithCur(who, a.to, auActorName(a.to)), a.to || '')),
+    create_task: () => auFld('Title', auIn('step.args.title', a.title))
+      + auFld('Assign to', auSel('step.args.owner', [['', 'Owner'], ...auWithCur(who, a.owner, auActorName(a.owner))], a.owner || '', 'data-blank')),
+    assign: () => auFld('Assign to', auSel('step.args.owner', auWithCur(who, a.owner, auActorName(a.owner)), a.owner || '')),
     wake_bot: () => auFld('Bot', auSel('step.args.bot', auWithCur(auBots(), a.bot, auActorName(a.bot)), a.bot || '')),
     forward: () => auFld('To', auIn('step.args.to', a.to, 'name@acme.example')),
     label: () => auFld('Label', auIn('step.args.label', a.label)),
@@ -254,6 +259,15 @@ function auEdWire(box) {
       else if (AU_EVENTS[ed.trigger.name] || AU_EVENT_MORE[ed.trigger.name]) ed.trigger.name = '';
       auDrawSide();
       if (ed.evCustom) box.querySelector('[data-b="trigger.name"]')?.focus();
+      return;
+    }
+    if (b === 'ttype') {
+      // Another kind of trigger starts fresh (its filters test another kind's fields); back to the saved kind restores it.
+      if (e.type !== 'change') return;
+      ed.saved ??= auClone(AU.cur.trigger);
+      ed.trigger = v === ed.saved.type ? auClone(ed.saved) : auNewTrigger(v);
+      ed.evCustom = undefined;
+      auDrawSide();
       return;
     }
     if (b === 'set') { ed.custom = !v; if (v) { ed.step.set = v; delete ed.step.questions; auDecideQs(ed); } auDrawSide(); return; }
@@ -301,6 +315,13 @@ async function auEdSave(button) {
   if (ed.kind === 'trigger') {
     body = {trigger: ed.trigger.type === 'event' ? {...ed.trigger, name: String(ed.trigger.name || '').trim()} : ed.trigger};
     if (ed.trigger.type === 'event' && !body.trigger.name) { toast('Name the event', true); if (button) button.disabled = false; return; }
+    if (ed.trigger.type === 'due') {
+      const t = body.trigger, days = Number(t.open_days ?? 14);
+      const bad = !/^\d{4}-\d{2}-\d{2}$/.test(String(t.first_due || '')) ? 'Pick the first due date'
+        : !(Number.isInteger(days) && days >= 0 && days <= 366) ? 'Days before is a whole number from 0 to 366' : '';
+      if (bad) { toast(bad, true); if (button) button.disabled = false; return; }
+      body.trigger = {...t, open_days: days, tz: String(t.tz || '').trim() || auZone()};
+    }
   }
   else {
     const step = auClone(ed.step);
