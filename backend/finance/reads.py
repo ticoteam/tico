@@ -96,6 +96,30 @@ def _cap(rows: list[Row], top_n: int) -> list[Row]:
                             sum(int(str(r["amount"])) for r in rest), "count": len(rest)}]
 
 
+def _fold_pnl(out: Row, top_n: int) -> Row:
+    """A P&L capped for a payload: the `top_n` largest lines (by total, in chart order) and, per type, one "Other · n"
+    row carrying the rest's per-period actuals and total. Columns, totals and net stay whole."""
+    rows = cast(list[Row], out["rows"])
+    if len(rows) <= top_n:
+        return out
+    size = len(cast(list[object], out["columns"]))
+    ranked = sorted(range(len(rows)), key=lambda i: -abs(cast(int, rows[i]["total"] or 0)))
+    keep = set(ranked[:top_n])
+    shown = [r for i, r in enumerate(rows) if i in keep]
+    for type_ in ("income", "expense"):
+        rest = [r for i, r in enumerate(rows) if i not in keep and r["type"] == type_]
+        if not rest:
+            continue
+        actual = [0] * size
+        for r in rest:
+            for n, v in enumerate(cast(list[int], r["actual"] or [])):
+                actual[n] += v
+        shown.append({"key": "other", "label": f"Other · {len(rest)}", "type": type_, "account_id": None,
+                      "section": None, "private": False, "actual": actual, "total": sum(actual), "budget": None,
+                      "projection": None, "count": len(rest)})
+    return {**out, "rows": shown, "rows_total": len(rows)}
+
+
 def _hidden_labels(s: _Seen, hidden: Iterable[str]) -> list[Row]:
     return [{"account_id": a, "label": VW.PRIVATE_LABEL} for a in sorted(hidden)]
 
@@ -815,7 +839,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
     def one(p: date, q: date) -> Row:
         if kind == "pnl":
-            return pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at)
+            return _fold_pnl(pnl(c, viewer, p.isoformat(), q.isoformat(), period, basis or ctx.book.basis, at), top)
         if kind == "cash_flow":
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
@@ -961,7 +985,8 @@ def inbox(c: sqlite3.Connection, viewer: str, *, limit: int = 50, cursor: str | 
                                "label": f"{r['contact_name'] or 'Bill'} {r['number']} · {_money(int(r['total']))}"
                                .replace("  ", " ")} for r in drafts[:INBOX_EACH]], len(drafts) > INBOX_EACH)
     if R.has(ctx.org, viewer, R.BOOK, held):
-        files = SAP.unmatched_files(c, ctx.book.id, INBOX_EACH + 1)
+        # A receipt with no subject yet is the company's to see only with the whole books; else the viewer's own.
+        files = SAP.unmatched_files(c, ctx.book.id, INBOX_EACH + 1, "" if view.everything else viewer)
         add("unmatched_receipt", [{"id": str(r["id"]), "file_id": str(r["file_id"]), "date": str(r["created_at"])[:10],
                                    "label": "Receipt with nothing to attach to"} for r in files[:INBOX_EACH]],
             len(files) > INBOX_EACH)
@@ -1027,26 +1052,35 @@ def _checklist(s: _Seen, month: str) -> Row:
     last = dates.month_end(first)
     period = SL.period(ctx.c, ctx.book.id, first.isoformat())
     status = str(period["status"]) if period is not None else "open"
-    money = [m for m in SK.money_accounts(ctx.c, ctx.book.id) if str(m["status"]) == "active"]
+    money = [m for m in SK.money_accounts(ctx.c, ctx.book.id)
+             if str(m["status"]) == "active" and tab.sees_money_account(ctx, s.view, m)]
     live = [m for m in money if (SK.first_feed_day(ctx.c, str(m["id"])) or "9999") <= last.isoformat()]
     behind = [{"money_account_id": str(m["id"]), "name": str(m["name"]),
                "locked_through": SK.locked_through(ctx.c, str(m["id"])) or None} for m in live
               if (SK.locked_through(ctx.c, str(m["id"])) or "") < last.isoformat()]
     rows, more = _uncategorized(s, first, last, INBOX_EACH)
-    receipts = SAP.unmatched_files(ctx.c, ctx.book.id, INBOX_EACH + 1)
-    drafts = [r for r in SAP.drafts(ctx.c, ctx.book.id, 5000) if str(r["bill_date"]) <= last.isoformat()]
     accrual = ctx.book.basis == "accrual"
     checks: list[Row] = [
         {"key": "reconciled", "ok": not behind, "count": len(behind), "accounts": behind,
          "label": "Every money account reconciled through month end"},
         {"key": "uncategorized", "ok": not rows, "count": len(rows), "more": more,
-         "label": "Nothing left in Other expenses or uncategorized"},
-        {"key": "unmatched_receipts", "ok": not receipts, "count": min(len(receipts), INBOX_EACH),
-         "label": "Receipts matched"},
-        {"key": "draft_bills", "ok": not drafts, "count": len(drafts), "label": "Bills dated this month entered"},
+         "label": "Nothing left in Other expenses or uncategorized"}]
+    # Company-wide counts only for whoever sees them: unmatched receipts with the whole books, draft bills with
+    # payables (and only the drafts the viewer sees whole).
+    if s.view.everything:
+        receipts = SAP.unmatched_files(ctx.c, ctx.book.id, INBOX_EACH + 1)
+        checks.append({"key": "unmatched_receipts", "ok": not receipts, "count": min(len(receipts), INBOX_EACH),
+                       "label": "Receipts matched"})
+    if tab_ap.sees_side(ctx, s.view, "bill"):
+        dated = [r for r in SAP.drafts(ctx.c, ctx.book.id, 5000) if str(r["bill_date"]) <= last.isoformat()]
+        kept, _ = tab_ap.keep_docs(ctx.c, "bill", dated, set(tab.private_cut(ctx, s.view)))
+        checks.append({"key": "draft_bills", "ok": not kept, "count": len(kept),
+                       "label": "Bills dated this month entered"})
+    notes: list[Row] = [
         {"key": "accruals", "ok": True, "label": "Review accruals and prepaids" if accrual else
          "Cash basis: no accruals to review", "note": True},
         {"key": "budget_vs_actual", "ok": True, "label": "Write the budget vs actual note", "note": True}]
+    checks += notes
     # A month no money account had a feed for has nothing to reconcile, so it is never "ready" on its own.
     ready = status == "open" and last < dates.day(ctx.today) and bool(live) and not behind and not rows
     return {"month": month, "start": first.isoformat(), "end": last.isoformat(), "status": status, "ready": ready,
@@ -1056,7 +1090,8 @@ def _checklist(s: _Seen, month: str) -> Row:
 def close_checklist(c: sqlite3.Connection, viewer: str, period: str, at: str | None = None) -> Row:
     """A month's close checklist (§10): reconciled through month end, nothing uncategorized, receipts matched, draft
     bills entered, and notes for accruals and budget vs actual. `ready` is what finance.period.ready fires on (the
-    first two, on an open month that has ended). For teammates with finance.book."""
+    first two, on an open month that has ended). For teammates with finance.book, cut to their view: only the money
+    accounts they see, and the receipt and draft-bill checks only when they see those."""
     s = _open(c, viewer, at)
     if not R.has(s.ctx.org, viewer, R.BOOK, s.ctx.rights(viewer)):
         raise denied("the close is for teammates who do the books")

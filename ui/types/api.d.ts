@@ -1251,6 +1251,10 @@ export type FinanceCards = {
 
 export type FinanceChart = {
   accounts: Array<{
+  attributable?: Array<{
+  team?: string;
+  teammate?: string;
+}>;
   company_wide?: boolean;
   id: string;
   name: string;
@@ -1328,12 +1332,14 @@ export type FinanceDocument = (FinanceDocumentRow & {
   rule_id: string | null;
   status: string;
 }>;
+  attachment_count?: number;
   attachments: Array<{
   created_at: string;
   created_by: string;
   file_id: string;
   id: string;
 }>;
+  attachments_more?: boolean;
   lines: Array<{
   account: Record<string, unknown> | null;
   amount: number;
@@ -1342,6 +1348,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   tags: Record<string, unknown>;
 }>;
   schedule?: Record<string, unknown> | null;
+  settlement_count?: number;
   settlements: Array<{
   amount: number;
   created_by: string;
@@ -1352,6 +1359,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   settled_on: string;
   voided_at: string | null;
 }>;
+  settlements_more?: boolean;
   terms_days?: number | null;
   view_version?: number;
 });

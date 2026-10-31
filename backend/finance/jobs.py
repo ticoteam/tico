@@ -131,7 +131,8 @@ def watch(c: sqlite3.Connection, at: str | None = None) -> int:
         below = cash < floor
         if below and not was.get("below"):
             crossings += 1
-            event(ctx, CASH_EVENT, "company", {"floor": floor, "cash": cash}, f"n{crossings}")
+            # References only: whoever acts on it reads the cash metric under their own view.
+            event(ctx, CASH_EVENT, "company", {"metric": "cash", "crossing": crossings}, f"n{crossings}")
             n += 1
         if below != bool(was.get("below")):
             SL.set_setting(c, CASH_STATE, {"below": below, "n": crossings}, SYSTEM, ctx.at)

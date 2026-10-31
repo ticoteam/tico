@@ -329,19 +329,32 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if program and card is not None:
         # A charge or refund on a card Tico issued posts against the card liability: to the line a posting rule picks,
         # else the card's budget line, tagged with its holder either way.
+        # A charge paying an entered bill goes to AP instead (the bill already took the expense); the card's use and
+        # hold work the same either way.
         account, tags = card_line(ctx, card)
-        lines, ask = posting_rules.card_lines(ctx, row, money, account, tags)
+        found = documents.match_feed(ctx, row, t) if t.amount < 0 else None
+        if found is not None:
+            lines = [feed_line(documents.control(ctx, "bill").id, -t.amount, {},
+                               str(found[1][f"{documents.CONTACT_OF['bill']}_id"]))]
+            ask = False
+        else:
+            lines, ask = posting_rules.card_lines(ctx, row, money, account, tags)
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
         entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
         _card_used(ctx, row, -t.amount, entry)
+        if found is not None:
+            documents.feed_paid(ctx, row, found[0], found[1], entry)
         if ask:
             event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return
     # Anything else: a payment marked paid from this account, else the one open bill or invoice it pays, else the
     # first posting rule (or the counterparty's default line), else a debit posts to Other expenses and a credit
     # waits, and a person is asked (needs_category).
-    if documents.expected_match(ctx, row, money, t):
+    expected = documents.expected_match(ctx, row, money, t)
+    if expected:
+        if expected == documents.ASK:   # it may pay one of several marked payments: it stays new, a person picks
+            event(ctx, CATEGORY_EVENT, fid, {"feed_id": fid})
         return                      # the bank row of a payment marked paid from this account: linked, posted once
     found = documents.match_feed(ctx, row, t)
     if found is not None:
@@ -558,7 +571,8 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
             posting.reverse(ctx, str(e["id"]), day=open_day(ctx, str(e["entry_date"])), memo=memo, by=SYSTEM)
     for r in SK.rows_of_entry(ctx.c, entry_id):
         SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "new", "entry_id": None, "updated_at": ctx.at})
-    documents.feed_gone(ctx, str(row["id"]))         # a bill or invoice it paid is owed again
+    # A bill or invoice it paid is owed again.
+    documents.feed_gone(ctx, str(row["id"]), [str(e["id"]) for e in [entry, *later] if e is not None])
 
 
 def undo(ctx: Ctx, row: Any) -> None:

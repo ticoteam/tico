@@ -146,8 +146,8 @@ def _build():
     add("finance.invoice.overdue", "A Finance invoice is 1, 7, 30, 60 or 90 days overdue.",
         {"invoice_id": "in1", "stage": "overdue_7", "due_date": "2026-10-24", "event_id": "e11"}, sourceless=True,
         outbound=False)
-    add("finance.cash.below", "The company's cash dropped under the owner's alert amount.",
-        {"floor": 2500000, "cash": 2400000, "event_id": "e12"}, sourceless=True, outbound=False)
+    add("finance.cash.below", "The company's cash dropped under the owner's alert amount (read the cash metric for amounts).",
+        {"metric": "cash", "crossing": 1, "event_id": "e12"}, sourceless=True, outbound=False)
     add("finance.period.ready", "A month is ready to close in Finance.",
         {"month": "2026-10", "event_id": "e13"}, sourceless=True, outbound=False)
     add("custom.*", "Anything a bot or rule sends: custom.<name>.",

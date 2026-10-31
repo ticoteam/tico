@@ -130,8 +130,9 @@ def checked(ctx: Ctx, who: str, p: V.Payload, base: Mapping[str, object] | None 
     bad = AP.failing_posting_examples(when, then, examples)
     if bad:
         raise invalid("its examples do not pass: " + "; ".join(bad[:5]))
+    kept = old.get("priority")              # 0 is a priority (first of all), not "none given"
     priority = V.integer(p, "priority", 0, 10_000) if p.get("priority") is not None else \
-        int(cast(int, old.get("priority") or AP.DEFAULT_PRIORITY))
+        int(cast(int, kept)) if kept is not None else AP.DEFAULT_PRIORITY
     outcome = AP.posting_json(then)
     words = V.opt_text(p, "words", 300) or str(old.get("words") or "") or G.words_for(when, outcome)
     external = V.opt_text(p, "external_rule_id", 120) if "external_rule_id" in p else old.get("external_rule_id")

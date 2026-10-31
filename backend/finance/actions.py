@@ -102,7 +102,13 @@ def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
 
 
 def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], what: str) -> dict[str, object]:
-    return {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what, "payload": dict(payload)}
+    out: dict[str, object] = {"source": SOURCE, "action_id": action_id, "kind": kind, "what": what,
+                              "payload": dict(payload)}
+    if kind in K.SPEND:
+        # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
+        out["amount"] = payload.get("amount")
+        out["account"] = str(payload.get("money_account_id") or payload.get("account_id") or "bank")
+    return out
 
 
 def _audit(c: sqlite3.Connection, p: O.Principal, action_id: str, kind: str, status: str, code: str = "",

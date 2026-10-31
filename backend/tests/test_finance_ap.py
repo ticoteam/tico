@@ -298,6 +298,16 @@ def test_rights_and_views_cut_every_new_kind_and_read(books):
             _bill(c, vendor, [{"account_id": account(c, "6100"), "amount": 1_000 + n}], number=f"A-{n}")
         assert "98-7654321" not in str(c.execute("SELECT * FROM fin_actions").fetchall())   # sealed, never stored
         FA.grant_defaults(c, "bot:seller", at=AT)
+    with books.read() as c:                     # a right is an action only: seeing is the view (§7.4, §7.5)
+        for read in (FR.bills, FR.contacts):
+            with pytest.raises(FA.FinanceError):
+                read(c, "bot:seller")
+        with pytest.raises(FA.FinanceError):
+            FR.invoices(c, "human:dan")
+        assert FR.search(c, "bot:seller", kind="bill", q="A-")["results"] == []
+    with books.transaction() as c:
+        for who, what in (("bot:seller", "payables"), ("human:dan", "receivables")):
+            assert act(c, OWNER, "view_grant", {"subject": who, "what": what}).status == "committed"
     with books.read() as c:
         assert FR.contacts(c, "human:dan")["contacts"][0]["tax_id_last4"] is None       # last 4 for admins only
         assert {x["tax_id_last4"] for x in FR.contacts(c, OWNER)["contacts"]} == {"6789", "4321"}

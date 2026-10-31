@@ -221,8 +221,10 @@ def categorize(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         total += abs(line.amount)
 
     def apply(aid: str) -> Result:
+        from .documents import retagged
         for row, old, new in changes:
             SL.set_line_tags(ctx.c, row, old, new, who, ctx.at)
+            retagged(ctx, row, old, new)        # the cash view's attribution follows the tags
         posting.touched(ctx, [c for c, _ in charges], who)
         return {"lines": len(changes)}
     return Plan(K.default_gate(ctx.org, who, "categorize"), f"Tag {len(changes)} line(s)", apply,

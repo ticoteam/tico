@@ -1613,7 +1613,8 @@ SCHEMAS.update({
     "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
                          "currency": "s", "bills_email": "n", "view_version": "i"}),
     "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
-                                                "parent_id": "n", "company_wide": "b"},
+                                                "parent_id": "n", "company_wide": "b",
+                                                "attributable": items(obj({"team": "s", "teammate": "s"}, required=[]))},
                                                required=["id", "number", "name", "type"])),
                          "more": "b", "view_version": "i"}),
     "FinancePayFrom": obj({"accounts": items(obj({"id": "s", "name": "s", "provider": "s", "last4": "n",
@@ -1642,6 +1643,7 @@ SCHEMAS.update({
         "attachments": items(obj({"id": "s", "file_id": "s", "created_by": "s", "created_at": "s"})),
         "actions": items(obj({"action_id": "s", "kind": "s", "status": "s", "actor": "s", "approval_id": "n",
                               "approval_to": "n", "rule_id": "n", "created_at": "s"})),
+        "settlement_count": "i", "settlements_more": "b", "attachment_count": "i", "attachments_more": "b",
         "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
         required=["lines", "settlements", "attachments", "actions"])]},
     "FinanceContacts": obj({"contacts": items(obj({

@@ -265,24 +265,32 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     method = str(rec["method"])
     purpose = _purpose(p, method)
     pid = SL.new_id()
+    gate = K.default_gate(ctx.org, who, "payment_create")
+    bill = obligation.startswith("bill:")
+    if bill:
+        # A bill's payment: checked against the bill, and its expense budgets (already spent, never held again).
+        from .documents import bill_payment
+        budget_gate = bill_payment(ctx, who, obligation, rec, amount, line.id)
+        gate = budget_gate if gate.outcome == "allow" else gate
 
     def apply(aid: str) -> Result:
         hold = budgeting.place(ctx, budget_scope={"account_id": line.id, **tags, "vendor": vendor_of(rec)},
                                amount=amount, currency=ctx.book.base_currency, source="payment", source_id=pid,
-                               expires_at=None, by=who)
-        if not hold.allowed:
+                               expires_at=None, by=who) if not bill else None
+        if hold is not None and not hold.allowed:
             raise denied(f"it does not fit: {hold.reason}")
         SK.insert(ctx.c, "fin_payments", {
             "id": pid, "book_id": ctx.book.id, "action_id": aid, "idempotency_key": f"pay-{aid}",
             "recipient_id": str(rec["id"]), "recipient_version": int(rec["version"]),
             "money_account_id": str(bank["id"]), "amount": amount, "currency": ctx.book.base_currency,
             "method": method, "memo": memo, "obligation": obligation, "account_id": line.id,
-            "tags_json": SK.dump(tags), "mode": "approval_queue", "status": "queued", "hold_id": hold.hold_id,
+            "tags_json": SK.dump(tags), "mode": "approval_queue", "status": "queued",
+            "hold_id": hold.hold_id if hold is not None else None,
             "purpose_json": SK.dump(purpose),
             "next_try_at": ctx.at, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         ring()
         return {"payment_id": pid, "status": "queued"}
-    return Plan(K.default_gate(ctx.org, who, "payment_create"),
+    return Plan(gate,
                 f"Pay {amount / 100:.2f} {ctx.book.base_currency} to {rec['name']} by {method}"
                 f"{' for ' + obligation if obligation else ''}", apply,
                 facts=_facts(ctx, rec, amount, line.code, obligation, tags, bank))

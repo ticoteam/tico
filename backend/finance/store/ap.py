@@ -1,10 +1,11 @@
 """SQL for payables and receivables (spec §4.1, §4.2): contacts, bills, invoices and their lines, attachments,
 settlement links and the cash view's rollups. Callers pass plain values and check rights and views themselves."""
+import json
 import sqlite3
 from collections.abc import Mapping, Sequence
 from typing import Any
 
-from .banking import like
+from .banking import LIVE_PAYMENT, like
 from .ledger import new_id, tagset
 
 TABLES = frozenset({"fin_contacts", "fin_bills", "fin_bill_lines", "fin_invoices", "fin_invoice_lines",
@@ -53,6 +54,12 @@ def lines(c: sqlite3.Connection, kind: str, doc_ids: Sequence[str]) -> dict[str,
     for r in c.execute(sql, list(doc_ids)):
         out[str(r[key])].append(r)
     return out
+
+
+def set_line_tags(c: sqlite3.Connection, kind: str, line_id: str, tags: Mapping[str, str]) -> None:
+    """A document line's tags, after its posted line was retagged."""
+    _, table, _, _, _ = DOCS[kind]
+    c.execute(f"UPDATE {table} SET tags_json=? WHERE id=?", (json.dumps(dict(tags), sort_keys=True), line_id))
 
 
 def replace_lines(c: sqlite3.Connection, kind: str, doc_id: str, rows: Sequence[Mapping[str, object]]) -> list[str]:
@@ -176,10 +183,25 @@ def owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str]) -> dict[s
         f"AND status IN ({_marks(statuses)}) GROUP BY {contact}", (*contact_ids, *statuses))}
 
 
+def open_for(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str], most: int) -> list[Any]:
+    """The open documents of these contacts (what `owed` sums), for a caller that cuts them to a viewer first."""
+    if not contact_ids:
+        return []
+    table, _, _, _, contact = DOCS[kind]
+    statuses = ("open", "scheduled") if kind == "bill" else ("sent", "partial")
+    return c.execute(f"SELECT * FROM {table} WHERE {contact} IN ({_marks(contact_ids)}) AND status IN "
+                     f"({_marks(statuses)}) ORDER BY id LIMIT ?", (*contact_ids, *statuses, most)).fetchall()
+
+
 # ------------------------------------------------------------------------------------------------ settlements
-def settlements_to(c: sqlite3.Connection, kind: str, doc_id: str, live: bool = True) -> list[Any]:
+def settlements_to(c: sqlite3.Connection, kind: str, doc_id: str, live: bool = True, most: int = -1) -> list[Any]:
     sql = "SELECT * FROM fin_settlements WHERE to_kind=? AND to_id=?" + (" AND voided_at IS NULL" if live else "")
-    return c.execute(sql + " ORDER BY settled_on, created_at", (kind, doc_id)).fetchall()
+    return c.execute(sql + " ORDER BY settled_on, created_at, id LIMIT ?", (kind, doc_id, most)).fetchall()
+
+
+def settlement_count(c: sqlite3.Connection, kind: str, doc_id: str) -> int:
+    return int(c.execute("SELECT count(*) FROM fin_settlements WHERE to_kind=? AND to_id=?", (kind, doc_id)
+                         ).fetchone()[0])
 
 
 def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any]:
@@ -187,14 +209,16 @@ def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any
                      "ORDER BY created_at", (kind, from_id)).fetchall()
 
 
-def expected(c: sqlite3.Connection, kind: str, money_account_id: str, amount: int, start: str, end: str) -> list[Any]:
-    """Payments marked from a connected money account still waiting for their bank row, of this amount in a window,
-    with the document's `contact_name`."""
+def expected(c: sqlite3.Connection, kind: str, money_account_id: str, amount: int, start: str, end: str,
+             most: int = 20) -> list[Any]:
+    """Payments marked from a connected money account still waiting for their bank row, of this amount (0: any) in a
+    window, with the document's `contact_id` and `contact_name`."""
     table, _, _, _, contact = DOCS[kind]
-    return c.execute(f"SELECT s.*, k.name AS contact_name FROM fin_settlements s JOIN {table} d ON d.id=s.to_id "
-                     f"LEFT JOIN fin_contacts k ON k.id=d.{contact} WHERE s.from_kind='expected' AND s.to_kind=? AND "
-                     "s.from_id=? AND s.amount=? AND s.settled_on BETWEEN ? AND ? AND s.voided_at IS NULL "
-                     "ORDER BY s.created_at, s.id LIMIT 20", (kind, money_account_id, amount, start, end)).fetchall()
+    return c.execute(f"SELECT s.*, d.{contact} AS contact_id, k.name AS contact_name FROM fin_settlements s "
+                     f"JOIN {table} d ON d.id=s.to_id LEFT JOIN fin_contacts k ON k.id=d.{contact} "
+                     "WHERE s.from_kind='expected' AND s.to_kind=? AND s.from_id=? AND (?=0 OR s.amount=?) AND "
+                     "s.settled_on BETWEEN ? AND ? AND s.voided_at IS NULL ORDER BY s.created_at, s.id LIMIT ?",
+                     (kind, money_account_id, amount, amount, start, end, most)).fetchall()
 
 
 def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
@@ -219,6 +243,19 @@ def attachments(c: sqlite3.Connection, kind: str, subject_ids: Sequence[str]) ->
     return out
 
 
+def attachment_counts(c: sqlite3.Connection, kind: str, subject_ids: Sequence[str]) -> dict[str, int]:
+    if not subject_ids:
+        return {}
+    return {str(r[0]): int(r[1]) for r in c.execute(
+        f"SELECT subject_id, count(*) FROM fin_attachments WHERE subject_kind=? AND subject_id IN "
+        f"({_marks(subject_ids)}) GROUP BY subject_id", (kind, *subject_ids))}
+
+
+def attachments_first(c: sqlite3.Connection, kind: str, subject_id: str, most: int) -> list[Any]:
+    return c.execute("SELECT * FROM fin_attachments WHERE subject_kind=? AND subject_id=? ORDER BY created_at, id "
+                     "LIMIT ?", (kind, subject_id, most)).fetchall()
+
+
 def attach(c: sqlite3.Connection, book_id: str, kind: str, subject_id: str, file_ids: Sequence[str], by: str,
            at: str) -> list[str]:
     """Attach files not already on the subject. The new attachment ids."""
@@ -228,10 +265,10 @@ def attach(c: sqlite3.Connection, book_id: str, kind: str, subject_id: str, file
             for f in file_ids if f not in have]
 
 
-def unmatched_files(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
-    """Receipts uploaded with nothing to attach to yet (subject `unmatched`)."""
-    return c.execute("SELECT * FROM fin_attachments WHERE book_id=? AND subject_kind='unmatched' "
-                     "ORDER BY created_at DESC, id LIMIT ?", (book_id, most)).fetchall()
+def unmatched_files(c: sqlite3.Connection, book_id: str, most: int, by: str = "") -> list[Any]:
+    """Receipts uploaded with nothing to attach to yet (subject `unmatched`); with `by`, only that teammate's."""
+    return c.execute("SELECT * FROM fin_attachments WHERE book_id=? AND subject_kind='unmatched' AND "
+                     "(?='' OR created_by=?) ORDER BY created_at DESC, id LIMIT ?", (book_id, by, by, most)).fetchall()
 
 
 def card_rows_without_receipt(c: sqlite3.Connection, money_ids: Sequence[str], card_ids: Sequence[str], since: str,
@@ -312,13 +349,18 @@ def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
 
 
 def open_owing(c: sqlite3.Connection, kind: str, book_id: str, left: int, most: int = 20) -> list[Any]:
-    """Open documents that still owe exactly `left`, with `contact_name` (what a new feed row may be paying)."""
+    """Open documents that still owe exactly `left`, with `contact_name` (what a new feed row may be paying). A
+    scheduled bill counts (the vendor may pull it before its day); one with a live Finance payment does not (that
+    payment's own row settles it)."""
     table, _, _, _, contact = DOCS[kind]
     paid = "amount_paid" if kind == "bill" else "amount_paid + written_off"
-    statuses = ("open",) if kind == "bill" else ("sent", "partial")
+    statuses = ("open", "scheduled") if kind == "bill" else ("sent", "partial")
+    live = ("AND NOT EXISTS (SELECT 1 FROM fin_payments p WHERE p.obligation='bill:' || d.id AND p.status IN "
+            f"({_marks(LIVE_PAYMENT)}))") if kind == "bill" else ""
+    args = (book_id, *statuses, left, *(LIVE_PAYMENT if kind == "bill" else ()), most)
     return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
-                     f"WHERE d.book_id=? AND d.status IN ({_marks(statuses)}) AND d.total - {paid} = ? "
-                     "ORDER BY d.id LIMIT ?", (book_id, *statuses, left, most)).fetchall()
+                     f"WHERE d.book_id=? AND d.status IN ({_marks(statuses)}) AND d.total - {paid} = ? {live} "
+                     "ORDER BY d.id LIMIT ?", args).fetchall()
 
 
 def drop_unmatched(c: sqlite3.Connection, book_id: str, file_ids: Sequence[str]) -> int:

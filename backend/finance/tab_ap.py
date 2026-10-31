@@ -1,7 +1,8 @@
 """Payables and receivables reads (spec §4.1, §7.1, §12): bills, invoices, contacts and one document with its lines,
-settlements, attachments and approvals. Bills and vendors show to whoever sees payables (a view grant, or the
-finance.ap right whose work they are), invoices and customers to whoever sees receivables; a document with a line on
-a private account the viewer has no full detail for is left out whole. Re-exported by finance/reads, the only door."""
+settlements, attachments and approvals. Bills and vendors show to whoever sees payables (the view, §7.5: rights are
+for doing, never seeing), invoices and customers to whoever sees receivables; a document with a line on a private
+account the viewer has no full detail for is left out whole, from lists, totals and contacts' owed amounts alike.
+Nested lists are capped, with a count and `more`. Re-exported by finance/reads, the only door."""
 import sqlite3
 from collections.abc import Sequence
 from datetime import date
@@ -10,6 +11,7 @@ from typing import Any
 from .context import Ctx, load
 from .core import ap as AP
 from .core import dates
+from .core import ledger as L
 from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
@@ -22,6 +24,7 @@ Row = dict[str, object]
 BATCH = 200
 SCAN = 2000                 # rows a page may look through before it hands back a cursor
 OPEN_MOST = 5000            # open documents an aging summary sums (more is reported as `more`)
+NESTED_MOST = 50            # settlements and attachments one document response carries
 SIDES = {"bill": ("payables", R.AP), "invoice": ("receivables", R.AR)}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 BILLS_EMAIL_KEY = "finance_bills_email"     # the install's bills address (actions.set_bills_email writes it)
@@ -31,12 +34,10 @@ CHART_FOR = {"bill": ("expense", "asset"), "invoice": ("income",)}
 
 
 def sees_side(ctx: Ctx, view: VW.View, kind: str) -> bool:
-    """Whether the viewer sees bills (kind bill) or invoices (kind invoice): a payables or receivables view, or the
-    finance.ap / finance.ar right, since entering and paying them is that right's work."""
-    flag, right = SIDES[kind]
-    if view.everything or (view.payables if flag == "payables" else view.receivables):
-        return True
-    return R.has(ctx.org, view.viewer, right, ctx.rights(view.viewer))
+    """Whether the viewer sees bills (kind bill) or invoices (kind invoice): a payables or receivables view. The
+    finance.ap / finance.ar right alone shows nothing."""
+    flag = SIDES[kind][0]
+    return view.everything or (view.payables if flag == "payables" else view.receivables)
 
 
 def sees_contact_kind(ctx: Ctx, view: VW.View, kind: str) -> bool:
@@ -150,12 +151,12 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
         scanned += len(batch)
         kept, _ = keep_docs(c, kind, batch, cut)
         keep = {str(r["id"]) for r in kept}
-        files = SAP.attachments(c, kind, sorted(keep))
+        files = SAP.attachment_counts(c, kind, sorted(keep))
         for r in batch:
             before = (str(r[f"{kind}_date"]), str(r["id"]))
             if str(r["id"]) not in keep:
                 continue
-            row = doc_row(kind, r, today, len(files.get(str(r["id"]), [])))
+            row = doc_row(kind, r, today, files.get(str(r["id"]), 0))
             if aging is not None and row["aging"] != aging:
                 continue
             out.append(row)
@@ -186,17 +187,21 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     kept, found = keep_docs(c, kind, [r], set(private_cut(ctx, view)))
     if not kept:
         raise FinanceError(NOT_FOUND, f"no such {kind} in your view")
-    files = SAP.attachments(c, kind, [doc_id])[doc_id]
-    out = doc_row(kind, r, dates.day(ctx.today), len(files))
+    attached = SAP.attachment_counts(c, kind, [doc_id]).get(doc_id, 0)
+    settled = SAP.settlement_count(c, kind, doc_id)
+    out = doc_row(kind, r, dates.day(ctx.today), attached)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
                      "description": str(x["description"]), "tags": SK.loads(x["tags_json"])}
                     for x in found[doc_id]]
     out["settlements"] = [{"id": str(s["id"]), "from_kind": str(s["from_kind"]), "from_id": str(s["from_id"]) or None,
                            "amount": int(s["amount"]), "settled_on": str(s["settled_on"]), "entry_id": s["entry_id"],
                            "voided_at": s["voided_at"], "created_by": str(s["created_by"])}
-                          for s in SAP.settlements_to(c, kind, doc_id, live=False)]
+                          for s in SAP.settlements_to(c, kind, doc_id, live=False, most=NESTED_MOST)]
+    out["settlement_count"], out["settlements_more"] = settled, settled > NESTED_MOST
     out["attachments"] = [{"id": str(f["id"]), "file_id": str(f["file_id"]), "created_by": str(f["created_by"]),
-                           "created_at": str(f["created_at"])} for f in files]
+                           "created_at": str(f["created_at"])}
+                          for f in SAP.attachments_first(c, kind, doc_id, NESTED_MOST)]
+    out["attachment_count"], out["attachments_more"] = attached, attached > NESTED_MOST
     out["actions"] = _approvals(c, kind, doc_id)
     out["terms_days"] = r["terms_days"]
     if kind == "bill":
@@ -239,6 +244,16 @@ def contact_row(ctx: Ctx, r: Any, admin: bool, owed: Row | None = None) -> Row:
             "created_at": str(r["created_at"])}
 
 
+def _owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str], cut: set[str]) -> dict[str, int]:
+    """What each contact's open documents owe, from only the documents this viewer sees whole."""
+    contact = f"{CONTACT_OF[kind]}_id"
+    kept, _ = keep_docs(c, kind, SAP.open_for(c, kind, contact_ids, OPEN_MOST), cut)
+    out: dict[str, int] = {}
+    for r in kept:
+        out[str(r[contact])] = out.get(str(r[contact]), 0) + int(r["total"]) - paid_of(kind, r)
+    return out
+
+
 def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: str = "", active: bool | None = True,
              cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
     """Vendors (to whoever sees payables) and customers (receivables) by name, with what their open bills and
@@ -260,8 +275,9 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
                              after=after, most=most + 1)
     page = rows[:most]
     ids = [str(r["id"]) for r in page]
-    bills_owed = SAP.owed(c, "bill", ids) if vendors else {}
-    invoices_owed = SAP.owed(c, "invoice", ids) if customers else {}
+    cut = set(private_cut(ctx, view))
+    bills_owed = _owed(c, "bill", ids, cut) if vendors else {}
+    invoices_owed = _owed(c, "invoice", ids, cut) if customers else {}
     out = [contact_row(ctx, r, admin, {**({"bills": bills_owed.get(str(r["id"]), 0)} if vendors else {}),
                                        **({"invoices": invoices_owed.get(str(r["id"]), 0)} if customers else {})})
            for r in page]
@@ -279,7 +295,8 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
     """The active lines the viewer may post to, for the bill, invoice and journal forms: every line in their view,
     for teammates who write to the books (finance.book, ap or ar). `for_` bill keeps expense and asset lines, invoice
     income lines (never accounts payable or receivable, which only documents move); journal keeps every line.
-    `company_wide` says whether a line takes untagged amounts from this viewer (else they tag their team)."""
+    `company_wide` says whether a line takes untagged amounts from this viewer; when it does not, `attributable` lists
+    the team and teammate tags they may use on it (the same rule a write checks)."""
     from .handlers import may_write
     ctx = load(c, at)
     view = ctx.view(viewer)
@@ -295,14 +312,35 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
             continue
         if types is not None and (a.type not in types or a.subtype in CONTROL_SUBTYPES):
             continue
-        out.append({"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
-                    "parent_id": a.parent_id or None, "company_wide": may_write(ctx, viewer, a.id, {})})
+        wide = may_write(ctx, viewer, a.id, {})
+        row: Row = {"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+                    "parent_id": a.parent_id or None, "company_wide": wide}
+        if not wide:
+            row["attributable"] = _attributable(ctx, viewer, a)
+        out.append(row)
     return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST, "view_version": view.version}
 
 
+ATTRIBUTABLE_MOST = 200
+
+
+def _attributable(ctx: Ctx, viewer: str, account: L.Account) -> list[Row]:
+    """The tags the viewer may put an amount on this line under (handlers.may_write decides each): its teams, then
+    teammates, as {"team": id} or {"teammate": id}."""
+    from .handlers import may_write
+    view = ctx.view(viewer)
+    out: list[Row] = [{"team": t} for t in sorted(view.teams(account)) if may_write(ctx, viewer, account.id, {"team": t})]
+    for m in sorted(ctx.org.humans | ctx.org.bots):
+        if len(out) >= ATTRIBUTABLE_MOST:
+            break
+        if may_write(ctx, viewer, account.id, {"teammate": m}):
+            out.append({"teammate": m})
+    return out[:ATTRIBUTABLE_MOST]
+
+
 def pay_from(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
-    """The connected bank accounts the viewer may pay a bill from (finance.pay): id, name, last 4, and the balance
-    only when the viewer sees that account's line on the balance sheet."""
+    """The connected bank accounts the viewer may pay a bill from (finance.pay) and sees (its view's sources): id,
+    name, provider, last 4 and balance. An account outside the view is left out whole."""
     from .tab import sees_money_account
     ctx = load(c, at)
     view = ctx.view(viewer)
@@ -310,11 +348,10 @@ def pay_from(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         raise denied("paying is for teammates with finance.pay")
     out: list[Row] = []
     for m in SK.money_accounts(c, ctx.book.id):
-        if str(m["kind"]) != "bank" or not m["connection_id"] or str(m["status"] or "active") != "active":
+        if str(m["kind"]) != "bank" or not m["connection_id"] or str(m["status"] or "active") != "active" \
+                or not sees_money_account(ctx, view, m):
             continue
-        seen = sees_money_account(ctx, view, m)
         out.append({"id": str(m["id"]), "name": str(m["name"]), "provider": str(m["provider"] or ""),
-                    "last4": m["last4"], "balance": m["balance"] if seen else None,
-                    "available_balance": m["available_balance"] if seen else None,
-                    "balance_as_of": m["balance_as_of"] if seen else None})
+                    "last4": m["last4"], "balance": m["balance"], "available_balance": m["available_balance"],
+                    "balance_as_of": m["balance_as_of"]})
     return {"accounts": out, "currency": ctx.book.base_currency, "view_version": view.version}

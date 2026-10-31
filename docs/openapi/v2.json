@@ -37263,6 +37263,22 @@
                 },
                 "company_wide": {
                   "type": "boolean"
+                },
+                "attributable": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "team": {
+                        "type": "string"
+                      },
+                      "teammate": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [],
+                    "additionalProperties": true
+                  }
                 }
               },
               "required": [
@@ -37725,6 +37741,18 @@
                   ],
                   "additionalProperties": true
                 }
+              },
+              "settlement_count": {
+                "type": "integer"
+              },
+              "settlements_more": {
+                "type": "boolean"
+              },
+              "attachment_count": {
+                "type": "integer"
+              },
+              "attachments_more": {
+                "type": "boolean"
               },
               "terms_days": {
                 "type": [
