@@ -2,8 +2,10 @@
    Balance sheet: assets, liabilities and equity as of a day (and a day to compare with), each line with the accounts
    that feed it; the totals are the route's. Cards: each card with its holder, budget, limit and spend this period;
    the rail freezes, unfreezes and sets the limit. Transactions: bank feed rows and entries, searched and filtered,
-   paged by cursor; the rail tags a row's lines (categorize) for those who keep the books.
-   Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users.
+   paged by cursor; for those who keep the books the rail posts a bank row to a line, or splits it across lines
+   (categorize with feed_id, a dry run first), and tags a row's lines (categorize).
+   Reads: GET /api/v2/finance/balance-sheet, /finance/cards, /finance/transactions, /finance/budgets, /finance/mercury-users,
+   /finance/chart.
    Writes (POST /api/v2/finance/actions): card_create, card_freeze, card_unfreeze, card_update_limit, categorize.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -213,7 +215,9 @@ function finTxPage() {
   }
   // The org filter lives in the address only: a bare Transactions link drops one an earlier link set.
   const org = finFilterFrom(FIN.q); t.org = finFilterAny(org) ? org : null;
-  FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: []};
+  // chart: the lines a bank row may go to (undefined until read, null while reading, false when there is no chart read);
+  // cat: the selected bank row's picks (finTxCatState).
+  FIN.tx = {rows: [], next: null, sel: '', load: 0, lines: [], chart: undefined, cat: null};
   const orgChip = t.org ? `<span class="fin-chip">${esc([...finPicked(t.org).map(finPickName), ...(t.org.who !== 'both' ? [t.org.who === 'bots' ? 'Bots' : 'People'] : [])].join(', '))}<button type="button" data-fin-org-clear aria-label="Clear filter">✕</button></span>` : '';
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><span class="sr-only">Search</span><input type="search" data-fin-q value="${esc(t.q)}" placeholder="Search" aria-label="Search"></label>
       ${finSeg('source', 'Source', [['all', 'All'], ['feed', 'Bank'], ['entry', 'Entries']], t.source)}
@@ -260,6 +264,7 @@ async function finTxLines() {
   const t = FIN_TX, known = state.lines.some(r => r.account_id === t.account);
   sel.innerHTML = `<option value="">All lines</option>${t.account && !known ? `<option value="${esc(t.account)}" selected>${esc(t.account)}</option>` : ''}${state.lines.map(r =>
     `<option value="${esc(r.account_id)}"${r.account_id === t.account ? ' selected' : ''}>${esc(r.name)}</option>`).join('')}`;
+  if (state.chart === false) finTxCatRedraw();
 }
 async function finTxLoad(more) {
   const state = FIN.tx, t = FIN_TX, load = ++state.load;
@@ -299,6 +304,7 @@ function finTxRail() {
   if (!r) { finRail(''); return; }
   const lines = r.kind === 'feed' ? (r.lines || []) : r.entry_id && r.id ? [{line_id: r.id, account: r.account, amount: r.amount, vendor: r.vendor, tags: r.tags || {}}] : [];
   const may = finCaps().may('finance.book') && lines.length > 0;
+  const cat = finTxCatOn(r);
   const acc = FIN.acc || {};
   // What each field shows: the lines' common value, or Mixed when a split transaction's lines differ.
   const FIN_MIXED = '*';
@@ -313,11 +319,13 @@ function finTxRail() {
     ${finKv('Date', esc(finDayLabel(r.date)))}
     ${r.kind === 'feed' ? finKv('Account', esc(`${r.money_account?.name || ''}${r.money_account?.last4 ? ' ••' + r.money_account.last4 : ''}`)) + (r.description && r.description !== title ? finKv('Description', esc(r.description)) : '') : finKv('Source', esc(r.source || ''))}
     ${r.memo ? finKv('Memo', esc(r.memo)) : ''}
-    ${lines.length ? `<h3 class="fin-h">Lines</h3>${lines.map(l => finKv(l.account || '', finCents(l.amount))).join('')}` : ''}
+    ${cat ? '<form class="fin-form fin-rail-form fin-cat" data-fin-cat novalidate></form>'
+      : lines.length ? `<h3 class="fin-h">Lines</h3>${lines.map(l => finKv(l.account || '', finCents(l.amount))).join('')}` : ''}
     ${may ? `<form class="fin-form fin-rail-form" data-fin-tag><label>Teammate<select name="teammate">${mixed('teammate')}${opt('', '—', shown.teammate)}${(acc.teammates || []).map(t => opt(t.teammate, finWho(t.teammate), shown.teammate)).join('')}</select></label>
       <label>Team<select name="team">${mixed('team')}${opt('', '—', shown.team)}${(acc.teams || []).map(t => opt(t.id, t.name, shown.team)).join('')}</select></label>
       <label>Project<input name="project" maxlength="80" autocomplete="off" value="${shown.project === FIN_MIXED ? '' : esc(shown.project)}"${shown.project === FIN_MIXED ? ' placeholder="Mixed"' : ''}></label>
       <div class="fin-foot"><button type="submit" class="primary">Save</button></div></form>` : ''}`);
+  if (cat) finTxCatDraw(r);
   const form = $('#fin-rail [data-fin-tag]');
   form?.elements.project.addEventListener('input', ev => { ev.target.dataset.finTyped = '1'; });
   if (form) form.onsubmit = async ev => {
@@ -340,4 +348,132 @@ function finTxRail() {
       void finTxLoad(false);
     } catch (e) { toast(e.message, true); btn.disabled = false; }
   };
+}
+
+// ----------------------------------------------------------------- a bank row's line
+// Those who keep the books post a bank or card row to a line, or split it across 2+ lines whose amounts add up to the
+// row's; a row still pending at the bank, or cleared by a done reconciliation, keeps its line (banking.py
+// categorize_feed). Owners always may (finCaps().may).
+const finTxCatOn = r => r.kind === 'feed' && !r.pending && !r.reconciled && !!finCaps()?.may('finance.book');
+
+// The lines the viewer may post to, each with whether it takes amounts from them with no team or teammate tag
+// (GET /finance/chart). A server without that read gets the P&L lines this tab already reads, company-wide only for
+// a viewer who sees everything.
+async function finTxChart() {
+  const state = FIN.tx;
+  if (state.chart !== undefined) return;
+  state.chart = null;
+  let rows = null;
+  try { rows = (await get('/v2/finance/chart?for=journal' + finAs(), {fresh: true}))?.accounts; } catch { rows = null; }
+  if (FIN?.tx !== state) return;
+  state.chart = Array.isArray(rows) && rows.length ? rows : false;
+  finTxCatRedraw();
+}
+function finTxCatLines() {
+  const state = FIN.tx;
+  if (Array.isArray(state.chart)) return state.chart;
+  if (state.chart !== false) return [];
+  const wide = !!finCaps()?.all;
+  return state.lines.map(l => ({id: l.account_id, name: l.name, company_wide: wide}));
+}
+function finTxCatRedraw() {
+  const r = FIN?.tx?.rows.find(x => finTxKey(x) === FIN.tx.sel);
+  if (r && finTxCatOn(r)) finTxCatDraw(r);
+}
+// Whom an amount on a line that is not company-wide for the viewer may be for: the chart's own list when it sends one,
+// else from the access read (the viewer, their teams, the teammates they see), the viewer first. [value, label].
+function finTxForOpts(line) {
+  const me = finCaps()?.who || '', acc = FIN.acc || {};
+  const tags = line?.attributable || [{teammate: me}, ...(acc.teams || []).map(t => ({team: t.id})),
+    ...(acc.teammates || []).filter(t => t.teammate !== me).map(t => ({teammate: t.teammate}))];
+  return [...tags.filter(t => t.teammate === me), ...tags.filter(t => t.teammate !== me)]
+    .map(t => t.team ? ['team:' + t.team, finTeamName(t.team)] : ['teammate:' + t.teammate, finWho(t.teammate)]);
+}
+// The selected row's picks, kept while the rail redraws: its current line(s), or one empty pick for a new row.
+function finTxCatState(r) {
+  const state = FIN.tx, key = finTxKey(r);
+  if (state.cat?.key === key) return state.cat;
+  const lines = r.lines || [];
+  const forOf = tags => tags?.teammate ? 'teammate:' + tags.teammate : tags?.team ? 'team:' + tags.team : '';
+  const rows = (lines.length ? lines : [{}]).map(l => ({account: l.account_id || '', name: l.account || '', tags: l.tags || {},
+    for: forOf(l.tags), amount: lines.length > 1 ? (Math.abs(l.amount) / 100).toFixed(2) : ''}));
+  return state.cat = {key, split: rows.length > 1, rows, ask: null};
+}
+function finTxCatDraw(r) {
+  const form = $('#fin-rail [data-fin-cat]'); if (!form) return;
+  void finTxChart();
+  const state = FIN.tx, c = finTxCatState(r), chart = finTxCatLines();
+  const lineOf = row => chart.find(a => a.id === row.account);
+  const scoped = row => lineOf(row)?.company_wide === false;
+  const opt = (v, l, cur) => `<option value="${esc(v)}"${v === cur ? ' selected' : ''}>${esc(l)}</option>`;
+  const lineSel = (row, i, label) => `<select name="account" data-i="${i}"${label ? '' : ' aria-label="Line"'}>${opt('', '—', row.account)}${
+    row.account && !lineOf(row) ? opt(row.account, row.name || row.account, row.account) : ''}${chart.map(a => opt(a.id, a.name, row.account)).join('')}</select>`;
+  const forSel = (row, i) => {
+    if (!scoped(row)) return '';
+    const o = finTxForOpts(lineOf(row));
+    if (!o.some(([v]) => v === row.for)) row.for = o[0]?.[0] || '';
+    return `<select name="for" data-i="${i}"${c.split ? ' aria-label="For"' : ''}>${o.map(([v, l]) => opt(v, l, row.for)).join('')}</select>`;
+  };
+  const cents = row => finParseCents(row.amount);
+  const ready = () => c.rows.every(x => x.account && (!scoped(x) || x.for)) && (!c.split
+    || (c.rows.length > 1 && c.rows.every(x => (cents(x) || 0) > 0) && c.rows.reduce((t, x) => t + (cents(x) || 0), 0) === Math.abs(r.amount)));
+  const footHtml = () => `<div class="fin-foot">${c.ask != null
+    ? `<span class="fin-ask">${esc(c.ask ? `Approval from ${finWho(c.ask)}` : 'Needs approval')}</span><button type="button" class="ghost" data-fin-cat-no>Cancel</button><button type="button" class="primary" data-fin-cat-yes>Send</button>`
+    : `<button type="button" class="fin-cat-link" ${c.split ? 'data-fin-cat-add>Add line' : 'data-fin-cat-split>Split'}</button><span class="spacer"></span><button type="submit" class="primary" data-fin-cat-save${ready() ? '' : ' disabled'}>Save</button>`}</div>`;
+  const foot = () => { const f = form.querySelector('.fin-foot'); if (f) f.outerHTML = footHtml(); };
+  const draw = focus => {
+    form.innerHTML = (c.split
+      ? c.rows.map((row, i) => `<div class="fin-cat-row">${lineSel(row, i, false)}<input name="amount" data-i="${i}" inputmode="decimal" autocomplete="off" aria-label="Amount" value="${esc(row.amount)}">${
+        c.rows.length > 2 ? `<button type="button" class="fin-x" data-fin-cat-del="${i}" aria-label="Remove">✕</button>` : '<span></span>'}</div>${scoped(row) ? `<div class="fin-cat-for">${forSel(row, i)}</div>` : ''}`).join('')
+      : `<label>Line${lineSel(c.rows[0], 0, true)}</label>${scoped(c.rows[0]) ? `<label>For${forSel(c.rows[0], 0)}</label>` : ''}`) + footHtml();
+    if (focus) form.querySelector(focus)?.focus();
+  };
+  const sign = r.amount < 0 ? 1 : -1;    // a line carries the row's amount the other way round, as the read's lines do
+  const tagsOf = row => {
+    const out = {...row.tags};
+    delete out.budget;                   // set by the line's budgets when it posts
+    if (scoped(row)) { delete out.teammate; delete out.team; const [k, v] = row.for.split(/:(.*)/); out[k] = v; }
+    return out;
+  };
+  const payload = () => c.split
+    ? {feed_id: r.id, lines: c.rows.map(x => ({account_id: x.account, amount: sign * (cents(x) || 0), tags: tagsOf(x)}))}
+    : {feed_id: r.id, account_id: c.rows[0].account, tags: tagsOf(c.rows[0])};
+  const send = async confirmed => {
+    const btn = form.querySelector(confirmed ? '[data-fin-cat-yes]' : '[data-fin-cat-save]');
+    if (btn) btn.disabled = true;
+    const p = payload();
+    try {
+      if (!confirmed) {
+        const dry = await post('/v2/finance/actions', {kind: 'categorize', payload: p, dry_run: true});
+        if (dry?.status === 'needs_approval') { c.ask = dry.approver || ''; foot(); return; }
+        if (dry?.status !== 'committed') throw new Error(dry?.reason || 'Not done');
+      }
+      const res = await finAct('categorize', p);
+      if (res.status === 'committed') toast('Saved');
+      if (FIN?.tx === state) state.cat = null;
+      void finTxLoad(false);
+    } catch (e) { toast(e.message, true); if (btn) btn.disabled = false; }
+  };
+  form.onchange = ev => {
+    const el = ev.target, row = c.rows[Number(el.dataset?.i)];
+    if (!row) return;
+    c.ask = null;
+    if (el.name === 'account') { row.account = el.value; row.name = el.selectedOptions[0]?.textContent || ''; draw(`select[name="account"][data-i="${el.dataset.i}"]`); }
+    else if (el.name === 'for') { row.for = el.value; foot(); }
+  };
+  form.oninput = ev => {
+    const el = ev.target, row = c.rows[Number(el.dataset?.i)];
+    if (!row || el.name !== 'amount') return;
+    row.amount = el.value; c.ask = null; foot();
+  };
+  form.onclick = ev => {
+    const t = ev.target;
+    if (t.closest('[data-fin-cat-split]')) { c.split = true; c.rows = [{...c.rows[0], amount: ''}, {account: '', name: '', tags: {}, for: '', amount: ''}]; draw('input[name="amount"]'); }
+    else if (t.closest('[data-fin-cat-add]')) { c.rows.push({account: '', name: '', tags: {}, for: '', amount: ''}); draw(`select[name="account"][data-i="${c.rows.length - 1}"]`); }
+    else if (t.closest('[data-fin-cat-del]')) { c.rows.splice(Number(t.closest('[data-fin-cat-del]').dataset.finCatDel), 1); c.ask = null; draw(''); }
+    else if (t.closest('[data-fin-cat-no]')) { c.ask = null; foot(); }
+    else if (t.closest('[data-fin-cat-yes]')) void send(true);
+  };
+  form.onsubmit = ev => { ev.preventDefault(); if (ready() && c.ask == null) void send(false); };
+  draw('');
 }

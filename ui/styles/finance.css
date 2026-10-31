@@ -161,3 +161,19 @@
 .fin-kv select{width:auto;max-width:200px;min-height:0;padding:2px 6px}
 .fin-private{display:flex;flex-wrap:wrap;gap:6px}
 .fin-private .fin-chip{white-space:normal}
+
+/* Transactions rail: a bank row's line (categorize), or the row split across lines with amounts. */
+.fin-cat .fin-foot{align-items:center}
+.fin-cat .fin-foot .spacer{flex:1}
+.fin-cat-row{display:grid;grid-template-columns:minmax(0,1fr) 84px 22px;gap:6px;align-items:center}
+.fin-form .fin-cat-row select,.fin-form .fin-cat-row input{min-width:0}
+.fin-cat-row input{text-align:right;font-variant-numeric:tabular-nums}
+.fin-cat-for{margin:-4px 28px 0 0}
+.fin-cat-for select{width:100%}
+.fin-cat-link{padding:0;border:0;background:none;color:var(--link);font:inherit;font-size:var(--t-sm);cursor:pointer}
+.fin-cat-link:hover{text-decoration:underline}
+.fin-ask{margin:0 auto 0 0;color:var(--wait-ink);font-size:var(--t-sm)}
+@media (max-width:640px){
+  .fin-cat-row{grid-template-columns:minmax(0,1fr) 96px 28px}
+  .fin-cat-for{margin-right:34px}
+}
