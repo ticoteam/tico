@@ -383,7 +383,9 @@ def test_no_card_number_is_taken_stored_or_read_back(books):
             assert (refused.status, refused.code) == ("failed", "invalid"), kind
         assert FA.receipt_payload(c, "card_save", {"card_id": coder, "vendor": typed}) == \
             {"refused": FA.CARD_NUMBER_REFUSED}
-        stored = " ".join(str(v) for table in ("fin_actions", "fin_cards", "fin_card_saves")
+        # Fields join on newlines: a space would glue one field's digits onto the next once spaces are removed below,
+        # and a random id's digits could then read as a card number.
+        stored = "\n".join(str(v) for table in ("fin_actions", "fin_cards", "fin_card_saves")
                           for row in c.execute(f"SELECT * FROM {table}").fetchall() for v in tuple(row))
         assert typed.replace(" ", "") not in stored.replace(" ", "")
         assert not CARD_NUMBER.search(stored.replace(" ", ""))
@@ -437,6 +439,48 @@ def test_a_card_number_is_refused_however_its_digits_are_spaced_or_followed(book
     assert not V.has_card_number({"budget_id": "ab4222222222222cd", "card_id": "12345678-1234-1234-1234-123456789012"})
 
 
+DASHED_CARD_SHAPES = ("4242-4242-4242-4242-123", "4242 4242 4242 4242-123", "4242-4242-4242-4242-7",
+                      "4242-4242-4242-4242-", "-4242424242424242", "4242424242424242-", "-4242-4242-4242-4242",
+                      "123-4242-4242-4242-4242")
+
+
+def test_a_dashed_card_number_is_refused_with_a_code_or_a_dash_on_either_side(books):
+    """A dash next to a card number is a separator, not an id, unless letters or digits run on past it. A code after
+    or before the number (one to four digits, dashed off) is a group of its own."""
+    for typed in DASHED_CARD_SHAPES:
+        assert V.has_card_number(typed), typed
+    # A UUID-shaped id is no card, even when its first sixteen digits pass Luhn: a group that goes on after them is
+    # no code.
+    assert not V.has_card_number("42424242-4242-4242-4242-123456789012")
+    assert not V.has_card_number("ord-4242424242424242")
+    with books.transaction() as c:
+        before = c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0]
+        for typed in DASHED_CARD_SHAPES:
+            refused = act(c, OWNER, "budget_create", {"name": typed, "account_id": account(c, "6100"),
+                                                      "amount": 10_000, "at_limit": "decline"})
+            assert refused.status == "failed" and refused.code == "invalid", typed
+            assert refused.reason == FA.CARD_NUMBER_REFUSED, typed
+            refused = act(c, OWNER, "contact_create", {"name": "Acme Shop", "kind": "vendor", "tax_id": typed})
+            assert (refused.status, refused.code, refused.reason) == ("failed", "invalid", V.CARD_NUMBER_REFUSED), typed
+        assert c.execute("SELECT count(*) FROM fin_budgets").fetchone()[0] == before
+        assert c.execute("SELECT count(*) FROM fin_contacts").fetchone()[0] == 0
+        stored = " ".join(str(v) for table in ("fin_budgets", "fin_actions", "fin_contacts")
+                          for row in c.execute(f"SELECT * FROM {table}").fetchall() for v in tuple(row))
+        assert "4242424242424242" not in re.sub(r"\D", "", stored)
+
+
+def test_a_dashed_card_number_in_a_plain_field_is_refused_and_never_stored(books):
+    fake = FakeMercury()
+    _, coder, _ = _world(books, fake)
+    with books.transaction() as c:
+        for typed in DASHED_CARD_SHAPES:
+            refused = act(c, OWNER, "card_save", {"card_id": coder, "vendor": typed})
+            assert (refused.status, refused.code, refused.reason) == \
+                ("failed", "invalid", FA.CARD_NUMBER_REFUSED), typed
+        assert c.execute("SELECT count(*) FROM fin_card_saves").fetchone()[0] == 0
+        assert "4242424242424242" not in _stored_digits(c)
+
+
 def test_a_card_number_sent_as_a_json_number_is_refused_before_anything_is_stored(books):
     fake = FakeMercury()
     _, coder, _ = _world(books, fake)
@@ -487,6 +531,136 @@ def test_an_unfreeze_waits_while_an_ancestor_decline_budget_is_at_its_cutoff(boo
         assert _status(c, kid) == "frozen"
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
         assert _status(c, kid) == "active" and _frozen_by(c, kid) is None
+
+
+def test_an_unfreeze_refusal_names_only_budgets_the_asker_can_see(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00, decline; coder and seller hold 40.00 of it
+    with books.transaction() as c:
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
+        ctx = load(c, AT)
+        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="cutoff-hidden", expires_at=None)
+        assert held.allowed
+        FA.drain_events(c, AT)
+        assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
+        # The bot holds its card but has no view of Tools, the budget above it: the refusal does not name it.
+        refused = act(c, "bot:coder", "card_unfreeze", {"card_id": kid})
+        assert (refused.status, refused.code) == ("denied", "denied")
+        assert "Tools" not in refused.reason
+        assert refused.reason == "a budget above this one is used up; raise it before unfreezing"
+        assert "Tools budget is used up" in act(c, OWNER, "card_unfreeze", {"card_id": kid}).reason
+
+
+def test_a_refusal_that_named_a_budget_replays_without_the_name_once_the_asker_cannot_see_it(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00, decline; coder and seller hold 40.00 of it
+    with books.transaction() as c:
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
+        ctx = load(c, AT)
+        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="cutoff-replay", expires_at=None)
+        assert held.allowed
+        FA.drain_events(c, AT)
+        assert _status(c, kid) == "frozen" and _frozen_by(c, kid) == "budget"
+        grant = act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
+        assert grant.status == "committed"
+        # The bot sees Tools now, so the refusal names it; the record keeps only the fallback, never the name.
+        refused = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-replay")
+        assert (refused.status, refused.reason) == ("denied", "the Tools budget is used up; raise it before unfreezing")
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (refused.action_id,)).fetchone()[0]
+        assert stored == "a budget above this one is used up; raise it before unfreezing"
+        # Its view is taken back: the same key replays without the name.
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        replay = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-replay")
+        assert replay.replayed and replay.reason == "a budget above this one is used up; raise it before unfreezing"
+        # Given back, the same key names it again.
+        assert act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"}).status == "committed"
+        again = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-replay")
+        assert again.replayed and again.reason == "the Tools budget is used up; raise it before unfreezing"
+
+
+def test_a_status_read_names_a_budget_only_while_the_asker_can_see_it(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00, decline; coder and seller hold 40.00 of it
+    with books.transaction() as c:
+        eng = _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        kid = str(_bot_card(c, eng, "bot:coder", amount=5_000).result["card_id"])
+        ctx = load(c, AT)
+        held = budgeting.place(ctx, budget_scope=budget, amount=5_000, currency=ctx.book.base_currency, source="manual",
+                               source_id="cutoff-read", expires_at=None)
+        assert held.allowed
+        FA.drain_events(c, AT)
+        grant = act(c, OWNER, "view_grant", {"subject": "bot:coder", "what": "everything"})
+        assert grant.status == "committed"
+        refused = act(c, "bot:coder", "card_unfreeze", {"card_id": kid}, key="unfreeze-read")
+        assert refused.reason == "the Tools budget is used up; raise it before unfreezing"
+        # A status read gives the same rule as a replay: the name while the asker can see Tools, the fallback after.
+        seen = FR.action_for(c, "bot:coder", refused.action_id)
+        assert seen["reason"] == "the Tools budget is used up; raise it before unfreezing"
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        unseen = FR.action_for(c, "bot:coder", refused.action_id)
+        assert unseen["reason"] == "a budget above this one is used up; raise it before unfreezing"
+
+
+def test_a_warn_budget_paused_at_zero_keeps_its_cards_frozen_through_the_sweep(books):
+    fake = FakeMercury()
+    budget, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "at_limit": "warn"}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 0}).status == "committed"
+        assert _frozen_by(c, coder) == "budget" and _frozen_by(c, seller) == "budget"
+        FA.watch_documents(c, LATER)                 # the hourly sweep: a zero amount pauses a warn budget too
+        assert _status(c, coder) == "frozen" and _status(c, seller) == "frozen"
+    with books.transaction() as c:
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        assert _status(c, coder) == "active" and _status(c, seller) == "active"
+
+
+def test_a_budget_back_from_inactive_at_zero_today_must_fit_its_later_versions(books):
+    """A paused child that comes back active brings its November version: the parent's cards (40.00) and that version
+    (20.00) fit its 50.00 in October but not in November."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c)                                              # Tools: 50.00 a month, decline
+        eng = _budget(c, name="Eng tools", amount=20_000, team="eng", parent_id=line, effective_from="2026-11-01")
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "amount": 0}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        assert _bot_card(c, line, "bot:coder").status == "committed"
+        assert _bot_card(c, line, "bot:seller", user="user-dan").status == "committed"
+        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "active": True})
+        assert refused.code == "invalid" and "reserve 600.00" in refused.reason
+        assert c.execute("SELECT active FROM fin_budgets WHERE id=?", (eng,)).fetchone()[0] == 0
+        assert act(c, OWNER, "budget_update", {"budget_id": line, "amount": 60_000}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": True}).status == "committed"
+
+
+def test_a_child_with_no_amount_today_that_comes_back_active_fits_its_later_version(books):
+    """A child with no amount in force today (its first version is November's) brings that version back with it, so on
+    November 1 its 500.00 must fit the parent alone and then with the parent's 400.00 of cards."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = _budget(c, amount=100_000)                                # Tools: 1000.00, decline
+        assert _bot_card(c, line, "bot:coder", amount=20_000).status == "committed"
+        assert _bot_card(c, line, "bot:seller", amount=20_000, user="user-dan").status == "committed"
+        eng = _budget(c, name="Eng tools", amount=50_000, team="eng", parent_id=line, effective_from="2026-11-01")
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": False}).status == "committed"
+        # 500.00 of children alone is more than 450.00: refused by the children check.
+        assert act(c, OWNER, "budget_update", {"budget_id": line, "amount": 45_000}).status == "committed"
+        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "active": True})
+        assert refused.code == "invalid" and "children would total" in refused.reason
+        assert c.execute("SELECT active FROM fin_budgets WHERE id=?", (eng,)).fetchone()[0] == 0
+        # 500.00 fits alone at 800.00, but 400.00 of cards on top makes 900.00: refused by the reserve check.
+        assert act(c, OWNER, "budget_update", {"budget_id": line, "amount": 80_000}).status == "committed"
+        refused = act(c, OWNER, "budget_update", {"budget_id": eng, "active": True})
+        assert refused.code == "invalid" and "reserve 900.00" in refused.reason
+        assert c.execute("SELECT active FROM fin_budgets WHERE id=?", (eng,)).fetchone()[0] == 0
+        assert act(c, OWNER, "budget_update", {"budget_id": line, "amount": 90_000}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": eng, "active": True}).status == "committed"
 
 
 def test_a_warn_budget_at_zero_does_not_hold_a_card_back_from_the_sweep(books):
@@ -636,3 +810,26 @@ def test_migration_67_adds_the_saved_card_record_to_an_install_from_66(store):
     with store.read() as c:
         assert c.execute("SELECT 1 FROM sqlite_master WHERE name='fin_card_saves'").fetchone()
         assert c.execute("SELECT count(*) FROM cloud_migrations WHERE version=67").fetchone()[0] == 1
+
+
+def test_a_cards_refusal_names_the_cards_only_while_the_asker_can_see_them(books):
+    fake = FakeMercury()
+    budget, _, _ = _world(books, fake)               # Tools: 50.00; coder reserves 200.00 and seller 200.00 of it
+    with books.transaction() as c:
+        _budget(c, name="Eng tools", amount=10_000, team="eng", parent_id=budget)
+        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.budgets"}).status == "committed"
+        grant = act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "everything"})
+        assert grant.status == "committed"
+        refused = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
+        assert refused.code == "invalid" and "lower these cards first" in refused.reason
+        assert "coder" in refused.reason and "reserves 200.00" in refused.reason
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (refused.action_id,)).fetchone()[0]
+        assert "coder" not in stored and "seller" not in stored and "200.00" not in stored
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        replay = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
+        assert replay.replayed and "coder" not in replay.reason and "200.00" not in replay.reason
+        seen = FR.action_for(c, "human:ben", refused.action_id)
+        assert "coder" not in seen["reason"] and "200.00" not in seen["reason"]
+        assert act(c, OWNER, "view_grant", {"subject": "human:ben", "what": "everything"}).status == "committed"
+        again = act(c, "human:ben", "budget_update", {"budget_id": budget, "amount": 45_000}, key="cards-shown")
+        assert again.replayed and "coder" in again.reason and "reserves 200.00" in again.reason

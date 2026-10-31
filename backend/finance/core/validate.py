@@ -13,14 +13,18 @@ MAX_ITEMS = 500
 
 # Field names a card number goes under. A card number is 13 to 19 digits that pass the Luhn check every card number
 # passes, written as digit groups joined by whitespace or dashes (any kind), or as a JSON number. A group run is one
-# only as a whole token: a digit next to a letter or a dash is part of an id, and a card number may carry a code after
-# it (`4242 4242 4242 4242 123`), so every run of groups is tried.
+# only as a whole token: a letter or digit that runs on past a dash makes it part of an id (`ord-4242…`, a UUID's
+# groups), while a dash that stands alone at the edge of a number is a separator. A card number may carry a short code
+# before or after it, dashed off (`4242 4242 4242 4242 123`, `4242-4242-4242-4242-123`), so every run of
+# groups is tried.
 CARD_NUMBER_KEYS = frozenset({"card_number", "cardnumber", "pan", "cvc", "cvv", "cvv2", "security_code"})
 CARD_NUMBER_REFUSED = "a card number never goes into Finance: Tico does not take one (spec §8.3)"
+_CODE_MAX = 4
 _DIGITS = re.compile(r"\d+")
 _DASHES = "\\-\u2010-\u2015\u2212"
 _GAP = re.compile(rf"[\s\u00ad\u200b-\u200d\u2060\ufeff{_DASHES}]*")
-_EDGE = re.compile(rf"[\w{_DASHES}]")
+_DASH = re.compile(rf"[{_DASHES}]")
+_WORD = re.compile(r"\w")
 
 
 def _luhn(digits: str) -> bool:
@@ -35,10 +39,41 @@ def _card_int(n: int) -> bool:
     return 10**12 <= abs(n) < 10**19 and _luhn(str(abs(n)))
 
 
+def _joined_right(text: str, at: int) -> bool:
+    """Whether an id runs on past `at`: a letter or digit right there, or a dash with one after it."""
+    return _WORD.match(text, at) is not None or \
+        (_DASH.match(text, at) is not None and _WORD.match(text, at + 1) is not None)
+
+
+def _joined_left(text: str, at: int) -> bool:
+    """Whether an id runs on into `at` from the left: a letter or digit before it, or a dash with one before that."""
+    if at >= 1 and _WORD.match(text, at - 1) is not None:
+        return True
+    return at >= 2 and _DASH.match(text, at - 1) is not None and _WORD.match(text, at - 2) is not None
+
+
+def _code_after(text: str, spans: list[tuple[int, int]], j: int) -> bool:
+    """Whether the run of groups ending at span `j` is followed by a short code dashed off it that ends the token."""
+    if j + 1 >= len(spans):
+        return False
+    code_start, code_end = spans[j + 1]
+    return _GAP.fullmatch(text, spans[j][1], code_start) is not None and 1 <= code_end - code_start <= _CODE_MAX \
+        and not _joined_right(text, code_end)
+
+
+def _code_before(text: str, spans: list[tuple[int, int]], i: int) -> bool:
+    """Whether span `i` starts a number that a short code dashed off before it began the token."""
+    if i < 1:
+        return False
+    code_start, code_end = spans[i - 1]
+    return _GAP.fullmatch(text, code_end, spans[i][0]) is not None and 1 <= code_end - code_start <= _CODE_MAX \
+        and not _joined_left(text, code_start)
+
+
 def _card_text(text: str) -> bool:
     spans = [m.span() for m in _DIGITS.finditer(text)]
     for i, (start, _) in enumerate(spans):
-        if _EDGE.match(text[start - 1:start]):
+        if _joined_left(text, start) and not _code_before(text, spans, i):
             continue
         digits = ""
         for j in range(i, len(spans)):
@@ -48,7 +83,7 @@ def _card_text(text: str) -> bool:
             if len(digits) > 19:
                 break
             end = spans[j][1]
-            if len(digits) >= 13 and not _EDGE.match(text[end:end + 1]) and _luhn(digits):
+            if len(digits) >= 13 and _luhn(digits) and (not _joined_right(text, end) or _code_after(text, spans, j)):
                 return True
     return False
 

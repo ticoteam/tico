@@ -10,7 +10,7 @@ import json
 import sqlite3
 from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import Any, cast
 
 from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting
 from . import raw_totals, runs
@@ -20,7 +20,7 @@ from .context import Ctx, load
 from .core import kinds as K
 from .core import org as O
 from .core import validate as V
-from .core.errors import DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, CONFLICT, FinanceError
+from .core.errors import CONFLICT, DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError, Named
 from .store import actions as SX
 from .store import budgets as SB
 from .store import usage as SU
@@ -100,6 +100,20 @@ def _canonical(payload: object) -> dict[str, object]:
 def _trim_ids(payload: Mapping[str, object]) -> dict[str, object]:
     return {k: v.strip() if isinstance(v, str) and (k.endswith("_id") or k == "obligation") else v
             for k, v in payload.items()}
+
+
+def _replayed_reason(c: sqlite3.Connection, p: O.Principal, row: Mapping[str, object], at: str | None) -> str:
+    """The reason a replay returns: a refusal's names come back only for a caller who may see each budget it named
+    (spec §7.5); otherwise the fallback its record kept."""
+    fallback = str(row["reason"] or "")
+    result = cast(dict[str, Any], json.loads(str(row["result_json"] or "{}")))
+    if "named" not in result:
+        return fallback
+    try:
+        ctx = load(c, at)
+    except FinanceError:
+        return fallback
+    return handlers.named_reason(ctx, p.who, fallback, result)
 
 
 def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
@@ -217,7 +231,7 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
                     prior["actor"] != p.actor:
                 return ActionResult(status="failed", kind=kind, code=CONFLICT,
                                     reason="that idempotency key was used for a different request")
-            return replace(_stored(prior), replayed=True)
+            return replace(_stored(prior), reason=_replayed_reason(c, p, prior, at), replayed=True)
     action_id = tico.new_id()
     try:
         if kind not in K.ALL:
@@ -289,6 +303,14 @@ def receipt_payload(c: sqlite3.Connection, kind: str, payload: Mapping[str, obje
     return {"refused": CARD_NUMBER_REFUSED} if V.has_card_number(body) else body
 
 
+def _recorded(named: Named | None) -> dict[str, object]:
+    """What a refusal keeps of the budgets and cards it names: their ids and the sentence, never a name."""
+    if named is None:
+        return {}
+    return {"named": {"budgets": list(named.budgets), "cards": list(named.cards), "template": named.template,
+                      "numbers": named.numbers}}
+
+
 def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapping[str, object], key: str,
                     action_id: str, e: FinanceError, dry_run: bool, at: str | None) -> ActionResult:
     """A denial or failure is recorded under its key too, so a retry gets the same answer. Bank details it sealed
@@ -299,8 +321,8 @@ def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapp
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
     SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-              rule_id=p.rule, key=key, rules=[], status=status, result={}, code=e.code, reason=e.message, by=p.actor,
-              at=when)
+              rule_id=p.rule, key=key, rules=[], status=status, result=_recorded(e.named), code=e.code,
+              reason=e.named.fallback if e.named else e.message, by=p.actor, at=when)
     _audit(c, p, action_id, kind, status, e.code)
     return ActionResult(status=status, kind=kind, action_id=action_id, code=e.code, reason=e.message)
 
@@ -336,18 +358,21 @@ def verify(row: Mapping[str, object], appr: Mapping[str, object]) -> str:
     return ""
 
 
-def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str) -> ActionResult:
+def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: str,
+           named: Named | None = None) -> ActionResult:
     """End a waiting action: it releases any hold it reserved, and the key's result is final (ask again with a new
-    key)."""
+    key). A refusal that named budgets keeps its fallback and record, as a refused call does (`named`)."""
     action_id = str(row["id"])
+    text = named.fallback if named else reason
     budgeting.release_for(ctx, "action", action_id)
     payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
-    SX.finish(ctx.c, action_id, status=status, result={}, code=code, reason=reason, at=ctx.at)
+    SX.finish(ctx.c, action_id, status=status, result=_recorded(named), code=code, reason=text, at=ctx.at)
     if str(row["kind"]) == "payment_create":     # a scheduled bill that asked for it is open again, and says why
-        documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload_json"] or "{}")), status, reason)
+        documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload_json"] or "{}")), status, text)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
-    return _stored(SX.by_id(ctx.c, action_id))
+    done = _stored(SX.by_id(ctx.c, action_id))
+    return replace(done, reason=reason) if named else done     # the caller who just refused it gets the sentence
 
 
 def withdraw_bill_asks(ctx: Ctx, bill_id: str, keep: str, why: str) -> list[str]:
@@ -419,7 +444,7 @@ def approval_decided(c: sqlite3.Connection, approval_id: str, at: str | None = N
         _rollback(c, "fin_decide", mark)
         if isinstance(e, gating.Denied):
             gating.logged_denial(ctx, e, str(row["id"]))
-        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
+        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
     except (sqlite3.IntegrityError, tico.Refused) as e:
         _rollback(c, "fin_decide", mark)
         return _close(ctx, row, "failed", "failed", str(e)[:300])
@@ -442,7 +467,7 @@ def _reask(ctx: Ctx, row: Mapping[str, object], p: O.Principal, kind: str, body:
         gate, plan = _plan(ctx, p, kind, body, action_id)
         approver = _approver(ctx, gate, p.who)
     except FinanceError as e:
-        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message)
+        return _close(ctx, row, "denied" if e.code in DENIAL_CODES else "failed", e.code, e.message, e.named)
     if not approver:
         return _close(ctx, row, "failed", DENIED, "nobody else decides this now; ask again")
     fresh = {**body, **plan.resolved}
