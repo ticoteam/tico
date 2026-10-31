@@ -32,6 +32,19 @@ TIMEOUT = 20
 TRIES_429 = 3
 MAX_WAIT = 30.0
 MAX_TEXT = 300
+# The transactions a retry looks for first, by entity: a cut-off call may already have landed in QuickBooks.
+TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.create": "JournalEntry",
+                "payment.bill": "BillPayment", "payment.invoice": "Payment", "writeoff.create": "CreditMemo"}
+
+
+def _marker(key: str) -> str:
+    """The Tico reference a write carries in its private note: the RequestId of its outbox key, so a retry finds it."""
+    return f"[tico:{uuid.uuid5(NAMESPACE, key)}]"
+
+
+def _quote(value: object) -> str:
+    """A string as a QuickBooks query takes it, with its quotes escaped."""
+    return str(value).replace("\\", "\\\\").replace("'", "\\'")
 log = logging.getLogger(__name__)
 _warned = [False]
 
@@ -260,6 +273,37 @@ class QuickBooks:
         final = created.status == 400 and "Fault" in created.body
         return Sent(False, error=_fault(created.body, created.status), final=final)
 
+    def find(self, op: str, body: Mapping[str, Any], key: str) -> Sent | None:
+        """Whether QuickBooks already holds the write sent under `key`, for a retry after a cut-off call. A transaction is
+        found by the Tico reference in its private note, on its day; an account or party by its name. None: it is not
+        there. A lookup that cannot tell comes back final, so the write is marked unknown and is not sent again."""
+        if op in TRANSACTIONS:
+            entity, day = TRANSACTIONS[op], str(body.get("day") or body.get("date") or "")
+            if not day:
+                return Sent(False, error="UNKNOWN: no date to find the write by", final=True)
+            where, mark = f"TxnDate = '{day}'", _marker(key)
+        elif op == "account.create":
+            entity, where, mark = "Account", f"Name = '{_quote(body['name'])}'", ""
+        elif op == "party.create":
+            entity = "Vendor" if str(body.get("kind")) == "vendor" else "Customer"
+            where, mark = f"DisplayName = '{_quote(body['name'])}'", ""
+        else:
+            return None
+        reply = self._call("GET", "query", query={"query": f"SELECT * FROM {entity} WHERE {where} MAXRESULTS 1000"})
+        if reply.status in (0, 429) or reply.status >= 500:
+            return Sent(False, error="QuickBooks did not answer the lookup")
+        if reply.status != 200:
+            return Sent(False, error=f"UNKNOWN: {_fault(reply.body, reply.status)}"[:MAX_TEXT], final=True)
+        rows = Q.as_list((Q.as_map(reply.body.get("QueryResponse")) or {}).get(entity))
+        for raw in rows:
+            row = Q.as_map(raw) or {}
+            if not mark or mark in str(row.get("PrivateNote") or ""):
+                return Sent(True, kind=entity, external_id=str(row.get("Id") or ""),
+                            revision=str(row.get("SyncToken") or ""))
+        if len(rows) >= 1000:
+            return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True)
+        return None
+
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""
         request_id = str(uuid.uuid5(NAMESPACE, key))
@@ -269,6 +313,7 @@ class QuickBooks:
             if isinstance(found, str):
                 return Sent(False, error=found)
             items = found
+        body = {**body, "marker": _marker(key)}
         if op == "writeoff.create":
             item = self._write_off_item(str(body["account"]), key)
             if isinstance(item, Sent):

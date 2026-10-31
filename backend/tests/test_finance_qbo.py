@@ -4,6 +4,7 @@ import base64
 import hashlib
 import hmac
 import json
+import urllib.parse
 import uuid
 
 import pytest
@@ -460,3 +461,26 @@ def test_a_bad_debt_item_that_sells_to_another_account_refuses_the_write_off_bef
     sent = _client(wire).send("writeoff.create", WRITE_OFF, "wo-key-3")
     assert sent.ok is False and sent.final is True and "already sells to another account" in sent.error
     assert [method for method, *_ in wire.sent] == ["GET"]
+
+
+def test_a_retry_finds_a_bill_the_cut_off_call_made_by_its_tico_reference_and_says_when_it_cannot_tell():
+    body = {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05", "due": "2026-11-05", "memo": "seats",
+            "lines": [{"account": "Account:2", "amount": 1500, "description": "seats"}]}
+    marker = f"[tico:{uuid.uuid5(QC.NAMESPACE, 'bill-key')}]"
+    wire = Wire(QC.Reply(0), QC.Reply(200, {"QueryResponse": {"Bill": [
+        {"Id": "901", "SyncToken": "0", "PrivateNote": f"seats {marker}"}]}}))
+    client = _client(wire)
+    assert client.send("bill.create", body, "bill-key").ok is False
+    assert json.loads(wire.sent[0][3] or b"{}")["PrivateNote"] == f"seats {marker}"
+    found = client.find("bill.create", body, "bill-key")
+    assert found is not None and (found.ok, found.kind, found.external_id, found.revision) == (True, "Bill", "901", "0")
+    assert "TxnDate = '2026-10-05'" in urllib.parse.unquote_plus(wire.sent[1][1])
+    assert Q.document_record({"Id": "901", "SyncToken": "0", "PrivateNote": f"seats {marker}", "TxnDate": "2026-10-05",
+                              "TotalAmt": "15.00", "VendorRef": {"value": "9"}, "Line": []}, "Bill", {}).memo == "seats"
+
+    assert _client(Wire(QC.Reply(200, {"QueryResponse": {}}))).find("bill.create", body, "bill-key") is None
+    unknown = _client(Wire(QC.Reply(400, {"Fault": {"Error": [{"Message": "bad query"}]}}))).find(
+        "bill.create", body, "bill-key")
+    assert unknown is not None and unknown.final is True and unknown.error.startswith("UNKNOWN")
+    retry = _client(Wire(QC.Reply(503, {}))).find("bill.create", body, "bill-key")
+    assert retry is not None and retry.ok is False and retry.final is False

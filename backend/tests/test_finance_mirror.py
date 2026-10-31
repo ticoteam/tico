@@ -26,6 +26,12 @@ class FakeBooks:
     fail: set[tuple[str, int]] = field(default_factory=set)
     replies: list[mirror.Sent] = field(default_factory=list)
     sent: list[tuple[str, dict[str, Any], str]] = field(default_factory=list)
+    found: dict[str, mirror.Sent] = field(default_factory=dict)      # by idempotency key: what the provider holds
+    lookups: list[str] = field(default_factory=list)
+
+    def find(self, op: str, body: Any, key: str) -> mirror.Sent | None:
+        self.lookups.append(key)
+        return self.found.get(key)
 
     def page(self, entity: str, start: int, size: int) -> mirror.Read:
         if (entity, start) in self.fail:
@@ -505,3 +511,94 @@ def test_a_write_off_goes_out_as_a_credit_memo_that_closes_the_invoice_and_its_e
                          ).fetchone()[0] == 1
         assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) == (
             "paid", 2000)
+
+
+def _bill_key(books, fake: FakeBooks, cid: str) -> str:
+    """A bill made here, not yet sent: its outbox key."""
+    with books.transaction() as c:
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "number": "B-77", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05", "lines": [{"account_id": account(c, "6100"), "amount": 1500,
+                                                 "description": "seats"}]})
+        assert made.status == "committed", made
+    with books.read() as c:
+        return str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='bill.create'").fetchone()[0])
+
+
+def test_a_create_cut_off_after_the_provider_took_it_is_found_and_not_sent_again(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    key = _bill_key(books, fake, cid)
+    fake.replies.append(mirror.Sent(False, error="QuickBooks did not answer"))     # the write landed; no answer came
+    _drain(books, fake, cid, now=LATER)
+    fake.found[key] = mirror.Sent(True, kind="Bill", external_id="901", revision="0")
+    assert _drain(books, fake, cid, now="2026-10-15T14:00:00.000000Z") == []
+    assert [op for op, _, _ in fake.sent if op == "bill.create"] == ["bill.create"]
+    assert fake.lookups == [key]
+    with books.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM fin_bills WHERE total=1500").fetchone()[0] == 1
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Bill:901'").fetchone()[0] == "active"
+        assert c.execute("SELECT status FROM fin_outbox WHERE op='bill.create'").fetchone()[0] == "sent"
+
+
+def test_a_retry_the_provider_cannot_rule_out_is_marked_unknown_and_never_sent_again(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    key = _bill_key(books, fake, cid)
+    fake.replies.append(mirror.Sent(False, error="QuickBooks did not answer"))
+    _drain(books, fake, cid, now=LATER)
+    fake.found[key] = mirror.Sent(False, error="UNKNOWN: too many writes that day to tell", final=True)
+    assert _drain(books, fake, cid, now="2026-10-15T14:00:00.000000Z") == [
+        "bill.create: UNKNOWN: too many writes that day to tell"]
+    assert [op for op, _, _ in fake.sent if op == "bill.create"] == ["bill.create"]
+    with books.read() as c:
+        row = c.execute("SELECT status, last_error FROM fin_outbox WHERE op='bill.create'").fetchone()
+        assert row[0] == "failed" and row[1].startswith("UNKNOWN")
+        assert c.execute("SELECT COUNT(*) FROM fin_bills").fetchone()[0] == 0
+
+
+def test_a_write_left_claimed_by_a_cut_off_call_is_looked_up_before_it_is_sent_again(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    key = _bill_key(books, fake, cid)
+    with books.transaction() as c:
+        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='bill.create'", ("2026-10-01T00:00:00.000000Z",))
+    fake.found[key] = mirror.Sent(True, kind="Bill", external_id="901", revision="0")
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [op for op, _, _ in fake.sent if op == "bill.create"] == []
+    assert fake.lookups == [key]
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Bill:901'").fetchone()[0] == "active"
+
+
+def test_a_void_of_a_closed_month_bill_at_the_provider_is_flagged_as_a_restatement(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [M.Document(M.Ext("Bill", "12", "1"), party="Vendor:9", number="B-12",
+                                            day="2026-09-10", due="2026-10-10", total=1500,
+                                            lines=(M.EntryLine("Account:2", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    fake.changes = [M.Ext("Bill", "12", "2", True)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert [tuple(r) for r in c.execute("SELECT change, day FROM fin_restatements").fetchall()] == [
+            ("deleted", "2026-09-10")]
+        assert c.execute("SELECT status FROM fin_bills WHERE number='B-12'").fetchone()[0] == "void"
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0

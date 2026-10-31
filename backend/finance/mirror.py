@@ -70,12 +70,15 @@ class Sent:
 
 
 class Books(Protocol):
-    """A provider's books as the mirror reads and writes them; each provider has an adapter (qbo.py for QuickBooks)."""
+    """A provider's books as the mirror reads and writes them; each provider has an adapter (qbo.py for QuickBooks).
+    `find` looks for a write sent under an idempotency key before it is sent again: the provider's Sent when it holds it,
+    None when it does not, and a final Sent when it cannot tell (the write is then marked unknown)."""
     entities: tuple[str, ...]
 
     def page(self, entity: str, start: int, size: int) -> Read: ...
     def changed(self, since: str) -> Read: ...
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent: ...
+    def find(self, op: str, body: Mapping[str, Any], key: str) -> Sent | None: ...
 
 
 class _Missing(Exception):
@@ -251,7 +254,7 @@ def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> Non
         if account is not None:
             SL.update_account(c, replace(account, active=False), at)
     elif table in ("fin_bills", "fin_invoices"):
-        _void(c, ctx, table, local, at)
+        _void(c, ctx, cid, table, local, ext.key, at)
     else:
         SX.contact_deactivate(c, local, at)
     _bind(c, cid, table, local, ext, at, status="deleted")
@@ -337,25 +340,29 @@ def _retire(c: sqlite3.Connection, ctx: Ctx, cid: str, local: str, key: str, at:
 
 
 # ------------------------------------------------------------------------------------------------ documents and payments
-def _void(c: sqlite3.Connection, ctx: Ctx, table: str, local: str, at: str) -> None:
+def _void(c: sqlite3.Connection, ctx: Ctx, cid: str, table: str, local: str, key: str, at: str) -> None:
     """A bill or invoice deleted at the provider: its entry is reversed and the document is void. The payments that
-    settled it stay as they are, since the provider keeps them too."""
+    settled it stay as they are, since the provider keeps them too. A void that lands in a closed month is flagged as a
+    restatement, as a deletion of an entry is."""
     doc = SAP.get(c, table, local)
     if doc is None:
         return
     entry = str(doc["entry_id"] or "")
     if entry:
-        _retire_entry_only(c, ctx, entry)
+        _retire_entry_only(c, ctx, cid, entry, key, at)
     SAP.update(c, table, local, {"status": "void", "updated_at": at})
 
 
-def _retire_entry_only(c: sqlite3.Connection, ctx: Ctx, entry_id: str) -> None:
+def _retire_entry_only(c: sqlite3.Connection, ctx: Ctx, cid: str, entry_id: str, key: str, at: str) -> None:
     """Reverse a document's own entry (a posted one; a reversal or a reversed entry is left alone)."""
     entry = SL.entry_row(c, entry_id)
     if entry is None or str(entry["status"]) != "posted" or entry["reverses_id"]:
         return
-    posting.reverse(ctx, entry_id, day=banking.open_day(ctx, str(entry["entry_date"])),
-                    memo="deleted at the provider", by=SYSTEM)
+    day = str(entry["entry_date"])
+    closed = SL.closed_on(c, ctx.book.id, day)
+    rid = posting.reverse(ctx, entry_id, day=banking.open_day(ctx, day), memo="deleted at the provider", by=SYSTEM)
+    if closed:
+        _restate(c, ctx, day, "deleted", entry_id, rid, cid, key, at)
 
 
 def _doc_lines(c: sqlite3.Connection, cid: str, d: M.Document) -> list[tuple[str, int, str]]:
@@ -407,7 +414,7 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
         # QuickBooks zeroes a voided invoice rather than deleting it: a zero invoice is one the books void.
         if verdict == M.REPLACE and row is not None and row["local_id"]:
             local = str(row["local_id"])
-            _void(c, ctx, table, local, at)
+            _void(c, ctx, cid, table, local, d.ext.key, at)
             _bind(c, cid, table, local, d.ext, at, status="deleted")
         return
     contact = _mapped(c, cid, "fin_contacts", d.party)
@@ -858,7 +865,8 @@ def _confirm_void(c: sqlite3.Connection, cid: str, table: str, local: Mapping[st
     """The provider voided a bill or invoice Tico voided: its entry is reversed, and its ref takes the revision the void
     left, so the change feed's echo of that void is the same record and brings nothing new."""
     doc_id = str(local["id"])
-    _void(c, load(c, now), table, doc_id, now)
+    _void(c, load(c, now), cid, table, doc_id, M.Ext(kind=sent.kind, external_id=sent.external_id,
+                                                      revision=sent.revision).key, now)
     ref = SX.ref_for_local(c, cid, table, doc_id)
     if ref is not None:
         SX.ref_set(c, str(ref["id"]), local_id=doc_id, revision=sent.revision, status="deleted", at=now)
@@ -929,13 +937,32 @@ def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], p
                                          "next_try_at": M.stamp(now, delay * 1_000_000), "updated_at": now})
 
 
+# The creates a provider may already hold when a retry comes: a cut-off call can have landed, and a provider's
+# idempotency key is only kept for a while.
+RETRIED_CREATES = ("bill.create", "invoice.create", "journal.create", "party.create", "account.create",
+                   "payment.bill", "payment.invoice", "writeoff.create")
+
+
+def _send(books: Books, o: Any, provider: Mapping[str, Any]) -> Sent:
+    """The provider's answer to a write. A create tried before is looked up first: when the provider holds it, that is
+    the answer; when it cannot tell, the answer is final, so the write is marked unknown and never sent again."""
+    op, key = str(o["op"]), str(o["idempotency_key"])
+    if int(o["attempts"]) > 0 and op in RETRIED_CREATES:
+        found = books.find(op, provider, key)
+        if found is not None:
+            return found
+    return books.send(op, provider, key)
+
+
 def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
     """This connection's writes, each claimed in a short transaction before its call (so two workers never send one
     twice) and recorded after it. A claim left from a cut-off call is released to be sent again: every write carries
     an idempotency key the provider keeps."""
     with store.transaction() as c:
         for o in SK.outbox_stuck(c, M.stamp(now, -CLAIM_MINUTES * 60 * 1_000_000), cid):
-            SK.update(c, "fin_outbox", str(o["id"]), {"claimed_at": None, "updated_at": now})
+            # A claim left by a cut-off call may have sent the write: counted as an attempt, so it is looked up first.
+            SK.update(c, "fin_outbox", str(o["id"]), {"claimed_at": None, "attempts": int(o["attempts"]) + 1,
+                                                       "updated_at": now})
         due = SK.outbox_due(c, now, OUTBOX_MOST, cid)
     problems: list[str] = []
     for o in due:
@@ -946,7 +973,7 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
         if prepared is None:
             continue
         local, provider = prepared
-        sent = books.send(str(o["op"]), provider, str(o["idempotency_key"]))
+        sent = _send(books, o, provider)
         with store.transaction() as c:
             _record(c, cid, o, local, provider, sent, now)
         if not sent.ok:

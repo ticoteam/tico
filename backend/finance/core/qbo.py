@@ -2,6 +2,7 @@
 request bodies. No I/O (the HTTP client is finance/qbo.py). QuickBooks sends money as decimal text, so amounts go through
 Decimal and come out as integer minor units; nothing here is a float. A deleted row (CDC marks it "Deleted") is its
 identity only, and the books take it as a deletion."""
+import re
 from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -127,7 +128,7 @@ def journal_record(row: dict[str, Any]) -> M.Journal:
                 party = f"{kind}:{_id(entity_ref.get('value'))}"
         lines.append(M.EntryLine(account=f"Account:{_id(ref.get('value'))}", amount=units, party=party,
                                  description=_id(line.get("Description"))))
-    return M.Journal(ext, _id(row.get("TxnDate")), _id(row.get("PrivateNote")), "sync", tuple(lines))
+    return M.Journal(ext, _id(row.get("TxnDate")), _memo(row), "sync", tuple(lines))
 
 
 def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]]) -> M.EntryLine | None:
@@ -164,7 +165,7 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
     links = _links(row, "Invoice") if kind == "CreditMemo" else ()
     return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
                       number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
-                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_id(row.get("PrivateNote")),
+                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row),
                       links=links)
 
 
@@ -181,7 +182,7 @@ def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
         bank = _ref(check, "BankAccountRef") or _ref(card, "CCAccountRef")
         party_kind, party_value = "Vendor", _ref(row, "VendorRef")
         target = "Bill"
-    return M.Settlement(ext, day=_id(row.get("TxnDate")), memo=_id(row.get("PrivateNote")),
+    return M.Settlement(ext, day=_id(row.get("TxnDate")), memo=_memo(row),
                         party=f"{party_kind}:{party_value}" if party_value else "",
                         bank=f"Account:{bank}" if bank else "", total=_units(row.get("TotalAmt")) or 0,
                         links=_links(row, target))
@@ -284,7 +285,7 @@ def journal_body(body: Mapping[str, Any]) -> dict[str, Any]:
             detail["ClassRef"] = {"value": str(next(iter(classes.values())))}
         lines.append({"DetailType": "JournalEntryLineDetail", "Amount": decimal_text(units),
                       "Description": str(x.get("description") or ""), "JournalEntryLineDetail": detail})
-    return {"TxnDate": str(body["date"]), "PrivateNote": str(body.get("memo") or "")[:4000], "Line": lines}
+    return {"TxnDate": str(body["date"]), "PrivateNote": _note(body), "Line": lines}
 
 
 def account_body(body: Mapping[str, Any]) -> dict[str, Any]:
@@ -321,8 +322,24 @@ def _party_id(key: object, kind: str) -> str:
     return found[1]
 
 
+MARKER = re.compile(r"\s*\[tico:[0-9a-f-]{36}\]$")
+
+
+def _memo(row: Mapping[str, Any]) -> str:
+    """A provider record's memo, without the Tico reference a write of ours carries in its private note."""
+    return MARKER.sub("", _id(row.get("PrivateNote")))
+
+
+def _note(body: Mapping[str, Any]) -> str:
+    """A write's private note: its memo, then the Tico reference that finds the write again after a retry."""
+    marker, memo = str(body.get("marker") or ""), str(body.get("memo") or "")
+    if not marker:
+        return memo[:4000]
+    return f"{memo[:4000 - len(marker) - 1]} {marker}".lstrip()
+
+
 def _header(body: Mapping[str, Any]) -> dict[str, Any]:
-    return {"TxnDate": str(body["day"]), "PrivateNote": str(body.get("memo") or "")[:4000]}
+    return {"TxnDate": str(body["day"]), "PrivateNote": _note(body)}
 
 
 def _applied(links: Sequence[Sequence[Any]]) -> list[dict[str, Any]]:
