@@ -447,7 +447,8 @@ def _reclass(ctx: Ctx, row: Any, pay: Any) -> None:
     account = str(pay["account_id"])
     tags = posting.with_team(ctx, cast(dict[str, str], SK.loads(pay["tags_json"])))
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
-    vendor = (payments.vendor_of(rec) if rec is not None else str(row["counterparty"]))[:80]
+    vendor = SAP.vendor_key(ctx.c, ctx.book.id,
+                            (payments.vendor_of(rec) if rec is not None else str(row["counterparty"]))[:80])
     if all(x.account_id == account and dict(x.tags) == tags and x.contact_id == vendor for x in spent):
         if hold:
             budgeting.settle(ctx, hold, -int(row["amount"]), entry_id)
@@ -513,6 +514,20 @@ def feed_line(account_id: str, amount: int, tags: Mapping[str, str] | None = Non
     return line
 
 
+def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str, object]]:
+    """A feed row's lines with each vendor as its one key: a counterparty that names a vendor contact (any case) is
+    that contact's id, so its card rows and its bills count under one vendor (store/ap.vendor_key); a merchant with
+    no contact keeps its name."""
+    keys: dict[str, str] = {}
+    out: list[dict[str, object]] = []
+    for line in lines:
+        key = str(line.get("contact_id") or "")
+        if key and key not in keys:
+            keys[key] = SAP.vendor_key(ctx.c, ctx.book.id, key)
+        out.append({**line, "contact_id": keys[key]} if key else dict(line))
+    return out
+
+
 def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], gl_id: str, holds: Sequence[str],
              day: str = "") -> str:
     """One entry for a feed row: its other lines, then the money account's own line (`gl_id`), recorded as such
@@ -523,7 +538,7 @@ def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], g
     done = posting.post_entry(ctx.c, {"date": day or open_day(ctx, t.txn_date), "source": source,
                                       "source_id": fresh_source(ctx, source, fid),
                                       "memo": (t.counterparty or t.description)[:200],
-                                      "lines": [*lines, feed_line(gl_id, t.amount)]},
+                                      "lines": [*vendor_lines(ctx, lines), feed_line(gl_id, t.amount)]},
                               hold_ids=holds, at=ctx.at, roles={len(lines): L.MONEY_ROLE})
     if not done.get("posted"):
         raise FinanceError(CONFLICT, f"feed row {fid} did not post")      # never settle on an older entry

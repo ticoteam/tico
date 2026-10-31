@@ -173,6 +173,28 @@ def contact_named(c: sqlite3.Connection, book_id: str, name: str) -> Any:
                      (book_id, name)).fetchone()
 
 
+VENDOR_NAMED = ("SELECT id FROM fin_contacts WHERE book_id=? AND lower(name)=lower(?) AND active=1 AND "
+                "kind IN ('vendor','both') ORDER BY created_at, id LIMIT 1")
+
+
+def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
+    """The one key a vendor goes by on lines and budgets (spec §3, §4.4): a contact's id stays; a name that is an
+    active vendor contact's (any case) becomes its id; anything else (a merchant with no contact) stays as written."""
+    if not key or c.execute("SELECT 1 FROM fin_contacts WHERE id=?", (key,)).fetchone() is not None:
+        return key
+    row = c.execute(VENDOR_NAMED, (book_id, key)).fetchone()
+    return str(row[0]) if row is not None else key
+
+
+def vendor_keys(c: sqlite3.Connection, key: str) -> list[str]:
+    """Every key a vendor's lines carry: its own, and for a contact its name too (a line posted before the contact
+    existed keeps the name it had; lines never change)."""
+    if not key:
+        return []
+    row = c.execute("SELECT name FROM fin_contacts WHERE id=?", (key,)).fetchone()
+    return [key, str(row[0])] if row is not None and str(row[0]) != key else [key]
+
+
 def owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str]) -> dict[str, int]:
     """What each contact's open documents still owe."""
     if not contact_ids:

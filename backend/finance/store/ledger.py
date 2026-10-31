@@ -272,8 +272,9 @@ def rollup_rows(c: sqlite3.Connection, book_id: str, start: str, end: str,
 
 
 def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, account_ids: Sequence[str], *,
-               teams: Sequence[str] | None = None, teammate: str = "", vendor: str = "") -> int:
-    """The posted total on `account_ids` in the window, cut to `teams` (None: any), a teammate and a vendor."""
+               teams: Sequence[str] | None = None, teammate: str = "", vendors: Sequence[str] = ()) -> int:
+    """The posted total on `account_ids` in the window, cut to `teams` (None: any), a teammate and a vendor (any of
+    the keys its lines carry, store/ap.vendor_keys)."""
     if not account_ids or teams is not None and not teams:
         return 0
     sql = (f"SELECT COALESCE(SUM(amount), 0) FROM fin_rollups WHERE book_id=? AND day>=? AND day<=? "
@@ -285,9 +286,9 @@ def rollup_sum(c: sqlite3.Connection, book_id: str, start: str, end: str, accoun
     if teammate:
         sql += " AND teammate=?"
         args.append(teammate)
-    if vendor:
-        sql += " AND vendor=?"
-        args.append(vendor)
+    if vendors:
+        sql += f" AND vendor IN ({','.join('?' * len(vendors))})"
+        args += list(vendors)
     return int(c.execute(sql, args).fetchone()[0])
 
 

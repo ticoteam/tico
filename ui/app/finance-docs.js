@@ -35,7 +35,8 @@ const FIN_ACT_STATUS = {needs_approval: ['waiting', 'Waiting'], committed: ['ok'
 const FIN_PAID_FROM = {payment: 'Payment', feed: 'Bank row', credit: 'Credit', account: 'Recorded', expected: 'Expected'};
 const FIN_PAY_STATUS = {queued: ['waiting', 'Queued'], sending: ['waiting', 'Sending'], awaiting_bank_approval: ['waiting', 'Bank approval'],
   submitted: ['ready', 'Submitted'], settled: ['ok', 'Settled'], unknown: ['waiting', 'Checking'], failed: ['fail', 'Pay failed'],
-  returned: ['fail', 'Returned'], cancelled: ['fail', 'Pay cancelled']};
+  returned: ['fail', 'Returned'], cancelled: ['fail', 'Pay cancelled'], denied: ['fail', 'Pay denied'],
+  expired: ['fail', 'Approval expired'], withdrawn: ['fail', 'Pay withdrawn']};
 const FIN_PAY_LIVE = new Set(['queued', 'sending', 'awaiting_bank_approval', 'submitted', 'unknown']);
 
 const finPill = ([cls, label]) => `<span class="pill ${cls}">${esc(label)}</span>`;

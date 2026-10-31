@@ -837,6 +837,28 @@ def payment_ended(ctx: Ctx, pay: Any) -> None:
         SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "open", "pay_on": None, "updated_at": ctx.at})
 
 
+def payment_ask_ended(ctx: Ctx, action_id: str, body: Mapping[str, object], status: str, reason: str) -> None:
+    """The payment a scheduled bill asked for ended without running (denied, expired, withdrawn or failed on its
+    approval): the bill is open again with no schedule, and says how the ask ended."""
+    obligation = str(body.get("obligation") or "")
+    bill = SAP.get(ctx.c, "fin_bills", obligation.removeprefix("bill:")) if obligation.startswith("bill:") else None
+    if bill is None or str(bill["status"]) != "scheduled":
+        return
+    sched = SK.loads(bill["schedule_json"])
+    if str(sched.get("action_id") or "") == action_id:
+        _unschedule(ctx, bill, sched, status, reason, int(cast(int, body.get("amount") or 0)))
+
+
+def _unschedule(ctx: Ctx, bill: Any, sched: Mapping[str, object], status: str, reason: str, amount: int) -> None:
+    """Open the bill with no schedule. What the bill row shows of the ask stays (`ended`); its count stays, so the
+    next schedule's payment gets a fresh key."""
+    SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "open", "pay_on": None, "updated_at": ctx.at,
+                                                     "schedule_json": SK.dump({
+                                                         "n": sched.get("n") or 1,
+                                                         "ended": {"status": status, "reason": reason[:300],
+                                                                   "on": ctx.today, "amount": amount}})})
+
+
 # ------------------------------------------------------------------------------------------------ paying
 def _same_name(counterparty: str, name: str) -> bool:
     a = "".join(ch for ch in counterparty.lower() if ch.isalnum())
@@ -1366,11 +1388,13 @@ def pay_due(ctx: Ctx) -> int:
             f"bill-pay-{bill['id']}-{sched.get('n') or 1}", at=ctx.at)
         done = res.status in ("committed", "needs_approval")
         # Asked for: the day stays on the bill (it shows when it pays) and the action id keeps it from being asked
-        # again; refused, the bill is open again.
-        SAP.update(ctx.c, "fin_bills", str(bill["id"]), {
-            "pay_on": bill["pay_on"] if done else None, "status": "scheduled" if done else "open", "updated_at": ctx.at,
-            "schedule_json": SK.dump({**sched, "action_id": res.action_id, "result": res.status})})
-        if not done:
+        # again; refused, the bill is open again with no schedule.
+        if done:
+            SAP.update(ctx.c, "fin_bills", str(bill["id"]), {
+                "updated_at": ctx.at, "schedule_json": SK.dump({**sched, "action_id": res.action_id,
+                                                                "result": res.status})})
+        else:
+            _unschedule(ctx, bill, sched, res.status, res.reason, left)
             person = who if who in ctx.org.humans else admin_person(ctx)
             tico.needs_you(ctx.c, person, f"Bill {bill['number'] or bill['id']} was not paid",
                            f"The payment scheduled for bill {bill['id']} was refused: {res.reason[:300]}. Fix it and "

@@ -121,17 +121,21 @@ def test_a_bill_holds_budget_posts_ap_once_and_its_scheduled_payment_clears_ap_w
         assert _pnl(c, "cash").get("6100") == _pnl(c, "accrual").get("6100") == 50_000
 
 
-def _scheduled_today(c) -> str:
-    """Acme Supplies by ACH (not at Mercury yet), a 500.00 bill from them entered and scheduled for today."""
-    assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
+def _scheduled_today(c, ask=False) -> str:
+    """Acme Supplies by ACH (not at Mercury yet), a 500.00 bill from them entered and scheduled for today. With `ask`,
+    paying a new recipient asks the finance approver, dan (the default rule)."""
+    if ask:
+        FA.setup(c, OWNER, AT, finance_approver="human:dan")
+    else:
+        assert act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"}).status == "committed"
     added = act(c, OWNER, "recipient_add", {"name": "Acme Supplies", "method": "ach",
                                             "account_number": "000099998888", "routing_number": "000000000"})
     assert added.status == "committed", added
     bid = _bill(c, _vendor(c, recipient_id=str(added.result["recipient_id"])),
                 [{"account_id": account(c, "6100"), "amount": 50_000}], due_date="2026-10-20")
     assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
-    assert act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": AT[:10],
-                                           "money_account_id": _checking(c)}).status == "committed"
+    done = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": AT[:10], "money_account_id": _checking(c)})
+    assert done.status == "committed", done
     return bid
 
 
@@ -195,6 +199,54 @@ def test_a_payment_rejected_in_mercury_leaves_the_bill_unpaid_and_says_so(books)
         assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchall() == []
         again = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-10-16", "money_account_id": _checking(c)})
         assert again.status == "committed", again
+
+
+def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_says_so(books):
+    """A payment a scheduled bill asked for that waits on approval and never runs leaves no "Scheduled" bill behind:
+    the bill is open with no schedule, its row says how the ask ended, and a new schedule asks again (fresh key)."""
+    from backend import hubdb as H
+
+    def asked(c, bid):
+        FA.watch_documents(c, AT)
+        bill = FR.bill(c, OWNER, bid)
+        assert (bill["status"], bill["pay_on"], bill["payment"]) == ("scheduled", AT[:10], None)
+        waiting = FA.action(c, str(bill["schedule"]["action_id"]))
+        assert waiting.status == "needs_approval", waiting
+        return waiting
+
+    def reopened(c, bid, status):
+        bill = FR.bill(c, OWNER, bid)
+        assert (bill["status"], bill["pay_on"], bill["remaining"]) == ("open", None, 50_000)
+        assert (bill["payment"]["id"], bill["payment"]["status"], bill["payment"]["amount"]) == (None, status, 50_000)
+        assert bill["payment"]["error"]
+        assert FR.bills(c, OWNER)["bills"][0]["payment"]["status"] == status
+        assert c.execute("SELECT count(*) FROM fin_payments").fetchone()[0] == 0
+        assert c.execute("SELECT count(*) FROM fin_holds WHERE status='held'").fetchone()[0] == 0
+
+    def reschedule(c, bid):
+        assert act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": AT[:10],
+                                               "money_account_id": _checking(c)}).status == "committed"
+
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        bid = _scheduled_today(c, ask=True)
+        first = asked(c, bid)
+        H.approval_decide(c, str(first.approver), str(first.approval_id), "declined")
+        assert FA.approval_decided(c, str(first.approval_id), AT).status == "denied"
+        reopened(c, bid, "denied")
+        reschedule(c, bid)
+        assert FR.bill(c, OWNER, bid)["payment"] is None                # a new schedule clears how the last one ended
+        second = asked(c, bid)
+        assert second.action_id != first.action_id
+        H.approval_withdraw(c, str(second.approval_id), "Withdrawn.")
+        assert [r.status for r in FA.approvals_sweep(c, AT)] == ["withdrawn"]
+        reopened(c, bid, "withdrawn")
+        reschedule(c, bid)
+        third = asked(c, bid)
+        c.execute("UPDATE approvals SET created='2026-09-01T00:00:00.000000Z' WHERE id=?", (third.approval_id,))
+        H.approval_withdraw(c, str(third.approval_id), "No decision in 14 days.")
+        assert [r.status for r in FA.approvals_sweep(c, AT)] == ["expired"]
+        reopened(c, bid, "expired")
 
 
 def test_vendor_labels_are_contact_names_and_never_ids(books):
@@ -511,3 +563,39 @@ def test_a_posting_rule_categorizes_a_tico_card_charge_and_keeps_the_holder_card
         assert [a for code, _, a in lines if code == "2100"] == [-4_500]        # still on the card liability
         assert _card_use(c, card_id, "2026-10") == 4_500 and _card_holds(c) == [(4_250, "settled")]
         assert not _events(c, "finance.feed.needs_category")
+
+
+def test_a_vendor_has_one_key_across_its_bills_and_card_rows(books):
+    """Spec §3, §4.4: a card row whose merchant is a vendor contact's name (any case) posts under the contact's id, so
+    one vendor budget counts the vendor's bill line and card row once each, and spend-by vendor shows one row. The
+    budget was made on the plain name before the contact existed; it matches once the contact does."""
+    from backend.finance import budgeting
+    from backend.tests.test_finance_banking import _arrives, _card_for_eve
+    fake = FakeMercury()
+    fake.balances["credit-io"] = 0
+    connect(books, fake)
+    cloud, _ = _card_for_eve(books, fake)                              # a Cloud budget on 6100, eve's card on it
+    sync_once(books, fake)
+    with books.transaction() as c:
+        line = account(c, "6100")
+        by_name = act(c, OWNER, "budget_create", {"name": "Acme Cloud", "account_id": line, "vendor": "acme cloud",
+                                                  "parent_id": cloud, "amount": 50_000})
+        assert by_name.status == "committed", by_name
+        vendor = _vendor(c, "Acme Cloud")
+        rule = {"kind": "posting", "name": "Hosting", "when": {"counterparty": {"matches": "CLOUD"}},
+                "outcome": {"outcome": "post", "account_id": line},
+                "examples": [{"input": {"counterparty": "Acme Cloud"}, "expect": "post"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+        bid = _bill(c, vendor, [{"account_id": line, "amount": 20_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+    _arrives(fake, MERCURY["txn_card_pending"], 1, "evt-0001")
+    sync_once(books, fake, HOURS[1])
+    _arrives(fake, MERCURY["txn_card_posted"], 2, "evt-0002")
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        keys = [str(r[0]) for r in c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_accounts a ON "
+                                             "a.id=l.account_id WHERE a.code='6100' ORDER BY l.amount")]
+        assert keys == [vendor, vendor]                                # the card row and the bill line, one key
+        assert budgeting.budget_state(c, str(by_name.result["budget_id"]), AT).actual == 24_500
+        rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
+        assert [(r["key"], r["label"], r["amount"]) for r in rows] == [(vendor, "Acme Cloud", 24_500)]

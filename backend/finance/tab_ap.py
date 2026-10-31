@@ -7,7 +7,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterable, Sequence
 from datetime import date
-from typing import Any
+from typing import Any, cast
 
 from .context import Ctx, load
 from .core import ap as AP
@@ -98,8 +98,20 @@ def payment_of(pay: Any) -> Row | None:
             "on": str(pay["created_at"])[:10], "error": str(pay["last_error"] or "") or None}
 
 
+def ask_ended(r: Any) -> Row | None:
+    """How a bill's scheduled payment ended before any payment existed (its approval denied, expired or withdrawn,
+    or the ask refused), in payment_of's shape with no id."""
+    end = SK.loads(r["schedule_json"]).get("ended")
+    if not isinstance(end, dict):
+        return None
+    e = cast(dict[str, Any], end)
+    return {"id": None, "status": str(e.get("status") or ""), "amount": int(e.get("amount") or 0),
+            "on": str(e.get("on") or ""), "error": str(e.get("reason") or "") or None}
+
+
 def doc_row(kind: str, r: Any, today: date, attached: int = 0, pay: Any = None) -> Row:
-    """One bill or invoice as a list row; a bill carries its latest payment (`pay`, from SK.last_payments)."""
+    """One bill or invoice as a list row; a bill carries its latest payment (`pay`, from SK.last_payments), or how
+    its schedule's ask ended when that came after (a new schedule clears it)."""
     left = remaining(kind, r)
     due = r["due_date"]
     contact = CONTACT_OF[kind]
@@ -112,7 +124,7 @@ def doc_row(kind: str, r: Any, today: date, attached: int = 0, pay: Any = None) 
                 "created_by": str(r["created_by"]), "created_at": str(r["created_at"])}
     if kind == "bill":
         out.update({"origin": str(r["origin"]), "approved_by": r["approved_by"], "approved_at": r["approved_at"],
-                    "pay_on": r["pay_on"], "payment": payment_of(pay)})
+                    "pay_on": r["pay_on"], "payment": ask_ended(r) or payment_of(pay)})
     else:
         out.update({"sent_at": r["sent_at"], "written_off": int(r["written_off"]), "payment_link": r["payment_link"]})
     return out

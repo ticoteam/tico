@@ -319,6 +319,8 @@ def _close(ctx: Ctx, row: Mapping[str, object], status: str, code: str, reason: 
     budgeting.release_for(ctx, "action", action_id)
     payments.drop_details(ctx.c, json.loads(str(row["payload_json"] or "{}")))
     SX.finish(ctx.c, action_id, status=status, result={}, code=code, reason=reason, at=ctx.at)
+    if str(row["kind"]) == "payment_create":     # a scheduled bill that asked for it is open again, and says why
+        documents.payment_ask_ended(ctx, action_id, json.loads(str(row["payload_json"] or "{}")), status, reason)
     p = O.Principal(actor=str(row["actor"]), for_actor=str(row["on_behalf_of"] or ""))
     _audit(ctx.c, p, action_id, str(row["kind"]), status, code, {"approval_id": row["approval_id"]})
     return _stored(SX.by_id(ctx.c, action_id))

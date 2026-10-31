@@ -16,6 +16,7 @@ from .core import view as VW
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .store import access as SA
+from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
@@ -386,7 +387,8 @@ def budget_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         id="", book_id=ctx.book.id, name=V.text(p, "name", 120), period=V.choice(p, "period", B.PERIODS, "month"),
         account_id=V.opt_text(p, "account_id", 80) or "", catch_all=V.flag(p, "catch_all"),
         team=V.opt_text(p, "team", 80) or "", teammate=V.opt_text(p, "teammate", 120) or "",
-        vendor=V.opt_text(p, "vendor", 80) or "", parent_id=V.opt_text(p, "parent_id", 80) or "", owner=who,
+        vendor=SAP.vendor_key(ctx.c, ctx.book.id, V.opt_text(p, "vendor", 80) or ""),
+        parent_id=V.opt_text(p, "parent_id", 80) or "", owner=who,
         created_at=ctx.at))
     B.check(new, ctx.budgets(), ctx.accounts, ctx.org)
     _need_budget_view(ctx, who, new)

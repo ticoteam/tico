@@ -13,6 +13,7 @@ from .core import validate as V
 from .core.errors import FinanceError, NOT_FOUND, invalid
 from .core.ledger import descendants
 from .core.org import SYSTEM
+from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
 
@@ -62,7 +63,7 @@ def actual(ctx: Ctx, b: B.Budget, start: str, end: str, teammate: str = "") -> i
     under it), teammate and vendor."""
     teams = sorted(ctx.org.below(b.team)) if b.team else None
     return SL.rollup_sum(ctx.c, ctx.book.id, start, end, scope_accounts(ctx, b), teams=teams,
-                         teammate=teammate or b.teammate, vendor=b.vendor)
+                         teammate=teammate or b.teammate, vendors=SAP.vendor_keys(ctx.c, b.vendor))
 
 
 def period_window(ctx: Ctx, budget_id: str) -> tuple[str, str]:
@@ -144,6 +145,8 @@ def leaf(ctx: Ctx, account_id: str, team: str = "", teammate: str = "", vendor: 
     """The budget a spend counts against (most specific wins; the catch-all takes uncovered expense lines). A teammate
     with no team named counts in the team they are in."""
     team = team or (ctx.org.team_of.get(teammate, "") if teammate else "")
+    if vendor and any(b.vendor for b in ctx.budgets().values()):
+        vendor = SAP.vendor_key(ctx.c, ctx.book.id, vendor)     # a merchant's name that is a vendor contact's
     return B.find(ctx.budgets(), B.Charge(account_id=account_id, team=team, teammate=teammate, vendor=vendor),
                   ctx.accounts, ctx.org)
 

@@ -1389,10 +1389,11 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
 # Finance (backend/finance_routes.py): every read is cut to the caller's own view.
 DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
                                                           "name": {"type": ["string", "null"]}}}
-DOC_PAYMENT = {"anyOf": [obj({"id": "s", "status": {"type": "string", "enum": [
+DOC_PAYMENT = {"anyOf": [obj({"id": "n", "status": {"type": "string", "enum": [
     "queued", "sending", "awaiting_bank_approval", "submitted", "settled", "returned", "failed", "cancelled",
-    "unknown"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
-    "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did"}
+    "unknown", "denied", "expired", "withdrawn"]}, "amount": "i", "on": "s", "error": "n"}), {"type": "null"}],
+    "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did. No id "
+                   "when the scheduled ask ended before a payment existed (denied, expired, withdrawn or failed)"}
 TAGS["Finance"] = ("Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
                    "caller sees; Finance actions, committed or sent to one person for approval.")
 STABLE.extend([

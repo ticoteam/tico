@@ -1414,9 +1414,9 @@ export type FinanceDocumentRow = {
   payment?: {
   amount: number;
   error: string | null;
-  id: string;
+  id: string | null;
   on: string;
-  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown";
+  status: "queued" | "sending" | "awaiting_bank_approval" | "submitted" | "settled" | "returned" | "failed" | "cancelled" | "unknown" | "denied" | "expired" | "withdrawn";
 } | null;
   payment_link?: string | null;
   remaining: number;

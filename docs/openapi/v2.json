@@ -38573,7 +38573,10 @@
                 "type": "object",
                 "properties": {
                   "id": {
-                    "type": "string"
+                    "type": [
+                      "string",
+                      "null"
+                    ]
                   },
                   "status": {
                     "type": "string",
@@ -38586,7 +38589,10 @@
                       "returned",
                       "failed",
                       "cancelled",
-                      "unknown"
+                      "unknown",
+                      "denied",
+                      "expired",
+                      "withdrawn"
                     ]
                   },
                   "amount": {
@@ -38615,7 +38621,7 @@
                 "type": "null"
               }
             ],
-            "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did"
+            "description": "A bill's latest payment: its state, the day it was asked for and why it ended, if it did. No id when the scheduled ask ended before a payment existed (denied, expired, withdrawn or failed)"
           },
           "sent_at": {
             "type": [

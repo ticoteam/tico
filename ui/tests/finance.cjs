@@ -177,7 +177,10 @@ const BILLS = [
     payment: {id: 'pay-3', status: 'awaiting_bank_approval', amount: 124000, on: '2026-11-11', error: null}}),
   // Its last payment was rejected in Mercury: the bill is open again and says so.
   doc('bill', 'bill-4', 'DD-8812', {id: 'v-datadog', name: 'Datadog'}, 'open', 139000, '2026-10-15', {aging: '1_30', days_late: 16,
-    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}})];
+    payment: {id: 'pay-4', status: 'cancelled', amount: 139000, on: '2026-10-14', error: 'rejected in Mercury'}}),
+  // Its scheduled payment's approval was declined before any payment existed: open, and says so.
+  doc('bill', 'bill-5', 'GH-77', {id: 'v-github', name: 'GitHub'}, 'open', 21000, '2026-10-20', {
+    payment: {id: null, status: 'denied', amount: 21000, on: '2026-10-15', error: 'declined by human:ana'}})];
 const INVOICES = [
   doc('invoice', 'inv-1', '#1047', {id: 'c-bright', name: 'Brightline Studio'}, 'sent', 400000, '2026-11-14'),
   doc('invoice', 'inv-2', '#1033', {id: 'c-pine', name: 'Pine & Co'}, 'sent', 150000, '2026-09-20', {aging: '31_60', days_late: 41}),
@@ -612,6 +615,7 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       const statusOf = async id => (await page.locator(`tr[data-fin-doc="${id}"] td:nth-child(6)`).innerText()).replace(/\s+/g, ' ').trim();
       assert.equal(await statusOf('bill-3'), 'Bank approval', tag + ': a bill paying now shows its payment\'s state');
       assert.equal(await statusOf('bill-4'), 'Open Pay cancelled', tag + ': a rejected payment shows beside Open');
+      assert.equal(await statusOf('bill-5'), 'Open Pay denied', tag + ': a declined approval shows beside Open');
       assert.ok(!(await page.locator('#fin-body').innerText()).includes('5,130'), tag + ': the open total is not drawn');
       assert.match(await page.locator('[data-fin-email-set]').innerText(), /bills@acme\.example$/, tag + ': the owner\'s bills address control');
       // The owner sets the address: an inbox address saves; any other saves but says it is not an inbox's; empty clears it.

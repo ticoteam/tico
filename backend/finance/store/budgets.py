@@ -10,15 +10,19 @@ from .ledger import new_id
 
 def _budget(r: Any) -> Budget:
     return Budget(id=r["id"], book_id=r["book_id"], name=r["name"], period=r["period"], account_id=r["account_id"] or "",
-                  catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor"],
+                  catch_all=bool(r["catch_all"]), team=r["team"], teammate=r["teammate"], vendor=r["vendor_key"],
                   parent_id=r["parent_id"] or "", owner=r["owner"], warn_pct=int(r["warn_pct"]), at_limit=r["at_limit"],
                   rollover=r["rollover"], active=bool(r["active"]), created_at=r["created_at"])
 
 
 def budgets(c: sqlite3.Connection, book_id: str) -> dict[str, Budget]:
-    """Every budget in the book, active or not (a tree is small: dozens of rows)."""
-    return {r["id"]: _budget(r) for r in c.execute("SELECT * FROM fin_budgets WHERE book_id=? ORDER BY created_at, id",
-                                                    (book_id,))}
+    """Every budget in the book, active or not (a tree is small: dozens of rows). A vendor budget made on a plain name
+    goes by the contact's id once a vendor contact has that name (store/ap.vendor_key), so it matches its lines."""
+    return {r["id"]: _budget(r) for r in c.execute(
+        "SELECT b.*, COALESCE((SELECT k.id FROM fin_contacts k WHERE b.vendor<>'' AND k.book_id=b.book_id AND "
+        "lower(k.name)=lower(b.vendor) AND k.active=1 AND k.kind IN ('vendor','both') ORDER BY k.created_at, k.id "
+        "LIMIT 1), b.vendor) AS vendor_key FROM fin_budgets b WHERE b.book_id=? ORDER BY b.created_at, b.id",
+        (book_id,))}
 
 
 def insert_budget(c: sqlite3.Connection, b: Budget, by: str, at: str) -> None:
