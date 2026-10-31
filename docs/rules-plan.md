@@ -214,7 +214,9 @@ ahead of time so it doesn't try.
     A mail sent after any failed check (any status, or no answer) is kept in the connector's state by that key alone
     (at most 100 per bot, oldest dropped) and reported once Tico answers again: `POST
     /api/v2/bots/{bot}/mail-check/misses {ids}` records one `rules.unchecked` (reason `connector`) per id not yet
-    kept for that bot, so a check the route counted, or a repeat, counts nothing more. It counts only when a rule
+    kept for that bot, so a check the route counted, or a repeat, counts nothing more. Whichever lands first, the
+    check or the report, claims the id and counts it; a report it doesn't count isn't kept. The connector makes an id
+    reportable only in the commit that records Gmail's confirmed send. It counts only when a rule
     in force names the bot with With empty (an id can't say where the mail went), up to 200 a bot a UTC day. The
     connector forgets the ids after its 2xx; a release without the route (404/405) leaves them queued. BotOps writing
     mail for a person finds its holds and approvals under BotOps, the author they were held as.

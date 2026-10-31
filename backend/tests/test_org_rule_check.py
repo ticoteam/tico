@@ -898,6 +898,43 @@ def test_a_send_after_a_failed_check_counts_once_whether_the_route_counted_it_or
     assert get(api, "rules/stats")["unchecked_today"] == before + 1
 
 
+def _no_budget(api):
+    api.app.state.store.settings.rules_monthly_usd = 1.0
+    with api.app.state.store.transaction() as c:
+        H.event(c, H.KEEPER, "rules.spend", "rule-check@1", {"cost_usd": 5.0})
+
+
+@pytest.mark.parametrize("how", ["budget", "error"])
+def test_a_report_that_lands_before_its_check_finishes_unchecked_counts_once(ruled, monkeypatch, how):
+    # The mail tool gave up waiting, sent the mail, and reported it; then the check itself finishes as unchecked.
+    api, _ = ruled
+    color_rule(api)
+    check_id = str(uuid.uuid4())
+    assert post(api, "bots/ops/mail-check/misses", {"ids": [check_id]}, token="ops-test")["recorded"] == 1
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Thanks for the call."}
+    if how == "budget":
+        _no_budget(api)
+        assert post(api, "bots/ops/mail-check", mail, token="ops-test", key=check_id)["outcome"] == "unchecked"
+    else:
+        monkeypatch.setattr(K, "mail_approved", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+        with pytest.raises(RuntimeError):
+            api.post("/api/v2/bots/ops/mail-check", json=mail, headers=headers("ops-test", check_id))
+    assert get(api, "rules/stats")["unchecked_today"] == 1
+
+
+def test_a_report_not_counted_is_not_kept_so_its_check_still_counts(ruled):
+    api, _ = ruled
+    color_rule(api, **{"with": {"people": ["ben"]}})
+    check_id = str(uuid.uuid4())
+    assert post(api, "bots/ops/mail-check/misses", {"ids": [check_id]}, token="ops-test") == \
+        {"recorded": 0, "known": []}
+    _no_budget(api)
+    mail = {"to": ["ben@acme.example"], "subject": "Hi", "body": "Thanks for the call."}
+    assert post(api, "bots/ops/mail-check", mail, token="ops-test", key=check_id)["outcome"] == "unchecked"
+    assert post(api, "bots/ops/mail-check/misses", {"ids": [check_id]}, token="ops-test")["known"] == [check_id]
+    assert get(api, "rules/stats")["unchecked_today"] == 1
+
+
 def test_a_report_counts_only_under_a_rule_with_no_with_and_up_to_a_days_cap(ruled, monkeypatch):
     api, _ = ruled
     color_rule(api, **{"with": {"people": ["ben"]}})          # only mail to Ben: an id cannot say where a mail went
@@ -907,7 +944,8 @@ def test_a_report_counts_only_under_a_rule_with_no_with_and_up_to_a_days_cap(rul
     ids = [str(uuid.uuid4()) for _ in range(4)]
     assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test") == {"recorded": 3, "known": []}
     assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ops-test")["recorded"] == 0
-    assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test")["known"] == ids
+    # The one over the cap was not kept: only the counted ones are known.
+    assert post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test")["known"] == ids[:3]
     assert get(api, "rules/stats")["unchecked_today"] == 3
 
 

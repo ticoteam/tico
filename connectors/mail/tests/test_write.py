@@ -117,12 +117,22 @@ class Sending(Writing):
         self.send(9)
         self.assertEqual(([sorted(r) for r in reported], self.misses()), ([sorted(keys)], []))
 
-    def test_a_mail_that_did_not_go_out_keeps_no_miss(self):
+    def test_a_miss_is_reportable_only_once_gmail_confirms_the_send(self):
+        # Another run reports while this send is in flight, and the send then fails: nothing was out, nothing told.
+        from connectors.mail import gmail
         pl.HUB_POST = lambda path, body, key=None: (_ for _ in ()).throw(pl.HubFailed("unavailable"))
-        self.service.send_fails = True
-        self.run_cli("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")
-        self.service.send_fails = False
-        self.assertEqual(self.misses(), [])
+        seen, send = [], gmail.Gmail.send_draft
+
+        def in_flight(gm_self, draft_id):
+            seen.append(db.mail_check_misses(self.conn(), "influencer"))
+            self.service.send_fails = True
+            try:
+                return send(gm_self, draft_id)
+            finally:
+                self.service.send_fails = False
+        with mock.patch.object(gmail.Gmail, "send_draft", in_flight):
+            self.run_cli("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")
+        self.assertEqual((seen, self.misses()), ([[]], []))
 
     def test_an_older_tico_without_the_misses_route_keeps_them_and_still_holds_the_mail(self):
         pl.HUB_POST = lambda path, body, key=None: (_ for _ in ()).throw(pl.HubFailed("unavailable"))

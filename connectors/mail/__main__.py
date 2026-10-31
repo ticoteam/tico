@@ -1897,20 +1897,16 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         ctx.audit("send-duplicate", draft_id, {"key": key, "message": row.get("message_id")})
         return dict(base, sent=True, already_sent=True, message=row.get("message_id", ""),
                     key=key, note="this exact send was already made; nothing was sent again.")
-    missed = bool(ruled and ruled.get("failed"))
-    if missed:
-        # Out with no verdict: kept with the pending send, Tico hears of it by the check's id once it answers again.
-        db.add_mail_check_miss(ctx.conn, ctx.slug, check_id)
     try:
         res = ctx.gmail.send_draft(draft_id)
     except Failure:
         db.drop_send(ctx.conn, key)                     # never sent: let a retry try again
-        if missed:
-            db.drop_mail_check_misses(ctx.conn, [check_id])
         raise
     message_id = res.get("id", "")
     thread_id = res.get("threadId") or thread_id
-    db.finish_send(ctx.conn, key, message_id, "sent")
+    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
+    db.finish_send(ctx.conn, key, message_id, "sent",
+                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
     handled = lb.handled(ctx.slug)
     label_thread(ctx, handled, msgs, [message_id])
     ctx.audit("send", message_id or draft_id,

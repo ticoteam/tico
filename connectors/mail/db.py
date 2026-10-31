@@ -247,14 +247,16 @@ def record_audit(conn, row):
 MAIL_CHECK_MISSES_MAX = 100     # kept per employee, oldest dropped; also what one report to Tico carries
 
 
-def add_mail_check_miss(conn, employee, check_id):
-    """A mail sent after its org rule check brought back no verdict: the check's id, for Tico to count once, later."""
+def add_mail_check_miss(conn, employee, check_id, commit=True):
+    """A mail sent after its org rule check brought back no verdict: the check's id, for Tico to count once, later.
+    `commit` False: it lands with the caller's next commit (`finish_send`)."""
     conn.execute("INSERT OR IGNORE INTO mail_check_misses (id, employee, created) VALUES (?,?,?)",
                  (check_id, employee, stamp()))
     conn.execute("DELETE FROM mail_check_misses WHERE employee=? AND id NOT IN (SELECT id FROM mail_check_misses "
                  "WHERE employee=? ORDER BY created DESC, rowid DESC LIMIT ?)",
                  (employee, employee, MAIL_CHECK_MISSES_MAX))
-    conn.commit()
+    if commit:
+        conn.commit()
 
 
 def mail_check_misses(conn, employee):
@@ -354,9 +356,13 @@ def claim_send(conn, key, employee, mailbox, issue, recipients, subject, thread_
     return get_send(conn, key), True
 
 
-def finish_send(conn, key, message_id="", status="sent"):
+def finish_send(conn, key, message_id="", status="sent", miss=None):
+    """`miss` (employee, check id): the send went out after a failed org rule check; its miss becomes reportable in
+    this same commit, only once the send is known to have gone."""
     conn.execute("UPDATE sends SET message_id=?, status=? WHERE key=?",
                  (message_id or "", status, key))
+    if miss:
+        add_mail_check_miss(conn, *miss, commit=False)
     conn.commit()
     return get_send(conn, key)
 

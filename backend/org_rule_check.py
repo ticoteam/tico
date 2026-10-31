@@ -1141,10 +1141,10 @@ def check_id_of(request):
 
 
 def record_misses(c, author, ids):
-    """Inside the write: each id not yet counted for this bot (by the check itself, or an earlier report) is kept and
-    is one `rules.unchecked`, when a rule in force covers the bot whatever the recipients (Who names it, With empty:
-    an id says nothing of whom the mail went to), up to MISSES_DAY_MAX a UTC day. Ids older than MISSES_KEPT_DAYS are
-    forgotten."""
+    """Inside the write: each id not yet counted for this bot (by the check itself, or an earlier report) is claimed
+    and is one `rules.unchecked`, when a rule in force covers the bot whatever the recipients (Who names it, With
+    empty: an id says nothing of whom the mail went to), up to MISSES_DAY_MAX a UTC day. An id not counted is not
+    kept. Every id is taken (the connector forgets them on the 2xx). Ids older than MISSES_KEPT_DAYS are forgotten."""
     cutoff = (datetime.now(timezone.utc) - timedelta(days=MISSES_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
     c.execute("DELETE FROM org_rule_misses WHERE created<?", (cutoff,))
     counted = on(c) and bool(R.matching(c, author))
@@ -1153,12 +1153,19 @@ def record_misses(c, author, ids):
         "AND json_extract(detail_json,'$.reason')='connector'", (author, _day())).fetchone()[0] if counted else 0
     known, recorded, over = [], 0, 0
     for miss in ids:
-        if not keep_miss(c, author, miss):
+        if counted and recorded < room:
+            # Claimed before counted: the check itself, still running, then finds it claimed and counts nothing.
+            if keep_miss(c, author, miss):
+                H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
+                                                              "bot": H.actor_id(author)})
+                recorded += 1
+            else:
+                known.append(miss)
+            continue
+        # Not counted here (no rule without With, or over the day's cap): not kept either, so the check, if it is
+        # still running, can count it.
+        if c.execute("SELECT 1 FROM org_rule_misses WHERE author=? AND id=?", (author, miss)).fetchone():
             known.append(miss)
-        elif counted and recorded < room:
-            H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
-                                                          "bot": H.actor_id(author)})
-            recorded += 1
         elif counted:
             over += 1
     if over:
@@ -1205,10 +1212,10 @@ def install(app, store, auth, mutate):
                 if not R.any_active(c) or not on(c):
                     return
                 rules = R.matching(c, "bot:" + bot, mail_recipients(c, [*body.to, *body.cc]))
-                if rules:
+                # Claimed before counted: a report of this check that landed first already counted it.
+                if rules and (not check_id or keep_miss(c, author, check_id)):
                     H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": reason,
                                                                   "rules": [r["id"] for r in rules], "bot": bot})
-                    keep_miss(c, author, check_id)
         except Exception as exc:  # noqa: BLE001 - recording a failure never adds one
             LOG.warning("Recording a failed mail check failed: %s", type(exc).__name__)
 
@@ -1280,9 +1287,11 @@ def install(app, store, auth, mutate):
         def work(c):
             mark = c.execute("SELECT coalesce(max(rowid), 0) FROM events").fetchone()[0]
             out = decide(c)
+            # The check claims its id with the unchecked it wrote; a report of it that landed first (the mail tool gave
+            # up waiting) already counted it, and this write's own unchecked comes out again.
             if check_id and c.execute("SELECT 1 FROM events WHERE rowid>? AND action='rules.unchecked' AND actor=? "
-                                      "LIMIT 1", (mark, author)).fetchone():
-                keep_miss(c, author, check_id)
+                                      "LIMIT 1", (mark, author)).fetchone() and not keep_miss(c, author, check_id):
+                c.execute("DELETE FROM events WHERE rowid>? AND action='rules.unchecked' AND actor=?", (mark, author))
             return out
 
         def decide(c):
