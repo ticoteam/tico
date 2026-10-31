@@ -60,6 +60,7 @@ class ChartAccount:
     type: str           # asset | liability | equity | income | expense
     subtype: str = ""
     active: bool = True
+    payroll: bool = False   # a payroll expense account: its lines are private until the owner says otherwise
 
 
 @dataclass(frozen=True)
@@ -267,7 +268,7 @@ def decode(d: Mapping[str, Any]) -> Record:
     ext = _ext(d["ext"])
     if kind == "ChartAccount":
         return ChartAccount(ext, str(d["code"]), str(d["name"]), str(d["type"]), str(d.get("subtype", "")),
-                            bool(d.get("active", True)))
+                            bool(d.get("active", True)), bool(d.get("payroll", False)))
     if kind == "Party":
         return Party(ext, str(d["name"]), str(d["kind"]), bool(d.get("active", True)),
                      tuple(str(x) for x in d.get("emails", [])))

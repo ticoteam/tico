@@ -615,3 +615,9 @@ def test_a_purchase_is_read_as_an_entry_between_its_bank_and_its_expense_account
     [made] = Q.records("Purchase", [row], {})
     assert isinstance(made, M.Journal)
     assert sorted((x.account, x.amount) for x in made.lines) == [("Account:1", -10000), ("Account:40", 10000)]
+
+
+def test_a_quickbooks_payroll_expenses_account_is_marked_payroll_and_an_ordinary_expense_is_not():
+    base = {"Id": "7", "SyncToken": "1", "Name": "Payroll expenses", "AccountType": "Expense", "Active": True}
+    assert Q.account_record({**base, "AccountSubType": "PayrollExpenses"}).payroll is True
+    assert Q.account_record({**base, "AccountSubType": "OtherMiscellaneousServiceExpense"}).payroll is False

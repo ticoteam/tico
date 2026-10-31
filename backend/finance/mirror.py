@@ -23,6 +23,7 @@ from .core import mirror as M
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
+from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
@@ -290,6 +291,7 @@ def _local_account(ctx: Ctx, row: Any, code: str) -> L.Account | None:
 def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: str) -> None:
     row = SX.ref(c, cid, "fin_accounts", a.ext.key)
     if M.decide(_have(row), a.ext) in (M.SAME, M.OLDER, M.GONE):
+        _payroll_private(c, str(row["local_id"]) if row is not None else "", a, at)
         return
     current = _local_account(ctx, row, a.code)
     if current is None:
@@ -303,6 +305,14 @@ def _account(c: sqlite3.Connection, ctx: Ctx, cid: str, a: M.ChartAccount, at: s
         L.check_account(new, ctx.accounts)
         SL.update_account(c, new, at)
     _bind(c, cid, "fin_accounts", new.id, a.ext, at)
+    _payroll_private(c, new.id, a, at)
+
+
+def _payroll_private(c: sqlite3.Connection, account_id: str, a: M.ChartAccount, at: str) -> None:
+    """A payroll expense account's lines are private (spec §7.5), as an owner's private account is: set when the account
+    comes in, and never cleared here, so a change at the provider never unhides what is private."""
+    if a.payroll and account_id and SA.mark_private(c, account_id, SYSTEM, at):
+        SA.bump_view(c, f"payroll account {account_id}", at)
 
 
 def _party(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Party, at: str) -> None:
@@ -1725,7 +1735,7 @@ def _create_planner(kind: str) -> handlers.Planner:
             return {"outbox_id": oid, "status": "queued", "total": total}
         return handlers.Plan(K.default_gate(ctx.org, who, f"{kind}_create"),
                              f"Send a {documents.money_of(total)} {ctx.book.base_currency} {kind} for {contact['name']}",
-                             apply, facts={"amount": total, "counterparty": str(contact["name"])})
+                             apply, facts=documents.doc_facts(kind, contact, lines, ctx))
     return planner
 
 
@@ -1768,6 +1778,8 @@ def _payment_planner(kind: str) -> handlers.Planner:
         V.only(p, (f"{kind}_id", "amount", "date", "feed_id", "money_account_id", "account_id"))
         cid = _cid(ctx)
         doc = documents.doc_of(ctx, kind, V.text(p, f"{kind}_id", 80))
+        if kind == "bill" and who != SYSTEM and not documents.sees_doc(ctx, who, kind, doc):
+            raise FinanceError(NOT_FOUND, "no such bill")          # the same refusal as a missing bill
         documents.need_status(kind, doc, documents.OPEN[kind], "only an open one is paid")
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
@@ -1775,7 +1787,8 @@ def _payment_planner(kind: str) -> handlers.Planner:
         if ref is None or str(ref["status"]) != "active":
             raise FinanceError(CONFLICT, "that is not in the provider yet")
         left = documents.left_of(kind, doc)
-        amount = V.opt_amount(p) or left
+        given = V.opt_amount(p)
+        amount = left if given is None else given     # 0 is refused below, never read as the balance left
         if not 0 < amount <= left:
             raise invalid(f"the amount is more than 0 and at most what is left ({left})")
         if sum(k in p for k in ("feed_id", "money_account_id", "account_id")) > 1:
@@ -1841,7 +1854,8 @@ def _writeoff_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     if ref is None or str(ref["status"]) != "active":
         raise FinanceError(CONFLICT, "that is not in the provider yet")
     left = documents.left_of("invoice", inv)
-    amount = V.opt_amount(p) or left
+    given = V.opt_amount(p)
+    amount = left if given is None else given     # 0 is refused below, never read as the balance left
     if not 0 < amount <= left:
         raise invalid(f"a write-off is more than 0 and at most what is left ({left})")
     if "account_id" in p:

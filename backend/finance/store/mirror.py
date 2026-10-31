@@ -92,12 +92,14 @@ def set_mirror_state(c: sqlite3.Connection, cid: str, fields: Mapping[str, objec
 
 def candidates(c: sqlite3.Connection, book_id: str, gl_account_id: str, amount: int, start: str,
                end: str) -> list[tuple[str, str, int]]:
-    """Live entries (not reversals, not reversed, not already a bank row's) with a line on the bank's account for this
-    amount in a window: (entry id, entry date, line amount)."""
+    """Live entries with a line on the bank's account for this amount in a window: (entry id, entry date, line amount).
+    A line is taken out once a bank row on that same account is its match; the other legs of the entry (a transfer's
+    second account) are still offered, so each leg matches on its own."""
     rows = c.execute(
         "SELECT e.id, e.entry_date, l.amount FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id "
         "WHERE e.book_id=? AND l.account_id=? AND l.amount=? AND e.entry_date BETWEEN ? AND ? AND e.status='posted' "
-        "AND e.reverses_id IS NULL AND NOT EXISTS (SELECT 1 FROM fin_feed_txns f WHERE f.entry_id=e.id) "
+        "AND e.reverses_id IS NULL AND NOT EXISTS (SELECT 1 FROM fin_feed_txns f JOIN fin_money_accounts m "
+        "ON m.id=f.money_account_id WHERE f.entry_id=e.id AND (m.account_id=l.account_id OR m.account_id IS NULL)) "
         "ORDER BY e.entry_date, e.id LIMIT 200", (book_id, gl_account_id, amount, start, end)).fetchall()
     return [(str(r[0]), str(r[1]), int(r[2])) for r in rows]
 

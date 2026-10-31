@@ -104,7 +104,8 @@ def account_record(row: dict[str, Any]) -> M.ChartAccount | None:
     if _id(row.get("AccountSubType")) == "SalesTaxPayable":
         subtype = M.SALES_TAX           # where a taxed record's tax lands (the books' sales tax account)
     return M.ChartAccount(ext, code=code, name=_id(row.get("Name")), type=mapped[0], subtype=subtype,
-                          active=bool(row.get("Active", True)))
+                          active=bool(row.get("Active", True)),
+                          payroll=_id(row.get("AccountSubType")) == "PayrollExpenses")
 
 
 def party_record(row: dict[str, Any], kind: str) -> M.Party:
