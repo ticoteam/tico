@@ -230,7 +230,7 @@ function finPnlDraw() {
     const sel = p.sel?.id === r.account_id ? p.sel.col : -1;
     const edit = editable(r);
     const how = FIN_PROJ[r.projection_method] ? ` title="${FIN_PROJ[r.projection_method]}"` : '';
-    const cells = vals.map((v, i) => `<td data-fin-cell="${esc(r.account_id)}|${i}"${cols[i].state === 'future' ? how : ''} class=""${cols[i].state === 'future' ? 'fin-p' : ''}${i === past && cols[i].state === 'future' ? ' fin-b' : ''}${sel === i ? ' fin-on' : ''}">${r.private && v == null ? '<span class="muted">—</span>' : finNum(v)}</td>`).join('');
+    const cells = vals.map((v, i) => `<td data-fin-cell="${esc(r.account_id)}|${i}"${cols[i].state === 'future' ? how : ''} class="${cols[i].state === 'future' ? 'fin-p' : ''}${i === past && cols[i].state === 'future' ? ' fin-b' : ''}${sel === i ? ' fin-on' : ''}">${r.private && v == null ? '<span class="muted">—</span>' : finNum(v)}</td>`).join('');
     return `<tr class="fin-ln" style="--d:${r.depth}"><td>${name}</td>${cells}<td class="fin-b${edit ? ' fin-edit' : ''}"${edit
       ? ` data-fin-budget="${esc(r.account_id)}" tabindex="0" aria-label="${esc(r.name)} budget, ${esc(finColLong(bcol))}"` : ''}>${r.private ? '<span class="muted">—</span>' : finNum(budget)}</td><td class="${diff.cls}">${diff.text}</td></tr>`;
   };

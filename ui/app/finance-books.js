@@ -153,7 +153,7 @@ function finCardsDraw() {
   if (!state.rows.length) { box.innerHTML = finNote('No cards yet.'); return; }
   box.innerHTML = `<table class="fin-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
     const [cls, label] = finCardPill(c);
-    return `<tr data-fin-card=""${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
+    return `<tr data-fin-card="${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
       <td>${c.budget ? esc(c.budget.name) : '<span class="muted">—</span>'}</td><td class="fin-n">${c.limit == null ? '<span class="muted">—</span>' : finNum(c.limit)}</td><td class="fin-n">${finNum(c.spent)}</td>
       <td><span class="pill ${cls}">${esc(label)}</span>${c.sync_status && c.sync_status !== 'ok' ? ` <span class="muted fin-small">${esc(c.sync_status)}</span>` : ''}</td></tr>`;
   }).join('')}</tbody></table>${state.next ? '<button type="button" class="ghost fin-more-btn" data-fin-more>More</button>' : ''}`;
@@ -591,8 +591,8 @@ function finTxCatDraw(r) {
 
 // ----------------------------------------------------------------- transfers
 // Moves between the company's own bank accounts (payment_create method "internal", backend/finance/transfers.py), and
-// payment_cancel while one is still queued. Route (not on a branch yet): GET /api/v2/finance/transfers?cursor= ->
-// {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next}.
+// payment_cancel while one is still queued. GET /api/v2/finance/transfers?cursor= ->
+// {transfers: [{id, from: {id, name, last4}, to: {…}, amount, memo, status, last_error, created_at, created_by}], next_cursor}.
 const FIN_XFER_STATUS = {queued: ['waiting', 'Queued'], submitted: ['waiting', 'Sent'], unknown: ['fail', 'Check bank'],
   failed: ['fail', 'Failed'], posted: ['ok', 'Posted'], cancelled: ['idle', 'Cancelled']};
 const finAcctName = a => a ? `${a.name || ''}${a.last4 ? ' ••' + a.last4 : ''}` : '';
