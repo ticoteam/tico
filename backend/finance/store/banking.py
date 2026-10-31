@@ -243,6 +243,16 @@ def feed_window(c: sqlite3.Connection, money_account_id: str, through: str) -> l
                      (money_account_id, through)).fetchall()
 
 
+def booked_uncleared(c: sqlite3.Connection, money_account_id: str, gl_account_id: str) -> list[Any]:
+    """This money account's rows no done reconciliation cleared whose entries are posted: each row's id, its entry's
+    date and what that entry moved on the account's GL line (what a reconciliation adjusts the GL balance by)."""
+    return c.execute("SELECT f.id, e.entry_date, COALESCE(SUM(l.amount), 0) AS amount FROM fin_feed_txns f "
+                     "JOIN fin_entries e ON e.id=f.entry_id AND e.status='posted' "
+                     "JOIN fin_lines l ON l.entry_id=e.id AND l.account_id=? "
+                     "WHERE f.money_account_id=? AND f.reconciliation_id IS NULL GROUP BY f.id, e.entry_date",
+                     (gl_account_id, money_account_id)).fetchall()
+
+
 def feed_outstanding(c: sqlite3.Connection, money_account_id: str, through: str) -> tuple[int, int]:
     """Settled rows on or before `through` the books don't have yet (`new`): how many, and their total."""
     row = c.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "

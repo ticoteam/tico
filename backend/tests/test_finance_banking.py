@@ -426,3 +426,29 @@ def test_a_correction_to_a_charge_in_a_closed_month_reverses_on_an_open_day(book
     sync_once(books, fake, "2026-10-15T15:00:00.000000Z")
     with books.read() as c:
         assert _entries(c, "bank") == 3                                          # the open-day shift is no change
+
+
+def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(books):
+    """C17: a journal on the bank's GL line the statement doesn't have keeps the reconciliation open, though the
+    statement and its feed rows agree; an outstanding row on the books is adjusted for, not a gap."""
+    fake = FakeMercury()
+    connect(books, fake)
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                           # -15.00 on Oct 12
+    fake.txns["txn-late"] = _txn("txn-late", "acct-chk", -7.0, "wireFee", day="2026-10-20")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        stray = act(c, OWNER, "journal", {"date": "2026-10-13", "memo": "stray", "lines": [
+            {"account_id": account(c, "6900"), "amount": 10_000}, {"account_id": account(c, "1000"), "amount": -10_000}]})
+        assert stray.status == "committed", stray
+        off = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                          "statement_balance": -1_500})
+        assert off.result["status"] == "open" and off.result["difference"] == 0
+        assert off.result["book_difference"] == 10_000
+        c.execute("DELETE FROM fin_reconciliations")
+        assert act(c, OWNER, "journal", {"date": "2026-10-13", "memo": "fix", "lines": [
+            {"account_id": account(c, "1000"), "amount": 10_000},
+            {"account_id": account(c, "6900"), "amount": -10_000}]}).status == "committed"
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
+                                           "statement_balance": -1_500})
+        assert (done.result["status"], done.result["book_difference"]) == ("done", 0)

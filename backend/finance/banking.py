@@ -239,7 +239,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if pay is not None and t.amount < 0:
         tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
         rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
-        vendor = str(rec["contact_id"] or rec["name"]) if rec is not None else t.counterparty
+        vendor = payments.vendor_of(rec) if rec is not None else t.counterparty
         entry = _post(ctx, fid, t, [_line(str(pay["account_id"]), -t.amount, tags, vendor),
                                     _line(gl.id, t.amount)], [str(pay["hold_id"])] if pay["hold_id"] else [])
         _posted(ctx, [fid], entry)
@@ -494,6 +494,24 @@ def _signed(money: Any, shown: int) -> int:
     return -shown if str(money["kind"]) == "card_program" else shown
 
 
+def _book_gap(ctx: Ctx, money: Any, end: str, cleared: set[str], statement: int) -> int:
+    """How far the books are from the statement: the money account's whole GL balance through `end` (every entry on
+    that line: feed postings, journals, an opening balance), less what the books have that the statement doesn't yet
+    (posted rows not being cleared, dated through `end`), plus what the statement has that the books date later (a
+    cleared row posted on an open day after `end`). 0 when the GL line is the statement. With no GL line, 0."""
+    gl = str(money["account_id"] or "")
+    if not gl:
+        return 0
+    balance = SK.balances(ctx.c, ctx.book.id, end, [gl]).get(gl, 0)
+    for r in SK.booked_uncleared(ctx.c, str(money["id"]), gl):
+        on_books = str(r["entry_date"]) <= end
+        if str(r["id"]) in cleared and not on_books:
+            balance += int(r["amount"])
+        elif str(r["id"]) not in cleared and on_books:
+            balance -= int(r["amount"])
+    return statement - balance
+
+
 def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Tie a money account to its statement: the statement's end day and balance (from Mercury's statement when it
     has one, else typed), the cleared rows (default: every settled row through the end day not yet cleared), the
@@ -530,11 +548,7 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         opening = int(last["cleared_total"])
     total = opening + sum(int(window[i]["amount"]) for i in ids)
     difference = _signed(money, shown) - total
-    # The books must say what the cleared rows say: their entries, still posted, moved the money account's GL line
-    # by exactly their amounts. Rows the books don't have yet are outstanding and never cleared.
-    booked = SL.posted_total(ctx.c, [str(window[i]["entry_id"]) for i in ids], str(money["account_id"] or "")) \
-        if money["account_id"] else sum(int(window[i]["amount"]) for i in ids)
-    book_gap = sum(int(window[i]["amount"]) for i in ids) - booked
+    book_gap = _book_gap(ctx, money, end, set(ids), _signed(money, shown))
     waiting, waiting_total = SK.feed_outstanding(ctx.c, str(money["id"]), end)
     status = "done" if difference == 0 and book_gap == 0 else "open"
 
