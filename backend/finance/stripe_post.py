@@ -101,17 +101,18 @@ def stale(ctx: Ctx) -> None:
                 _ask(ctx, str(r["id"]), "it has no sale or payout to post against", "stale")
 
 
-def categorized_lines(ctx: Ctx, row: Any, money: Any, account_id: str, tags: Mapping[str, str],
-                      counterparty: str) -> list[dict[str, object]] | None:
-    """The lines a person's category posts for a Stripe sale: its gross to the chosen account and its fee to fees, as an
-    unheld sale posts them, so the row (its net) and these lines balance. None for any row that is not a Stripe sale."""
-    if str(money["provider"]) != "stripe" or str(row["kind"]) not in F.STRIPE_CHARGES:
-        return None
-    gross, fee = F.stripe_parts(SK.loads(row["raw_json"]))
-    lines = [banking.feed_line(account_id, -gross, tags, counterparty)]
-    if fee:
-        lines.append(banking.feed_line(_fees(ctx).id, fee))
-    return lines
+def fee_of(row: Any) -> int:
+    """What a Stripe sale's fee took out of its net, in cents; 0 for any other row (a refund, a payout, a cost)."""
+    if str(row["kind"]) not in F.STRIPE_CHARGES:
+        return 0
+    return F.stripe_parts(SK.loads(row["raw_json"]))[1]
+
+
+def fee_line(ctx: Ctx, row: Any) -> dict[str, object] | None:
+    """The line a Stripe sale's fee posts to fees, or None when it took no fee. What the sale settles is its gross, so
+    the line it settles grosses up by this same fee."""
+    fee = fee_of(row)
+    return banking.feed_line(_fees(ctx).id, fee) if fee else None
 
 
 # ------------------------------------------------------------------------------------------------ sales

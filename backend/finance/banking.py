@@ -525,6 +525,19 @@ def feed_line(account_id: str, amount: int, tags: Mapping[str, str] | None = Non
     return line
 
 
+def provider_fee(row: Any, money: Any) -> int:
+    """What the money row's provider took out of it before it arrived (a Stripe sale's fee), in cents; 0 for a bank row.
+    A row's counter line is its amount plus this much, and the fee posts as its own line (provider_fee_line)."""
+    from .stripe_post import fee_of
+    return fee_of(row) if str(money["provider"]) == "stripe" else 0
+
+
+def provider_fee_line(ctx: Ctx, row: Any, money: Any) -> dict[str, object] | None:
+    """The line for provider_fee's amount, or None when the provider took none."""
+    from .stripe_post import fee_line
+    return fee_line(ctx, row) if str(money["provider"]) == "stripe" else None
+
+
 def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     """A feed row's lines with each vendor as its one key: a counterparty that names a vendor contact (any case) is
     that contact's id, so its card rows and its bills count under one vendor (store/ap.vendor_key); a merchant with
@@ -702,15 +715,15 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                   status=F.POSTED, kind=str(row["kind"]), counterparty=str(row["counterparty"]),
                   description=str(row["description"]), card_id=str(row["card_id"] or ""))
 
-    from .stripe_post import categorized_lines  # local: stripe_post imports this module
-
     def apply(aid: str) -> Result:
         if row["entry_id"]:
             _unpost(ctx, row, "re-categorized")
         holds = [str(row["hold_id"])] if row["hold_id"] and amount < 0 else []
-        lines = categorized_lines(ctx, row, money, account.id, tags, t.counterparty)
-        if lines is None:
-            lines = [feed_line(account.id, -amount, tags, t.counterparty)]
+        taken = provider_fee(row, money)
+        lines = [feed_line(account.id, -(amount + taken), tags, t.counterparty)]
+        fee = provider_fee_line(ctx, row, money)
+        if fee is not None:
+            lines.append(fee)
         entry = post_row(ctx, str(row["id"]), t, lines, gl.id, holds)
         mark_posted(ctx, [str(row["id"])], entry)
         return {"feed_id": str(row["id"]), "entry_id": entry}

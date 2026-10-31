@@ -727,6 +727,34 @@ def test_a_held_sale_a_person_categorizes_posts_its_gross_income_and_its_fee_lik
         assert _every_entry_balances(c)
 
 
+def test_a_held_sale_applied_by_hand_to_an_invoice_posts_its_gross_and_fee_so_a_refund_nets_the_receivable(books):
+    """A $100 sale with a $3 fee, held, applied by hand to a $100 invoice: the receivable clears on the gross and the fee
+    posts as an expense, the same as an automatic match. A full refund reopens the invoice; the fee stays spent."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 10_000)
+    with books.transaction() as c:
+        rule = {"kind": "posting", "name": "Hold", "when": {"counterparty": "Acme Hold"}, "outcome": {"outcome": "ask"},
+                "examples": [{"input": {"counterparty": "Acme Hold"}, "expect": "ask"}]}
+        assert act(c, OWNER, "rule_create", rule).status == "committed"
+    stripe.add("charge", 10_000, 300, "Acme Hold")
+    stripe_pass(books, stripe)
+    with books.transaction() as c:
+        held = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": held, "amount": 10_000})
+        assert made.status == "committed", made
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "6200"), _sum(c, "1050")) == (0, 300, 9_700)
+        assert _every_entry_balances(c)
+    assert _invoice_row(books, iid) == (10_000, "paid")
+    stripe.add("refund", -10_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "6200"), _sum(c, "1050")) == (10_000, 300, -300)
+        assert _every_entry_balances(c)
+    assert _invoice_row(books, iid) == (0, "sent")
+
+
 def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
     body = json.dumps({"id": "evt_1", "type": "payout.paid", "data": {}}).encode()
     now = int(time.time())

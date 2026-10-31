@@ -1211,11 +1211,11 @@ def _unapplied(ctx: Ctx, row: Any, ctl: str, sign: int, contact: str) -> int:
 
 
 def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
-    """Post what a feed row paying a document needs. A row not yet in the books posts whole to AP or AR (any amount
-    beyond this document stays there, for the next one it pays). A posted row uses what it already put in AP or AR for
+    """Post what a feed row paying a document needs. A row not yet in the books posts its gross to AP or AR, with any
+    provider fee as its own line (any amount beyond this document stays there, for the next one it pays). A posted row uses what it already put in AP or AR for
     the contact first, then moves the rest from the lines it hit to AP or AR (and whatever it left on the automatic
     default, unapplied there), in an entry beside its own (the bank line is never touched, so a reconciled row works too)."""
-    from .banking import feed_line, fresh_source, mark_posted, open_day, post_row
+    from .banking import feed_line, fresh_source, mark_posted, open_day, post_row, provider_fee, provider_fee_line
     ctl = control(ctx, kind)
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
     fid = str(row["id"])
@@ -1227,7 +1227,13 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
         t = _row_txn(row)
         # A card charge left unposted (it may pay one of many bills) keeps its authorization: it settles here.
         holds = [str(row["hold_id"])] if row["hold_id"] and t.amount < 0 else []
-        entry = post_row(ctx, fid, t, [feed_line(ctl.id, -t.amount, {}, contact)], gl.id, holds)
+        # A provider's fee comes out of the gross before the row arrives: the document settles the gross, and the fee
+        # is its own expense line, the same as an automatic match posts it.
+        lines = [feed_line(ctl.id, -(t.amount + provider_fee(row, money)), {}, contact)]
+        fee = provider_fee_line(ctx, row, money)
+        if fee is not None:
+            lines.append(fee)
+        entry = post_row(ctx, fid, t, lines, gl.id, holds)
         mark_posted(ctx, [fid], entry)
         if holds:
             from .banking import card_used
@@ -1322,7 +1328,10 @@ def _pay(kind: str) -> Any:
                 raise FinanceError(CONFLICT, "that row is a Finance payment; it settles its own bill")
             if row["entry_id"] and len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1:
                 raise FinanceError(CONFLICT, "that row is a transfer between your own accounts")
-            free = abs(int(row["amount"])) - SAP.settled_from(ctx.c, "feed", str(row["id"]))
+            from .banking import provider_fee
+            row_money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+            gross = abs(int(row["amount"])) + (provider_fee(row, row_money) if row_money is not None else 0)
+            free = gross - SAP.settled_from(ctx.c, "feed", str(row["id"]))
             if amount > free:
                 raise invalid(f"that row has {free} left to apply")
             day = V.opt_day(p, "date") or str(row["txn_date"])
