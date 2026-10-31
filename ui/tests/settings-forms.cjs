@@ -129,6 +129,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal(await page.locator('#set-prov [data-provider-fallback]').isChecked(), true);
     await page.locator('#set-prov [data-provider-fallback]').uncheck();
     const saves = () => writes.filter(row => row.p === '/api/v2/providers').length;
+    // The save redraws the form; the next edit waits for the new one.
+    await page.evaluate(() => { document.querySelector('#set-prov').dataset.before = '1'; });
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && !saves(); i++) await new Promise(done => setTimeout(done, 50));
     assert.equal(writes.find(row => row.p === '/api/v2/providers').body.auto_fallback, false);
@@ -137,6 +139,7 @@ const {unrouted} = require('./support/routes.cjs');
     assert.equal('check_models' in writes.find(row => row.p === '/api/v2/providers').body, false);
     // Edited, the order is sent as typed.
     const before = saves();
+    await page.locator('#set-prov:not([data-before]) [data-provider-check]').waitFor();
     await page.locator('#set-prov [data-provider-check]').fill('grok, codex');
     await page.locator('#set-prov-save').click();
     for (let i = 0; i < 100 && saves() === before; i++) await new Promise(done => setTimeout(done, 50));
