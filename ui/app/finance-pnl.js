@@ -190,6 +190,10 @@ function finSum(rows, pick) {
   for (const r of rows) { const v = pick(r); if (v != null) { any = true; total += v; } }
   return any ? total : null;
 }
+// One side of a difference (gross profit, net income): a side with no lines is 0; a side with lines but no figure for
+// the column is unknown, and so is the difference.
+const finSide = (rows, f) => rows.length ? finSum(rows, f) : 0;
+const finLess = (a, b) => a == null || b == null ? null : a - b;
 function finPnlDraw() {
   const state = FIN.pnl, box = $('#fin-pl'); if (!box || !state?.data) return;
   const data = state.data, cols = data.columns || [], p = FIN_PNL, bi = p.budgetCol, caps = finCaps();
@@ -241,8 +245,8 @@ function finPnlDraw() {
     out.push(total('Total ' + s.top.name.toLowerCase() + (hasPrivate(s.lines) ? excl : ''), s.lines, 'fin-subt', s.top.type === 'income' ? 1 : -1));
     const lastCogs = s.cogs && !sections.slice(n + 1).some(x => x.cogs);
     if (state.view === 'company' && lastCogs && income.length) {
-      const gp = i => { const a = finSum(income, r => r.private ? null : finVal(r, cols, i)), b = finSum(cogs, r => r.private ? null : finVal(r, cols, i)); return a == null || b == null ? null : a - b; };
-      const gpB = (() => { const a = finSum(income, finBudgetOf(bi)), b = finSum(cogs, finBudgetOf(bi)); return a == null || b == null ? null : a - b; })();
+      const gp = i => finLess(finSide(income, r => r.private ? null : finVal(r, cols, i)), finSide(cogs, r => r.private ? null : finVal(r, cols, i)));
+      const gpB = finLess(finSide(income, finBudgetOf(bi)), finSide(cogs, finBudgetOf(bi)));
       const gv = cols.map((c, i) => gp(i));
       out.push(`<tr class="fin-subt"><td>Gross profit${hasPrivate([...income, ...cogs]) ? excl : ''}</td>${nums(gv, gpB, gv[bi], 1)}</tr>`);
       const pct = i => { const rev = finSum(income, r => r.private ? null : finVal(r, cols, i)); return rev ? Math.round(gv[i] / rev * 100) : null; };
@@ -256,11 +260,10 @@ function finPnlDraw() {
   if (state.view === 'company') {
     const net = cols.map((c, i) => {
       if (c.state !== 'future') return data.net?.[i] ?? null;
-      const a = finSum(income, r => r.private ? null : finVal(r, cols, i)), b = finSum(allLines.filter(r => r.type === 'expense'), r => r.private ? null : finVal(r, cols, i));
-      return a == null || b == null ? null : a - b;
+      return finLess(finSide(income, r => r.private ? null : finVal(r, cols, i)), finSide(allLines.filter(r => r.type === 'expense'), r => r.private ? null : finVal(r, cols, i)));
     });
-    const inB = finSum(income, finBudgetOf(bi)), exB = finSum(allLines.filter(r => r.type === 'expense'), finBudgetOf(bi));
-    out.push(`<tr class="fin-tot"><td>Net income${excl}</td>${nums(net, inB == null || exB == null ? null : inB - exB, net[bi], 1)}</tr>`);
+    const netB = finLess(finSide(income, finBudgetOf(bi)), finSide(allLines.filter(r => r.type === 'expense'), finBudgetOf(bi)));
+    out.push(`<tr class="fin-tot"><td>Net income${excl}</td>${nums(net, netB, net[bi], 1)}</tr>`);
   } else {
     const spent = cols.map((c, i) => c.state === 'future' ? finSum(allLines, r => r.private ? null : finVal(r, cols, i)) : data.expense?.[i] ?? null);
     out.push(`<tr class="fin-tot"><td>Total expenses${excl}</td>${nums(spent, finSum(allLines, finBudgetOf(bi)), spent[bi], -1)}</tr>`);

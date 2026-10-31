@@ -69,9 +69,9 @@ function columns(start, end) {
   }
   return out;
 }
-function pnl(url, me) {
+function pnl(url, me, noRevenue = false) {
   const q = url.searchParams, cols = columns(q.get('start'), q.get('end')), view = q.get('view') || 'company';
-  const lines = LINES.filter(l => view === 'company' || l[3] === 'expense');
+  const lines = LINES.filter(l => (view === 'company' && !noRevenue) || l[3] === 'expense');
   const wave = (v, i) => v ? Math.round(v * (1 + ((i * 7) % 5 - 2) / 40) / 100) * 100 : 0;
   // A private line is hidden from all but the owner (backend/finance/reads.py pnl): renamed, no actuals or projections.
   const viewer = url.searchParams.get('view_as') || 'human:' + me;
@@ -159,7 +159,7 @@ const SOURCES = {groups: [
   {group: 'manual', name: 'Manual', count: 1, rows: [{id: 'manual', kind: 'entries', name: 'Journal entries and imports', manual: 4, import: 0}]}]};
 
 // ----------------------------------------------------------------- the fake hub
-async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl'} = {}) {
+async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/finance/pnl', noRevenue = false} = {}) {
   const person = people.find(p => p.id === viewer);
   const me = {id: viewer, name: person.name, email: viewer + '@acme.example', role: person.role, company_role: person.role, cloud: true};
   const config = {company_name: 'Acme'};
@@ -188,7 +188,7 @@ async function open(browser, {viewport = DESKTOP, viewer = 'ana', hash = '#/fina
     if (p === '/api/v2/conversations') return json({conversations: []});
     const denied = () => json({error: {code: 'denied', detail: 'Not in your view'}}, 403);
     if (p === '/api/v2/finance/access') return json(access(viewer));
-    if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer));
+    if (p === '/api/v2/finance/pnl') return json(pnl(url, viewer, noRevenue));
     if (p === '/api/v2/finance/budgets') return json({budgets: BUDGETS, more: false});
     if (p.startsWith('/api/v2/finance/lines/')) return json(line(decodeURIComponent(p.split('/').pop()), url));
     if (p === '/api/v2/finance/mercury-users') return json({users: [{id: 'mu-1', name: 'Ana Silva', connection_id: 'c1', email: 'a•••@acme.example', updated_at: '2026-10-30T10:00:00Z'},
@@ -462,6 +462,20 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('dialog.fin-dlg [type=submit]').click();
       await page.waitForFunction(() => !document.querySelector('dialog.fin-dlg[open]'));
       assert.deepEqual(actions(writes).at(-1), {kind: 'view_defaults_set', payload: {manager_payroll: 'hidden'}}, tag + ': view_defaults_set with what changed');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
+    // A company with no revenue lines: projected net income is minus the expenses, not blank.
+    {
+      const tag = 'no revenue';
+      const {page, errors} = await open(browser, {noRevenue: true});
+      await page.locator('.fin-pl').waitFor();
+      const net = await page.locator('.fin-pl tr.fin-tot td').allInnerTexts();
+      const cols = await page.evaluate(() => FIN.pnl.data.columns);
+      const future = cols.map((c, i) => c.state === 'future' ? net[i + 1] : null).filter(v => v != null);
+      assert.equal(net[0], 'Net income', tag + ': the bottom line');
+      assert.ok(future.length && future.every(v => /^\(?−?[\d,]+\)?$/.test(v) && v !== '0'), tag + ': projected net income has figures: ' + future.join(' '));
+      assert.ok(net[cols.length + 1] !== '', tag + ': the net budget has a figure');
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
