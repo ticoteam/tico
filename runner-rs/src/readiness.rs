@@ -638,10 +638,21 @@ pub fn document(runtimes: &Map<String, Value>, checks: &[Map<String, Value>], st
     // Bots run as their own user here, so the server may hand this computer a turn on a Tico model
     // (backend/models_preset.py); without it the server keeps such turns away (gateway_relay.rs refuses them).
     doc["isolated"] = json!(crate::isolation::enabled());
+    // Not isolated, but a Tico cloud machine: one company's trust group, whose Gateway turns run on the relay alone
+    // (gateway_relay.rs Separation::TrustGroup). Sent only to a server that takes the field.
+    if let Some(trust) = trust_field(crate::gateway_relay::separation(), crate::fallback::server_takes_trust()) {
+        doc["trust"] = json!(trust);
+    }
     if let Some((total, free)) = disk_usage(state_dir) {
         doc["disk"] = json!({"total_bytes": total, "free_bytes": free});
     }
     doc
+}
+
+/// The readiness `trust` (backend/models.py StructuredReadiness): "cloud_machine" for a trust group, to a server that
+/// takes it; isolation says itself (`isolated`).
+fn trust_field(separation: crate::gateway_relay::Separation, server_takes: bool) -> Option<&'static str> {
+    (server_takes && separation == crate::gateway_relay::Separation::TrustGroup).then_some("cloud_machine")
 }
 
 pub fn disk_usage(path: &Path) -> Option<(u64, u64)> {
@@ -723,6 +734,17 @@ pub fn changed_agent_instructions(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_a_cloud_machine_says_trust_and_only_to_a_server_that_takes_it() {
+        use crate::gateway_relay::Separation;
+        assert_eq!(trust_field(Separation::TrustGroup, true), Some("cloud_machine"));
+        // An older server forbids unknown readiness fields: it gets the heartbeat it knows (and holds Gateway work).
+        assert_eq!(trust_field(Separation::TrustGroup, false), None);
+        // Isolation is still `isolated`, never relabelled, and a plain computer claims nothing.
+        assert_eq!(trust_field(Separation::Isolated, true), None);
+        assert_eq!(trust_field(Separation::NoRelay, true), None);
+    }
 
     #[test]
     fn a_runtime_a_subscription_signs_in_needs_no_sign_in_here() {

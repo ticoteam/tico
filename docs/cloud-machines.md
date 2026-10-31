@@ -22,6 +22,9 @@ cloud machine" under Computer).
   When the last bot leaves it idles to a stop like any other.
 - Bots on one machine share its disk and `sudo`: they are one trust group, like bots sharing a computer today. Put a
   bot that must not see the others' files on its own machine.
+- Tico models run on a cloud machine even though its bots don't run as their own user: the runner keeps the company's
+  Gateway key and hands each turn only a pass for its model calls, but a bot there could still read the key from the
+  runner. That is the company's own key on its own machine, a trade-off accepted for cloud machines only.
 - One noisy bot cannot starve the rest past the runner's turns-at-once limit (Settings > Computers); there is no
   separate CPU accounting.
 - Billing and caps are HQ's: the shared machine is one machine against the company's machine cap, whatever the
@@ -80,6 +83,10 @@ no capabilities, where `sudo` can never work. The base step writes `/etc/sudoers
 
 The runner follows the server's release by itself, like any checkout runner (docs/updates.md), so a machine made from
 an older base updates on its first heartbeat. Refreshing the base per release only saves that first update.
+
+The runner knows it is on a cloud machine by the marker `/etc/tico/cloud-machine.json` (root's, naming the runner's
+user), which the base step writes. Machines made before Tico models ran here have it too, so they take Tico models once
+their runner updates.
 
 ## What's on a machine
 

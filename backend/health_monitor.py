@@ -331,7 +331,7 @@ def _login_checks(c, settings):
             continue                                  # a removed computer runs nothing more
         login = models_preset.LOGIN_NAMES.get(x["runtime"])
         if (login and models_preset.fallback_row(record) and record.get("auto_fallback")
-                and models_preset.isolated(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
+                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
             # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
             out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
                                 f"{label}'s {login} login is used up",
@@ -493,7 +493,7 @@ def _bot_checks(c, settings=None):
             continue
         login = models_preset.LOGIN_NAMES.get(providers.bot_choice(c, settings, declared)[0])
         if login and models_preset.fallback_row(record) and record.get("auto_fallback") \
-                and not models_preset.isolated(computer):
+                and not models_preset.runs_gateway(computer):
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
                                 f"{bot} stopped: its {login} login is used up",
                                 f"{bot} stopped: its {login} login is used up, and no computer here can run Tico "

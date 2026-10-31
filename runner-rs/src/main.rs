@@ -27,6 +27,7 @@ mod appdriver;
 mod backlog;
 mod capture;
 mod client;
+mod cloud_machine;
 mod commands;
 mod config;
 mod credential_imports;
