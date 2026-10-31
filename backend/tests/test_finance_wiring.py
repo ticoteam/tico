@@ -6,6 +6,7 @@ import urllib.error
 from datetime import datetime, timezone
 from decimal import Decimal
 
+from backend import hubdb as H
 from backend import usage_limits
 from backend.finance import actions as FA
 from backend.finance import gateway_sync
@@ -476,3 +477,67 @@ def test_a_claim_may_spend_what_is_left_of_the_bots_own_allocation(books):
         held = FA.run_hold(c, "coder", "job1", at=AT)
         assert not held.refused and held.hold_id
         assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 3
+
+
+def test_the_requester_of_an_approved_action_needs_the_view_to_read_its_reason(books):
+    with books.transaction() as c:
+        soft = account(c, "6100")
+        root = act(c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": 1_000,
+                                               "at_limit": "decline"}).result["budget_id"]
+        web = act(c, OWNER, "budget_create", {"name": "Software web", "account_id": soft, "team": "web",
+                                              "parent_id": root, "amount": 500, "at_limit": "decline"}).result["budget_id"]
+        grant = act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "expenses"})
+        asked = act(c, "human:cara", "allocation_set", {"budget_id": web, "target_kind": "teammate",
+                                                        "target_id": "human:eve", "amount": 300})
+        assert (asked.status, asked.approver) == ("needs_approval", "human:ben")
+        spend(c, "6100", 900)
+        H.approval_decide(c, "human:ben", asked.approval_id, "approved")
+        failed = FA.approval_decided(c, asked.approval_id, AT)
+        assert failed.status == "failed" and "100" in failed.reason
+        act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
+        assert FR.action_for(c, "human:cara", asked.action_id)["reason"] == ""
+        assert "100" in FR.action_for(c, "human:ben", asked.action_id)["reason"]
+
+
+def test_a_run_billed_in_october_is_taken_in_by_octobers_posting_though_it_settled_in_november(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
+        _attempt(c, "jlate", "alate")
+        held = FA.run_hold(c, "coder", "jlate", at="2026-10-31T23:00:00.000000Z").hold_id
+        _turn(c, "coder", "2026-10-31T23:59:00.000000Z", 0.30, tid="alate")
+        assert FA.run_ended(c, "jlate", "alate", "2026-11-01T00:01:00.000000Z") == "settled"
+        FA.usage_snapshot(c, _meter("2026-11-01T00:30:00Z", **{"tico-medium": "0.30"}),
+                          fetched_at="2026-11-01T00:30:00.000000Z")
+        FA.post_usage(c, "2026-11-01T00:35:00.000000Z")
+        assert _hold(c, held)[1] is not None
+
+
+def test_an_unchanged_final_read_still_closes_the_month(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
+        held = FA.run_hold(c, "coder", "joct", at="2026-10-20T10:00:00.000000Z").hold_id
+        run = _turn(c, "coder", "2026-10-20T11:00:00.000000Z", 0.20)
+        FA.run_ended(c, "joct", run, "2026-10-20T11:00:01.000000Z")
+        zero = {"month": "2026-10", "rows": [], "as_of": "2026-10-31T23:59:59Z"}
+        assert FA.usage_snapshot(c, zero, fetched_at="2026-11-01T00:30:00.000000Z")
+        FA.post_usage(c, "2026-11-01T00:35:00.000000Z")
+        assert _hold(c, held) == ("settled", None)
+        assert FA.usage_snapshot(c, zero, fetched_at="2026-11-04T00:30:00.000000Z") is None
+        FA.post_usage(c, "2026-11-04T00:35:00.000000Z")
+        assert _hold(c, held) == ("released", None)
+        assert "2026-10" not in gateway_sync.due_months(c, "2026-11-05T12:00:00.000000Z")
+
+
+def test_a_claim_fits_what_is_left_along_the_whole_budget_path(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        act(c, OWNER, "budget_create", {"name": "AI web", "account_id": account(c, "5100"), "team": "web",
+                                        "parent_id": ai, "amount": 50, "at_limit": "decline"})
+        spend(c, "5100", 47, team="web")
+        spend(c, "5100", 51, team="sales")
+        held = FA.run_hold(c, "coder", "job1", at=AT)        # web has 3 left, AI services 2
+        assert not held.refused and held.hold_id
+        assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 2

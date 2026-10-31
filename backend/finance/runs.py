@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from . import budgeting
-from .context import load
+from .context import Ctx, load
 from .core import dates
 from .core.org import SYSTEM
 from .setup import AI
@@ -64,9 +64,7 @@ def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) ->
     decision = budgeting.hold_place(c, budget_scope=scope, amount=amount, currency=book.base_currency, source="run",
                                     source_id=source_id(job_id), expires_at=expires, at=at)
     if not decision.allowed and decision.action == "decline" and decision.limit_budget_id and decision.budget_id:
-        ctx = load(c, at)       # what is left for this bot: its own allocations on its path are its to spend
-        left = budgeting.state(ctx, decision.limit_budget_id, dates.day(ctx.today), scope_target(bot),
-                               budgeting.chain_of(ctx, decision.budget_id)).remaining
+        left = _left(load(c, at), bot, decision.budget_id)
         if left is not None and 0 < left < amount:
             decision = budgeting.hold_place(c, budget_scope=scope, amount=left, currency=book.base_currency,
                                             source="run", source_id=source_id(job_id), expires_at=expires, at=at)
@@ -110,6 +108,15 @@ def expire(c: sqlite3.Connection, at: str, most: int = 500) -> int:
     for hid in tico.live_expired_run_holds(c, at):
         SU.extend_hold(c, hid, later)
     return budgeting.holds_expire(c, at, most)
+
+
+def _left(ctx: Ctx, bot: str, leaf_id: str) -> int | None:
+    """What the bot may still spend along its whole budget path: the least any budget on it has left for the bot (its
+    own allocations there are its to spend), or None when no budget on it has an amount."""
+    path = budgeting.chain_of(ctx, leaf_id)
+    today = dates.day(ctx.today)
+    lefts = [budgeting.state(ctx, bid, today, scope_target(bot), path).remaining for bid in path]
+    return min((v for v in lefts if v is not None), default=None)
 
 
 def _hours_after(at: str, hours: int) -> str:

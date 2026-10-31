@@ -10,8 +10,8 @@ on Video production; decision calls on AI services) less what earlier postings a
 posting; the rest is Unattributed. When the records come to more than the meter moved (the meter lags), the bots share the posting in
 proportion. Runs on the company's own keys, sign-ins and subscriptions are not on the meter and post nothing.
 
-A posting also takes in the run holds the meter now covers: run holds settled in the snapshot's month by the snapshot's
-time, even when the meter did not move. A month stays on the fetch list until a snapshot taken at least FINAL_DAYS after
+A posting also takes in the run holds the meter now covers: settled run holds whose run finished in the snapshot's month
+by the snapshot's time, even when the meter did not move. A month stays on the fetch list until a snapshot taken at least FINAL_DAYS after
 its end is posted, so a server that was down over the turn of the month still reads it; that final posting takes in
 (or, where the meter billed nothing on the line, releases) every settled run hold of the month still left."""
 import json
@@ -44,6 +44,7 @@ KEEP_MONTHS = 3
 BACKLOG_KEY = "gateway_usage_months"    # months that still need a final read of the meter
 FINAL_DAYS = 3                          # charges the meter records late: a month's final read is this long after it
 MOST_BACKLOG = 12
+FINAL_KEY = "gateway_usage_final"       # {month: when its final read came back}, kept until that month is closed
 MAX_BOTS = MAX_LINES - 2                # bot lines in one entry; the rest goes Unattributed
 
 
@@ -103,6 +104,8 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
                      "price_nano": price, "line": line})
     as_of = stamp(payload.get("as_of"), fetched_at)
     remember(c, month, by, fetched_at)
+    if fetched_at >= _final_after(month):
+        _final_read(c, month, by, fetched_at)   # an unchanged final read still closes the month
     return SU.add_snapshot(c, month=month, as_of=as_of, ai_nano=totals["ai"], video_nano=totals["video"], rows=kept,
                            by=by, at=fetched_at)
 
@@ -203,7 +206,34 @@ def post(c: sqlite3.Connection, at: str | None = None, by: str = SYSTEM) -> list
             break
         for snap in snaps:
             done += _post_one(ctx, snap, by)
+    _close_final_reads(ctx, by)
     return done
+
+
+def _final_read(c: sqlite3.Connection, month: str, by: str, at: str) -> None:
+    stored = SL.setting(c, FINAL_KEY)
+    months: dict[str, object] = dict(cast(dict[str, object], stored)) if isinstance(stored, dict) else {}
+    months[month] = at
+    SL.set_setting(c, FINAL_KEY, {m: months[m] for m in sorted(months)[-MOST_BACKLOG:]}, by, at)
+
+
+def _close_final_reads(ctx: Ctx, by: str) -> None:
+    """Close each month whose final read came back once none of its snapshots waits to post, even when that read
+    matched the last one kept (the meter did not move, so no snapshot was added)."""
+    c = ctx.c
+    stored = SL.setting(c, FINAL_KEY)
+    months = sorted(str(m) for m in cast(dict[str, object], stored)) if isinstance(stored, dict) else []
+    if not months:
+        return
+    waiting = {str(s["month"]) for s in SU.unposted(c)}
+    closed = [m for m in months if m not in waiting]
+    for month in closed:
+        snap = SU.latest(c, month)
+        _close_month(ctx, month, video_models(snap) if snap is not None else [])
+        _backlog_done(c, month, by, ctx.at)
+    if closed:
+        left = {m: cast(dict[str, object], stored)[m] for m in months if m not in closed}
+        SL.set_setting(c, FINAL_KEY, left, by, ctx.at)
 
 
 def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, object]]:
@@ -286,8 +316,8 @@ def _crossings(ctx: Ctx, touched: Sequence[tuple[str, str]], by: str) -> None:
 
 
 def _holds_by_line(c: sqlite3.Connection, month: str, as_of: str, models: Sequence[str]) -> dict[str, list[str]]:
-    """The settled run holds whose run ended (settled) in `month` by `as_of`, by the line their run cost lands on."""
-    held = SU.run_holds_settled(c, month, as_of)
+    """The settled run holds whose run finished in `month` by `as_of`, by the line their run cost lands on."""
+    held = tico.run_holds_settled(c, month, as_of)
     video = tico.video_jobs(c, [sid.removeprefix("job:") for _, sid in held], models) if held else set[str]()
     out: dict[str, list[str]] = {"ai": [], "video": []}
     for hid, sid in held:

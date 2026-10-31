@@ -207,6 +207,24 @@ def video_jobs(c: sqlite3.Connection, job_ids: Sequence[str], video_models: Sequ
     return out
 
 
+def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int = 1000) -> list[tuple[str, str]]:
+    """(hold id, source id) of every settled run hold no entry has taken in yet whose run finished in `month`
+    (YYYY-MM, the month the Gateway bills it in) at or before `through`, read a page at a time. A run's finish is its
+    job's last turn's `finished`; a hold with no turn on record goes by when it settled."""
+    out: list[tuple[str, str]] = []
+    last = ""
+    while True:
+        rows = c.execute(
+            "SELECT id, source_id FROM (SELECT h.id, h.source_id, coalesce((SELECT max(t.finished) FROM attempts a "
+            "JOIN turns t ON t.id = a.id WHERE a.job_id = substr(h.source_id, 5)), h.settled_at) AS finished "
+            "FROM fin_holds h WHERE h.source='run' AND h.status='settled' AND h.entry_id IS NULL AND h.id>?) "
+            "WHERE substr(finished, 1, 7)=? AND finished<=? ORDER BY id LIMIT ?", (last, month, through, page)).fetchall()
+        out += [(str(r[0]), str(r[1])) for r in rows]
+        if len(rows) < page:
+            return out
+        last = str(rows[-1][0])
+
+
 def live_expired_run_holds(c: sqlite3.Connection, at: str) -> list[str]:
     """Run holds past their expiry whose job is still out with a runner (leased, running, or not yet known to have
     ended)."""

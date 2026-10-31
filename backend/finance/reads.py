@@ -434,7 +434,7 @@ def _covers(ctx: Ctx, viewer: str, payload: Mapping[str, object]) -> bool | None
 
 
 def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, object] | None:
-    """An action's status for `viewer`, read now: None unless they asked for it, are named to decide its approval, or
+    """An action's status for `viewer`, read now: None unless they asked for it, are the one to decide its approval, or
     their current view covers what it is about. Its reason (which may carry amounts) for the approver, and otherwise
     only while the viewer's view covers that; else its code alone."""
     row = SX.by_id(c, action_id)
@@ -447,7 +447,7 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, 
         payload = dict[str, object]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)
     asked = viewer in {str(row["actor"]), str(row["on_behalf_of"] or "")}
-    approver = viewer in {str(row["approval_to"] or ""), str(row["approval_by"] or "")} - {""}
+    approver = bool(row["approval_to"]) and viewer == str(row["approval_to"])     # who decides it, not who asked
     if not asked and not covers and not approver:
         return None
     shown = covers is True or approver or (covers is None and asked)

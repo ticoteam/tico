@@ -68,21 +68,6 @@ def last_entry(c: sqlite3.Connection, book_id: str, prefix: str) -> str | None:
     return str(row[0]) if row else None
 
 
-def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int = 1000) -> list[tuple[str, str]]:
-    """(hold id, source id) of every run hold whose run ended (settled) in `month` (YYYY-MM) at or before `through`
-    and that no entry has taken in yet, read a page at a time."""
-    out: list[tuple[str, str]] = []
-    last = ""
-    while True:
-        rows = c.execute("SELECT id, source_id FROM fin_holds WHERE source='run' AND status='settled' AND entry_id IS NULL "
-                         "AND substr(settled_at, 1, 7)=? AND settled_at<=? AND id>? ORDER BY id LIMIT ?",
-                         (month, through, last, page)).fetchall()
-        out += [(str(r[0]), str(r[1])) for r in rows]
-        if len(rows) < page:
-            return out
-        last = str(rows[-1][0])
-
-
 def posted_by_teammate(c: sqlite3.Connection, book_id: str, account_id: str, prefix: str) -> dict[str, int]:
     """{teammate: cents} usage entries whose source id starts `prefix` put on each teammate on one account."""
     rows = c.execute("SELECT t.value, coalesce(sum(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id = l.entry_id "
