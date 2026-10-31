@@ -367,7 +367,11 @@ def _post_update(c, auto, run_id, args, values):
         out["briefing"] = MB.post(c, SimpleNamespace(actor=author), MB.this_week(), title, body, [], source=source)["week"]
         text = _pointer(c, poster, title)
     if "updates" in to:
-        posted = updates.post(c, poster, text, kind="daily", source=source)
+        # A warned step's text leads with its warn line (_warned_args): it goes on after the writing checks.
+        from .org_rule_check import unwarned
+        bare = unwarned(text)
+        posted = updates.post(c, poster, bare, kind="daily", source=source,
+                              warning=text[:len(text) - len(bare)].rstrip("\n"))
         out["update"] = (posted or {}).get("id")
     return out
 

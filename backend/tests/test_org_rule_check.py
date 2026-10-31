@@ -1930,3 +1930,16 @@ def test_an_impossible_update_day_is_refused_as_a_day(ruled):
     color_rule(api, if_broken="warn")
     r = api.post("/api/v2/updates", json={"day": "2026-02-30", "body": "- x"}, headers=headers("ops-test"))
     assert r.status_code == 422 and r.json()["error"]["code"] == "day", r.text
+
+
+def test_a_warned_automation_update_passes_refusing_writing_checks(ruled, monkeypatch):
+    from backend import hubdb
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    monkeypatch.setattr(hubdb, "STYLE_LINT", "refuse")
+    aid = post(api, "automations", {"name": "Post", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [{"id": "p", "type": "action", "do": "post_update",
+                                               "args": {"text": "- Our favorite color is blue."}}]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    body = sql(api, "SELECT body FROM updates WHERE bot='ops'")[0]["body"]
+    assert body.startswith("Warning:") and body.endswith("\n\n- Our favorite color is blue."), body
