@@ -825,3 +825,32 @@ def test_a_debit_carrying_a_lost_sends_key_is_the_payment_when_it_arrives(books)
         assert tuple(c.execute("SELECT status, provider_request_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
             == ("settled", "req-10")
         assert _holds(c) == [(50_000, "settled")] and _lines(c) == [("1000", -50_000), ("6100", 50_000)]
+
+
+@pytest.fixture
+def stale_vault():
+    """What an earlier app (or a test) left registered: a vault that is not set up for this one."""
+    from types import SimpleNamespace
+    FA.use_vault(SimpleNamespace(configured=False))
+
+
+def test_payee_and_payment_actions_work_on_an_app_with_timers_off(stale_vault, api):  # noqa: F811
+    """The app registers its own vault at startup, so an app with the scheduler off (a demo, this fixture) never seals
+    bank details with whatever an earlier registration left behind."""
+    store = api.app.state.store
+    assert not api.app.state.store.settings.scheduler_enabled
+    fake = FakeMercury()
+    with store.transaction() as c:
+        FA.setup(c, OWNER, AT)
+    connect(store, fake)
+    added = post(api, "finance/actions", {"kind": "recipient_add", "payload": PAYEE})
+    assert added["status"] == "committed", added
+    with store.transaction() as c:
+        assert _sealed_rows(c) == 1 and _plaintext_anywhere(c) == []
+    sync_once(store, fake)
+    with store.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        pay = {"recipient_id": added["result"]["recipient_id"], "money_account_id": _checking(c),
+               "account_id": account(c, "6100"), "amount": 2_500}
+    paid = post(api, "finance/actions", {"kind": "payment_create", "payload": pay})
+    assert paid["status"] == "committed", paid

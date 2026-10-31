@@ -150,6 +150,9 @@ def create_app(settings=None):
         # Files go to the company's own bucket from the first request, when the owner set one.
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
+        # Finance seals payees' bank details with this app's vault, timers or not (banking_start registers it again).
+        from .finance import actions as finance_vault
+        finance_vault.use_vault(app.state.vault)
         cloud_access.current(store)        # a lock kept from before the restart holds from the first request
         asyncio.get_running_loop().run_in_executor(None, auth.warm)   # Cloudflare's keys, before anyone signs in
         asyncio.get_running_loop().run_in_executor(None, app.state.vault.cipher.warm, store)   # the KMS data key
@@ -7683,6 +7686,8 @@ def create_app(settings=None):
     install_meeting_review(app, store, auth, mutate)
     from .credentials import install_credentials
     install_credentials(app, store, delegate=delegated_identity, propose=propose_card)
+    from .finance import actions as finance_vault
+    finance_vault.use_vault(app.state.vault)      # never one an earlier app left behind (the scheduler may be off)
     install_credential_cards(app, store, app.state.vault, auth, BOTOPS, delegated_identity, settings_admin._manager)
     from . import company_storage
     company_storage.install(app, store, auth)
