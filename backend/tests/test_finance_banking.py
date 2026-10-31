@@ -415,6 +415,8 @@ def test_a_payment_settles_on_its_payees_contact_so_the_vendor_hold_and_actual_m
         vendor = c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_feed_txns f ON f.entry_id=l.entry_id "
                            "WHERE f.provider_id='txn-pay' AND l.amount>0").fetchone()[0]
         assert vendor == "acme supplies"                               # the payee's name, keyed folded
+        assert c.execute("SELECT label FROM fin_vendor_labels WHERE name_key=?", (vendor,)).fetchone()[0] == \
+            "Acme Supplies"                                            # and read as written
         assert c.execute("SELECT status FROM fin_holds WHERE source='payment'").fetchone()[0] == "settled"
 
 

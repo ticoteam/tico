@@ -449,7 +449,7 @@ def _reclass(ctx: Ctx, row: Any, pay: Any) -> None:
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
     vendor = SAP.vendor_key(ctx.c, ctx.book.id,
                             (payments.vendor_of(rec) if rec is not None else str(row["counterparty"]))[:80])
-    if all(x.account_id == account and dict(x.tags) == tags and x.contact_id == vendor for x in spent):
+    if all(x.account_id == account and dict(x.tags) == tags and x.contact_id == L.name_key(vendor) for x in spent):
         if hold:
             budgeting.settle(ctx, hold, -int(row["amount"]), entry_id)
         return
@@ -517,7 +517,7 @@ def feed_line(account_id: str, amount: int, tags: Mapping[str, str] | None = Non
 def vendor_lines(ctx: Ctx, lines: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     """A feed row's lines with each vendor as its one key: a counterparty that names a vendor contact (any case) is
     that contact's id, so its card rows and its bills count under one vendor (store/ap.vendor_key); a merchant with
-    no contact keeps its name."""
+    no contact keeps its name (posting.post keys it folded and keeps the text as its label)."""
     keys: dict[str, str] = {}
     out: list[dict[str, object]] = []
     for line in lines:

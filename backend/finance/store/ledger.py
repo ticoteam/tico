@@ -122,6 +122,23 @@ def closed_through(c: sqlite3.Connection, book_id: str) -> str | None:
     return str(found) if found else None
 
 
+# ------------------------------------------------------------------------------------------------ vendor labels
+def label_vendor(c: sqlite3.Connection, book_id: str, name_key: str, label: str, day: str) -> None:
+    """Remember the text a vendor name key was posted under; an older entry date never replaces a newer one."""
+    c.execute("INSERT INTO fin_vendor_labels(book_id, name_key, label, seen_on) VALUES(?,?,?,?) "
+              "ON CONFLICT(book_id, name_key) DO UPDATE SET label=excluded.label, seen_on=excluded.seen_on "
+              "WHERE excluded.seen_on>=fin_vendor_labels.seen_on", (book_id, name_key, label, day))
+
+
+def vendor_label_texts(c: sqlite3.Connection, book_id: str, keys: Sequence[str]) -> dict[str, str]:
+    if not keys:
+        return {}
+    marks = ",".join("?" * len(keys))
+    return {str(r[0]): str(r[1]) for r in c.execute(
+        f"SELECT name_key, label FROM fin_vendor_labels WHERE book_id=? AND name_key IN ({marks})",
+        (book_id, *keys))}
+
+
 # ------------------------------------------------------------------------------------------------ entries and lines
 def insert_entry(c: sqlite3.Connection, e: Entry, *, entry_id: str, period_id: str, action_id: str,
                  reverses_id: str, by: str, at: str) -> list[str]:

@@ -196,15 +196,16 @@ def alias_add(c: sqlite3.Connection, book_id: str, name_key: str, contact_id: st
 
 
 def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
-    """The key a new line's vendor posts under (spec §3: one key per vendor): a contact's id stays; a name that is an
-    active vendor contact's alias becomes its id; any other name is its name key (L.name_key)."""
+    """The vendor a new line posts under (spec §3: one key per vendor): a contact's id stays; a name that is an active
+    vendor contact's alias becomes its id; any other name stays as written, for posting.post to key (L.name_key) and
+    keep as the key's label."""
     if not key or is_contact(c, key):
         return key
     nk = name_key(key)
     row = c.execute("SELECT a.contact_id FROM fin_vendor_aliases a JOIN fin_contacts k ON k.id=a.contact_id WHERE "
                     "a.book_id=? AND a.name_key=? AND k.active=1 AND k.kind IN ('vendor','both')",
                     (book_id, nk)).fetchone()
-    return str(row[0]) if row is not None else nk
+    return str(row[0]) if row is not None else key.strip()
 
 
 def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:

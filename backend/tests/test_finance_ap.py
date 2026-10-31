@@ -251,7 +251,7 @@ def test_a_scheduled_payment_denied_withdrawn_or_expired_reopens_the_bill_and_sa
 
 def test_vendor_labels_are_contact_names_and_never_ids(books):
     """F: lines a bill, an invoice write-off or any document posts carry the contact's id as their vendor key; the
-    drill-down, spend-by and transactions show the contact's name, a plain vendor name as its folded key, and an id with no
+    drill-down, spend-by and transactions show the contact's name, a plain vendor name as the text it was posted under, and an id with no
     contact behind it as nothing."""
     from backend.tests.test_finance_fixtures import spend
     stray = "0b6a4a52-5d0e-4c1a-9a43-2f2f3f6d1e10"
@@ -266,11 +266,11 @@ def test_vendor_labels_are_contact_names_and_never_ids(books):
         spend(c, "6900", 5_000, vendor="Northwind")
         spend(c, "6900", 1_000, vendor=stray)
         detail = FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31")
-        want = {"Acme Retail": 10_000, "Acme Supplies": 20_000, "northwind": 5_000, "": 1_000}
+        want = {"Acme Retail": 10_000, "Acme Supplies": 20_000, "Northwind": 5_000, "": 1_000}
         assert {r["label"]: r["amount"] for r in detail["by_vendor"]} == want
         assert {e["vendor_name"] for e in detail["entries"]} == set(want)
         by = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31")
-        assert {r["label"] for r in by["rows"]} >= {"Acme Retail", "Acme Supplies", "northwind", ""}
+        assert {r["label"] for r in by["rows"]} >= {"Acme Retail", "Acme Supplies", "Northwind", ""}
         rows = FR.transactions(c, OWNER, start="2026-10-01", end="2026-10-31")["rows"]
         assert not any(customer in str(r.get("vendor_name")) or stray in str(r.get("vendor_name")) for r in rows)
         assert "Acme Retail" in {r.get("vendor_name") for r in rows}
@@ -608,7 +608,7 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
     """Spec §3, §4.4 through fin_vendor_aliases: a plain name is keyed folded (ÉCOLE is école); a budget on a name keeps
     its actual as a contact takes the name and is renamed (the old name stays an alias); a budget on a contact's name
     stores its id; siblings on one vendor are refused, and so is a rename that would make two count the same spend;
-    an inactive contact's name captures no new bank row."""
+    an inactive contact's name captures no new bank row; a merchant with no contact reads as its newest row's text."""
     from backend.finance import budgeting
     from backend.tests.test_finance_fixtures import spend
     connect(books, FakeMercury())
@@ -650,13 +650,18 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
         assert (clash.status, clash.code) == ("failed", "conflict") and "Ecole and North" in clash.reason
         gone = _vendor(c, "Globex")
         assert act(c, OWNER, "contact_update", {"contact_id": gone, "active": False}).status == "committed"
-        for who in ("GLOBEX", "northwind"):
+        for who in ("GLOBEX", "northwind", "github"):
             rule = {"kind": "posting", "name": who, "when": {"counterparty": {"matches": who}},
                     "outcome": {"outcome": "post", "account_id": line},
                     "examples": [{"input": {"counterparty": who}, "expect": "post"}]}
             assert act(c, OWNER, "rule_create", rule).status == "committed"
         _ingest(c, _txn("txn-globex", -20.0, who="GLOBEX", kind="debitCardTransaction"))
         _ingest(c, _txn("txn-north", -30.0, who="northwind ", kind="debitCardTransaction"))
+        _ingest(c, _txn("txn-gh-new", -4.0, who="GitHub", kind="debitCardTransaction"))
+        _ingest(c, _txn("txn-gh-old", -4.0, who="GITHUB", day="2026-10-13", kind="debitCardTransaction"))
         keys = {str(r[0]) for r in c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_entries e ON "
                                              "e.id=l.entry_id WHERE e.source IN ('bank', 'card') AND l.contact_id<>''")}
-        assert keys == {"globex", north}                                 # inactive: its name only; active: its id
+        assert keys == {"globex", north, "github"}                       # inactive: its name only; active: its id
+        rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
+        labels = {r["label"]: r["amount"] for r in rows}
+        assert labels["GitHub"] == 800 and labels["Globex"] == 2_000    # the newest row's text; the alias's contact

@@ -38,7 +38,12 @@ def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str
          reversing: bool = False, touch: bool = True) -> tuple[str, list[str]]:
     """Check and post one entry. The entry id and its line ids. `touch=False` leaves the budget crossings to the
     caller, for once everything that goes with the entry is written."""
-    # A plain vendor name is keyed folded (L.name_key; a contact's id is its own key); a reversal keeps its keys.
+    # A plain vendor name is keyed folded (L.name_key; a contact's id is its own key) and keeps its text as the key's
+    # label; a reversal keeps its keys.
+    if not reversing:
+        for raw in {x.contact_id for x in e.lines if x.contact_id.strip()}:
+            if not SAP.is_contact(ctx.c, raw):
+                SL.label_vendor(ctx.c, ctx.book.id, L.name_key(raw), raw.strip()[:80], e.entry_date)
     e = replace(e, lines=tuple(replace(x, tags=with_team(ctx, x.tags),
                                        contact_id=x.contact_id if reversing else L.name_key(x.contact_id))
                                for x in e.lines))

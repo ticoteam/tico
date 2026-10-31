@@ -78,6 +78,12 @@ CREATE TABLE IF NOT EXISTS fin_vendor_aliases (
   contact_id TEXT NOT NULL REFERENCES fin_contacts(id), created_at TEXT NOT NULL,
   PRIMARY KEY (book_id, name_key));
 
+-- How a vendor name key with no contact reads: the text it was last posted under (a bank or card row's counterparty,
+-- a payee's name, an entry's vendor), the newest entry date winning. Display only; nothing counts by it.
+CREATE TABLE IF NOT EXISTS fin_vendor_labels (
+  book_id TEXT NOT NULL REFERENCES fin_books(id), name_key TEXT NOT NULL, label TEXT NOT NULL,
+  seen_on TEXT NOT NULL, PRIMARY KEY (book_id, name_key));
+
 CREATE TABLE IF NOT EXISTS fin_bills (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), vendor_id TEXT REFERENCES fin_contacts(id),
   number TEXT NOT NULL DEFAULT '', bill_date TEXT NOT NULL, due_date TEXT,
