@@ -1201,6 +1201,7 @@ export type FinanceBalanceSheet = {
 
 export type FinanceBills = {
   bills: Array<FinanceDocumentRow>;
+  bills_email: string | null;
   currency: string;
   next_cursor: string | null;
   open: FinanceOpenTotal;
@@ -1236,6 +1237,20 @@ export type FinanceCards = {
   sync_status: string;
 }>;
   next: string | null;
+  view_version: number;
+};
+
+export type FinanceChart = {
+  accounts: Array<{
+  company_wide?: boolean;
+  id: string;
+  name: string;
+  number: string;
+  parent_id?: string | null;
+  subtype?: string;
+  type: string;
+}>;
+  more: boolean;
   view_version: number;
 };
 
@@ -1422,6 +1437,20 @@ export type FinanceOpenTotal = {
   remaining: number;
 };
 
+export type FinancePayFrom = {
+  accounts: Array<{
+  available_balance?: number | null;
+  balance?: number | null;
+  balance_as_of?: string | null;
+  id: string;
+  last4?: string | null;
+  name: string;
+  provider?: string;
+}>;
+  currency: string;
+  view_version: number;
+};
+
 export type FinancePayments = {
   next_cursor: string | null;
   payments: Array<{
@@ -1547,9 +1576,11 @@ export type FinanceRules = {
   examples?: Array<Record<string, unknown>>;
   external_rule_id?: string | null;
   id: string;
+  kind?: "gate" | "posting";
   name: string;
   outcome: Record<string, unknown>;
   owner?: string;
+  priority?: number;
   runs?: Array<{
   action_id: string | null;
   at: string;
@@ -5402,6 +5433,14 @@ export type GetFinanceBillParams = {
 export type GetFinanceBillBody = never;
 export type GetFinanceBillResponse = FinanceDocument;
 
+/** GET /api/v2/finance/chart */
+export type GetFinanceChartParams = {
+  for?: "bill" | "invoice" | "journal" | null;
+  view_as?: string | null;
+};
+export type GetFinanceChartBody = never;
+export type GetFinanceChartResponse = FinanceChart;
+
 /** GET /api/v2/finance/close/{month} */
 export type GetFinanceCloseChecklistParams = {
   month: string;
@@ -6203,6 +6242,13 @@ export type ListFinanceInvoicesResponse = FinanceInvoices;
 export type ListFinanceMercuryUsersParams = Record<string, never>;
 export type ListFinanceMercuryUsersBody = never;
 export type ListFinanceMercuryUsersResponse = FinanceMercuryUsers;
+
+/** GET /api/v2/finance/pay-from */
+export type ListFinancePayFromParams = {
+  view_as?: string | null;
+};
+export type ListFinancePayFromBody = never;
+export type ListFinancePayFromResponse = FinancePayFrom;
 
 /** GET /api/v2/finance/payments */
 export type ListFinancePaymentsParams = {

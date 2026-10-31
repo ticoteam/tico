@@ -15,6 +15,7 @@ from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .store import ap as SAP
 from .store import banking as SK
+from .store import ledger as SL
 from .tab import decode_cursor, encode_cursor, page_size, private_cut
 
 Row = dict[str, object]
@@ -23,6 +24,10 @@ SCAN = 2000                 # rows a page may look through before it hands back 
 OPEN_MOST = 5000            # open documents an aging summary sums (more is reported as `more`)
 SIDES = {"bill": ("payables", R.AP), "invoice": ("receivables", R.AR)}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
+BILLS_EMAIL_KEY = "finance_bills_email"     # the install's bills address (actions.set_bills_email writes it)
+CHART_MOST = 2000
+CONTROL_SUBTYPES = ("payable", "receivable")
+CHART_FOR = {"bill": ("expense", "asset"), "invoice": ("income",)}
 
 
 def sees_side(ctx: Ctx, view: VW.View, kind: str) -> bool:
@@ -203,9 +208,9 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
 def bills(c: sqlite3.Connection, viewer: str, *, status: str | None = None, vendor_id: str | None = None,
           q: str = "", start: str | None = None, end: str | None = None, aging: str | None = None,
           cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
-    """Bills the viewer sees (`documents` with kind bill)."""
-    return documents(c, viewer, "bill", status=status, contact_id=vendor_id, q=q, start=start, end=end, aging=aging,
-                     cursor=cursor, limit=limit, at=at)
+    """Bills the viewer sees (`documents` with kind bill), with the install's bills address (`bills_email`)."""
+    return {**documents(c, viewer, "bill", status=status, contact_id=vendor_id, q=q, start=start, end=end,
+                        aging=aging, cursor=cursor, limit=limit, at=at), "bills_email": bills_email(c)}
 
 
 def invoices(c: sqlite3.Connection, viewer: str, *, status: str | None = None, customer_id: str | None = None,
@@ -262,3 +267,54 @@ def contacts(c: sqlite3.Connection, viewer: str, *, kind: str | None = None, q: 
            for r in page]
     nxt = encode_cursor([str(page[-1]["name"]), str(page[-1]["id"])]) if len(rows) > most else None
     return {"contacts": out, "next_cursor": nxt, "view_version": view.version}
+
+
+def bills_email(c: sqlite3.Connection) -> str | None:
+    """The address vendors send bills to (Bookkeeper reads that mailbox), or None while there is none."""
+    value = SL.setting(c, BILLS_EMAIL_KEY)
+    return value if isinstance(value, str) and value else None
+
+
+def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: str | None = None) -> Row:
+    """The active lines the viewer may post to, for the bill, invoice and journal forms: every line in their view,
+    for teammates who write to the books (finance.book, ap or ar). `for_` bill keeps expense and asset lines, invoice
+    income lines (never accounts payable or receivable, which only documents move); journal keeps every line.
+    `company_wide` says whether a line takes untagged amounts from this viewer (else they tag their team)."""
+    from .handlers import may_write
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    held = ctx.rights(viewer)
+    if not any(R.has(ctx.org, viewer, r, held) for r in (R.BOOK, R.AP, R.AR)):
+        raise denied("the chart is for teammates who write to the books")
+    if for_ is not None and for_ not in (*CHART_FOR, "journal"):
+        raise invalid("for is bill|invoice|journal")
+    types = CHART_FOR.get(for_ or "journal")
+    out: list[Row] = []
+    for a in sorted(ctx.accounts.values(), key=lambda x: (x.code, x.id)):
+        if not a.active or not (view.everything or view.sees_account(a)):
+            continue
+        if types is not None and (a.type not in types or a.subtype in CONTROL_SUBTYPES):
+            continue
+        out.append({"id": a.id, "number": a.code, "name": a.name, "type": a.type, "subtype": a.subtype,
+                    "parent_id": a.parent_id or None, "company_wide": may_write(ctx, viewer, a.id, {})})
+    return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST, "view_version": view.version}
+
+
+def pay_from(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
+    """The connected bank accounts the viewer may pay a bill from (finance.pay): id, name, last 4, and the balance
+    only when the viewer sees that account's line on the balance sheet."""
+    from .tab import sees_money_account
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    if not R.has(ctx.org, viewer, R.PAY, ctx.rights(viewer)):
+        raise denied("paying is for teammates with finance.pay")
+    out: list[Row] = []
+    for m in SK.money_accounts(c, ctx.book.id):
+        if str(m["kind"]) != "bank" or not m["connection_id"] or str(m["status"] or "active") != "active":
+            continue
+        seen = sees_money_account(ctx, view, m)
+        out.append({"id": str(m["id"]), "name": str(m["name"]), "provider": str(m["provider"] or ""),
+                    "last4": m["last4"], "balance": m["balance"] if seen else None,
+                    "available_balance": m["available_balance"] if seen else None,
+                    "balance_as_of": m["balance_as_of"] if seen else None})
+    return {"accounts": out, "currency": ctx.book.base_currency, "view_version": view.version}

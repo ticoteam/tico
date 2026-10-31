@@ -107,6 +107,40 @@ def open_next_period(c: sqlite3.Connection, at: str | None = None) -> str | None
     return ensure_period(ctx, dates.add_months(dates.day(ctx.today).replace(day=1), 1).isoformat())
 
 
+CASH_EVENT, READY_EVENT = "finance.cash.below", "finance.period.ready"
+CASH_STATE = "finance_cash_below_state"  # whether cash was under the floor at the last look, and how many crossings
+
+
+def watch(c: sqlite3.Connection, at: str | None = None) -> int:
+    """The hourly look (spec §7.3): pay the scheduled bills whose day has come; raise each bill's due-soon and each
+    invoice's overdue stage once; finance.cash.below once per crossing under the owner's floor (it re-arms when cash
+    is back over it); finance.period.ready once per month whose close checklist is ready. How many it raised or paid."""
+    if not is_set_up(c):
+        return 0
+    from . import documents, reads
+    from .banking import event
+    from .payments import CASH_BELOW_KEY
+    n = documents.pay_due(load(c, at))
+    ctx = load(c, at)
+    n += documents.watch(ctx)
+    floor = SL.setting(c, CASH_BELOW_KEY)
+    cash = reads.company_cash(c, at) if isinstance(floor, int) and floor > 0 else None
+    was = cast(dict[str, object], SL.setting(c, CASH_STATE) or {})
+    crossings = int(cast(int, was.get("n") or 0))
+    if cash is not None and isinstance(floor, int):
+        below = cash < floor
+        if below and not was.get("below"):
+            crossings += 1
+            event(ctx, CASH_EVENT, "company", {"floor": floor, "cash": cash}, f"n{crossings}")
+            n += 1
+        if below != bool(was.get("below")):
+            SL.set_setting(c, CASH_STATE, {"below": below, "n": crossings}, SYSTEM, ctx.at)
+    for month in reads.ready_months(c, at):
+        event(ctx, READY_EVENT, month, {"month": month})
+        n += 1
+    return n
+
+
 def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str, B.State, int] | None:
     """The company-wide AI services budget (no team, teammate or vendor) when it has an amount: its at-limit action,
     its state now, and what is really spent against it (actuals and holds; money set aside in allocations and not used

@@ -8543,6 +8543,86 @@
         ]
       }
     },
+    "/api/v2/finance/chart": {
+      "get": {
+        "summary": "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill keeps expense and asset lines, invoice income lines; for teammates who write to the books",
+        "operationId": "getFinanceChart",
+        "parameters": [
+          {
+            "name": "for",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "bill",
+                    "invoice",
+                    "journal"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "For"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceChart"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/close/{month}": {
       "get": {
         "summary": "A month's close checklist (YYYY-MM) for teammates who do the books, and whether it is ready to close",
@@ -9756,6 +9836,65 @@
         ]
       }
     },
+    "/api/v2/finance/pay-from": {
+      "get": {
+        "summary": "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees that account",
+        "operationId": "listFinancePayFrom",
+        "parameters": [
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinancePayFrom"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/payments": {
       "get": {
         "summary": "Payments the caller made or whose line they see, newest first, with a cursor; errors only for the payer or a finance admin",
@@ -10444,7 +10583,7 @@
     },
     "/api/v2/finance/rules": {
       "get": {
-        "summary": "Finance gate rules with their words, condition, outcome, examples and latest runs, for teammates who may write them; external_rule_id lists those linked to one external rule",
+        "summary": "Finance gate and posting rules with their kind, priority, words, condition, outcome, examples and latest runs, for teammates who may write them; external_rule_id lists those linked to one external rule",
         "operationId": "listFinanceRules",
         "parameters": [
           {
@@ -36823,12 +36962,19 @@
           "currency": {
             "type": "string"
           },
+          "bills_email": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "view_version": {
             "type": "integer"
           }
         },
         "required": [
           "bills",
+          "bills_email",
           "currency",
           "next_cursor",
           "open",
@@ -36990,6 +37136,62 @@
         "required": [
           "cards",
           "next",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceChart": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "number": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "company_wide": {
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "id",
+                "name",
+                "number",
+                "type"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accounts",
+          "more",
           "view_version"
         ],
         "additionalProperties": true
@@ -37862,6 +38064,69 @@
         ],
         "additionalProperties": true
       },
+      "FinancePayFrom": {
+        "type": "object",
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "last4": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "balance": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "available_balance": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "balance_as_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "currency": {
+            "type": "string"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "accounts",
+          "currency",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
       "FinancePayments": {
         "type": "object",
         "properties": {
@@ -38441,6 +38706,16 @@
               "properties": {
                 "id": {
                   "type": "string"
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "gate",
+                    "posting"
+                  ]
+                },
+                "priority": {
+                  "type": "integer"
                 },
                 "name": {
                   "type": "string"

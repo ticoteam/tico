@@ -11,6 +11,7 @@ from .core import ledger as L
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, invalid
 from .core.org import SYSTEM
+from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
 
@@ -44,6 +45,12 @@ def post(ctx: Ctx, e: L.Entry, *, by: str, action_id: str = "", reverses_id: str
     entry_id = SL.new_id()
     line_ids = SL.insert_entry(ctx.c, e, entry_id=entry_id, period_id=period_id, action_id=action_id,
                                reverses_id=reverses_id, by=by, at=ctx.at)
+    if not e.cash_view():
+        # The cash P&L leaves this entry's P&L lines out; a bill's or invoice's come back as it is paid (settlements).
+        for x in e.lines:
+            account = ctx.accounts.get(x.account_id)
+            if account is not None and account.type in L.PNL_TYPES:
+                SAP.cash_roll(ctx.c, ctx.book.id, e.entry_date, x.account_id, x.tags, x.contact_id, -x.amount)
     if touch:
         touched(ctx, e.lines, by)
     return entry_id, line_ids
@@ -79,7 +86,7 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
     if SL.closed_on(ctx.c, ctx.book.id, when):
         raise FinanceError(PERIOD_CLOSED, f"the period holding {when} is closed; reverse on an open date")
     e = L.Entry(book_id=ctx.book.id, entry_date=when, memo=memo or f"Reverses {entry_id}", source=str(row["source"]),
-                source_id=str(row["source_id"]), lines=L.reversal(lines))
+                source_id=str(row["source_id"]), lines=L.reversal(lines), basis=str(row["basis"] or "both"))
     rid, _ = post(ctx, e, by=by, action_id=action_id, reverses_id=entry_id, reversing=True)
     if SL.mark_reversed(ctx.c, entry_id) != 1:
         raise FinanceError(CONFLICT, "that entry is already reversed")
@@ -89,11 +96,12 @@ def reverse(ctx: Ctx, entry_id: str, *, day: str | None, memo: str, by: str, act
 def system_entry(raw: object, ctx: Ctx) -> L.Entry:
     """An entry Tico itself posts (usage, imports, syncs): any source but `manual`, balanced lines."""
     p = V.obj(raw, "entry")
-    V.only(p, ("date", "memo", "source", "source_id", "lines"))
+    V.only(p, ("date", "memo", "source", "source_id", "lines", "basis"))
     source = V.choice(p, "source", tuple(s for s in L.SOURCES if s != "manual"))
     lines = tuple(L.line(item, ctx.book.base_currency) for item in V.items(p.get("lines"), "lines", L.MAX_LINES))
     return L.Entry(book_id=ctx.book.id, entry_date=V.day(p, "date"), memo=V.opt_text(p, "memo") or "",
-                   source=source, source_id=V.opt_text(p, "source_id", 200) or "", lines=lines)
+                   source=source, source_id=V.opt_text(p, "source_id", 200) or "", lines=lines,
+                   basis=V.choice(p, "basis", L.BASES, "both"))
 
 
 def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = SYSTEM,
