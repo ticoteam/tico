@@ -38757,6 +38757,9 @@
                     },
                     "tags": {
                       "type": "object"
+                    },
+                    "taxable": {
+                      "type": "boolean"
                     }
                   },
                   "required": [

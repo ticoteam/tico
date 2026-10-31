@@ -1038,6 +1038,16 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', payables: 'tr[data-fin-doc="b
       assert.deepEqual(errors, [], tag + ': no page errors');
       await page.close();
     }
+    // Back from a books consent that needs a new grant: Sources, one "Reconnect books", and a clean address.
+    {
+      const tag = 'books return';
+      const {page, errors} = await open(browser, {hash: '#/finance?books=error&reason=reconnect_required'});
+      await page.waitForFunction(() => location.hash === '#/finance/sources');
+      await page.locator(READY.sources).first().waitFor();
+      assert.match(await page.locator('.toast').first().innerText(), /Reconnect books/, tag + ': says to reconnect');
+      assert.deepEqual(errors, [], tag + ': no page errors');
+      await page.close();
+    }
     // A manager: their teams' expenses; Balance sheet and Sources hidden, even by address.
     {
       const tag = 'manager';

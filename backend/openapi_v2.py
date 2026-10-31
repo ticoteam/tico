@@ -1683,7 +1683,8 @@ SCHEMAS.update({
         required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
     "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
         "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
-                            "amount": "i", "description": "s", "tags": "o"})),
+                            "amount": "i", "description": "s", "tags": "o", "taxable": "b"},
+                           required=["id", "account", "amount", "description", "tags"])),
         "settlements": items(obj({"id": "s", "from_kind": {"type": "string", "enum": ["payment", "feed", "credit",
                                                                                        "account", "expected"]},
                                   "from_id": "n", "amount": "i", "settled_on": "s", "entry_id": "n", "voided_at": "n",

@@ -1386,6 +1386,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   description: string;
   id: string;
   tags: Record<string, unknown>;
+  taxable?: boolean;
 }>;
   schedule?: Record<string, unknown> | null;
   settlement_count?: number;
