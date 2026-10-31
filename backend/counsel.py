@@ -226,6 +226,48 @@ def _store_link(c, blobs, files, plan, task_id, text, title):
     file_library.index(c, saved["id"], saved["current_version"], saved["title"], text)
 
 
+# Outward routes a Counsel token may not call (403, from the API's middleware: backend/app.py). A denylist, so the runner's
+# plumbing (attempts, heartbeats, completion, claims that are not sends) and every read stay open. Counsel speaks only on
+# its own task: a task comment is allowed there and nowhere else (TASK_COMMENT).
+OUTWARD = tuple(re.compile(pattern) for pattern in (
+    r"^/api/v2/gateway/(search|fetch|images)$",                 # the Gateway: web search, page fetch, images
+    r"^/api/v2/messages(/[^/]+/answer)?$",                      # a message to anyone, or an answer to a question
+    r"^/api/v2/conversations/[^/]+/messages$",
+    r"^/api/v2/assistant/messages$",
+    r"^/api/send$",
+    r"^/api/meetings/[^/]+/(send|comments)$",
+    r"^/api/v2/meetings/[^/]+/comments$",
+    r"^/api/v2/updates/[^/]+/reply$",
+    r"^/api/v2/automations/mail-actions/claim$",                 # a mail action to send
+    r"^/api/v2/connectors/(mail/google/claim|calendar/actions/claim)$",
+    r"^/api/v2/slack/",                                         # Slack, every write (a read is a GET)
+    r"^/api/v2/webhooks",                                       # outbound webhooks: create, send, replay
+    r"^/api/v2/triggers/[^/]+/relay",
+))
+TASK_COMMENT = re.compile(r"^/api/v2/tasks/([^/]+)/comments(/|$)")
+SENDS = frozenset({"POST", "PUT", "PATCH", "DELETE"})
+REFUSED = "Counsel sends nothing outside Tico and speaks only on its own task: this call is not its to make."
+
+
+def is_counsel(who):
+    return who.role == "bot" and who.actor == "bot:" + SLUG
+
+
+def refused(store, who, path, method):
+    """Whether a call by Counsel is refused: an outward route (OUTWARD), or a task comment on a task that is not Counsel's
+    own (the task's owner is Counsel). Any other call is the runner's or a read, and is left to the route."""
+    if not is_counsel(who) or method.upper() not in SENDS:
+        return False
+    if any(pattern.match(path) for pattern in OUTWARD):
+        return True
+    match = TASK_COMMENT.match(path)
+    if match:
+        with store.read() as c:
+            row = c.execute("SELECT owner FROM tasks WHERE id=?", (match.group(1),)).fetchone()
+        return bool(row) and row["owner"] != "bot:" + SLUG
+    return False
+
+
 def _task(c, who, title, text, labels=()):
     """Counsel's task for a person's request: private to that person and Counsel (the file's readers are not widened)."""
     return H.task_create(c, who.actor, title, text, "bot:" + SLUG, labels=["rules", *labels], private=True)
@@ -269,6 +311,20 @@ def prepare(store, auth, who, blobs, body):
     return found
 
 
+def _open_read(c, who, file_id, number):
+    """The task of this person's read of this version, if nobody has closed it: an identical re-read returns it."""
+    row = c.execute("SELECT r.task_id FROM rule_reads r JOIN tasks t ON t.id=r.task_id WHERE r.file_id=? AND r.version=? "
+                    "AND r.requested_by=? AND t.closed_at IS NULL AND t.status NOT IN ('done','closed','declined')",
+                    (file_id, number, who.actor)).fetchone()
+    return row["task_id"] if row else None
+
+
+def _receipt(source, file_id, number, title, who_hint, cut, action, task_id, existing):
+    return {"task_id": task_id, "source": {"id": source["id"], "name": source["name"], "kind": source["kind"]},
+            "file": {"id": file_id, "version": number, "title": title}, "suggested_who": who_hint,
+            "truncated": cut, "screening": action, "existing": existing}
+
+
 def read(c, auth, who, files, blobs, body, found):
     """Add a document: its one private Counsel task, the file version it names (a link's text is saved as one), and its
     rule_reads row. `found` is what prepare read and screened before this write; a file must still be at the version
@@ -292,6 +348,11 @@ def read(c, auth, who, files, blobs, body, found):
         plan = _link_plan(c, who, body.url, text)
         file_id, number = plan["id"], plan["number"]
     who_hint = suggested_who(c, source["name"])
+    open_task = _open_read(c, who, file_id, number)
+    if open_task:
+        # Asked again while the last task for this version is open: the same task, no second one (people re-read
+        # on purpose only once it is closed).
+        return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], open_task, existing=True)
     hint = (f"Departments holding this From's access: {', '.join(who_hint['groups'])}" if who_hint["groups"]
             else "Departments holding this From's access: none granted (leave Who empty)")
     lines = ["Read this document and suggest the rules that bind us. Follow the Documents section of your AGENT.md.",
@@ -322,12 +383,11 @@ def read(c, auth, who, files, blobs, body, found):
                                                           "task": task["id"], "bot": SLUG, "truncated": cut,
                                                           "screening": verdict["action"]})
     c.execute("INSERT INTO rule_reads(file_id, version, task_id, requested_by, created, truncated) "
-              "VALUES(?,?,?,?,?,?) ON CONFLICT(file_id, version) DO NOTHING",
+              "VALUES(?,?,?,?,?,?) ON CONFLICT(file_id, version) DO UPDATE SET task_id=excluded.task_id, "
+              "requested_by=excluded.requested_by, created=excluded.created, truncated=excluded.truncated",
               (file_id, number, task["id"], who.actor, H.now(), int(cut)))
     screening.note(c, verdict, "document", file_id, task=task["id"])
-    return {"task_id": task["id"], "source": {"id": source["id"], "name": source["name"], "kind": source["kind"]},
-            "file": {"id": file_id, "version": number, "title": title}, "suggested_who": who_hint,
-            "truncated": cut, "screening": verdict["action"]}
+    return _receipt(source, file_id, number, title, who_hint, cut, verdict["action"], task["id"], existing=False)
 
 
 def check_cite(c, auth, who, blobs, cite):

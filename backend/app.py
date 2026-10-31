@@ -33,6 +33,7 @@ from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import login_holds
 from . import cloud_access
+from . import counsel
 from . import step_age
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
@@ -637,6 +638,10 @@ def create_app(settings=None):
                 app.state.sleep_idle.seen(who, request.url.path)
                 # A locked Tico Cloud company (backend/cloud_access.py): people reach only billing and the download.
                 cloud_access.gate(store, who, request.url.path)
+                # Counsel sends nothing outside Tico (backend/counsel.py OUTWARD): refused on the server, not only in its tools.
+                if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
+                        None, counsel.refused, store, who, request.url.path, request.method):
+                    raise Problem("forbidden", counsel.REFUSED, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -7231,7 +7236,7 @@ def create_app(settings=None):
     from . import audit_log
     audit_log.install(app, store, auth)
     task_caps.install(app, store, auth, mutate)
-    from . import counsel, org_rules
+    from . import org_rules
     counsel.install(app, store, auth, mutate)      # before org_rules: /rules/read and /rules/ask come before /rules/{id}
     org_rules.install(app, store, auth, mutate)
     profiles.install(app, store, auth, mutate, settings_admin)

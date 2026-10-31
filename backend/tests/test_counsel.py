@@ -713,7 +713,8 @@ def test_a_link_read_is_private_to_its_requester_and_counsel(api, monkeypatch):
     assert api.get(f"/api/v2/files/{file_id}/versions/1", headers=headers("cara-test")).status_code == 404
     assert api.get(f"/api/v2/files/{file_id}/versions/1", headers=headers("counsel-test")).status_code == 200
     # The same text read again is no new version: the cite stays on the version already held.
-    post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)}, expected=422)
+    again = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert again["existing"] is True and again["task_id"] == r["task_id"]
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM bot_file_versions WHERE file_id=?", (file_id,)).fetchone()[0] == 1
 
@@ -740,3 +741,69 @@ def test_an_uploaded_pdf_is_read_as_text_and_an_office_file_is_refused(api):
     refused = api.post("/api/v2/rules/read", headers=headers("ana-test"),
                        json={"file_id": docx_id, "source_id": source(api)})
     assert refused.status_code == 422
+
+
+def test_an_identical_reread_returns_the_open_task_and_a_closed_one_opens_a_new_task(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+    first = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert first["existing"] is False
+    again = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert again["existing"] is True and again["task_id"] == first["task_id"]
+    assert {k: again[k] for k in ("source", "file", "suggested_who", "truncated", "screening")} == \
+        {k: first[k] for k in ("source", "file", "suggested_who", "truncated", "screening")}
+    # A file read again the same way is the same task too.
+    file_id, _ = store_file(api, CONTRACT)
+    one = read_document(api, file_id)
+    two = read_document(api, file_id)
+    assert one["existing"] is False and two["existing"] is True and two["task_id"] == one["task_id"]
+    # Once Counsel's task is closed, a re-read on purpose opens a new one.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE tasks SET closed_at=?, status='done' WHERE id=?", (H.now(), first["task_id"]))
+    third = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert third["existing"] is False and third["task_id"] != first["task_id"]
+    assert third["file"]["version"] == 1
+
+
+def test_the_server_refuses_counsel_outward_routes_and_comments_only_on_its_own_task(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+    token = headers("counsel-test")
+    refused = [("POST", "/api/v2/gateway/fetch", {"url": "https://vendor.example/terms"}),
+               ("POST", "/api/v2/gateway/search", {"query": "vendor terms"}),
+               ("POST", "/api/v2/messages", {"text": "hello"}),
+               ("POST", "/api/v2/conversations/c1/messages", {"text": "hello"}),
+               ("POST", "/api/v2/assistant/messages", {"text": "hello"}),
+               ("POST", "/api/v2/webhooks/hook-1/send", {"text": "hello"}),
+               ("POST", "/api/v2/slack/channels", {"name": "general"}),
+               ("POST", "/api/v2/automations/mail-actions/claim", {})]
+    for method, path, body in refused:
+        r = api.request(method, path, headers=token, json=body)
+        assert r.status_code == 403, (path, r.text)
+        assert "not its to make" in r.text
+    # A comment on a task that is not Counsel's own is refused; on its own read task it is not.
+    other = post(api, "tasks", {"owner": "ops", "title": "Ops work", "body": "Ordinary work."})
+    assert api.post(f"/api/v2/tasks/{other['id']}/comments", headers=token, json={"body": "hi"}).status_code == 403
+    read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    own = api.post(f"/api/v2/tasks/{read['task_id']}/comments", headers=token, json={"body": "Progress."})
+    assert own.status_code != 403, own.text
+    # A person is not held to it.
+    assert api.post("/api/v2/gateway/search", headers=headers("ana-test"), json={"query": "x"}).status_code != 403
+
+
+def test_counsel_still_completes_its_own_attempt(api):
+    from backend.tests.test_api import post as api_post, setup_attempt
+    org(api)
+    counsel_on(api)
+    r, _, attempt = setup_attempt(api, bot="counsel")
+    api_post(api, f"attempts/{attempt['id']}/started", {"thread_id": "local-thread"}, token=r["token"])
+    done = api_post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Done.", "last_seq": 0},
+                    token=r["token"], key="counsel-complete")
+    assert done and done == api_post(api, f"attempts/{attempt['id']}/complete",
+                                     {"outcome": "completed", "text": "Done.", "last_seq": 0},
+                                     token=r["token"], key="counsel-complete")
+    identity = Identity("bot:counsel", "bot", attempt_id=attempt["id"])
+    assert counsel.refused(api.app.state.store, identity, f"/api/v2/attempts/{attempt['id']}/complete", "POST") is False
+    assert counsel.refused(api.app.state.store, identity, "/api/v2/runners/heartbeat", "POST") is False
