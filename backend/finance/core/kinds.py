@@ -122,6 +122,7 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 # `actions.help` and the hub tools show; the planners accept exactly these fields.
 Field = tuple[str, str, str]
 _LINE = "list[{account_id, amount: minor, description?, tags?: obj}]"
+_INVOICE_LINE = "list[{account_id, amount: minor, description?, tags?: obj, taxable?: bool}]"
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -240,7 +241,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "bill_void": (("bill_id", "str", ""), ("reason?", "str", "")),
     "invoice_create": (("customer_id", "str", "a customer contact"), ("number?", "str", ""),
                        ("invoice_date", "day", ""), ("due_date?", "day", "or terms_days"), ("terms_days?", "int", ""),
-                       ("memo?", "str", ""), ("lines", _LINE, "income lines; amounts positive"),
+                       ("memo?", "str", ""),
+                       ("lines", _INVOICE_LINE, "income lines; amounts positive; taxable defaults to true on income "
+                                                "lines of an invoice with a sales tax line"),
                        ("payment_link?", "str", "")),
     "invoice_send": (("invoice_id", "str", "posts accounts receivable debit, income credit; returns the document"),),
     "invoice_record_payment": (("invoice_id", "str", ""), ("amount", "minor", "may be part of what is owed"),

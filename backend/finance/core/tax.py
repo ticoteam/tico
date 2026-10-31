@@ -8,24 +8,24 @@ import json
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import cast
 
 SALES_TAX = "sales_tax"                     # the GL subtype of a jurisdiction's liability account
 REMIT_TAG = "tax"                           # a remittance line's custom tag reads "tax:2026-Q3"
 TAXED = ("sent", "partial", "paid")         # invoice statuses whose tax has posted
 CARD_KINDS = ("card_program",)              # money accounts whose payments are card charges
 CARD_SUBTYPES = ("credit_card",)            # GL accounts card charges post through
-CARD_SOURCES = ("card",)                    # entries posted from a card row (a 1099-K's, not a 1099-NEC's)
 NOT_CASH = ("credit",)                      # Gateway credit: a prepaid balance, not money sent to the vendor
 THRESHOLDS = ((2026, 200000), (0, 60000))   # (from year, minor units): $2,000 for 2026 payments, $600 before
-SALES_COLUMNS = ("period", "jurisdiction", "taxable_sales", "tax_collected", "tax_remitted", "due")
+SALES_COLUMNS = ("period", "jurisdiction", "taxable_sales", "exempt_sales", "tax_collected", "tax_remitted", "due")
 FORM_COLUMNS = ("year", "vendor", "tin_on_file", "cash_paid", "card_paid_excluded", "threshold", "reportable")
 
-Jurisdiction = tuple[str, str, str]                     # (GL account id, code, name)
-InvoiceLine = tuple[str, str, str, int, str, str]       # (invoice id, invoice day, account id, amount, type, subtype)
-Remittance = tuple[str, str, int]                       # (account id, tags as JSON, amount)
-Vendor = tuple[str, str, bool]                          # (contact id, name, a TIN on file)
-Settlement = tuple[str, str, int, str, str]             # (vendor id, from kind, amount, money kind, GL subtype)
-Expense = tuple[str, str, int]                          # (vendor id, entry source, amount)
+Jurisdiction = tuple[str, str, str]                      # (GL account id, code, name)
+InvoiceLine = tuple[str, str, str, int, str, str, bool]  # (invoice, day, account, amount, type, subtype, taxable)
+Remittance = tuple[str, str, int, int, int]              # (account, tags as JSON, amount, bill total, bill paid)
+Vendor = tuple[str, str, bool]                           # (contact id, name, a TIN on file)
+Settlement = tuple[str, str, int, str, str, bool]        # (vendor, from kind, amount, money kind, GL subtype, card)
+Expense = tuple[str, bool, int]                          # (vendor id, paid by card, amount)
 
 
 @dataclass(frozen=True)
@@ -34,6 +34,7 @@ class SalesRow:
     code: str
     jurisdiction: str
     taxable_sales: int
+    exempt_sales: int
     tax_collected: int
     tax_remitted: int
     due: int
@@ -91,35 +92,56 @@ def dollars(minor: int) -> str:
     return f"{'-' if minor < 0 else ''}{whole}.{cents:02d}"
 
 
+def tags_of(text: str) -> dict[str, str]:
+    """A line's tags, from the JSON they are stored as."""
+    raw: object = json.loads(text or "{}")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in cast(dict[str, object], raw).items()}
+
+
+def share(part: int, whole: int, amount: int) -> int:
+    """The part of `amount` that `part` of `whole` covers, rounded down so a share never comes out above the amount."""
+    return amount * part // whole if whole > 0 else 0
+
+
+def taxable_default(given: bool | None, income: bool, carries_tax: bool) -> bool:
+    """Whether an invoice line is taxable: as the payload says, else an income line on an invoice with a sales tax line."""
+    return (income and carries_tax) if given is None else given
+
+
 def sales_tax_rows(year: int, jurisdictions: Sequence[Jurisdiction], lines: Iterable[InvoiceLine],
                    remittances: Iterable[Remittance], due_on: Mapping[tuple[str, str], str | None]) -> list[SalesRow]:
-    """One row per jurisdiction and quarter of the year. Tax collected is the tax lines of invoices dated in the quarter;
-    taxable sales are the income lines of those same invoices (the whole invoice is taxed); tax remitted is the paid
-    remittance lines tagged with the quarter. Due is what was collected less what was remitted."""
-    base: dict[str, int] = {}
+    """One row per jurisdiction and quarter of the year. Tax collected is the tax lines of invoices dated in the quarter.
+    The income lines of those invoices split into taxable sales and exempt sales by their taxable flag. Tax remitted is
+    the paid share of each remittance line tagged with the quarter. Due is what was collected less what was remitted."""
+    taxable: dict[str, int] = {}
+    exempt: dict[str, int] = {}
     taxed: dict[tuple[str, str], set[str]] = {}
     collected: dict[tuple[str, str], int] = {}
-    for invoice, day, account, amount, kind, subtype in lines:
+    for invoice, day, account, amount, kind, subtype, flagged in lines:
         if subtype == SALES_TAX:
             key = (account, quarter_key(day))
             taxed.setdefault(key, set()).add(invoice)
             collected[key] = collected.get(key, 0) + amount
         elif kind == "income":
-            base[invoice] = base.get(invoice, 0) + amount
+            bucket = taxable if flagged else exempt
+            bucket[invoice] = bucket.get(invoice, 0) + amount
     remitted: dict[tuple[str, str], int] = {}
-    for account, tags_json, amount in remittances:
-        tags: Mapping[str, object] = json.loads(tags_json or "{}") or {}
-        tag = str(tags.get("custom") or "")
+    for account, tags_json, amount, bill_total, bill_paid in remittances:
+        tag = tags_of(tags_json).get("custom", "")
         if tag.startswith(REMIT_TAG + ":"):
             key = (account, tag[len(REMIT_TAG) + 1:])
-            remitted[key] = remitted.get(key, 0) + amount
+            remitted[key] = remitted.get(key, 0) + share(bill_paid, bill_total, amount)
     rows: list[SalesRow] = []
     for account, code, name in sorted(jurisdictions, key=lambda j: j[1]):
         for period, _, _ in quarters(year):
             key = (account, period)
             got, sent = collected.get(key, 0), remitted.get(key, 0)
+            invoices = taxed.get(key, set())
             rows.append(SalesRow(period=period, code=code, jurisdiction=name,
-                                 taxable_sales=sum(base.get(i, 0) for i in taxed.get(key, ())),
+                                 taxable_sales=sum(taxable.get(i, 0) for i in invoices),
+                                 exempt_sales=sum(exempt.get(i, 0) for i in invoices),
                                  tax_collected=got, tax_remitted=sent, due=got - sent, due_on=due_on.get(key)))
     return rows
 
@@ -130,13 +152,13 @@ def paid_by_vendor(settled: Iterable[Settlement], expenses: Iterable[Expense]) -
     Gateway credit is neither."""
     cash: dict[str, int] = {}
     card: dict[str, int] = {}
-    for vendor, kind, amount, money_kind, subtype in settled:
+    for vendor, kind, amount, money_kind, subtype, by_card in settled:
         if kind in NOT_CASH:
             continue
-        target = card if money_kind in CARD_KINDS or subtype in CARD_SUBTYPES else cash
+        target = card if by_card or money_kind in CARD_KINDS or subtype in CARD_SUBTYPES else cash
         target[vendor] = target.get(vendor, 0) + amount
-    for vendor, source, amount in expenses:
-        target = card if source in CARD_SOURCES else cash
+    for vendor, by_card, amount in expenses:
+        target = card if by_card else cash
         target[vendor] = target.get(vendor, 0) + amount
     return cash, card
 
@@ -166,8 +188,8 @@ def csv_text(columns: Sequence[str], rows: Iterable[Mapping[str, object]]) -> st
 def sales_export(rows: Iterable[SalesRow]) -> list[dict[str, object]]:
     """The sales tax workpaper's export lines (SALES_COLUMNS), amounts in dollars and cents."""
     return [{"period": r.period, "jurisdiction": r.jurisdiction, "taxable_sales": dollars(r.taxable_sales),
-             "tax_collected": dollars(r.tax_collected), "tax_remitted": dollars(r.tax_remitted),
-             "due": dollars(r.due)} for r in rows]
+             "exempt_sales": dollars(r.exempt_sales), "tax_collected": dollars(r.tax_collected),
+             "tax_remitted": dollars(r.tax_remitted), "due": dollars(r.due)} for r in rows]
 
 
 def form_export(rows: Iterable[FormRow], year: int) -> list[dict[str, object]]:

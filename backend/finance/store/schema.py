@@ -455,6 +455,7 @@ ADDED = (
     ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
     ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
     ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_invoice_lines", "taxable", "INTEGER NOT NULL DEFAULT 1"),
     ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
     ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
     ("fin_invoices", "voided_at", "TEXT"),
@@ -556,3 +557,4 @@ def tax(c: sqlite3.Connection) -> None:
     """Cloud migration 70: the sales tax jurisdictions and the due dates seeded for the outside obligations. Idempotent."""
     for statement in statements(TAX):
         c.execute(statement)
+    _add_columns(c)

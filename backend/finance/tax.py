@@ -1,11 +1,12 @@
 """Tax tracking (spec §11): sales tax jurisdictions, their remittances and quarterly due dates, the 1099-NEC due date, and the
 two workpapers with their CSV exports. Each due date is an external rule owned by the Bookkeeper, seeded once when Finance
 is set up, and a remittance is a bill to the jurisdiction's tax authority contact. Reads take the caller's view: the sales
-tax workpaper needs receivables and payables in view, the 1099 workpaper needs payables. A vendor's TIN is never read
-here, only whether one is on file (the vault holds it, see payments.py)."""
+tax workpaper needs receivables and payables in view, the 1099 workpaper needs payables, and each 1099 line counts only
+where the viewer's view covers it. A vendor's TIN is never read here, only whether one is on file (the vault holds it,
+see payments.py)."""
 import re
 import sqlite3
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import asdict, replace
 from datetime import date, timedelta
 from typing import Any
@@ -22,9 +23,11 @@ from .core import dates
 from .core import kinds as K
 from .core import tax as T
 from .core import validate as V
+from .core import view as VW
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .documents import bill_create
 from .handlers import Plan
+from .store import ap as SAP
 from .store import ledger as SL
 from .store import tax as ST
 
@@ -82,17 +85,18 @@ def _due_after(due: tuple[date, str], end: date) -> str | None:
 
 
 def _sales_rows(ctx: Ctx, year: int, due: bool, cut: Sequence[str]) -> list[T.SalesRow]:
-    """The sales tax rows of a year from the posted invoices and paid remittances. An invoice with a line on an account
-    `cut` names (private to the viewer) is left out whole."""
+    """The sales tax rows of a year from the posted invoices and paid remittances. An invoice or remittance bill with a
+    line on an account `cut` names (private to the viewer) is left out whole."""
     c = ctx.c
     jurisdictions = ST.jurisdictions(c, ctx.book.id)
     accounts = [(str(j["account_id"]), str(j["code"]), str(j["name"])) for j in jurisdictions]
     account_ids = [account for account, _, _ in accounts]
     skip = ST.invoices_on(c, cut)
     lines = [(str(r["invoice_id"]), str(r["invoice_date"]), str(r["account_id"]), int(r["amount"]), str(r["type"]),
-              str(r["subtype"])) for r in ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31", skip)]
-    remits = [(str(r["account_id"]), str(r["tags_json"]), int(r["amount"]))
-              for r in ST.remittance_lines(c, ctx.book.id, account_ids)]
+              str(r["subtype"]), bool(r["taxable"]))
+             for r in ST.invoice_lines(c, ctx.book.id, f"{year}-01-01", f"{year}-12-31", skip)]
+    remits = [(str(r["account_id"]), str(r["tags_json"]), int(r["amount"]), int(r["bill_total"]), int(r["bill_paid"]))
+              for r in ST.remittance_lines(c, ctx.book.id, account_ids, ST.bills_on(c, cut))]
     due_on: dict[tuple[str, str], str | None] = {}
     for j in jurisdictions:
         dues = _first_due(c, ST.seeded(c, f"sales-tax:{j['code']}")) if due else None
@@ -133,7 +137,7 @@ def tax_jurisdiction_add(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 def tax_remit(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Remit a quarter's sales tax: a bill to the jurisdiction's tax authority with one line on its sales tax account,
-    tagged with the quarter. It is paid like any bill, and the workpaper counts it as remitted once it is paid."""
+    tagged with the quarter. It is paid like any bill, and the workpaper counts what is paid on it as remitted."""
     V.only(p, ("jurisdiction", "period", "amount", "bill_date", "due_date", "number"))
     j = _jurisdiction(ctx, V.text(p, "jurisdiction", 20))
     period = _period(V.text(p, "period", 7))
@@ -203,8 +207,8 @@ def _sales(c: sqlite3.Connection, viewer: str, year: int | None, at: str | None)
 
 
 def sales_tax_report(c: sqlite3.Connection, viewer: str, year: int | None = None, at: str | None = None) -> Result:
-    """The sales tax workpaper for a year: each jurisdiction's four quarters, with taxable sales, tax collected, tax
-    remitted, what is due, and the day the return falls due."""
+    """The sales tax workpaper for a year: each jurisdiction's four quarters, with taxable and exempt sales, tax collected,
+    tax remitted, what is due, and the day the return falls due."""
     ctx, y, rows = _sales(c, viewer, year, at)
     return {"year": y, "currency": ctx.book.base_currency, "rows": [asdict(r) for r in rows]}
 
@@ -215,22 +219,59 @@ def sales_tax_csv(c: sqlite3.Connection, viewer: str, year: int | None = None, a
     return T.csv_text(T.SALES_COLUMNS, T.sales_export(rows))
 
 
+def _seen(ctx: Ctx, view: VW.View, cut: frozenset[str], account_id: str, tags: Mapping[str, str]) -> bool:
+    """Whether the viewer sees a line on this account with these tags: the account is not private to them, and their view
+    covers the line."""
+    account = ctx.accounts.get(account_id)
+    return account is not None and account_id not in cut and view.sees(account, tags)
+
+
+def _settled(ctx: Ctx, view: VW.View, cut: frozenset[str], start: str, end: str) -> list[T.Settlement]:
+    """Money settled against the bills in the window, each part of it the viewer's view covers: a bill's settlement counts
+    for the share of the bill's lines the viewer sees."""
+    found = ST.settlements(ctx.c, ctx.book.id, start, end)
+    whole: dict[str, int] = {}
+    seen: dict[str, int] = {}
+    for r in ST.bill_lines(ctx.c, sorted({str(x["bill_id"]) for x in found})):
+        bill, amount = str(r["bill_id"]), int(r["amount"])
+        whole[bill] = whole.get(bill, 0) + amount
+        if _seen(ctx, view, cut, str(r["account_id"]), T.tags_of(str(r["tags_json"]))):
+            seen[bill] = seen.get(bill, 0) + amount
+    out: list[T.Settlement] = []
+    for r in found:
+        bill = str(r["bill_id"])
+        part = T.share(seen.get(bill, 0), whole.get(bill, 0), int(r["amount"]))
+        if part:
+            out.append((str(r["vendor_id"]), str(r["from_kind"]), part, str(r["money_kind"]), str(r["subtype"]),
+                        bool(r["by_card"])))
+    return out
+
+
+def _expenses(ctx: Ctx, view: VW.View, cut: frozenset[str], start: str, end: str,
+              owner: Mapping[str, str]) -> list[T.Expense]:
+    """Expense lines posted under a flagged vendor's id or any name it went by, each one the viewer's view covers."""
+    rows = [r for r in ST.expense_lines(ctx.c, ctx.book.id, start, end, cut) if str(r["vendor_key"]) in owner]
+    tags = SL.line_tags(ctx.c, [str(r["line_id"]) for r in rows])
+    return [(owner[str(r["vendor_key"])], bool(r["by_card"]), int(r["amount"])) for r in rows
+            if _seen(ctx, view, cut, str(r["account_id"]), tags[str(r["line_id"])])]
+
+
 def _form(c: sqlite3.Connection, viewer: str, year: int | None, at: str | None) -> tuple[Ctx, int, list[T.FormRow]]:
     ctx = load(c, at)
     view = ctx.view(viewer)
     if not tab_ap.sees_side(ctx, view, "bill"):
         raise denied("payables are not in your view")
     y = _year(ctx, year)
-    cut = tab.private_cut(ctx, view)
+    cut = frozenset(tab.private_cut(ctx, view))
     start, end = f"{y}-01-01", f"{y}-12-31"
-    hidden = set(ST.bills_on(c, cut))
-    settled = [(str(r["vendor_id"]), str(r["from_kind"]), int(r["amount"]), str(r["money_kind"]), str(r["subtype"]))
-               for r in ST.settlements(c, ctx.book.id, start, end) if str(r["bill_id"]) not in hidden]
-    expenses = [(str(r["vendor_id"]), str(r["source"]), int(r["amount"]))
-                for r in ST.expense_lines(c, ctx.book.id, start, end, cut)]
-    cash, card = T.paid_by_vendor(settled, expenses)
-    vendors = [(str(r["id"]), str(r["name"]), bool(r["tin_ref"])) for r in ST.vendors_1099(c, ctx.book.id)]
-    return ctx, y, T.form_rows(y, vendors, cash, card)
+    vendors = ST.vendors_1099(c, ctx.book.id)
+    owner: dict[str, str] = {}
+    for r in vendors:
+        for key in SAP.vendor_keys(c, ctx.book.id, str(r["id"])):
+            owner.setdefault(key, str(r["id"]))
+    cash, card = T.paid_by_vendor(_settled(ctx, view, cut, start, end), _expenses(ctx, view, cut, start, end, owner))
+    rows = [(str(r["id"]), str(r["name"]), bool(r["tin_ref"])) for r in vendors]
+    return ctx, y, T.form_rows(y, rows, cash, card)
 
 
 def form_1099_report(c: sqlite3.Connection, viewer: str, year: int | None = None, at: str | None = None) -> Result:

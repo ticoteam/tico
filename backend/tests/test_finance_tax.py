@@ -14,6 +14,7 @@ from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, OWNER, PEOPLE, account, act, books, finance_template, store)
 
 PLAIN = "human:eve"
+PAYABLES = "human:dan"                          # a teammate whose view covers their own expenses and payables
 TIN = "00-0000001"
 BOOKKEEPER = {"bookkeeper": {"name": "bookkeeper", "runtime": "fake", "status": "active"}}
 
@@ -75,11 +76,29 @@ def _pay(c, vendor, amount, source, bill_day="2026-05-01", paid_on="2026-06-01")
     return bill
 
 
-def _expense(c, vendor, amount, source, source_id, credit_code):
-    """A bank or card row posted straight to an expense with the vendor on it."""
+def _split_bill(c, vendor, parts, source):
+    """A bill with one expense line per (amount, teammate) part, approved and paid from `source`."""
+    lines = [{"account_id": account(c, "6100"), "amount": amount, "tags": {"teammate": teammate}}
+             for amount, teammate in parts]
+    made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-05-01", "lines": lines})
+    assert made.status == "committed", made
+    bill = str(made.result["bill_id"])
+    assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+    paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "date": "2026-06-01", **source})
+    assert paid.status == "committed", paid
+
+
+def _expense(c, vendor, amount, source, source_id, credit_code, teammate=""):
+    """A bank or card row posted straight to an expense with the vendor on it, tagged with a teammate when one is given."""
+    tags = {"teammate": teammate} if teammate else {}
     FA.post_entry(c, {"date": "2026-06-02", "source": source, "source_id": source_id, "lines": [
-        {"account_id": account(c, "6100"), "amount": amount, "contact_id": vendor},
+        {"account_id": account(c, "6100"), "amount": amount, "contact_id": vendor, "tags": tags},
         {"account_id": account(c, credit_code), "amount": -amount}]}, at=AT)
+
+
+def _grant(c, teammate, what, **more):
+    made = act(c, OWNER, "view_grant", {"subject": teammate, "what": what, **more})
+    assert made.status == "committed", made
 
 
 def _vendor_row(report, name):
@@ -188,10 +207,10 @@ def test_sales_tax_is_collected_and_remitted_by_jurisdiction_and_quarter(keeper)
     assert [r["due_on"] for r in rows] == [None, None, "2026-10-20", "2027-01-20"]
     assert csv_text.splitlines() == [
         ",".join(T.SALES_COLUMNS),
-        "2026-Q1,Testland,200.00,16.00,16.00,0.00",
-        "2026-Q2,Testland,0.00,0.00,0.00,0.00",
-        "2026-Q3,Testland,1000.00,80.00,80.00,0.00",
-        "2026-Q4,Testland,0.00,0.00,0.00,0.00"]
+        "2026-Q1,Testland,200.00,0.00,16.00,16.00,0.00",
+        "2026-Q2,Testland,0.00,0.00,0.00,0.00,0.00",
+        "2026-Q3,Testland,1000.00,0.00,80.00,80.00,0.00",
+        "2026-Q4,Testland,0.00,0.00,0.00,0.00,0.00"]
 
 
 def test_a_jurisdiction_needs_a_vendor_authority_and_a_remittance_needs_one(keeper):
@@ -241,3 +260,138 @@ def test_a_teammate_without_payables_and_receivables_cannot_read_the_workpapers(
         with pytest.raises(FinanceError) as form:
             FR.form_1099_csv(c, PLAIN, 2026, AT)
     assert (sales.value.code, form.value.code) == ("denied", "denied")
+
+
+def test_a_payables_teammate_sees_only_the_1099_lines_their_view_covers(keeper):
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        bank = _bank(c)
+        _grant(c, PAYABLES, "payables")
+        _grant(c, PAYABLES, "expenses", whose="own")
+        _expense(c, acme, 20_000, "bank", "b1", "1000", teammate=PAYABLES)
+        _expense(c, acme, 5_000, "bank", "b2", "1000", teammate="human:ben")
+        _split_bill(c, acme, [(30_000, PAYABLES), (10_000, "human:ben")], {"money_account_id": bank})
+    with keeper.read() as c:
+        mine = FR.form_1099_report(c, PAYABLES, 2026, AT)
+        mine_csv = FR.form_1099_csv(c, PAYABLES, 2026, AT)
+        everyone = FR.form_1099_report(c, OWNER, 2026, AT)
+    # The bill's 40,000 is settled in full; the teammate sees the 30,000 of its lines their view covers.
+    assert _vendor_row(mine, "Acme Consulting")["cash_paid"] == 50_000
+    assert mine_csv.splitlines()[1] == "2026,Acme Consulting,yes,500.00,0.00,2000.00,no"
+    assert _vendor_row(everyone, "Acme Consulting")["cash_paid"] == 65_000
+
+
+def test_a_remittance_bill_with_a_private_line_is_left_out_whole(keeper):
+    with keeper.transaction() as c:
+        authority = _contact(c, "Testland Revenue")
+        made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority,
+                                                      "due_day": 20})
+        tax_account = str(made.result["account_id"])
+        customer = _contact(c, "Globex", kind="customer")
+        _invoice(c, customer, "2026-02-10", 20_000, 1_600, tax_account)
+        # Private lines are expense lines, so a remittance can only reach one through a second line on its bill.
+        remit = act(c, OWNER, "bill_create", {"vendor_id": authority, "bill_date": "2026-04-01", "lines": [
+            {"account_id": tax_account, "amount": 1_600, "tags": {"custom": "tax:2026-Q1"}},
+            {"account_id": account(c, "6100"), "amount": 100}]})
+        assert remit.status == "committed", remit
+        bill = str(remit.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "account_id": account(c, "1000")}).status == "committed"
+        assert act(c, OWNER, "private_lines_set", {"account_id": account(c, "6100"), "private": True,
+                                                   "others_see": "hidden"}).status == "committed"
+        _grant(c, PAYABLES, "receivables")
+        _grant(c, PAYABLES, "payables")
+    with keeper.read() as c:
+        mine = FR.sales_tax_report(c, PAYABLES, 2026, AT)["rows"]
+        everyone = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
+    # The invoice is visible to them, the paid remittance is not: its tax line goes out with the whole bill.
+    assert _quarter(mine, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 0,
+                                         "due": 1_600}
+    assert _quarter(everyone, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 1_600,
+                                             "due": 0}
+
+
+def test_a_debit_card_row_on_a_bank_account_is_a_card_payment(keeper):
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        bank = _bank(c)
+        debit = SK.insert(c, "fin_feed_txns", {
+            "money_account_id": bank, "provider_id": "t3", "txn_date": "2026-06-01", "amount": -40_000,
+            "counterparty": "Acme Consulting", "currency": "USD", "created_at": AT, "created_by": "system:finance",
+            "status": "posted", "raw_json": "{}", "kind": "debitCardTransaction"})
+        _pay(c, acme, 40_000, {"feed_id": debit})
+        _pay(c, acme, 10_000, {"money_account_id": bank})
+    with keeper.read() as c:
+        row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
+    assert (row["cash_paid"], row["card_paid_excluded"]) == (10_000, 40_000)
+
+
+def test_a_card_expense_matched_to_a_bill_nets_on_the_card(keeper):
+    with keeper.transaction() as c:
+        acme = _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+        _card_gl(c)
+        bank, program = _bank(c), _program(c)
+        charge = _card_charge(c, program, 50_000, "t5")
+        assert act(c, OWNER, "categorize", {"feed_id": charge, "account_id": account(c, "6100")}).status == "committed"
+        _pay(c, acme, 50_000, {"feed_id": charge})
+        _pay(c, acme, 240_000, {"money_account_id": bank})
+    with keeper.read() as c:
+        row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
+    assert (row["card_paid_excluded"], row["cash_paid"]) == (50_000, 240_000)
+
+
+def test_a_vendor_paid_under_a_name_before_its_contact_existed_counts(keeper):
+    with keeper.transaction() as c:
+        FA.post_entry(c, {"date": "2026-06-02", "source": "bank", "source_id": "early", "lines": [
+            {"account_id": account(c, "6100"), "amount": 20_000, "contact_id": "Acme Consulting"},
+            {"account_id": account(c, "1000"), "amount": -20_000}]}, at=AT)
+        _contact(c, "Acme Consulting", is_1099=True, tax_id=TIN)
+    with keeper.read() as c:
+        row = _vendor_row(FR.form_1099_report(c, OWNER, 2026, AT), "Acme Consulting")
+    assert row["cash_paid"] == 20_000
+
+
+def test_a_partial_remittance_counts_what_was_paid(keeper):
+    with keeper.transaction() as c:
+        authority = _contact(c, "Testland Revenue")
+        made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority,
+                                                      "due_day": 20})
+        tax_account = str(made.result["account_id"])
+        customer = _contact(c, "Globex", kind="customer")
+        _invoice(c, customer, "2026-02-10", 20_000, 1_600, tax_account)
+        bill = _remit(c, "2026-Q1")
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "amount": 1_000, "account_id": account(c, "1000")})
+        assert paid.status == "committed", paid
+    with keeper.read() as c:
+        rows = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
+    assert _quarter(rows, "2026-Q1") == {"taxable_sales": 20_000, "tax_collected": 1_600, "tax_remitted": 1_000,
+                                         "due": 600}
+    with keeper.transaction() as c:
+        again = act(c, OWNER, "tax_remit", {"jurisdiction": "TL", "period": "2026-Q1"})
+        assert again.status == "committed", again
+        assert c.execute("SELECT amount FROM fin_bill_lines WHERE bill_id=?",
+                         (again.result["bill_id"],)).fetchone()[0] == 600
+
+
+def test_an_exempt_income_line_is_listed_as_exempt_sales(keeper):
+    with keeper.transaction() as c:
+        authority = _contact(c, "Testland Revenue")
+        made = act(c, OWNER, "tax_jurisdiction_add", {"code": "TL", "name": "Testland", "authority_id": authority,
+                                                      "due_day": 20})
+        tax_account = str(made.result["account_id"])
+        customer = _contact(c, "Globex", kind="customer")
+        lines = [{"account_id": account(c, "4000"), "amount": 20_000},
+                 {"account_id": account(c, "4000"), "amount": 5_000, "taxable": False},
+                 {"account_id": tax_account, "amount": 1_600}]
+        invoice = act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-02-10",
+                                                   "lines": lines})
+        assert invoice.status == "committed", invoice
+        assert act(c, OWNER, "invoice_send", {"invoice_id": invoice.result["invoice_id"]}).status == "committed"
+        # Income on an invoice with no sales tax line is not taxed, so it is not an exempt sale either.
+        _invoice(c, customer, "2026-03-05", 9_000)
+    with keeper.read() as c:
+        rows = FR.sales_tax_report(c, OWNER, 2026, AT)["rows"]
+        csv_text = FR.sales_tax_csv(c, OWNER, 2026, AT)
+    first = next(r for r in rows if r["period"] == "2026-Q1")
+    assert (first["taxable_sales"], first["exempt_sales"], first["tax_collected"]) == (20_000, 5_000, 1_600)
+    assert csv_text.splitlines()[1] == "2026-Q1,Testland,200.00,50.00,16.00,0.00,16.00"

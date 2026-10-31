@@ -32,7 +32,7 @@ from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
-from .core.tax import SALES_TAX
+from .core.tax import SALES_TAX, taxable_default
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import ap as SAP
@@ -270,8 +270,10 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
 
 
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str, object]]:
+    """The rows a document's lines are stored as. Only an invoice line says whether it is taxable."""
     return [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
-             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who} for x in lines]
+             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
+             **({"taxable": int(x.taxable)} if x.taxable is not None else {})} for x in lines]
 
 
 def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
@@ -551,7 +553,10 @@ def invoice_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     day = V.day(p, "invoice_date")
     terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else None
     due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
-    lines, _ = _resolve(ctx, who, "invoice", customer, AP.doc_lines(p.get("lines")))
+    lines, _ = _resolve(ctx, who, "invoice", customer, AP.doc_lines(p.get("lines"), invoice=True))
+    carries_tax = any(ctx.accounts[x.account_id].subtype == SALES_TAX for x in lines)
+    lines = [replace(x, taxable=taxable_default(x.taxable, ctx.accounts[x.account_id].type == "income", carries_tax))
+             for x in lines]
     link = V.opt_text(p, "payment_link", 500) or None
     if link and not link.startswith("https://"):
         raise invalid("a payment link is an https:// address")
