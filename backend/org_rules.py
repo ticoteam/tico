@@ -935,11 +935,10 @@ def counts(c, auth, who):
     auth.domain(who)
     rows = _active(c)
     active = {r["id"] for r in rows}
-    open_due = [d for d in D.views(c, [r for r in D.live_rows(c) if r["rule_id"] in active])
-                if d["status"] in ("overdue", "due_soon")]
+    dues = [r for r in D.live_rows(c) if r["rule_id"] in active]
     return {"internal": sum(1 for r in rows if r["kind"] == "internal"),
             "external": sum(1 for r in rows if r["kind"] == "external"),
-            "due": len(open_due),
+            "due": len(dues),
             "suggested": c.execute("SELECT count(*) FROM org_rules WHERE status='suggested'").fetchone()[0]}
 
 
@@ -1020,7 +1019,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/rules/counts")
     def rules_counts(request: Request):
-        """The tab counts: internal and external rules in force, the due dates open or due soon, the suggestions waiting."""
+        """The tab counts: internal and external rules in force, the due dates kept, the suggestions waiting."""
         with store.read() as c:
             return counts(c, auth, request.state.identity)
 
