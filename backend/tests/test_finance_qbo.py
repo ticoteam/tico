@@ -12,7 +12,10 @@ from backend import hook_relay
 from backend import trigger_presets as P
 from backend.finance import books_link, books_sync
 from backend.finance import qbo as QC
+from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
+from backend.finance.store import banking as SK
+from backend.finance.store import ledger as SL
 from backend.finance.store import mirror as SX
 from backend.finance.store import tico as T
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -74,7 +77,7 @@ def test_quickbooks_shapes_map_to_mirror_records_with_exact_money():
     assert [(line.account, line.amount, line.party) for line in entry.lines] == [
         ("Account:55", 1500, "Vendor:9"), ("Account:66", -1500, "")]
     cdc = Q.change_records({"CDCResponse": [{"QueryResponse": [{"Account": [{"Id": "55", "status": "Deleted"}]}]}]})
-    assert len(cdc) == 1 and cdc[0].ext.deleted is True and cdc[0].ext.external_id == "55"
+    assert cdc == [M.Ext("Account", "55", "", True)]
 
 
 class Wire:
@@ -145,6 +148,8 @@ class FakeHQ:
         def call(link, method, path, body=None, idempotency=None, *, area="hooks", **_):  # type: ignore[no-untyped-def]
             self.calls.append({"base": link.base, "area": area, "path": path, "body": body})
             answer = self.answers.pop(0)
+            if callable(answer):                       # a step that changes the vault before HQ answers
+                answer = answer()
             if isinstance(answer, Exception):
                 raise answer
             return answer
@@ -212,3 +217,139 @@ def test_disconnect_drops_the_vault_rows_only_after_hq_confirms(books, monkeypat
         assert not T.credential_exists(c, str(before["access"]))
         assert not T.credential_exists(c, str(before["refresh"]))
         assert SX.books_status(c, cid) == "disconnected"
+
+
+def _cid_of(store) -> str:  # type: ignore[no-untyped-def]
+    with store.read() as c:
+        return str(c.execute("SELECT id FROM fin_connections WHERE provider='quickbooks'").fetchone()[0])
+
+
+def _claim(store, vault: object, name: str = "Acme books") -> str:  # type: ignore[no-untyped-def]
+    return books_link.connect_claim(store, vault, _link(), provider="quickbooks", company_id="co_acme",
+                                    claim_id="clm_x", name=name, by=OWNER, now=AT)
+
+
+def test_a_failed_vault_write_is_tried_again_with_the_pair_still_in_hand(books, monkeypatch):
+    hq = FakeHQ(_tokens("acc-1", "ref-1"))
+    monkeypatch.setattr(hook_relay.Link, "call", hq.as_link_call())
+    real_save, tries = books_link.save, []
+
+    def flaky(c, cid, tokens, *, by, at):  # type: ignore[no-untyped-def]
+        tries.append(cid)
+        if len(tries) == 1:
+            raise RuntimeError("vault is busy")
+        real_save(c, cid, tokens, by=by, at=at)
+
+    monkeypatch.setattr(books_link, "save", flaky)
+    vault = T._VAULT[0]
+    cid = _claim(books, vault)
+    assert len(tries) == 2
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "active"
+    assert books_link.access_token(books, vault, _link(), cid, "quickbooks", now=AT) == "acc-1"
+    assert [call["path"] for call in hq.calls] == ["oauth/quickbooks/claim"]     # the single-use claim, once
+
+
+def test_a_vault_write_that_fails_twice_leaves_a_reconnect_and_one_needs_you_item(books, monkeypatch):
+    hq = FakeHQ(_tokens("acc-1", "ref-1"))
+    monkeypatch.setattr(hook_relay.Link, "call", hq.as_link_call())
+    asks: list[tuple[str, str]] = []
+
+    def down(c, cid, tokens, *, by, at):  # type: ignore[no-untyped-def]
+        raise RuntimeError("vault is down")
+
+    monkeypatch.setattr(books_link, "save", down)
+    monkeypatch.setattr(T, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    with pytest.raises(books_link.ReconnectRequired) as err:
+        _claim(books, T._VAULT[0])
+    assert err.value.code == "vault_write_failed"
+    assert asks == [(OWNER, "Connect quickbooks again")]
+    with books.read() as c:
+        assert SX.books_status(c, _cid_of(books)) == "reconnect"
+    assert len(hq.calls) == 1
+
+
+def test_a_refresh_hq_holds_no_grant_for_asks_for_a_reconnect_and_is_not_retried(books, monkeypatch):
+    hq = FakeHQ(_tokens("acc-1", "ref-1"), hook_relay.Failed("not_connected", 404, {"error": "not_connected"}))
+    monkeypatch.setattr(hook_relay.Link, "call", hq.as_link_call())
+    vault = T._VAULT[0]
+    cid = _claim(books, vault)
+    with pytest.raises(books_link.ReconnectRequired):
+        books_link.access_token(books, vault, _link(), cid, "quickbooks", now=LATER, force=True)
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "reconnect"
+    assert [call["path"] for call in hq.calls] == ["oauth/quickbooks/claim", "oauth/quickbooks/refresh"]
+
+
+def test_a_refresh_with_a_pair_already_rotated_is_tried_once_more_with_the_vault_pair(books, monkeypatch):
+    def rotated_elsewhere():  # type: ignore[no-untyped-def]
+        with books.transaction() as c:
+            books_link.save(c, _cid_of(books), books_link.Tokens("acc-2", "ref-2", "2026-10-15T13:30:00Z", None,
+                                                                  "123", None), by=OWNER, at=LATER)
+        return hook_relay.Failed("not_connected", 404, {"error": "not_connected"})
+
+    hq = FakeHQ(_tokens("acc-1", "ref-1"), rotated_elsewhere, _tokens("acc-3", "ref-3", "2026-10-15T14:30:00Z"))
+    monkeypatch.setattr(hook_relay.Link, "call", hq.as_link_call())
+    vault = T._VAULT[0]
+    cid = _claim(books, vault)
+    assert books_link.access_token(books, vault, _link(), cid, "quickbooks", now=LATER, force=True) == "acc-3"
+    refreshes = [call["body"]["refresh_token"] for call in hq.calls if call["path"].endswith("/refresh")]
+    assert refreshes == ["ref-1", "ref-2"]
+    with books.read() as c:
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-3"
+
+
+def test_relayed_quickbooks_events_are_kept_for_the_realm_the_connection_holds(books):
+    _books_connection(books)
+    with books.transaction() as c:
+        SX.set_books_settings(c, "conn-qb", {"realm_id": "123"})
+    with books.transaction() as c:
+        assert books_sync.delivery(c, "intuit", _envelope(
+            external_id="evt-cloud", payload={"cloudEvents": [{"intuitaccountid": "123", "id": "a"}]})) == "kept"
+        assert books_sync.delivery(c, "intuit", _envelope(
+            external_id="evt-other", payload={"cloudEvents": [{"intuitaccountid": "999"}]})) == "refused"
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-mixed", payload={"cloudEvents": [
+            {"intuitaccountid": "123"}, {"intuitaccountid": "999"}]})) == "refused"
+        assert books_sync.delivery(c, "intuit", _envelope(
+            external_id="evt-legacy", payload={"eventNotifications": [{"realmId": "123"}]})) == "kept"
+        assert books_sync.delivery(c, "intuit", _envelope(external_id="evt-junk", payload={"events": []})) == "refused"
+
+
+def test_documents_and_settlements_map_to_mirror_records_with_their_accounts_and_links():
+    items = Q.item_accounts([{"Id": "7", "ExpenseAccountRef": {"value": "66"}, "IncomeAccountRef": {"value": "40"}}])
+    bill = Q.records("Bill", [{"Id": "12", "SyncToken": "3", "DocNumber": "B-12", "TxnDate": "2026-10-05",
+                               "DueDate": "2026-11-05", "TotalAmt": "30.50", "VendorRef": {"value": "9"},
+                               "PrivateNote": "seats", "Line": [
+                                   {"Amount": "15.25", "DetailType": "ItemBasedExpenseLineDetail", "Description": "seat",
+                                    "ItemBasedExpenseLineDetail": {"ItemRef": {"value": "7"}}},
+                                   {"Amount": "15.25", "DetailType": "AccountBasedExpenseLineDetail",
+                                    "Description": "fee", "AccountBasedExpenseLineDetail": {
+                                        "AccountRef": {"value": "55"}}},
+                                   {"Amount": "30.50", "DetailType": "SubTotalLineDetail"}]}], items)[0]
+    assert isinstance(bill, M.Document) and bill.ext == M.Ext("Bill", "12", "3")
+    assert (bill.party, bill.number, bill.day, bill.due, bill.total) == (
+        "Vendor:9", "B-12", "2026-10-05", "2026-11-05", 3050)
+    assert [(line.account, line.amount) for line in bill.lines] == [("Account:66", 1525), ("Account:55", 1525)]
+    paid = Q.records("BillPayment", [{"Id": "30", "SyncToken": "1", "TxnDate": "2026-10-12", "TotalAmt": "15.25",
+                                      "VendorRef": {"value": "9"}, "CheckPayment": {
+                                          "BankAccountRef": {"value": "35"}},
+                                      "Line": [{"Amount": "15.25", "LinkedTxn": [
+                                          {"TxnType": "Bill", "TxnId": "12"}]}]}])[0]
+    assert isinstance(paid, M.Settlement)
+    assert (paid.party, paid.bank, paid.total, paid.links) == ("Vendor:9", "Account:35", 1525, (("Bill:12", 1525),))
+    assert Q.records("Bill", [{"Id": "12", "SyncToken": "4", "status": "Deleted"}]) == [
+        M.Ext("Bill", "12", "4", True)]
+
+
+def test_withheld_rehearsal_writes_stay_visible_and_are_not_sent(books):
+    _books_connection(books)
+    with books.transaction() as c:
+        SL.set_book_mode(c, SL.book(c).id, "mirror", "conn-qb")  # type: ignore[union-attr]
+        SK.outbox_add(c, connection_id="conn-qb", action_id="", op="journal.create",
+                      payload={"date": "2026-10-05", "memo": "x", "source": "sync", "lines": []},
+                      key="rehearse-1", by=OWNER, at=AT)
+    assert books_sync.withhold(books, now=AT) == 1
+    assert books_sync.withhold(books, now=AT) == 0
+    with books.read() as c:
+        row = c.execute("SELECT status, last_error FROM fin_outbox WHERE idempotency_key='rehearse-1'").fetchone()
+    assert tuple(row) == ("withheld", books_sync.REHEARSAL_WHY)

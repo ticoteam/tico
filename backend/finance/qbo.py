@@ -114,7 +114,7 @@ class QuickBooks:
     """The books of one QuickBooks company (its realm). `tokens(force)` returns a usable access token, refreshed through
     HQ when `force` is set (after a 401); it raises books_link.BrokerFailed when HQ cannot."""
 
-    entities: tuple[str, ...] = ("accounts", "parties", "entries")
+    entities: tuple[str, ...] = tuple(Q.PAGES)
 
     def __init__(self, realm: str, tokens: Callable[[bool], str], *, base: str | None = None,
                  transport: Transport | None = None, sleep: Callable[[float], None] = time.sleep) -> None:
@@ -122,6 +122,7 @@ class QuickBooks:
         self.base = (base or base_url()).rstrip("/")
         self.transport = transport or _urllib
         self.sleep = sleep
+        self._items: dict[str, dict[str, str]] | None = None      # one read of the items per pass, when a document needs it
 
     def _call(self, method: str, path: str, *, query: Mapping[str, str] | None = None,
               body: Mapping[str, Any] | None = None, request_id: str = "") -> Reply:
@@ -162,40 +163,74 @@ class QuickBooks:
         total = found.get("totalCount")
         return int(total) if isinstance(total, int) else 0
 
+    def _item_accounts(self) -> dict[str, dict[str, str]] | str:
+        """Each item's income and expense account, read once per pass; a line that names an item posts to its account."""
+        if self._items is None:
+            reply = self._call("GET", "query", query={"query": "SELECT * FROM Item STARTPOSITION 1 MAXRESULTS 1000"})
+            if reply.status != 200:
+                return _fault(reply.body, reply.status)
+            found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
+            self._items = Q.item_accounts(Q.as_list(found.get("Item")))
+        return self._items
+
     def _query(self, entity: str, start: int, size: int) -> Read:
         sql = f"SELECT * FROM {entity} STARTPOSITION {start} MAXRESULTS {size}"
         reply = self._call("GET", "query", query={"query": sql})
         if reply.status != 200:
             return Read(False, error=_fault(reply.body, reply.status))
         found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
-        return Read(True, tuple(Q.records(entity, Q.as_list(found.get(entity)))))
+        rows = Q.as_list(found.get(entity))
+        items: dict[str, dict[str, str]] = {}
+        if entity in Q.DOCUMENTS:
+            known = self._item_accounts()
+            if isinstance(known, str):
+                return Read(False, error=known)
+            items = known
+        return Read(True, tuple(Q.records(entity, rows, items)), seen=len(rows))
+
+    def _across(self, names: tuple[str, ...], start: int, size: int) -> Read:
+        """A page of several QuickBooks entities read as one list in order (the first's rows, then the next's), counted
+        from `start`: the books' backfill cursor counts all of them together."""
+        if len(names) == 1:
+            return self._query(names[0], start, size)
+        counts: list[int] = []
+        for name in names:
+            count = self._count(name)
+            if isinstance(count, str):
+                return Read(False, error=count)
+            counts.append(count)
+        out: list[Record] = []
+        seen, offset, left = 0, start - 1, size
+        for name, count in zip(names, counts, strict=True):
+            if left <= 0:
+                break
+            if offset >= count:
+                offset -= count
+                continue
+            take = min(left, count - offset)
+            got = self._query(name, offset + 1, take)
+            if not got.ok:
+                return got
+            out += got.records
+            seen += got.seen
+            left -= take
+            offset = 0
+        return Read(True, tuple(out), seen=seen)
 
     def page(self, entity: str, start: int, size: int) -> Read:
-        if entity == "accounts":
-            return self._query("Account", start, size)
-        if entity == "entries":
-            return self._query("JournalEntry", start, size)
-        vendors = self._count("Vendor")
-        if isinstance(vendors, str):
-            return Read(False, error=vendors)
-        records: list[Record] = []
-        if start <= vendors:
-            got = self._query("Vendor", start, min(size, vendors - start + 1))
-            if not got.ok:
-                return got
-            records += list(got.records)
-        if len(records) < size:
-            got = self._query("Customer", max(start - vendors, 1), size - len(records))
-            if not got.ok:
-                return got
-            records += list(got.records)
-        return Read(True, tuple(records))
+        names = Q.PAGES.get(entity)
+        if names is None:
+            return Read(False, error=f"no such entity: {entity}")
+        return self._across(names, start, size)
 
     def changed(self, since: str) -> Read:
         reply = self._call("GET", "cdc", query={"entities": ",".join(Q.ENTITIES), "changedSince": _iso(since)})
         if reply.status != 200:
             return Read(False, error=_fault(reply.body, reply.status))
-        return Read(True, tuple(Q.change_records(reply.body)))
+        known = self._item_accounts()
+        if isinstance(known, str):
+            return Read(False, error=known)
+        return Read(True, tuple(Q.change_records(reply.body, known)))
 
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""

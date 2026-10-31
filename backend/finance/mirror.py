@@ -6,13 +6,13 @@ it replaces and posts the new one; an edit to a closed month posts in the open p
 A bank row takes the provider's entry for it when one fits, and only an unmatched row is written out. A provider call
 never runs inside a transaction: each step reads, calls, then records what came back in a transaction of its own."""
 import sqlite3
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
-from . import banking, handlers, posting
+from . import banking, documents, handlers, posting
 from .context import Ctx, load
 from .core import dates
 from .core import feeds as F
@@ -22,6 +22,7 @@ from .core import mirror as M
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, invalid
 from .core.org import SYSTEM
+from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
@@ -31,7 +32,8 @@ OUTBOX_MOST = 50                            # writes out claimed in one pass
 RETRY = (60, 300, 1800, 3600)               # seconds to wait after each failed try of a write (the last repeats)
 CLAIM_MINUTES = 10                          # a write claimed this long ago with no answer was cut off mid-call
 MATCH_MOST = 500                            # bank rows looked at in one pass to find their provider entry
-ENTITIES = ("accounts", "parties", "entries")
+# In the order the books take them in: documents need the parties and accounts, payments need the documents.
+ENTITIES = ("accounts", "parties", "documents", "payments", "entries")
 TAG_SETTING = "mirror.tags"                 # {"enabled": bool, "map": {tag kind: {tag value: provider class id}}}
 # Actions a mirrored book refuses: the provider holds these records, so Tico cannot write them here.
 REFUSED = ("bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
@@ -39,7 +41,13 @@ REFUSED = ("bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match")
 
-Record = M.ChartAccount | M.Party | M.Journal | M.Ext
+Record = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Ext
+DOC_TABLES = {"Bill": "fin_bills", "Invoice": "fin_invoices"}   # a document kind with a row of its own
+TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMemo": "fin_entries",
+            "BillPayment": "fin_entries", "Payment": "fin_entries", "Bill": "fin_bills", "Invoice": "fin_invoices"}
+GROUP_OF = {"Account": "accounts", "Vendor": "parties", "Customer": "parties", "Bill": "documents",
+            "Invoice": "documents", "CreditMemo": "documents", "BillPayment": "payments", "Payment": "payments",
+            "JournalEntry": "entries"}
 
 
 @dataclass(frozen=True)
@@ -47,6 +55,7 @@ class Read:
     ok: bool
     records: tuple[Record, ...] = ()
     error: str = ""
+    seen: int = -1          # provider rows read (records can be fewer: a row no record fits); -1 when not counted
 
 
 @dataclass(frozen=True)
@@ -74,7 +83,7 @@ class _Missing(Exception):
 
 # ------------------------------------------------------------------------------------------------ records in
 def _table(kind: str) -> str:
-    return {"Account": "fin_accounts", "JournalEntry": "fin_entries"}.get(kind, "fin_contacts")
+    return TABLE_OF.get(kind, "fin_contacts")
 
 
 def _group(r: Record) -> str:
@@ -84,8 +93,11 @@ def _group(r: Record) -> str:
         return "entries"
     if isinstance(r, M.Party):
         return "parties"
-    table = _table(r.kind)
-    return "accounts" if table == "fin_accounts" else "entries" if table == "fin_entries" else "parties"
+    if isinstance(r, M.Document):
+        return "documents"
+    if isinstance(r, M.Settlement):
+        return "payments"
+    return GROUP_OF.get(r.kind, "parties")
 
 
 def apply(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) -> None:
@@ -115,6 +127,10 @@ def _do(c: sqlite3.Connection, ctx: Ctx, cid: str, r: Record, at: str) -> None:
         _account(c, ctx, cid, r, at)
     elif isinstance(r, M.Party):
         _party(c, ctx, cid, r, at)
+    elif isinstance(r, M.Document):
+        _document(c, ctx, cid, r, at)
+    elif isinstance(r, M.Settlement):
+        _settlement(c, ctx, cid, r, at)
     else:
         _journal(c, ctx, cid, r, at)
 
@@ -202,6 +218,8 @@ def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> Non
         account = ctx.accounts.get(local)
         if account is not None:
             SL.update_account(c, replace(account, active=False), at)
+    elif table in ("fin_bills", "fin_invoices"):
+        _void(c, ctx, table, local, at)
     else:
         SX.contact_deactivate(c, local, at)
     _bind(c, cid, table, local, ext, at, status="deleted")
@@ -233,29 +251,42 @@ def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: s
                           entry_id=entry_id, reversal_id=reversal_id, cid=cid, external_id=key, at=at, by=SYSTEM)
 
 
+def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str) -> None:
+    """Undo the settlements a payment's entry made, before the entry is reversed: each document owes its money again."""
+    for s in SX.settlements_of(c, entry_id):
+        documents.unsettle(ctx, s)
+
+
+def _book(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, verdict: str, old: str, day: str,
+          make: Callable[[str], L.Entry], at: str) -> str:
+    """Post the entry a provider record needs, reversing the entry it replaces (`old`, "" for none). The new entry posts
+    first, so a failure reverses nothing. A replaced entry's settlements are undone before it is reversed, and a change
+    that lands in a closed month is flagged as a restatement. Returns the new entry's id."""
+    closed = SL.closed_on(c, ctx.book.id, day)
+    new_id, _ = posting.post(ctx, make(banking.open_day(ctx, day)), by=SYSTEM)
+    replaced = SL.entry_row(c, old) if verdict == M.REPLACE and old else None
+    replaced_closed = False
+    if replaced is not None and str(replaced["status"]) == "posted" and not replaced["reverses_id"]:
+        old_day = str(replaced["entry_date"])
+        _unsettle_entry(c, ctx, str(replaced["id"]))
+        rid = posting.reverse(ctx, str(replaced["id"]), day=banking.open_day(ctx, old_day),
+                              memo="revised at the provider", by=SYSTEM)
+        SX.link_feed(c, str(replaced["id"]), new_id)
+        replaced_closed = SL.closed_on(c, ctx.book.id, old_day)
+        if replaced_closed:
+            _restate(c, ctx, old_day, "replaced", new_id, rid, cid, ext.key, at)
+    if closed and not replaced_closed:
+        _restate(c, ctx, day, "added", new_id, None, cid, ext.key, at)
+    return new_id
+
+
 def _journal(c: sqlite3.Connection, ctx: Ctx, cid: str, j: M.Journal, at: str) -> None:
     row = SX.ref(c, cid, "fin_entries", j.ext.key)
     verdict = M.decide(_have(row), j.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
-    closed = SL.closed_on(c, ctx.book.id, j.day)
-    day = banking.open_day(ctx, j.day)
-    e = _entry(c, cid, ctx, j, day)
-    # The replacement posts first: if it cannot, nothing has been reversed.
-    new_id, _ = posting.post(ctx, e, by=SYSTEM)
-    old = SL.entry_row(c, str(row["local_id"])) if verdict == M.REPLACE and row is not None and row["local_id"] \
-        else None
-    replaced_closed = False
-    if old is not None and str(old["status"]) == "posted" and not old["reverses_id"]:
-        old_day = str(old["entry_date"])
-        rid = posting.reverse(ctx, str(old["id"]), day=banking.open_day(ctx, old_day),
-                              memo="revised at the provider", by=SYSTEM)
-        SX.link_feed(c, str(old["id"]), new_id)
-        replaced_closed = SL.closed_on(c, ctx.book.id, old_day)
-        if replaced_closed:
-            _restate(c, ctx, old_day, "replaced", new_id, rid, cid, j.ext.key, at)
-    if closed and not replaced_closed:
-        _restate(c, ctx, j.day, "added", new_id, None, cid, j.ext.key, at)
+    old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
+    new_id = _book(c, ctx, cid, j.ext, verdict, old, j.day, lambda when: _entry(c, cid, ctx, j, when), at)
     _bind(c, cid, "fin_entries", new_id, j.ext, at)
 
 
@@ -266,10 +297,200 @@ def _retire(c: sqlite3.Connection, ctx: Ctx, cid: str, local: str, key: str, at:
         return
     day = str(entry["entry_date"])
     closed = SL.closed_on(c, ctx.book.id, day)
+    _unsettle_entry(c, ctx, local)
     rid = posting.reverse(ctx, local, day=banking.open_day(ctx, day), memo="deleted at the provider", by=SYSTEM)
     SX.unlink_feed(c, local, at)
     if closed:
         _restate(c, ctx, day, "deleted", local, rid, cid, key, at)
+
+
+# ------------------------------------------------------------------------------------------------ documents and payments
+def _void(c: sqlite3.Connection, ctx: Ctx, table: str, local: str, at: str) -> None:
+    """A bill or invoice deleted at the provider: its entry is reversed and the document is void. The payments that
+    settled it stay as they are, since the provider keeps them too."""
+    doc = SAP.get(c, table, local)
+    if doc is None:
+        return
+    entry = str(doc["entry_id"] or "")
+    if entry:
+        _retire_entry_only(c, ctx, entry)
+    SAP.update(c, table, local, {"status": "void", "updated_at": at})
+
+
+def _retire_entry_only(c: sqlite3.Connection, ctx: Ctx, entry_id: str) -> None:
+    """Reverse a document's own entry (a posted one; a reversal or a reversed entry is left alone)."""
+    entry = SL.entry_row(c, entry_id)
+    if entry is None or str(entry["status"]) != "posted" or entry["reverses_id"]:
+        return
+    posting.reverse(ctx, entry_id, day=banking.open_day(ctx, str(entry["entry_date"])),
+                    memo="deleted at the provider", by=SYSTEM)
+
+
+def _doc_lines(c: sqlite3.Connection, cid: str, d: M.Document) -> list[tuple[str, int, str]]:
+    """A document's lines as (local account id, amount, description), amounts positive. Raises unless every line has an
+    account the books hold and the lines add up to the document's total."""
+    if not d.party:
+        raise FinanceError(NOT_AVAILABLE, "the document names no party")
+    rows: list[tuple[str, int, str]] = []
+    for x in d.lines:
+        if not x.account:
+            raise FinanceError(NOT_AVAILABLE, "a line names no account the books hold (its item has none)")
+        if x.amount < 0:
+            raise FinanceError(NOT_AVAILABLE, "a line has a negative amount, which this books cannot take in")
+        rows.append((_mapped(c, cid, "fin_accounts", x.account), x.amount, x.description))
+    if not rows:
+        raise FinanceError(NOT_AVAILABLE, "the document has no lines")
+    if sum(amount for _, amount, _ in rows) != d.total:
+        raise FinanceError(NOT_AVAILABLE, "the lines do not add up to the total (tax or discounts are not taken in yet)")
+    return rows
+
+
+def _doc_entry(ctx: Ctx, *, control_kind: str, sign: int, source: str, source_id: str, contact: str,
+               rows: Sequence[tuple[str, int, str]], memo: str, day: str) -> L.Entry:
+    """A document's entry: its lines (sign +1 debits, -1 credits) against its control account for the same total."""
+    base = ctx.book.base_currency
+    lines = [L.Line(account_id=account, amount=sign * amount, currency=base, original_amount=sign * amount,
+                    fx_rate=Decimal(1), contact_id=contact, description=description[:200])
+             for account, amount, description in rows]
+    total = sum(amount for _, amount, _ in rows)
+    control = documents.control(ctx, control_kind).id
+    lines.append(L.Line(account_id=control, amount=-sign * total, currency=base, original_amount=-sign * total,
+                        fx_rate=Decimal(1), contact_id=contact))
+    return L.Entry(book_id=ctx.book.id, entry_date=day, memo=memo[:200], source=source, source_id=source_id,
+                   lines=tuple(lines))
+
+
+def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
+    """A bill or invoice (its own row, its lines and its entry) or a credit memo (its entry only). A newer revision
+    replaces the entry and the lines; the document keeps its id, so the payments that settled it still point at it."""
+    if d.ext.kind == "CreditMemo":
+        _credit(c, ctx, cid, d, at)
+        return
+    table = DOC_TABLES[d.ext.kind]
+    kind = "bill" if table == "fin_bills" else "invoice"
+    row = SX.ref(c, cid, table, d.ext.key)
+    verdict = M.decide(_have(row), d.ext)
+    if verdict not in (M.CREATE, M.REPLACE):
+        return
+    contact = _mapped(c, cid, "fin_contacts", d.party)
+    rows = _doc_lines(c, cid, d)
+    total = sum(amount for _, amount, _ in rows)
+    if verdict == M.REPLACE and row is not None and row["local_id"]:
+        local = str(row["local_id"])
+        doc = SAP.get(c, table, local)
+        if doc is None:
+            raise FinanceError(CONFLICT, "the document this revises is no longer in the books")
+        old_entry = str(doc["entry_id"] or "")
+        paid = int(doc["amount_paid"])
+        written_off = int(doc["written_off"]) if kind == "invoice" else 0
+        state = _doc_state(kind, total, paid, written_off)
+        SAP.update(c, table, local, _doc_update(kind, contact, d, total, state, at))
+        SAP.replace_lines(c, kind, local, _line_rows(rows, at))
+    else:
+        old_entry = ""
+        local = SAP.insert(c, table, _doc_row(ctx, kind, contact, d, total, _doc_state(kind, total, 0, 0), at))
+        SAP.replace_lines(c, kind, local, _line_rows(rows, at))
+    sign = 1 if kind == "bill" else -1
+    new_entry = _book(c, ctx, cid, d.ext, verdict, old_entry, d.day,
+                      lambda when: _doc_entry(ctx, control_kind=kind, sign=sign, source=kind, source_id=local,
+                                              contact=contact, rows=rows, memo=_doc_label(d), day=when), at)
+    SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
+    _bind(c, cid, table, local, d.ext, at)
+
+
+def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
+    """A credit memo: debits to income against receivables, one entry (it has no row of its own)."""
+    row = SX.ref(c, cid, "fin_entries", d.ext.key)
+    verdict = M.decide(_have(row), d.ext)
+    if verdict not in (M.CREATE, M.REPLACE):
+        return
+    contact = _mapped(c, cid, "fin_contacts", d.party)
+    rows = _doc_lines(c, cid, d)
+    old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
+    new_id = _book(c, ctx, cid, d.ext, verdict, old, d.day,
+                   lambda when: _doc_entry(ctx, control_kind="invoice", sign=1, source="invoice",
+                                           source_id=f"{d.ext.key}:{d.ext.revision}", contact=contact, rows=rows,
+                                           memo=_doc_label(d), day=when), at)
+    _bind(c, cid, "fin_entries", new_id, d.ext, at)
+
+
+def _doc_label(d: M.Document) -> str:
+    return f"{d.ext.kind} {d.number or d.ext.external_id} · {d.memo}".strip(" ·")
+
+
+def _doc_state(kind: str, total: int, paid: int, written_off: int) -> str:
+    """A document's status from what it owes: settled, partly paid (an invoice), or open."""
+    if paid + written_off >= total:
+        return "paid"
+    if kind == "invoice":
+        return "partial" if paid else "sent"
+    return "open"
+
+
+def _doc_update(kind: str, contact: str, d: M.Document, total: int, state: str, at: str) -> dict[str, object]:
+    """The fields a provider revision sets on a document's row."""
+    fields: dict[str, object] = {"number": d.number, "status": state, "total": total, "due_date": d.due or None,
+                                 "updated_at": at}
+    if kind == "bill":
+        fields.update({"vendor_id": contact, "bill_date": d.day})
+    else:
+        fields.update({"customer_id": contact, "invoice_date": d.day})
+    return fields
+
+
+def _doc_row(ctx: Ctx, kind: str, contact: str, d: M.Document, total: int, state: str, at: str) -> dict[str, object]:
+    """A new document row: its update fields plus the book, currency and creation of a row the books make."""
+    return {**_doc_update(kind, contact, d, total, state, at), "book_id": ctx.book.id,
+            "currency": ctx.book.base_currency, "created_at": at, "created_by": SYSTEM}
+
+
+def _line_rows(rows: Sequence[tuple[str, int, str]], at: str) -> list[dict[str, object]]:
+    return [{"account_id": account, "amount": amount, "description": description[:200], "tags_json": "{}",
+             "created_at": at, "created_by": SYSTEM} for account, amount, description in rows]
+
+
+def _settle_target(c: sqlite3.Connection, cid: str, key: str) -> tuple[str, str]:
+    """A payment's link to a bill or invoice: (the document kind, its local id). Raises when it is not in the books."""
+    name, _, _ = key.partition(":")
+    if name not in DOC_TABLES:
+        raise FinanceError(NOT_AVAILABLE, f"{key} is not a bill or an invoice")
+    return ("bill" if name == "Bill" else "invoice"), _mapped(c, cid, DOC_TABLES[name], key)
+
+
+def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: str) -> None:
+    """A bill payment (Dr payables, Cr bank) or a received payment (Dr bank, Cr receivables), and the bills or invoices
+    it settles: each link is a settlement, so the document's paid amount and status move with the money."""
+    row = SX.ref(c, cid, "fin_entries", s.ext.key)
+    verdict = M.decide(_have(row), s.ext)
+    if verdict not in (M.CREATE, M.REPLACE):
+        return
+    if not s.party:
+        raise FinanceError(NOT_AVAILABLE, "the payment names no party")
+    if not s.bank:
+        raise FinanceError(NOT_AVAILABLE, "the payment names no bank account the books hold")
+    if sum(amount for _, amount in s.links) > s.total:
+        raise FinanceError(NOT_AVAILABLE, "the payment settles more than its total")
+    bill = s.ext.kind == "BillPayment"
+    contact = _mapped(c, cid, "fin_contacts", s.party)
+    bank = _mapped(c, cid, "fin_accounts", s.bank)
+    targets = [(*_settle_target(c, cid, key), amount) for key, amount in s.links]
+    control = documents.control(ctx, "bill" if bill else "invoice").id
+    base = ctx.book.base_currency
+
+    def line(account: str, amount: int, party: str) -> L.Line:
+        return L.Line(account_id=account, amount=amount, currency=base, original_amount=amount, contact_id=party)
+
+    lines = (line(control, s.total, contact), line(bank, -s.total, "")) if bill else \
+        (line(bank, s.total, ""), line(control, -s.total, contact))
+    old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
+    entry = _book(c, ctx, cid, s.ext, verdict, old, s.day,
+                  lambda when: L.Entry(book_id=ctx.book.id, entry_date=when, memo=(s.memo or s.ext.kind)[:200],
+                                       source="sync", source_id=f"{s.ext.key}:{s.ext.revision}", lines=lines),
+                  at)
+    for kind, doc_id, amount in targets:
+        documents.settle(ctx, kind, doc_id, amount=amount, day=s.day, from_kind="account", from_id=bank,
+                         entry_id=entry, by=SYSTEM)
+    _bind(c, cid, "fin_entries", entry, s.ext, at)
 
 
 # ------------------------------------------------------------------------------------------------ bank rows
@@ -577,9 +798,10 @@ def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
     read = books.page(entity, start, size)
     if not read.ok:
         return f"backfill {entity} from {start}: {read.error}"
+    counted = read.seen if read.seen >= 0 else len(read.records)     # a row no record fits still moves the cursor
     with store.transaction() as c:
         apply(c, cid, read.records, now)
-        done = M.backfill_after(_backfill_state(SX.mirror_state(c, cid)), entity, start, len(read.records), size)
+        done = M.backfill_after(_backfill_state(SX.mirror_state(c, cid)), entity, start, counted, size)
         SX.set_mirror_state(c, cid, {"backfill": done})
     return ""
 

@@ -1,6 +1,7 @@
 """QuickBooks Online shapes (spec §10): the JSON the adapter reads from QuickBooks and writes to it, as mirror records and
 request bodies. No I/O (the HTTP client is finance/qbo.py). QuickBooks sends money as decimal text, so amounts go through
-Decimal and come out as integer minor units; nothing here is a float."""
+Decimal and come out as integer minor units; nothing here is a float. A deleted row (CDC marks it "Deleted") is its
+identity only, and the books take it as a deletion."""
 from collections.abc import Iterable, Mapping
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
@@ -8,7 +9,17 @@ from typing import Any, cast
 from . import mirror as M
 
 MINOR_VERSION = "65"
-ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry")     # what the change feed and the backfill read
+# Every QuickBooks entity the change feed reads.
+ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Bill", "Invoice", "CreditMemo", "BillPayment", "Payment")
+# The QuickBooks entities behind each backfill entity, in the order the books take them in (the mirror's ENTITIES).
+PAGES: dict[str, tuple[str, ...]] = {
+    "accounts": ("Account",), "parties": ("Vendor", "Customer"), "documents": ("Bill", "Invoice", "CreditMemo"),
+    "payments": ("BillPayment", "Payment"), "entries": ("JournalEntry",)}
+DOCUMENTS = ("Bill", "Invoice", "CreditMemo")
+PAYMENTS = ("BillPayment", "Payment")
+# A document line's detail. Its account is its own (a purchase on an account) or its item's: income for a sale, expense
+# for a purchase on an item.
+LINE_DETAILS = ("AccountBasedExpenseLineDetail", "ItemBasedExpenseLineDetail", "SalesItemLineDetail")
 # QuickBooks AccountType -> Tico (type, subtype). Subtypes are only the ones the default chart uses.
 TYPES: dict[str, tuple[str, str]] = {
     "Bank": ("asset", "bank"), "Accounts Receivable": ("asset", ""), "Other Current Asset": ("asset", ""),
@@ -22,6 +33,7 @@ _OUT: dict[tuple[str, str], str] = {("asset", "bank"): "Bank", ("income", "other
                                     ("expense", "other_expense"): "Other Expense"}
 _DEFAULT_OUT = {"asset": "Other Current Asset", "liability": "Other Current Liability", "equity": "Equity",
                 "income": "Income", "expense": "Expense"}
+Made = M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Ext
 
 
 def as_map(value: object) -> dict[str, Any] | None:
@@ -51,16 +63,28 @@ def _id(value: object) -> str:
     return str(value or "").strip()
 
 
+def _ref(row: Mapping[str, Any], key: str) -> str:
+    """The id a reference field holds (`{"value": "33", "name": ...}`), or ""."""
+    ref = as_map(row.get(key))
+    return _id(ref.get("value")) if ref is not None else ""
+
+
+def _units(value: object) -> int | None:
+    """A QuickBooks amount as minor units, or None when it is not an amount."""
+    try:
+        return minor(value if value is not None else 0)
+    except ValueError:
+        return None
+
+
 def account_type(tico_type: str, subtype: str) -> str:
     """The QuickBooks AccountType for a Tico account: its subtype when QuickBooks has one for it, else its type's."""
     return _OUT.get((tico_type, subtype)) or _DEFAULT_OUT.get(tico_type, "Expense")
 
 
-def account_record(row: dict[str, Any], *, deleted: bool = False) -> M.ChartAccount | None:
+def account_record(row: dict[str, Any]) -> M.ChartAccount | None:
     """A QuickBooks Account as a chart account; None for a type this chart cannot hold."""
-    ext = M.Ext("Account", _id(row.get("Id")), _id(row.get("SyncToken")), deleted)
-    if deleted:
-        return M.ChartAccount(ext, code="", name="", type="", active=False)
+    ext = M.Ext("Account", _id(row.get("Id")), _id(row.get("SyncToken")))
     mapped = TYPES.get(_id(row.get("AccountType")))
     if mapped is None:
         return None
@@ -69,11 +93,9 @@ def account_record(row: dict[str, Any], *, deleted: bool = False) -> M.ChartAcco
                           active=bool(row.get("Active", True)))
 
 
-def party_record(row: dict[str, Any], kind: str, *, deleted: bool = False) -> M.Party:
+def party_record(row: dict[str, Any], kind: str) -> M.Party:
     """A QuickBooks Vendor (kind "Vendor") or Customer (kind "Customer") as a party."""
-    ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")), deleted)
-    if deleted:
-        return M.Party(ext, name="", kind="vendor" if kind == "Vendor" else "customer", active=False)
+    ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
     address = as_map(row.get("PrimaryEmailAddr"))
     emails = (_id(address.get("Address")),) if address is not None and address.get("Address") else ()
     return M.Party(ext, name=_id(row.get("DisplayName")) or _id(row.get("CompanyName")),
@@ -81,9 +103,9 @@ def party_record(row: dict[str, Any], kind: str, *, deleted: bool = False) -> M.
                    emails=emails)
 
 
-def journal_record(row: dict[str, Any], *, deleted: bool = False) -> M.Journal:
+def journal_record(row: dict[str, Any]) -> M.Journal:
     """A QuickBooks JournalEntry as one balanced entry. Debits are positive; lines without an account are skipped."""
-    ext = M.Ext("JournalEntry", _id(row.get("Id")), _id(row.get("SyncToken")), deleted)
+    ext = M.Ext("JournalEntry", _id(row.get("Id")), _id(row.get("SyncToken")))
     lines: list[M.EntryLine] = []
     for raw in as_list(row.get("Line")):
         line = as_map(raw)
@@ -93,7 +115,7 @@ def journal_record(row: dict[str, Any], *, deleted: bool = False) -> M.Journal:
         ref = as_map(detail.get("AccountRef")) if detail is not None else None
         if detail is None or ref is None or not _id(ref.get("value")):
             continue
-        units = minor(line.get("Amount") or 0)
+        units = _units(line.get("Amount")) or 0            # junk makes the entry unbalanced: it waits as unmapped
         if _id(detail.get("PostingType")) == "Credit":
             units = -units
         party = ""
@@ -108,29 +130,117 @@ def journal_record(row: dict[str, Any], *, deleted: bool = False) -> M.Journal:
     return M.Journal(ext, _id(row.get("TxnDate")), _id(row.get("PrivateNote")), "sync", tuple(lines))
 
 
-def records(entity: str, rows: Iterable[object]) -> list[M.ChartAccount | M.Party | M.Journal]:
-    """The mirror records for one QuickBooks entity's rows (a query page or a change block); rows of another shape
-    are skipped, and a deleted row (CDC marks it "Deleted") keeps only its identity."""
-    out: list[M.ChartAccount | M.Party | M.Journal] = []
+def _doc_line(raw: object, items: Mapping[str, Mapping[str, str]]) -> M.EntryLine | None:
+    """One document line as an entry line on its account. None for a line that carries no money (a description, a
+    subtotal). Tax and discount lines are not taken in, so a document that has them does not add up to its total and
+    waits as unmapped (the mirror says so)."""
+    line = as_map(raw)
+    if line is None:
+        return None
+    detail_type = _id(line.get("DetailType"))
+    if detail_type not in LINE_DETAILS:
+        return None
+    detail: dict[str, Any] = as_map(line.get(detail_type)) or {}
+    units = _units(line.get("Amount"))
+    if units is None:
+        return M.EntryLine(account="", amount=0, description=_id(line.get("Description")))
+    if detail_type == "AccountBasedExpenseLineDetail":
+        account = _ref(detail, "AccountRef")
+    else:
+        side = "expense" if detail_type == "ItemBasedExpenseLineDetail" else "income"
+        found = items.get(_ref(detail, "ItemRef"))
+        account = found.get(side, "") if found is not None else ""
+    return M.EntryLine(account=f"Account:{account}" if account else "", amount=units,
+                       description=_id(line.get("Description")))
+
+
+def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str, str]]) -> M.Document:
+    """A QuickBooks Bill, Invoice or CreditMemo as a document. A bill's party is its vendor; an invoice's and a credit
+    memo's is their customer. `items` maps each item id to its income and expense accounts (see item_accounts)."""
+    ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
+    party_kind = "Vendor" if kind == "Bill" else "Customer"
+    party_value = _ref(row, "VendorRef" if kind == "Bill" else "CustomerRef")
+    lines = tuple(x for x in (_doc_line(raw, items) for raw in as_list(row.get("Line"))) if x is not None)
+    return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
+                      number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
+                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_id(row.get("PrivateNote")))
+
+
+def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
+    """A QuickBooks BillPayment (paid to a vendor) or Payment (received from a customer): its money account, party,
+    total, and what each line applies to a bill (BillPayment) or an invoice (Payment)."""
+    ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
+    if kind == "Payment":
+        bank, party_kind, party_value = _ref(row, "DepositToAccountRef"), "Customer", _ref(row, "CustomerRef")
+        target = "Invoice"
+    else:
+        check: dict[str, Any] = as_map(row.get("CheckPayment")) or {}
+        card: dict[str, Any] = as_map(row.get("CreditCardPayment")) or {}
+        bank = _ref(check, "BankAccountRef") or _ref(card, "CCAccountRef")
+        party_kind, party_value = "Vendor", _ref(row, "VendorRef")
+        target = "Bill"
+    links: list[tuple[str, int]] = []
+    for raw in as_list(row.get("Line")):
+        line = as_map(raw)
+        if line is None:
+            continue
+        units = _units(line.get("Amount"))
+        for txn_raw in as_list(line.get("LinkedTxn")):
+            txn = as_map(txn_raw) or {}
+            if _id(txn.get("TxnType")) == target and _id(txn.get("TxnId")) and units is not None:
+                links.append((f"{target}:{_id(txn.get('TxnId'))}", units))
+    return M.Settlement(ext, day=_id(row.get("TxnDate")), memo=_id(row.get("PrivateNote")),
+                        party=f"{party_kind}:{party_value}" if party_value else "",
+                        bank=f"Account:{bank}" if bank else "", total=_units(row.get("TotalAmt")) or 0,
+                        links=tuple(links))
+
+
+def item_accounts(rows: Iterable[object]) -> dict[str, dict[str, str]]:
+    """Each item's income and expense account (QuickBooks keeps them on the item): what its lines post to."""
+    out: dict[str, dict[str, str]] = {}
+    for raw in rows:
+        row = as_map(raw)
+        if row is None or not _id(row.get("Id")):
+            continue
+        out[_id(row.get("Id"))] = {"income": _ref(row, "IncomeAccountRef"), "expense": _ref(row, "ExpenseAccountRef")}
+    return out
+
+
+def _one(entity: str, row: dict[str, Any], items: Mapping[str, Mapping[str, str]]) -> Made | None:
+    if entity == "Account":
+        return account_record(row)
+    if entity in ("Vendor", "Customer"):
+        return party_record(row, entity)
+    if entity == "JournalEntry":
+        return journal_record(row)
+    if entity in DOCUMENTS:
+        return document_record(row, entity, items)
+    if entity in PAYMENTS:
+        return settlement_record(row, entity)
+    return None
+
+
+def records(entity: str, rows: Iterable[object], items: Mapping[str, Mapping[str, str]] | None = None) -> list[Made]:
+    """The mirror records for one QuickBooks entity's rows (a query page or a change block). Rows that are not objects
+    are skipped; a deleted row keeps only its identity, which the books take as the deletion."""
+    out: list[Made] = []
     for raw in rows:
         row = as_map(raw)
         if row is None:
             continue
-        gone = _id(row.get("status")) == "Deleted"
-        if entity == "Account":
-            made = account_record(row, deleted=gone)
-            if made is not None:
-                out.append(made)
-        elif entity in ("Vendor", "Customer"):
-            out.append(party_record(row, entity, deleted=gone))
-        elif entity == "JournalEntry":
-            out.append(journal_record(row, deleted=gone))
+        if _id(row.get("status")) == "Deleted":
+            if _id(row.get("Id")):
+                out.append(M.Ext(entity, _id(row.get("Id")), _id(row.get("SyncToken")), True))
+            continue
+        made = _one(entity, row, items or {})
+        if made is not None:
+            out.append(made)
     return out
 
 
-def change_records(answer: Mapping[str, Any]) -> list[M.ChartAccount | M.Party | M.Journal]:
+def change_records(answer: Mapping[str, Any], items: Mapping[str, Mapping[str, str]] | None = None) -> list[Made]:
     """The records in a CDC answer: {"CDCResponse": [{"QueryResponse": [{"Account": [...], ...}]}]}."""
-    out: list[M.ChartAccount | M.Party | M.Journal] = []
+    out: list[Made] = []
     for block in as_list(answer.get("CDCResponse")):
         found = as_map(block)
         if found is None:
@@ -140,7 +250,7 @@ def change_records(answer: Mapping[str, Any]) -> list[M.ChartAccount | M.Party |
             if page is None:
                 continue
             for entity in ENTITIES:
-                out += records(entity, as_list(page.get(entity)))
+                out += records(entity, as_list(page.get(entity)), items)
     return out
 
 

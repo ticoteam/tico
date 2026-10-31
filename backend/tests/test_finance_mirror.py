@@ -18,7 +18,7 @@ LATER = "2026-10-15T13:00:00.000000Z"
 @dataclass
 class FakeBooks:
     """A provider's books in memory: records per entity, change feed, failures and confirmations queued by the test."""
-    entities: tuple[str, ...] = ("accounts", "parties", "entries")
+    entities: tuple[str, ...] = mirror.ENTITIES
     records: dict[str, list[Any]] = field(default_factory=lambda: defaultdict(list))
     changes: list[Any] = field(default_factory=list)
     fail: set[tuple[str, int]] = field(default_factory=set)
@@ -65,11 +65,17 @@ def _mirror(store: Any, cid: str) -> None:
         SL.set_book_mode(c, SL.book(c).id, "mirror", cid)  # type: ignore[union-attr]
 
 
-def _drain(store: Any, fake: FakeBooks, cid: str, now: str = AT, passes: int = 4) -> list[str]:
+def _drain(store: Any, fake: FakeBooks, cid: str, now: str = AT, passes: int = 6) -> list[str]:
+    """Enough passes to read every entity's one page each and then the change feed."""
     problems: list[str] = []
     for _ in range(passes):
         problems += mirror.sync_once(store, fake, cid, now)
     return problems
+
+
+def _local(c: sqlite3.Connection, ext: str, table: str) -> str:
+    return str(c.execute("SELECT local_id FROM fin_external_refs WHERE external_id=? AND local_table=?",
+                         (ext, table)).fetchone()[0])
 
 
 def _entry_of(c: sqlite3.Connection, ext: str) -> str:
@@ -212,3 +218,87 @@ def _bank_row(c: sqlite3.Connection, amount: int, day: str) -> tuple[str, str]:
               "status, created_at, created_by) VALUES(?,?,?,?,?,?,?,?,?,?)",
               (fid, money, f"txn-{fid[:8]}", day, amount, book.base_currency, "Acme Software", "new", AT, OWNER))  # type: ignore[union-attr]
     return money, fid
+
+
+def _bill(n: int, rev: int, total: int) -> M.Document:
+    return M.Document(M.Ext("Bill", str(n), str(rev)), party="Vendor:9", number=f"B-{n}", day="2026-10-05",
+                      due="2026-11-05", total=total, lines=(M.EntryLine("Account:2", total, description="seats"),))
+
+
+def _vendor(fake: FakeBooks) -> None:
+    fake.records["parties"] = [M.Party(M.Ext("Vendor", "9", "1"), "Acme Software", "vendor")]
+
+
+def test_a_bill_posts_its_accrual_and_a_newer_revision_replaces_it_and_stays_balanced(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [_bill(12, 1, 1500)]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        bill = _local(c, "Bill:12", "fin_bills")
+        old = str(c.execute("SELECT entry_id FROM fin_bills WHERE id=?", (bill,)).fetchone()[0])
+        assert c.execute("SELECT source FROM fin_entries WHERE id=?", (old,)).fetchone()[0] == "bill"
+        original = c.execute("SELECT id, account_id, amount FROM fin_lines WHERE entry_id=? ORDER BY id",
+                             (old,)).fetchall()
+    fake.changes = [_bill(12, 2, 2000)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        total, status, new = c.execute("SELECT total, status, entry_id FROM fin_bills WHERE id=?", (bill,)).fetchone()
+        assert (total, status) == (2000, "open") and new != old
+        assert c.execute("SELECT status FROM fin_entries WHERE id=?", (old,)).fetchone()[0] == "reversed"
+        assert c.execute("SELECT id, account_id, amount FROM fin_lines WHERE entry_id=? ORDER BY id",
+                         (old,)).fetchall() == original
+        assert c.execute("SELECT SUM(amount) FROM fin_lines").fetchone()[0] == 0
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Bill:12'").fetchone()[0] == "2"
+
+
+def test_a_bill_payment_settles_the_bill_and_deleting_it_puts_the_bill_back_owing(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    fake.records["documents"] = [_bill(12, 1, 1500)]
+    fake.records["payments"] = [M.Settlement(M.Ext("BillPayment", "30", "1"), day="2026-10-12", memo="Acme payment",
+                                             party="Vendor:9", bank="Account:1", total=1500,
+                                             links=(("Bill:12", 1500),))]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        bill = _local(c, "Bill:12", "fin_bills")
+        pay = _local(c, "BillPayment:30", "fin_entries")
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_bills WHERE id=?", (bill,)).fetchone()) == (
+            "paid", 1500)
+        settled = c.execute("SELECT from_kind, to_kind, amount, entry_id FROM fin_settlements WHERE to_id=? "
+                            "AND voided_at IS NULL", (bill,)).fetchall()
+        assert [tuple(row) for row in settled] == [("account", "bill", 1500, pay)]
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "2000"),)
+                         ).fetchone()[0] == 0
+    fake.changes = [M.Ext("BillPayment", "30", "2", True)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_bills WHERE id=?", (bill,)).fetchone()) == (
+            "open", 0)
+        assert c.execute("SELECT COUNT(*) FROM fin_settlements WHERE to_id=? AND voided_at IS NULL", (bill,)
+                         ).fetchone()[0] == 0
+        assert c.execute("SELECT status FROM fin_entries WHERE id=?", (pay,)).fetchone()[0] == "reversed"
+        # The bill is owed again: its accrual is the credit left on payables.
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "2000"),)
+                         ).fetchone()[0] == -1500
+
+
+def test_a_document_whose_lines_do_not_add_up_to_its_total_is_not_posted(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _vendor(fake)
+    short = M.Document(M.Ext("Bill", "13", "1"), party="Vendor:9", number="B-13", day="2026-10-05", due="", total=1600,
+                       lines=(M.EntryLine("Account:2", 1500),))
+    fake.records["documents"] = [short]
+    cid = _connection(books)
+    _mirror(books, cid)
+    _drain(books, fake, cid)
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Bill:13'").fetchone()[0] == "unmapped"
+        assert c.execute("SELECT COUNT(*) FROM fin_bills WHERE number='B-13'").fetchone()[0] == 0

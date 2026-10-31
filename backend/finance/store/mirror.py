@@ -46,6 +46,12 @@ def restatements(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
                      (book_id, most)).fetchall()
 
 
+def settlements_of(c: sqlite3.Connection, entry_id: str) -> list[Any]:
+    """The settlements a payment's entry made that have not been undone."""
+    return c.execute("SELECT * FROM fin_settlements WHERE entry_id=? AND voided_at IS NULL ORDER BY created_at, id",
+                     (entry_id,)).fetchall()
+
+
 def as_map(value: object) -> dict[str, object]:
     """A JSON object as a dict; any other value reads as empty."""
     return cast(dict[str, object], value) if isinstance(value, dict) else {}
@@ -232,6 +238,13 @@ def set_connection_status(c: sqlite3.Connection, cid: str, status: str, error: s
 def books_status(c: sqlite3.Connection, cid: str) -> str:
     row = c.execute("SELECT status FROM fin_connections WHERE id=?", (cid,)).fetchone()
     return str(row[0]) if row else ""
+
+
+def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:
+    """A rehearsal copy's writes to the provider wait as `withheld`: visible in the outbox, never sent. Returns how many."""
+    cur = c.execute("UPDATE fin_outbox SET status='withheld', last_error=?, updated_at=? "
+                    "WHERE connection_id=? AND status='pending' AND claimed_at IS NULL", (why[:300], at, cid))
+    return int(cur.rowcount)
 
 
 def connection_owner(c: sqlite3.Connection, cid: str) -> str:

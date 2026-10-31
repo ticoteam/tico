@@ -76,6 +76,33 @@ class Journal:
     lines: tuple[EntryLine, ...]
 
 
+@dataclass(frozen=True)
+class Document:
+    """A provider's bill, invoice or credit memo. Its lines are positive amounts on accounts; the books post a bill's lines
+    as debits and an invoice's as credits (a credit memo's as debits, against receivables)."""
+    ext: Ext
+    party: str          # the vendor or customer key ("Vendor:9", "Customer:4"), "" when the provider names none
+    number: str
+    day: str
+    due: str
+    total: int          # minor units, positive
+    lines: tuple[EntryLine, ...]
+    memo: str = ""
+
+
+@dataclass(frozen=True)
+class Settlement:
+    """A provider's payment of bills or invoices: a bill payment or a received payment. Its money moves between the bank
+    account and the party's control account; `links` says how much settles each document ("Bill:12", amount)."""
+    ext: Ext
+    day: str
+    memo: str
+    party: str
+    bank: str           # the provider's key for the money account, "" when the provider names none
+    total: int          # minor units, positive
+    links: tuple[tuple[str, int], ...] = ()
+
+
 def revision_order(a: str, b: str) -> int:
     """1 when revision `a` is newer than `b`, -1 when older, 0 when the same. Revisions are counters, so digits compare
     as numbers; anything else compares as text."""
