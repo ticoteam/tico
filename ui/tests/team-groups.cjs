@@ -30,7 +30,7 @@ const hiring = page => page.evaluate(() => ['Post a job', typeof teamBuildOpen =
 async function open(browser, me, branches = false) {
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], calls = [], failures = new Set();
-  const deletion = {status: 0, hold: null}, seatSave = {status: 0, hire: 0};
+  const deletion = {status: 0, hold: null}, seatSave = {status: 0, hire: 0, draftHold: null};
   const people = [
     {id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: '', inbox_bot: 'inbox'},
     {id: 'ben', name: 'Ben Cole', org_parent: 'p:ana', team: 'marketing', reports_to: 'ana'},
@@ -112,6 +112,7 @@ async function open(browser, me, branches = false) {
     }
     if (p === '/api/v2/seats/draft' && method === 'POST') {
       const body = request.postDataJSON(); calls.push(['POST', 'draft', body]);
+      if (seatSave.draftHold) await seatSave.draftHold;
       return json({description: body.redraft ? 'Keeps the books, closes each month and files the taxes.' : 'Keeps the books and closes each month.',
         source: 'catalog'});
     }
@@ -677,6 +678,45 @@ async function teamAdd(browser) {
   calls.length = 0;
   await page.evaluate(() => { location.hash = '#/updates'; });
   await page.waitForFunction(() => location.hash === '#/updates');
+
+  // Posting while the draft is on its way waits for it, and so does Enter straight from the title: the job is posted
+  // with the drafted words, never an empty description.
+  const held = () => { let release; seatSave.draftHold = new Promise(resolve => { release = resolve; }); return () => { seatSave.draftHold = null; release(); }; };
+  await choose('Post a job');
+  await post.locator('[name=title]').fill('Auditor');
+  let release = held();
+  await post.locator('[name=title]').blur();
+  await post.locator('[type=submit]').click();
+  await page.waitForTimeout(150);
+  assert.equal(calls.some(c => c[1] === 'seats'), false, 'nothing is posted before the draft lands');
+  release();
+  await page.waitForFunction(() => location.hash === '#/seat/seat3');
+  assert.deepEqual(calls.find(c => c[1] === 'seats')[2].description, 'Keeps the books and closes each month.');
+  calls.length = 0;
+  await page.evaluate(() => { location.hash = '#/updates'; });
+  await page.waitForFunction(() => location.hash === '#/updates');
+  await choose('Post a job');
+  await post.locator('[name=title]').fill('Treasurer');
+  await post.locator('[name=title]').press('Enter');
+  await page.waitForFunction(() => location.hash === '#/seat/seat4');
+  assert.deepEqual(calls.map(c => c[1]), ['draft', 'seats']);
+  assert.deepEqual(calls[1][2].description, 'Keeps the books and closes each month.');
+  calls.length = 0;
+  await page.evaluate(() => { location.hash = '#/updates'; });
+  await page.waitForFunction(() => location.hash === '#/updates');
+  // Words typed while a Redraft is on its way stay; the late draft does not replace them.
+  await choose('Post a job');
+  await post.locator('[name=title]').fill('Clerk');
+  await post.locator('[name=title]').blur();
+  await expectValue(post.locator('[name=description]'), 'Keeps the books and closes each month.');
+  release = held();
+  await post.locator('[data-post-redraft]').click();
+  await post.locator('[name=description]').fill('Files the receipts.');
+  release();
+  await page.waitForFunction(() => !document.querySelector('#recruit-post textarea').hasAttribute('aria-busy'));
+  assert.equal(await post.locator('[name=description]').inputValue(), 'Files the receipts.');
+  await page.keyboard.press('Escape');
+  calls.length = 0;
 
   // A failed add keeps the entered human available for correction and retry.
   await choose('Add human');

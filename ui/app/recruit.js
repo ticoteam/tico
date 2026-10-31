@@ -168,23 +168,28 @@ async function recruitPostJob(seed = {}) {
   dialog.querySelector('[data-post-place]')?.addEventListener('click', event => {
     event.currentTarget.hidden = true; dialog.querySelector('[data-post-pair]').hidden = false; f.team.focus();
   });
-  // The description is drafted from the title once it is left (and again on Redraft); a description typed by hand is
-  // never replaced by the first draft, and only the newest answer lands.
-  let typed = false, drafted = '', asked = 0;
-  text.oninput = () => { typed = text.value.trim() !== '' && text.value !== drafted; };
-  const draftNow = async (again = false) => {
-    const title = f.title.value.trim();
-    if (!title || (!again && (typed || drafted && title === draftNow.title))) return;
-    draftNow.title = title;
-    const mine = ++asked;
+  // The description is drafted from the title once it is left (and again on Redraft). A draft lands only if nobody
+  // typed in the description since it was asked for, so it never replaces words written by hand, and only the newest
+  // answer lands.
+  let typed = false, drafted = '', asked = 0, edits = 0, pending = null;
+  text.oninput = () => { edits++; typed = text.value.trim() !== '' && text.value !== drafted; };
+  const ask = async (title, again, mine, seen) => {
     ldotSet(dot, 'thinking'); redraft.disabled = true; text.setAttribute('aria-busy', 'true');
     try {
       const found = await post('/v2/seats/draft', {title, team: recruitGroupName(f.team.value), reports_to: f.reports_to.value, redraft: again});
       if (mine !== asked || !dialog.open) return;
-      if (found.description && (again || !typed)) { text.value = drafted = found.description; typed = false; }
+      if (found.description && edits === seen) { text.value = drafted = found.description; typed = false; }
       ldotSet(dot, 'done');
     } catch (e) { if (mine === asked) { ldotSet(dot, 'idle'); error.textContent = e.message; error.hidden = false; } }
-    finally { if (mine === asked) { redraft.disabled = false; text.removeAttribute('aria-busy'); } }
+    finally { if (mine === asked) { redraft.disabled = false; text.removeAttribute('aria-busy'); pending = null; } }
+  };
+  const draftNow = (again = false) => {
+    const title = f.title.value.trim();
+    if (!title || (!again && (typed || drafted && title === draftNow.title))) return pending || Promise.resolve();
+    if (!again && pending && title === draftNow.title) return pending;
+    draftNow.title = title;
+    pending = ask(title, again, ++asked, edits);
+    return pending;
   };
   f.title.addEventListener('blur', () => { void draftNow(); });
   f.title.addEventListener('input', () => { redraft.disabled = !f.title.value.trim(); });
@@ -201,6 +206,9 @@ async function recruitPostJob(seed = {}) {
     if (!title) { error.textContent = 'Give the job a title.'; error.hidden = false; f.title.focus(); return; }
     if (!S.me?.id || !settingsCanCreateBots()) { error.textContent = 'You no longer have permission to add bots.'; error.hidden = false; return; }
     posting = true; form.querySelector('[type=submit]').disabled = true;
+    // An empty description waits for the draft: the one still on its way, or one for a title submitted with Enter.
+    if (!text.value.trim()) await draftNow();
+    if (!dialog.open) return;
     try {
       const seat = await post('/v2/seats', {title, reports_to: f.reports_to.value, description: text.value.trim(),
         ...(f.team.value ? {team: f.team.value} : {})});

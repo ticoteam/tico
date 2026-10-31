@@ -5467,10 +5467,11 @@ def create_app(settings=None):
         nothing."""
         who = request.state.identity
         auth.domain(who)
+        recruiting.may_draft(who)
         boss = ""
         if body.redraft and body.reports_to:
             with store.read() as c:
-                boss = recruiting.boss_name(c, body.reports_to)
+                boss = recruiting.boss_name(auth, c, who, body.reports_to)
         return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft)
 
     @app.get("/api/v2/seats/{seat_id}")

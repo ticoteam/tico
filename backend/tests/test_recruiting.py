@@ -56,16 +56,82 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     def rewrite(composed, title, boss):
         asked.append((title, boss))
         return "Leads our support desk.\n\nWhat you'll do\n- Answer every ticket the same day"
-    monkeypatch.setattr(recruiting, "_rewrite", rewrite)
+    monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
     post(api, "seats/draft", {"title": "Customer support lead"})
     assert asked == []
     again = post(api, "seats/draft", {"title": "Customer support lead", "reports_to": "coo", "redraft": True})
     assert again["source"] == "model" and again["description"].startswith("Leads our support desk.")
     assert asked == [("Customer support lead", get(api, "bots/coo")["display_name"])]
     for broken in (lambda *_: (_ for _ in ()).throw(TimeoutError("slow")), lambda *_: "Too short."):
-        monkeypatch.setattr(recruiting, "_rewrite", broken)
+        monkeypatch.setattr(recruiting, "_rewrite_call", broken)
         assert post(api, "seats/draft", {"title": "Customer support lead", "redraft": True}) == drafted
     post(api, "seats/draft", {"title": ""}, expected=422)
+
+    # Only a person drafts, and the model hears only a manager the caller could post under: Cara, a member, gets her
+    # own name sent but not the COO's, which is outside her chain; a name nobody has is dropped too.
+    asked.clear()
+    monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
+    as_member(api, "ben@acme.example")
+    for reports_to in ("coo", "nobody-here", "human:ana"):
+        post(api, "seats/draft", {"title": "Customer support lead", "reports_to": reports_to, "redraft": True}, token="cara-test")
+    post(api, "seats/draft", {"title": "Customer support lead", "reports_to": "human:cara", "redraft": True}, token="cara-test")
+    with api.app.state.store.read() as c:
+        cara = H.human(c, "cara")["name"]
+    assert asked == [("Customer support lead", "")] * 3 + [("Customer support lead", cara)]
+    bot = as_bot(api, "coo")
+    assert api.post("/api/v2/seats/draft", headers=bot, json={"title": "Customer support lead"}).status_code == 403
+
+
+def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
+    import time
+    from clients import docs_qa
+    composed = post(api, "seats/draft", {"title": "Customer support lead"})
+    body = {"title": "Customer support lead", "redraft": True}
+    monkeypatch.setattr(recruiting, "REWRITE_SECONDS", 0.3)
+
+    def timed():
+        started = time.monotonic()
+        out = post(api, "seats/draft", body)
+        return out, time.monotonic() - started
+
+    # The bound covers finding the key: a secret store that hangs does not hold the draft.
+    monkeypatch.setattr(docs_qa, "key", lambda: time.sleep(3) or "k")
+    out, took = timed()
+    assert out == composed and took < 1.5
+
+    # And reading the answer: a server that trickles it is cut off at the same bound.
+    class Answer:
+        def __init__(self, read):
+            self._read = read
+        def __enter__(self):
+            return self
+        def __exit__(self, *_):
+            return False
+        def read(self, n):
+            return self._read(n)
+    monkeypatch.setattr(docs_qa, "key", lambda: "k")
+    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: Answer(lambda n: time.sleep(3) or b"{}"))
+    out, took = timed()
+    assert out == composed and took < 1.5
+
+    # An answer longer than the cap is not read past it, and is not used.
+    reads = []
+    huge = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads support. " * 20000}]}}]}).encode()
+    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: Answer(lambda n: reads.append(n) or huge[:n]))
+    assert post(api, "seats/draft", body) == composed and reads == [recruiting.REWRITE_BYTES + 1]
+    fine = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads our support desk, every day of the week."}]}}]}).encode()
+    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: Answer(lambda n: fine[:n]))
+    assert post(api, "seats/draft", body)["source"] == "model"
+
+    # A rehearsal or a demo never reads a key or asks a model.
+    touched = []
+    monkeypatch.setattr(docs_qa, "key", lambda: touched.append("key") or "k")
+    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: touched.append("model") or Answer(lambda n: fine[:n]))
+    for flag in ("rehearsal", "demo"):
+        monkeypatch.setattr(api.app.state.onboarding.settings, flag, True)
+        assert post(api, "seats/draft", body) == composed
+        monkeypatch.setattr(api.app.state.onboarding.settings, flag, False)
+    assert touched == []
 
 
 def test_the_strategy_bot_no_longer_drafts_and_people_s_words_stay_theirs(api):
