@@ -96,8 +96,9 @@ def _login_target(runners, wanted):
 
 
 def built_in(settings):
-    """The bots every install starts with: the four a person talks to, and the Task Manager (docs/task-manager.md)."""
-    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager", "task-manager"}
+    """The bots every install starts with: the four a person talks to, the Task Manager (docs/task-manager.md) and the
+    Bookkeeper (docs/bookkeeper.md)."""
+    return {settings.assistant_bot, BOTOPS, LIBRARIAN, "goal-manager", "task-manager", "bookkeeper"}
 
 
 def own_bots(c, settings):

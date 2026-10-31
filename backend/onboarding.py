@@ -902,6 +902,11 @@ class Onboarding:
         run it. It is a helper outside the org chart, so no chart or seat changes."""
         return self._ensure_builtin(c, "task-manager", "Task Manager", "task_manager.turned_on")
 
+    def ensure_bookkeeper(self, c):
+        """The same for the Bookkeeper (docs/bookkeeper.md), once Finance is set up (backend/bookkeeper.py `ensure`
+        checks that and adds its defaults). A helper outside the org chart, like the Task Manager."""
+        return self._ensure_builtin(c, "bookkeeper", "Bookkeeper", "bookkeeper.turned_on")
+
     def turn_on_task_manager(self, c, who):
         """Bring the Task Manager back after it was paused or archived by an older version (its report is plain code and
         keeps running either way, but the tasks it opens need the bot to be active)."""
@@ -1057,6 +1062,8 @@ class Onboarding:
         self.ensure_librarian(c)              # a company from before it was built in
         self.ensure_goal_manager(c)
         self.ensure_task_manager(c)
+        from . import bookkeeper
+        bookkeeper.ensure(c, self, self.auth)
         placed = self._wire(c, record, "human:" + operator, runner_id)
         self._store(c, record, "human:" + operator)
         return branches + placed

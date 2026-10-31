@@ -1,0 +1,26 @@
+name: bookkeeper                 # the slug: it matches the repository bot-bookkeeper and the label owner:bookkeeper
+display_name: "Bookkeeper"
+labels: [owner:bookkeeper]
+reads: []                        # other bot repositories this one may clone read-only
+
+# These must agree with the bot's settings on the server, or be left out of this file entirely.
+reasoning_effort: medium
+max_run_minutes: 60
+
+# It sends nothing outside the team itself; an invoice reminder goes through Finance's own send.
+outbound_send: false
+
+# Most of its work comes from the server's hourly Books check (backend/bookkeeper.py): plain code reads its Finance work
+# queue and opens a task only when the queue has something, so a quiet month wakes no model. The one routine is the
+# monthly report, which is real work every month. The server seeds it once, when the Bookkeeper is built in; from then
+# on Tico's rows are the routines (docs/routines.md). Set the timezone to the team's own.
+routines:
+  - id: monthly-report
+    title: Monthly finance report
+    cron: "0 9 3 * *"
+    timezone: America/Los_Angeles
+    template: playbooks/monthly-report.md
+    labels: [priority:p2]
+
+# It needs no tool or credential of its own: Finance's books, banks and cards are reached through the hub_finance tools.
+tools: []
