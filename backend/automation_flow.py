@@ -162,7 +162,8 @@ def _check_trigger(trigger):
 
 def _check_due(trigger):
     """A due-date trigger (backend/automation_due.py): a first due day, a repeat, the lead time and an optional zone
-    and rule id (the rules feature stores its due date's id here; nothing checks it yet)."""
+    and rule due date id (backend/rule_due_routine.py stores it; automations._save lets only that due date's routine
+    name it)."""
     from . import automation_due as D
     try:
         D.first_due(trigger)

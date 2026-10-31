@@ -671,11 +671,12 @@ def create_app(settings=None):
                 if counsel.is_counsel(who) and await asyncio.get_running_loop().run_in_executor(
                         None, counsel.refused, store, who, request.url.path, request.method):
                     raise Problem("forbidden", counsel.REFUSED, 403)
-                # While its run may publish a document's suggestions, Counsel reads only that document's task and version.
-                if counsel.is_counsel(who) and who.attempt_id and request.method in ("GET", "HEAD") and \
-                        await asyncio.get_running_loop().run_in_executor(
-                            None, counsel.read_refused, store, auth, who, request.url.path, dict(request.query_params)):
-                    raise Problem("privacy", counsel.READ_SCOPE, 403)
+                # Counsel calls only its own routes (backend/counsel.py COUNSEL_ROUTES), and a Counsel run reads on them
+                # only its own task, its read's document version and its own run (read_refused).
+                if counsel.is_counsel(who) and (reason := await asyncio.get_running_loop().run_in_executor(
+                        None, counsel.read_refused, store, auth, who, request.method, request.url.path,
+                        dict(request.query_params))):
+                    raise Problem("privacy", reason, 403)
                 if census.person_due(who):
                     await asyncio.get_running_loop().run_in_executor(None, census.note_person, who)
                 if who.via:
@@ -4819,6 +4820,7 @@ def create_app(settings=None):
         question to a person passes ask ingest first (backend/ask_ingest.py): sent back, it is withdrawn as soon as it
         is asked."""
         who = request.state.identity
+        counsel.no_attachments(who, body.attachments)    # before the rule check holds anything (visuals.attach too)
         if body.delivery and (body.ask or (body.needs_action and body.delivery != "steer")):
             raise Problem("delivery", "A question always wakes the one it is for, and needs_action is steer: send it "
                           "without a delivery, or with steer", 422)

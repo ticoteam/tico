@@ -354,19 +354,45 @@ def _completes(task, actor):
     return task.get("status") == "closed" and H.is_human(actor)
 
 
+def links(c, due_id, routine_id):
+    """Whether that automation is the routine the due date row links now (`routine_id`, set only by
+    backend/rule_due_routine.py): the one automation that may carry the row's id in its trigger, and stamp it on a task."""
+    row = one(c, due_id) if due_id and routine_id else None
+    return bool(row) and row["routine_id"] == routine_id
+
+
+def linked(c, row, routine_id):
+    """Whether that automation is, or was, the due date row's routine: its `routine_id` now, or one the rule's audit trail
+    recorded for this row (every add and edit of a due date writes its view, routine included). A routine turned off or
+    deleted after it opened a task still stands for that task; an automation that only names the row never does."""
+    if not routine_id:
+        return False
+    if row["routine_id"] == routine_id:
+        return True
+    for found in c.execute("SELECT before_json, after_json FROM audit_log WHERE object=?", ("org_rule:" + row["rule_id"],)):
+        for raw in found:
+            due = (json.loads(raw) or {}).get("due") if raw else None
+            if isinstance(due, dict) and due.get("id") == row["id"] and due.get("routine_id") == routine_id:
+                return True
+    return False
+
+
 def _occurrence_row(c, task):
-    """The due date and the day a routine's task stands for: the day from its occurrence marker
-    (`<automation>:<due_on>`), the row from `tasks.rule_due_id`, which the run that opened the task saved from its
-    payload (automation_actions), scheduled or Run now. Later edits to the routine or the due date never change it, so
+    """The due date and the day a routine's task stands for: the routine and the day from its occurrence marker
+    (`<automation>:<due_on>`, the server's), the row from `tasks.rule_due_id`, which the run that opened the task stamped
+    only while that automation was the row's routine (automation_actions `_occurrence`), scheduled or Run now. The
+    routine must be (or have been) the row's (`linked`). Later edits to the routine or the due date never change it, so
     a task opened before an edit marks the ended row and a task outliving its routine still marks its day. (None, None)
     when it is not a rule's routine or that due date was removed."""
-    _, _, due_on = str(task.get("occurrence") or "").rpartition(":")
+    routine, _, due_on = str(task.get("occurrence") or "").rpartition(":")
     try:
         day = date.fromisoformat(due_on)
     except ValueError:
         return None, None
     row = one(c, task.get("rule_due_id")) if task.get("rule_due_id") else None
     if not row or row["retired_at"] or not is_occurrence(parse_date(row["first_due"]), row["repeats"], day):
+        return None, None
+    if not linked(c, row, routine):
         return None, None
     return row, due_on
 

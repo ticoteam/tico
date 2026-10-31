@@ -243,3 +243,41 @@ def test_a_due_dates_owner_is_the_caller_a_teammate_in_who_or_someone_they_manag
     assert automation(api, ops["routine_id"])["owner"] == "bot:ops"
     post(api, f"rule-due/{mine['id']}", {"owner": "ops"}, token="cara-test")
     post(api, f"rule-due/{ops['id']}", {"owner": "ops", "task_days": 7}, token="cara-test")
+
+
+def cara_routine(api, trigger, expected=200):
+    """Cara's own "Before a due date" automation, which opens a task for her."""
+    body = {"name": "Mine", "owner": "person:cara", "enabled": True, "trigger": {"type": "due", **trigger},
+            "steps": [{"id": "open", "type": "action", "do": "create_task", "args": {"title": "Mine", "owner": "cara"}}]}
+    return post(api, "automations", body, token="cara-test", expected=expected)
+
+
+def test_only_the_linked_routine_names_a_due_date_and_a_forged_task_satisfies_nothing(api):
+    _, due = linked(api, first="2030-03-01", repeats="yearly", days=0)
+    trigger = {"first_due": "2030-03-01", "repeats": "yearly", "open_days": 0, "tz": "UTC"}
+    # Cara's routine may not name Ana's due date, on create or on an edit.
+    cara_routine(api, {**trigger, "rule_due_id": due["id"]}, expected=403)
+    mine = cara_routine(api, trigger)
+    patch(api, mine["id"], {"trigger": {"type": "due", **trigger, "rule_due_id": due["id"]}}, token="cara-test",
+          expected=403)
+    # One saved before that check (written straight to its row) opens its task without the link, whatever its input says.
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET flow_json=json_set(flow_json, '$.trigger.rule_due_id', ?) WHERE id=?",
+                  (due["id"], mine["id"]))
+    post(api, f"automations/{mine['id']}/run", {"input": {"due": {"due_on": "2030-03-01", "tz": "UTC",
+                                                                  "rule_due_id": due["id"]}}}, token="cara-test")
+    [opened] = tasks(api, mine["id"])
+    assert sql(api, "SELECT rule_due_id FROM tasks WHERE id=?", (opened["id"],))[0]["rule_due_id"] is None
+    write(api, H.task_update, "human:cara", opened["id"], status="done")
+    # A task stamped with Ana's due date by a routine that never was its routine marks nothing either.
+    forged = write(api, H.task_create, "human:cara", "Forged", "Forged", "human:cara",
+                   occurrence=f"{mine['id']}:2030-03-01", rule_due_id=due["id"])
+    write(api, H.task_update, "human:cara", forged["id"], status="done")
+    assert marks(api, due["id"]) == []
+    # The linked routine's own task still does, and its refs name the due date.
+    tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
+    [task] = tasks(api, due["routine_id"])
+    refs = sql(api, "SELECT refs_json FROM messages WHERE json_extract(refs_json,'$.automation')=?", (due["routine_id"],))
+    assert any(json.loads(ref["refs_json"]).get("rule_due_id") == due["id"] for ref in refs)
+    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    assert [(m["due_on"], m["task_id"]) for m in marks(api, due["id"])] == [("2030-03-01", task["id"])]

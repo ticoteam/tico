@@ -1,6 +1,7 @@
 """Counsel over the API (docs/rules-plan.md §2, §5): a document becomes a Files version and one Counsel task, a bot's
 suggestion lands as suggested with a cite that must be in the file, a link's cite keeps pointing at the version it was
 read as, and a can-I question is answered with the rules that apply. Acme is the fictional company here."""
+import base64
 import json
 import re
 from pathlib import Path
@@ -18,6 +19,7 @@ from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401  (the api fixture)
 from backend.tests.test_org_rules import as_bot, org
 
+PNG = b"\x89PNG\r\n\x1a\n" + b"\x00" * 64
 CONTRACT = ("Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include an opt-out line in every send. "
             "Keep a record of each consent for five years.\n\n5. Data\n\nDelete raw logs after 30 days.")
 
@@ -71,12 +73,17 @@ def read_document(api, file_id, token="ana-test"):
     return post(api, "rules/read", {"file_id": file_id, "source_id": source(api)}, token=token)
 
 
+def read_run(api):
+    """The headers of Counsel's run on the read a person just added: the only caller that cites it or reads its file."""
+    return headers(counsel_run(api)[1]["token"])
+
+
 def test_a_bots_suggestion_lands_as_suggested_with_its_cite(api):
     org(api)
     counsel_on(api)
     file_id, version = store_file(api, CONTRACT)
     read_document(api, file_id)
-    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+    r = api.post("/api/v2/rules", headers=read_run(api), json={
         "kind": "external", "text": "Keep a consent record for five years.", "who": {"bots": ["ops"]},
         "source_id": source(api), "cite": {"file_id": file_id, "version": version, "section": "4. Messaging",
                                            "quote": "Keep a record of each consent for five years."}})
@@ -97,7 +104,7 @@ def test_a_quote_not_in_the_file_is_dropped_and_counted_not_stored(api):
     read_document(api, file_id)
     body = {"kind": "external", "text": "Pay within ten days.", "who": {"bots": ["ops"]}, "source_id": source(api),
             "cite": {"file_id": file_id, "version": 1, "quote": "Payment is due within ten days."}}
-    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json=body)
+    r = api.post("/api/v2/rules", headers=read_run(api), json=body)
     assert r.status_code == 200, r.text
     assert r.json()["rule"] is None and r.json()["dropped"]["reason"] == "quote_not_in_source"
     assert events(api, "rules.quote_dropped")
@@ -116,7 +123,7 @@ def test_accepting_a_suggestion_writes_an_audit_row(api):
     counsel_on(api)
     file_id, _ = store_file(api, CONTRACT)
     read_document(api, file_id)
-    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+    r = api.post("/api/v2/rules", headers=read_run(api), json={
         "kind": "external", "text": "Delete raw logs after thirty days.", "who": {"bots": ["ops"]},
         "source_id": source(api), "cite": {"file_id": file_id, "version": 1, "quote": "Delete raw logs after 30 days."}}).json()
     accepted = post(api, f"rules/{r['id']}/accept", {"version": r["version"]})
@@ -134,7 +141,7 @@ def test_a_link_is_saved_as_a_file_version_and_a_later_change_does_not_alter_its
     first = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert first["task_id"] and first["file"]["version"] == 1
     file_id = first["file"]["id"]
-    cited = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+    cited = api.post("/api/v2/rules", headers=read_run(api), json={
         "kind": "external", "text": "Delete raw logs after 30 days.", "who": {"bots": ["ops"]},
         "source_id": first["source"]["id"], "cite": {"file_id": file_id, "version": 1,
                                                       "quote": "Delete raw logs after 30 days."}}).json()
@@ -186,7 +193,7 @@ def test_a_reader_without_the_file_sees_the_sentence_but_not_the_quote(api, monk
     counsel_on(api)
     file_id, _ = store_file(api, CONTRACT)
     read_document(api, file_id)
-    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+    r = api.post("/api/v2/rules", headers=read_run(api), json={
         "kind": "external", "text": "Delete raw logs after 30 days.", "who": {"bots": ["ops"]},
         "source_id": source(api), "cite": {"file_id": file_id, "version": 1, "quote": "Delete raw logs after 30 days."}}).json()
     post(api, f"rules/{r['id']}/accept", {"version": r["version"]})
@@ -225,8 +232,8 @@ def test_a_long_document_is_named_not_pasted_and_counsel_reads_the_whole_version
     assert "Filler clause" not in body and "Keep a record of each consent" not in body
     assert f"hub file read {file_id} --version {version}" in body
     assert "UNTRUSTED DOCUMENT" in body
-    # Counsel reads the version it was asked about, in full.
-    got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=headers("counsel-test"))
+    # Counsel's run reads the version it was asked about, in full.
+    got = api.get(f"/api/v2/files/{file_id}/versions/{version}", headers=read_run(api))
     assert got.status_code == 200, got.text
     assert len(got.content) == 300_000
 
@@ -242,15 +249,236 @@ def test_a_short_document_is_fenced_inside_the_task(api):
     assert "hub file read" not in body
 
 
-def test_counsel_reads_only_a_file_someone_asked_it_to_read(api):
+def test_only_the_run_asked_reads_a_file_and_no_other_counsel_run_does(api):
     org(api)
     counsel_on(api)
-    asked, _ = store_file(api, CONTRACT)
-    unasked, unasked_version = store_file(api, "Nothing to see here.", title="Other terms")
-    read_document(api, asked)
-    assert api.get(f"/api/v2/files/{asked}/versions/1", headers=headers("counsel-test")).status_code == 200
-    assert api.get(f"/api/v2/files/{unasked}/versions/{unasked_version}",
-                   headers=headers("counsel-test")).status_code != 200
+    first, _ = store_file(api, CONTRACT)
+    second, _ = store_file(api, "Globex terms: the price list is secret.", title="Globex Terms")
+    read_document(api, first)
+    read_document(api, second, token="ben-test")
+    r, attempt = counsel_run(api)
+    readable = []
+    for n in range(2):
+        attempt = attempt if n == 0 else next_counsel_run(api, r)
+        run = headers(attempt["token"])
+        codes = {fid: api.get(f"/api/v2/files/{fid}/versions/1", headers=run).status_code for fid in (first, second)}
+        # Its own read's file, and not the file only the other read was granted.
+        assert sorted(codes.values()) == [200, 403], codes
+        readable.append(next(fid for fid, code in codes.items() if code == 200))
+        finish(api, r, attempt)
+    assert sorted(readable) == sorted([first, second])
+    # A question's run, and Counsel outside a run, read neither.
+    post(api, "rules/ask", {"question": "Can I share the Globex price list?"}, token="cara-test")
+    attempt = next_counsel_run(api, r)
+    for fid in (first, second):
+        assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers(attempt["token"])).status_code == 403
+        assert api.get(f"/api/v2/files/{fid}/versions/1", headers=headers("counsel-test")).status_code == 404
+
+
+def test_the_run_asked_reads_a_long_file_on_a_private_task(api):
+    org(api)
+    counsel_on(api)
+    text = CONTRACT + "\n\n" + "Filler clause, nothing to suggest. " * 1000
+    assert len(text) > counsel.TEXT_INLINE_MAX
+    data = text.encode("utf-8")
+    with api.app.state.store.transaction() as c:
+        task = H.task_create(c, "human:ana", "Acme contract", "The signed copy.", "bot:ops", private=True)
+        digest = api.app.state.blobs.put(data, "text/plain")
+        item = register(c, Identity("human:ana", "human"), digest, len(data), "contract.txt", "text/plain")
+        row, _, _ = api.app.state.files.add_version(
+            c, bot="ops", actor="human:ana", scope="task:" + task["id"], task=task["id"], conversation=None, attempt="",
+            identity="upload:contract", title="Acme contract", name="contract.txt", mime="text/plain",
+            blob_id=item["id"], digest=digest, size=len(data))
+    read = read_document(api, row["id"])
+    with api.app.state.store.read() as c:
+        assert "hub file read" in c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    got = api.get(f"/api/v2/files/{row['id']}/versions/1", headers=read_run(api))
+    assert got.status_code == 200 and len(got.content) == len(data)
+    assert api.get(f"/api/v2/files/{row['id']}/versions/1", headers=headers("counsel-test")).status_code == 404
+
+
+def test_counsel_reads_no_sql_in_a_run_or_out_of_one(api):
+    org(api)
+    counsel_on(api)
+    read_document(api, store_file(api, CONTRACT)[0])
+    run = read_run(api)
+    for token in (run, headers("counsel-test")):
+        refused = api.post("/api/v2/sql", headers=token, json={"sql": "SELECT body FROM tasks"})
+        assert refused.status_code == 403 and "SQL" in refused.text, refused.text
+    assert api.post("/api/v2/sql", headers=headers("ana-test"), json={"sql": "SELECT 1"}).status_code == 200
+
+
+def test_a_counsel_run_reads_no_other_runs_summary_or_any_run_history(api):
+    org(api)
+    counsel_on(api)
+    read_document(api, store_file(api, CONTRACT)[0])
+    r, attempt = counsel_run(api)
+    finish(api, r, attempt, text="Clause 9: the Acme price list is secret. Wrote 0 suggestions.")
+    post(api, "rules/ask", {"question": "Can I share the price list?"}, token="cara-test")
+    later = headers(next_counsel_run(api, r)["token"])
+    for path in ("bots/tico-counsel/turns", "bots/tico-counsel/history", "bots/tico-counsel/memory", "runs",
+                 f"turns/{attempt['id']}/steps"):
+        for token in (later, headers("counsel-test")):
+            got = api.get("/api/" + ("" if path == "runs" else "v2/") + path, headers=token)
+            assert got.status_code in (403, 404) and "price list" not in got.text, (path, got.text)
+    # The owner still reads the run list.
+    assert "price list" in api.get("/api/v2/bots/tico-counsel/turns", headers=headers("ana-test")).text
+
+
+def test_counsel_reaches_no_route_outside_its_own_and_others_keep_theirs(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    read = read_document(api, file_id)
+    new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
+    run = read_run(api)
+    asked = [("GET", f"answers?ids={read['task_id']}"), ("GET", f"pages/{file_id}"), ("GET", "replay"),
+             ("GET", f"file-approvals?file={file_id}&version=2"), ("GET", "bots/tico-counsel/turns"),
+             ("GET", f"files/{file_id}/versions"), ("GET", f"files/{file_id}/meta?v=2"),
+             ("GET", f"tasks/{read['task_id']}/answers"), ("GET", "rules/stats"),
+             ("POST", "task-questions"), ("POST", "pages")]
+    for method, path in asked:
+        for token in (run, headers("counsel-test")):
+            got = api.request(method, "/api/v2/" + path, headers=token, json={} if method == "POST" else None)
+            assert got.status_code == 403 and "merger" not in got.text, (method, path, got.text)
+    # A person still reads the run list and the file's versions.
+    for path in ("bots/tico-counsel/turns", f"files/{file_id}/versions"):
+        assert api.get("/api/v2/" + path, headers=headers("ana-test")).status_code == 200, path
+
+
+def test_a_document_read_and_an_ask_make_only_calls_counsel_is_allowed(api, monkeypatch):
+    from backend.tests.test_automation_cli import Client
+    from backend.tests.test_org_rules_surfaces import mcp
+    from clients import hubtools
+
+    class Turn(Client):
+        """The run's own hub client, as clients/hubmcp.py gives the harness its tools (the turn's token)."""
+        def request(self, method, path, binary=False):
+            got = self.api.request(method, path, headers=headers(self.token))
+            assert got.status_code == 200, got.text
+            return got.content
+
+    def tools(token, *calls):
+        protocol = hubtools.Protocol(Turn(api, token), local=True)
+        for name, args in calls:
+            reply = protocol.handle({"jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                                     "params": {"name": name, "arguments": args}})
+            assert not reply["result"]["isError"], (name, reply)
+        return reply["result"]["structuredContent"]
+
+    org(api)
+    counsel_on(api)
+    file_id, version = store_file(api, CONTRACT)
+    read = read_document(api, file_id)
+    seen, real = [], counsel.read_refused
+
+    def watch(store, auth, who, method, path, query):
+        reason = real(store, auth, who, method, path, query)
+        if counsel.is_counsel(who):
+            seen.append((method, path, reason))
+        return reason
+    monkeypatch.setattr(counsel, "read_refused", watch)
+    r, attempt = counsel_run(api)
+    token = attempt["token"]
+    # What the computer running it asks with the run's token: its task, its credentials.
+    assert api.get(f"/api/v2/tasks/{read['task_id']}", headers=headers(token)).status_code == 200
+    api.get("/api/v2/credential-runtime", headers=headers(token))
+    cite = {"file_id": file_id, "version": version, "section": "4. Messaging",
+            "quote": "Keep a record of each consent for five years."}
+    rule_id = tools(token, ("hub_rules_list", {}), ("hub_rules_list", {"mine": True}),
+                    ("hub_file_read", {"id": file_id, "version": version}),
+                    ("hub_rules_add", {"kind": "external", "text": "Keep a consent record for five years.",
+                                       "source_id": "Acme Vendor", "cite": cite}))["id"]
+    tools(token, ("hub_rules_get", {"id": rule_id}),
+          ("hub_task_comment", {"id": read["task_id"], "text": "Wrote 1 suggestion."}))
+    # The same tools over the hub's own MCP: the version it was asked to read comes back whole, a newer one is refused.
+    assert not mcp(api, "hub_rules_list", {}, token=token)[0]
+    failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": version}, token=token)
+    assert not failed and got["text"] == CONTRACT, got
+    newer = new_version(api, file_id, CONTRACT + "\nClause 12: the Globex merger is secret.")
+    failed, got = mcp(api, "hub_file_read", {"id": file_id, "version": newer}, token=token)
+    assert failed and "Globex" not in json.dumps(got), got
+    assert ("GET", f"/api/v2/files/{file_id}/versions/{newer}", counsel.READ_SCOPE) in seen
+    seen[:] = [s for s in seen if s[2] is None]
+    finish(api, r, attempt)
+    # A question's run: the rules in force, one rule and a note on its task. Closing it reaches the route, which says
+    # only the person who asked closes it.
+    ask = post(api, "rules/ask", {"question": "Can I keep consent records?"}, token="cara-test")
+    token = next_counsel_run(api, r)["token"]
+    tools(token, ("hub_rules_list", {}), ("hub_rules_list", {"bot": "ops"}), ("hub_rules_get", {"id": rule_id}),
+          ("hub_task_comment", {"id": ask["task_id"], "text": "No rule covers it."}))
+    with pytest.raises(Exception, match="only they or their managers close it"):
+        hubtools.task_close(Turn(api, token), {"id": ask["task_id"], "note": "Answered."})
+    assert seen and all(reason is None for _, _, reason in seen), [s for s in seen if s[2]]
+    paths = {re.sub(r"/(tasks|files|rules)/[^/]+", r"/\1/{id}", path) for _, path, _ in seen}
+    assert {"/api/v2/mcp", "/api/v2/me", "/api/v2/rules", "/api/v2/rules/{id}", "/api/v2/tasks/{id}",
+            "/api/v2/tasks/{id}/comments", "/api/v2/files/{id}/versions/1"} <= paths, paths
+    assert ("POST", "/api/v2/tasks/" + ask["task_id"], None) in seen
+
+
+def test_counsel_attaches_no_file_and_is_given_no_visual_address(api, monkeypatch):
+    from backend import visuals
+    org(api)
+    counsel_on(api)
+    monkeypatch.setattr(api.app.state.store.settings, "visual_origin", "http://visuals.localhost:9001")
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+    read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    task_id, link = read["task_id"], read["file"]["id"]
+    # The person who asked puts another file on the read task and shows it in a comment: they get its address.
+    made = api.post(f"/api/v2/tasks/{task_id}/files", headers=headers("ana-test"),
+                    json={"name": "globex.png", "content_base64": base64.b64encode(PNG).decode()})
+    assert made.status_code == 200, made.text
+    other = made.json()["file_id"]
+    shown = api.post(f"/api/v2/tasks/{task_id}/comments", headers=headers("ana-test"),
+                     json={"text": "Also this", "attachments": [f"{other}@1"]})
+    assert shown.status_code == 200, shown.text
+    assert shown.json()["comment"]["refs"]["attachments"][0]["src"]
+    r, attempt = counsel_run(api)
+    run = headers(attempt["token"])
+    # The page changes while the run works: the link's second version stays on the same task.
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched("Clause 12: the Globex merger is secret."))
+    assert post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": read["source"]["id"]}
+                )["file"]["version"] == 2
+    # Its comments carry no file: neither the other file, nor the version it was not asked to read, nor its own.
+    for ref in (f"{other}@1", f"{link}@2", f"{link}@1"):
+        refused = api.post(f"/api/v2/tasks/{task_id}/comments", headers=run, json={"text": "See", "attachments": [ref]})
+        assert refused.status_code == 403, (ref, refused.text)
+        assert "Globex" not in refused.text and "/visuals/" not in refused.text
+    # Its task shows the person's comment as a plain file ref, with no address, name or preview.
+    page = api.get(f"/api/v2/tasks/{task_id}", headers=run)
+    assert page.status_code == 200, page.text
+    [item] = next(m for m in page.json()["comments"] if m["id"] == shown.json()["comment"]["id"])["refs"]["attachments"]
+    assert set(item) <= {"id", "file_id", "version", "ref", "kind"} and item["file_id"] == other
+    assert "/visuals/" not in page.text
+    # And a visual token naming Counsel, however it came about, opens nothing.
+    token = visuals.mint(visuals.key_for(api.app, api.app.state.store.settings), "bot:tico-counsel", other, 1)
+    assert api.get("/visuals/" + token, headers={"host": "visuals.localhost:9001"}).status_code == 404
+    with api.app.state.store.read() as c:
+        assert visuals.token_reader(c, api.app.state.auth, "bot:tico-counsel") is None
+        assert visuals.token_reader(c, api.app.state.auth, "bot:ops") is not None
+
+
+def test_counsel_lists_a_cite_as_the_person_who_asked_would_see_it(api):
+    org(api)
+    counsel_on(api)
+    file_id, version = store_file(api, CONTRACT)
+    restrict_bot(api, "ops")
+    read_document(api, file_id)
+    r, attempt = counsel_run(api)
+    made = run_suggests(api, attempt, file_id, version)
+    assert made.status_code == 200, made.text
+    post(api, f"rules/{made.json()['id']}/accept", {"version": made.json()["version"], "who": {"bots": ["ops"]}})
+    finish(api, r, attempt)
+    shown = {}
+    for token in ("cara-test", "ana-test"):          # Cara cannot read the file; Ana can
+        post(api, "rules/ask", {"question": "Can I keep consent records for seven years?"}, token=token)
+        attempt = next_counsel_run(api, r)
+        listed = api.get("/api/v2/rules", headers=headers(attempt["token"]))
+        assert listed.status_code == 200, listed.text
+        shown[token] = [item.get("cite") for item in listed.json()["rules"]]
+        finish(api, r, attempt, text="Rule cited.")
+    assert shown["cara-test"] == [{"hidden": True}] and CONSENT not in json.dumps(shown["cara-test"])
+    assert shown["ana-test"][0]["quote"] == CONSENT
 
 
 def test_counsel_cannot_cite_a_file_nobody_asked_it_to_read(api):
@@ -398,12 +626,15 @@ def test_counsel_cites_only_the_version_it_was_asked_to_read(api):
     read_document(api, file_id)
     newer = new_version(api, file_id, CONTRACT + "\nAmendment: nothing new for us.")
     assert newer == first + 1
+    token = counsel_run(api)[1]["token"]
     # The unreviewed version is not citable, even though it holds the quote.
-    assert suggest(api, file_id, CONSENT, version=newer).status_code == 404
+    assert suggest(api, file_id, CONSENT, version=newer, token=token).status_code == 403
     # The asked version is, and a cite that names no version is refused before any quote is checked.
-    ok = suggest(api, file_id, CONSENT, version=first)
+    ok = suggest(api, file_id, CONSENT, version=first, token=token)
     assert ok.status_code == 200 and ok.json()["cite"]["version"] == first
-    assert suggest(api, file_id, CONSENT).status_code == 404
+    assert suggest(api, file_id, CONSENT, token=token).status_code == 403
+    # Counsel outside that run cites nothing.
+    assert suggest(api, file_id, CONSENT, version=first).status_code == 404
 
 
 def test_counsel_must_name_the_version_when_more_than_one_was_read(api, monkeypatch):
@@ -414,8 +645,15 @@ def test_counsel_must_name_the_version_when_more_than_one_was_read(api, monkeypa
     monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT + "\nRevised."))
     second = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert second["file"]["version"] == 2
-    assert suggest(api, second["file"]["id"], CONSENT).status_code == 404
-    assert suggest(api, second["file"]["id"], CONSENT, version=2).status_code == 200
+    # Each read's run cites its own version, and names it.
+    r, attempt = counsel_run(api)
+    assert suggest(api, second["file"]["id"], CONSENT, token=attempt["token"]).status_code == 403
+    assert suggest(api, second["file"]["id"], CONSENT, version=2, token=attempt["token"]).status_code == 403
+    assert suggest(api, second["file"]["id"], CONSENT, version=1, token=attempt["token"]).status_code == 200
+    finish(api, r, attempt)
+    attempt = next_counsel_run(api, r)
+    assert suggest(api, second["file"]["id"], CONSENT, version=1, token=attempt["token"]).status_code == 403
+    assert suggest(api, second["file"]["id"], CONSENT, version=2, token=attempt["token"]).status_code == 200
 
 
 def test_a_person_may_still_cite_a_newer_version_they_can_read(api):
@@ -470,7 +708,7 @@ def test_a_suggestion_with_no_who_is_accepted_only_once_a_who_is_set(api):
     counsel_on(api)
     file_id, _ = store_file(api, CONTRACT)
     read_document(api, file_id)
-    r = suggest(api, file_id, CONSENT, version=1)
+    r = suggest(api, file_id, CONSENT, version=1, token=counsel_run(api)[1]["token"])
     assert r.status_code == 200, r.text
     rule = r.json()
     assert rule["status"] == "suggested"
@@ -495,7 +733,7 @@ def test_a_long_document_is_read_in_full_and_its_obligation_cited(api, monkeypat
     monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(text))
     first = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
     assert first["truncated"] is False
-    assert suggest(api, first["file"]["id"], CONSENT, version=1).status_code == 200
+    assert suggest(api, first["file"]["id"], CONSENT, version=1, token=counsel_run(api)[1]["token"]).status_code == 200
 
 
 def test_a_document_over_the_bound_is_marked_truncated_in_every_place(api, monkeypatch):
@@ -530,7 +768,7 @@ def test_the_cli_cites_the_version_it_names_after_a_newer_version_lands(api):
         "--from", source(api), "--file", file_id, "--version", str(first), "--section", "4. Messaging",
         "--quote", CONSENT]))
     assert args.cite == {"file_id": file_id, "section": "4. Messaging", "quote": CONSENT, "version": first}
-    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+    r = api.post("/api/v2/rules", headers=read_run(api), json={
         "kind": args.kind, "text": args.text, "who": args.who, "source_id": args.source_id, "cite": args.cite})
     assert r.status_code == 200, r.text
     assert r.json()["cite"]["version"] == first
