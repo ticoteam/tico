@@ -639,6 +639,22 @@ impl Drove {
 
 /// Err when the turn was stopped before it acknowledged its start (a person's Stop, or its task done or closed while it
 /// waited for its login): it ends unstarted, so its job ends with nothing run, not as an uncertain turn the drive stops.
+/// Mask `secrets` in all the turn leaves from now on (a sign-in file found in place or refreshed mid-turn).
+fn mask(aid: &str, redactor: &mut Option<Arc<Redactor>>, vault: &mut Vault, secrets: Vec<String>) {
+    if secrets.is_empty() {
+        return;
+    }
+    match redactor {
+        Some(r) => r.add(&secrets),
+        None => {
+            let r = Arc::new(Redactor::new(&secrets));
+            redact::register(aid, r.clone());
+            *redactor = Some(r);
+        }
+    }
+    vault.values.extend(secrets);
+}
+
 fn unstopped(flags: &Flags) -> Result<(), Fail> {
     if flags.stopped.load(Ordering::SeqCst) {
         return Err(Fail::runtime("Execution interrupted after stop before the turn started"));
@@ -1324,6 +1340,15 @@ impl Runner {
             }
             // A private meeting's turn asks for its GitHub tokens as itself: the hub answers read-only (github_app.py).
             let own = if p.private { crate::client::Client::new(&self.config.url(), &token, 10, 0).ok() } else { None };
+            // This computer's company subscription for the runtime signs it in instead (backend/model_subscriptions.py),
+            // when it will run: a busy or held login's turn goes to its fallback, which is signed in when it starts.
+            if busy.is_none() && held.is_none() {
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &runtime, &mut env);
+                vault.values.extend(placed);
+            }
+            if let (Some(d), Some(s)) = (crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime), segments.last_mut()) {
+                s.billing = d.billing;
+            }
             let socket_path = self.socket.as_ref().map(|s| {
                 match &own {
                     Some(client) => s.register_as(&token, &bot, client.clone()),
@@ -1340,6 +1365,9 @@ impl Runner {
             crate::gitcred::apply(&mut env, client, tokens, &bot, socket_path.as_deref(), &self.state.directory).await;
             let hop_runtime = crate::fallback::configured(&config).map(|h| h.runtime);
             for keyed in std::iter::once(runtime.as_str()).chain(hop_runtime.as_deref()) {
+                if crate::model_subscriptions::for_runtime(&vault.subscriptions, keyed).is_some() {
+                    continue;   // signed in with the company subscription, never the computer's key
+                }
                 if let Some((name, key)) = self.turn_key(keyed, selected.as_ref()) {
                     if env.get(&name).is_none_or(|v| v.is_empty()) {
                         env.insert(name, key);
@@ -1377,6 +1405,9 @@ impl Runner {
             if let Some(p) = &selected {
                 // A thread begun on one login is never resumed on another.
                 conv = format!("{conv}:profile:{}:{}", p.name, p.binding());
+            }
+            if let Some(b) = crate::model_subscriptions::for_runtime(&vault.subscriptions, &runtime).and_then(|d| d.binding()) {
+                conv.push_str(&b);      // nor across the computer's login and its subscriptions
             }
             let start_attempt = attempt.clone();
             if p.has_checkout() {
@@ -1786,7 +1817,7 @@ impl Runner {
             // Out of quota with no fallback of its own: another provider signed in on this computer runs the turn
             // once (Settings > Computers can turn this off for the company).
             let choices = self.default_fallbacks().await;
-            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| self.fallback_ready(rt, selected.as_ref()));
+            pending = crate::fallback::default_choice(&fallback_config, &choices, &turn_env, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
         }
         // A Tico fallback needs the turn's relay; without one it is left out and the primary's outcome stands.
         pending = crate::gateway_relay::admit(pending, vault.relay.is_some());
@@ -1830,13 +1861,18 @@ impl Runner {
                         profile: requested, runtime: hop.runtime.clone(),
                     }));
                 }
+                // Signed in with its own subscription only: the primary's leaves the copied environment, and its home
+                // is let go now that its host has stopped.
+                let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
+                let placed = crate::model_subscriptions::start(&mut vault.subscriptions, &hop.runtime, &mut hop_env);
+                mask(&aid, &mut redactor, &mut vault, placed);
                 segments.push(Segment {
                     meter: Meter::default(),
                     config: hop_config.clone(),
                     profile: selected.as_ref().map(|p| p.name.clone()),
-                    billing: self.billing(&hop.runtime, selected.as_ref()),
+                    billing: crate::model_subscriptions::for_runtime(&vault.subscriptions, &hop.runtime)
+                        .map_or_else(|| self.billing(&hop.runtime, selected.as_ref()), |d| d.billing),
                 });
-                let mut hop_env = selected.as_ref().map_or_else(|| base.clone(), |p| p.environment(&hop.runtime, &base));
                 let own = crate::harness_tools::caps(&hop.runtime, &hop.harness).isolated_user;
                 if own && vault.turn_user.is_none() && crate::turn_users::available() {
                     // Leased only now, so a primary that runs as `bot` costs no lease and cleanup sweep. The turn has
@@ -2027,7 +2063,7 @@ impl Runner {
             if drove.limited && hop.default && !native_control && spent < 2 && source_saved.is_none() {
                 left = Some((hop.harness.clone(), true));
                 let choices = self.default_fallbacks().await;
-                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| self.fallback_ready(rt, selected.as_ref()));
+                let next = crate::fallback::next_choice(&fallback_config, &choices, &turn_env, &tried, |rt| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_some() || self.fallback_ready(rt, selected.as_ref()));
                 pending = crate::gateway_relay::admit(next, vault.relay.is_some());
             }
         }
@@ -2064,8 +2100,10 @@ impl Runner {
             subscription_unavailable = None;
         }
         let ran_on = fallback.clone().unwrap_or_else(|| runtime.clone());
-        if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed") {
-            // Retrying cannot help: this runtime takes no work here until a credential changes.
+        if let Some((rt, reason)) = auth_rejected.as_ref().filter(|_| drove.outcome == "failed")
+            .filter(|(rt, _)| crate::model_subscriptions::for_runtime(&vault.subscriptions, rt).is_none()) {
+            // Retrying cannot help: this runtime takes no work here until a credential changes. A refused subscription
+            // is the server's to mark (it needs reconnecting); the computer's own login is not touched.
             self.sign_in.reject(rt, reason, selected.as_ref());
             log(&format!("Tico runner: {bot}: {rt} sign-in was rejected; this computer takes no {rt} work on this profile until the key or sign-in changes"));
         }
@@ -2138,6 +2176,10 @@ impl Runner {
         if let Some(relay) = &mut vault.relay { relay.stop().await; }
         if let Some(user) = &mut vault.turn_user { user.permit_reuse(); }
         vault.remove_files();
+        // The subscription homes' sign-in files go now; a login Codex refreshed is masked in all that follows (the
+        // reply, the changes, the result) before it is sent back.
+        let refreshed = crate::model_subscriptions::finish(&mut vault.subscriptions);
+        mask(&aid, &mut redactor, &mut vault, refreshed);
         let user = vault.turn_user.take();
         let _ = tokio::task::spawn_blocking(move || drop(user)).await;
         if self.drain.returning(&aid) {
@@ -2226,6 +2268,8 @@ impl Runner {
             }
         }
         crate::continuity::session_field(&mut completion, session.as_ref().filter(|_| host.is_some()), serves_session);
+        // A ChatGPT login Codex refreshed in a subscription's home goes back, so the next computer starts from it.
+        crate::model_subscriptions::send_back(&self.client, &aid, &vault.subscriptions).await;
         let profile_used = selected.as_ref().filter(|_| host.is_some()).map(|p| p.name.clone());
         if let Some(name) = &profile_used {
             completion.insert("profile_used".into(), json!(name));

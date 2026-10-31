@@ -98,7 +98,7 @@ function hlComputerHtml(machine) {
   }).join('');
   return `<li class="hl-computer" data-online="${machine.online}"><span class="hl-dot ${machine.online ? 'on' : 'off'}" aria-hidden="true"></span>
     <div><strong>${esc(machine.label)}</strong> <span class="muted">${machine.online ? 'online' : 'offline'}${machine.last_seen ? ', last seen ' + esc(ago(machine.last_seen)) : ', never seen'}</span>
-    ${window.runnerUpdateHtml?.(machine.update, machine.version) || ''}
+    ${window.runnerUpdateHtml?.(machine.update, machine.release || machine.update?.release || machine.version) || ''}
     <ul class="hl-models">${models || '<li class="muted">No models reported</li>'}</ul></div></li>`;
 }
 

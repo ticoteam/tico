@@ -15,9 +15,11 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
   Prices: shared $10 a month per recipient, private from $25 a month; scans $1 a letter for up to 10 pages, then
   $0.25 a page. Tico doesn't deposit checks: ask Tico support to forward one, or deposit it yourself.
 - **Your own provider, by email.** An owner or admin names one company email inbox (Email & Phone) as the mail-intake
-  address: `PUT /api/v2/postal/intake` with `{"inbox_id": "..."}`, or `null` to stop. Have your mail provider send
-  its scans there. Each PDF or image attached to a message in that inbox becomes a letter; other attachments and other
-  inboxes are left alone.
+  address and who sends it scans: `PUT /api/v2/postal/intake` with `{"inbox_id": "...", "senders":
+  ["scans@provider.com", "@provider.com"]}` (at least one address or `@domain`), or `{"inbox_id": null}` to stop.
+  Have your mail provider send its scans there. Each PDF or image attached to a message from a listed sender becomes a
+  letter; other senders, other attachments and other inboxes are left alone. The sender is what the message claims,
+  so the list keeps out strangers and floods; a scan is still read as outside text.
 
 ## What happens to a letter
 
@@ -26,14 +28,17 @@ sent to whoever handles that kind. Legal papers reach the owner at once.
 2. It is read through Tico Gateway (Low tier, which reads PDFs and images): sender, a one-line summary, the response
    deadline, if any.
 3. One Decide call ([question set](../questions/README.md) `physical-mail`) says its kind.
+
+At most 100 letters are read in any 24 hours; past that a letter waits an hour and tries again, without using up one
+of its tries.
 4. It goes where its kind goes:
 
 | Kind | Goes to |
 |---|---|
 | Legal (summons, lawsuit, subpoena, court papers) | The owner's Needs you, private, due on the deadline |
-| Government or tax | The Finance bot, or the owner when there is none |
-| Bill | The Finance bot, or the owner |
-| Financial (statements, bank notices) | The Finance bot, or the owner |
+| Government or tax | The Finance bot, or the owner when there is none; private |
+| Bill | The Finance bot, or the owner; private |
+| Financial (statements, bank notices) | The Finance bot, or the owner; private |
 | Check (flagged by the mailbox provider, or seen by the reader) | The owner, private. Tico doesn't deposit checks |
 | Junk | Archived: no task; the scan is still kept |
 | Other, or not sure | The Assistant, or the owner |
@@ -49,8 +54,8 @@ never as instructions, and each task says so.
 
 ## Who sees a letter
 
-A filed letter shows to whoever may read its task, so legal mail, checks and unread scans (private tasks) show only to
-the owner, not to admins. A letter with no task (just in, failed, or archived as junk) shows in full only to the
+A filed letter shows to whoever may read its task. Every kind but Other is a private task (account numbers and amounts
+are not the whole company's to read), so it shows only to the owner and the bot it went to, not to admins. A letter with no task (just in, failed, or archived as junk) shows in full only to the
 owner; admins see that it came and its status, so they can retry it, but not its sender, summary or scan. The scan
 download (`/api/v2/files/{id}`) follows the same rule, and so do the hub tools.
 

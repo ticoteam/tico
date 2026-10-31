@@ -741,6 +741,30 @@ export type CompanyUpdate = {
   vision?: string | null;
 };
 
+export type ComputerSubscription = {
+  confirm?: boolean;
+  runner_id: string;
+  runtime: string;
+  subscription?: string | null;
+};
+
+export type ComputerSubscriptionList = {
+  assignments: Array<{
+  runner_id: string;
+  runtime: "claude" | "codex";
+  subscription_id: string;
+}>;
+  capable: Array<string>;
+};
+
+export type ComputerSubscriptionResult = {
+  runner_id: string;
+  runtime: "claude" | "codex";
+  sessions_reset: number;
+  stopped: number;
+  subscription_id: string | null;
+};
+
 export type Config = {
   app_name: string;
   assistant_bot: string;
@@ -2004,6 +2028,49 @@ export type MessageResult = {
   message: Message;
 };
 
+export type ModelSubscription = {
+  added_by: string;
+  added_by_name: string;
+  computers: Array<string>;
+  created: string;
+  id: string;
+  kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
+  label: string;
+  name: string;
+  preview: string;
+  revision: number;
+  runtime: "claude" | "codex";
+  status: "new" | "working" | "needs_reconnect";
+  status_at: string | null;
+  status_detail: string;
+  updated: string;
+  usage: {
+  cost_usd_month: number | null;
+  resets_at?: string | null;
+  used_pct: number | null;
+  window: "5h" | "week" | null;
+} | null;
+};
+
+export type ModelSubscriptionDeleted = {
+  computers: number;
+  deleted: boolean;
+  id: string;
+  sessions_reset: number;
+  stopped: number;
+};
+
+export type ModelSubscriptionList = {
+  kinds: Array<{
+  help: string;
+  kind: "claude_token" | "codex_login" | "anthropic_key" | "openai_key";
+  label: string;
+  runtime: "claude" | "codex";
+  secret_label: string;
+}>;
+  subscriptions: Array<ModelSubscription>;
+};
+
 export type Moderate = {
   action: string;
 };
@@ -2993,6 +3060,13 @@ export type SubscriptionWeeklyResult = {
   source: "manual";
   used_percent: number | null;
 } | null;
+};
+
+export type SubscriptionWrite = {
+  confirm?: boolean;
+  kind?: string | null;
+  name?: string | null;
+  secret?: string | null;
 };
 
 export type Suggestion = {
@@ -4048,6 +4122,13 @@ export type AddLinkedDocParams = {
 export type AddLinkedDocBody = LinkCreate;
 export type AddLinkedDocResponse = LinkedDocResult;
 
+/** POST /api/v2/model-subscriptions */
+export type AddModelSubscriptionParams = {
+  "Idempotency-Key": string;
+};
+export type AddModelSubscriptionBody = SubscriptionWrite;
+export type AddModelSubscriptionResponse = ModelSubscription;
+
 /** POST /api/v2/pins */
 export type AddPinParams = {
   "Idempotency-Key": string;
@@ -4212,6 +4293,14 @@ export type CancelInboundPhoneRequestParams = {
 };
 export type CancelInboundPhoneRequestBody = never;
 export type CancelInboundPhoneRequestResponse = unknown;
+
+/** POST /api/v2/model-subscriptions/{sid} */
+export type ChangeModelSubscriptionParams = {
+  "Idempotency-Key": string;
+  sid: string;
+};
+export type ChangeModelSubscriptionBody = SubscriptionWrite;
+export type ChangeModelSubscriptionResponse = ModelSubscription;
 
 /** POST /api/v2/chat/{bot} */
 export type ChatWithBotParams = {
@@ -5440,6 +5529,11 @@ export type ListChangelogParams = {
 export type ListChangelogBody = never;
 export type ListChangelogResponse = ChangelogList;
 
+/** GET /api/v2/computer-subscriptions */
+export type ListComputerSubscriptionsParams = Record<string, never>;
+export type ListComputerSubscriptionsBody = never;
+export type ListComputerSubscriptionsResponse = ComputerSubscriptionList;
+
 /** GET /api/v2/conversations */
 export type ListConversationsParams = {
   bot?: string | null;
@@ -5634,6 +5728,11 @@ export type ListMessagesParams = {
 };
 export type ListMessagesBody = never;
 export type ListMessagesResponse = MessagePage;
+
+/** GET /api/v2/model-subscriptions */
+export type ListModelSubscriptionsParams = Record<string, never>;
+export type ListModelSubscriptionsBody = never;
+export type ListModelSubscriptionsResponse = ModelSubscriptionList;
 
 /** GET /api/v2/models */
 export type ListModelsParams = Record<string, never>;
@@ -6236,6 +6335,15 @@ export type RemoveCardParams = {
 export type RemoveCardBody = never;
 export type RemoveCardResponse = unknown;
 
+/** DELETE /api/v2/model-subscriptions/{sid} */
+export type RemoveModelSubscriptionParams = {
+  "Idempotency-Key": string;
+  confirm?: boolean;
+  sid: string;
+};
+export type RemoveModelSubscriptionBody = never;
+export type RemoveModelSubscriptionResponse = ModelSubscriptionDeleted;
+
 /** DELETE /api/v2/humans/{pid} */
 export type RemovePersonParams = {
   "Idempotency-Key": string;
@@ -6679,6 +6787,11 @@ export type SetChatGoalParams = {
 };
 export type SetChatGoalBody = GoalAction;
 export type SetChatGoalResponse = ChatGoalResult;
+
+/** PUT /api/v2/computer-subscriptions */
+export type SetComputerSubscriptionParams = Record<string, never>;
+export type SetComputerSubscriptionBody = ComputerSubscription;
+export type SetComputerSubscriptionResponse = ComputerSubscriptionResult;
 
 /** POST /api/v2/computers/{rid}/turns-at-once */
 export type SetComputerTurnsAtOnceParams = {

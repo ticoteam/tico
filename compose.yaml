@@ -281,8 +281,9 @@ services:
   # whose Public Hostname is set in the Cloudflare dashboard keeps that route: cloudflared prefers what Cloudflare holds.
   # cloudflared reads the file only when it starts. It is ingress.yml: a cloudflared from an older compose file reads
   # cloudflared.yml, which only an older server writes (straight to server:8765), so the changed command is what moves
-  # an install over. The update that brings it recreates cloudflared once, after the hold is up (Compose starts what a
-  # service depends on first); an update that rolls back never got that far and leaves the old route.
+  # an install over. The update that brings it recreates cloudflared once, after the hold answers (the updater starts
+  # with --no-deps, so it starts the hold and checks it first); a hold that does not come up rolls the update back,
+  # and cloudflared keeps the old route.
   cloudflared:
     <<: *hardening
     profiles: [cloudflared]

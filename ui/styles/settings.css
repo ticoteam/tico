@@ -97,14 +97,6 @@ button.people-danger{background:var(--fail);color:var(--surface)}
   .people-switch-label{display:inline}
   .ds-row select{flex:1;min-width:0}
 }
-@media (max-width:760px){
-  /* computers become stacked cards: nothing is cut off behind a sideways scroll */
-  .settings-table.settings-machines,.settings-machines tbody,.settings-machines tr,.settings-machines td{display:block;width:100%;min-width:0}
-  .settings-machines thead{display:none}
-  .settings-machines tr{padding:10px 0;border-bottom:1px solid var(--line)}
-  .settings-machines td{border:0;padding:2px 0}
-  .settings-machines td[data-label]::before{content:attr(data-label);display:block;margin-top:6px;font-size:var(--t-label);font-weight:600;letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted)}
-}
 p:empty{display:none}
 .person-bot-logos{display:flex;align-items:center;min-height:25px;gap:3px}
 .person-bot-logos a{display:inline-flex;border-radius:50%;padding:2px;margin-left:-4px;border:2px solid var(--surface);background:var(--surface)}
@@ -344,13 +336,8 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 }
 .machine-status{display:inline-flex;align-items:center;gap:6px;white-space:nowrap;font-size:var(--t-base)}.machine-status .dot.ok{background:var(--ok)}
 .machine-bots{display:block;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.settings-machines td:first-child{width:1%;white-space:nowrap;padding-right:24px}
-@media (max-width:760px){
-  .settings-machines td:first-child{width:100%;white-space:normal;padding-right:0}
-}
 .machine-head{display:flex;align-items:center;gap:10px}
 .machine-head .machine-status{font-size:var(--t-sm);color:var(--muted)}
-.machine-facts{display:block}
 /* Settings > Computers (ui/app/computer-detail.js): one compact row per computer, a chip per AI connection. */
 .settings-machines tbody tr{cursor:pointer}.settings-machines tbody tr:hover{background:var(--surface2)}
 .machine-name{all:unset;cursor:pointer;font-weight:600;color:var(--ink)}.machine-name:hover{color:var(--ink)}.machine-name:focus-visible{outline:var(--focus-ring);outline-offset:var(--focus-offset)}
@@ -360,7 +347,6 @@ tr:hover .sb-task-mark,.sb-task-mark:focus-visible,.sb-task-mark[aria-expanded=t
 .machine-chip-bar{width:28px;height:4px}
 .machine-chip-pct{color:var(--muted);font-variant-numeric:tabular-nums}
 .machine-chip-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--fail)}
-.machine-chip-add{color:var(--muted);border-style:dashed}.machine-chip-add:hover:not(:disabled){color:var(--ink);border-color:var(--muted)}.machine-chip-add:disabled{cursor:default;opacity:.5}
 /* The computer's pop-up: Connections, Screen, Bots on this computer, Versions and updates, Settings. */
 .computer-detail{width:min(760px,calc(100vw - 32px))}
 .computer-detail-head{display:flex;align-items:flex-start;justify-content:space-between;gap:8px;padding:14px 16px 6px;border-bottom:1px solid var(--line)}
@@ -633,16 +619,9 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .brepo-row:has([data-brepo-pick]:not(:checked)) :is(.repo-seg,.brepo-run){display:none}
 }
 /* Subscriptions (ui/app/subscriptions.js): a connection's controls in the computer's pop-up, and the bot editor's line. */
-.subs-controls{flex-basis:100%;font-size:var(--t-sm)}
-.subs-controls summary{cursor:pointer;color:var(--muted)}
-.subs-controls form{display:flex;flex-wrap:wrap;align-items:end;gap:8px;padding:8px 0}
-.subs-controls label{display:grid;gap:4px;max-width:100%}
-.subs-controls input{max-width:100%;box-sizing:border-box}
-.subs-controls input[type=number]{width:100px}
-.subs-controls form>strong{flex-basis:100%;font-weight:500}
 .sb-sub{display:flex;flex-wrap:wrap;align-items:center;gap:4px 6px;margin:-4px 0 0 104px;font-size:var(--t-sm);color:var(--muted);min-width:0}
 .sb-sub[hidden]{display:none}
-/* Compact at sits under Model: space it off Model's subscription line, and size it like Model's own selects. */
+/* Compact at sits under Model: sized like Model's own selects. */
 .sb-compact{margin-top:8px}.sb-row.sb-compact .settings-inline-select{font-size:16px}
 .sb-sub .pill{font-size:var(--t-xs)}
 @media (max-width:760px){
@@ -882,8 +861,9 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
 .pm-scan{margin:-8px 0 0;padding:0 2px;font-size:var(--t-sm)}
 .pm-dialog .task-rule-form>label:not(.pm-kind){display:grid;gap:4px}
 .pm-dialog input[name=company_name],.pm-dialog select{width:100%}
-.pm-intake{display:flex!important;flex-direction:row!important;align-items:center;gap:8px;flex-wrap:wrap}
-.pm-intake select{width:auto!important;min-width:0;max-width:min(100%,420px)}
+.pm-intake{display:grid!important;grid-template-columns:64px minmax(0,360px);align-items:center;gap:8px}
+.pm-intake select,.pm-intake input{width:min(100%,360px)!important;min-width:0;flex:0 1 auto}
+.pm-intake{margin-bottom:8px}
 @media (max-width:640px){
   .pm-table thead{display:none}
   .pm-table tbody tr{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:2px 10px;padding:9px 0;border-bottom:1px solid var(--line)}
@@ -898,4 +878,64 @@ fieldset.brepo>.repo-name+p{margin:-4px 0 4px 24px;font-size:var(--t-xs);line-he
   .pm-letters .pm-kind-cell{grid-column:2;grid-row:1}
   .pm-letters .pm-from{grid-column:1/-1}
   .pm-letters .pm-where{grid-column:1/-1}
+}
+
+/* Settings > Models and the Computers table (ui/app/subscriptions.js, settings-providers.js, settings-devices.js). */
+section.card>header .settings-head-act{margin-left:auto}
+#settings-computers>header,#settings-subs>header{align-items:center}
+.subs-table td,.settings-machines td{padding-top:7px;padding-bottom:7px}
+.subs-table td,.subs-table th{white-space:nowrap}
+/* The hidden labels in these tables are absolutely placed: keep them inside the scrolling box, not the page. */
+#set-subs .scroll,#set-machines .scroll{position:relative}
+.subs-name{font-weight:500}
+.subs-kind{color:var(--muted)}
+.subs-count{color:var(--muted)}.subs-count .nav-icon{font-size:15px;vertical-align:-3px;margin-right:4px}
+.subs-usage{display:inline-flex;align-items:center;gap:6px;color:var(--muted)}.subs-usage-w{min-width:2.4em}
+.subs-bar{display:inline-block;width:48px;height:4px;border-radius:2px;background:var(--surface2);box-shadow:inset 0 0 0 1px var(--line);overflow:hidden}
+.subs-bar b{display:block;height:100%;background:var(--ok)}.subs-bar.warn b{background:var(--wait)}.subs-bar.bad b{background:var(--fail)}
+.subs-more-cell{width:1%;text-align:right}
+.subs-more{min-height:var(--ctl-sm);padding:0 8px;line-height:1}
+.subs-reconnect{cursor:pointer;border:0;font:inherit;font-size:var(--t-sm)}
+.subs-empty{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.subs-dialog{width:min(480px,calc(100vw - 32px))}
+.subs-dialog .tmodal-body,.machine-add .tmodal-body{overflow:visible}
+.subs-dialog[open],.subs-dialog>form{overflow:visible}
+.subs-form{display:grid;gap:12px}
+.subs-field{display:grid;gap:4px;min-width:0}
+.subs-field[hidden]{display:none}
+.subs-field .k{display:inline-flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted)}
+.subs-field input,.subs-field select,.subs-field textarea,.subs-combo input{width:100%;box-sizing:border-box}
+.subs-field textarea{font-family:var(--mono);font-size:var(--t-sm);resize:vertical}
+.subs-combo{position:relative}
+.subs-combo input{padding-right:28px;background:var(--surface) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M1 1l4 4 4-4' fill='none' stroke='%23888' stroke-width='1.5'/%3E%3C/svg%3E") no-repeat right 10px center}
+.subs-combo-list{position:absolute;z-index:5;left:0;right:0;top:calc(100% + 4px);margin:0;padding:4px;list-style:none;max-height:220px;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:8px;box-shadow:0 8px 24px rgba(0,0,0,.25)}
+.subs-combo-list[hidden]{display:none}
+.subs-combo-list li{padding:0 8px;min-height:28px;display:flex;align-items:center;border-radius:6px;cursor:pointer}
+.subs-combo-list li.on,.subs-combo-list li:hover{background:var(--surface2)}
+.subs-combo-list li[hidden]{display:none}
+.subs-cell{display:inline-flex;align-items:center;gap:6px}
+.subs-pick{height:28px;max-width:200px;padding:0 24px 0 8px;font-size:var(--t-sm)}
+.settings-machines td,.settings-machines th{white-space:nowrap}
+.settings-machines td.num,.settings-machines th.num{text-align:right;padding-right:16px}
+.machine-cell .machine-head{gap:8px}
+.machine-now{font-size:var(--t-sm)}
+.machine-show-revoked{display:inline-flex;align-items:center;gap:6px;margin-top:8px}
+.models-form{display:grid;gap:8px;max-width:560px}
+.models-row{display:grid;grid-template-columns:minmax(150px,240px) minmax(0,1fr);align-items:center;gap:12px;min-height:32px}
+.models-row .k{display:inline-flex;align-items:center;gap:6px;color:var(--muted);font-size:var(--t-base)}
+.models-row select,.models-row input[type=text],.models-row input[type=url],.models-row input[type=password]{width:100%;max-width:320px;box-sizing:border-box}
+.models-row input.people-switch{justify-self:start}
+.models-num{display:inline-flex;align-items:center;gap:8px}.models-num input{width:90px}
+.models-form .onb-actions{margin-top:4px}
+.models-gw-toggle{display:inline-flex;align-items:center;gap:10px;cursor:pointer}
+.models-adv{margin-top:10px}
+.models-adv>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);width:max-content}
+.models-adv[open]>summary{margin-bottom:8px}
+.models-gw-line{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:0 0 8px;font-size:var(--t-sm)}
+.models-gw-line .dot.ok{background:var(--ok)}
+.models-adv .prov-gateway{display:grid;gap:8px;max-width:560px}
+@media (max-width:760px){
+  .models-row{grid-template-columns:minmax(0,1fr);gap:4px}
+  .models-row select,.models-row input[type=text],.models-row input[type=url],.models-row input[type=password]{max-width:none}
+  .subs-pick{max-width:160px}
 }
