@@ -121,6 +121,23 @@ def named_visible(ctx: Ctx, who: str, budgets: Sequence[B.Budget], numbers: bool
     return all(shows_numbers(ctx, who, b) if numbers else sees_budget(ctx, who, b) for b in budgets)
 
 
+def named_reason(ctx: Ctx, who: str, fallback: str, result: Mapping[str, Any], decider: bool = False) -> str:
+    """The reason a refusal shows `who`. A refusal that named budgets keeps its sentence in the record with the budget
+    ids; the names (and amounts, where it has them) come back only while `who` may see each budget. A `decider` (the
+    one an approval of the action is for) reads them regardless: an approval lets them read the action's own objects
+    (spec, approvals). Otherwise the fallback the record kept, which names nothing."""
+    recorded = result.get("named")
+    if not recorded:
+        return fallback
+    budgets = ctx.budgets()
+    shown = [budgets[str(bid)] for bid in recorded["budgets"] if str(bid) in budgets]
+    if len(shown) != len(recorded["budgets"]):
+        return fallback
+    if not decider and not named_visible(ctx, who, shown, bool(recorded["numbers"])):
+        return fallback
+    return str(recorded["template"]).format(*[b.name for b in shown])
+
+
 def _budget_impact(ctx: Ctx, who: str, charges: list[tuple[L.Line, int]]) -> list[Result]:
     """For each budget the charges count against that `who` sees: remaining now and after. Budgets outside their view
     (a parent above a manager's teams) are left out; ones over private lines show no numbers."""

@@ -93,22 +93,17 @@ def _canonical(payload: object) -> dict[str, object]:
 
 
 def _replayed_reason(c: sqlite3.Connection, p: O.Principal, row: Mapping[str, object], at: str | None) -> str:
-    """The reason a replay returns. A refusal that named budgets gets the names back only for a caller who may see
-    each of them now; otherwise the fallback its record kept, which names nothing (spec §7.5)."""
+    """The reason a replay returns: a refusal's names come back only for a caller who may see each budget it named
+    (spec §7.5); otherwise the fallback its record kept."""
     fallback = str(row["reason"] or "")
-    recorded = cast(dict[str, Any], json.loads(str(row["result_json"] or "{}"))).get("named")
-    if not recorded:
+    result = cast(dict[str, Any], json.loads(str(row["result_json"] or "{}")))
+    if "named" not in result:
         return fallback
     try:
         ctx = load(c, at)
     except FinanceError:
         return fallback
-    budgets = ctx.budgets()
-    shown = [budgets[str(bid)] for bid in recorded["budgets"] if str(bid) in budgets]
-    if len(shown) != len(recorded["budgets"]) or \
-            not handlers.named_visible(ctx, p.who, shown, bool(recorded["numbers"])):
-        return fallback
-    return str(recorded["template"]).format(*[b.name for b in shown])
+    return handlers.named_reason(ctx, p.who, fallback, result)
 
 
 def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:

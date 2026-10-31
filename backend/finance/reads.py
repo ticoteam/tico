@@ -21,7 +21,7 @@ from .core import dates, money
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, descendants, pnl_section
-from .handlers import private_scope, sees_budget, sees_scope, shows_numbers
+from .handlers import named_reason, private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA
 from .store import banking as SK
@@ -1289,6 +1289,10 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, 
         payload = cast(Mapping[str, object], json.loads(str(row["payload_json"] or "{}")))
     except ValueError:
         payload = dict[str, object]()
+    try:
+        result = cast(Mapping[str, Any], json.loads(str(row["result_json"] or "{}")))
+    except ValueError:
+        result = dict[str, Any]()
     covers = True if ctx.view(viewer).everything else _covers(ctx, viewer, payload)
     asked = viewer in {str(row["actor"]), str(row["on_behalf_of"] or "")}
     approver = bool(row["approval_to"]) and viewer == str(row["approval_to"])     # who decides it, not who asked
@@ -1296,6 +1300,6 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, 
         return None
     shown = covers is True or approver or (covers is None and asked)
     return {"action_id": str(row["id"]), "kind": str(row["kind"]), "status": str(row["status"]),
-            "code": str(row["code"] or ""), "reason": str(row["reason"] or "") if shown else "",
+            "code": str(row["code"] or ""), "reason": named_reason(ctx, viewer, str(row["reason"] or ""), result, decider=approver) if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
             "rule": str(row["rule_id"] or "")}
