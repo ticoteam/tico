@@ -900,6 +900,11 @@ def _same_name(counterparty: str, name: str) -> bool:
     return bool(a and b) and (a == b or (min(len(a), len(b)) >= NAME_MIN and (a in b or b in a)))
 
 
+def named(counterparty: str, docs: Sequence[Any]) -> list[Any]:
+    """The documents whose contact the counterparty names (no counterparty names none)."""
+    return [d for d in docs if _same_name(counterparty, str(d["contact_name"] or ""))]
+
+
 OWING_MOST = 50             # open documents owing a row's exact amount looked at; with more, the row is unclear
 
 

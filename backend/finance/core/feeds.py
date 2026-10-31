@@ -192,10 +192,12 @@ def request_status(value: object) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ Stripe
-STRIPE_BALANCE = "balance"        # Stripe's balance transactions all sit on the one balance account
-STRIPE_PAYOUT = "payout"          # the balance moved to the bank: a transfer, matched to the deposit, never income
-STRIPE_SALES = ("charge", "payment", "refund", "payment_refund", "adjustment")   # income, or its reversal (disputes)
-STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")                         # Stripe's own charges, no income
+STRIPE_PAYOUT = "payout"                                    # the balance moved to the bank: a transfer, never income
+STRIPE_PAYOUT_BACK = ("payout_failure", "payout_cancel")    # a payout that came back to the balance
+STRIPE_CHARGES = ("charge", "payment")                      # sales: income, or the invoice they pay
+STRIPE_UNWINDS = ("refund", "payment_refund", "refund_failure", "adjustment")   # reverse or restore a sale (disputes)
+STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")    # Stripe's own charges: expense, no income
+STRIPE_LINKED = (*STRIPE_CHARGES, STRIPE_PAYOUT, *STRIPE_PAYOUT_BACK)   # kinds whose source object is the link itself
 
 
 def _int(value: object) -> int:
@@ -205,25 +207,37 @@ def _int(value: object) -> int:
     return value
 
 
-def stripe_txn(raw: dict[str, Any]) -> FeedTxn:
-    """A Stripe balance transaction. Its `net` (gross less fee) is what the balance moved, so it is the feed amount;
-    gross and fee are kept in the raw copy for posting (`stripe_parts`). The day is the UTC day it was created. Only
-    the billing name is kept from the source, the part that matches an invoice; the source is kept by id."""
+def _link(kind: str, source: dict[str, Any], source_id: str) -> str:
+    """The sale or payout a balance transaction is about: the charge a refund or dispute names, else the source itself
+    for a sale or a payout, else "" (a person is asked)."""
+    charge = str(source.get("charge") or "")
+    if charge:
+        return charge
+    return source_id if kind in STRIPE_LINKED else ""
+
+
+def stripe_txn(raw: dict[str, Any], account: str) -> FeedTxn:
+    """A Stripe balance transaction on its Stripe account. Its `net` (gross less fee) is what the balance moved, so it is
+    the feed amount; gross and fee are kept in the raw copy for posting (`stripe_parts`). The day is the UTC day it was
+    created. Only the billing name is kept from the source (the part that matches an invoice); the source is kept by id,
+    and `link` names the sale or payout it is about."""
     tid = str(raw.get("id") or "")
-    if not tid:
-        raise invalid("a balance transaction has an id")
+    if not tid or not account:
+        raise invalid("a balance transaction has an id and an account")
+    kind = str(raw.get("type") or "")
     gross, fee, net = _int(raw.get("amount")), _int(raw.get("fee")), _int(raw.get("net"))
     created = _int(raw.get("created"))
     day = datetime.fromtimestamp(created, timezone.utc).date().isoformat()
     source = raw.get("source")
-    billing = _dict(_dict(source).get("billing_details"))
-    keep: dict[str, Any] = {"id": tid, "type": str(raw.get("type") or ""), "amount": gross, "fee": fee, "net": net,
-                            "currency": str(raw.get("currency") or ""),
-                            "description": str(raw.get("description") or "")[:500],
-                            "source": str(_dict(source).get("id") or source or "")[:200]}
-    return FeedTxn(provider_id=tid, account_id=STRIPE_BALANCE, amount=net, txn_date=day, status=POSTED,
-                   kind=str(raw.get("type") or ""), counterparty=str(billing.get("name") or "")[:200],
-                   description=str(raw.get("description") or "")[:500], version=1, raw=keep)
+    obj = _dict(source)
+    source_id = str(obj.get("id") or (source if isinstance(source, str) else "") or "")[:200]
+    billing = _dict(obj.get("billing_details"))
+    description = str(raw.get("description") or "")[:500]
+    keep: dict[str, Any] = {"id": tid, "type": kind, "amount": gross, "fee": fee, "net": net,
+                            "currency": str(raw.get("currency") or ""), "created": created,
+                            "description": description, "source": source_id, "link": _link(kind, obj, source_id)}
+    return FeedTxn(provider_id=tid, account_id=account, amount=net, txn_date=day, status=POSTED, kind=kind,
+                   counterparty=str(billing.get("name") or "")[:200], description=description, version=1, raw=keep)
 
 
 def stripe_parts(raw: Mapping[str, Any]) -> tuple[int, int]:

@@ -3,9 +3,10 @@
   python3 scripts/fake_stripe.py --port 18500
   TICO_STRIPE_BASE=http://127.0.0.1:18500/v1   (the server reads only 127.0.0.1, localhost or ::1)
 
-It serves GET /v1/balance and GET /v1/balance_transactions (newest first, `starting_after`, `limit`, `has_more`, the
-`expand[]` source as an object). Control endpoints under /_fake/ add what Stripe would have recorded:
+It serves GET /v1/account, GET /v1/balance and GET /v1/balance_transactions (newest first, `starting_after`, `limit`,
+`has_more`, the `expand[]` source as an object). Control endpoints under /_fake/ add what Stripe would have recorded:
   POST /_fake/txn    {"type": "charge", "amount": 10000, "fee": 320, "billing_name": "Acme Buyer"}  (cents)
+                     a refund, dispute or returned payout names its sale or payout with "link": "ch_fake000001"
   POST /_fake/payout {"amount": 9680}                                                              (cents)
   POST /_fake/reset  forget everything
 Balance transactions carry `net` = `amount` - `fee`, and the balance is the sum of the nets."""
@@ -18,6 +19,7 @@ from typing import Any
 from urllib.parse import parse_qs, urlsplit
 
 LOCK = threading.Lock()
+ACCOUNT = "acct_fake000001"
 TXNS: list[dict[str, Any]] = []      # oldest first; served newest first
 COUNTER = [0]
 NOW = [int(time.time()) - 3600]
@@ -28,14 +30,29 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_fake{COUNTER[0]:06d}"
 
 
-def _add(kind: str, amount: int, fee: int, billing_name: str) -> dict[str, Any]:
+def _source(kind: str, link: str, billing_name: str) -> dict[str, Any]:
+    """The object a balance transaction came from, as the expanded list shows it."""
+    if kind in ("charge", "payment"):
+        source: dict[str, Any] = {"id": _new_id("ch"), "object": "charge"}
+        if billing_name:
+            source["billing_details"] = {"name": billing_name}
+        return source
+    if kind in ("refund", "payment_refund", "refund_failure"):
+        return {"id": _new_id("re"), "object": "refund", "charge": link}
+    if kind == "adjustment":
+        return {"id": _new_id("dp"), "object": "dispute", "charge": link}
+    if kind == "payout":
+        return {"id": _new_id("po"), "object": "payout"}
+    if kind in ("payout_failure", "payout_cancel"):
+        return {"id": link, "object": "payout"}
+    return {"id": _new_id("src"), "object": "other"}
+
+
+def _add(kind: str, amount: int, fee: int, billing_name: str, link: str = "") -> dict[str, Any]:
     NOW[0] += 60
-    source: dict[str, Any] = {"id": _new_id("ch"), "object": "charge"}
-    if billing_name:
-        source["billing_details"] = {"name": billing_name}
     txn = {"id": _new_id("txn"), "object": "balance_transaction", "type": kind, "amount": amount, "fee": fee,
            "net": amount - fee, "currency": "usd", "status": "available", "created": NOW[0],
-           "description": f"{kind} {billing_name}".strip(), "source": source}
+           "description": f"{kind} {billing_name}".strip(), "source": _source(kind, link, billing_name)}
     TXNS.append(txn)
     return txn
 
@@ -60,6 +77,8 @@ class Handler(BaseHTTPRequestHandler):
         if not self._authorized():
             return self._send(401, {"error": {"message": "No API key provided."}})
         with LOCK:
+            if url.path == "/v1/account":
+                return self._send(200, {"object": "account", "id": ACCOUNT, "livemode": False})
             if url.path == "/v1/balance":
                 net = sum(int(t["net"]) for t in TXNS)
                 return self._send(200, {"object": "balance", "available": [{"amount": net, "currency": "usd"}],
@@ -86,11 +105,11 @@ class Handler(BaseHTTPRequestHandler):
         with LOCK:
             if self.path == "/_fake/txn":
                 txn = _add(str(body.get("type", "charge")), int(body["amount"]), int(body.get("fee", 0)),
-                           str(body.get("billing_name", "")))
-                return self._send(200, {"id": txn["id"], "net": txn["net"]})
+                           str(body.get("billing_name", "")), str(body.get("link", "")))
+                return self._send(200, {"id": txn["id"], "net": txn["net"], "source": txn["source"]["id"]})
             if self.path == "/_fake/payout":
                 txn = _add("payout", -int(body["amount"]), 0, "")
-                return self._send(200, {"id": txn["id"], "net": txn["net"]})
+                return self._send(200, {"id": txn["id"], "net": txn["net"], "source": txn["source"]["id"]})
             if self.path == "/_fake/reset":
                 TXNS.clear()
                 NOW[0] = int(time.time()) - 3600

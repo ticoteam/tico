@@ -198,7 +198,7 @@ def opening_amount(ctx: Ctx, money: Any, through: str) -> int:
     return sum(line.amount for _, line in SL.entry_lines(ctx.c, str(entry["id"])) if line.account_id == gl)
 
 
-def _set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
+def set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
     """Make the money account's one opening-balance entry say `amount` on `day` (Dr/Cr its GL line against Opening
     balance equity). Unchanged: nothing. Changed: the old entry is reversed and the new one posted, each on an open
     day (a closed month keeps its meaning). The live entry's id, or None when the opening is 0."""
@@ -231,7 +231,7 @@ def opening_balance(ctx: Ctx, money_id: str) -> str | None:
         return None
     total, first = SK.settled_total(ctx.c, money_id)
     day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
-    return _set_opening(ctx, money, int(money["balance"]) - total, day)
+    return set_opening(ctx, money, int(money["balance"]) - total, day)
 
 
 def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
@@ -245,7 +245,7 @@ def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
         return
     have = opening_amount(ctx, money, dated)
     earlier = (dates.day(day) - timedelta(days=1)).isoformat()
-    _set_opening(ctx, money, have - amount, min(dated, earlier))
+    set_opening(ctx, money, have - amount, min(dated, earlier))
 
 
 # ------------------------------------------------------------------------------------------------ taking in
@@ -305,16 +305,16 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         if program and card is not None and t.amount < 0:
             _card_hold(ctx, row, card, -t.amount)
         return
+    if str(money["kind"]) == "stripe":    # a Stripe row posts once and never changes: stripe_post settles or waits
+        from . import stripe_post        # lazy: it posts through this module's helpers
+        stripe_post.settle(ctx, row, money, t)
+        return
     if row["entry_id"]:
         if _unchanged(ctx, row, money):
             return
         _unpost(ctx, row, "the bank changed this transaction")
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
-        return
-    if str(money["kind"]) == "stripe":
-        from . import stripe_post        # lazy: it posts through this module's helpers
-        stripe_post.settle(ctx, row, money, t)
         return
     gl = _gl(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None

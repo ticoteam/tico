@@ -30,6 +30,7 @@ EXPAND = ("data.source",)              # each balance transaction's charge, refu
 class Provider(Protocol):
     """What Finance needs from Stripe. The adapter is the one implementation; tests use fakes."""
 
+    def account(self) -> Answer: ...
     def balance(self) -> Answer: ...
     def transactions(self, starting_after: str | None, limit: int = PAGE) -> Answer: ...
 
@@ -88,6 +89,10 @@ class Stripe:
                 return Answer(None, {})
         return Answer(429, {})
 
+    def account(self) -> Answer:
+        """The account the key belongs to: its id names the money account it posts to."""
+        return self._get("/account", [])
+
     def balance(self) -> Answer:
         return self._get("/balance", [])
 
@@ -132,7 +137,7 @@ def error_text(answer: Answer) -> str:
     if answer.status is None:
         return "Stripe did not answer"
     if answer.status in (401, 403):
-        return "Stripe refused the key; check its permissions for balance and balance transactions"
+        return "Stripe refused the key; check its permissions for account, balance and balance transactions"
     if 300 <= answer.status < 400:
         return f"Stripe answered {answer.status}, a redirect, which is never followed"
     error = answer.body.get("error")

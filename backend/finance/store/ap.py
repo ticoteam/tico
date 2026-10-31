@@ -448,6 +448,14 @@ def open_owing(c: sqlite3.Connection, kind: str, book_id: str, left: int, most: 
                      "ORDER BY d.id LIMIT ?", args).fetchall()
 
 
+def paid_owing(c: sqlite3.Connection, kind: str, book_id: str, total: int, most: int = 20) -> list[Any]:
+    """Documents marked paid for exactly `total`, with `contact_name` (a sale that paid one already)."""
+    table, _, _, _, contact = DOCS[kind]
+    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
+                     "WHERE d.book_id=? AND d.status='paid' AND d.total=? ORDER BY d.id LIMIT ?",
+                     (book_id, total, most)).fetchall()
+
+
 def drop_unmatched(c: sqlite3.Connection, book_id: str, file_ids: Sequence[str]) -> int:
     """Files filed to a subject leave the unmatched receipts."""
     if not file_ids:

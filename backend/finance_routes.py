@@ -28,8 +28,10 @@ Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_re
 
 
 class FinanceConnectionRequest(Contract):
-    """Connect Mercury with a stored token credential. The approver is a Mercury user other than the token's creator,
-    who approves payments in Mercury; without one, payments stay off."""
+    """Connect a bank or Stripe with a stored credential. Mercury's token: the approver is a Mercury user other than the
+    token's creator, who approves payments in Mercury; without one, payments stay off. Stripe's restricted key needs no
+    approver."""
+    provider: Literal["mercury", "stripe"] = "mercury"
     credential_id: str = Field(min_length=1, max_length=120)
     name: str | None = Field(None, max_length=120)
     approver_email: str | None = Field(None, max_length=200)
@@ -339,19 +341,21 @@ def install(app, store, auth, mutate):
 
     @app.post("/api/v2/finance/connections")
     def finance_connect(request: Request, body: FinanceConnectionRequest):
-        """Connect Mercury: the token is tested and its accounts listed (outside any transaction), then the
-        connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
+        """Connect Mercury or Stripe: the credential is tested and its accounts listed (outside any transaction), then
+        the connection_create action maps them into the books. A finance admin's action; the Idempotency-Key is its key."""
         who = viewer(request)
         if not read(lambda c: finance_reads.may_connect(c, who.actor)):
             raise Problem("denied", "connecting a bank is for finance admins", 403)
-        found, why = finance.mercury_probe(store, request.app.state.vault, body.credential_id)
+        probe = finance.stripe_probe if body.provider == "stripe" else finance.mercury_probe
+        found, why = probe(store, request.app.state.vault, body.credential_id)
         if why:
             raise Problem("invalid", why, 422)
         key = (request.headers.get("idempotency-key") or "").strip()
-        payload = {"provider": "mercury", "credential_id": body.credential_id, "probe": found,
-                   **{k: v for k, v in (("name", body.name), ("approver_email", body.approver_email),
-                                        ("token_creator_email", body.token_creator_email),
-                                        ("server_ip", body.server_ip)) if v}}
+        extra = (("name", body.name),) if body.provider == "stripe" else (
+            ("name", body.name), ("approver_email", body.approver_email),
+            ("token_creator_email", body.token_creator_email), ("server_ip", body.server_ip))
+        payload = {"provider": body.provider, "credential_id": body.credential_id, "probe": found,
+                   **{k: v for k, v in extra if v}}
 
         def work(c):
             done = finance.act(c, who.actor, "connection_create", payload, key)
