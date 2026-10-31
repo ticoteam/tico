@@ -209,9 +209,12 @@ ahead of time so it doesn't try.
     connector only reads the on/off switch). It's one try within 20 s (the longest deadline plus a margin). A person's
     mail, their Assistant's included, answers `not_checked`. Another bot's token is refused; a refusal or a server
     error is a `rules.unchecked` event (reason `forbidden` / `error`), and the connector sends on a failed check but
-    logs it (`rule-check-failed`) and says so in its answer. A failure that never reached Tico (a timeout, no
-    connection) is counted in the connector's state, a number only, and rides its next check as `unchecked_before`
-    (at most 100): one `rules.unchecked` each (reason `connector`), cleared only after a 2xx. BotOps writing mail for
+    logs it (`rule-check-failed`) and says so in its answer. A send after a check Tico never answered (a timeout, no
+    connection, a proxy's 502/503/504 without Tico's error body) is kept in the connector's state as an id only (at
+    most 100 per bot, oldest dropped) and reported once Tico answers again: `POST /api/v2/bots/{bot}/mail-check/misses
+    {ids}` records one `rules.unchecked` per id new for that bot (reason `connector`), so a repeat counts nothing, and
+    the connector forgets them after its 2xx. A release without that route (404/405) leaves them queued. A refusal or
+    a 5xx from Tico is never queued: the route recorded it. BotOps writing mail for
     a person finds its holds and approvals under BotOps, the author they were held as.
 
   Not phase 1: public roadmap comments (Later #16). Send/publish approvals aren't check points:

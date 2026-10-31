@@ -1859,12 +1859,10 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
     # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
     # logged and named in the answer.
-    # Sends that went out after a failed check are told to Tico on the next check that reaches it, and forgotten
-    # here only once it answered.
-    missed = 0 if ctx.dry else db.rule_check_misses(ctx.conn, ctx.slug)
-    ruled = pl.rule_check(ctx.slug, to, cc, subject, body, unchecked_before=missed)
-    if missed and ruled and not ruled.get("failed"):
-        db.clear_rule_check_misses(ctx.conn, ctx.slug, missed)
+    ruled = pl.rule_check(ctx.slug, to, cc, subject, body)
+    if ruled and not ruled.get("failed") and not ctx.dry:
+        # Tico answers again: the sends whose check it never answered are told to it now, forgotten once it took them.
+        db.drop_mail_check_misses(ctx.conn, pl.report_misses(ctx.slug, db.mail_check_misses(ctx.conn, ctx.slug)))
     if ruled and ruled.get("failed"):
         ctx.audit("rule-check-failed", draft_id or thread_id, {"reason": ruled["failed"], "to": to, "cc": cc})
         base["rule_check"] = "unchecked: the org rule check failed (" + str(ruled["failed"]) + ")"
@@ -1906,8 +1904,8 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
     message_id = res.get("id", "")
     thread_id = res.get("threadId") or thread_id
     db.finish_send(ctx.conn, key, message_id, "sent")
-    if ruled and ruled.get("failed"):
-        db.add_rule_check_miss(ctx.conn, ctx.slug)      # it went out unchecked: Tico hears of it next time
+    if ruled and ruled.get("failed") and not ruled.get("answered"):
+        db.add_mail_check_miss(ctx.conn, ctx.slug)      # out unchecked, and Tico never heard: it hears of it next time
     handled = lb.handled(ctx.slug)
     label_thread(ctx, handled, msgs, [message_id])
     ctx.audit("send", message_id or draft_id,

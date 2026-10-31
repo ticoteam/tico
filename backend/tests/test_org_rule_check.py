@@ -7,6 +7,7 @@ Acme is the fictional company (backend/tests/test_org_rules.py's org): Ana owns 
 import json
 import threading
 import time
+import uuid
 
 import pytest
 
@@ -815,20 +816,63 @@ def test_botops_mail_for_a_person_finds_its_own_hold_and_spends_its_approval_onc
     assert post(api, "bots/botops/mail-check", mail, token="ana-botops")["outcome"] == "held"
 
 
-def test_sends_after_checks_that_never_reached_tico_count_once_with_the_next_check(ruled):
+def test_reported_misses_count_once_however_often_or_concurrently_they_come(ruled):
     api, _ = ruled
     color_rule(api)
-    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Thanks for the call.",
-            "unchecked_before": 2}
-    key = "mail-recovered-1"
-    assert post(api, "bots/ops/mail-check", mail, token="ops-test", key=key)["outcome"] == "pass"
-    post(api, "bots/ops/mail-check", mail, token="ops-test", key=key)       # a retry of that same request
-    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["connector"] * 2
-    assert get(api, "rules/stats")["unchecked_today"] == 2
-    # A bot no rule covers reports nothing: its mail was never going to be checked.
-    post(api, "bots/finance/mail-check", mail, token="finance-test")
-    assert get(api, "rules/stats")["unchecked_today"] == 2
-    post(api, "bots/ops/mail-check", {**mail, "unchecked_before": 101}, token="ops-test", expected=422)
+    ids = [str(uuid.uuid4()) for _ in range(3)]
+    assert post(api, "bots/ops/mail-check/misses", {"ids": ids[:2]}, token="ops-test") == {"recorded": 2, "known": []}
+    # The reply was lost and the connector sends them again, with a new one.
+    again = post(api, "bots/ops/mail-check/misses", {"ids": ids}, token="ops-test")
+    assert again == {"recorded": 1, "known": ids[:2]}
+    late = str(uuid.uuid4())
+    answers = []
+    threads = [threading.Thread(target=lambda: answers.append(
+        post(api, "bots/ops/mail-check/misses", {"ids": [late]}, token="ops-test")["recorded"])) for _ in range(4)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert sorted(answers) == [0, 0, 0, 1]
+    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["connector"] * 4
+    assert get(api, "rules/stats")["unchecked_today"] == 4
+    # No rule covers Finance, a person's own mail was never checked, and a bot reports only its own.
+    assert post(api, "bots/finance/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="finance-test")[
+        "recorded"] == 0
+    assert post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="ben-test")["recorded"] == 0
+    post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4())]}, token="finance-test", expected=403)
+    post(api, "bots/ops/mail-check/misses", {"ids": ["not-an-id"]}, token="ops-test", expected=422)
+    post(api, "bots/ops/mail-check/misses", {"ids": [str(uuid.uuid4()) for _ in range(101)]}, token="ops-test",
+         expected=422)
+    assert get(api, "rules/stats")["unchecked_today"] == 4
+
+
+def test_a_send_after_a_check_tico_never_answered_counts_once_when_the_connector_reports_it(ruled, tmp_path,
+                                                                                           monkeypatch):
+    # The connector's own pieces against this server: a timeout, the send's miss, then Tico back.
+    from connectors.mail import db as mail_db, policy as pl
+    api, _ = ruled
+    color_rule(api)
+    conn = mail_db.connect(tmp_path / "mail.db")
+
+    def timed_out(path, body):
+        raise pl.HubFailed("unavailable", answered=False)
+
+    def tico(path, body):
+        return post(api, path, body, token="ops-test")
+    monkeypatch.setattr(pl, "HUB_POST", timed_out)
+    mail = (["vendor@outside.example"], [], "Hi", "Thanks for the call.")
+    failed = pl.rule_check("ops", *mail)
+    assert failed["failed"] and failed["answered"] is False
+    mail_db.add_mail_check_miss(conn, "ops")                     # the mail went out unchecked
+    before = get(api, "rules/stats")["unchecked_today"]
+    monkeypatch.setattr(pl, "HUB_POST", tico)
+    assert pl.rule_check("ops", *mail)["outcome"] == "pass"
+    pending = mail_db.mail_check_misses(conn, "ops")
+    taken = pl.report_misses("ops", pending)
+    assert pl.report_misses("ops", pending) == taken == pending     # a repeat, as after a lost reply
+    mail_db.drop_mail_check_misses(conn, taken)
+    assert mail_db.mail_check_misses(conn, "ops") == []
+    assert get(api, "rules/stats")["unchecked_today"] == before + 1
 
 
 def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is_not_checked(ruled, monkeypatch):
@@ -844,6 +888,8 @@ def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is
     settings.test_identities["ben-assistant"] = Identity("human:ben", "human", "ben@acme.example", via="assistant")
     assert post(api, f"bots/{settings.assistant_bot}/mail-check", mail, token="ben-assistant") == \
         {"outcome": "not_checked"}
+    assert post(api, f"bots/{settings.assistant_bot}/mail-check/misses", {"ids": [str(uuid.uuid4())]},
+                token="ben-assistant") == {"recorded": 0, "known": []}
     # A server error inside the check: recorded before it surfaces.
     monkeypatch.setattr(K, "mail_approved", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
     with pytest.raises(RuntimeError):

@@ -81,22 +81,50 @@ class Sending(Writing):
         [failed] = [a for a in self.audit_lines() if a["action"] == "rule-check-failed"]
         self.assertEqual(failed["detail"]["reason"], "forbidden")
 
-    def test_sends_after_a_check_that_never_reached_tico_ride_the_next_check_and_clear_once_it_answers(self):
-        asked = []
+    def misses(self):
+        return db.mail_check_misses(self.conn(), "influencer")
 
-        def down(path, body):
-            asked.append(body)
-            raise pl.HubFailed("unavailable")
+    def send(self):
+        return self.run_json("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")[1]
 
-        def up(path, body):
-            asked.append(body)
+    def test_a_send_after_a_check_tico_never_answered_is_reported_once_it_answers(self):
+        reported = []
+
+        def silent(path, body):
+            raise pl.HubFailed("unavailable", answered=False)
+
+        def back(path, body):
+            if path.endswith("/misses"):
+                reported.append(body["ids"])
+                return {"recorded": len(body["ids"]), "known": []}
             return {"outcome": "pass"}
-        # The first goes out unchecked; the second, still unchecked, is stopped by the recipient cooldown, so it is no
-        # miss and the count is not cleared; the first answer clears it.
-        for hub in (down, down, up, up):
-            pl.HUB_POST = hub
-            self.run_json("send", "--as", "influencer", "--draft", self.make(), "--issue", "42")
-        self.assertEqual([b.get("unchecked_before") for b in asked], [None, 1, 1, None])
+        pl.HUB_POST = silent
+        self.assertTrue(self.send()["sent"])
+        [miss] = self.misses()
+        pl.HUB_POST = back
+        self.send()                                     # the recipient cooldown stops this one; the report goes
+        self.assertEqual((reported, self.misses()), ([[miss]], []))
+
+    def test_an_older_tico_without_the_misses_route_keeps_them_and_still_holds_the_mail(self):
+        pl.HUB_POST = lambda path, body: (_ for _ in ()).throw(pl.HubFailed("unavailable", answered=False))
+        self.send()
+        queued = self.misses()
+
+        def older(path, body):
+            if path.endswith("/misses"):
+                raise pl.HubFailed("http_404", status=404)
+            return {"outcome": "held", "held": {"text": "held by the rule 'No offers by mail.'"}}
+        pl.HUB_POST = older
+        p = self.send()
+        self.assertEqual((p["sent"], p["gate"]), (False, "rules"))
+        self.assertEqual(self.misses(), queued)
+
+    def test_a_check_tico_answered_with_a_refusal_or_its_own_error_queues_nothing(self):
+        # The route recorded those itself (backend/org_rule_check.py mail_unchecked).
+        for failure in (pl.HubFailed("forbidden", status=403), pl.HubFailed("http_500", status=500)):
+            pl.HUB_POST = lambda path, body, failure=failure: (_ for _ in ()).throw(failure)
+            self.send()
+        self.assertEqual(self.misses(), [])
 
     def test_the_idempotency_row_is_written_before_the_api_call(self):
         did = self.make()

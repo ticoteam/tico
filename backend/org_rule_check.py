@@ -33,10 +33,12 @@ import contextvars
 import hashlib
 import json
 import logging
+import re
 import secrets
 import threading
 import time
 import weakref
+from datetime import datetime, timedelta, timezone
 
 from clients import judge as J
 from . import judge as B
@@ -79,7 +81,14 @@ SCHEMA = (
     "call_id TEXT, created TEXT NOT NULL)",
     "CREATE INDEX IF NOT EXISTS org_rule_verdicts_created ON org_rule_verdicts(created)",
     "CREATE INDEX IF NOT EXISTS org_rule_holds_task ON org_rule_holds(task_id) WHERE task_id IS NOT NULL",
+    # Mails a bot's connector sent after a check that got no answer from Tico, by the id the connector gave each:
+    # one `rules.unchecked` per id, however often it is reported (`record_misses`).
+    "CREATE TABLE IF NOT EXISTS org_rule_misses(author TEXT NOT NULL, id TEXT NOT NULL, created TEXT NOT NULL, "
+    "PRIMARY KEY (author, id))",
+    "CREATE INDEX IF NOT EXISTS org_rule_misses_created ON org_rule_misses(created)",
 )
+MISSES_MAX = 100              # ids one report carries (connectors/mail keeps at most this many per bot)
+MISSES_KEPT_DAYS = 90         # how long a reported id is remembered, so a late repeat still counts once
 
 # Send anyway's writes, by operation: fn(c, bot identity, hold, replay data, ingest) -> the write's answer. Registered
 # by the module that owns the write (backend/app.py, execution, automations), so the replay is the normal write.
@@ -1112,6 +1121,28 @@ def health_findings(c, settings):
 
 
 # ----------------------------------------------------------------------------- HTTP
+MISS_ID = re.compile(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")
+
+
+def record_misses(c, author, ids):
+    """Inside the write: each id new for this bot is kept and, when a rule applies to the bot, one `rules.unchecked`;
+    an id kept before is `known`. Ids older than MISSES_KEPT_DAYS are forgotten."""
+    now = H.now()
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=MISSES_KEPT_DAYS)).strftime("%Y-%m-%dT%H:%M:%S")
+    c.execute("DELETE FROM org_rule_misses WHERE created<?", (cutoff,))
+    counted = watched(c, author)
+    known, recorded = [], 0
+    for miss in ids:
+        if not c.execute("INSERT OR IGNORE INTO org_rule_misses(author, id, created) VALUES(?,?,?)",
+                         (author, miss, now)).rowcount:
+            known.append(miss)
+        elif counted:
+            H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
+                                                          "bot": H.actor_id(author)})
+            recorded += 1
+    return {"recorded": recorded, "known": known}
+
+
 def install(app, store, auth, mutate):
     from fastapi import Request
     from pydantic import Field
@@ -1139,8 +1170,9 @@ def install(app, store, auth, mutate):
         cc: list[str] = Field(default_factory=list, max_length=200)
         subject: str = Field(default="", max_length=2000)
         body: str = Field(default="", max_length=500_000)
-        # Mails the connector sent after a check that never reached Tico (a timeout, no connection): counted here.
-        unchecked_before: int = Field(default=0, ge=0, le=100)
+
+    class MailMisses(Contract):
+        ids: list[str] = Field(min_length=1, max_length=MISSES_MAX)
 
     def mail_unchecked(author, bot, body, reason):
         """A mail check that could not run (refused, or the server failed): the connector sends the mail unchecked, so
@@ -1155,6 +1187,23 @@ def install(app, store, auth, mutate):
                                                                   "rules": [r["id"] for r in rules], "bot": bot})
         except Exception as exc:  # noqa: BLE001 - recording a failure never adds one
             LOG.warning("Recording a failed mail check failed: %s", type(exc).__name__)
+
+    @app.post("/api/v2/bots/{bot}/mail-check/misses")
+    def mail_check_misses(request: Request, bot: str, body: MailMisses):
+        """Mails the bot's mail tool sent after a check that got no answer from Tico (a timeout, no connection, a proxy
+        error), reported by the ids it gave them once Tico answers again: one `rules.unchecked` each (reason
+        `connector`) when a rule applies to the bot. An id already reported counts nothing (`known`). The same
+        callers as mail-check: a person's own mail was never checked, so it records nothing."""
+        who = request.state.identity
+        author = author_of(who, store.settings.assistant_bot)
+        if not author:
+            return {"recorded": 0, "known": []}
+        if author != "bot:" + bot:
+            raise Problem("forbidden", "A bot reports only its own mail", 403)
+        ids = list(dict.fromkeys(body.ids))
+        if any(not MISS_ID.fullmatch(i) for i in ids):
+            raise Problem("validation", "Each id is a UUID", 422)
+        return mutate(request, body, lambda c: record_misses(c, author, ids))
 
     @app.post("/api/v2/bots/{bot}/mail-check")
     def mail_check(request: Request, bot: str, body: MailCheck):
@@ -1203,11 +1252,6 @@ def install(app, store, auth, mutate):
             return {"outcome": "unchecked" if verdict and verdict["outcome"] == "unchecked" else "pass"}
 
         def work(c):
-            if body.unchecked_before and watched(c, author):
-                # One `rules.unchecked` per mail, so the day's count stays one plain count; once, with this write.
-                for _ in range(body.unchecked_before):
-                    H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": "connector",
-                                                                  "bot": H.actor_id(author)})
             waiting = open_mail_hold(c, author, key) if holds(verdict) else None
             if approved:
                 if current_matched(c, approved) != {tuple(x) for x in check[0]}:

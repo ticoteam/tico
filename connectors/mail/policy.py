@@ -470,11 +470,16 @@ RULE_CHECK_TIMEOUT = 20
 
 class HubFailed(Exception):
     """Tico was asked and gave no usable answer. `reason`: forbidden (the token is not this bot's), http_<status>,
-    unavailable (timed out or unreachable) or error."""
+    unavailable (timed out or unreachable) or error. `answered` False: Tico itself never answered (a timeout, no
+    connection, a proxy's 502/503/504 without Tico's error body), so the route recorded nothing; any answer from
+    Tico, a refusal or its own 5xx, the route already recorded."""
 
-    def __init__(self, reason):
+    def __init__(self, reason, answered=True, status=0):
         super().__init__(reason)
-        self.reason = reason
+        self.reason, self.answered, self.status = reason, answered, status
+
+
+NO_ANSWER = (502, 503, 504)       # a proxy's, unless Tico's own error body came with it
 
 
 def _default_hub_post(path, body):
@@ -489,7 +494,10 @@ def _default_hub_post(path, body):
     except APIError as exc:
         reason = "forbidden" if exc.status == 403 else f"http_{exc.status}" if exc.status else \
             "unavailable" if exc.code == "unavailable" else "error"
-        raise HubFailed(reason) from None
+        # clients/tico.py names a body with no Tico error `http_error`: a proxy spoke, not Tico.
+        silent = (not exc.status and exc.code == "unavailable") or \
+            (exc.status in NO_ANSWER and exc.code == "http_error")
+        raise HubFailed(reason, answered=not silent, status=exc.status) from None
     except Exception:
         raise HubFailed("error") from None
 
@@ -497,23 +505,34 @@ def _default_hub_post(path, body):
 HUB_POST = _default_hub_post
 
 
-def rule_check(slug, to, cc, subject, body, unchecked_before=0):
+def rule_check(slug, to, cc, subject, body):
     """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
     {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
     A check that failed (refused, timed out, a server error) lets the send go on, as every other failure of the check
-    lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason}, for the send
-    to log and answer with. The server records its own side (a `rules.unchecked` event) for a refusal or an error;
-    a failure that never reached it rides the next check as `unchecked_before`, a count of such sends."""
-    ask = {"to": list(to or []), "cc": list(cc or []), "subject": subject or "", "body": body or ""}
-    if unchecked_before:
-        ask["unchecked_before"] = int(unchecked_before)
+    lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason, "answered":
+    bool}, for the send to log and answer with. The server records its own side (a `rules.unchecked` event) for a
+    refusal or an error; a send after a check Tico never answered is reported later (`report_misses`)."""
     try:
-        answer = HUB_POST(f"bots/{slug}/mail-check", ask)
+        answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
+                                                      "subject": subject or "", "body": body or ""})
     except HubFailed as exc:
         import sys
         print(f"mail: the org rule check failed ({exc.reason}); this send goes out unchecked", file=sys.stderr)
-        return {"outcome": "unchecked", "failed": exc.reason}
+        return {"outcome": "unchecked", "failed": exc.reason, "answered": exc.answered}
     return answer if isinstance(answer, dict) else None
+
+
+def report_misses(slug, ids):
+    """Tell Tico of sends whose check it never answered (`POST /api/v2/bots/{bot}/mail-check/misses`), by their ids:
+    it counts each once, however often it hears of it. The ids Tico took (a 2xx), to forget; [] when it did not
+    answer or is a release without the route (404, 405), and they wait for the next time."""
+    if not ids:
+        return []
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check/misses", {"ids": list(ids)})
+    except HubFailed:
+        return []
+    return list(ids) if isinstance(answer, dict) else []
 
 
 def _hub_row(kind, n):
