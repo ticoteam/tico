@@ -1544,19 +1544,17 @@ def install(app, store, auth, mutate, onboarding):
         with store.read() as c:
             return view(c, who, room)
 
-    def chat_bot_for(c, who, files):
-        """The bot this person's chat posts to, refusing a chat that is off, takes text only (files) or is not theirs."""
+    def chat_bot_for(c, who):
+        """The bot this person's chat posts to, refusing a chat that is off or is not theirs."""
         info = availability(c, settings, who)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        if files:
-            raise Problem("text_only", "The " + info["name"] + " takes text only", 422)
         auth.require_write(c, who, info["bot"])
         return info["bot"]
 
     def post_message_sync(request, body, who, intent, reply, links, uploads=None):
         def work(c):
-            bot = chat_bot_for(c, who, uploads is not None)
+            bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
             said, kind, fast_links = reply, intent, links
             # The canned hello only opens a chat: a "hi" after anything the person said goes to the model, which knows
@@ -1602,8 +1600,8 @@ def install(app, store, auth, mutate, onboarding):
             await fast_answer(Internal(request), who, bots, body.text)
         return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
 
-    # An Assistant room is text only: this door refuses every upload (`text_only`) before a byte is stored, for a client
-    # that still offers to attach.
+    # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
+    # any bot chat's, in their room's conversation. They skip the quick answers, which read words only.
     @app.post("/api/v2/uploads/assistant/messages", openapi_extra=upload_contract(M.AssistantUpload))
     async def assistant_upload(request: Request):
         who = own(request)
@@ -1611,7 +1609,7 @@ def install(app, store, auth, mutate, onboarding):
         def admit(body):
             # Before any byte is stored, so a refused send keeps nothing; the write checks again in its transaction.
             with store.read() as c:
-                chat_bot_for(c, who, True)
+                chat_bot_for(c, who)
         body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
         return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
 

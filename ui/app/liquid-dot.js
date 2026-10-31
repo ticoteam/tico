@@ -32,7 +32,8 @@ function ldotSet(el, state) {
 // flies from where it was (`from`, a rect) to `el` along an arc and squashes as it lands, while `el` waits unseen. Both
 // rects are measured once, before the flight (`to` when the caller knows better, e.g. a panel still sliding in); the
 // copy moves by a Web Animation of transform alone, on top of every clip, and is the only thing with will-change.
-// None with reduced motion. Returns the Animation, or null when nothing flew.
+// `pace` divides its time (Ask's panel, a click away, flies at 3). None with reduced motion.
+// Returns the Animation, or null when nothing flew.
 // The copies are made once, in one fixed layer, and reused: a flight only places one and shows it by a class. A node
 // added to or taken from <body> per flight costs a whole-page restyle (body's `:has(> …)` rules look again).
 const ldotCalm = () => !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
@@ -55,7 +56,7 @@ function ldotGhost() {
   LDOT_GHOSTS.push(layer.lastElementChild);
   return layer.lastElementChild;
 }
-function ldotFly(el, from, {to = null} = {}) {
+function ldotFly(el, from, {to = null, pace = 1} = {}) {
   if (!el?.isConnected || !from?.width || ldotCalm() || typeof el.animate !== 'function') return null;
   to ||= el.getBoundingClientRect();
   const dx = from.left - to.left, dy = from.top - to.top, dist = Math.hypot(dx, dy);
@@ -73,7 +74,7 @@ function ldotFly(el, from, {to = null} = {}) {
     {transform: 'translate(0,0) scale(1.22,.8)', offset: .84},
     {transform: 'translate(0,-3px) scale(.95,1.06)', offset: .93},
     {transform: 'none'},
-  ], {duration: Math.min(900, 480 + dist * .45), easing: 'cubic-bezier(.45,0,.4,1)'});
+  ], {duration: Math.min(900, 480 + dist * .45) / pace, easing: 'cubic-bezier(.45,0,.4,1)'});
   const land = () => {
     if (ghost._run === run) { ghost.classList.remove('ldot-fly'); ghost._run = null; }
     if (el._ldotFly === run) { el.classList.remove('ldot-away'); delete el._ldotFly; }
@@ -94,7 +95,7 @@ const LDOT_MOVES = {
 function ldotMove(el, move = 'hop') {
   const body = el?.querySelector?.('.body');
   if (!body || typeof body.animate !== 'function' || ldotCalm() || el.dataset.state === 'still') return null;
-  return body.animate(LDOT_MOVES[move] || LDOT_MOVES.hop, {duration: move === 'split' ? 500 : 750, easing: 'cubic-bezier(.3,0,.2,1)'});
+  return body.animate(LDOT_MOVES[move] || LDOT_MOVES.hop, {duration: move === 'split' ? 330 : 750, easing: 'cubic-bezier(.3,0,.2,1)'});
 }
 
 // Idle alternates, cheaply: a setTimeout (never a frame loop) gives the live idle dot a short variant every 6-14 s; in

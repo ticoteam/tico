@@ -344,36 +344,26 @@ def png():
     return image.getvalue()
 
 
-def test_an_assistant_chat_takes_text_only_for_the_owner_too_and_a_refused_upload_keeps_nothing(api, monkeypatch):
-    import hashlib
-    from backend.store import Problem
-    blobs = api.app.state.blobs
-    writes = []
-
-    def storage_down(data, content_type="application/octet-stream"):
-        writes.append(hashlib.sha256(data).hexdigest())
-        raise Problem("storage", "Storage is unavailable", 503)
-
-    def kept(data):
-        return (blobs.directory / blobs.key(hashlib.sha256(data).hexdigest())).exists()
-
-    def stored(c):
-        return [c.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-                for table in ("messages", "message_assets", "bot_files", "blobs")]
+def test_a_file_in_an_assistant_chat_lands_on_the_persons_own_message_only(api):
+    import json
     strategy_bot(api)
-    get(api, "assistant")
-    with api.app.state.store.read() as c:
-        before = stored(c)
-    # Refused before a byte is stored, so storage being down changes nothing; the same key again, with the same and
-    # with other content, is refused the same way.
-    mine, other = png() + uuid.uuid4().bytes, png() + uuid.uuid4().bytes
-    monkeypatch.setattr(blobs, "put", storage_down)
+    rooms = {token: get(api, "assistant", token)["room_id"] for token in ("ana-test", "ben-test")}
+    sent = {}
     for token in ("ana-test", "ben-test"):
-        for text, picture in (("Look", mine), ("Look", mine), ("Look again", other)):
-            refused = api.post("/api/v2/uploads/assistant/messages", data={"text": text},
-                               files={"files": ("image.png", picture, "image/png")},
-                               headers={**headers(token), "Idempotency-Key": "paste-" + token})
-            assert refused.status_code == 422 and refused.json()["error"]["code"] == "text_only", refused.text
-            assert writes == [] and not kept(mine) and not kept(other)
+        r = api.post("/api/v2/uploads/assistant/messages",
+                     data={"text": "Look", "page": json.dumps({"path": "#/tasks", "title": "Tasks"})},
+                     files={"files": ("image.png", png(), "image/png")}, headers=headers(token))
+        assert r.status_code == 200, r.text
+        sent[token] = r.json()
+    ana = sent["ana-test"]["message"]
+    # In her own room, with the page she asked from; a picture skips the quick answers.
+    assert ana["conversation_id"] == rooms["ana-test"] != rooms["ben-test"]
+    assert sent["ana-test"]["reply"] is None and sent["ana-test"]["fast"] is False
     with api.app.state.store.read() as c:
-        assert stored(c) == before
+        refs = json.loads(c.execute("SELECT refs_json FROM messages WHERE id=?", (ana["id"],)).fetchone()[0])
+    assert refs["page"] == {"path": "#/tasks", "title": "Tasks"} and refs["assistant"] is True
+    [picture] = refs["attachments"]
+    assert picture["kind"] == "image" and picture["name"] == "image.png"
+    # Ben cannot read hers.
+    assert api.get(f"/api/v2/files/{picture['file_id']}", headers=headers("ana-test")).status_code == 200
+    assert api.get(f"/api/v2/files/{picture['file_id']}", headers=headers("ben-test")).status_code in (403, 404)

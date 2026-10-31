@@ -7,8 +7,8 @@
 // ui/app/pill.js), and on a wide window the same dense right rail (Active, Updates, Files, Recurring) when the
 // assistant has any of them; with none, the chat alone. GET /v2/assistant gives your own Assistant room with its
 // messages; a message goes to /v2/assistant/messages, which answers a lookup at once and hands the rest to a turn of
-// the assistant bot, shown live like any bot's reply. Proposals are Confirm / Cancel cards (ui/assistant.js). An
-// Assistant room takes text only, so its composer has no attach button. The page is the same for everyone, the owner
+// the assistant bot, shown live like any bot's reply (with files, /v2/uploads/assistant/messages). Proposals are
+// Confirm / Cancel cards (ui/assistant.js). The page is the same for everyone, the owner
 // included: the owner's earlier chat with the Strategy Bot, from before it became a helper, stays readable under
 // "Earlier chats" (GET /v2/assistant `earlier`), above the Assistant thread with its own older messages.
 // "What it has learned" at the top opens ui/app/learned.js.
@@ -18,7 +18,7 @@ function assistantPill() {
   const slug = myChatBot();
   if (ASSISTANT_PILL?.slug === slug) return ASSISTANT_PILL;
   if (ASSISTANT_PILL) PILLS.delete(ASSISTANT_PILL);
-  ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, files: false, send: assistantSend,
+  ASSISTANT_PILL = pillRestore(makePill({mode: 'chat', slug, send: assistantSend,
     label: 'Message the Assistant', placeholder: 'Ask anything…'}));
   return ASSISTANT_PILL;
 }

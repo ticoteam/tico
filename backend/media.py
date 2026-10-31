@@ -185,7 +185,7 @@ async def form(request, model, blobs, store, admit=None):
                     else:
                         fields[name] = data.decode("utf-8")
                 for field in ("calendar", "refs", "acceptance_criteria", "participants", "context", "titles",
-                              "labels", "links"):
+                              "labels", "links", "page"):
                     if field in fields:
                         fields[field] = json.loads(fields[field])
             else:
@@ -487,7 +487,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
-    # POST /api/v2/uploads/assistant/messages uses this too; it refuses every upload (an Assistant room is text only).
+    # POST /api/v2/uploads/assistant/messages uses this too (a person's own Assistant chat).
     app.state.uploads = SimpleNamespace(form=lambda request, model, admit=None: form(request, model, blobs, store, admit),
                                         attach=chat_uploads,
                                         write=write)
