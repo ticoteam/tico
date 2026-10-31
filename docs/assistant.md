@@ -73,6 +73,11 @@ change stays the owner's: the Strategy Bot proposes it on a Confirm card, and on
 (`422 request_id`). A person's post to the Strategy Bot's chat (`POST /api/v2/chat/goal-manager`) lands in their
 Assistant chat instead.
 
+To save proposed goal changes from chat, the Assistant reads back the exact changes first. Reply with a plain yes as your
+next message within 30 minutes, or name the numbered changes you approve. Tico saves only those fields from the read-back,
+and only if the goals have not changed since it was sent. If the reply is late, another message comes first, or a goal
+changed, nothing is saved.
+
 The owner used to chat with the Strategy Bot itself (`room_key: ceo`). That chat stays the owner's as read-only history:
 `GET /api/v2/assistant` lists it under `"earlier": {"room_id", "bot", "name"}`, and new messages go to the Assistant.
 On the first start after the update, Confirm cards still waiting there move to the owner's Assistant room, once
