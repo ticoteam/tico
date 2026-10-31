@@ -797,6 +797,59 @@ def test_a_pays_bill_line_never_names_the_bill_to_a_teammate_without_payables(bo
         assert "Pays bill AC-105" in {e["memo"] for e in mine["entries"]}
 
 
+def test_a_reversed_pays_bill_entry_still_never_names_the_bill_and_search_cannot_find_it(books):
+    """Fix check: the "Pays bill AC-105" entry is reversed, which voids its settlement. To gus (P&L, no payables) the
+    entry and its reversal still show no bill number, and searching for it finds nothing; the owner still finds it."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _ingest(c, _txn("txn-ac105", -30.0, who="ACME CLOUD", day="2026-10-14"))
+        bid = _bill(c, _vendor(c, "Acme Cloud"), [{"account_id": account(c, "6100"), "amount": 3_000}],
+                    number="AC-105")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        assert act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)}).status == \
+            "committed"
+        pays = str(c.execute("SELECT id FROM fin_entries WHERE memo='Pays bill AC-105'").fetchone()[0])
+        back = act(c, OWNER, "journal", {"reverses": pays})
+        assert back.status == "committed", back
+        assert c.execute("SELECT count(*) FROM fin_settlements WHERE entry_id=? AND voided_at IS NULL",
+                         (pays,)).fetchone()[0] == 0
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}).status == "committed"
+    with books.read() as c:
+        rows = FR.transactions(c, "human:gus", start="2026-10-01", end="2026-10-31", source="entry")["rows"]
+        assert sorted(r["amount"] for r in rows if r["account_id"] == account(c, "6900")) == [-3_000, 3_000, 3_000]
+        assert _no_number(rows, "AC-105") == [], _no_number(rows, "AC-105")
+        detail = FR.line_detail(c, "human:gus", account(c, "6900"), "2026-10-01", "2026-10-31", at=AT)
+        assert len(detail["entries"]) == 3 and _no_number(detail["entries"], "AC-105") == []
+        assert FR.transactions(c, "human:gus", start="2026-10-01", end="2026-10-31", q="AC-105")["rows"] == []
+        found = FR.transactions(c, OWNER, start="2026-10-01", end="2026-10-31", source="entry", q="AC-105")["rows"]
+        assert {r["memo"] for r in found} >= {"Pays bill AC-105"}
+
+
+def test_line_detail_hides_a_pays_bill_line_for_a_private_bill_amount_and_all(books):
+    """Fix check: a payroll bill (private line) marked paid from a bank row already on Other expenses. Its "Pays
+    bill" line moves the spend off Other expenses; to gus (P&L totals, no payroll detail) neither that line nor the
+    row's own line shows in Other expenses' detail, as in Transactions. The owner sees both."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        made = act(c, OWNER, "account_create", {"code": "6200", "name": "Payroll", "type": "expense",
+                                                "parent_id": account(c, "6000")})
+        payroll = str(made.result["account_id"])
+        act(c, OWNER, "private_lines_set", {"account_id": payroll, "others_see": "totals"})
+        _ingest(c, _txn("txn-pay", -40.0, who="ACME PAYROLL", day="2026-10-14"))
+        bid = _bill(c, _vendor(c, "Acme Payroll"), [{"account_id": payroll, "amount": 4_000}], number="PR-7")
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "money_account_id": _checking(c)})
+        assert paid.result["from"] == "feed", paid
+        assert act(c, OWNER, "view_grant", {"subject": "human:gus", "what": "pnl"}).status == "committed"
+    with books.read() as c:
+        mine = FR.line_detail(c, OWNER, account(c, "6900"), "2026-10-01", "2026-10-31", at=AT)
+        assert sorted(e["amount"] for e in mine["entries"]) == [-4_000, 4_000]
+        gus = FR.line_detail(c, "human:gus", account(c, "6900"), "2026-10-01", "2026-10-31", at=AT)
+        assert gus["entries"] == [], gus["entries"]
+        rows = FR.transactions(c, "human:gus", start="2026-10-01", end="2026-10-31", source="entry")["rows"]
+        assert [r for r in rows if abs(r["amount"]) == 4_000] == []
+
+
 def test_a_pays_invoice_line_never_names_an_invoice_with_a_private_line(books):
     """Grok fix check: an invoice with a line on a private account is cut from dan's receivables (keep_docs), so its
     "Pays invoice" line shows the line it moved off, with no invoice number, to dan; the owner sees the invoice.
@@ -880,6 +933,24 @@ def test_padded_ids_are_stored_trimmed_so_a_reschedule_still_withdraws_the_ask(b
         assert (stored(ask.action_id)["obligation"], stored(ask.action_id)["recipient_id"]) == (f"bill:{bid}", rid)
         assert stored(moved.action_id)["bill_id"] == bid
         assert FR.bill(c, OWNER, bid)["status"] == "scheduled"
+
+
+def test_a_request_stored_with_padded_ids_before_trimming_still_replays(books):
+    """Fix check: an action stored before ids were trimmed (its payload holds " <id> ") replays for the same key,
+    padded or not, rather than answering that the key was used for a different request."""
+    with books.transaction() as c:
+        vendor = _vendor(c)
+        first = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
+                                              "lines": [{"account_id": account(c, "6100"), "amount": 1_000}]}, key="old")
+        assert first.status == "committed", first
+        row = json.loads(c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (first.action_id,)).fetchone()[0])
+        c.execute("UPDATE fin_actions SET payload_json=? WHERE id=?",
+                  (json.dumps({**row, "vendor_id": f" {vendor} "}, sort_keys=True), first.action_id))
+        for sent in (f" {vendor} ", vendor):
+            again = act(c, OWNER, "bill_create", {"vendor_id": sent, "bill_date": "2026-10-10",
+                                                  "lines": [{"account_id": account(c, "6100"), "amount": 1_000}]},
+                        key="old")
+            assert (again.replayed, again.action_id) == (True, first.action_id), again
 
 
 def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_never_pays(books):

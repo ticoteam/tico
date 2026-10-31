@@ -541,11 +541,17 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         rows = SL.entries_on(c, s.ctx.book.id, ids, a.isoformat(), z.isoformat(), most * 4 + 1,
                              None if vendor is None else SAP.vendor_keys(c, s.ctx.book.id, vendor) or [""])
         tags = SL.line_tags(c, [r["line_id"] for r in rows])
+        # As Transactions: a line of a bank or card row standing for a private line (a payroll bill's "Pays bill"
+        # reclass, its reversal) never shows to a viewer without that line's full detail, amount and all.
+        stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in rows}))
+        origins = {str(r["line_id"]): tab.feed_origin(r) for r in rows}
+        history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
+        cut = tab.private_feed(s.ctx, s.view, [*stands.values(), *history.values()])
         seen: list[Row] = []
         for r in rows:
             line_account = s.ctx.accounts[r["account_id"]]
             mark = tags.get(r["line_id"], {})
-            if not s.view.sees(line_account, mark) or \
+            if origins[str(r["line_id"])] in cut or not s.view.sees(line_account, mark) or \
                     (f.any and not f.keeps(str(mark.get("team") or ""), str(mark.get("teammate") or ""))):
                 continue
             seen.append({"amount": int(r["amount"]), "card_id": r["card_id"], "money_account_id": r["money_account_id"],

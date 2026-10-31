@@ -695,7 +695,7 @@ def lines_page(c: sqlite3.Connection, book_id: str, *, account_ids: Sequence[str
         where.append("(l.entry_date<? OR (l.entry_date=? AND l.id<?))")
         args += [before[0], before[0], before[1]]
     return c.execute(f"SELECT l.id AS line_id, l.entry_id, l.entry_date, l.account_id, l.amount, l.contact_id, "
-                     f"l.description, e.memo, e.source, e.source_id, e.status AS entry_status FROM fin_lines l "
+                     f"l.description, e.memo, e.source, e.source_id, e.status AS entry_status, e.reverses_id FROM fin_lines l "
                      f"JOIN fin_entries e ON e.id=l.entry_id WHERE {' AND '.join(where)} "
                      f"ORDER BY l.entry_date DESC, l.id DESC LIMIT ?", [*args, most]).fetchall()
 

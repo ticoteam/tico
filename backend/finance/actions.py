@@ -89,8 +89,12 @@ def _canonical(payload: object) -> dict[str, object]:
         loaded: object = json.loads(json.dumps(payload, sort_keys=True))
     except (TypeError, ValueError):
         raise FinanceError(INVALID, "payload is plain JSON") from None
+    return _trim_ids(cast(dict[str, object], loaded))
+
+
+def _trim_ids(payload: Mapping[str, object]) -> dict[str, object]:
     return {k: v.strip() if isinstance(v, str) and (k.endswith("_id") or k == "obligation") else v
-            for k, v in cast(dict[str, object], loaded).items()}
+            for k, v in payload.items()}
 
 
 def _stored(row: Mapping[str, object], full: bool = False) -> ActionResult:
@@ -150,7 +154,9 @@ def _requester(c: sqlite3.Connection, who: str) -> str:
 
 
 def _same_request(prior: Mapping[str, object], body: Mapping[str, object]) -> bool:
-    """Whether a stored payload is this request: equal, or equal but for defaults the planner filled in."""
+    """Whether a stored payload is this request: equal, or equal but for defaults the planner filled in. Ids compare
+    trimmed, so a request stored before ids were trimmed still replays."""
+    prior = _trim_ids(prior)
     if prior == body:
         return True
     extra = set(prior) - set(body)

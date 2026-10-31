@@ -231,36 +231,41 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
     return out
 
 
-def _feed_origin(r: Any) -> str:
+def feed_origin(r: Any) -> str:
     """The feed row a bank or card entry (or its reversal) was posted for, from its source id ("" for other entries):
     so an earlier posting of a feed row that now stands for a private line can't show its amount either."""
     return str(r["source_id"]).split(":")[0] if str(r["source"]) in ("bank", "card") else ""
 
 
 def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str, str], set[str]]:
-    """For these lines (entry_id, source, source_id): what a "Pays bill" entry shows as its line, the documents it pays
-    ("Bill AC-105") rather than the line it moves the spend off (that spend now counts on the bill's own lines), to a
-    viewer who can open those documents. Also the entries naming a bill or invoice this viewer can't open (one that
-    pays it, or its own entry and that entry's reversal), whose memo and description must not show."""
+    """For these lines (entry_id, source, source_id, reverses_id): what a "Pays bill" entry shows as its line, the
+    documents it pays ("Bill AC-105") rather than the line it moves the spend off (that spend now counts on the bill's
+    own lines), to a viewer who can open those documents. Also the entries naming a bill or invoice this viewer can't
+    open, whose memo and description must not show: its own entry, an entry that ever paid it (a voided settlement
+    still names it) and either one's reversal."""
     from .tab_ap import sees_side
     cut = set(private_cut(ctx, view))
     out: dict[str, str] = {}
     named: dict[str, list[tuple[str, str]]] = {}
+    ids = {str(r["entry_id"]) for r in rows} | {str(r["reverses_id"]) for r in rows if r["reverses_id"]}
+    paid = SAP.documents_paid_by(ctx.c, sorted(ids), voided=True)
     for r in rows:
+        eid = str(r["entry_id"])
+        mine = named.setdefault(eid, [])
         if str(r["source"]) in ("bill", "invoice"):
-            named.setdefault(str(r["entry_id"]), []).append((str(r["source"]), str(r["source_id"]).split(":")[0]))
-    paid = SAP.documents_paid_by(ctx.c, sorted({str(r["entry_id"]) for r in rows}))
-    for eid, docs in paid.items():
-        named.setdefault(eid, []).extend((str(d["to_kind"]), str(d["to_id"])) for d in docs)
+            mine.append((str(r["source"]), str(r["source_id"]).split(":")[0]))
+        for d in [*paid.get(eid, []), *paid.get(str(r["reverses_id"] or ""), [])]:
+            mine.append((str(d["to_kind"]), str(d["to_id"])))
     kinds = {k for docs in named.values() for k, _ in docs}
     hidden = {(k, i) for k in kinds if sees_side(ctx, view, k)
               for i in hidden_documents(ctx, cut, k, sorted({i for docs in named.values() for x, i in docs if x == k}))}
     closed = {eid for eid, docs in named.items()
               if any(not sees_side(ctx, view, k) or (k, i) in hidden for k, i in docs)}
-    for eid, docs in paid.items():
-        if eid not in closed and len({str(d["to_kind"]) for d in docs}) == 1:
-            out[eid] = f"{str(docs[0]['to_kind']).capitalize()} " + \
-                ", ".join(str(d["number"] or d["to_id"])[:40] for d in docs)
+    for eid in named:
+        live = [d for d in paid.get(eid, []) if d["voided_at"] is None]
+        if live and eid not in closed and len({str(d["to_kind"]) for d in live}) == 1:
+            out[eid] = f"{str(live[0]['to_kind']).capitalize()} " + \
+                ", ".join(str(d["number"] or d["to_id"])[:40] for d in live)
     return out, closed
 
 
@@ -399,7 +404,7 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
         stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in batch}))
-        origins = {str(r["line_id"]): _feed_origin(r) for r in batch}
+        origins = {str(r["line_id"]): feed_origin(r) for r in batch}
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
         cut = private_feed(ctx, view, [*stands.values(), *history.values()])
         names = vendor_labels(ctx, view, [str(r["contact_id"]) for r in batch])
@@ -414,6 +419,8 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
                     (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id)) or \
                     (org is not None and not org(tagged.get("team", ""), tagged.get("teammate", ""))):
                 continue
+            if text and str(r["entry_id"]) in closed and text.casefold() not in str(r["contact_id"]).casefold():
+                continue        # matched only on the memo or description it can't show
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
                                      "amount": int(r["amount"]), "currency": ctx.book.base_currency,
                                      "entry_id": str(r["entry_id"]), "account_id": account.id,

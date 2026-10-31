@@ -292,15 +292,18 @@ def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
                      (entry_id,)).fetchall()
 
 
-def documents_paid_by(c: sqlite3.Connection, entry_ids: Sequence[str]) -> dict[str, list[Any]]:
-    """The live settlements each entry made, with the document's kind, id and number: what a "Pays bill" entry pays."""
+def documents_paid_by(c: sqlite3.Connection, entry_ids: Sequence[str], *, voided: bool = False
+                      ) -> dict[str, list[Any]]:
+    """The live settlements each entry made, with the document's kind, id and number: what a "Pays bill" entry pays.
+    With `voided`, the voided ones too (an entry that once paid a document still names it in its memo)."""
     if not entry_ids:
         return {}
     out: dict[str, list[Any]] = {}
-    for r in c.execute(f"SELECT s.entry_id, s.to_kind, s.to_id, COALESCE(b.number, i.number, '') AS number "
+    live = "" if voided else " AND s.voided_at IS NULL"
+    for r in c.execute(f"SELECT s.entry_id, s.to_kind, s.to_id, s.voided_at, COALESCE(b.number, i.number, '') AS number "
                        f"FROM fin_settlements s LEFT JOIN fin_bills b ON s.to_kind='bill' AND b.id=s.to_id "
                        f"LEFT JOIN fin_invoices i ON s.to_kind='invoice' AND i.id=s.to_id WHERE s.entry_id IN "
-                       f"({_marks(entry_ids)}) AND s.voided_at IS NULL ORDER BY s.created_at, s.id", list(entry_ids)):
+                       f"({_marks(entry_ids)}){live} ORDER BY s.created_at, s.id", list(entry_ids)):
         out.setdefault(str(r["entry_id"]), []).append(r)
     return out
 
