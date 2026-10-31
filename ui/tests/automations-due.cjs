@@ -57,7 +57,7 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   assert.deepEqual(saved.trigger, {type: 'due', first_due: '2027-03-01', repeats: 'yearly', open_days: 21, tz: 'America/New_York'});
   assert.equal(saved.next_due, '2027-03-01', `${tag}: the hub's next due day`);
   assert.equal(Date.parse(saved.next_run), Date.parse('2027-02-08T05:00:00Z'), `${tag}: its task opens 21 days before, at midnight in New York`);
-  assert.equal(await page.locator('.au-trig .au-c1').innerText(), 'Due Mar 1, 2027 · yearly · 21d before');
+  assert.equal(await page.locator('.au-trig .au-c1').innerText(), 'Due Mar 1 · yearly · 21d before');
 
   // Switching to a schedule and back restores the saved due date unchanged.
   await page.locator('.au-card[data-open="trigger"]').click();
@@ -89,8 +89,10 @@ run('automations-due', ['org', 'toured', 'automations'], async ({hub, browser, p
   await go(page, '#/automations');
   const row = page.locator(`tr.au-row[data-row="${made.id}"]`);
   await row.waitFor();
-  assert.equal(await row.locator('td.au-tt').innerText(), 'Due Mar 1, 2027 · yearly · 21d before');
-  assert.deepEqual((await row.locator('.au-nx').innerText()).split('\n'), ['Due Mar 1, 2027', 'opens in 111d']);
+  assert.equal(await row.locator('td.au-tt').innerText(), 'Due Mar 1 · yearly · 21d before');
+  assert.deepEqual((await row.locator('.au-nx').innerText()).split('\n'), ['Due Mar 1', 'opens in 111d']);
+  const next = await row.locator('td.au-cx').boundingBox();
+  assert.ok(next.width >= 90, `${tag}: Next is shown, not folded (${next.width}px)`);
   const groups = await page.locator('tr.au-grp').evaluateAll(r => r.map(x => x.dataset.agrp));
   assert.ok(groups.includes('due') && groups.indexOf('due') === groups.length - 1 - (groups.includes('system') ? 1 : 0),
     `${tag}: Due date after the other kinds, before system jobs (${groups})`);

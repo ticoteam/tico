@@ -83,12 +83,12 @@ function auCronWords(cron) {
 }
 // The viewer's time zone, the default for a new schedule or due date.
 function auZone() { try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'; } catch { return 'UTC'; } }
-// A day (YYYY-MM-DD, a calendar day with no zone) as "Mar 1", or "Mar 1, 2027" outside this year.
-function auDay(iso) {
+// A day (YYYY-MM-DD, a calendar day with no zone) as "Mar 1"; with `year`, "Mar 1, 2027" outside this year.
+function auDay(iso, year = false) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(iso || ''));
   if (!m) return '';
   const d = new Date(+m[1], +m[2] - 1, +m[3]);
-  return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(d.getFullYear() !== new Date().getFullYear() ? {year: 'numeric'} : {})});
+  return d.toLocaleDateString(undefined, {month: 'short', day: 'numeric', ...(year && d.getFullYear() !== new Date().getFullYear() ? {year: 'numeric'} : {})});
 }
 // A local day `n` days from today, as YYYY-MM-DD.
 function auInDays(n) {
@@ -109,7 +109,8 @@ function auSource(t = {}) {
   if (t.type === 'webhook') return t.name || t.id || '';
   if (t.type === 'listening') return t.destination ? 'Listening · ' + t.destination : 'Listening';
   if (t.type === 'event') return t.name ? auEventWords(t.name) : '';
-  if (t.type === 'due') return [`Due ${auDay(t.first_due)}`, t.repeats, `${t.open_days ?? 14}d before`].filter(Boolean).join(' · ');
+  // A repeat reads as its day ("Due Mar 1 · yearly"); only a one-off says its year.
+  if (t.type === 'due') return [`Due ${auDay(t.first_due, t.repeats === 'once')}`, t.repeats, `${t.open_days ?? 14}d before`].filter(Boolean).join(' · ');
   return '';
 }
 const auSpendWords = a => a.spend_cap?.per_30m != null ? `$${Number(a.spend_cap.per_30m).toFixed(2)} / 30 min` : 'Bot’s limit';

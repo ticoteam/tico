@@ -54,7 +54,7 @@
 .au-tbl-t th.au-tt{width:15%}
 .au-tbl-t th.au-to{width:64px}
 .au-tbl-t th.au-cl{width:78px}
-.au-tbl-t th.au-cx{width:96px}
+.au-tbl-t th.au-cx{width:104px}
 .au-tbl-t th.au-cs{width:104px;padding-right:0}
 .au-tbl-t th.au-n{width:58px}
 .au-tbl-t th.au-cc{width:74px}
@@ -65,7 +65,7 @@
 /* a narrow table beside the editor folds Next (and a run's Steps and Time) to nothing, then Cost; folded, not removed, so a
    group row's colspan still matches the columns. A phone keeps them all and scrolls sideways instead. */
 @media (min-width:761px){
-  @container (max-width:1000px){
+  @container (max-width:940px){
     .au-tbl-t th.au-cx{width:0}
     .au-tbl-t .au-cx{padding:0;font-size:0}
   }
