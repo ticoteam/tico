@@ -369,14 +369,36 @@ impl Stopper {
     }
 }
 
+/// Makes the process `command` starts the leader of a new session and process group, so a stop (`own`) reaches
+/// what it starts (tool commands, MCP servers, a browser) as well as itself. A turn's standard streams are piped, so
+/// losing the controlling terminal costs nothing, and nothing it runs can stop on a read from one.
+pub fn new_group(command: &mut tokio::process::Command) -> &mut tokio::process::Command {
+    // SAFETY: setsid is async-signal-safe, and a just-forked child leads no group, so it succeeds.
+    unsafe {
+        command.pre_exec(|| {
+            libc::setsid();
+            Ok(())
+        });
+    }
+    command
+}
+
 /// Hand `child` to a task of its own that waits for it and carries out `Stopper` requests. The receiver gets the
 /// exit status. Take the child's pipes before calling this.
+///
+/// A child that leads its own process group (`new_group`) is stopped as a group: SIGTERM, the SIGKILL after the
+/// grace, and, when it exits after a SIGTERM, a SIGKILL to whatever of the group is still left, so nothing it started
+/// outlives the stop. `kill` and `signal` reach the child alone, and after either the group is left to its caller:
+/// a turn that ends on its background wait keeps shells in that group.
 pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::Receiver<std::io::Result<std::process::ExitStatus>>) {
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<Stop>();
     let (done, exited) = tokio::sync::oneshot::channel();
+    // SAFETY: getpgid only reads; the child is not reaped yet, so the pid is still its own.
+    let mut group = child.id().map(|p| p as i32).filter(|&p| unsafe { libc::getpgid(p) } == p);
     tokio::spawn(async move {
         let mut kill_at: Option<tokio::time::Instant> = None;
         let mut asking = true;
+        let mut termed = false;
         let status = loop {
             let escalate = async {
                 match kill_at {
@@ -389,17 +411,20 @@ pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::
                 asked = rx.recv(), if asking => match asked {
                     // Not reaped yet: only this task waits for the child, and its wait has not returned.
                     Some(Stop::Kill) => {
+                        group = None;
                         let _ = child.start_kill();
                         kill_at = None;
                     }
                     Some(Stop::Signal(signal)) => {
+                        group = None;
                         if let Some(pid) = child.id() {
                             unsafe { libc::kill(pid as i32, signal); }
                         }
                     }
                     Some(Stop::Term(grace)) => {
                         if let Some(pid) = child.id() {
-                            unsafe { libc::kill(pid as i32, libc::SIGTERM); }
+                            unsafe { libc::kill(group.map_or(pid as i32, |g| -g), libc::SIGTERM); }
+                            termed = true;
                         }
                         let at = tokio::time::Instant::now() + grace;
                         kill_at = Some(kill_at.map_or(at, |k| k.min(at)));
@@ -407,12 +432,20 @@ pub fn own(mut child: tokio::process::Child) -> (Stopper, tokio::sync::oneshot::
                     None => asking = false,
                 },
                 _ = escalate => {
-                    let _ = child.start_kill();
+                    match group {
+                        Some(g) => unsafe { libc::kill(-g, libc::SIGKILL); },
+                        None => { let _ = child.start_kill(); }
+                    }
                     kill_at = None;
                     asking = false;
                 }
             }
         };
+        if let (Some(g), true) = (group, termed) {
+            // SAFETY: the group's number stays taken while any process of it is left, and it was reaped a moment
+            // ago: with none left, this finds nothing.
+            unsafe { libc::kill(-g, libc::SIGKILL) };
+        }
         let _ = done.send(status);
     });
     (Stopper(tx), exited)
@@ -756,6 +789,50 @@ pub mod fixtures {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A harness in its own group that starts a child; its pid (the group) and the child's.
+    async fn grouped_harness() -> (tokio::process::Child, i32, i32) {
+        use tokio::io::AsyncBufReadExt;
+        let mut command = tokio::process::Command::new("/bin/sh");
+        command.args(["-c", "sleep 900 </dev/null >/dev/null 2>&1 & echo $!; while :; do sleep 1; done"]);
+        command.stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped());
+        let mut child = new_group(&mut command).spawn().unwrap();
+        let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let tool: i32 = lines.next_line().await.unwrap().unwrap().trim().parse().unwrap();
+        let group = child.id().unwrap() as i32;
+        (child, group, tool)
+    }
+
+    fn group_gone(group: i32) -> bool {
+        // SAFETY: signal 0 only checks whether any process of the group is left.
+        unsafe { libc::kill(-group, 0) == -1 && std::io::Error::last_os_error().raw_os_error() == Some(libc::ESRCH) }
+    }
+
+    #[tokio::test]
+    async fn a_terminate_ends_the_whole_group_and_a_kill_ends_only_the_leader() {
+        let (child, group, tool) = grouped_harness().await;
+        // SAFETY: getpgid only reads.
+        assert_eq!(unsafe { libc::getpgid(tool) }, group);
+        let (stopper, exited) = own(child);
+        stopper.terminate(std::time::Duration::from_secs(5));
+        tokio::time::timeout(std::time::Duration::from_secs(5), exited).await.unwrap().unwrap().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while !group_gone(group) && std::time::Instant::now() < deadline {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        assert!(group_gone(group), "the harness's child outlived the stop");
+
+        // A background-wait end kills the harness alone: the shells it keeps run on in its group.
+        let (child, group, tool) = grouped_harness().await;
+        let (stopper, exited) = own(child);
+        stopper.kill();
+        tokio::time::timeout(std::time::Duration::from_secs(5), exited).await.unwrap().unwrap().unwrap();
+        // SAFETY: signal 0 only checks the pid.
+        let kept = unsafe { libc::kill(tool, 0) } == 0;
+        // SAFETY: the child this test started, and its group.
+        unsafe { libc::kill(-group, libc::SIGKILL) };
+        assert!(kept, "a kill reached the harness's child");
+    }
 
     #[test]
     fn a_tool_summary_names_the_file_or_program_but_never_the_arguments() {

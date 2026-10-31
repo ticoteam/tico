@@ -1065,6 +1065,7 @@ impl PiHost {
         }
         let mut command = crate::isolation::command_as(settings.identity, &argv[0]);
         command.args(&argv[1..]).stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::piped()).current_dir(&settings.cwd).env_clear().envs(env);
+        super::new_group(&mut command);
         Ok(command)
     }
 
