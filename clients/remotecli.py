@@ -60,11 +60,17 @@ def _rules_args(args):
         with_scope = scope(getattr(args, "with_names", None))
         if with_scope is not None:
             setattr(args, "with", with_scope)
+    if args.fn == "rules read" and not getattr(args, "source", None):
+        args.fn = "rules get"                      # one rule by id; with --from it is a document read (hub_rules_read)
+    if args.fn == "rules add" and getattr(args, "file_version", None) and not getattr(args, "quote", None):
+        raise SystemExit("hub rules add: --version goes with --file and --quote")
     if args.fn == "rules add" and getattr(args, "quote", None):
         if not getattr(args, "file_id", None):
             raise SystemExit("hub rules add: a quote needs --file (the document it is in)")
         args.cite = {"file_id": args.file_id, "section": getattr(args, "section", None) or "", "quote": args.quote}
-    for flag in ("who_names", "with_names", "everyone", "all_bots", "file_id", "section", "quote"):
+        if getattr(args, "file_version", None):
+            args.cite["version"] = args.file_version
+    for flag in ("who_names", "with_names", "everyone", "all_bots", "file_id", "section", "quote", "file_version"):
         if hasattr(args, flag):
             delattr(args, flag)
     return args

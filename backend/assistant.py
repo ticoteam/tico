@@ -229,7 +229,7 @@ def instructed_org(method, path, body=None):
         return False
     if any(m == method and p.fullmatch(path) for m, p in _ORG):
         return True
-    if method == "POST" and path == "/api/v2/rules":
+    if method == "POST" and path in ("/api/v2/rules", "/api/v2/rules/read", "/api/v2/rules/ask"):
         return True
     fields = _fields(body)
     return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields

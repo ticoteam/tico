@@ -5,9 +5,11 @@ import json
 import re
 from pathlib import Path
 
+import pytest
 import yaml
 
-from backend import counsel
+from backend import audit_log, counsel, screening
+from backend import assistant as A
 from backend import files as F
 from backend import org_rules as O
 from backend.auth import Identity
@@ -39,6 +41,15 @@ def store_file(api, text, title="Acme Vendor Terms", bot="ops"):
             identity="upload:" + title, title=title, name=title + ".txt", mime="text/plain", blob_id=item["id"],
             digest=digest, size=len(data))
         return row["id"], row["current_version"]
+
+
+def restrict_bot(api, slug, people=("ana",)):
+    """The bot's own access is restricted to the named people (a real restriction, not a stub): Cara, who is on no
+    list, cannot read its files, its tasks or the rules that cite them."""
+    audience = {"everyone": False, "people": list(people), "teams": [], "bots": []}
+    doc = {level: audience for level in ("see", "read", "write")}
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET access_json=? WHERE bot=?", (json.dumps(doc), slug))
 
 
 def source(api, name="Acme Vendor", kind="vendor"):
@@ -157,12 +168,16 @@ def test_the_document_is_fenced_as_data_in_counsels_task(api):
     assert f"<<END UNTRUSTED DOCUMENT {token}>>" in text[end:]
 
 
-def test_counsel_has_no_outbound_tools_and_sends_nothing():
+def test_counsel_has_no_credentials_and_sends_nothing(api):
     card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "counsel" / "bot.yaml"
     document = yaml.safe_load(card.read_text())
     assert document["tools"] == []
     assert document["outbound_send"] is False
     assert document["routines"] == []
+    assert "no credentials" in card.read_text() and "sends nothing" in card.read_text()
+    counsel_on(api)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT COUNT(*) FROM credential_grants WHERE subject='bot:counsel'").fetchone()[0] == 0
 
 
 def test_a_reader_without_the_file_sees_the_sentence_but_not_the_quote(api, monkeypatch):
@@ -272,7 +287,7 @@ def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
         "kind": "external", "text": "Keep a consent record.", "who": {"bots": ["ops"]}, "source_id": source(api),
         "cite": {"file_id": file_id, "quote": "Keep a record of each consent for five years."}})
-    assert r.status_code == 404, r.text
+    assert r.status_code == 403, r.text
 
 
 def test_hub_file_read_returns_the_whole_text_of_one_version():
@@ -290,3 +305,276 @@ def test_hub_file_read_returns_the_whole_text_of_one_version():
     out = hubtools.files_read(client, {"id": "abc123", "version": 2})
     assert client.calls == [("GET", "/api/v2/files/abc123/versions/2", True)]
     assert out["characters"] == len("Whole text. " * 25000) and out["text"].startswith("Whole text.")
+
+
+def new_version(api, file_id, text, title="Acme Vendor Terms", bot="ops"):
+    """Another version of the same upload (the same identity), as a newer copy of the document lands."""
+    data = text.encode("utf-8")
+    with api.app.state.store.transaction() as c:
+        digest = api.app.state.blobs.put(data, "text/plain")
+        item = register(c, Identity("human:ana", "human"), digest, len(data), title + ".txt", "text/plain")
+        row, _, _ = api.app.state.files.add_version(
+            c, bot=bot, actor="human:ana", scope="bot", task=None, conversation=None, attempt="",
+            identity="upload:" + title, title=title, name=title + ".txt", mime="text/plain", blob_id=item["id"],
+            digest=digest, size=len(data))
+    assert row["id"] == file_id
+    return row["current_version"]
+
+
+def suggest(api, file_id, quote, version=None, token="counsel-test", who=None):
+    cite = {"file_id": file_id, "quote": quote}
+    if version is not None:
+        cite["version"] = version
+    body = {"kind": "external", "text": "Keep a consent record for five years.", "source_id": source(api), "cite": cite}
+    if who is not None:
+        body["who"] = who
+    return api.post("/api/v2/rules", headers=headers(token), json=body)
+
+
+CONSENT = "Keep a record of each consent for five years."
+
+
+def test_a_read_task_is_private_to_the_person_who_asked_and_counsel(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    restrict_bot(api, "ops")
+    # Cara cannot read the file (ops is restricted to ana), so she must not read the task about it either.
+    assert api.get(f"/api/v2/files/{file_id}", headers=headers("cara-test")).status_code != 200
+    task = read_document(api, file_id)["task_id"]
+    assert api.get(f"/api/v2/tasks/{task}", headers=headers("ana-test")).status_code == 200
+    assert api.get(f"/api/v2/tasks/{task}", headers=headers("cara-test")).status_code == 404
+    listing = api.get("/api/v2/tasks", headers=headers("cara-test"))
+    assert listing.status_code == 200 and task not in listing.text and CONSENT not in listing.text
+
+
+def test_a_can_i_task_is_private_to_the_person_who_asked(api):
+    org(api)
+    counsel_on(api)
+    task = post(api, "rules/ask", {"question": "Can I keep consent records for seven years?"})["task_id"]
+    assert api.get(f"/api/v2/tasks/{task}", headers=headers("ana-test")).status_code == 200
+    assert api.get(f"/api/v2/tasks/{task}", headers=headers("cara-test")).status_code == 404
+
+
+def test_screening_runs_on_every_document_read_and_warns(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    seen = []
+
+    def warn(store, source_name, text, bot=None, **kw):
+        seen.append((source_name, bot))
+        return screening.verdict("warn", None, "", ["instruction_override"], "patterns", "pattern")
+    monkeypatch.setattr(screening, "screen", warn)
+    read = read_document(api, file_id)
+    assert seen == [("document", "counsel")]
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    assert body.startswith("Tico screening:")
+    assert "Keep a record of each consent" in body
+    assert events(api, "screening.warned")
+
+
+def test_a_document_screening_holds_is_not_given_to_counsel(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    monkeypatch.setattr(screening, "screen", lambda *a, **kw: screening.verdict(
+        "hold", 0.99, "instruction_override", [], "model", "score", label="injection"))
+    read = read_document(api, file_id)
+    assert read["screening"] == "hold"
+    with api.app.state.store.read() as c:
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    assert "Screening held this document" in body
+    assert "UNTRUSTED DOCUMENT" not in body and "Keep a record of each consent" not in body
+    assert events(api, "screening.held")
+
+
+def test_counsel_cites_only_the_version_it_was_asked_to_read(api):
+    org(api)
+    counsel_on(api)
+    file_id, first = store_file(api, CONTRACT)
+    read_document(api, file_id)
+    newer = new_version(api, file_id, CONTRACT + "\nAmendment: nothing new for us.")
+    assert newer == first + 1
+    # The unreviewed version is not citable, even though it holds the quote.
+    assert suggest(api, file_id, CONSENT, version=newer).status_code == 404
+    # The asked version is, and with no version named, the one asked is the one cited.
+    ok = suggest(api, file_id, CONSENT, version=first)
+    assert ok.status_code == 200 and ok.json()["cite"]["version"] == first
+    assert suggest(api, file_id, CONSENT).json()["cite"]["version"] == first
+
+
+def test_counsel_must_name_the_version_when_more_than_one_was_read(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+    post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT + "\nRevised."))
+    second = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert second["file"]["version"] == 2
+    assert suggest(api, second["file"]["id"], CONSENT).status_code == 422
+    assert suggest(api, second["file"]["id"], CONSENT, version=2).status_code == 200
+
+
+def test_a_person_may_still_cite_a_newer_version_they_can_read(api):
+    org(api)
+    counsel_on(api)
+    file_id, first = store_file(api, CONTRACT)
+    newer = new_version(api, file_id, CONTRACT + "\nRevised in March.")
+    assert newer == first + 1
+    r = api.post("/api/v2/rules", headers=headers("ana-test"), json={
+        "kind": "external", "text": "Keep a consent record for five years.", "source_id": source(api),
+        "who": {"bots": ["ops"]}, "cite": {"file_id": file_id, "quote": CONSENT}})
+    assert r.status_code == 200 and r.json()["cite"]["version"] == newer != first
+
+
+def test_audit_shows_a_rules_quote_only_to_a_reader_who_can_read_its_file(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    restrict_bot(api, "ops")
+    read_document(api, file_id)
+    cite = {"file_id": file_id, "version": 1, "section": "4. Messaging", "quote": CONSENT}
+    with api.app.state.store.transaction() as c:
+        audit_log.write(c, "human:cara", "org_rule:rule-1", None, {"id": "rule-1", "cite": cite}, None)
+        audit_log.write(c, "human:ana", "org_rule:rule-2", None, {"id": "rule-2", "cite": cite}, None)
+    cara = get(api, "audit", token="cara-test")
+    shown = [row for row in cara["rows"] if row["object"] == "org_rule:rule-1"]
+    assert shown and shown[0]["after"]["cite"] == {"hidden": True}
+    assert CONSENT not in json.dumps(cara)
+    ana = get(api, "audit", token="ana-test")
+    kept = [row for row in ana["rows"] if row["object"] == "org_rule:rule-2"]
+    assert kept and kept[0]["after"]["cite"]["quote"] == CONSENT
+
+
+def test_a_link_is_fetched_with_no_credential(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    monkeypatch.setenv("GH_TOKEN", "synthetic-gh-token")
+    monkeypatch.setenv("GOOGLE_ACCESS_TOKEN", "synthetic-google-token")
+    seen = {}
+
+    def fake(url, **kw):
+        seen.update(kw)
+        return fetched(CONTRACT)
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", fake)
+    post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert seen["env"] == {}
+    assert seen["max_chars"] == counsel.DOC_CHARS == 400_000
+
+
+def test_a_suggestion_with_no_who_is_accepted_only_once_a_who_is_set(api):
+    org(api)
+    counsel_on(api)
+    file_id, _ = store_file(api, CONTRACT)
+    read_document(api, file_id)
+    r = suggest(api, file_id, CONSENT)
+    assert r.status_code == 200, r.text
+    rule = r.json()
+    assert rule["status"] == "suggested"
+    with api.app.state.store.read() as c:
+        stored = json.loads(c.execute("SELECT who_json FROM org_rules WHERE id=?", (rule["id"],)).fetchone()[0])
+    assert not O._has(stored)
+    # A person cannot add a rule with no Who, and cannot accept a suggestion that has none.
+    no_who = api.post("/api/v2/rules", headers=headers("ana-test"), json={
+        "kind": "internal", "text": "Ops answers within a day."})
+    assert no_who.status_code == 422
+    refused = api.post(f"/api/v2/rules/{rule['id']}/accept", headers=headers("ana-test"), json={"version": rule["version"]})
+    assert refused.status_code == 422, refused.text
+    set_who = post(api, f"rules/{rule['id']}/accept", {"version": rule["version"], "who": {"bots": ["ops"]}})
+    assert set_who["rule"]["status"] == "active"
+
+
+def test_a_long_document_is_read_in_full_and_its_obligation_cited(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    text = "Filler clause, nothing to suggest. " * 1000 + "\n\n5. Consent\n\n" + CONSENT
+    assert text.index(CONSENT) > 30_000
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(text))
+    first = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert first["truncated"] is False
+    assert suggest(api, first["file"]["id"], CONSENT, version=1).status_code == 200
+
+
+def test_a_document_over_the_bound_is_marked_truncated_in_every_place(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    cut = dict(fetched("Clause. " * 1000), truncated=True)
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: cut)
+    read = post(api, "rules/read", {"url": "https://vendor.example/terms", "source_id": source(api)})
+    assert read["truncated"] is True
+    with api.app.state.store.read() as c:
+        row = c.execute("SELECT * FROM rule_reads WHERE file_id=?", (read["file"]["id"],)).fetchone()
+        body = c.execute("SELECT body FROM tasks WHERE id=?", (read["task_id"],)).fetchone()["body"]
+    assert row["truncated"] == 1 and row["version"] == 1
+    assert "longer than 400000 characters" in body
+    # An upload past the bound is cut at it, and says so.
+    big, _ = store_file(api, "Clause. " * 60_000, title="Huge terms")
+    read_big = read_document(api, big)
+    assert read_big["truncated"] is True
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT truncated FROM rule_reads WHERE file_id=?", (big,)).fetchone()["truncated"] == 1
+
+
+def test_the_cli_cites_the_version_it_names_after_a_newer_version_lands(api):
+    from clients import hubcli, remotecli
+    org(api)
+    counsel_on(api)
+    file_id, first = store_file(api, CONTRACT)
+    read_document(api, file_id)
+    new_version(api, file_id, CONTRACT + "\nAmendment.")
+    args = remotecli._rules_args(hubcli.parser().parse_args([
+        "rules", "add", "--kind", "external", "--text", "Keep a consent record for five years.", "--who", "ops",
+        "--from", source(api), "--file", file_id, "--version", str(first), "--section", "4. Messaging",
+        "--quote", CONSENT]))
+    assert args.cite == {"file_id": file_id, "section": "4. Messaging", "quote": CONSENT, "version": first}
+    r = api.post("/api/v2/rules", headers=headers("counsel-test"), json={
+        "kind": args.kind, "text": args.text, "who": args.who, "source_id": args.source_id, "cite": args.cite})
+    assert r.status_code == 200, r.text
+    assert r.json()["cite"]["version"] == first
+    with pytest.raises(SystemExit):
+        remotecli._rules_args(hubcli.parser().parse_args([
+            "rules", "add", "--kind", "external", "--text", "x", "--from", "Acme", "--version", "1"]))
+
+
+def test_rules_read_by_id_is_the_single_rule_and_with_from_a_document_read():
+    from clients import hubcli, remotecli
+    single = remotecli._rules_args(hubcli.parser().parse_args(["rules", "read", "rule-1"]))
+    assert remotecli.tool_name(single.fn) == "hub_rules_get"
+    document = remotecli._rules_args(hubcli.parser().parse_args(["rules", "read", "file-1", "--from", "Acme"]))
+    assert remotecli.tool_name(document.fn) == "hub_rules_read"
+
+
+def test_the_assistant_is_offered_the_document_read_the_question_and_the_single_rule_read():
+    from clients import hubtools
+    names = {t["name"] for t in hubtools.listing(kind="assistant")}
+    assert {"hub_rules_get", "hub_rules_read", "hub_rules_ask", "hub_rules_add"} <= names
+    tools = {t["name"]: t for t in hubtools.TOOLS}
+    assert tools["hub_rules_get"]["writes"] is False
+    assert tools["hub_rules_read"]["writes"] is True and "on_behalf_of" in tools["hub_rules_read"]["inputSchema"]["properties"]
+    assert A.instructed_org("POST", "/api/v2/rules/read", b"{}")
+    assert A.instructed_org("POST", "/api/v2/rules/ask", b"{}")
+    assert not A.instructed_org("GET", "/api/v2/rules/read", b"{}")
+
+
+def test_a_replay_returns_the_saved_answer_and_fetches_nothing(api, monkeypatch):
+    org(api)
+    counsel_on(api)
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", lambda url, **kw: fetched(CONTRACT))
+    body = {"url": "https://vendor.example/terms", "source_id": source(api)}
+    first = post(api, "rules/read", body, key="read-once")
+
+    def offline(url, **kw):
+        raise counsel.doc_fetch.FetchError("offline", "The page is offline")
+    monkeypatch.setattr(counsel.doc_fetch, "fetch", offline)
+    assert post(api, "rules/read", body, key="read-once") == first
+    assert len(events(api, "rules.read_requested")) == 1
+    # Without a key a read is refused before any fetch.
+    assert api.post("/api/v2/rules/read", headers={"Authorization": "Bearer ana-test"}, json=body).status_code == 422
+
+
+def test_counsels_registries_list_it_as_a_hidden_helper():
+    text = (Path(counsel.__file__).resolve().parents[1] / "ui" / "app" / "state.js").read_text()
+    assert "slug === 'counsel'" in text
+    assert "ASSISTANT_HELPERS = ['botops', 'goal-manager', 'librarian', 'counsel']" in text

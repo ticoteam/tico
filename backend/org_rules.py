@@ -134,6 +134,24 @@ def _via(who):
     return who.via or H.VIA.get() or "api"
 
 
+def redact_audit(c, auth, who, found):
+    """The audit rows of org rules (backend/audit_log.py `rows`), with each cite's quote shown only where the reader may
+    read its file now, as `view` shows it. Changed in place: `before` and `after` of each row."""
+    from . import files as F
+    cache = {}
+    for item in found:
+        if not str(item.get("object") or "").startswith("org_rule:"):
+            continue
+        for key in ("before", "after"):
+            snap = item.get(key)
+            cite = snap.get("cite") if isinstance(snap, dict) else None
+            if not cite:
+                continue
+            row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite.get("file_id"),)).fetchone()
+            if not row or not F.file_visible(c, auth, who, row, cache):
+                snap["cite"] = {"hidden": True}
+
+
 def _audit(c, actor, rule_id, before, after, who):
     audit_log.write(c, actor, "org_rule:" + rule_id, before, after, _via(who))
 
@@ -588,7 +606,13 @@ def add_rule(c, auth, who, body):
     if cite and cite.get("file_id") is None:
         raise Problem("validation", "A cite names its file", 422)
     ctx = _ctx(c)
-    scope = _scope_checked(c, auth, who, body.get("who") or {})
+    given = scope_in(c, body.get("who") or {}, flags=True)
+    if who.role == "bot" and not _has(given):
+        # Counsel names no Who when no department is named: the suggestion is stored with none, and the owner sets it
+        # when they accept (decide_rule refuses an accept with no Who).
+        scope = given
+    else:
+        scope = _scope_checked(c, auth, who, body.get("who") or {})
     with_scope = scope_in(c, body.get("with") or {}, flags=False) if kind == "internal" else \
         {"groups": [], "bots": [], "people": []}
     # A bot's add is a suggestion, and so is a person's add they may not manage (the rule is theirs to suggest). Whoever may
@@ -656,6 +680,8 @@ def decide_rule(c, auth, who, rule_id, body, action):
     row = _get(c, rule_id)
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a rule; a person accepts, skips or retires it", 403)
+    if action == "accept" and body.get("who") is None and not _has(row["who"]):
+        raise Problem("validation", "Say who follows it: a suggestion with no Who is accepted with one", 422)
     ctx = _ctx(c)
     _check_manage(c, auth, who, row["who"], ctx)
     if action == "accept":
@@ -1203,5 +1229,5 @@ def install(app, store, auth, mutate):
             return bot_rules(c, auth, who, bot, cursors, _limit(limit, BOT_LIST_MAX, BOT_LIST_MAX))
 
 
-__all__ = ["ensure", "matching", "applies_to", "may_manage", "scope_in", "settings_for", "view", "install", "counts",
+__all__ = ["ensure", "matching", "applies_to", "may_manage", "scope_in", "settings_for", "view", "install", "counts", "redact_audit",
            "due_show"]

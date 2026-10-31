@@ -1,16 +1,18 @@
 """Counsel: the built-in helper that reads a document someone adds to Rules and suggests the obligations that bind us,
 and answers "can I...?" from the rules in force (docs/rules-plan.md §2, §5).
 
-- Adding a document (`POST /api/v2/rules/read`) saves its text as a Files version (an upload keeps its own version; a
-  link is fetched with clients/doc_fetch.py and the exact fetched text is saved first, so every cite points at a version
-  that later changes never alter), then opens one task for Counsel with the document fenced as untrusted data. Counsel
-  has no outbound tools, so the fence is a convention for its reading, not the control: the control is that it can only
-  write suggestions, and a person accepts each one.
-- Counsel writes each suggestion through `POST /api/v2/rules` as `suggested`, with its From and a cite. A cite is
-  checked here: the file must be readable by the writer, and the quote must appear in that version's normalized text.
-  A quote that does not is dropped (the response says so, and `rules.quote_dropped` counts it), never stored.
+- Adding a document (`POST /api/v2/rules/read`) reads it first, outside any write: a file's text, or a public link
+  fetched with clients/doc_fetch.py with no credential (`env={}`), either held to DOC_CHARS characters. The text is
+  screened for prompt injection (backend/screening.py, source `document`): at `warn` the task starts with the warning
+  line; at `hold` Counsel is not given the text at all. Then the write saves a link's text as a Files version (so each
+  cite points at a version that later changes never alter), records the version in `rule_reads`, and opens one private
+  task for Counsel with the document fenced as untrusted data. A document cut at DOC_CHARS is marked truncated.
+- Counsel has no credentials and sends nothing. It reads its task and the rules in force, and writes suggestions through
+  `POST /api/v2/rules` as `suggested`. A cite is checked here: Counsel cites only the exact (file, version) it was asked
+  to read, and the quote must appear in that version's normalized text. A quote that does not is dropped (the response
+  says so, and `rules.quote_dropped` counts it), never stored. Only Counsel and a person cite; no other bot can.
 - `POST /api/v2/rules/ask` answers "can I...?" with the active rules that share words with the question, at once, and
-  opens a Counsel task for the full answer. Every answer carries the one line that it is not legal advice.
+  opens a private Counsel task for the full answer. Every answer carries the one line that it is not legal advice.
 
 Counsel is a helper (backend/assistant.py `HELPERS`): built in, off the org chart, seeded by onboarding like the
 Librarian (templates/catalog/counsel). Only the owner can turn it on or off.
@@ -32,6 +34,7 @@ from . import files as F
 from . import hubdb as H
 from . import org_rules as O
 from . import people as P
+from . import screening
 from .auth import Identity
 from .blobs import register
 from .models import Contract
@@ -42,6 +45,9 @@ NAME = "Counsel"
 NOT_ADVICE = "Not legal advice. For real exposure, ask a lawyer."
 QUESTION_MAX = 500
 NOTE_MAX = 2000
+# The most of a document Counsel reads: a link is fetched to this bound, a file is read to it. Longer text is cut here and
+# the read says so (truncated), in the response, the task and the rule_reads row.
+DOC_CHARS = 400_000
 # A document's text goes into Counsel's task only up to this many characters (a run's prompt budget). A longer one is
 # named by file and version, and Counsel reads it with `hub file read`.
 TEXT_INLINE_MAX = 20_000
@@ -50,7 +56,12 @@ STOP_WORDS = frozenset("the and for with that this from are can our your you any
                        "what when which will may must".split())
 # Quote characters and dashes that differ in a copy of a document but say the same thing.
 _STRAIGHT = str.maketrans({"‘": "'", "’": "'", "‚": "'", "“": '"', "”": '"', "„": '"',
-                           "–": "-", "—": "-", " ": " "})
+                           "–": "-", "—": "-", " ": " "})
+
+# The versions Counsel was asked to read: the only versions it may cite (backend/files.py asked_to_read).
+RULE_READS = """CREATE TABLE IF NOT EXISTS rule_reads(
+ file_id TEXT NOT NULL, version INTEGER NOT NULL, task_id TEXT, requested_by TEXT NOT NULL,
+ created TEXT NOT NULL, truncated INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(file_id, version))"""
 
 
 class RuleRead(Contract):
@@ -63,6 +74,11 @@ class RuleRead(Contract):
 
 class RuleAsk(Contract):
     question: str = Field(min_length=3, max_length=QUESTION_MAX)
+
+
+def ensure(c):
+    """The table of the document versions Counsel was asked to read. Unversioned, as the org-rules tables are."""
+    c.execute(RULE_READS)
 
 
 def available(c):
@@ -88,15 +104,22 @@ def fence(text):
     return f"<<UNTRUSTED DOCUMENT {token}>>\n{text}\n<<END UNTRUSTED DOCUMENT {token}>>"
 
 
-def version_text(c, blobs, file_id, number):
-    """The text Tico holds for one version of a file (the same extraction the search index uses), or None when the
-    type has no text Tico reads."""
+def document(c, blobs, file_id, number):
+    """One version's text as Counsel reads it: the whole text up to DOC_CHARS, and whether it was cut. (None, False)
+    when the version does not exist or is of a type Tico reads no text from."""
     row = c.execute("SELECT v.mime, b.digest FROM bot_file_versions v JOIN blobs b ON b.id=v.blob_id "
                     "WHERE v.file_id=? AND v.version=?", (file_id, number)).fetchone()
     if not row:
-        return None
-    text = file_library.extract(row["mime"], blobs.get(row["digest"]))
-    return text or None
+        return None, False
+    data = blobs.get(row["digest"])
+    text = file_library.extract(row["mime"], data, full=True)
+    if not text:
+        return None, False
+    return text[:DOC_CHARS], len(text) > DOC_CHARS or len(data) > file_library.READ_MAX
+
+
+def version_text(c, blobs, file_id, number):
+    return document(c, blobs, file_id, number)[0]
 
 
 def suggested_who(c, source_name):
@@ -154,68 +177,130 @@ def _store_fetched(c, blobs, files, url, fetched):
     return row["id"], row["current_version"], row["title"]
 
 
-def _task(c, who, title, text):
-    return H.task_create(c, who.actor, title, text, "bot:" + SLUG, labels=["rules"])
+def _task(c, who, title, text, labels=()):
+    """Counsel's task for a person's request: private to that person and Counsel (the file's readers are not widened)."""
+    return H.task_create(c, who.actor, title, text, "bot:" + SLUG, labels=["rules", *labels], private=True)
 
 
-def read(c, auth, who, files, blobs, body, fetched=None):
-    """Add a document: a Files version and one Counsel task. `fetched` is the link's text, fetched before the write."""
-    H._writer(c, who.actor)
-    if not available(c):
-        raise Problem("counsel_off", "The " + NAME + " is off", 409)
+def _screen(store, text):
+    """The screening verdict on a document's text. Outside any write: the screener reads its own settings."""
+    return screening.screen(store, "document", text, bot=SLUG, key=hashlib.sha256(text.encode("utf-8")).hexdigest())
+
+
+def prepare(store, auth, who, blobs, body):
+    """Outside any write: the document's text as Counsel reads it, and its screening verdict. A link is fetched here
+    with no credential (`env={}`: no server token reaches the fetch). Nothing is written."""
     if bool(body.file_id) == bool(body.url):
         raise Problem("validation", "Say which document: a file (file_id) or a link (url), not both", 422)
-    note = str(body.note or "").strip()
-    source = _source(c, who, body)
     if body.file_id:
-        row = c.execute("SELECT * FROM bot_files WHERE id=?", (body.file_id,)).fetchone()
-        if not row or not F.file_visible(c, auth, who, row, {}):
-            raise Problem("not_found", "That file is not one you can read", 404)
-        number, title = row["current_version"], row["title"]
-        text = version_text(c, blobs, row["id"], number)
+        with store.read() as c:
+            if not available(c):
+                raise Problem("counsel_off", "The " + NAME + " is off", 409)
+            row = c.execute("SELECT * FROM bot_files WHERE id=?", (body.file_id,)).fetchone()
+            if not row or not F.file_visible(c, auth, who, row, {}):
+                raise Problem("not_found", "That file is not one you can read", 404)
+            number = row["current_version"]
+            text, cut = document(c, blobs, row["id"], number)
         if text is None:
             raise Problem("unreadable", "Counsel reads text, Markdown, HTML and CSV; this file has no text Tico can read",
                           422)
-        file_id = row["id"]
+        found = {"file_id": row["id"], "number": number, "title": row["title"], "text": text, "truncated": cut,
+                 "fetched": None}
     else:
-        if fetched is None:
-            raise Problem("validation", "The link is fetched before it is read", 422)
-        text = fetched["text"]
-        file_id, number, title = _store_fetched(c, blobs, files, body.url, fetched)
+        with store.read() as c:
+            if not available(c):
+                raise Problem("counsel_off", "The " + NAME + " is off", 409)
+        try:
+            fetched = doc_fetch.fetch(body.url, max_chars=DOC_CHARS, env={})
+        except doc_fetch.FetchError as exc:
+            raise Problem("fetch", exc.message, 422) from exc
+        found = {"file_id": None, "number": None, "title": (fetched.get("title") or body.url)[:300],
+                 "text": fetched["text"], "truncated": bool(fetched.get("truncated")), "fetched": fetched}
+    found["verdict"] = _screen(store, found["text"])
+    return found
+
+
+def read(c, auth, who, files, blobs, body, found):
+    """Add a document: a Files version (a link's), its rule_reads row, and one private Counsel task. `found` is what
+    prepare read and screened before this write; a file must still be at the version that was read."""
+    H._writer(c, who.actor)
+    if not available(c):
+        raise Problem("counsel_off", "The " + NAME + " is off", 409)
+    if found is None:
+        raise Problem("idempotency", "This document was not read for this request; send it again", 409)
+    note = str(body.note or "").strip()
+    source = _source(c, who, body)
+    if found["file_id"]:
+        row = c.execute("SELECT * FROM bot_files WHERE id=?", (found["file_id"],)).fetchone()
+        if not row or not F.file_visible(c, auth, who, row, {}):
+            raise Problem("not_found", "That file is not one you can read", 404)
+        if row["current_version"] != found["number"]:
+            raise Problem("conflict", "The document changed while it was added; add it again", 409)
+        file_id, number, title = found["file_id"], found["number"], found["title"]
+    else:
+        file_id, number, title = _store_fetched(c, blobs, files, body.url, found["fetched"])
+    text, cut, verdict = found["text"], found["truncated"], found["verdict"]
     who_hint = suggested_who(c, source["name"])
     hint = (f"Departments holding this From's access: {', '.join(who_hint['groups'])}" if who_hint["groups"]
-            else "Departments holding this From's access: none granted (leave Who to the owner)")
+            else "Departments holding this From's access: none granted (leave Who empty)")
     lines = ["Read this document and suggest the rules that bind us. Follow the Documents section of your AGENT.md.",
              f"From: {source['name']} ({source['kind']})",
              f"Document: {file_id} version {number}",
              hint]
+    if cut:
+        lines.append(f"The document is longer than {DOC_CHARS} characters: Tico holds only its first {DOC_CHARS}. Say so "
+                     "in your last line.")
     if note:
         lines += ["", "The person's note (their words, not the document's):", note]
-    if len(text) <= TEXT_INLINE_MAX:
+    if verdict["action"] == "hold":
+        lines += ["", "Screening held this document, so its text is not here. Do not suggest from it; say in your last "
+                      "line that it is held for a person to read."]
+    elif len(text) <= TEXT_INLINE_MAX:
         lines += ["", fence(f"Title: {title}\n\n{text}")]
     else:
         lines += ["", f"The document is {len(text)} characters, too long for this task. Its title and text are not here.",
                   "Read the whole of this version with `hub file read " + file_id + " --version " + str(number) + "` and",
                   "work from that. The title, read from the document, is:", fence(title)]
-    task = _task(c, who, f"Read: {title}"[:180] + f" (v{number})", "\n".join(lines))
+    if verdict["action"] == "warn":
+        lines = [screening.warning_line(verdict), "", *lines]
+    labels = [*(["truncated"] if cut else []), *(["held"] if verdict["action"] == "hold" else [])]
+    task = _task(c, who, f"Read: {title}"[:180] + f" (v{number})", "\n".join(lines), labels=labels)
     H.event(c, who.actor, "rules.read_requested", file_id, {"source": source["id"], "version": number,
-                                                          "task": task["id"], "bot": SLUG})
+                                                          "task": task["id"], "bot": SLUG, "truncated": cut,
+                                                          "screening": verdict["action"]})
+    c.execute("INSERT INTO rule_reads(file_id, version, task_id, requested_by, created, truncated) "
+              "VALUES(?,?,?,?,?,?) ON CONFLICT(file_id, version) DO NOTHING",
+              (file_id, number, task["id"], who.actor, H.now(), int(cut)))
+    screening.note(c, verdict, "document", file_id, task=task["id"])
     return {"task_id": task["id"], "source": {"id": source["id"], "name": source["name"], "kind": source["kind"]},
-            "file": {"id": file_id, "version": number, "title": title}, "suggested_who": who_hint}
+            "file": {"id": file_id, "version": number, "title": title}, "suggested_who": who_hint,
+            "truncated": cut, "screening": verdict["action"]}
 
 
 def check_cite(c, auth, who, blobs, cite):
-    """A suggestion's cite, checked: the file exists, the version exists, and the quote is in its text. A person or any
-    bot other than Counsel cites a file it can read (F.file_visible). Counsel cites only a file someone asked it to read
-    (F.asked_to_read: the read event names Counsel). Returns the cite to store, or None when the quote is not in the
-    source (the drop is counted as an event; the caller writes no rule)."""
+    """A suggestion's cite, checked. Counsel cites only the exact (file, version) it was asked to read (`rule_reads`); a
+    person cites a file they can read (F.file_visible); any other bot cites nothing. Returns the cite to store, or None
+    when the quote is not in that version's text (the drop is counted as an event and no rule is written)."""
     row = c.execute("SELECT * FROM bot_files WHERE id=?", (cite["file_id"],)).fetchone()
     if who.role == "bot" and H.actor_id(who.actor) == SLUG:
-        if not row or not F.asked_to_read(c, who, row):
+        asked = [r["version"] for r in c.execute(
+            "SELECT version FROM rule_reads WHERE file_id=? ORDER BY version", (cite["file_id"],))]
+        if not row or not asked:
             raise Problem("not_found", "Counsel cites only a document someone asked it to read", 404)
-    elif not row or not F.file_visible(c, auth, who, row, {}):
-        raise Problem("not_found", "That file is not one you can read", 404)
-    number = cite.get("version") or row["current_version"]
+        number = cite.get("version")
+        if number is None:
+            if len(asked) > 1:
+                raise Problem("validation", "Say the version to cite: the document was read in more than one version", 422)
+            number = asked[0]
+        if int(number) not in asked:
+            raise Problem("not_found", f"Counsel was not asked to read {row['id']} version {number}", 404)
+        number = int(number)
+    elif who.role == "bot":
+        raise Problem("forbidden", "Only Counsel cites a document; a bot's rule is written without a quote", 403)
+    else:
+        if not row or not F.file_visible(c, auth, who, row, {}):
+            raise Problem("not_found", "That file is not one you can read", 404)
+        number = int(cite.get("version") or row["current_version"])
     if not c.execute("SELECT 1 FROM bot_file_versions WHERE file_id=? AND version=?", (row["id"], number)).fetchone():
         raise Problem("not_found", f"File {row['id']} has no version {number}", 404)
     text = version_text(c, blobs, row["id"], number)
@@ -226,8 +311,8 @@ def check_cite(c, auth, who, blobs, cite):
 
 
 def ask(c, auth, who, question):
-    """A "can I...?" question: the active rules that share words with it (cited, now), and one Counsel task for the
-    full answer."""
+    """A "can I...?" question: the active rules that share words with it (cited, now), and one private Counsel task for
+    the full answer."""
     H._writer(c, who.actor)
     if not available(c):
         raise Problem("counsel_off", "The " + NAME + " is off", 409)
@@ -254,15 +339,18 @@ def ask(c, auth, who, question):
 def install(app, store, auth, mutate):
     @app.post("/api/v2/rules/read")
     def rules_read_document(request: Request, body: RuleRead):
-        """Add a document for Counsel to read: a file you can read, or a public link (fetched now, saved as a file version).
-        Counsel suggests the obligations in it as rules, each with its quote, for a person to add or skip."""
+        """Add a document for Counsel to read: a file you can read, or a public link (fetched now, with no credential,
+        saved as a file version). Counsel suggests the obligations in it as rules, each with its quote, for a person to add
+        or skip. The Idempotency-Key is checked before the fetch: a replay returns the saved answer and fetches nothing."""
         who = request.state.identity
-        try:
-            fetched = doc_fetch.fetch(body.url) if body.url else None
-        except doc_fetch.FetchError as exc:
-            raise Problem("fetch", exc.message, 422) from exc
+        key = request.headers.get("idempotency-key")
+        if not key or len(key) > 200:
+            raise Problem("idempotency_key", "Provide an Idempotency-Key of 1–200 characters", 422)
         files, blobs = request.app.state.files, request.app.state.blobs
-        return mutate(request, body, lambda c: read(c, auth, who, files, blobs, body, fetched))
+        with store.read() as c:
+            replayed = store.saved(c, who, request.url.path, key)
+        found = None if replayed else prepare(store, auth, who, blobs, body)
+        return mutate(request, body, lambda c: read(c, auth, who, files, blobs, body, found))
 
     @app.post("/api/v2/rules/ask")
     def rules_ask(request: Request, body: RuleAsk):

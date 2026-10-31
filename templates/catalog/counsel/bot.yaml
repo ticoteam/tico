@@ -13,6 +13,7 @@ outbound_send: false
 # No routines and no watchers: Counsel only runs on a task (a document added, or a question asked).
 routines: []
 
-# What this bot may touch: nothing outside Tico. It reads the document it is given in its task and the rules in force,
-# and writes suggestions through `hub rules`. It has no credentials and no web access, so a document cannot reach out.
+# What this bot may touch: nothing outside Tico. It has no credentials and sends nothing: it reads the document its task
+# gives it and the rules in force, and writes suggestions through `hub rules`. Tico fetches a link itself, with no
+# credential, before Counsel's task exists; Counsel never fetches.
 tools: []

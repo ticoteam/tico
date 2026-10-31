@@ -5976,28 +5976,34 @@ def rules_suggested(api, args):
     return _as_person(api).get("rules", status="suggested", cursor=args.get("cursor"), limit=args.get("limit"))
 
 
-@tool("hub_rules_read", "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
-      "you can read that file. With `source` (a From), it adds a document instead: `id` is then a file id or a public "
-      "link, and Counsel reads it and suggests the rules in it, each with its quote, for a person to add or skip.",
-      {"id": _s("A rule's id; with source, a file id or a public link"),
-       "source": _s("With a document: the From, by name or id"),
+@tool("hub_rules_get", "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
+      "you can read that file.", {"id": _s("The rule's id")}, required=("id",))
+def rules_get(api, args):
+    return _as_person(api).get(f"rules/{args['id']}")
+
+
+@tool("hub_rules_read", "Add a document for Counsel to read: a file you can read, or a public link (fetched now, saved as a "
+      "file version). Counsel suggests the obligations in it as rules, each with its quote, for a person to add or skip. "
+      "The Assistant adds it as the person, citing their words (on_behalf_of).",
+      {"id": _s("A file id, or a public link"), "source": _s("The From, by name or id"),
        "kind": {"type": "string", "enum": ["vendor", "customer", "government", "other"],
-                "description": "With a document: the kind, when the From is new"},
-       "note": _s("With a document: what it is for")}, required=("id",), writes=True)
+                "description": "The kind, when the From is new"},
+       "note": _s("What the document is for"), "on_behalf_of": ASKED}, required=("id", "source"), writes=True)
 def rules_read(api, args):
-    if not args.get("source"):
-        return _as_person(api).get(f"rules/{args['id']}")
     link = args["id"].startswith(("http://", "https://"))
     body = _present({"url" if link else "file_id": args["id"], "source_id": args["source"], "kind": args.get("kind"),
                      "note": args.get("note")})
-    return _as_person(api).post("rules/read", body, key=_key(args))
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.post("rules/read", body, key=_key(args))
 
 
 @tool("hub_rules_ask", "A can-I question about the company's rules: the active rules that share words with it, cited, "
-      "and Counsel's answer on a task. Counsel answers from the rules only, and says it is not legal advice.",
-      {"question": _s("The question, in one sentence")}, required=("question",), writes=True)
+      "and Counsel's answer on a task. Counsel answers from the rules only, and says it is not legal advice. The "
+      "Assistant asks as the person, citing their words (on_behalf_of).",
+      {"question": _s("The question, in one sentence"), "on_behalf_of": ASKED}, required=("question",), writes=True)
 def rules_ask(api, args):
-    return _as_person(api).post("rules/ask", {"question": args["question"]}, key=_key(args))
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.post("rules/ask", {"question": args["question"]}, key=_key(args))
 
 
 @tool("hub_rules_add", "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
@@ -6005,7 +6011,8 @@ def rules_ask(api, args):
       "Assistant adds one as the person, citing their words (on_behalf_of).",
       {"kind": {"type": "string", "enum": ["internal", "external"]},
        "text": _s("The rule in one sentence"), "description": _s("Optional, longer"),
-       "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: who it is about"),
+       "who": _rule_scope("Who follows it. A bot may leave it out when no department is named: the owner sets it on accept"),
+       "with": _rule_scope("Internal: who it is about"),
        "source_id": _s("External: the From, by name or id"),
        "cite": {"type": "object", "additionalProperties": False, "description": "External: the words the rule rests on, "
                 "which must be in that file's version. A quote that is not there is dropped (the answer says so).",
@@ -6014,7 +6021,7 @@ def rules_ask(api, args):
                 "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
        "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
-      required=("kind", "text", "who"), writes=True)
+      required=("kind", "text"), writes=True)
 def rules_add(api, args):
     body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
                                               "if_broken", "reviewer")})
@@ -6116,7 +6123,7 @@ ASSISTANT_WRITES = {"hub_goal_read_back", "hub_goal_save", "hub_goal_create", "h
                     "hub_task_close", "hub_task_link", "hub_approval_decline", "hub_approval_approve", "hub_approval_read_back",
                     "hub_question_answer",
                     "hub_update_mark_read", "hub_changelog_mark_read", "hub_assistant_propose", "hub_assistant_learn",
-                    "hub_settings_set"}
+                    "hub_settings_set", "hub_rules_read", "hub_rules_ask"}
 AUDIENCE = {
     # Task caps (CONTRACT §1): people read and set them; a bot's own change is a proposal a person decides.
     "hub_task_caps": REQUESTER_READ, "hub_task_cap_set": PEOPLE + BOTS,

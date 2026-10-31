@@ -145,13 +145,17 @@ def prime_visible(c, rows):
     privacy.prime_attempts(c, {v["attempt_id"] for found in versions.values() for v in found})
 
 
-def asked_to_read(c, who, row):
-    """A file a person asked Counsel to read (POST /api/v2/rules/read, backend/counsel.py): Counsel reads that one file,
-    whichever bot's it is. The person had to be able to read it when they asked. Nothing else widens Counsel's view."""
+def asked_to_read(c, who, row, version=None):
+    """A file a person asked Counsel to read (POST /api/v2/rules/read, backend/counsel.py `rule_reads`): Counsel reads
+    that file, whichever bot's it is. `version` narrows it to the exact version that was asked. The person had to be able
+    to read it when they asked. Nothing else widens Counsel's view."""
     if who.role != "bot" or H.actor_id(who.actor) != "counsel":
         return False
-    return c.execute("SELECT 1 FROM events WHERE action='rules.read_requested' AND target=? "
-                     "AND json_extract(detail_json,'$.bot')='counsel' LIMIT 1", (row["id"],)).fetchone() is not None
+    sql, args = "SELECT 1 FROM rule_reads WHERE file_id=?", [row["id"]]
+    if version is not None:
+        sql += " AND version=?"
+        args.append(int(version))
+    return c.execute(sql + " LIMIT 1", args).fetchone() is not None
 
 
 def file_visible(c, auth, who, row, cache):

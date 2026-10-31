@@ -212,6 +212,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules suggested                    the suggestions waiting for a person
     hub rules add --kind internal|external --text "..." [--who N ...] [--everyone] [--all-bots] [--with N ...]
                   [--from SOURCE] [--description "..."] [--if-broken block|escalate|warn] [--reviewer P]
+                  [--file FILE_ID --version N --section S --quote Q]   external: the words the rule rests on
     hub rules edit <id> --version N [--text ...] [--who N ...] [--everyone] [--all-bots] [--with N ...] [--from SOURCE]
     hub rules accept <id> --version N [--who N ...] [--everyone] [--all-bots]   a person; a bot is refused
     hub rules skip <id> --version N        set a suggestion aside
@@ -1735,6 +1736,8 @@ def parser():
     s.add_argument("--file", dest="file_id", metavar="FILE_ID", help="external: the document the rule rests on")
     s.add_argument("--section", help="external: the section of the document")
     s.add_argument("--quote", help="external: the words of the document the rule rests on (must be in the file)")
+    s.add_argument("--version", dest="file_version", type=int, metavar="N",
+                   help="external: the version of --file the quote is in (Counsel passes the one its task names)")
     s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
     s.add_argument("--reviewer")
     s.set_defaults(fn="rules add")
