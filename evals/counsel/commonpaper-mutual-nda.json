@@ -1,0 +1,29 @@
+{
+  "expected": [
+    {
+      "text": "Use the other party's confidential information only for the agreed purpose.",
+      "quote": "The Receiving Party shall: (a) use Confidential Information solely for the Purpose;",
+      "section": "Obligations",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Sign a cover page that incorporates these standard terms before the NDA applies.",
+      "quote": "To use this MNDA, the parties must complete and sign a cover page incorporating these Standard Terms",
+      "section": "Use of this MNDA",
+      "who_hint": "legal"
+    },
+    {
+      "text": "Legal actions on this NDA must be brought in the courts of the agreed jurisdiction.",
+      "quote": "Any legal suit, action, or proceeding relating to this MNDA must be instituted in the federal or state courts located in Jurisdiction.",
+      "section": "Governing law",
+      "who_hint": "legal"
+    }
+  ],
+  "url": "https://commonpaper.com/standards/mutual-nda/",
+  "fetched_at": "2026-10-30T23:40:36Z",
+  "from": {
+    "name": "Common Paper Mutual NDA",
+    "kind": "other"
+  },
+  "truncated": false
+}

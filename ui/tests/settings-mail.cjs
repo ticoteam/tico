@@ -2,7 +2,7 @@
 // address only once active, registered agent and Form 1583 status, with open orders as Pending; Get an address shows
 // shared and private, each with its price and line, and the scan price (Tico Gateway's `prices` win, else Tico's own),
 // and sends the order once with an Idempotency-Key, after which it shows as Pending; the intake inbox is picked from
-// the company's email inboxes, and a failed save goes back to the last saved inbox; a failed letter is retried by an
+// the company's email inboxes and needs a sender, and a failed save goes back to the last saved inbox; a failed letter is retried by an
 // owner, and its task is a link. A member reads only.
 // Without Tico Gateway the addresses card says so and offers no order. No sideways scroll on a phone.
 // TICO_SHOTS=<dir> saves screenshots (desktop and phone, dark and light).
@@ -81,8 +81,8 @@ async function open(browser, viewport = {width: 1280, height: 860}, state = serv
     if (p === '/api/v2/postal/intake') {
       if (method === 'PUT') {
         if (state.intakeFail) return json({error: {code: 'bad_request', detail: 'Not saved'}}, 422);
-        const id = req.postDataJSON().inbox_id, box = state.inboxes.find(i => i.inbox_id === id);
-        state.intake = id ? {inbox_id: id, address: box.address, set_by: 'human:ana', set_at: AGO(0)} : null;
+        const {inbox_id: id, senders} = req.postDataJSON(), box = state.inboxes.find(i => i.inbox_id === id);
+        state.intake = id ? {inbox_id: id, address: box.address, senders, set_by: 'human:ana', set_at: AGO(0)} : null;
       }
       return json({intake: state.intake});
     }
@@ -134,15 +134,28 @@ const rowText = async row => (await row.innerText()).replace(/\s+/g, ' ').trim()
       const intake = pane.locator('[data-pm-intake-select]');
       assert.deepEqual(await intake.locator('option').allInnerTexts(), ['None', 'Mail · mail@acme.example']);
       await shot(page, 'desktop');
+      // Senders alone save nothing; with an inbox picked both go in one save.
+      const from = pane.locator('[data-pm-intake-senders]'), puts = () => state.sent.filter(s => s.path === '/api/v2/postal/intake').length;
+      await from.fill('Scans@VPM.example, @vpm.example');
+      await from.dispatchEvent('change');
+      assert.equal(puts(), 0, 'no inbox, nothing saved');
       await intake.selectOption('ib_mail');
       await page.locator('.toast', {hasText: 'Saved'}).waitFor();
-      assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body, {inbox_id: 'ib_mail'});
+      assert.equal(puts(), 1, 'one save, though picking the inbox also blurred the senders field');
+      assert.deepEqual(state.sent.find(s => s.path === '/api/v2/postal/intake')?.body,
+        {inbox_id: 'ib_mail', senders: ['scans@vpm.example', '@vpm.example']});
       // A refused change goes back to the inbox saved a moment ago, not to the one the page loaded with (None).
       state.intakeFail = true;
       await intake.selectOption('');
       await pane.locator('#settings-mail-intake [data-field-err]').waitFor();
       assert.equal(await intake.inputValue(), 'ib_mail', 'a failed save restores the last saved inbox');
       state.intakeFail = false;
+      // An inbox needs a sender: clearing them is refused on the page, before anything is sent.
+      const before = puts();
+      await from.fill('');
+      await from.dispatchEvent('change');
+      await pane.locator('#settings-mail-intake [data-field-err]', {hasText: 'address or @domain'}).waitFor();
+      assert.equal(puts(), before, 'no save without a sender');
       // Get an address: prices and lines, then one order.
       await pane.locator('[data-pm-order]').click();
       const dialog = page.locator('.pm-dialog');

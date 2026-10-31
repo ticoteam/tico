@@ -76,6 +76,10 @@ in the same workspace, with the same model sign-ins. The runner delivers only cr
 not the whole environment or `_shared.env`; upgrades automatically grant each bot the shared credentials it already uses.
 This delivery filter is not OS isolation: bot code can still read another bot's files and credentials on that computer. This is a design choice, not a bug: it keeps setup simple and lets
 bots on a team cooperate.
+The same holds for a company model subscription given to a computer (docs/computers.md#company-subscriptions): it is
+handed to the turns of every bot on that computer, in their environment or a Codex home under the runner's state, so
+any bot there could read it. One computer is one trust group; give a subscription only to computers whose bots may all
+use it.
 
 What is separated: the computer's own credential. The runner's registration (`runner.json`) can claim the
 work of any bot assigned to that computer, so code a bot runs must not be able to read it.

@@ -271,7 +271,8 @@ def reason(c, row, settings, shared=None, suspect=None):
     if jobs:
         job = jobs[0]
         return ('scoped' if not job['in_scope'] else 'uncertain' if not job['free'] else
-                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect) or
+                E.job_refusal(c, job, followed, ready, busy, E.lanes_on(runner), E.roots_on(runner), suspect=suspect,
+                              runner=runner) or
                 ('cooling_off' if E.login_refusal(c, settings, runner['id'], bot, followed, job['id']) else 'not_started'))
     return (auto_tasks.refusal(c, row, followed, woken=True, suspect=suspect) or row.get('rewake_refusal')
             or 'no_queued_wake')

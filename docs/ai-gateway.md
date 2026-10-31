@@ -2,7 +2,7 @@
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
 department, a level (Low, Medium or High), Fast or not, and a version. Decide asks the Gateway with the same key. You
-connect it once, in **Settings → Computers → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
+connect it once, in **Settings → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
@@ -35,7 +35,11 @@ new can pick them.
 
 ## Choose how bots get their models
 
-At the top of **Settings → Computers → Models**, and in the first step of setup, the owner picks one of four choices:
+In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
+switch, **Use when a computer has no subscription, or a plan runs out**: on is the first choice (or Tico Gateway only,
+when that was picked), off is the second (or your company's plans or API keys).
+
+The four choices:
 
 - **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
@@ -71,7 +75,7 @@ its monthly cap, the Gateway work stops and Health says **Gateway cap reached** 
 
 Only the owner can do this.
 
-1. Open **Settings → Computers → Models**. The **Tico AI Gateway** card is under the providers.
+1. Open **Settings → Models**. The **Tico AI Gateway** card is under the providers.
 2. Paste the key Tico gave you in **Gateway key**.
 3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
    you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
@@ -119,7 +123,7 @@ Sign in directly as an owner or admin to link the server:
 The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
 With automatic connection enabled, the server asks for a Gateway key immediately, then retries hourly while it has none.
 Gateway use spends that company's credit.
-The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Computers → Models** once it has the key.
+The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Models** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
 [connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
@@ -181,7 +185,7 @@ A bot on the Gateway with no model of its own, for example one that waits for a 
 pick at the current version. A template can start a bot on another level: its `bot.yaml` may hold
 `gateway: {level: low, fast: true}` ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
-**Settings → Computers → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
+**Settings → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
 `tico-decide-1.0`), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
 seconds per try instead of 8). Higher costs more per question and answers slower.
 
@@ -246,7 +250,7 @@ saying the Tico AI Gateway cut the reply off.
 One flat page for the owner and admins: a line saying whether the Gateway is connected and this month's spend against its
 cap; **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with each service's status
 (Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
-**Settings → Computers → Models**, one link away.
+**Settings → Models**, one link away.
 
 Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
 (live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read

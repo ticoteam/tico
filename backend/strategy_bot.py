@@ -247,7 +247,7 @@ def reconcile(c):
 
 
 def _outside(slug, entry, assistant, helpers):
-    return slug in ("assistant", "botops", "librarian", SLUG, "health-monitor", "task-manager", "bookkeeper") \
+    return slug in ("assistant", "botops", "librarian", H.COUNSEL, SLUG, "health-monitor", "task-manager", "bookkeeper") \
         or slug == assistant \
         or str((entry or {}).get("template") or "") in helpers
 

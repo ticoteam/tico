@@ -342,7 +342,7 @@ GITHUB_REPO = re.compile(r"^https://(?:www\.)?github\.com/([\w.-]+)/([\w.-]+?)(?
 def fetch(url, max_chars=DEFAULT_MAX_CHARS, env=None, resolver=resolve, opener=connect, clock=time.monotonic):
     """{url, final_url, title, text, links, truncated}. Raises FetchError."""
     url = str(url or "").strip()
-    max_chars = max(500, min(int(max_chars or DEFAULT_MAX_CHARS), 200_000))
+    max_chars = max(500, min(int(max_chars or DEFAULT_MAX_CHARS), 400_000))
     fetcher = Fetcher(env, resolver, opener, clock)
     fetcher.check_url(url)
     doc = GOOGLE_DOC.match(url)

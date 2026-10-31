@@ -167,8 +167,9 @@ class _Text(HTMLParser):
             self.out.append(data)
 
 
-def extract(mime, data):
-    """The searchable text of one version's bytes, or "" for a type Tico does not read (PDF and office files later)."""
+def extract(mime, data, full=False):
+    """The searchable text of one version's bytes, or "" for a type Tico does not read (PDF and office files later).
+    `full`: the whole text the bytes hold (up to READ_MAX bytes), with no cut for the search index (Counsel reads it)."""
     mime = (mime or "").split(";", 1)[0].strip().lower()
     data = data[:READ_MAX]
     if mime in TEXT_TYPES:
@@ -186,7 +187,7 @@ def extract(mime, data):
         rows = []
         try:
             for i, row in enumerate(reader):
-                if i > CSV_ROWS:
+                if i > CSV_ROWS and not full:
                     break
                 rows.append(" ".join(cell.strip() for cell in row))
         except csv.Error:
@@ -194,7 +195,7 @@ def extract(mime, data):
         text = "\n".join(rows)
     else:
         text = ""
-    return text[:TEXT_MAX]
+    return text if full else text[:TEXT_MAX]
 
 
 def index(c, fid, version, title, text):

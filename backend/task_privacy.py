@@ -198,6 +198,29 @@ def _attempt_tasks(c, aid):
     return ids
 
 
+def carried_tasks(c, aid):
+    """The tasks a run carries the text of: attempt_tasks without the ids an assignment notice names only in its
+    `reconcile` list (the requester's other open tasks with this bot: id, title and status, never their bodies)."""
+    snapshot(c)
+    ids = set()
+    rows = c.execute("SELECT m.* FROM attempts a JOIN jobs j ON j.id=a.job_id "
+                     "JOIN messages m ON m.id=j.message_id WHERE a.id=? UNION "
+                     "SELECT m.* FROM attempt_inputs i JOIN messages m ON m.id=i.message_id "
+                     "WHERE i.attempt_id=?", (aid, aid)).fetchall()
+    for row in rows:
+        row = dict(row)
+        refs = H._json(row.get("refs_json"), {}) or {}
+        if isinstance(refs, dict) and "reconcile" in refs:
+            refs = {key: value for key, value in refs.items() if key != "reconcile"}
+            row = {**row, "refs": refs, "refs_json": json.dumps(refs)}
+        ids.update(_message_tasks(c, row, include_run=False, current=True))
+    ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
+    for row in c.execute("SELECT detail_json FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
+                         (aid,)):
+        ids.update(references(c, H._json(row[0], {}) or {}))
+    return ids
+
+
 def prime_attempts(c, aids):
     """Read the provenance of many runs in a fixed number of queries, for a page that then checks each run
     (a task's comments and runs). The results are the ones attempt_tasks and the meeting index would build one
@@ -1032,6 +1055,10 @@ def guard_write(c, who, path, auth):
         return
     if path.endswith(("/status", "/usage")) or path == "/api/v2/status":
         return
+    if path == "/api/v2/rules":
+        from . import counsel
+        if counsel.run_read(c, who):
+            return          # Counsel's suggestions from its own read task; the route checks each (counsel.private_suggestion)
     raise Problem("privacy", "Private task work cannot publish into company-wide resources", 403)
 
 

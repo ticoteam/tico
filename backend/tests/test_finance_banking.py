@@ -2,8 +2,10 @@
 last 4 only), signatures (a wrong one refused, a replay kept once), connecting (bank assets, IO a liability, payments
 only with another approver), a card authorization held and then settled in place and posted once, the IO bill clearing
 the card liability, and reconciliation's difference, lock and undo. Migration 65 is in test_finance_ledger."""
+import http.server
 import io
 import json
+import threading
 import time
 import urllib.error
 
@@ -12,7 +14,7 @@ from backend.finance import actions as FA
 from backend.finance import reads as FR
 from backend.finance import sync
 from backend.finance.core import feeds as F
-from backend.finance.mercury import IP_HINT, Answer, Mercury, error_text
+from backend.finance.mercury import IP_HINT, Answer, Mercury, dollars, error_text
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_triggers import hook
 from backend.tests.test_finance_fixtures import (  # noqa: F401
@@ -28,7 +30,7 @@ class _Opener:
     def __init__(self, *answers):
         self.answers, self.seen = list(answers), []
 
-    def __call__(self, request, timeout):
+    def __call__(self, request, *, timeout):
         self.seen.append(request)
         status, body, headers = self.answers.pop(0)
         if status >= 400:
@@ -674,3 +676,47 @@ def test_card_use_follows_the_ledger_across_open_months_and_a_reopened_month(boo
         # The November entry is reversed in November and the charge reposts on its own September day.
         assert months(c) == [19_000, -10_000, 0]
         assert remaining(c, "2026-11-20T12:00:00.000000Z") == (0, 20_000, 80_000)
+
+
+def test_the_client_calls_real_urlopen_over_http_with_the_timeout_by_keyword_and_amounts_as_numbers():
+    """Regression: urlopen's 2nd positional arg is data, so a positional timeout broke every real Mercury call, and
+    Decimal amounts went out as strings. Runs the default opener against a local HTTP server, no fake opener."""
+    seen = []
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def _answer(self, body: bytes) -> None:
+            length = int(self.headers.get("Content-Length") or 0)
+            seen.append((self.command, self.path, self.headers.get("Authorization"), self.rfile.read(length)))
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def do_GET(self) -> None:
+            self._answer(json.dumps({"accounts": [{"id": "acct-chk"}]}).encode())
+
+        def do_POST(self) -> None:
+            self._answer(json.dumps({"id": "req-1", "status": "pending"}).encode())
+
+        def log_message(self, *args: object) -> None:
+            return None
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        m = Mercury("tok-acme", base=f"http://127.0.0.1:{server.server_address[1]}/api/v1")
+        listed = m.accounts()
+        sent = m.request_send_money("acct-chk", {"amount": dollars(1250), "recipientId": "rcp-1"})
+    finally:
+        server.shutdown()
+        server.server_close()
+    assert listed.status == 200 and listed.body == {"accounts": [{"id": "acct-chk"}]}
+    assert sent.status == 200 and sent.body == {"id": "req-1", "status": "pending"}
+    get, post = seen
+    assert get[0] == "GET" and get[2] == "Bearer tok-acme"
+    assert post[0] == "POST" and post[1] == "/api/v1/account/acct-chk/request-send-money"
+    assert post[2] == "Bearer tok-acme"
+    assert json.loads(post[3]) == {"amount": 12.5, "recipientId": "rcp-1"}
+    assert isinstance(json.loads(post[3])["amount"], float)

@@ -773,7 +773,10 @@ def install_credentials(app,store,delegate=None,propose=None):
                 if row['ciphertext'] is not None and row['id'] in held:
                     values.append({'id':row['id'],'name':row['name'],'env':row['env'],'kind':row['kind'],**vault.reveal(c,who,row['id'])})
             # Never the Tico AI Gateway's key: a run reaches it through its runner (runner-gateway-credentials below).
-            return {'credentials':values}
+            # The company subscriptions its claim handed it, for this run only (backend/model_subscriptions.py).
+            from .model_subscriptions import run_values
+            subscriptions=run_values(c,vault,who)
+            return {'credentials':values,**({'subscriptions':subscriptions} if subscriptions else {})}
 
     @app.get('/api/v2/runner-gateway-credentials')
     def gateway_credentials(request:Request,attempt:str):
