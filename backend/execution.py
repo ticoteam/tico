@@ -1744,7 +1744,7 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
             return "not_ready", None
         if usage_limits.blocked(c, bot, default=usage_limits.company(c) if default is None else default):
             return "limit", None
-        return ("cooling_off", None) if cooling_off(c, bot) else (None, config)
+        return ("cooling_off", None) if cooling_off_here(c, settings, runner, bot, config) else (None, config)
     if check.get("ready") is not True:
         reported = check.get("ready") is False and bot in (ready.get("bots") or {})
         return ("not_ready" if reported else "readiness_unknown"), None
@@ -1755,7 +1755,8 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
         return "limit", None
     # While the bot's own login is held, that hold decides (login_refusal), so a ready fallback can take the turn;
     # otherwise the bot's own cooldown does, as for a limit its fallback met.
-    if (cooling_off(c, bot) and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
+    if (cooling_off_here(c, settings, runner, bot, config, subscription_context)
+            and not primary_hold(c, settings, runner["id"], bot, config, ctx=subscription_context)
             or login_refusal(c, settings, runner["id"], bot, config, ctx=subscription_context)):
         # Already-started fallback work continues its own login even if new fallbacks have since been disabled.
         pending = c.execute("SELECT id FROM jobs WHERE bot=? AND state='queued' AND held=0", (bot,))
@@ -1763,6 +1764,20 @@ def _claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_
                    for j in pending):
             return "cooling_off", None
     return None, config
+
+
+def cooling_off_here(c, settings, runner, bot, config, ctx=None):
+    """cooling_off for a turn of `bot` on `runner`, judged on the login that turn would sign in with. A limit met on a
+    company subscription holds that subscription (backend/login_holds.py `sub:<id>`), which the computer then passes
+    over (model_subscriptions.in_effect): the turn runs on the computer's own login or the Gateway instead, so the
+    subscription's cooldown does not keep it waiting. That login's own hold, if any, still decides (login_refusal)."""
+    if not cooling_off(c, bot):
+        return False
+    last = last_limit(c, bot)
+    held = str((login_holds.for_attempt(c, last["id"]) if last else {}).get("profile") or "")
+    if held.startswith(login_holds.SUBSCRIPTION) and runner:
+        return login_key(c, settings, runner["id"], bot, config, ctx)[1] == held
+    return True
 
 
 def login_refusal(c, settings, runner_id, bot, config, job_id=None, ctx=None):
@@ -1936,10 +1951,10 @@ FOLD_TEXT = 4000           # characters of each one given in the prompt; the bot
 PRIME_QUEUED = 50          # queued messages a claim or an input poll reads together before checking them one by one
 
 
-def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None):
+def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *, suspect=None, runner=None):
     """Why the claim passes over one queued job of a bot claim_refusal let through, or None when it hands it out.
     `followed` is the bot's followed config; `busy` the taken (bot, lane) pairs; `live` the (bot, task) pairs with a
-    turn out (live_tasks)."""
+    turn out (live_tasks); `runner` the computer's row, whose company subscription signs a check's runtime in."""
     message = H.message(c, job["message_id"])
     if not privacy.message_readable(c, "bot:" + job["bot"], message):
         return "unreadable"
@@ -1964,6 +1979,10 @@ def job_refusal(c, job, followed, ready, busy, lanes, roots, live=frozenset(), *
         if why := auto_tasks.refusal(c, task, followed, woken=True, result=bool(refs.get("subtask")), message=message, suspect=suspect):
             return why
     wanted = check_models.of(c, task_id, job["bot"])
+    if wanted and runner is not None:
+        # A check runtime this computer's subscription signs in needs no sign-in here (backend/model_subscriptions.py).
+        ready = model_subscriptions.covered(ready, model_subscriptions.covered_runtimes(
+            c, runner, check_models.apply(followed, wanted)))
     if not check_models.runs_here(ready, wanted) or (wanted and check_models.held(c, task_id)):
         return "check_model"
     if wanted and not message["from_actor"].startswith("human:") and check_models.dropped(c, task_id):
@@ -2207,7 +2226,7 @@ def bot_claimable(c, settings, runner_id, bot, default=None, oldest=False, with_
         elif not private_lanes_on(runner) and private_job(c, job):
             why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         if why is None or (oldest and why != "lane_held"):
             return result(why, job["created"], person, job["id"])
@@ -2265,7 +2284,7 @@ def queued_reasons(c, settings, runner_id, bot, default=None, *, oldest=False, s
         elif not private_lanes_on(runner) and private_job(c, job):
             why = "private_update"
         else:
-            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect) or (
+            why = job_refusal(c, job, followed, ready, busy, lanes, roots, live, suspect=suspect, runner=runner) or (
                 "cooling_off" if login_refusal(c, settings, runner_id, bot, followed, job["id"]) else None)
         yield job, why
 
@@ -3020,7 +3039,7 @@ class Execution:
                     continue        # left queued for a runner that continues its thread: this one would start it afresh
                 if not private_lanes and private_job(c, row):
                     continue        # a private meeting's turn waits for a runner that keeps it out of the bot's checkout
-                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live)
+                why = job_refusal(c, row, followed[row["bot"]], ready, busy, lanes, roots, live, runner=runner)
                 if why != "unreadable":
                     # The bot's checks ran for this job without raising: the back-off their last failure started ends.
                     self.check_backoff.pop(row["bot"], None)
@@ -4852,6 +4871,12 @@ class Execution:
                                                 runtime, body, aid, H.now(),
                                                 hopped=fallback_mark(json.loads(config[0] or "{}") if config else {})
                                                 if hopped else None)
+        elif check and not stopped and not gateway_wait and (limited or body.outcome == "completed"):
+            # A check's own schedule stays its own (check_models.hold below), but a company subscription it signed in
+            # with is one login on every computer given it: its limit holds it there too, and a check that worked on it
+            # clears it.
+            login_holds.after_turn(c, row["runner_id"], row["bot"], "", runtime, body, aid, H.now(),
+                                   subscriptions_only=True)
         if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
