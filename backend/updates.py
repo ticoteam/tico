@@ -122,6 +122,12 @@ def kind_for(day):
     return "weekly" if datetime.fromisoformat(day).weekday() == 4 else "daily"
 
 
+def effective_kind(kind, slides, day=None):
+    """The kind `post` stores: the one asked for, else a week in review when it has slides, else the day's own. A daily
+    keeps its bullets and drops any slides; a week in review is its slides alone."""
+    return kind or ("weekly" if slides else kind_for(day or today()))
+
+
 def settings(c, bot):
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
@@ -997,7 +1003,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     flagged draft, so what they post over it is their own words, and their reply links no flagged input. `source` is
     the automation run posting it ({automation, run, task}); any other post clears it."""
     day = day or today()
-    kind = kind or ("weekly" if slides else kind_for(day))
+    kind = effective_kind(kind, slides, day)
     if kind not in KINDS:
         raise Problem("kind", "An update is daily or weekly", 422)
     stored = None

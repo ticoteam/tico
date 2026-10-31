@@ -657,6 +657,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         ask = check_ask(c, tid, M.ReviewAsk(questions=[M.ReviewQuestion(
             id="decision", header="", question=question, why=body.why.strip(), options=choices,
             multi=body.multi)], who=person, if_no_answer=body.if_no_answer), auth, who, lint=False)
+        if rule and rule.get("warn"):
+            # Every card (Needs you, Decide, the Ask panel, the task page) reads the structured question, not the
+            # comment: the line leads it there too. Set on the stored ask, past the model's length cap, which the
+            # question as the bot wrote it met.
+            ask["questions"][0]["question"] = said_text
         if topic:
             ask["topic"] = topic
         if review:

@@ -1627,9 +1627,10 @@ def card_why(item):
     if str(q.get("why") or "").strip():
         return str(q["why"]).strip()
     line = H.person_ask_of_body(item.get("body"), item.get("title"))
-    said = " ".join(line.split()).casefold()
+    said, plain = " ".join(line.split()).casefold(), lambda x: " ".join(str(x or "").split()).casefold()
+    # A line the question already says (all of it, or the org rule warning it leads with) is not said twice.
     if (not line or "\n" in line or len(line) > 200 or H.lint_plain(line)
-            or said in {" ".join(str(x or "").split()).casefold() for x in (q.get("question"), item.get("title"))}):
+            or said == plain(item.get("title")) or said in plain(q.get("question"))):
         return ""
     return line
 

@@ -1565,3 +1565,101 @@ def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch
     assert post(api, "bots/ops/mail-check", {"to": ["ben@acme.example"], "body": "Hi Ben."},
                 token="ops-test")["outcome"] == "pass"
     assert resolved == [] and judge.calls == []
+
+
+# ---- a warning on the copy its reader reads: the question card, the public roadmap, a daily with slides --------------
+
+def question_card(api, task_id):
+    """Ana's Needs you card for the question on `task_id`."""
+    items = api.get("/api/v2/needs-you", headers=headers("ana-test")).json()["items"]
+    return next(it for it in items if it.get("id") == task_id and it["kind"] == "question")
+
+
+def test_a_warned_question_leads_the_card_new_and_folded(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    # Only the why line breaks the rule: the card shows the question and why, so the line leads the question there.
+    asked = ask(api, "Ship it?", why="Our favorite color is blue.", topic="palette")
+    q = asked["question"]["refs"]["questions"][0]
+    assert q["question"].startswith("Warning:") and q["question"].endswith("Ship it?")
+    assert asked["task"]["title"] == "Ship it?"
+    card = question_card(api, asked["task"]["id"])
+    assert card["ask"]["refs"]["questions"][0]["question"] == q["question"]
+    assert card["why"] == "Our favorite color is blue."
+    # Asked again on the topic, the folded card's question carries the line too.
+    folded = ask(api, "Ship it on Monday?", body="Our favorite color is blue.", topic="palette")
+    assert folded["folded"] and folded["rule_warning"]
+    q = folded["question"]["refs"]["questions"][0]
+    assert q["question"].startswith("Warning:") and q["question"].endswith("Ship it on Monday?")
+    card = question_card(api, asked["task"]["id"])
+    assert card["ask"]["refs"]["questions"][0]["question"] == q["question"] and card["why"] != q["question"]
+
+
+def test_a_question_sent_anyway_under_a_new_warn_rule_leads_its_card_with_the_line(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    hold = ask(api, "Ship the palette?", title="Palette", body="Our favorite color is red; launch is Tuesday.")
+    rule(api, {"kind": "internal", "text": LAUNCH, "who": {"bots": ["ops"]}, "if_broken": "warn"})
+    judge.needles[LAUNCH] = "launch is"
+    send_anyway(api, hold["held"]["id"])
+    [task] = sql(api, "SELECT id FROM tasks WHERE title='Palette'")
+    [refs] = [json.loads(r["refs_json"]) for r in sql(api, "SELECT refs_json FROM messages WHERE kind='ask' AND "
+                                                         "json_extract(refs_json,'$.task')=?", (task["id"],))]
+    assert refs["questions"][0]["question"].startswith("Warning:")
+    assert refs["questions"][0]["question"].endswith("Ship the palette?")
+
+
+def public_output(api, task_id):
+    from backend import public_roadmaps
+    with api.app.state.store.read() as c:
+        return public_roadmaps.output(c, H.task(c, task_id))
+
+
+def test_a_warned_publish_puts_its_line_on_the_public_summary_the_roadmap_shows(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": "Our favorite color is red."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    assert got["rule_warning"]
+    shown = public_output(api, drafted["id"])
+    assert shown["title"] == "New palette"
+    assert shown["summary"].startswith("Warning:") and shown["summary"].endswith("Our favorite color is red.")
+    # A new public title on a public task with no summary: the line alone is the summary, the title kept whole.
+    bare = post(api, "tasks", {"owner": "ops", "title": "Logo", "body": "Draft it.", "visibility": "public",
+                               "public_title": "New logo"})
+    got = post(api, f"tasks/{bare['id']}", {"version": bare["version"], "public_title": "Our favorite color is red"},
+               token="ops-test")
+    assert got["rule_warning"]
+    shown = public_output(api, bare["id"])
+    assert shown["title"] == "Our favorite color is red" and shown["summary"].startswith("Warning:")
+
+
+def test_publishing_while_clearing_a_summary_judges_only_what_is_published(ruled):
+    api, judge = ruled
+    color_rule(api)
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "Safe title", "public_summary": "Our favorite color is red."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public",
+                                               "public_summary": ""}, token="ops-test")
+    assert "held" not in got, got
+    assert "favorite color" not in judge.calls[-1]["state"]["output"]
+    shown = public_output(api, drafted["id"])
+    assert shown["title"] == "Safe title" and not shown["summary"]
+
+
+def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    weekly = {"goal": "Ship the palette", "done": ["Launched"], "focus": ["Launch"], "blockers": ["None"]}
+    got = post(api, "updates", {"kind": "daily", "body": "- Our favorite color is blue.", "slides": weekly},
+               token="ops-test")
+    assert got["rule_warning"]
+    [row] = sql(api, "SELECT kind, body FROM updates WHERE bot='ops'")
+    assert row["kind"] == "daily"
+    assert row["body"].startswith("Warning:") and row["body"].endswith("- Our favorite color is blue.")
+    # The slides a daily drops are not judged.
+    assert "Ship the palette" not in judge.calls[-1]["state"]["output"]

@@ -2854,10 +2854,11 @@ def create_app(settings=None):
                                           getattr(body, "public_summary", None))))
 
     def rule_warned_fields(gate, body, row=None):
-        """A warned task write's recipient copies: the warning on every multi-line text field the write sets, never on
-        one it leaves unset. A title (and public title) is kept whole and unmarked: a new task with one carries the
-        line on its body; a change that sets no other text field (a title, or a hand-off alone) puts the line before
-        the task's note (`row`'s), which stays whole."""
+        """A warned task write's recipient copies: the warning on every multi-line text field the write sets. A title
+        (and public title) is kept whole and unmarked: a new task with one carries the line on its body; a change that
+        publishes (a public title, or making the task public) carries it on the public summary the roadmap shows; any
+        other change that sets no other text field (a title, or a hand-off alone) puts the line before the task's note
+        (`row`'s), which stays whole."""
         out = {}
         for key in ("body", "note", "public_summary"):
             value = getattr(body, key, None)
@@ -2867,7 +2868,13 @@ def create_app(settings=None):
         if row is None:
             if titled and "body" not in out:
                 out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
-        elif not out and (titled or getattr(body, "owner", None) or rule_newly_public(body, row)):
+            return out
+        if "public_summary" not in out and rule_shows_public(body, row):
+            # The public roadmap shows the public title and summary, never the note: the line goes on the summary it
+            # will show (the one kept, or the line alone when there is none), the title kept whole.
+            kept = body.public_summary if body.public_summary is not None else row.get("public_summary") or ""
+            out["public_summary"] = org_rule_check.warned_note(gate, kept)
+        if not out and (titled or getattr(body, "owner", None)):
             out["note"] = org_rule_check.warned_note(gate, row.get("note") or "")
         return out
 
@@ -2875,6 +2882,12 @@ def create_app(settings=None):
         """Whether a task change makes a task public that was not: its public text, written before, now reaches
         everyone."""
         return getattr(body, "visibility", None) == "public" and row.get("visibility") != "public"
+
+    def rule_shows_public(body, row):
+        """Whether a task change puts public text before the public roadmap's readers without writing a summary: it
+        makes the task public, or gives one that is or becomes public a new public title."""
+        public = (getattr(body, "visibility", None) or row.get("visibility")) == "public"
+        return public and (rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))
 
     def rule_publishes(body, row):
         """Whether a task change puts text before the whole company: it writes public text, or makes the task
@@ -2897,7 +2910,7 @@ def create_app(settings=None):
         if rule_newly_public(body, row):
             parts += [f"{label}: {row[key]}" for key, label in (("public_title", "Public title"),
                                                                 ("public_summary", "Public summary"))
-                      if row.get(key) and not getattr(body, key, None)]
+                      if row.get(key) and getattr(body, key, None) is None]   # an explicit "" clears it: no text
         if getattr(body, "owner", None):
             parts.append(f"Assigned: {row['title']}\n\n{row.get('body') or ''}".rstrip())
         return "\n\n".join(parts)
@@ -3149,10 +3162,18 @@ def create_app(settings=None):
             return {"update": {**row, "read": bool(read), "archived": updates.archived(c, who.actor, uid)},
                     "thread": thread}
 
+    def update_kind(body):
+        """The kind of update a post stores (updates.effective_kind): a daily drops any slides, a week in review its
+        bullets."""
+        return updates.effective_kind(body.kind, body.slides, body.day)
+
     def update_text(body):
-        """What an update says, as the rule check reads it: its bullets and every word of its slides."""
-        slides = body.slides.model_dump(exclude_none=True) if body.slides else None
-        return "\n\n".join(filter(None, (body.body.strip(), json.dumps(slides, sort_keys=True) if slides else "")))
+        """What an update says, as the rule check reads it: what the post stores, a daily's bullets or every word of a
+        week in review's slides."""
+        if update_kind(body) == "weekly":
+            slides = body.slides.model_dump(exclude_none=True) if body.slides else None
+            return json.dumps(slides, sort_keys=True) if slides else ""
+        return body.body.strip()
 
     def update_write(c, who, body, rc=None):
         """One update, as `POST /api/v2/updates` posts it and Send anyway replays it: a bot's is checked against the
@@ -3173,8 +3194,8 @@ def create_app(settings=None):
             return org_rule_check.answer(rule)
         text = body.body
         if rule and rule.get("warn"):
-            if slides:
-                slides = {**slides, "goal": org_rule_check.warned_text(rule, slides.get("goal") or "")}
+            if update_kind(body) == "weekly":
+                slides = {**(slides or {}), "goal": org_rule_check.warned_text(rule, (slides or {}).get("goal") or "")}
             else:
                 text = org_rule_check.warned_text(rule, text)
         return {"update": updates.post(c, author, text, kind=body.kind, day=body.day, slides=slides,
