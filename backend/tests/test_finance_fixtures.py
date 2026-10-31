@@ -4,6 +4,7 @@ import json
 import sqlite3
 from contextlib import closing
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -122,6 +123,7 @@ class FakeMercury:
         self.queue: dict[str, list[object]] = {}
         self.calls: list[tuple[str, object]] = []
         self.cards_list: list[dict[str, object]] = []
+        self.balances: dict[str, float] = {}       # account id -> currentBalance, in place of the recorded one
 
     def _answer(self, name: str, arg: object, default: object):
         self.calls.append((name, arg))
@@ -132,11 +134,16 @@ class FakeMercury:
     def sent(self, name: str) -> list[object]:
         return [arg for n, arg in self.calls if n == name]
 
+    def _balanced(self, recorded: dict[str, object]) -> dict[str, object]:
+        listed = cast(list[dict[str, object]], recorded["accounts"])
+        return {"accounts": [{**a, "currentBalance": self.balances[str(a["id"])]} if str(a["id"]) in self.balances
+                             else a for a in listed]}
+
     def accounts(self):
-        return self._answer("accounts", None, MERCURY["accounts"])
+        return self._answer("accounts", None, self._balanced(MERCURY["accounts"]))
 
     def credit(self):
-        return self._answer("credit", None, MERCURY["credit"])
+        return self._answer("credit", None, self._balanced(MERCURY["credit"]))
 
     def users(self):
         return self._answer("users", None, MERCURY["users"])

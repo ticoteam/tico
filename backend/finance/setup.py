@@ -23,6 +23,7 @@ CHART = (
     ("1200", "Accounts receivable", "asset", "receivable", ""),
     ("2000", "Accounts payable", "liability", "payable", ""),
     ("3000", "Owner's equity", "equity", "", ""),
+    ("3900", "Opening balance equity", "equity", "opening", ""),
     ("4000", "Revenue", "income", "", ""),
     ("5000", "Cost of revenue", "expense", "cogs", ""),
     ("5100", "AI services", "expense", "ai", "5000"),

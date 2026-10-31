@@ -253,6 +253,22 @@ def booked_uncleared(c: sqlite3.Connection, money_account_id: str, gl_account_id
                      (gl_account_id, money_account_id)).fetchall()
 
 
+def settled_total(c: sqlite3.Connection, money_account_id: str) -> tuple[int, str]:
+    """What the provider's current balance holds of this account's feed: the total of its settled rows (a cancelled,
+    failed, blocked or reversed one moved nothing) and the earliest such row's day ("" with none)."""
+    row = c.execute("SELECT COALESCE(SUM(amount), 0), COALESCE(MIN(txn_date), '') FROM fin_feed_txns WHERE "
+                    "money_account_id=? AND pending=0 AND COALESCE(provider_status, '') NOT IN "
+                    "('cancelled','failed','blocked','reversed')", (money_account_id,)).fetchone()
+    return int(row[0]), str(row[1])
+
+
+def opening_entry(c: sqlite3.Connection, book_id: str, money_account_id: str) -> Any:
+    """This money account's live opening-balance entry (source sync, source id opening:<id>[:<when>]), if any."""
+    return c.execute("SELECT * FROM fin_entries WHERE book_id=? AND source='sync' AND status='posted' AND "
+                     "reverses_id IS NULL AND (source_id=? OR source_id LIKE ?) ORDER BY created_at DESC, id DESC "
+                     "LIMIT 1", (book_id, f"opening:{money_account_id}", f"opening:{money_account_id}:%")).fetchone()
+
+
 def feed_outstanding(c: sqlite3.Connection, money_account_id: str, through: str) -> tuple[int, int]:
     """Settled rows on or before `through` the books don't have yet (`new`): how many, and their total."""
     row = c.execute("SELECT COUNT(*), COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "

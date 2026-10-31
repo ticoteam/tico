@@ -31,7 +31,7 @@ from .store import budgets as SB
 from .store import ledger as SL
 
 NEW_EVENT, CATEGORY_EVENT, DECLINED_EVENT = "finance.feed.new", "finance.feed.needs_category", "finance.card.declined"
-OTHER, BANK, CARDS = "6900", "1000", "2100"
+OTHER, BANK, CARDS, OPENING = "6900", "1000", "2100", "3900"
 MATCH_DAYS = 5                     # a transfer's two sides post within this many days of each other
 AUTH_DAYS = 30                     # an authorization's hold lasts this long without its settlement
 
@@ -174,6 +174,72 @@ def set_balance(ctx: Ctx, money_id: str, current: int | None, available: int | N
                                                       "balance_as_of": as_of, "updated_at": ctx.at})
 
 
+# ------------------------------------------------------------------------------------------------ opening balance
+def _opening_line(ctx: Ctx) -> L.Account:
+    """Opening balance equity: setup makes it; an older book gets it the first time an opening balance posts."""
+    found = next((a for a in ctx.accounts.values() if a.type == "equity" and a.subtype == "opening"), None)
+    return found or _new_account(ctx, OPENING, "Opening balance equity", "equity", "opening", SYSTEM)
+
+
+def opening_amount(ctx: Ctx, money: Any, through: str) -> int:
+    """What the money account's opening-balance entry put on its GL line, if it is dated through `through`."""
+    entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
+    if entry is None or str(entry["entry_date"]) > through:
+        return 0
+    gl = str(money["account_id"] or "")
+    return sum(line.amount for _, line in SL.entry_lines(ctx.c, str(entry["id"])) if line.account_id == gl)
+
+
+def _set_opening(ctx: Ctx, money: Any, amount: int, day: str) -> str | None:
+    """Make the money account's one opening-balance entry say `amount` on `day` (Dr/Cr its GL line against Opening
+    balance equity). Unchanged: nothing. Changed: the old entry is reversed and the new one posted, each on an open
+    day (a closed month keeps its meaning). The live entry's id, or None when the opening is 0."""
+    gl = _gl(ctx, money)
+    prior = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
+    if prior is not None:
+        moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(prior["id"])) if line.account_id == gl.id)
+        dated = str(prior["entry_date"])
+        if moved == amount and (dated == day or SL.closed_on(ctx.c, ctx.book.id, day)):
+            return str(prior["id"])
+        posting.reverse(ctx, str(prior["id"]), day=open_day(ctx, dated), memo="Opening balance changed", by=SYSTEM)
+    if amount == 0:
+        return None
+    mid = str(money["id"])
+    source_id = f"opening:{mid}" if prior is None else f"opening:{mid}:{ctx.at}"
+    done = posting.post_entry(ctx.c, {"date": open_day(ctx, day), "source": "sync", "source_id": source_id,
+                                      "memo": f"Opening balance: {money['name']}"[:200],
+                                      "lines": [_line(gl.id, amount), _line(_opening_line(ctx).id, -amount)]},
+                              at=ctx.at)
+    return str(done["entry_id"])
+
+
+def opening_balance(ctx: Ctx, money_id: str) -> str | None:
+    """After a backfill: the provider's current balance less every settled feed row is what the account held before
+    the first of them, posted as of the day before it (no rows: today). An IO credit line's balance and rows carry
+    the same sign (owed negative), so the liability side comes out the same way. Idempotent per money account; a
+    later backfill that reaches further back adjusts the one entry. Nothing without a balance or a GL line."""
+    money = SK.get(ctx.c, "fin_money_accounts", money_id)
+    if money is None or money["balance"] is None or not money["account_id"]:
+        return None
+    total, first = SK.settled_total(ctx.c, money_id)
+    day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+    return _set_opening(ctx, money, int(money["balance"]) - total, day)
+
+
+def _before_opening(ctx: Ctx, money: Any, amount: int, day: str) -> None:
+    """A settled row first seen after the opening was posted, dated on or before it: the provider's balance already
+    held it inside the opening, so the opening gives it back (and moves before it), never counting it twice."""
+    entry = SK.opening_entry(ctx.c, ctx.book.id, str(money["id"]))
+    if entry is None:
+        return
+    dated = str(entry["entry_date"])
+    if day > dated:
+        return
+    have = opening_amount(ctx, money, dated)
+    earlier = (dates.day(day) - timedelta(days=1)).isoformat()
+    _set_opening(ctx, money, have - amount, min(dated, earlier))
+
+
 # ------------------------------------------------------------------------------------------------ taking in
 def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str | None:
     """Take in one provider transaction: insert or update its row and post what it means. The feed row id, or None
@@ -209,6 +275,10 @@ def ingest(ctx: Ctx, connection_id: str, t: F.FeedTxn, by: str = SYSTEM) -> str 
                   f"v{t.version}")
             return fid
         SK.update(ctx.c, "fin_feed_txns", fid, fields)
+    was_settled = row is not None and not int(row["pending"]) and str(row["provider_status"] or "") not in (
+        *F.VOID, F.REVERSED)
+    if not t.pending and not (t.void or t.reversed) and not was_settled:
+        _before_opening(ctx, money, t.amount, t.txn_date)
     _settle(ctx, SK.get(ctx.c, "fin_feed_txns", fid), money, card, t)
     return fid
 
@@ -541,7 +611,9 @@ def reconcile(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     else:
         ids = sorted(window)
     if last is None:
-        opening = _signed(money, V.opt_amount(p, "opening_balance") or 0)
+        # A first reconciliation opens at the opening-balance entry the backfill posted, unless one is typed.
+        typed = V.opt_amount(p, "opening_balance")
+        opening = _signed(money, typed) if typed is not None else opening_amount(ctx, money, end)
     else:
         if "opening_balance" in p:
             raise invalid("the opening balance is the last reconciliation's")

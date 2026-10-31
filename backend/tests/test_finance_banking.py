@@ -141,6 +141,7 @@ def _arrives(fake, raw, version, event_id):
 
 def test_an_authorization_holds_settles_in_place_posts_once_and_the_io_bill_clears_it(books):
     fake = FakeMercury()
+    fake.balances["credit-io"] = 0                     # nothing owed before: no opening balance on the IO line
     connect(books, fake)
     budget_id, card_id = _card_for_eve(books, fake)
     assert sync_once(books, fake) == "ok"                                 # first sync: the card is made at Mercury
@@ -205,6 +206,7 @@ def test_a_voided_authorization_releases_its_hold(books):
 
 def test_reconciliation_difference_lock_and_undo(books):
     fake = FakeMercury()
+    fake.balances["acct-chk"] = 485.0                  # the fee and the deposit are all checking ever held
     connect(books, fake)
     for key in ("txn_bank_fee", "txn_deposit"):
         fake.txns[str(MERCURY[key]["id"])] = dict(MERCURY[key])
@@ -432,6 +434,7 @@ def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(b
     """C17: a journal on the bank's GL line the statement doesn't have keeps the reconciliation open, though the
     statement and its feed rows agree; an outstanding row on the books is adjusted for, not a gap."""
     fake = FakeMercury()
+    fake.balances["acct-chk"] = -22.0                  # these two rows are the account's whole history
     connect(books, fake)
     fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                           # -15.00 on Oct 12
     fake.txns["txn-late"] = _txn("txn-late", "acct-chk", -7.0, "wireFee", day="2026-10-20")
@@ -452,3 +455,50 @@ def test_a_reconciliation_is_done_only_when_the_whole_gl_line_is_the_statement(b
         done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
                                            "statement_balance": -1_500})
         assert (done.result["status"], done.result["book_difference"]) == ("done", 0)
+
+
+def _opening(c):
+    return [tuple(r) for r in c.execute(
+        "SELECT e.entry_date, a.code, l.amount FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id "
+        "JOIN fin_accounts a ON a.id=l.account_id WHERE e.source='sync' AND e.source_id LIKE 'opening:%' AND "
+        "e.status='posted' AND e.reverses_id IS NULL AND a.code IN ('1000','3900') AND e.id IN (SELECT l2.entry_id "
+        "FROM fin_lines l2 JOIN fin_accounts a2 ON a2.id=l2.account_id WHERE a2.code='1000') ORDER BY a.code")]
+
+
+def test_a_backfill_posts_the_opening_balance_so_the_first_reconcile_is_done_with_no_journal(books):
+    """Connect, backfill, reconcile to Mercury's statement: done, no hand journal. The opening is Mercury's balance
+    less the backfilled rows, as of the day before the first; one entry per account, adjusted (on an open day once
+    its month is closed) when an older row turns up."""
+    fake = FakeMercury()                                  # checking holds 125,250.50 today
+    fake.txns["txn-old"] = _txn("txn-old", "acct-chk", -1000.0, "wireFee", day="2026-09-03")
+    fake.txns["txn-fee"] = dict(MERCURY["txn_bank_fee"])                           # -15.00 on Oct 12
+    fake.queue["statements"] = [{"statements": [{**MERCURY["bank_statement"], "endingBalance": 125265.5}]}]
+    connect(books, fake)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert _opening(c) == [("2026-09-02", "1000", 12_626_550), ("2026-09-02", "3900", -12_626_550)]
+        assert c.execute("SELECT type, subtype FROM fin_accounts WHERE code='3900'").fetchone()[:] == ("equity",
+                                                                                                      "opening")
+        bank = str(c.execute("SELECT id FROM fin_money_accounts WHERE provider_account_id='acct-chk'").fetchone()[0])
+        assert c.execute("SELECT count(*) FROM fin_entries WHERE source='manual'").fetchone()[0] == 0
+        done = act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-09-30"})
+        assert (done.result["status"], done.result["difference"], done.result["book_difference"]) == ("done", 0, 0)
+        sheet = FR.balance_sheet(c, OWNER, at=AT)
+        assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050    # Mercury's own
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    sync_once(books, fake, LATER)                         # idempotent: still one opening
+    with books.transaction() as c:
+        assert len(_opening(c)) == 2
+        # An older row Mercury's balance already held: the opening gives it back and moves before it; its old
+        # month is closed, so the old entry is reversed on an open day.
+        raw = _txn("txn-older", "acct-chk", -50.0, "wireFee", day="2026-08-20")
+        from backend.finance import banking
+        from backend.finance.context import load
+        cid = str(c.execute("SELECT id FROM fin_connections").fetchone()[0])
+        banking.ingest(load(c, LATER), cid, F.mercury_txn(raw, 0))
+        assert _opening(c) == [("2026-08-19", "1000", 12_631_550), ("2026-08-19", "3900", -12_631_550)]
+        rev = c.execute("SELECT entry_date FROM fin_entries WHERE source='sync' AND reverses_id IS NOT NULL AND "
+                        "source_id LIKE ?", (f"opening:{bank}%",)).fetchall()
+        assert [r[0] for r in rev] == ["2026-10-15"]
+        sheet = FR.balance_sheet(c, OWNER, at=LATER)
+        assert next(r for r in sheet["assets"] if r["code"] == "1000")["balance"] == 12_525_050

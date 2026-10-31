@@ -303,6 +303,12 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         with store.transaction() as c:
             SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings_json": SK.dump(
                 {**conf, "backfilled": True}) if done else row["settings_json"]})
+            if done:
+                # The balances read at the start of this pass and the whole feed: each account's opening balance.
+                ctx = load(c, now)
+                for m in SK.money_accounts(c, ctx.book.id):
+                    if str(m["connection_id"] or "") == cid:
+                        banking.opening_balance(ctx, str(m["id"]))
         if done:
             break
     return []
