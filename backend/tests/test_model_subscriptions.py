@@ -201,8 +201,9 @@ def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
     post(api, "chat/ops", {"text": "Summarize the Acme account."})
     turn = claim(api, m)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "limit"}, m["token"])
+    # No reset named: a turn paused at a named reset keeps its saved session for that reset instead (source pause).
     post(api, f"attempts/{turn['id']}/events", {"events": [
-        {"seq": 1, "kind": "error", "payload": {"error": CLAUDE_LIMIT, "limit": True}}]}, m["token"])
+        {"seq": 1, "kind": "error", "payload": {"error": "You've hit your usage limit.", "limit": True}}]}, m["token"])
     post(api, f"attempts/{turn['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
          m["token"])
     sub_login = login_holds.subscription_login(sid)
@@ -219,6 +220,14 @@ def test_a_limit_met_on_a_subscription_holds_every_computer_given_it(api):
     other = claim(api, n)                                                     # it never waits on the held subscription
     assert other and other["bot"] == "cpo" and other["config"]["runtime"] == "claude" and "subscriptions" not in other
     assert not other["config"].get("primary_held")
+    # The bot that met the limit is not kept waiting by it either: its work back in the queue signs in with the
+    # computer's own login, which no limit holds.
+    from backend.execution import cooling_off
+    with api.app.state.store.read() as c:
+        assert H.status(c, "ops")["state"] == "limited" and cooling_off(c, "ops")
+    mine = claim(api, m)
+    assert mine and mine["job_id"] == turn["job_id"] and "subscriptions" not in mine
+    assert not mine["config"].get("primary_held")
 
 
 def test_a_held_subscription_falls_to_the_gateway_under_the_gateway_choice_and_waits_without_it(api, monkeypatch):
@@ -350,3 +359,123 @@ def test_a_refreshed_chatgpt_login_comes_back_only_from_the_run_that_had_it(api)
         sub = MS.row(c, sid)
         assert json.loads(api.app.state.vault.cipher.unseal(c, MS._context(sid), sub["sealed"]))["tokens"][
             "refresh_token"] == "r-2"
+        assert MS.handed(c, turn["id"], "codex")["revision"] == 2       # the run's record moved with its file
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-codex"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
+    assert listed(api)[0]["status"] == "working"                         # it worked on the revision it refreshed to
+    # A finished run writes nothing back, though its revision is still the current one.
+    late = {"attempt": turn["id"], "subscription": sid, "revision": 2, "value": codex_file(refresh="r-9")}
+    post(api, "runner-model-subscription-refresh", late, m["token"], expected=409)
+    # Nor does a live run on a computer the subscription was taken off.
+    post(api, "chat/ops", {"text": "And the Globex account?"})
+    second = claim(api, m)
+    assert second["subscriptions"][0]["revision"] == 2
+    post(api, f"attempts/{second['id']}/started", {"thread_id": "t-codex-2"}, m["token"])
+    assert give(api, m, "codex", None, confirm=True)["stopped"] == 1
+    post(api, "runner-model-subscription-refresh", {**late, "attempt": second["id"]}, m["token"], expected=409)
+    assert "subscriptions" not in get(api, "credential-runtime", second["token"])
+    with api.app.state.store.read() as c:
+        assert json.loads(api.app.state.vault.cipher.unseal(c, MS._context(sid), MS.row(c, sid)["sealed"]))[
+            "tokens"]["refresh_token"] == "r-2"
+
+
+def test_a_reconnect_restarts_runs_on_the_old_value_and_their_late_refusal_leaves_the_new_one(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api)["id"]
+    m = machine(api)                                  # no Claude login of its own: the subscription is its only one
+    give(api, m, "claude", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    turn = claim(api, m)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-old"}, m["token"])
+    assert post(api, f"model-subscriptions/{sid}", {"secret": OTHER})["revision"] == 2
+    # The run handed revision 1 is stopped and put back in the queue, and never reads the new value.
+    renewed = post(api, f"attempts/{turn['id']}/renew", {}, m["token"])
+    assert renewed["stop"] is True and "sign-in changed" in renewed["stop_reason"]
+    assert "subscriptions" not in get(api, "credential-runtime", turn["token"])
+    # Its refusal of the old value arrives late: the new value stays as it is, and no computer card waits on it.
+    post(api, f"attempts/{turn['id']}/complete", {
+        "outcome": "failed", "last_seq": 0,
+        "auth_rejected": {"runtime": "claude", "reason": "OAuth token has expired"}}, m["token"])
+    assert listed(api)[0]["status"] == "new" and effect(api, m) == sid
+    with api.app.state.store.read() as c:
+        assert not c.execute("SELECT 1 FROM task_reconnects WHERE key LIKE 'login:%'").fetchone()
+
+
+def test_a_run_reads_only_the_revision_it_was_handed_or_the_same_accounts_refresh(api):
+    setup(api)
+    company(api)
+    on(api, "ops", "codex", "gpt-6.1-sol")
+    on(api, "cpo", "codex", "gpt-6.1-sol")
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m, n = machine(api), machine(api, bot="cpo", label="Other Mac")
+    give(api, m, "codex", sid)
+    give(api, n, "codex", sid)
+    post(api, "chat/ops", {"text": "Summarize the Acme account."})
+    post(api, "chat/cpo", {"text": "Price the Acme plan."})
+    first, second = claim(api, m), claim(api, n)
+    assert first["subscriptions"][0]["revision"] == second["subscriptions"][0]["revision"] == 1
+    get(api, "credential-runtime", first["token"])
+    assert post(api, "runner-model-subscription-refresh", {"attempt": first["id"], "subscription": sid, "revision": 1,
+                                                           "value": codex_file(refresh="r-2")}, m["token"])["stored"]
+    # The other run reads after the refresh: the same account's newer file, and its record moves to it, so its own
+    # write-back is not stale.
+    [value] = get(api, "credential-runtime", second["token"])["subscriptions"]
+    assert value["revision"] == 2 and json.loads(value["value"])["tokens"]["refresh_token"] == "r-2"
+    assert post(api, "runner-model-subscription-refresh", {"attempt": second["id"], "subscription": sid, "revision": 2,
+                                                           "value": codex_file(refresh="r-3")}, n["token"]) == {
+        "stored": True, "revision": 3}
+    # The first run's copy is now behind (its refresh token was used up by the second): its refusal says nothing of
+    # the stored login, which stays in use on both computers.
+    post(api, f"attempts/{first['id']}/started", {"thread_id": "t-first"}, m["token"])
+    post(api, f"attempts/{first['id']}/complete", {
+        "outcome": "failed", "last_seq": 0,
+        "auth_rejected": {"runtime": "codex", "reason": "refresh_token_reused"}}, m["token"])
+    assert listed(api)[0]["status"] != "needs_reconnect" and effect(api, n, "codex") == sid
+
+
+def test_a_computer_with_only_a_codex_subscription_runs_codex_checks_and_their_limit_holds_it(api):
+    from backend.readiness import can_run
+    setup(api)
+    company(api)
+    on(api, "ops", "claude", "claude-sonnet-5-5")
+    sid = add(api, "codex_login", codex_file(), name="ChatGPT")["id"]
+    m = machine(api, signed_in=True)                  # its own Claude login; no Codex login of its own
+    post(api, "runners/heartbeat", {
+        "version": "test", "platform": "test", "capabilities": [MS.CAPABILITY, "task_lanes_v2", "session_roots_v1"],
+        "readiness": {"schema_version": 1, "runtimes": {"claude": {"installed": True, "authenticated": "ready"},
+                                                        "codex": {"installed": True, "authenticated": "missing"}},
+                      "bots": {"ops": {"runtime": "claude", "ready": True}}}}, token=m["token"])
+    old = machine(api, takes=False, bot="cpo", label="Old Mac")
+    with api.app.state.store.read() as c:
+        assert can_run(c, "ops", "codex")["can_run"] is False
+    give(api, m, "codex", sid)
+    give(api, old, "codex", sid)
+    with api.app.state.store.read() as c:
+        # The subscription is its Codex sign-in for every check (a move, a task model, a check model, Health) ...
+        assert can_run(c, "ops", "codex")["can_run"] is True
+        # ... but not on a runner too old to take one.
+        assert can_run(c, "cpo", "codex")["can_run"] is False
+    parent = post(api, "tasks", {"owner": "ops", "title": "Ship the import fix", "body": "Open the PR."})
+    turn = claim(api, m)
+    assert turn["task"]["id"] == parent["id"]
+    sub = post(api, "tasks", {"owner": "ops", "title": "Review it on Codex", "body": "Read it.", "check_model": "codex",
+                              "check_role": "review", "relations": [{"task": parent["id"], "kind": "parent"}]},
+               turn["token"])
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-parent"}, m["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."}, m["token"])
+    check = claim(api, m)                             # handed out though Codex is not signed in on the computer
+    assert check and check["task"]["id"] == sub["id"] and check["config"]["runtime"] == "codex"
+    assert [s["id"] for s in check["subscriptions"]] == [sid]
+    post(api, f"attempts/{check['id']}/started", {"thread_id": "t-check"}, m["token"])
+    post(api, f"attempts/{check['id']}/events", {"events": [
+        {"seq": 1, "kind": "error", "payload": {"error": "You've hit your usage limit.", "limit": True}}]}, m["token"])
+    post(api, f"attempts/{check['id']}/complete", {"outcome": "failed", "last_seq": 1, "limited": True, "text": ""},
+         m["token"])
+    with api.app.state.store.read() as c:
+        # The check's limit holds the shared subscription on every computer given it ...
+        assert login_holds.get(c, "", login_holds.subscription_login(sid), "codex")["until"] > H.now()
+        assert not login_holds.get(c, m["runner_id"], "", "codex")
+        # ... and the check keeps its own schedule: it alone is held, the bot is not limited.
+        assert H.status(c, "ops")["state"] != "limited" and "on a check" in H.status(c, "ops")["focus"]

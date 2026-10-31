@@ -541,14 +541,16 @@ def label(src, at="", primary_until=""):
     return said
 
 
-def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None):
+def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hopped=None, subscriptions_only=False):
     """Save or clear the logins' holds a finished turn shows, and return the hold that keeps the bot waiting, or {}.
     `profile` and `runtime` are the bot's own login. Every login the turn met a usage limit on is held, with the reset
     its own notice names, whatever the turn's outcome: an intermediate fallback that ran out stays held after a later
     one finishes the turn. A login the turn completed on is cleared, but only by a turn claimed after its hold began:
     a lane leased before the limit says nothing about the login now. `hopped` is the bot's fallback (execution.fallback_mark)
     when it met the limit and could not start the turn (execution.hop_failed): the bot waits out its own hold rather than
-    being sent there again, until it names another fallback."""
+    being sent there again, until it names another fallback. `subscriptions_only` (a check's turn) holds or clears only
+    the company subscriptions the turn signed in with: one is a login shared by every computer given it, while the
+    check keeps its own schedule (execution.complete) and the computer's own logins are left as they are."""
     # Sent away from its held login, no fallback ran it (none was ready, or it failed before it acknowledged the
     # turn): the turn ran nowhere, so no login met a limit; the hop its notes name only failed to start.
     unstarted = body.primary_held and body.limited and not body.fallback
@@ -565,6 +567,8 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
         # A step signed in with a company subscription met its limit (or worked) on that subscription, wherever it
         # runs; any other step on the computer's own login.
         given = handed(c, attempt_id, rt)
+        if subscriptions_only and not given:
+            continue
         login = (subscription_login(given["subscription_id"]) if given
                  else canonical(c, runner_id, profile if n == 0 else hop_profile, rt, subscription=False))
         last = n == len(steps) - 1
@@ -593,6 +597,8 @@ def after_turn(c, runner_id, bot, profile, runtime, body, attempt_id, hit, hoppe
             old = get(c, runner_id, login, rt)
             if old and claimed >= (old.get("since") or ""):
                 clear(c, runner_id, login, rt)
+    if subscriptions_only:
+        return {}
     if unstarted:
         # The bot waits out this hold rather than being sent to that fallback again (fallback_choice).
         own = canonical(c, runner_id, profile, runtime)

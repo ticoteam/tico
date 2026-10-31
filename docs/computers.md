@@ -33,7 +33,9 @@ subscription does the same on each computer that had it. A computer on an older 
 picker until it updates.
 
 Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
-cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu.
+cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu. A new value
+restarts the running tasks on each computer that has the subscription, as a switch does, without asking first, so no
+run goes on with the old one.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway

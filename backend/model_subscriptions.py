@@ -33,13 +33,21 @@ environment subscription (a token or Anthropic key) is set in the turn's environ
 (a ChatGPT login or OpenAI key for Codex) becomes `auth.json` in a home of its own per subscription on that computer,
 there only while a turn on it runs (runner-rs/src/model_subscriptions.rs). Codex refreshes a ChatGPT login in that
 file; the runner sends the refreshed file back (`POST runner-model-subscription-refresh`) so the next computer starts
-from it.
+from it. Only a live run still given the subscription on that computer, at the revision it was handed, writes back
+(`refreshed`).
+
+Revisions: a run reads only what it was handed. A reconnect (a new value) is a change like any other: it stops the
+live runs given it and starts their sessions fresh (`_restart`), so a run never reads another account's value. A
+refresh is the same account: a run still going that reads after one gets the refreshed value and its record moves
+with it (`run_values`), so its write-back and its verdict (`turn_rejected`, `turn_worked`) match what it ran on.
 
 Only a runner that says it can (`CAPABILITY`) is handed subscriptions; an older one runs as before and the page says it
 needs an update. One computer is one trust group: every bot on a computer runs as the same OS user there (SECURITY.md).
 
 A run the provider refuses on a subscription marks it `needs_reconnect` and leaves the computer's own login alone: it is
-passed over until someone saves a new value (Reconnect), and a run on it that completes marks it working.
+passed over until someone saves a new value (Reconnect), and a run on it that completes marks it working. Only a run on
+the subscription's current revision decides either: a late refusal of a value already replaced says nothing of the new
+one.
 """
 import base64
 import json
@@ -209,6 +217,12 @@ def _given(c):
 def given_to(c, runner_id):
     """[(runtime, subscription id)] the computer is given, whatever their status."""
     return [(runtime, sub["id"]) for (rid, runtime), sub in _given(c).items() if rid == runner_id]
+
+
+def still_given(c, runner_id, runtime, subscription_id):
+    """Whether the computer is given this subscription for `runtime` now (whatever its status)."""
+    sub = _given(c).get((runner_id, runtime))
+    return bool(sub) and sub["id"] == subscription_id
 
 
 def in_effect(c, runner_id, runtime):
@@ -410,9 +424,9 @@ def _restart(c, settings, runner_id, runtime):
 
 
 def _effect_changed(c, settings, sid):
-    """The subscription stopped or started counting (needs reconnecting, reconnected): each computer given it now signs
-    that runtime in another way, so its sessions there start fresh. Its runs are not stopped: a refused one already
-    ended, and a reconnect is the same account."""
+    """The subscription stopped counting (it needs reconnecting): each computer given it now signs that runtime in
+    another way, so its sessions there start fresh. Its runs are not stopped: the refused one already ended. (A
+    reconnect restarts them, `save`.)"""
     for runner_id, runtime in c.execute("SELECT runner_id,runtime FROM computer_subscriptions WHERE subscription_id=?",
                                         (sid,)).fetchall():
         _reset(c, settings, runner_id, runtime)
@@ -459,9 +473,18 @@ def save(c, vault, settings, who, body, sid=None):
             c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,status='new',"
                       "status_detail='',status_at=?,updated=? WHERE id=?",
                       (vault.cipher.seal(c, _context(sid), value), preview, now, now, sid))
-            if sub["status"] == "needs_reconnect":
-                _effect_changed(c, settings, sid)
-        H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": body.secret is not None})
+            # A new value may be another account: as for a change, every computer given it stops its live runs on
+            # that runtime (their work goes back in the queue) and starts its sessions there fresh. An older runner
+            # never signed in with it, so nothing changes there.
+            stopped = 0
+            for g in c.execute("SELECT g.runner_id,g.runtime,r.capabilities_json FROM computer_subscriptions g "
+                               "JOIN runners r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id",
+                               (sid,)).fetchall():
+                if runner_takes(g):
+                    stopped += _restart(c, settings, g["runner_id"], g["runtime"])["stopped"]
+            H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": True, "stopped": stopped})
+            return view(c, row(c, sid))
+        H.event(c, who.actor, "subscription.updated", sid, {"secret_changed": False})
         return view(c, row(c, sid))
     if not body.kind or body.secret is None:
         raise Problem("secret", "Choose a kind and paste the token, key or login", 422)
@@ -568,19 +591,29 @@ def hand_out(c, attempt_id, chosen):
 
 def run_values(c, vault, who):
     """What `GET credential-runtime` adds for the bot run `who`: each subscription its claim handed it, with its value.
-    Only the run's own attempt, only while it is live, and only the revision it was handed (a newer one waits for the
-    next turn, so the runner's home and its write-back agree)."""
+    Only the run's own attempt, only while it is live, only while its computer is still given that subscription, and
+    only the revision it was handed. A reconnect or a take-off stops every live run given it (`_restart`): such a run
+    gets nothing and ends. A run still going whose subscription moved on was moved by a refresh (`refreshed`, the same
+    account): it gets the refreshed value and its record moves with it, so its home, its write-back and its verdict
+    agree."""
     if not who.attempt_id or not H._has_table(c, "attempt_subscriptions"):
         return []
-    attempt = c.execute("SELECT runner_id,state,bot FROM attempts WHERE id=?", (who.attempt_id,)).fetchone()
+    attempt = c.execute("SELECT runner_id,state,bot,stop_requested FROM attempts WHERE id=?",
+                        (who.attempt_id,)).fetchone()
     if not attempt or attempt["state"] not in ("leased", "running") or "bot:" + attempt["bot"] != who.actor:
         return []
     out = []
     for given in c.execute("SELECT * FROM attempt_subscriptions WHERE attempt_id=? ORDER BY runtime",
                            (who.attempt_id,)).fetchall():
         sub = row(c, given["subscription_id"])
-        if not sub or sub["status"] == "needs_reconnect":
+        if (not sub or sub["status"] == "needs_reconnect"
+                or not still_given(c, attempt["runner_id"], given["runtime"], sub["id"])):
             continue
+        if sub["revision"] != given["revision"]:
+            if attempt["stop_requested"]:
+                continue        # stopped (a reconnect restarts its runs): it ends without the newer value
+            c.execute("UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
+                      (sub["revision"], who.attempt_id, given["runtime"]))
         value = vault.cipher.unseal(c, _context(sub["id"]), sub["sealed"])
         spec = KINDS[sub["kind"]]
         out.append({"id": sub["id"], "runtime": given["runtime"], "kind": sub["kind"], "name": sub["name"],
@@ -591,17 +624,24 @@ def run_values(c, vault, who):
 
 
 def refreshed(c, vault, who, body):
-    """A runner sends back a ChatGPT login its CLI refreshed in a turn it ran on it. Kept only when the attempt was
-    handed that subscription on this computer, the subscription is still at the revision the turn had, and the file is
-    the same account; anything else is ignored (another computer refreshed first, or someone reconnected)."""
+    """A runner sends back a ChatGPT login its CLI refreshed in a turn it ran on it. Only from a live run (leased or
+    running on this computer, its lease current, not stopped by Tico) that was handed that subscription and whose
+    computer is still given it for that runtime: a finished, expired, restarted or quarantined run, or a computer the
+    subscription was taken off, writes nothing (409 `stale_lease`). Kept only when the subscription is still at the
+    revision the turn had and the file is the same account; anything else is ignored (another computer refreshed first,
+    or someone reconnected). A kept file moves the run's record to the new revision with it."""
     if who.role != "runner":
         raise Problem("forbidden", "Only a registered computer may send this", 403)
-    given = c.execute("SELECT s.revision FROM attempt_subscriptions s JOIN attempts a ON a.id=s.attempt_id "
-                      "WHERE s.attempt_id=? AND s.subscription_id=? AND a.runner_id=?",
-                      (body.attempt, body.subscription, who.runner_id)).fetchone()
+    given = c.execute("SELECT s.runtime,s.revision,a.state,a.lease_until,a.stop_requested FROM attempt_subscriptions s "
+                      "JOIN attempts a ON a.id=s.attempt_id WHERE s.attempt_id=? AND s.subscription_id=? "
+                      "AND a.runner_id=?", (body.attempt, body.subscription, who.runner_id)).fetchone()
     sub = row(c, body.subscription)
     if not given or not sub or sub["kind"] != "codex_login":
         raise Problem("forbidden", "That run was not handed this subscription on this computer", 403)
+    if (given["state"] not in ("leased", "running") or (given["lease_until"] or "") <= H.now()
+            or given["stop_requested"] == H.KEEPER
+            or not still_given(c, who.runner_id, given["runtime"], sub["id"])):
+        raise Problem("stale_lease", "That run has ended or no longer signs in with this subscription", 409)
     if sub["revision"] != body.revision or given["revision"] != body.revision:
         return {"stored": False}
     value, preview = checked("codex_login", body.value.get_secret_value())
@@ -613,6 +653,8 @@ def refreshed(c, vault, who, body):
         return {"stored": False}
     c.execute("UPDATE model_subscriptions SET sealed=?,preview=?,revision=revision+1,updated=? WHERE id=?",
               (vault.cipher.seal(c, _context(sub["id"]), value), preview, H.now(), sub["id"]))
+    c.execute("UPDATE attempt_subscriptions SET revision=? WHERE attempt_id=? AND runtime=?",
+              (sub["revision"] + 1, body.attempt, given["runtime"]))
     H.event(c, who.actor, "subscription.refreshed", sub["id"], {"attempt": body.attempt})
     return {"stored": True, "revision": sub["revision"] + 1}
 
@@ -630,13 +672,14 @@ def _status(c, sid, status, detail=""):
 def turn_rejected(c, settings, attempt_id, bot, runtime, reason, task_id):
     """The provider refused the turn's sign-in for `runtime`. When the turn ran on a subscription for it, that
     subscription needs reconnecting and is passed over from the next turn on (the computer's own login or the Gateway
-    takes the requeued work); the computer's own login is not touched and no card holds the task. Returns the
-    subscription row, or None when the turn was on the computer's login."""
+    takes the requeued work); the computer's own login is not touched and no card holds the task. A refusal of a
+    revision already replaced while the turn ran (a reconnect, or another computer's refresh) leaves the new value as it
+    is. Returns the subscription row, or None when the turn was on the computer's login."""
     found = handed(c, attempt_id, runtime)
     sub = row(c, found["subscription_id"]) if found else None
     if not sub:
         return None
-    if sub["status"] != "needs_reconnect":
+    if sub["status"] != "needs_reconnect" and sub["revision"] == found["revision"]:
         _status(c, sub["id"], "needs_reconnect", reason or "The provider refused it")
         _effect_changed(c, settings, sub["id"])
     H.event(c, H.KEEPER, "subscription.rejected", sub["id"],
