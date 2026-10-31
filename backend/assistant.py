@@ -222,12 +222,14 @@ _REPORTS = (re.compile(r"/api/v2/(?:people|humans)/[^/]+"), re.compile(r"/api/v2
 
 
 def instructed_org(method, path, body=None):
-    """Whether this write is an org change that may run on the person's cited words: a group write, or a change of who a
-    person or a bot reports to and nothing else."""
+    """Whether this write is an org change that may run on the person's cited words: a group write, a change of who a
+    person or a bot reports to, or an org rule the person asked for (backend/org_rules.py), and nothing else."""
     path = normalize_path(path)
     if not path:
         return False
     if any(m == method and p.fullmatch(path) for m, p in _ORG):
+        return True
+    if method == "POST" and path == "/api/v2/rules":
         return True
     fields = _fields(body)
     return (method == "POST" and any(p.fullmatch(path) for p in _REPORTS) and "reports_to" in fields

@@ -41,6 +41,31 @@ def _delivery(args):
     return delivery_of(args)
 
 
+def _rules_args(args):
+    """`hub rules` flags as the API takes them: the Who and With flags become scope objects, the rest pass as they are."""
+    def scope(names, everyone=False, all_bots=False):
+        out = {}
+        if names:
+            out["names"] = list(names)
+        if everyone:
+            out["everyone"] = True
+        if all_bots:
+            out["all_bots"] = True
+        return out or None
+    if args.fn in ("rules add", "rules edit", "rules accept"):
+        who = scope(getattr(args, "who_names", None), getattr(args, "everyone", False), getattr(args, "all_bots", False))
+        if who is not None:
+            args.who = who
+    if args.fn in ("rules add", "rules edit"):
+        with_scope = scope(getattr(args, "with_names", None))
+        if with_scope is not None:
+            setattr(args, "with", with_scope)
+    for flag in ("who_names", "with_names", "everyone", "all_bots"):
+        if hasattr(args, flag):
+            delattr(args, flag)
+    return args
+
+
 def via_tool(client, args, **more):
     """Run the tool of the command's own name with the command's flags as its arguments."""
     from clients import hubtools
@@ -170,6 +195,8 @@ def run(args, who=None):
     fn = args.fn
     if args.cmd == "inbound":
         return via_tool(client,args)
+    if args.cmd == "rules":
+        return via_tool(client, _rules_args(args))
     if args.cmd == "mail":
         return via_tool(client, args)
     if args.cmd == "settings":

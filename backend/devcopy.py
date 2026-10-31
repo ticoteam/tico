@@ -49,6 +49,7 @@ EMPTY = (
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
     "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
+    "org_rule_holds",    # org rules: a held output could still be sent anyway from the copy
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
     "screening_pending", "screening_verdicts",  # screening: outside text waiting for its check, and the model's verdicts
     # runner and bot sessions
@@ -119,7 +120,7 @@ KEEP = frozenset((
     "market_evidence", "market_figures", "market_insights", "market_sizes", "market_sources", "market_watches", "market_briefings", "market_turn_sources", "media_assets", "media_control", "meeting_brain", "meeting_comments",
     "meeting_items", "meeting_versions", "meetings", "message_assets", "message_links", "message_links_dirty",
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
-    "recording_source_refs", "recording_transcripts", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_suggestions", "rules", "run_backoff", "runners",
+    "recording_source_refs", "recording_transcripts", "org_rules", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
     "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
