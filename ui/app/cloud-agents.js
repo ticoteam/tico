@@ -92,7 +92,7 @@
         <div class="cloud-request-title"><h2>Add ${name}</h2>${agent.site ? `<a href="https://${esc(agent.site)}" target="_blank" rel="noopener noreferrer">${esc(agent.site)} ↗</a>` : ''}</div>
         <button class="ghost tmodal-x" type="button" data-close aria-label="Close">✕</button></header>
       <div class="bot-editor-body">
-        <p class="cloud-note"><span class="cloud-dot" aria-hidden="true"></span><span>We don't connect to ${name} yet. We'll build it. That usually takes 12 to 24 hours on a normal day.</span></p>
+        <p class="cloud-note">${ldotHTML({state: 'idle', size: 12})}<span>We don't connect to ${name} yet. We'll build it. That usually takes 12 to 24 hours on a normal day.</span></p>
         <ol class="cloud-how"><li>A placeholder seat goes on your chart now</li><li>Tasks you give it wait there</li><li>When it connects, you sign in to ${name} once</li></ol>
         <label>First task (optional)<textarea name="first_task" rows="3" maxlength="8000"></textarea></label>
         <p class="err" role="alert" data-cloud-error hidden></p>
@@ -187,5 +187,12 @@
     await fill(dialog.querySelector('[data-cloud-body]'), {team, reports_to: team ? teamHead(team) : ''});
   };
 
+  // The team builder's Request link (ui/app/team-build.js) opens this dialog for the agent it picked, filed in the team
+  // and under the head it names. A supported agent is added, not requested: the request route refuses one.
+  window.cloudAgentRequest = function cloudAgentRequest(agent, {team = '', reports_to = ''} = {}) {
+    if (!agent) return;
+    if (agent.supported) return connectAgent(agent.connect_id || agent.id);
+    requestDialog(agent, {team, reports_to});
+  };
   window.cloudAgentsSeat = seatPage;
 })();

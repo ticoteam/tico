@@ -4,6 +4,7 @@ request that cannot be kept."""
 import json
 import uuid
 
+from backend import cloud_agents
 from backend import hubdb as H
 from backend.auth import Identity
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
@@ -150,3 +151,11 @@ def test_a_private_first_task_is_listed_only_to_the_people_who_can_read_it(envir
     assert [t["id"] for t in owner["tasks"]] == [task["id"]]
     riley = api.get(f"/api/v2/seats/{seat['id']}/request", headers=as_person(api, "riley")).json()
     assert riley["tasks"] == [] and riley["agent"]["id"] == "devin"
+
+
+def test_the_listing_is_the_catalog_the_route_serves_and_a_copy(environment):
+    api = environment()
+    served = api.get("/api/v2/cloud-agents", headers=signed_in()).json()["agents"]
+    assert cloud_agents.listing() == served
+    cloud_agents.listing()[0]["name"] = "Changed"
+    assert cloud_agents.listing()[0]["name"] == "Claude Code"

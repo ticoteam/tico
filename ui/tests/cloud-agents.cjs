@@ -1,19 +1,20 @@
 // Cloud agents on Recruit (ui/app/cloud-agents.js, backend/cloud_agents.py): the agents grid is four across and two
-// across on a phone, a request files a seat and opens its Connecting page, the seat sits on the chart as a dashed
-// node with its own pill, Add opens that agent's connect steps, and the Connecting pulse moves opacity only and stops
-// under reduced motion. Fixtures only, no network.
+// across on a phone, a request files a seat and opens its Connecting page, the team builder's Request link opens the same
+// dialog for the team it names, the seat sits on the chart as a dashed node with its own pill, Add opens that agent's
+// connect steps, and the Connecting pulse moves opacity only and stops under reduced motion. The agents are the
+// backend's own catalog. Fixtures only, no network.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
+const {execFileSync} = require('node:child_process');
 const fs = require('node:fs');
+const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
 
-const agent = (id, name, maker, site, supported) => ({id, name, maker, site, line: `${name} line`, supported,
-  connect_id: supported ? id : null});
-const AGENTS = [agent('claude', 'Claude Code', 'Anthropic', 'claude.com', true), agent('codex', 'Codex', 'OpenAI', 'openai.com', true),
-  agent('devin', 'Devin', 'Cognition', 'devin.ai', false), agent('droids', 'Droids', 'Factory', 'factory.ai', false),
-  agent('jules', 'Jules', 'Google', 'jules.google', false), agent('copilot', 'Copilot coding agent', 'GitHub', 'github.com', false),
-  agent('background', 'Background agents', 'Cursor', 'cursor.com', false), agent('openhands', 'OpenHands', 'All Hands AI', 'all-hands.dev', false)];
+// The agents the backend lists (listing() in backend/cloud_agents.py), so the grid shows the lines people see.
+const AGENTS = JSON.parse(execFileSync(process.env.TICO_PYTHON || 'python3',
+  ['-c', 'import json; from backend.cloud_agents import listing; print(json.dumps(listing()))'],
+  {cwd: path.join(__dirname, '../..')}).toString());
 // A bot that is not a built-in helper, so it is the team's head that a seat reports to.
 const bots = [{name: 'rust-engineer', display_name: 'Rust Engineer', org_parent: 'p:ana', reports_to: 'ana', team: 'eng', host: 'keeper',
   status: 'active', can_chat: true, users: [{id: 'ana', name: 'Ana'}], schedules: []}];
@@ -92,7 +93,7 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
 (async () => {
   const browser = await chromium.launch({headless: true, channel: process.env.TICO_BROWSER_CHANNEL === undefined ? 'chrome' : process.env.TICO_BROWSER_CHANNEL || undefined});
   try {
-    // Desktop: the chart, the Connecting page, the grid, a request, Add, another agent, and the cancel.
+    // Desktop: the chart, the Connecting page, the grid, a request, Add, another agent, the team builder's link, and the cancel.
     {
       const {page, errors, calls} = await open(browser, {width: 1300, height: 900});
       await page.goto('https://tico-ui.test/#/tasks');
@@ -128,9 +129,11 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       // A request files the seat in this team, reporting to its head, and opens its Connecting page.
       const request = page.locator('dialog.cloud-request');
       await grid.locator('[data-cloud-request="devin"]').click();
+      await request.waitFor();
+      assert.equal(await request.locator('.cloud-note .ldot').count(), 1, 'the placeholder note carries the Liquid Dot');
       await request.locator('textarea[name="first_task"]').fill('Map the sign-in errors');
       await request.locator('button[type="submit"]').click();
-      await seatDialog.waitFor();
+      await seatDialog.locator('.cloud-step').nth(2).waitFor();
       await request.waitFor({state: 'detached'});
       assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/devin/request',
         body: {first_task: 'Map the sign-in errors', team: 'eng', reports_to: 'rust-engineer'}});
@@ -151,9 +154,31 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await grid.locator('form[data-cloud-other] button[type="submit"]').click();
       await request.waitFor();
       await request.locator('button[type="submit"]').click();
-      await seatDialog.waitFor();
+      await seatDialog.locator('.cloud-step').nth(2).waitFor();
       assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/other/request',
         body: {first_task: '', name: 'Acme Agent', team: 'eng', reports_to: 'rust-engineer'}});
+      await seatDialog.locator('[data-close]').first().click();
+      await seatDialog.waitFor({state: 'detached'});
+
+      // The team builder's Request link: the same dialog and the same seat, filed in the team and under the head it names.
+      const pick = {...AGENTS.find(a => a.id === 'devin'), source: 'cloud'};
+      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), pick);
+      await request.waitFor();
+      await request.locator('button[type="submit"]').click();
+      await seatDialog.locator('.cloud-step').nth(2).waitFor();
+      assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/devin/request',
+        body: {first_task: '', team: 'eng', reports_to: 'rust-engineer'}});
+      await seatDialog.locator('[data-close]').first().click();
+      await seatDialog.waitFor({state: 'detached'});
+
+      // The same link with a supported agent adds it: the request route refuses one, so nothing is filed.
+      const count = calls.length;
+      await page.evaluate(p => window.cloudAgentRequest(p), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
+      await connect.waitFor();
+      assert.equal(await connect.locator('[data-url]').innerText(), 'https://mcp.tico.test/api/v2/mcp');
+      assert.equal(calls.length, count, 'a supported agent files no request');
+      await page.keyboard.press('Escape');
+      await connect.waitFor({state: 'hidden'});
 
       assert.deepEqual(errors, []);
       console.log('cloud-agents: desktop ok');

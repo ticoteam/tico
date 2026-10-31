@@ -37,6 +37,11 @@ AGENTS = (
      "line": "Open source; runs in its cloud or yours", "supported": False, "connect_id": None},
 )
 BY_ID = {agent["id"]: agent for agent in AGENTS}
+
+
+def listing():
+    """The catalog as the route serves it, as copies: a caller that changes one cannot change the agents Tico lists."""
+    return [dict(agent) for agent in AGENTS]
 OTHER = "other"                              # an agent not on the list: its name or website, typed by the person
 STEPS = ("requested", "building", "ready")   # the stepper on the seat's Connecting page
 NAME_MAX = 120                               # an `other` name becomes the seat's title
@@ -163,7 +168,7 @@ def install(app, store, auth, settings):
     def cloud_agents(request: Request):
         """The cloud coding agents: the supported ones are added to the team, the others are requested from Tico."""
         auth.domain(request.state.identity)
-        return {"agents": [dict(agent) for agent in AGENTS]}
+        return {"agents": listing()}
 
     @app.post("/api/v2/cloud-agents/{agent_id}/request")
     def cloud_agent_request(request: Request, agent_id: str, body: CloudAgentRequest):
