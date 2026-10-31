@@ -537,11 +537,23 @@ class Ask(Contract):
     label: str | None = Field(default=None, max_length=J.MAX_LABEL)
 
 
-def used_today(c, actor, at=None, action="judge.call"):
+# The keeper's rule-check calls (backend/org_rule_check.py) have their own daily cap: they count only against it, and
+# every other keeper call (ask ingest, triage, postal) only against the decisions cap, so neither starves the other.
+RULES_TARGET = "rule-check@%"
+
+
+def used_today(c, actor, at=None, action="judge.call", target=None):
+    """Today's `action` rows by `actor`. `target`: only those whose target is LIKE it. The keeper's own judge calls
+    leave out the rule checks unless `target` asks for them."""
     day = (at or H.now())[:10]
+    where, args = "", [actor, action, day + "T00:00:00"]
+    if target:
+        where, args = " AND target LIKE ?", [*args, target]
+    elif actor == H.KEEPER and action == "judge.call":
+        where, args = " AND target NOT LIKE ?", [*args, RULES_TARGET]
     # The actor's own rows, counted in the index (events_task_origin), not every actor's today (events_action_ts).
-    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?",
-                     (actor, action, day + "T00:00:00")).fetchone()[0]
+    return c.execute("SELECT count(*) FROM events INDEXED BY events_task_origin WHERE actor=? AND action=? AND ts>=?"
+                     + where, args).fetchone()[0]
 
 
 def install_judge(app, store, auth):

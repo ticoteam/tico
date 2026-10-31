@@ -1908,7 +1908,7 @@ STABLE.extend([
     ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
     ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
     ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
-    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
     ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
     ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
     ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),

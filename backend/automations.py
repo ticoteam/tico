@@ -1374,14 +1374,51 @@ RULE_CHECKED = {"create_task": ("title", "body"), "assign": ("text", "note"), "l
                 "send_reply": ("body", "text")}
 
 
+def _reply_addresses(values):
+    """The addresses a mail reply goes to: the message's sender and the others it was sent to."""
+    message = A._message(values) or {}
+    if message.get("source") == "slack":
+        return []
+    mailbox = str(message.get("mailbox") or "").strip().lower()
+    found = [str(a).strip().lower() for a in [message.get("from"), *(message.get("to") or []), *(message.get("cc") or [])]
+             if a and "@" in str(a)]
+    return sorted({a for a in found if a != mailbox})
+
+
+def _reply_audience(c, auto, args, values):
+    """Who a reply step's words reach. In Slack: the room its bot posts in (the operator, or a shared room's people)
+    and the person who wrote. By mail: the roster people it is addressed to."""
+    from . import org_rule_check
+    message = A._message(values) or {}
+    if message.get("source") != "slack":
+        return org_rule_check.mail_recipients(c, _reply_addresses(values))
+    out = [str(message.get("from") or "").replace("person:", "human:")]
+    bot = A.R._slug(args.get("bot")) or A._owner_bot(c, auto)
+    if bot:
+        from . import rooms
+        if rooms.thread_mode(c, bot) == rooms.SHARED:
+            room = c.execute("SELECT id FROM conversations WHERE scope='shared' AND room_key=? AND closed_at IS NULL "
+                             "ORDER BY COALESCE(last_message_at,created) DESC LIMIT 1", (bot,)).fetchone()
+            out += (H.conversation(c, room["id"]) or {}).get("participants") or [] if room else []
+        operator = c.execute("SELECT operator FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        if operator and operator["operator"]:
+            out.append(H.human_actor(operator["operator"]))
+    return out
+
+
 def _rule_audience(c, auto, do, args, values):
     """Who a step's words reach, for a rule's With: a new task's owner, the run's task's owner and requester, the bot
-    a note or wake goes to. An update or a Slack or mail reply reaches no teammate by name."""
+    a note or wake goes to, a reply's people, and the whole company for an update."""
+    from . import org_rule_check
     out = []
     try:
         task = A.task_of(c, auto, values)
     except ValueError:
         task = None
+    if do == "send_reply":
+        out += _reply_audience(c, auto, args, values)
+    if do == "post_update":
+        out += org_rule_check.company(c)
     if do in ("create_task", "assign") and args.get("owner"):
         owner = str(args["owner"]).replace("person:", "human:")
         out.append(H.resolve_actor(c, owner) or (owner if ":" in owner else "bot:" + owner))
@@ -1391,7 +1428,7 @@ def _rule_audience(c, auto, do, args, values):
         out.append("bot:" + str(args["bot"]).removeprefix("bot:"))
     if do == "wake_bot" and not args.get("bot") and A._owner_bot(c, auto):
         out.append("bot:" + A._owner_bot(c, auto))
-    return [a for a in out if a]
+    return sorted({a for a in out if a and a not in ("human:", "bot:")})
 
 
 def replay_step(c, bot, hold, replay, ingest):
@@ -1494,7 +1531,7 @@ class HubServices:
             found = self._screened(bot, ctx["values"]) if bot else None
             if found and found["action"] != "pass":
                 args = self._screened_task(found, bot, args, ctx["values"])
-        rule = self._rule_check(do, args, ctx["values"])
+        rule = self._rule_check(do, args, ctx["values"], ctx.get("step"))
         result = self._once(ctx, lambda c: self._ruled(c, rule, do, args, ctx["values"], step=ctx.get("step")))
         if found and found["action"] != "pass" and isinstance(result, dict) and result.get("task"):
             from . import screening
@@ -1502,7 +1539,9 @@ class HubServices:
                                                  to=args.get("owner") if found["action"] == "hold" else None))
         return result
 
-    def _rule_text(self, do, args, values):
+    def _rule_text(self, c, do, args, values):
+        """What a step says, as the rule check reads it, and the argument a warning line goes on. A task handed to a
+        new owner (`assign`) says its title and body to them, with or without a note."""
         keys = RULE_CHECKED.get(do)
         if not keys:
             return "", None
@@ -1510,38 +1549,55 @@ class HubServices:
         text = "\n\n".join(str(args[k]) for k in keys if args.get(k))
         if do == "post_update" and not text:
             text = str(A._turn_output(values).get("text") or "")
+        if do == "assign" and args.get("owner"):
+            try:
+                task = A.task_of(c, self.auto, values)
+            except ValueError:
+                task = None
+            if task:
+                text = "\n\n".join(filter(None, (text, f"Assigned: {task['title']}\n\n{task.get('body') or ''}".rstrip())))
+                key = key or "note"
         return text, key
 
-    def _rule_check(self, do, args, values):
+    def _rule_check(self, do, args, values, step=None):
         """The org rule check of what this step writes, when the automation acts as a bot (backend/org_rule_check.py):
         outside every transaction, as Decide's own calls are. A person's automation is never checked."""
         from . import org_rule_check
         from .auth import Identity
-        text, _ = self._rule_text(do, args, values)
-        if not text:
-            return None
         store = self.hub.store
         with store.read() as c:
+            text, _ = self._rule_text(c, do, args, values)
+            if not text:
+                return None
             author = A.acts_as(c, self.auto)
             if not author or not H.is_bot(author):
                 return None
             recipients = _rule_audience(c, self.auto, do, args, values)
+            task = None
+            if do == "assign":
+                try:
+                    task = A.task_of(c, self.auto, values)
+                except ValueError:
+                    pass
+        addresses = _reply_addresses(values) if do == "send_reply" else []
+        context = {"automation": self.flow.get("name") or self.row["id"], "step": do, "step_id": step or "",
+                   **({"to": addresses} if addresses else {})}
         return org_rule_check.preflight(store, self.hub.app.state.judge, Identity(author, "bot"), "automation", text,
-                                        recipients, context={"automation": self.flow.get("name") or self.row["id"],
-                                                             "step": do})
+                                        recipients, context=context,
+                                        obj=f"{task['id']}@{task['version']}" if task else "")
 
     def _ruled(self, c, rule, do, args, values, step=None):
         """The step inside its write: held by a rule, nothing is done and the run goes on with the step failed."""
         if rule:
             from . import org_rule_check
-            text, key = self._rule_text(do, args, values)
+            text, key = self._rule_text(c, do, args, values)
             gate = org_rule_check.apply(c, rule, text, {"automation": self.row["id"], "run": self.run_id, "do": do,
                                                         "args": args, "values": _trim(values),
                                                         "chain": list(self.chain)}, tell=True)
             if gate and gate.get("held"):
                 return {"ok": False, "detail": "held by a rule", "held": gate["held"]["id"]}
             if gate and gate.get("warn") and key:
-                args = {**args, key: org_rule_check.warned_text(gate, str(args[key]))}
+                args = {**args, key: org_rule_check.warned_text(gate, str(args.get(key) or ""))}
         return A.run(c, self.auto, self.run_id, do, args, values, step=step)
 
     def _screened_task(self, found, bot, args, values):

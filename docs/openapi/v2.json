@@ -16886,7 +16886,7 @@
     },
     "/api/v2/rule-holds": {
       "get": {
-        "summary": "The holds on one review task, as its reviewer or the author bot reads them",
+        "summary": "The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)",
         "operationId": "listRuleHolds",
         "parameters": [
           {
@@ -16896,6 +16896,22 @@
             "schema": {
               "type": "string",
               "title": "Task"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
             }
           },
           {
