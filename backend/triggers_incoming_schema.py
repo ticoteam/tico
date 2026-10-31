@@ -29,3 +29,10 @@ CREATE INDEX IF NOT EXISTS trigger_seen_at ON trigger_seen(seen_at);
 INSERT OR IGNORE INTO trigger_seen(trigger_id, delivery, seen_at)
   SELECT trigger_id, delivery, received_at FROM trigger_deliveries WHERE outcome='accepted';
 """
+
+# Who consumes a trigger's calls (spec §3.4): `finance` calls go to Finance (finance/actions.receive), never to rules or
+# automations. Mercury triggers made before this column are Finance's already, so they are marked here.
+CONSUMER_SCHEMA = """
+ALTER TABLE triggers ADD COLUMN consumer TEXT NOT NULL DEFAULT 'automations';
+UPDATE triggers SET consumer='finance' WHERE preset='mercury';
+"""

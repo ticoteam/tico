@@ -28,8 +28,9 @@ Each accepted call is kept (raw body, headers) for the trigger's `keep_days`, so
 that was given it can read it in parts, and one delivery can be run again. A call's type comes from the
 trigger's `type_from` (a header name, or a JSON pointer starting with /).
 
-A trigger on a Finance preset (`mercury`, trigger_presets.FINANCE) is Finance's: its calls go to Finance, never to
-rules or automations; only a finance admin makes one, changes, signs, replays, recovers or deletes it, whoever made it;
+A trigger whose `consumer` is `finance` is Finance's (it becomes one when a Finance preset, `mercury`, is set;
+trigger_presets.FINANCE): its calls go to Finance, never to rules or automations; only a finance admin makes one,
+changes, signs, replays, recovers or deletes it, whoever made it;
 and its kept calls are read only in Finance (GET /api/v2/finance/webhook-deliveries), never here.
 """
 import asyncio
@@ -178,9 +179,14 @@ def effective_preset(trigger):
 
 
 def finance_owned(trigger):
-    """A trigger whose calls are Finance's (a Mercury one, spec §3.4): bank payloads, kept from automations and rules,
-    managed only by a finance admin, and read only in Finance."""
-    return effective_preset(trigger) in P.FINANCE
+    """A trigger whose calls are Finance's (`consumer` = finance, spec §3.4): bank payloads, kept from automations and
+    rules, managed only by a finance admin, and read only in Finance."""
+    return trigger["consumer"] == "finance"
+
+
+def _consumer_for(preset):
+    """The consumer a verification preset implies: a Finance preset (Mercury's) makes its trigger Finance's."""
+    return "finance" if preset in P.FINANCE else "automations"
 
 
 def _finance_admin(c, who):
@@ -238,7 +244,8 @@ def summary(c, settings, t, since=None):
     return {"id": t["id"], "name": t["name"], "kind": t["kind"], "event": event_of(t["id"]),
             "url": "" if builtin(t["id"]) else address(settings, t["id"]), "builtin": builtin(t["id"]), "created_by": t["created_by"], "created_at": t["created_at"],
             "last_received": last, "received_24h": day, "refused_24h": refused,
-            "signed": bool(t["signing_secret"]), "preset": effective_preset(t), "type_from": type_spec(t),
+            "signed": bool(t["signing_secret"]), "preset": effective_preset(t), "consumer": t["consumer"],
+            "type_from": type_spec(t),
             "hourly": hourly_of(t), "keep_days": t["keep_days"], "unheard": t["unheard"], "automations": used}
 
 
@@ -264,7 +271,8 @@ def create(c, who, settings, body):
     c.execute("INSERT INTO triggers(id,name,kind,secret_hash,created_by,created_at,updated_at) VALUES(?,?,?,?,?,?,?) "
               "ON CONFLICT(id) DO UPDATE SET name=excluded.name,secret_hash=excluded.secret_hash,"
               "created_by=excluded.created_by,updated_at=excluded.updated_at,deleted_at=NULL,signing_secret=NULL,"
-              "preset='none',type_from='',hourly=NULL,keep_days=" + str(KEEP_DAYS) + ",unheard='log',unheard_noted=NULL",
+              "preset='none',consumer='automations',type_from='',hourly=NULL,keep_days=" + str(KEEP_DAYS)
+              + ",unheard='log',unheard_noted=NULL",
               (trigger_id, body.name.strip(), "webhook", digest(secret), who.actor, now, now))
     H.event(c, who.actor, "trigger.created", trigger_id, {"name": body.name.strip()})
     return {"id": trigger_id, "event": event_of(trigger_id), "url": address(settings, trigger_id, secret)}
@@ -299,7 +307,8 @@ def sign(c, who, vault, trigger_id, body):
     _no_change(trigger_id, "signed")
     if body.off:
         _leave_finance(c, found, "none")
-        c.execute("UPDATE triggers SET signing_secret=NULL,preset='none',updated_at=? WHERE id=?", (H.now(), trigger_id))
+        c.execute("UPDATE triggers SET signing_secret=NULL,preset='none',consumer='automations',updated_at=? WHERE id=?",
+              (H.now(), trigger_id))
         H.event(c, who.actor, "trigger.signing_off", trigger_id, {})
         return {"id": trigger_id, "signed": False, "preset": "none"}
     preset = body.preset or (effective_preset(found) if effective_preset(found) != "none" else "hmac")
@@ -312,8 +321,8 @@ def sign(c, who, vault, trigger_id, body):
     if (why := P.secret_problem(preset, key)):
         raise Problem("trigger", why, 422)
     _leave_finance(c, found, preset)
-    c.execute("UPDATE triggers SET signing_secret=?,preset=?,updated_at=? WHERE id=?",
-              (vault.cipher.seal(c, sealed_as(trigger_id), key), preset, H.now(), trigger_id))
+    c.execute("UPDATE triggers SET signing_secret=?,preset=?,consumer=?,updated_at=? WHERE id=?",
+              (vault.cipher.seal(c, sealed_as(trigger_id), key), preset, _consumer_for(preset), H.now(), trigger_id))
     H.event(c, who.actor, "trigger.signing_set", trigger_id, {"preset": preset})
     return {"id": trigger_id, "signed": True, "preset": preset, "signing_secret": key}
 
@@ -350,7 +359,7 @@ def update(c, who, settings, vault, trigger_id, body):
         if body.preset not in P.PRESETS:
             raise Problem("trigger", "A preset is one of: " + ", ".join(P.PRESETS), 422)
         if body.preset == "none":
-            sets["signing_secret"], sets["preset"] = None, "none"
+            sets["signing_secret"], sets["preset"], sets["consumer"] = None, "none", "automations"
         else:
             # The signing secret stays; it must suit the new preset (a Standard Webhooks one is whsec_ and base64).
             if not found["signing_secret"]:
@@ -360,7 +369,7 @@ def update(c, who, settings, vault, trigger_id, body):
             key = vault.cipher.unseal(c, sealed_as(trigger_id), found["signing_secret"])
             if (why := P.secret_problem(body.preset, key)):
                 raise Problem("trigger", why + "; set a new one with hub trigger sign", 422)
-            sets["preset"] = body.preset
+            sets["preset"], sets["consumer"] = body.preset, _consumer_for(body.preset)
         _leave_finance(c, found, body.preset)
     if sets:
         c.execute("UPDATE triggers SET " + ",".join(f"{k}=?" for k in sets) + ",updated_at=? WHERE id=?",
@@ -532,10 +541,11 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
     shown = content + (f"\nThe rest: hub trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
     payload = _payload_of(body)
     fired = []
-    if effective_preset(found) == "mercury":
-        # Mercury's events are Finance's alone (backend/finance/sync.py): kept once by event id, never shown to rules.
+    if finance_owned(found):
+        # Finance's calls (its bank's events, backend/finance/sync.py) are Finance's alone: kept once by event id, never
+        # shown to rules.
         from .finance import actions as finance
-        kept = finance.mercury_delivery(c, None, payload if isinstance(payload, dict) else {})
+        kept = finance.receive(c, payload if isinstance(payload, dict) else {})
         return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
     if builtin(trigger_id):
         # A notice from Tico Team is judged once, as `tico.notice`; `webhook.received` is for senders outside Tico.

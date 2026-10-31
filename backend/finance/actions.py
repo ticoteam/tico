@@ -476,8 +476,13 @@ banking_ensure = sync.ensure
 banking_stop = sync.stop
 banking_ring = sync.ring
 banking_step = sync.step
-mercury_delivery = sync.delivery
 mercury_probe = sync.probe_credential
+
+
+def receive(c: sqlite3.Connection, payload: dict[str, object]) -> bool:
+    """A kept call to a trigger whose consumer is Finance (spec §3.4): Mercury's event, kept once by its id. Mercury is
+    the only bank feed so far, so every Finance call is one of its deliveries."""
+    return sync.delivery(c, None, payload)
 
 
 # ------------------------------------------------------------------------------------------------ watch rules

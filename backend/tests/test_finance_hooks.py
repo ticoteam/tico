@@ -73,3 +73,14 @@ def test_only_a_finance_admin_manages_a_mercury_trigger_and_no_trigger_route_sho
     shown = _get(api, "triggers/mercury/deliveries/evt-0002", "ben-test").json()["delivery"]
     assert shown["expired"] and "body" not in shown
     assert _get(api, "finance/webhook-deliveries").json()["deliveries"] == []
+
+
+def test_a_trigger_is_finance_s_by_its_consumer_not_its_preset(api):
+    """`consumer` says who gets a trigger's calls (spec §3.4): a Mercury trigger is `finance`, any other is `automations`,
+    and taking a trigger off Mercury gives it back to automations."""
+    _mercury(api)
+    post(api, "triggers", {"name": "Plain"})
+    consumers = {t["id"]: t["consumer"] for t in _get(api, "triggers").json()["triggers"]}
+    assert consumers == {"mercury": "finance", "plain": "automations"}
+    assert _post(api, "triggers/mercury", {"preset": "none"}).status_code == 200
+    assert {t["id"]: t["consumer"] for t in _get(api, "triggers").json()["triggers"]}["mercury"] == "automations"
