@@ -42,6 +42,7 @@ async function review(browser, {viewport, theme}) {
   await page.evaluate(() => taskModalShow(TASKS_ST.tasks.find(t => t.id === 't-review')));
   const card = page.locator('#task-modal .rh-card[data-hold="h-1"]');
   await card.waitFor();
+  await page.waitForTimeout(400);   // the dialog's open animation, so the screenshot is the settled modal
   const text = await card.innerText();
   assert.match(text, /Tried to send[\s\S]*transcription vendor/i);
   assert.match(text, /Acme data stays in the EU/);
@@ -78,7 +79,7 @@ async function review(browser, {viewport, theme}) {
           document.querySelector('#task-modal')?.close();
           const host = document.createElement('div');
           host.id = 'rh-sample'; host.style.cssText = 'padding:24px;max-width:720px';
-          host.innerHTML = `<div class="ru" id="ru-root"><header class="ru-ph"><h1>Rules</h1><span class="spacer"></span></header></div>
+          host.innerHTML = `<div class="ru" id="ru-root"><header class="ru-ph" style="display:flex;align-items:baseline;flex-wrap:wrap"><h1>Rules</h1><span class="spacer"></span></header></div>
             <div class="conv-thread">${v2MessageHTML({id: 'm-1', kind: 'notice', from_actor: 'tico', to_actor: 'human:ana', created: new Date().toISOString(),
               body: "Support Bot's reply was held: it broke the rule 'Acme data stays in the EU.'", refs: {org_rule: {hold: 'h-2', bot: 'support'}}})}</div>`;
           document.querySelector('#main').replaceChildren(host);
