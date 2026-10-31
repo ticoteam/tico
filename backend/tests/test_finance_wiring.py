@@ -541,3 +541,26 @@ def test_a_claim_fits_what_is_left_along_the_whole_budget_path(books):
         held = FA.run_hold(c, "coder", "job1", at=AT)        # web has 3 left, AI services 2
         assert not held.refused and held.hold_id
         assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 2
+
+
+def test_a_quarter_budgets_gateway_cut_is_made_again_each_month(books):
+    from backend.finance import jobs
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        c.execute("UPDATE fin_budgets SET period='quarter' WHERE id=?", (ai,))
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        spend(c, "5100", 100)
+        assert jobs.cap_wanted(c, AT) == ("cut", "2026-10")
+        assert jobs.cap_wanted(c, "2026-11-02T00:00:00Z") == ("cut", "2026-11")
+
+
+def test_a_one_time_budget_at_its_cutoff_pauses_its_bots_with_no_end(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        c.execute("UPDATE fin_budgets SET period='once' WHERE id=?", (ai,))
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        spend(c, "5100", 100, day="2026-10-15")
+        met = usage_limits.over(c, "coder", at=NOON)
+        assert met["scope"] == "budget" and met["until"] == ""
+        assert usage_limits.why(met) == "Paused: AI services budget reached"
+        assert "used up; it starts again when a person raises it" in usage_limits.warning(c, "bot:coder", at=NOON)

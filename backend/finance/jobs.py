@@ -105,15 +105,17 @@ def company_ai_budget(c: sqlite3.Connection, at: str | None = None) -> tuple[str
 
 
 def cap_wanted(c: sqlite3.Connection, at: str | None = None) -> tuple[str, str]:
-    """What the Gateway self cap should be now, as (`cut` | `clear`, the budget month `YYYY-MM`): `cut` while the
-    company AI services budget is a `decline` budget whose spending (not its unused allocations) reached its amount."""
+    """What the Gateway self cap should be now, as (`cut` | `clear`, the Gateway month `YYYY-MM`): `cut` while the
+    company AI services budget is a `decline` budget whose spending (not its unused allocations) reached its amount.
+    The month is the calendar month even for a quarter, year or one-time budget: the Gateway's spend resets monthly,
+    so a cut made in October must be made again at November's spend."""
     found = company_ai_budget(c, at)
     month = (at or tico.now())[:7]
     if found is None:
         return "clear", month
     action, st, spent = found
     over = st.amount is not None and spent >= st.amount
-    return ("cut" if action == "decline" and over else "clear"), st.period_start[:7]
+    return ("cut" if action == "decline" and over else "clear"), month
 
 
 def cap_state(c: sqlite3.Connection) -> dict[str, object]:

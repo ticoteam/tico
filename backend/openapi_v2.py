@@ -1269,10 +1269,12 @@ SCHEMAS = {
     "UsageLimitView": obj({**{p + "_usd": NUM_N for p in PERIODS}, "source": {"type": "object", "description": "Where each cap comes "
                        "from: bot, company or null"}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
                        "percent": {"type": "integer", "description": "The highest share of one of the bot's own limits reached"},
-                       "blocked": {"enum": [*PERIODS, None], "description": "Set while a limit is met, the bot's own or a pool's: "
-                                   "the bot takes no new job"},
-                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company "
-                                      "or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and "
+                       "blocked": {"enum": [*PERIODS, "quarterly", "yearly", "budget", None], "description": "Set while a "
+                                   "limit is met, the bot's own, a pool's or a Finance budget's (quarterly, yearly, or budget "
+                                   "for a one-time budget): the bot takes no new job"},
+                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company, "
+                                      "group:<id> or budget), name (a pool's or budget's), period, until for a budget (\"\" "
+                                      "when it never turns over), and spent and limit (a pool's to the owner and "
                                       "administrators only)", "additionalProperties": True},
                        **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
     "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
