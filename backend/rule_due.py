@@ -332,50 +332,59 @@ def marked(c, due_id, due_on):
 
 
 def on_task_status(c, actor, task, old, new):
-    """Every task status write (hubdb `_set_status`, in its transaction) of a routine's occurrence task: completing it
-    marks its due date's occurrence Satisfied, and leaving done or closed again takes that mark back."""
-    if not task.get("occurrence") or not H._has_table(c, "rule_due_dates"):
+    """Every task status write (hubdb `_set_status`, in its transaction) of a routine's occurrence task: a move into done
+    or closed that completes it (`_completes`) marks its due date's occurrence Satisfied, whatever the status before
+    (the owner's done after the keeper's close counts); a move back into play takes the mark away. A decline of a
+    finished task leaves the mark, until the task comes back into play."""
+    if not task.get("occurrence") or not H._has_table(c, "rule_due_dates") or new == old:
         return
-    ended = ("done", "closed")
-    if new in ended and old not in ended:
+    if new in ("done", "closed"):
         on_due_task_completed(c, {**task, "status": new}, actor)
-    elif new == "closed" and old == "done":
-        on_due_task_completed(c, {**task, "status": new}, actor)    # done by someone else, then closed by a person
-    elif old in ended and new not in ended:
+    elif new in H.ACTIVE_STATUSES and old not in H.ACTIVE_STATUSES:     # back in play (from done, closed or declined)
         on_due_task_reopened(c, task, actor)
 
 
 def _completes(task, actor):
-    """Completed: marked done by its owner (or a person), or closed by a person. The keeper's close (ask expiry,
-    cleanup) and a decline (a cancel) never are."""
+    """Completed (docs/rules-plan.md §1): marked done by its owner, or closed by a person. A mover's or manager's done,
+    the keeper's close (ask expiry, cleanup) and a decline (a cancel) never are."""
     if not actor or actor == H.KEEPER:
         return False
     if task.get("status") == "done":
-        return actor == task.get("owner") or H.is_human(actor)
+        return actor == task.get("owner")
     return task.get("status") == "closed" and H.is_human(actor)
 
 
+def _fired_for(c, aid, due_on, task_id):
+    """The due date a routine's run for that day was fired for: the `rule_due_id` saved in the run's payload when it
+    started (automations.due_input), so later edits to the routine or the due date never change it. The run that
+    opened the task wins, then the latest that did not fail."""
+    rows = c.execute("SELECT state_json, status FROM automation_runs WHERE automation_id=? AND trigger_ref=? "
+                     "ORDER BY started DESC", (aid, "due:" + due_on)).fetchall()
+    rows = sorted(rows, key=lambda r: (task_id not in (r["state_json"] or ""), r["status"] == "failed"))
+    for r in rows:
+        try:
+            due = (json.loads(r["state_json"] or "{}").get("payload") or {}).get("due") or {}
+        except ValueError:
+            continue
+        if due.get("rule_due_id"):
+            return str(due["rule_due_id"])
+    return None
+
+
 def _occurrence_row(c, task):
-    """The due date and the day a routine's task stands for: the task's occurrence marker (`<automation>:<due_on>`), then
-    that automation's trigger (`rule_due_id`), then back along the due date's chain to the row the day belongs to, so a
-    late completion of an older occurrence marks that one. (None, None) when it is not a rule's routine."""
+    """The due date and the day a routine's task stands for: the day from its occurrence marker
+    (`<automation>:<due_on>`), the row from the run that opened it (`_fired_for`), so a task opened before an edit marks
+    the ended row and a task outliving its routine still marks its day. (None, None) when it is not a rule's routine or
+    that due date was removed."""
     aid, _, due_on = str(task.get("occurrence") or "").rpartition(":")
-    found = c.execute("SELECT flow_json FROM automations WHERE id=?", (aid,)).fetchone() if aid else None
-    if not found:
-        return None, None
-    trigger = json.loads(found["flow_json"]).get("trigger") or {}
     try:
         day = date.fromisoformat(due_on)
     except ValueError:
         return None, None
-    row, seen = one(c, str(trigger.get("rule_due_id") or "")), set()
-    while row and row["id"] not in seen and len(seen) < CHAIN_MAX:
-        seen.add(row["id"])
-        if not row["retired_at"] and row["routine_id"] == aid and \
-                is_occurrence(parse_date(row["first_due"]), row["repeats"], day):
-            return row, due_on
-        row = one(c, row["replaces"]) if row["replaces"] else None
-    return None, None
+    row = one(c, _fired_for(c, aid, due_on, str(task.get("id") or ""))) if aid else None
+    if not row or row["retired_at"] or not is_occurrence(parse_date(row["first_due"]), row["repeats"], day):
+        return None, None
+    return row, due_on
 
 
 def on_due_task_completed(c, task, closed_by=None):

@@ -8,6 +8,7 @@ automation (backend/automations.py, trigger `due`) that opens the due date's tas
   the task is their own work (`task_caps` never cap it).
 - `rule_due_dates.routine_id` names it. An edit that starts a new row moves the same automation to it; turning the
   routine off (or removing the due date) deletes the automation, as a person deleting it on the Automations page does.
+  A sync keeps a linked routine's paused or running state.
 - Completing its task marks the day Satisfied, and a day already marked by hand is skipped: backend/rule_due.py.
 """
 from . import automation_due
@@ -43,7 +44,9 @@ def _flow(row, rule_text, days, before=None):
     step = {"id": STEP_ID, "type": "action", "do": "create_task",
             "args": {"title": title[:TITLE_MAX], "owner": row["owner"]}}
     name = title if len(title) <= NAME_MAX else title[:NAME_MAX - 1].rstrip() + "…"
-    return {**(before or {}), "name": name, "owner": owner, "trigger": trigger, "steps": [step], "enabled": True,
+    # A new routine starts on; one already linked keeps its state, so an edit never resumes a paused one.
+    enabled = bool(before.get("enabled", True)) if before else True
+    return {**(before or {}), "name": name, "owner": owner, "trigger": trigger, "steps": [step], "enabled": enabled,
             "builtin": False}
 
 
@@ -73,8 +76,8 @@ def sync(c, actor, row, rule_text, days, via=None):
 
 
 def off(c, actor, row, via=None):
-    """The due date was removed: its routine goes too."""
-    if row.get("routine_id"):
-        linked = AU._row(c, row["routine_id"])
-        if linked:
-            AU.remove(c, actor, linked, via)
+    """The due date was removed: its routine goes too, but only while the routine is this row's. An edit moves the
+    routine to the new row and the ended one keeps its routine_id, so its trigger's `rule_due_id` says whose it is."""
+    linked = AU._row(c, row["routine_id"]) if row.get("routine_id") else None
+    if linked and str((AU.flow_of(linked).get("trigger") or {}).get("rule_due_id") or "") == row["id"]:
+        AU.remove(c, actor, linked, via)

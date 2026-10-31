@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from backend import rule_due as D
 from backend.store import H
 from backend.tests.test_api import api, get, post  # noqa: F401  (the api fixture)
+from backend.tests.test_automation_api import patch
 from backend.tests.test_automation_due import drain, runs_of, tick
 from backend.tests.test_automation_runs import sql
 from backend.tests.test_org_rules import org, rule
@@ -64,9 +65,14 @@ def test_completing_the_task_marks_the_day_and_reopening_takes_it_back(api):
     aid = due["routine_id"]
     tick(api, datetime(2030, 2, 15, 0, 0, 5, tzinfo=timezone.utc))
     [task] = tasks(api, aid)
+    write(api, H.task_update, "human:ana", task["id"], status="done")       # a mover's or manager's done is not
+    assert marks(api, due["id"]) == []
+    write(api, H.task_update, "bot:ops", task["id"], status="doing")
     write(api, H.task_update, "bot:ops", task["id"], status="done")
     assert marks(api, due["id"]) == [{"due_on": "2030-03-01", "satisfied_by": "bot:ops", "via": "routine",
                                       "task_id": task["id"]}]
+    write(api, H.task_update, "bot:ops", task["id"], status="declined")     # a finished task declined keeps its mark
+    assert len(marks(api, due["id"])) == 1
     write(api, H.task_update, "bot:ops", task["id"], status="doing")
     assert marks(api, due["id"]) == []
     actions = sql(api, "SELECT before_json, after_json FROM audit_log WHERE object=? AND via='routine'",
@@ -86,6 +92,8 @@ def test_a_keeper_close_or_a_decline_marks_nothing_and_a_persons_close_does(api)
     may = tasks(api, aid)[-1]
     write(api, H.task_close, "human:ana", may["id"])
     assert [(m["due_on"], m["satisfied_by"]) for m in marks(api, due["id"])] == [("2030-05-01", "human:ana")]
+    write(api, H.task_update, "bot:ops", march["id"], status="done")       # the owner's done after the keeper's close
+    assert sorted(m["due_on"] for m in marks(api, due["id"])) == ["2030-03-01", "2030-05-01"]
 
 
 def test_a_late_completion_of_an_older_occurrence_marks_that_one(api):
@@ -123,9 +131,36 @@ def test_an_edit_of_repeats_moves_the_routine_to_the_new_row_and_keeps_history(a
     assert auto["version"] == 2
     assert [link["id"] for link in get(api, f"rule-due/{edited['id']}")["chain"]] == [due["id"], edited["id"]]
     # An owner change in place moves the task's owner and who the routine acts as.
+    patch(api, aid, {"enabled": False})
     post(api, f"rule-due/{edited['id']}", {"owner": "ana"})
     auto = automation(api, aid)
     assert auto["owner"] == "person:ana" and auto["steps"][0]["args"]["owner"] == "human:ana"
+    assert auto["enabled"] is False                                         # an edit never resumes a paused routine
+    # The ended row's id can't remove the routine its successor now holds.
+    refused = post(api, f"rule-due/{due['id']}/remove", {}, expected=409)
+    assert refused["error"]["code"] == "ended" and refused["error"]["replaced_by"] == edited["id"]
+    assert automation(api, aid)["trigger"]["rule_due_id"] == edited["id"]
+    assert get(api, f"rule-due/{edited['id']}")["task_days"] == 14
+
+
+def test_a_task_opened_before_an_edit_marks_the_ended_row_even_when_the_new_schedule_has_its_day(api):
+    _, due = linked(api, first="2030-03-01", repeats="yearly", days=0)
+    aid = due["routine_id"]
+    tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
+    [task] = tasks(api, aid)
+    edited = post(api, f"rule-due/{due['id']}", {"repeats": "quarterly"})
+    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
+    assert marks(api, edited["id"]) == []
+
+
+def test_a_task_outliving_its_routine_still_marks_its_day(api):
+    _, due = linked(api, first="2030-03-01", repeats="yearly", days=0)
+    tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
+    [task] = tasks(api, due["routine_id"])
+    post(api, f"rule-due/{due['id']}", {"task_days": None})
+    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
 
 
 def test_removing_the_due_date_or_clearing_task_days_turns_the_routine_off(api):

@@ -774,6 +774,11 @@ def remove_due(c, auth, who, due_text):
     if who.role == "bot":
         raise Problem("forbidden", "A bot suggests a removal; a person removes a due date", 403)
     _check_manage(c, auth, who, rule["who"])
+    if row["ended_on"]:
+        # An edit ended this row and started another (replaced_by), which now holds the routine: remove that one.
+        later = c.execute("SELECT id FROM rule_due_dates WHERE replaces=?", (row["id"],)).fetchone()
+        raise Problem("ended", f"Due date {row['id']} was replaced by an edit; remove the one in force", 409,
+                      extra={"replaced_by": later["id"] if later else None})
     before = D.views(c, [row])[0]
     D.remove(c, row["id"])
     from . import rule_due_routine as RR
