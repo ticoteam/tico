@@ -299,7 +299,11 @@ const subsSignedInHere = (machine, runtime) => machine.readiness?.runtimes?.[run
 const subsNoneWords = (machine, runtime) => subsSignedInHere(machine, runtime) ? 'Signed in here' : subsGatewayOn() ? 'Gateway' : 'None';
 function subsPickerHTML(machine, runtime) {
   if (machine.revoked_at) return '<span class="muted">—</span>';
-  if (!SUBS.capable.includes(machine.id)) return `<span class="pill waiting" data-subs-needs-update title="Update Tico on ${esc(machine.label)} to give it a subscription">Needs update</span>`;
+  // An older runner still runs on its own (or a shared) login: its chip, and Needs update beside it.
+  if (!SUBS.capable.includes(machine.id)) {
+    const chips = machineShown(machine).filter(conn => conn.runtime === runtime).map(conn => machineChipHTML(machine, conn)).join('');
+    return `<span class="subs-cell">${chips ? `<span class="machine-chips">${chips}</span>` : ''}<span class="pill waiting" data-subs-needs-update title="Update Tico on ${esc(machine.label)} to give it a subscription">Needs update</span></span>`;
+  }
   const current = subsAssigned(machine.id, runtime);
   const options = SUBS.rows.filter(sub => subsRuntime(sub) === runtime);
   const tool = subsToolName(runtime);
