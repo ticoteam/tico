@@ -93,8 +93,8 @@ class Document:
     total: int          # minor units, positive
     lines: tuple[EntryLine, ...]
     memo: str = ""
-    currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
     links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
+    currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
 
 
 @dataclass(frozen=True)
@@ -241,8 +241,9 @@ def decode(d: Mapping[str, Any]) -> Record:
         return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]))
     if kind == "Document":
         return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
-                        _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])))
+                        _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])),
+                        str(d.get("currency", "")))
     if kind == "Settlement":
         return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
-                          _pairs(d.get("links", [])))
+                          _pairs(d.get("links", [])), str(d.get("currency", "")))
     raise ValueError(f"not a mirror record: {kind}")
