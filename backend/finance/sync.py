@@ -181,6 +181,7 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
     if due:
         problems += balances(store, provider, cid, now)
         provider_users(store, provider, cid, now)
+        problems += uncertain_cards(store, provider, cid, now)
         problems += backfill(store, provider, cid, now)
         problems += events(store, provider, cid, now)
     problems += process_inbox(store, provider, cid, now)
@@ -200,6 +201,25 @@ def connection(store: Any, vault: Any, cid: str, *, rehearsal: bool = False, mak
             fields.update({"status": "active", "last_error": None, "last_ok_at": now})
         SK.update(c, "fin_connections", cid, fields)
     return "failed" if problems else "ok"
+
+
+def uncertain_cards(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
+    """Cards whose creation was cut off: Mercury's cards for each one's user say whether it was issued."""
+    with store.read() as c:
+        waiting = [(str(k["id"]), str(SK.card_create_payload(c, str(k["id"])).get("user_id") or ""))
+                   for k in SK.cards_uncertain(c, cid)]
+    problems: list[str] = []
+    for card_id, user in waiting:
+        got = provider.cards(user) if user else None
+        if got is None or not got.ok:
+            if got is not None:
+                problems.append(error_text(got))
+            continue
+        with store.transaction() as c:
+            card = SK.get(c, "fin_cards", card_id)
+            if card is not None and str(card["provider_status"] or "") == cards.UNCERTAIN:
+                cards.resolve(load(c, now), card, listed(got, "cards"))
+    return problems
 
 
 def _failed(store: Any, cid: str, why: str, now: str) -> None:
@@ -399,9 +419,9 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
     SK.update(c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "last_error": why,
                                               "updated_at": now})
     body = SK.loads(o["payload_json"])
-    if op == "card_create" and body.get("card_id"):
-        SK.update(c, "fin_cards", str(body["card_id"]), {"sync_status": "failed", "sync_error": why})
     ctx = load(c, now)
+    if op == "card_create" and body.get("card_id"):
+        cards.uncertain(ctx, str(body["card_id"]), why)
     what = "a card" if op == "card_create" else f"recipient {body.get('name') or ''}".strip()
     tico.needs_you(c, payments.admin_person(ctx), f"Check Mercury for {what}",
                    f"Finance was creating {what} in Mercury when it stopped, so it may or may not exist there. "
@@ -502,11 +522,12 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
                 "provider_card_id": str(answer.body.get("cardId") or answer.body.get("id") or ""),
                 "last4": str(answer.body.get("lastFourDigits") or "")[-4:] or None, "provider_status": "active",
                 "provider_limit": limit, "sync_status": "ok", "synced_at": now, "updated_at": now})
-            cards.created(load(c, now), card_id, str(o["action_id"] or ""))
+            cards.created(load(c, now), card_id, str(o["action_id"] or ""), str(o["id"]))
         elif op == "card_create":
             cards.not_issued(load(c, now), card_id)
         elif op in ("card_sync", "card_limit", "card_state") and card_id:
-            cards.confirmed(load(c, now), card_id, cast(dict[str, Any], answer.body.get("confirmed") or {}))
+            cards.confirmed(load(c, now), card_id, cast(dict[str, Any], answer.body.get("confirmed") or {}),
+                            str(o["action_id"] or ""), follow=str(o["id"]))
         SK.update(c, "fin_outbox", str(o["id"]), {"status": "sent", "attempts": attempts, "claimed_at": None,
                                                   "last_error": str(answer.body.get("skipped") or "") or None,
                                                   "updated_at": now})
@@ -522,7 +543,9 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
     SK.update(c, "fin_outbox", str(o["id"]), {
         "status": "failed" if final else "pending", "attempts": attempts, "last_error": why, "claimed_at": None,
         "next_try_at": None if final else _after(now, RETRY[min(attempts - 1, len(RETRY) - 1)]), "updated_at": now})
-    if op.startswith("card_") and card_id:
+    if op == "card_create" and card_id and (answer.status is None or answer.status >= 500):
+        cards.uncertain(load(c, now), card_id, why)
+    elif op.startswith("card_") and card_id:
         SK.update(c, "fin_cards", card_id, {"sync_status": "failed" if final else "pending", "sync_error": why})
     return why
 

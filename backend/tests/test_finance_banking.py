@@ -377,3 +377,52 @@ def test_a_row_the_books_dont_have_is_outstanding_never_cleared(books):
         assert act(c, OWNER, "reconcile", {"money_account_id": bank, "statement_end": "2026-10-14",
                                            "statement_balance": 48_500, "cleared": [dep]}).code == "invalid"
         assert c.execute("SELECT count(*) FROM fin_feed_txns WHERE reconciliation_id IS NOT NULL").fetchone()[0] == 0
+
+
+def test_an_adjusted_or_voided_settled_card_charge_keeps_one_use_record(books):
+    """N3: a charge first seen settled keeps one use record: an adjustment moves it, a date shift to an open day is no
+    change, and a void gives it back."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card_for_eve(books, fake)
+    sync_once(books, fake)
+    raw = _txn("txn-c9", "credit-io", -80.0, "creditCardTransaction", cardId="card-eve")
+    _arrives(fake, raw, 1, "evt-c9-1")
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    _arrives(fake, {**raw, "amount": -90.0}, 2, "evt-c9-2")                     # the bank adjusts it
+    sync_once(books, fake, "2026-10-15T15:00:00.000000Z")
+
+    def used(c):
+        return c.execute("SELECT count(*), sum(settled_amount) FROM fin_holds WHERE target=? AND status='settled' "
+                         "AND source='card'", (f"card:{card_id}",)).fetchone()
+    with books.read() as c:
+        assert tuple(used(c)) == (1, 9_000)
+        assert FA.budget_state(c, budget_id, AT).held == 20_000 - 9_000
+        assert _entries(c, "card") == 3                                          # post, reversal, repost
+    _arrives(fake, {**raw, "amount": -90.0, "status": "cancelled"}, 3, "evt-c9-3")
+    sync_once(books, fake, "2026-10-15T16:00:00.000000Z")
+    with books.read() as c:
+        assert used(c)[0] == 0
+        assert FA.budget_state(c, budget_id, AT).held == 20_000                  # the whole slice is back
+
+
+def test_a_correction_to_a_charge_in_a_closed_month_reverses_on_an_open_day(books):
+    """G-new-2: a posted transaction whose month is now closed is corrected by a reversal and a repost on open days,
+    not retried forever; a later version with the same amount and bank date is no change."""
+    fake = FakeMercury()
+    connect(books, fake)
+    raw = _txn("txn-sep", "acct-chk", -15.0, "wireFee", day="2026-09-20")
+    _arrives(fake, raw, 1, "evt-sep-1")
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+    _arrives(fake, {**raw, "amount": -25.0}, 2, "evt-sep-2")
+    sync_once(books, fake, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_inbox WHERE provider_event_id='evt-sep-2'").fetchone()[0] == "done"
+        days = sorted(str(r[0]) for r in c.execute("SELECT entry_date FROM fin_entries WHERE source='bank'"))
+        assert days == ["2026-09-20", AT[:10], AT[:10]]                         # original, reversal, repost
+    _arrives(fake, {**raw, "amount": -25.0, "note": "seen again"}, 3, "evt-sep-3")
+    sync_once(books, fake, "2026-10-15T15:00:00.000000Z")
+    with books.read() as c:
+        assert _entries(c, "bank") == 3                                          # the open-day shift is no change

@@ -8,7 +8,7 @@ provider_limit). One `card_sync` write per card at a time carries no values: the
 when it sends, so a superseded change is never sent, and a card's creation reads it too (a freeze, cancel or limit
 made before Mercury issued the card applies once it does). A lower limit or a cancel keeps the old reservation until
 Mercury confirms it (`allocation_due`), so the budget never counts on room the card can still spend."""
-from typing import Any
+from typing import Any, cast
 
 from . import handlers
 from .context import Ctx
@@ -67,11 +67,13 @@ def queue(ctx: Ctx, card: Any, op: str, body: dict[str, object], key: str, aid: 
                                                     "updated_at": ctx.at})
 
 
-def sync(ctx: Ctx, card_id: str, aid: str, by: str) -> None:
-    """Bring Mercury to this card's desired state (once the card exists there)."""
+def sync(ctx: Ctx, card_id: str, aid: str, by: str, after: str = "") -> None:
+    """Bring Mercury to this card's desired state (once the card exists there). `after` names the write whose answer
+    left the card out of step (its own key, so it never folds into that write's)."""
     card = SK.get(ctx.c, "fin_cards", card_id)
     if card is not None and card["provider_card_id"]:
-        queue(ctx, card, "card_sync", {}, f"card-sync-{card_id}-{aid or ctx.at}", aid, by)
+        key = f"card-sync-{card_id}-after-{after}" if after else f"card-sync-{card_id}-{aid or ctx.at}"
+        queue(ctx, card, "card_sync", {}, key, aid, by)
 
 
 def used(ctx: Ctx, card: Any) -> int:
@@ -95,9 +97,11 @@ def in_step(card: Any) -> bool:
         (want == "frozen" and card["allocation_due"] is not None and int(card["allocation_due"]) == 0)
 
 
-def confirmed(ctx: Ctx, card_id: str, done: dict[str, Any]) -> None:
+def confirmed(ctx: Ctx, card_id: str, done: dict[str, Any], aid: str = "", follow: str = "") -> None:
     """What Mercury confirmed for a card. Once it matches the desired state, a lower reservation waiting on it
-    (`allocation_due`) takes effect."""
+    (`allocation_due`) takes effect. With `follow` (the outbox write whose final answer this is), a card still out of
+    step with its desired state keeps a card_sync queued, so a change made while the write was at Mercury is never
+    left behind."""
     fields: dict[str, object] = {"synced_at": ctx.at}
     if "status" in done:
         fields["provider_status"] = str(done["status"])
@@ -105,7 +109,15 @@ def confirmed(ctx: Ctx, card_id: str, done: dict[str, Any]) -> None:
         fields["provider_limit"] = int(done["limit"])
     SK.update(ctx.c, "fin_cards", card_id, fields)
     card = SK.get(ctx.c, "fin_cards", card_id)
-    if card is None or not in_step(card):
+    if card is None:
+        return
+    if str(card["provider_status"] or "") == "cancelled" and str(card["status"]) != "cancelled":
+        # Cancelled at Mercury is final: the card can't come back, so it is cancelled here too.
+        SK.update(ctx.c, "fin_cards", card_id, {"status": "cancelled", "allocation_due": 0, "updated_at": ctx.at})
+        card = SK.get(ctx.c, "fin_cards", card_id)
+    if not in_step(card):
+        if follow:
+            sync(ctx, card_id, aid, SYSTEM, after=follow)
         return
     SK.update(ctx.c, "fin_cards", card_id, {"sync_status": "ok", "sync_error": None})
     if card["allocation_due"] is not None and card["budget_id"]:
@@ -115,14 +127,66 @@ def confirmed(ctx: Ctx, card_id: str, done: dict[str, Any]) -> None:
         SK.update(ctx.c, "fin_cards", card_id, {"allocation_due": None})
 
 
-def created(ctx: Ctx, card_id: str, aid: str) -> None:
+def created(ctx: Ctx, card_id: str, aid: str, outbox_id: str = "") -> None:
     """Mercury issued the card: apply what changed meanwhile."""
     card = SK.get(ctx.c, "fin_cards", card_id)
     if card is None:
         return
-    confirmed(ctx, card_id, {})
-    if not in_step(SK.get(ctx.c, "fin_cards", card_id)):
-        sync(ctx, card_id, aid, SYSTEM)
+    confirmed(ctx, card_id, {}, aid, follow=outbox_id or f"create-{aid or ctx.at}")
+
+
+UNCERTAIN = "uncertain"     # provider_status of a card whose creation was cut off: Mercury may or may not have it
+
+
+def uncertain(ctx: Ctx, card_id: str, why: str) -> None:
+    """The card's creation may have gone through at Mercury: its reservation stays (a cancel keeps it too) until a
+    look at Mercury's cards (`resolve`) says whether the card exists."""
+    SK.update(ctx.c, "fin_cards", card_id, {"provider_status": UNCERTAIN, "sync_status": "failed", "sync_error": why,
+                                            "updated_at": ctx.at})
+
+
+def _mercury_status(raw: object) -> str:
+    s = str(raw or "")
+    return s if s in ("active", "frozen") else "cancelled"     # inactive, expired, suspended: it can't spend
+
+
+def _limit_cents(raw: object) -> int | None:
+    value = raw.get("amountCents") if isinstance(raw, dict) else None   # type: ignore[union-attr]
+    return int(cast(Any, value)) if isinstance(value, int) else None
+
+
+def resolve(ctx: Ctx, card: Any, found: list[dict[str, Any]]) -> str:
+    """Settle a cut-off creation from Mercury's cards for its user: exactly one card with its nickname, made since,
+    and not already some other card's, is that card (adopted, then brought to the desired state); none means Mercury
+    never issued it (a cancelled one lets its reservation go; else it stays failed for a person to cancel or issue
+    again); more than one stays uncertain for a person. Returns what it decided."""
+    card_id = str(card["id"])
+    asked = SK.card_create_payload(ctx.c, card_id)
+    nickname = str(asked.get("nickname") or card["nickname"] or "")[:50]
+    since = str(card["created_at"])[:10]
+    matches = [f for f in found if str(f.get("nickname") or "") == nickname and str(f.get("createdAt") or "")[:10]
+               >= since and f.get("id") and SK.card_by_provider(ctx.c, str(card["provider"]), str(f["id"])) is None]
+    if len(matches) > 1:
+        SK.update(ctx.c, "fin_cards", card_id, {"sync_error": f"{len(matches)} Mercury cards could be this one; "
+                                                              "check Mercury", "updated_at": ctx.at})
+        return "several"
+    if not matches:
+        if str(card["status"]) == "cancelled":
+            not_issued(ctx, card_id)
+            return "not_issued"
+        SK.update(ctx.c, "fin_cards", card_id, {"provider_status": None, "sync_status": "failed", "sync_error":
+                                                "Mercury never issued this card; cancel it and issue a new one",
+                                                "updated_at": ctx.at})
+        return "missing"
+    f = matches[0]
+    limit = _limit_cents(f.get("spendLimit"))
+    SK.update(ctx.c, "fin_cards", card_id, {
+        "provider_card_id": str(f["id"]), "last4": str(f.get("lastFour") or "")[-4:] or None,
+        "provider_status": _mercury_status(f.get("status")),
+        "provider_limit": limit if limit is not None else int(asked.get("monthly") or 0) or None,
+        "sync_status": "ok", "sync_error": None, "synced_at": ctx.at, "updated_at": ctx.at})
+    created(ctx, card_id, "", f"found-{card_id}")
+    return "found"
 
 
 def not_issued(ctx: Ctx, card_id: str) -> None:
@@ -229,6 +293,7 @@ def _state(kind: str) -> handlers.Planner:
                     fields["allocation_due"] = 0         # its reservation goes when Mercury confirms the cancel
                 SK.update(ctx.c, "fin_cards", str(card["id"]), fields)
                 if kind == "card_cancel" and not card["provider_card_id"] and \
+                        str(card["provider_status"] or "") != UNCERTAIN and \
                         not SK.card_create_waiting(ctx.c, str(card["id"])):
                     not_issued(ctx, str(card["id"]))       # never issued and not being issued: nothing to undo
                     continue
@@ -281,5 +346,5 @@ PLANNERS: dict[str, handlers.Planner] = {
     "card_create": card_create, "card_update_limit": card_update_limit, "card_freeze": _state("card_freeze"),
     "card_unfreeze": _state("card_unfreeze"), "card_cancel": _state("card_cancel")}
 
-__all__ = ["PLANNERS", "check_lower", "confirmed", "created", "limit_follows", "not_issued", "queue", "sync",
-           "used"]
+__all__ = ["PLANNERS", "UNCERTAIN", "check_lower", "confirmed", "created", "limit_follows", "not_issued", "queue",
+           "resolve", "sync", "uncertain", "used"]

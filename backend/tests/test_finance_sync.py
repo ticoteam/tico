@@ -222,3 +222,65 @@ def test_an_older_or_versionless_snapshot_never_overwrites_a_newer_row(books):
                                              "WHERE provider_id='txn-fee'").fetchone()
         assert (amount, version, pending) == (-2_000, 3, 0)
         assert c.execute("SELECT count(*) FROM fin_holds").fetchone()[0] == 0
+
+
+def test_a_cards_writes_go_one_at_a_time_and_an_out_of_step_answer_requeues(books):
+    """N1: while one write for a card is at Mercury, a later write for the same card can't be claimed; an answer that
+    leaves the card out of step with its desired state keeps a card_sync queued and the card pending."""
+    from backend.finance import sync
+    fake = FakeMercury()
+    connect(books, fake)
+    _, card_id = _card(books)
+    sync_once(books, fake, HOURS[0])
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_update_limit", {"card_id": card_id, "amount": 18_000}).status == "committed"
+        first = c.execute("SELECT * FROM fin_outbox WHERE op='card_sync' AND status='pending'").fetchone()
+        assert SK.outbox_claim(c, str(first["id"]), HOURS[1])             # worker A sends 180.00
+        assert act(c, OWNER, "card_update_limit", {"card_id": card_id, "amount": 10_000}).status == "committed"
+        second = c.execute("SELECT id FROM fin_outbox WHERE op='card_sync' AND status='pending' AND claimed_at IS NULL"
+                           ).fetchone()[0]
+        assert not SK.outbox_claim(c, str(second), HOURS[1])              # worker B waits for A
+        c.execute("DELETE FROM fin_outbox WHERE id=?", (second,))         # even if B's row were lost...
+        sync._record(c, first, {"card_id": card_id}, Answer(200, {"confirmed": {"limit": 18_000}}), HOURS[1])
+        assert c.execute("SELECT sync_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "pending"
+        assert c.execute("SELECT count(*) FROM fin_outbox WHERE op='card_sync' AND status='pending'").fetchone()[0] == 1
+        assert _state(c, card_id)[3:] == (18_000, 20_000)                 # Mercury allows 180.00: still reserved
+    sync_once(books, fake, HOURS[2])
+    with books.read() as c:
+        assert _state(c, card_id) == ("active", "active", 10_000, 10_000, 10_000)
+        assert c.execute("SELECT sync_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "ok"
+
+
+def test_a_cut_off_create_keeps_its_reservation_through_a_cancel_until_mercury_says(books):
+    """N2: a creation cut off mid-call is uncertain; a cancel then keeps the reservation; Mercury's card list decides:
+    a matching card is adopted and cancelled there, none frees the reservation."""
+    fake = FakeMercury()
+    connect(books, fake)
+    budget_id, card_id = _card(books)
+    with books.transaction() as c:
+        other_id = str(act(c, OWNER, "card_create", {"holder": "human:fay", "budget_id": budget_id, "amount": 5_000,
+                                                     "provider_user_id": "user-fay"}).result["card_id"])
+        for oid, in c.execute("SELECT id FROM fin_outbox WHERE op='card_create'").fetchall():
+            assert SK.outbox_claim(c, str(oid), AT)                      # both at Mercury when the worker died
+    fake.queue["cards"] = [Answer(500, {}), Answer(500, {})]             # Mercury's list is down at first
+    sync_once(books, fake, HOURS[0])                                       # the cut-off is found
+    with books.transaction() as c:
+        assert c.execute("SELECT provider_status FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "uncertain"
+        assert act(c, OWNER, "card_cancel", {"card_id": card_id}).status == "committed"
+        assert act(c, OWNER, "card_cancel", {"card_id": other_id}).status == "committed"
+        assert _state(c, card_id)[4] == 20_000 and _state(c, other_id)[4] == 5_000      # nothing freed yet
+    sync_once(books, fake, HOURS[2])                                       # the list fails: still uncertain
+    with books.read() as c:
+        assert _state(c, card_id)[4] == 20_000
+    with books.read() as c:
+        name = str(SK.card_create_payload(c, card_id)["nickname"])
+    fake.cards_list.append({"id": "card-found", "userId": "user-eve", "nickname": name, "lastFour": "4242",
+                            "status": "active", "createdAt": AT, "spendLimit": {"amountCents": 20_000}})
+    sync_once(books, fake, HOURS[4])                                       # fay has no card at Mercury
+    sync_once(books, fake, HOURS[5])
+    assert fake.sent("card_state") == [("card-found", "cancel")]
+    assert fake.sent("create_card") == []
+    with books.read() as c:
+        assert _state(c, card_id) == ("cancelled", "cancelled", 20_000, 20_000, 0)
+        assert c.execute("SELECT provider_card_id FROM fin_cards WHERE id=?", (card_id,)).fetchone()[0] == "card-found"
+        assert _state(c, other_id)[1] == "cancelled" and _state(c, other_id)[4] == 0

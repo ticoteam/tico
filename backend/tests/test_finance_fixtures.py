@@ -121,6 +121,7 @@ class FakeMercury:
         self.requests: dict[str, dict[str, object]] = {}
         self.queue: dict[str, list[object]] = {}
         self.calls: list[tuple[str, object]] = []
+        self.cards_list: list[dict[str, object]] = []
 
     def _answer(self, name: str, arg: object, default: object):
         self.calls.append((name, arg))
@@ -159,6 +160,9 @@ class FakeMercury:
 
     def credit_statements(self, account_id):
         return self._answer("credit_statements", account_id, {"statements": [MERCURY["credit_statement_new"]]})
+
+    def cards(self, user_id):
+        return self._answer("cards", user_id, {"cards": [k for k in self.cards_list if k.get("userId") == user_id]})
 
     def create_card(self, user_id, nickname, monthly_cents):
         return self._answer("create_card", (user_id, monthly_cents), MERCURY["card_created"])

@@ -292,8 +292,13 @@ def _card_used(ctx: Ctx, row: Any, card: Any, amount: int, entry_id: str) -> Non
     """A settled card transaction uses the card's allocation at its actual amount (a refund gives some back): its
     authorization hold settles at that amount, or, with none (first seen settled, as in a backfill), a settled hold
     records it, so the allocation never stays reserved beside the actual."""
-    if row["hold_id"] and amount > 0:
-        SB.set_settled_amount(ctx.c, str(row["hold_id"]), amount)
+    hold = SB.hold(ctx.c, str(row["hold_id"])) if row["hold_id"] else None
+    if hold is not None and str(hold["status"]) in ("held", "settled"):
+        # One record per charge: an adjustment moves its amount and entry, never adds a second.
+        if str(hold["status"]) == "held":
+            SB.settle(ctx.c, str(hold["id"]), amount, entry_id, ctx.at)
+        else:
+            SB.relink(ctx.c, str(hold["id"]), amount, entry_id)
         return
     b = ctx.budgets().get(str(card["budget_id"] or ""))
     if b is None or not b.active:
@@ -302,6 +307,7 @@ def _card_used(ctx: Ctx, row: Any, card: Any, amount: int, entry_id: str) -> Non
                          source_id=f"{row['id']}:settled", target=f"card:{card['id']}", held_on=str(row["txn_date"]),
                          expires_at=None, by=SYSTEM, at=ctx.at)
     SB.settle(ctx.c, hid, amount, entry_id, ctx.at)
+    SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"hold_id": hid})
 
 
 def _card_hold(ctx: Ctx, row: Any, card: Any, amount: int) -> None:
@@ -359,7 +365,10 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
     gl = str(money["account_id"])
     moved = sum(line.amount for _, line in SL.entry_lines(ctx.c, str(row["entry_id"])) if line.account_id == gl)
     shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1
-    return moved == int(row["amount"]) and (shared or str(entry["entry_date"]) == str(row["txn_date"]))
+    day, posted = str(row["txn_date"]), str(entry["entry_date"])
+    # A row dated in a closed period posted on a later open day (`open_day`): that shift is not a change.
+    same_day = posted == day or (posted > day and SL.closed_on(ctx.c, ctx.book.id, day))
+    return moved == int(row["amount"]) and (shared or same_day)
 
 
 def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
@@ -367,15 +376,18 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
     entry_id = str(row["entry_id"])
     entry = SL.entry_row(ctx.c, entry_id)
     if entry is not None and str(entry["status"]) == "posted" and not entry["reverses_id"]:
-        posting.reverse(ctx, entry_id, day=None, memo=memo, by=SYSTEM)
+        # Its period may be closed by now: the reversal posts on an open day, as a late item does.
+        posting.reverse(ctx, entry_id, day=open_day(ctx, str(entry["entry_date"])), memo=memo, by=SYSTEM)
     for r in SK.rows_of_entry(ctx.c, entry_id):
         SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "new", "entry_id": None, "updated_at": ctx.at})
 
 
 def undo(ctx: Ctx, row: Any) -> None:
-    """A row the provider cancelled, failed or reversed: its hold is released and its entry reversed."""
+    """A row the provider cancelled, failed or reversed: its hold is released (a settled one too: the charge no longer
+    uses the card's allocation) and its entry reversed."""
     if row["hold_id"]:
         budgeting.release(ctx, str(row["hold_id"]))
+        SB.void_settled(ctx.c, str(row["hold_id"]), ctx.at)
     if row["entry_id"]:
         _unpost(ctx, row, "the bank cancelled this transaction")
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"status": "ignored", "entry_id": None, "updated_at": ctx.at})

@@ -85,7 +85,10 @@ def target_used(c: sqlite3.Connection, budget_ids: Sequence[str], start: str, en
     if not budget_ids:
         return 0
     marks = ",".join("?" * len(budget_ids))
-    settled = "status='settled'" if absorbed else "status='settled' AND entry_id IS NULL"
+    # A settled hold whose entry was reversed (and not re-linked) no longer stands for any spend.
+    settled = ("status='settled' AND (entry_id IS NULL OR EXISTS (SELECT 1 FROM fin_entries e WHERE "
+               "e.id=fin_holds.entry_id AND e.status='posted'))") if absorbed else \
+        "status='settled' AND entry_id IS NULL"
     return int(c.execute(f"SELECT COALESCE(SUM(CASE WHEN status='held' THEN amount WHEN {settled} THEN settled_amount "
                          f"ELSE 0 END), 0) FROM fin_holds WHERE budget_id IN ({marks}) AND target=? AND held_on>=? "
                          f"AND held_on<=?", [*budget_ids, target, start, end]).fetchone()[0])
@@ -128,6 +131,19 @@ def settle(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str | Non
 def set_settled_amount(c: sqlite3.Connection, hold_id: str, amount: int) -> int:
     """A settled hold's real amount (a card charge that settled for more or less than it was authorized for)."""
     return c.execute("UPDATE fin_holds SET settled_amount=? WHERE id=? AND status='settled'", (amount, hold_id)).rowcount
+
+
+def relink(c: sqlite3.Connection, hold_id: str, amount: int, entry_id: str) -> int:
+    """A settled hold now stands for a new entry at a new amount (a card charge the bank adjusted): one record per
+    charge, never a second."""
+    return c.execute("UPDATE fin_holds SET settled_amount=?, entry_id=? WHERE id=? AND status='settled'",
+                     (amount, entry_id, hold_id)).rowcount
+
+
+def void_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:
+    """A settled charge the bank cancelled or reversed: it no longer uses anything."""
+    return c.execute("UPDATE fin_holds SET status='released', released_at=? WHERE id=? AND status='settled'",
+                     (at, hold_id)).rowcount
 
 
 def absorb(c: sqlite3.Connection, hold_id: str, entry_id: str) -> int:

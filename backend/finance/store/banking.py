@@ -466,9 +466,14 @@ def outbox_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | N
 
 
 def outbox_claim(c: sqlite3.Connection, outbox_id: str, at: str) -> bool:
-    """Take one write for one call: only one worker wins it."""
-    return c.execute("UPDATE fin_outbox SET claimed_at=?, updated_at=? WHERE id=? AND status='pending' AND "
-                     "claimed_at IS NULL", (at, at, outbox_id)).rowcount == 1
+    """Take one write for one call: only one worker wins it. A card's writes go one at a time across workers: a write
+    for a card whose other write is at Mercury right now waits until that one is recorded."""
+    return c.execute(
+        "UPDATE fin_outbox SET claimed_at=?, updated_at=? WHERE id=? AND status='pending' AND claimed_at IS NULL AND "
+        "(json_extract(payload_json, '$.card_id') IS NULL OR NOT EXISTS (SELECT 1 FROM fin_outbox o WHERE "
+        "o.status='pending' AND o.claimed_at IS NOT NULL AND o.id<>fin_outbox.id AND "
+        "json_extract(o.payload_json, '$.card_id')=json_extract(fin_outbox.payload_json, '$.card_id')))",
+        (at, at, outbox_id)).rowcount == 1
 
 
 def card_sync_waiting(c: sqlite3.Connection, card_id: str) -> bool:
@@ -487,6 +492,20 @@ def card_create_waiting(c: sqlite3.Connection, card_id: str) -> bool:
     """This card's creation is still owed (queued or at Mercury now)."""
     return c.execute("SELECT 1 FROM fin_outbox WHERE op='card_create' AND status='pending' AND "
                      "json_extract(payload_json, '$.card_id')=? LIMIT 1", (card_id,)).fetchone() is not None
+
+
+def cards_uncertain(c: sqlite3.Connection, connection_id: str) -> list[Any]:
+    """Cards whose creation was cut off at Mercury (it may or may not have issued them), on this connection."""
+    return c.execute("SELECT k.* FROM fin_cards k JOIN fin_money_accounts m ON m.id=k.money_account_id WHERE "
+                     "k.provider_status='uncertain' AND m.connection_id=? ORDER BY k.created_at",
+                     (connection_id,)).fetchall()
+
+
+def card_create_payload(c: sqlite3.Connection, card_id: str) -> dict[str, Any]:
+    """What this card's creation asked Mercury for (its user and nickname)."""
+    row = c.execute("SELECT payload_json FROM fin_outbox WHERE op='card_create' AND "
+                    "json_extract(payload_json, '$.card_id')=? ORDER BY created_at DESC LIMIT 1", (card_id,)).fetchone()
+    return loads(row[0]) if row is not None else {}
 
 
 def outbox_stuck(c: sqlite3.Connection, before: str, connection_id: str) -> list[Any]:
