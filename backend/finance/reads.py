@@ -401,6 +401,7 @@ def view_version(c: sqlite3.Connection) -> int:
 Cutoff = limits.Cutoff
 Cutoffs = limits.Cutoffs
 cutoffs = limits.cutoffs
+video_cutoff = limits.video_cutoff
 usage_reconcile = usage.reconcile
 is_set_up = _context.is_set_up
 

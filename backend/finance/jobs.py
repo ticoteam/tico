@@ -32,9 +32,8 @@ def ensure_setup(c: sqlite3.Connection, owner_email: str = "", at: str | None = 
     return True
 
 
-def _words(b: B.Budget, name: str, bots: bool, refuses: bool = True) -> str:
-    """The owner's notice. No amounts: the words name the budget and what happens next (`refuses`: something stops
-    new spend under it; nothing stops image making at a Video production cutoff yet)."""
+def _words(b: B.Budget, name: str, bots: bool, images: bool = False) -> str:
+    """The owner's notice. No amounts: the words name the budget and what happens next."""
     period = PERIOD_WORDS.get(b.period, b.period)
     if name == WARN_EVENT:
         return f"The {b.name} budget is at {b.warn_pct}% of this {period}'s amount."
@@ -42,9 +41,10 @@ def _words(b: B.Budget, name: str, bots: bool, refuses: bool = True) -> str:
         if bots:
             return (f"The {b.name} budget is used up for this {period}: the bots it covers take no new work until it "
                     f"is raised or the {period} ends.")
-        if refuses:
-            return (f"The {b.name} budget is used up for this {period}: new spend under it is refused until it is "
-                    "raised.")
+        if images:
+            return (f"The {b.name} budget is used up for this {period}: image making for the people and bots it covers "
+                    f"stops until it is raised or the {period} ends.")
+        return f"The {b.name} budget is used up for this {period}: new spend under it is refused until it is raised."
     if b.at_limit == "ask":
         return f"The {b.name} budget is used up for this {period}: new spend under it needs approval."
     return f"The {b.name} budget is used up for this {period}."
@@ -72,7 +72,7 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
                 c.execute("SAVEPOINT fin_notice")
                 try:
                     tico.notice(c, owner, _words(b, name, b.account_id == lines.get(AI),
-                                                 b.account_id != lines.get(VIDEO)))
+                                                 b.account_id == lines.get(VIDEO)))
                     c.execute("RELEASE fin_notice")
                 except tico.Refused:
                     c.execute("ROLLBACK TO fin_notice")

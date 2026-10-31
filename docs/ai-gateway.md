@@ -271,6 +271,9 @@ Each image is billed at what the image model costs plus 25%, from the same cap a
 varies with the model and size, so it is not one number. The catalog lists the service (`hub gateway catalog images`).
 Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and answers the saved paths, never
 the image bytes.
+When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,
+by the team they are in), new images are refused with `video_budget_reached` until the budget is raised or its period
+ends.
 
 ## Webhooks through the Gateway
 

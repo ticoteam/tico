@@ -118,6 +118,7 @@ def test_a_video_production_cutoff_pauses_no_bot(books):
         spend(c, "5200", 100, teammate="bot:coder")
         assert usage_limits.blocked(c, "coder", at=NOON) is None
         assert not FA.run_hold(c, "coder", "job4", at=AT).refused
+        assert FR.video_cutoff(c, "bot:coder", AT).name == "Video production"
 
 
 def test_warn_and_cutoff_fire_once_per_period_and_tell_the_owner(books):
