@@ -194,10 +194,14 @@ ahead of time so it doesn't try.
     tool steps, not the reply text, until the verdict says deliver. On Block or Escalate the text lives only on the
     `org_rule_holds` row; `final_text`, `result_json`, the run log and the bot session show the one-line note. The
     privacy withhold keeps text on the attempt; this doesn't.
-  - `hub message send` (`POST /api/v2/messages`), task comments, task create and owner change: the routes `ask_ingest`
-    already gates;
+  - `hub message send` (`POST /api/v2/messages`, and `POST /api/v2/chat/{bot}` through the same check and write),
+    task comments, task create and owner change: the routes `ask_ingest` already gates;
+  - task questions (`POST /api/v2/task-questions`): title, body, question and why as one output to the person asked;
+    on Block no task, fold, comment or note;
+  - updates (`POST /api/v2/updates`), slide text included, for the whole company;
   - task updates (`POST /api/v2/tasks/{tid}`: title, body, note, `public_title`, `public_summary`; on Block they stay
-    unchanged), the owner's ask (`POST /api/v2/tasks/{tid}/ask`), and bulk changes' `note`;
+    unchanged; public text, or making a task public, adds the whole company and judges the public text), the owner's
+    ask (`POST /api/v2/tasks/{tid}/ask`), and bulk changes' `note`;
   - notes to a bot (`hub_note_create`), which ride its next prompt;
   - automation steps that write as a bot or for one: `_create_task`, `_on_task`, `_note`, `_wake_bot` (their text is
     judged against the automation's owning bot), `_post_update`; Slack `send_reply`;
@@ -262,8 +266,9 @@ ahead of time so it doesn't try.
     readable only by the author bot and the reviewer. It is never a message or task row: an undelivered message is
     what inboxes and the mailbox loop read. Send anyway submits the hold's one-shot server nonce: the normal write
     runs once, as the bot, with `bot_access` and ask ingest, but Decide isn't asked again for that exact payload. A
-    changed payload or a newer rule version is a new check. Keep blocked leaves it. The review task body is a fixed
-    line plus the hold id; nothing from the output is copied in.
+    changed payload or a newer rule version is a new check. A held automation step whose automation now acts as
+    someone else (a new owner, a group's new lead) is refused with 409 `changed`. Keep blocked leaves it. The review
+    task body is a fixed line plus the hold id; nothing from the output is copied in.
   - **Appeal:** `hub rules appeal <hold-id> "<why>"` sends the hold to the reviewer as a review task. `why` is stored
     on the hold and shown only to the reviewer, never in a task body or a prompt. It isn't checked by rules, never delivers the payload, and isn't an override. That's the
     "ask your manager" route, so a rule can't block it. Nobody hears anything unless the bot appeals.

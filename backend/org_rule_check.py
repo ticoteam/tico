@@ -72,7 +72,7 @@ OPERATIONS = {
     "task_create": "a new task", "task_update": "a change to a task", "task_owner": "a task assignment",
     "task_ask": "a question on a task", "bulk": "a change to several tasks", "note": "a note to a bot",
     "reply": "a reply in a conversation", "automation": "an automation's write", "slack": "a Slack reply",
-    "mail": "an email",
+    "mail": "an email", "update": "an update", "task_question": "a question put to a person",
 }
 DRAFT_AS = {"message": "message", "comment": "comment", "task": "task_create", "assign": "task_owner"}
 
@@ -140,6 +140,13 @@ def author_of(who, assistant_bot=""):
 def on(c):
     """Whether the team checks outputs at all (Settings: the `org_rule_checks` team rule, on by default)."""
     return bool(team_rules.load(c).get(TEAM_RULE, True))
+
+
+def in_force(c):
+    """Whether any output can be checked now: an active rule exists and checks are on. One `SELECT ... LIMIT 1` when
+    none is: a caller asks this before it resolves a write's audience (a roster read), so an install with no rules
+    reads nothing more."""
+    return bool(R.any_active(c)) and on(c)
 
 
 def watched(c, bot):
@@ -330,7 +337,7 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
     try:
         recipients = sorted({r for r in recipients or () if r and r != author})
         with store.read() as c:
-            if not R.any_active(c) or not on(c):
+            if not in_force(c):
                 return None             # no rule in force: nothing more is read, and the output is never serialized
             rules = _rule_rows(R.matching(c, author, recipients))
             matched = sorted((r["id"], r["version"]) for r in rules)
@@ -1268,6 +1275,8 @@ def install(app, store, auth, mutate):
         key = mail_digest(body.to, body.cc, body.subject, body.body)
         output = (f"Subject: {body.subject}\n\n" if body.subject else "") + body.body
         with store.read() as c:
+            if not in_force(c):
+                return {"outcome": "pass"}      # no rule in force: no roster read for the recipients, nothing written
             approved = mail_approved(c, author, key)
             recipients = mail_recipients(c, [*body.to, *body.cc])
         # An approved mail (Send anyway) is not judged again on the rules it was held on; rules changed or added

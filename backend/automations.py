@@ -1481,6 +1481,11 @@ def replay_step(c, bot, hold, replay, ingest, gate=None):
     if not row:
         raise Problem("not_found", "The automation is gone", 409)
     auto = {"id": row["id"], "flow": flow_of(row), "assistant_bot": "", "chain": replay.get("chain") or []}
+    if A.acts_as(c, auto) != hold["author"]:
+        # The output was approved as the held bot's: run as anyone else (a new owner, a group's new lead), it would
+        # write under another bot's permissions and rules. That is a new, checked write.
+        raise Problem("changed", "Who this automation acts as changed since it was held; it stays held. Run it again "
+                      "to check it.", 409)
     args = _warned_args(c, auto, gate, replay["do"], replay["args"], _rule_key(replay["do"], replay["args"]),
                         replay["values"])
     chain, via = CHAIN.set(tuple(auto["chain"])), H.VIA.set("automation:" + row["id"])
@@ -1627,6 +1632,8 @@ class HubServices:
         from .auth import Identity
         store = self.hub.store
         with store.read() as c:
+            if do not in RULE_CHECKED or not org_rule_check.in_force(c):
+                return None             # no rule in force: the step's audience (a roster read) is never resolved
             text, _ = self._rule_text(c, do, args, values)
             if not text:
                 return None

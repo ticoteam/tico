@@ -1434,3 +1434,123 @@ def test_send_anyway_of_a_held_answer_resolves_its_pick_before_a_new_warning(rul
     send_anyway(api, hold)
     got = answered(api)
     assert len(got) == 1 and got[0][0].startswith("Warning:") and got[0][1] == {"q": [label]}
+
+
+# ---- chat, updates and task questions; the author of a replay; public task text; the fast path ----------------------
+
+def chat(api, text, to="finance", token="ops-test"):
+    r = api.post(f"/api/v2/chat/{to}", json={"text": text}, headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def ask(api, question, token="ops-test", **more):
+    r = api.post("/api/v2/task-questions", json={"on": "human:ana", "question": question, **more},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+def test_chat_updates_and_task_questions_are_held_under_a_block_rule(ruled):
+    api, judge = ruled
+    color_rule(api)
+    assert chat(api, "Our favorite color is blue.")["held"]
+    assert post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]
+    weekly = {"goal": "Ship the palette", "done": ["Our favorite color is teal"], "focus": ["Launch"],
+              "blockers": ["None"]}
+    assert post(api, "updates", {"slides": weekly}, token="ops-test")["held"]
+    got = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.", topic="palette")
+    assert got["held"] and set(got) == {"held"}
+    assert sql(api, "SELECT id FROM messages WHERE from_actor='bot:ops'") == []
+    assert sql(api, "SELECT id FROM updates WHERE bot='ops'") == []
+    assert sql(api, "SELECT id FROM tasks WHERE title='Palette' OR owner='bot:ops'") == []
+    held = sql(api, "SELECT operation FROM org_rule_holds ORDER BY created")
+    assert [h["operation"] for h in held] == ["message", "update", "update", "task_question"]
+    # An update is judged for the whole company, which reads it; a question for the person asked.
+    assert "Cara" in judge.calls[1]["state"]["to"] and judge.calls[3]["state"]["to"] == ["Ana"]
+    assert "Our favorite color is teal" in judge.calls[2]["state"]["output"]
+
+
+def test_chat_updates_and_task_questions_carry_a_warn_rules_line(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    got = chat(api, "Our favorite color is blue.")
+    assert got["rule_warning"] and got["message"]["body"].startswith("Warning:")
+    update = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")
+    assert update["rule_warning"] and update["update"]["body"].startswith("Warning:")
+    asked = ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")
+    assert asked["rule_warning"] and asked["question"]["body"].startswith("Warning:")
+    row = sql(api, "SELECT body, note, waiting_on FROM tasks WHERE id=?", (asked["task"]["id"],))[0]
+    assert row["body"].startswith("Warning:") and row["body"].count("Warning:") == 1
+    assert row["note"].startswith("Warning:") and row["waiting_on"] == "human:ana"
+
+
+def test_send_anyway_delivers_a_held_chat_update_and_task_question_once(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    holds = [chat(api, "Our favorite color is blue.")["held"]["id"],
+             post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"],
+             ask(api, "Ship it?", title="Palette", body="Our favorite color is blue.")["held"]["id"]]
+    for hold_id in holds:
+        assert send_anyway(api, hold_id)["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is blue")) == 1           # the chat message
+    assert [r["body"] for r in sql(api, "SELECT body FROM updates WHERE bot='ops'")] == \
+        ["- Our favorite color is blue."]
+    [task] = sql(api, "SELECT id, waiting_on FROM tasks WHERE title='Palette'")
+    assert task["waiting_on"] == "human:ana"
+    assert len([call for call in judge.calls if call["label"].startswith("rule-check")]) == 3
+
+
+def test_send_anyway_refuses_an_automation_whose_actor_changed(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    step = {"id": "t", "type": "action", "do": "create_task",
+            "args": {"owner": "ana", "title": "Palette", "body": "Our favorite color is red."}}
+    aid = post(api, "automations", {"name": "File", "owner": "bot:ops", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [step]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    [hold] = sql(api, "SELECT id FROM org_rule_holds WHERE operation='automation'")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET owner='bot:finance', flow_json=json_set(flow_json,'$.owner','bot:finance') "
+                  "WHERE id=?", (aid,))
+    assert send_anyway(api, hold["id"], expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, hold["id"])["state"] == "held"
+    assert sql(api, "SELECT id FROM tasks WHERE title='Palette'") == []
+
+
+def test_public_task_text_is_checked_for_the_whole_company(ruled):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}, "with": {"people": ["cara"]}})
+    task = task_for_ops(api)
+    got = post(api, f"tasks/{task['id']}", {"version": task["version"], "public_summary": "Our favorite color is red."},
+               token="ops-test")
+    assert got["held"], got
+    assert "Cara" in judge.calls[-1]["state"]["to"]
+    # Making a task public alone publishes the public text written before: that text is judged.
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": "Our favorite color is red."})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    assert got["held"], got
+    assert "favorite color is red" in judge.calls[-1]["state"]["output"]
+    assert sql(api, "SELECT visibility FROM tasks WHERE id=?", (drafted["id"],))[0]["visibility"] == "private"
+
+
+def test_with_no_rule_in_force_bot_writes_resolve_no_audience(ruled, monkeypatch):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}}, token="ops-test")    # suggested only
+    resolved = []
+    monkeypatch.setattr(K, "company", lambda c: resolved.append("company") or [])
+    monkeypatch.setattr(K, "mail_recipients", lambda c, addresses: resolved.append("mail") or [])
+    monkeypatch.setattr(H, "mentioned_people", lambda *a, **k: resolved.append("mentions") or [])
+    task = task_for_ops(api)
+    post(api, f"tasks/{task['id']}/comments", {"text": "Ask @ana or ben@acme.example about it."}, token="ops-test")
+    assert "held" not in post(api, "updates", {"body": "- Shipped the launch note."}, token="ops-test")
+    aid = post(api, "automations", {"name": "Post", "owner": "bot:finance", "trigger": {"type": "event", "name": "x.y"},
+                                    "steps": [{"id": "p", "type": "action", "do": "post_update",
+                                               "args": {"text": "- Closed the books."}}]})["id"]
+    post(api, f"automations/{aid}/run", {})
+    assert sql(api, "SELECT body FROM updates WHERE bot='finance'")[0]["body"] == "- Closed the books."
+    assert post(api, "bots/ops/mail-check", {"to": ["ben@acme.example"], "body": "Hi Ben."},
+                token="ops-test")["outcome"] == "pass"
+    assert resolved == [] and judge.calls == []
