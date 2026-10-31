@@ -267,23 +267,25 @@ fn validate_and_tag(
         .ok_or("Dispatch not visible yet; inspect Actions and resume with --run")?;
     verify_run(state, candidate, id, false)?;
     // Release Manager runs this in the background; the durable record resumes the same run after interruption.
-    let status = Command::new("gh")
-        .args([
-            "run",
-            "watch",
-            &id.to_string(),
-            "--repo",
-            &state.repo,
-            "--exit-status",
-            "--interval",
-            "10",
-        ])
-        .status()
-        .map_err(|e| e.to_string())?;
-    require(
-        status.success(),
-        "Release validation failed or watch was interrupted; no tag pushed",
-    )?;
+    loop {
+        let status = Command::new("gh")
+            .args([
+                "run",
+                "watch",
+                &id.to_string(),
+                "--repo",
+                &state.repo,
+                "--exit-status",
+                "--interval",
+                "10",
+            ])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() {
+            break;
+        }
+        rerun_cancelled(state, candidate, id)?;
+    }
     verify_run(state, candidate, id, true)?;
     unchanged(candidate)?;
     git(&[
@@ -298,6 +300,37 @@ fn validate_and_tag(
         state.version
     );
     Ok(())
+}
+// A run a bot cancelled is rerun in place: same id, title and candidate, so the freeze stays valid. Anything else refuses.
+fn rerun_cancelled(state: &Freeze, candidate: &str, id: u64) -> Result<()> {
+    let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
+    require(
+        run["status"] == "completed" && run["conclusion"] == "cancelled",
+        "Release validation failed or watch was interrupted; no tag pushed",
+    )?;
+    // GitHub counts attempts itself, so an interrupted publish can neither lose nor repeat a rerun.
+    let attempt = run["run_attempt"].as_u64().unwrap_or(1);
+    require(
+        attempt <= 2,
+        "Release validation was cancelled after 2 reruns; no tag pushed; inspect Actions",
+    )?;
+    verify_run(state, candidate, id, false)?;
+    unchanged(candidate)?;
+    command(
+        "gh",
+        &["run", "rerun", &id.to_string(), "--repo", &state.repo],
+    )?;
+    for _ in 0..20 {
+        let run = gh(&["api", &format!("repos/{}/actions/runs/{id}", state.repo)])?;
+        if run["status"] != "completed" {
+            println!("Validation run {id} was cancelled; rerunning it (rerun {attempt} of 2).");
+            return Ok(());
+        }
+        thread::sleep(Duration::from_secs(3));
+    }
+    Err(format!(
+        "Validation run {id} did not restart after its rerun; inspect Actions and run publish again"
+    ))
 }
 // The Release workflow publishes the tag a few minutes after it is pushed; the notes task waits for that.
 fn published(state: &Freeze) -> Result<()> {
