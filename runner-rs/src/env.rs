@@ -164,6 +164,8 @@ impl Drop for Vault {
         // Revoke the connection before a cleaned UID can be lent to another turn.
         self.relay.take();
         self.remove_files();
+        // A turn that ended before its own `finish` (an error, a panic) still lets go of its subscription homes.
+        crate::model_subscriptions::finish(&mut self.subscriptions);
         self.turn_user.take();
     }
 }

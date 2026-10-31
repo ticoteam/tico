@@ -210,7 +210,8 @@ computers. Every bot on that computer then runs that tool on it.
 - It works on any computer it is given to, a new cloud machine included: nobody signs in there. The turn reads it from
   Tico with its own run token, next to its credentials; it is never written into the bot's repository. A Claude token
   or Anthropic key is set in that turn's environment. A ChatGPT login or OpenAI key gets a Codex home of its own on
-  that computer; when Codex refreshes the login there, the refreshed login is sent back to Tico.
+  that computer; its `auth.json` is there only while a turn on it runs, and when Codex refreshes the login there, the
+  refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
 - A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
   passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
   else wait.

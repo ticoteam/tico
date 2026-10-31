@@ -2153,6 +2153,20 @@ impl Runner {
         if let Some(relay) = &mut vault.relay { relay.stop().await; }
         if let Some(user) = &mut vault.turn_user { user.permit_reuse(); }
         vault.remove_files();
+        // The subscription homes' sign-in files go now; a login Codex refreshed is masked in all that follows (the
+        // reply, the changes, the result) before it is sent back.
+        let refreshed = crate::model_subscriptions::finish(&mut vault.subscriptions);
+        if !refreshed.is_empty() {
+            match &redactor {
+                Some(r) => r.add(&refreshed),
+                None => {
+                    let r = Arc::new(Redactor::new(&refreshed));
+                    redact::register(&aid, r.clone());
+                    redactor = Some(r);
+                }
+            }
+            vault.values.extend(refreshed);
+        }
         let user = vault.turn_user.take();
         let _ = tokio::task::spawn_blocking(move || drop(user)).await;
         if self.drain.returning(&aid) {
