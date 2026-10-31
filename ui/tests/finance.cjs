@@ -437,93 +437,85 @@ const READY = {pnl: '.fin-pl', balance: '.fin-bs', cards: '[data-fin-card]', tra
       await page.locator('[data-fin-card="card-1"]').click();
       await shot(page, 'cards-desktop');
       await go(page, '#/finance/transactions', READY.transactions);
-      await page.locator('#fin-rail [data-fin-tag]').waitFor();
+      // A posted bank row: one form (line, teammate, team, project), one Save, one categorize, dry run first.
+      const cat = '#fin-rail [data-fin-cat]', save = cat + ' [data-fin-cat-save]';
+      await page.locator(cat + ' select[name="account"] option[value="a-6100"]').waitFor({state: 'attached'});
       await shot(page, 'transactions-desktop');
-      await page.locator('#fin-rail select[name="team"]').selectOption('eng');
-      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
-      await page.waitForTimeout(100);
-      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'}},
-        tag + ': categorize keeps the line\'s other tags');
+      assert.equal(await page.locator('#fin-rail form').count(), 1, tag + ': one form on a posted row');
+      assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-6100', tag + ': a posted row starts on its line');
+      assert.equal(await page.locator(save).isDisabled(), true, tag + ': nothing changed, nothing to save');
+      await page.locator(cat + ' select[name="team"]').selectOption('eng');
+      let n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      const tagWant = {lines: [{line_id: 'l1', tags: {teammate: 'bot:eng-lead', budget: 'b-software', team: 'eng'}}], mode: 'replace'};
+      assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: tagWant, dry_run: true}, {kind: 'categorize', payload: tagWant}],
+        tag + ': the same line only re-tags, keeping the line\'s other tags');
+      assert.notEqual(writes[n][3], writes[n + 1][3], tag + ': the dry run and the action have their own keys');
+      // A new line reposts the row with its tags (the old line's budget tag stays behind).
+      await page.locator(cat + ' select[name="account"]').selectOption('a-5100');
+      await page.locator(cat + ' input[name="project"]').fill('Q4');
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
+      assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {feed_id: 'f1', account_id: 'a-5100', tags: {teammate: 'bot:eng-lead', project: 'Q4'}}},
+        tag + ': a new line sends feed_id, account_id and the tags');
+      // A row a rule split: Mixed where its lines differ; the same line changes only the field set.
       await page.locator('[data-fin-tx="feed:f4"]').click();
       assert.equal(await page.locator('#fin-rail select[name="team"]').inputValue(), '*', tag + ': a split row\'s differing team shows Mixed');
       await page.locator('#fin-rail input[name="project"]').fill('Launch');
-      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
-      await page.waitForTimeout(100);
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {team: 'eng', teammate: 'bot:eng-lead', project: 'Launch'}},
         {line_id: 'l6', tags: {team: 'mkt', project: 'Launch'}}], mode: 'replace'}}, tag + ': a split row changes only the field set; each line keeps its own team');
-      await page.locator('[data-fin-tx="feed:f4"]').click();
       await page.locator('#fin-rail select[name="team"]').selectOption('');
-      await page.locator('#fin-rail [data-fin-tag] [type=submit]').click();
-      await page.waitForTimeout(100);
+      n = writes.length;
+      await page.locator(save).click();
+      await settled(() => actions(writes.slice(n)).length >= 2);
       assert.deepEqual(actions(writes).at(-1), {kind: 'categorize', payload: {lines: [{line_id: 'l5', tags: {teammate: 'bot:eng-lead'}}, {line_id: 'l6', tags: {}}], mode: 'replace'}},
         tag + ': on a mixed split, — clears the team on every line');
-      // A new bank row: no line yet; Save waits for one, then a dry run and the categorize itself, each its own key.
+      // A new bank row: no line yet; Save waits for one.
       await page.locator('[data-fin-tx="feed:f2"]').click();
-      const cat = '#fin-rail [data-fin-cat]', save = cat + ' [data-fin-cat-save]';
-      await page.locator(cat + ' select[name="account"] option[value="a-6100"]').waitFor({state: 'attached'});
       assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), '', tag + ': a new row has no line');
+      assert.equal(await page.locator(cat + ' select[name="teammate"]').count(), 0, tag + ': a new row has no tag fields');
       assert.equal(await page.locator(save).isDisabled(), true, tag + ': Save waits for a line');
       await page.locator(cat + ' select[name="account"]').selectOption('a-6100');
       assert.equal(await page.locator(cat + ' select[name="for"]').count(), 0, tag + ': no For on a company-wide line');
-      let n = writes.length;
+      n = writes.length;
       await page.locator(save).click();
       await settled(() => actions(writes.slice(n)).length >= 2);
       const catWant = {feed_id: 'f2', account_id: 'a-6100', tags: {}};
       assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: catWant, dry_run: true}, {kind: 'categorize', payload: catWant}],
         tag + ': a new row posts to the picked line, dry run first');
-      assert.notEqual(writes[n][3], writes[n + 1][3], tag + ': the dry run and the action have their own keys');
-      // A line that is not company-wide for the viewer asks For, the viewer first.
+      // A line that is not company-wide for the viewer asks For, the viewer first; the rules ask for approval.
       await page.locator(cat + ' select[name="account"]').selectOption('a-6300');
       assert.deepEqual((await page.locator(cat + ' select[name="for"] option').allInnerTexts()).slice(0, 2), ['Ana Silva', 'Engineering'], tag + ': For lists the viewer first');
       await page.locator(cat + ' select[name="for"]').selectOption('team:eng');
-      n = writes.length;
-      await page.locator(save).click();
-      await settled(() => actions(writes.slice(n)).length >= 2);
-      assert.deepEqual(actions(writes.slice(n)).at(-1), {kind: 'categorize', payload: {feed_id: 'f2', account_id: 'a-6300', tags: {team: 'eng'}}}, tag + ': For is the line\'s tag');
-      // Split: 2+ lines; Save only when they add up to the row exactly.
-      await page.locator(cat + ' [data-fin-cat-split]').click();
-      assert.equal(await page.locator(cat + ' .fin-cat-row').count(), 2, tag + ': Split makes two lines');
-      const rowsIn = page.locator(cat + ' .fin-cat-row');
-      await rowsIn.nth(0).locator('select').selectOption('a-6100');
-      await rowsIn.nth(1).locator('select').selectOption('a-5100');
-      await rowsIn.nth(0).locator('input').fill('50');
-      await rowsIn.nth(1).locator('input').fill('40');
-      assert.equal(await page.locator(save).isDisabled(), true, tag + ': 90.00 of 99.00 blocks Save');
-      await rowsIn.nth(1).locator('input').fill('49.01');
-      assert.equal(await page.locator(save).isDisabled(), true, tag + ': 99.01 of 99.00 blocks Save');
-      await rowsIn.nth(1).locator('input').fill('49');
-      assert.equal(await page.locator(save).isDisabled(), false, tag + ': an exact split saves');
-      // The rules ask for approval: the rail names the approver, Cancel keeps the picks, Send sends.
       hub.ask = 'human:ana';
       n = writes.length;
       await page.locator(save).click();
       await page.locator(cat + ' .fin-ask').waitFor();
       assert.equal(await page.locator(cat + ' .fin-ask').innerText(), 'Approval from Ana Silva', tag + ': who approves');
       await page.locator(cat + ' [data-fin-cat-no]').click();
-      assert.equal(await page.locator(cat + ' .fin-cat-row').count(), 2, tag + ': Cancel keeps the split');
+      assert.equal(await page.locator(cat + ' select[name="for"]').inputValue(), 'team:eng', tag + ': Cancel keeps the picks');
       await page.locator(save).click();
       await page.locator(cat + ' [data-fin-cat-yes]').click();
-      await page.waitForFunction(() => !document.querySelector('#fin-rail .fin-cat-row'));
+      await settled(() => actions(writes.slice(n)).length >= 3);
       hub.ask = '';
-      const splitWant = {feed_id: 'f2', lines: [{account_id: 'a-6100', amount: 5000, tags: {}}, {account_id: 'a-5100', amount: 4900, tags: {}}]};
-      assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: splitWant, dry_run: true}, {kind: 'categorize', payload: splitWant, dry_run: true},
-        {kind: 'categorize', payload: splitWant}], tag + ': the split is sent after Send, once');
-      // A posted row starts on its line; a reconciled one shows its line read only.
-      await page.locator('[data-fin-tx="feed:f1"]').click();
-      assert.equal(await page.locator(cat + ' select[name="account"]').inputValue(), 'a-6100', tag + ': a posted row starts on its line');
+      const forWant = {feed_id: 'f2', account_id: 'a-6300', tags: {team: 'eng'}};
+      assert.deepEqual(actions(writes.slice(n)), [{kind: 'categorize', payload: forWant, dry_run: true}, {kind: 'categorize', payload: forWant, dry_run: true},
+        {kind: 'categorize', payload: forWant}], tag + ': For is the line\'s tag, sent after Send, once');
+      // A reconciled row keeps its line, read only; its tags still change.
       await page.locator('[data-fin-tx="feed:f5"]').click();
-      await page.locator('#fin-rail .fin-rail-title').waitFor();
+      await page.locator('#fin-rail [data-fin-tag]').waitFor();
       assert.equal(await page.locator(cat).count(), 0, tag + ': no line picker on a reconciled row');
       assert.match(await page.locator('#fin-rail').innerText(), /Hosting\s+410\.00/, tag + ': its line, read only');
       await page.evaluate(() => { FIN_TX.q = ''; FIN_TX.account = ''; });
       await go(page, '#/finance/cards', READY.cards);
       await go(page, '#/finance/transactions', READY.transactions);
-      await page.locator('[data-fin-tx="feed:f2"]').click();
-      await page.locator(cat + ' [data-fin-cat-split]').click();
-      for (const [i, line, amount] of [[0, 'a-6100', '50'], [1, 'a-5100', '49']]) {
-        await rowsIn.nth(i).locator('select').selectOption(line);
-        await rowsIn.nth(i).locator('input').fill(amount);
-      }
+      await page.locator(cat + ' select[name="account"] option[value="a-6100"]').waitFor({state: 'attached'});
+      await page.locator(cat + ' select[name="team"]').selectOption('eng');
       await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
       await shot(page, 'transactions-categorize-desktop');
       await go(page, '#/finance/sources', READY.sources);
