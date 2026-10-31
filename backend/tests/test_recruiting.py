@@ -53,7 +53,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     # Redraft asks the model once, for this title and boss; a failure, or an answer too short to use, keeps the
     # composed text. The first draft never asks.
     asked = []
-    def rewrite(composed, title, boss):
+    def rewrite(composed, title, boss, deadline):
         asked.append((title, boss))
         return "Leads our support desk.\n\nWhat you'll do\n- Answer every ticket the same day"
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
@@ -83,50 +83,83 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
 
 
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
+    import io
+    import threading
     import time
     from clients import docs_qa
     composed = post(api, "seats/draft", {"title": "Customer support lead"})
     body = {"title": "Customer support lead", "redraft": True}
     monkeypatch.setattr(recruiting, "REWRITE_SECONDS", 0.3)
+    opened = []
+
+    class Answer(io.BytesIO):
+        """A model's answer; `pause` is how long each piece takes to arrive."""
+        def __init__(self, data, pause=0.0):
+            super().__init__(data)
+            self.pause, self.reads = pause, []
+        def read(self, n=-1):
+            self.reads.append(n)
+            time.sleep(self.pause)
+            return super().read(n)
+
+    def serve(answer):
+        def urlopen(request, timeout):
+            opened.append(timeout)
+            return answer
+        monkeypatch.setattr(recruiting, "urlopen", urlopen)
+
+    def workers():
+        return sum(t.name == "seat-draft-rewrite" for t in threading.enumerate())
+
+    def drained():
+        for _ in range(100):
+            if not workers():
+                return
+            time.sleep(0.02)
+        raise AssertionError("a rewrite worker outlived its deadline")
 
     def timed():
         started = time.monotonic()
         out = post(api, "seats/draft", body)
         return out, time.monotonic() - started
 
-    # The bound covers finding the key: a secret store that hangs does not hold the draft.
-    monkeypatch.setattr(docs_qa, "key", lambda: time.sleep(3) or "k")
+    # The bound covers finding the key: a secret store that is slow does not hold the draft, and no request starts once
+    # the deadline has passed. However many drafts time out, at most two workers are ever alive.
+    serve(Answer(b"{}"))
+    monkeypatch.setattr(docs_qa, "key", lambda: time.sleep(0.6) or "k")
     out, took = timed()
     assert out == composed and took < 1.5
+    alive = []
+    for _ in range(8):
+        assert post(api, "seats/draft", body) == composed
+        alive.append(workers())
+    assert max(alive) <= 2
+    drained()
+    assert opened == [], "no request starts after the deadline"
 
-    # And reading the answer: a server that trickles it is cut off at the same bound.
-    class Answer:
-        def __init__(self, read):
-            self._read = read
-        def __enter__(self):
-            return self
-        def __exit__(self, *_):
-            return False
-        def read(self, n):
-            return self._read(n)
+    # Reading the answer is bounded too: a server that trickles it is cut off at the deadline, the socket waits no
+    # longer than the time left, and the worker ends soon after.
     monkeypatch.setattr(docs_qa, "key", lambda: "k")
-    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: Answer(lambda n: time.sleep(3) or b"{}"))
+    trickle = Answer(b" " * 10000, pause=0.2)
+    trickle.read = lambda n=-1, read=trickle.read: read(min(n, 1))
+    serve(trickle)
     out, took = timed()
-    assert out == composed and took < 1.5
+    assert out == composed and took < 1.5 and 0 < opened[-1] <= 0.3
+    drained()
 
     # An answer longer than the cap is not read past it, and is not used.
-    reads = []
     huge = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads support. " * 20000}]}}]}).encode()
-    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: Answer(lambda n: reads.append(n) or huge[:n]))
-    assert post(api, "seats/draft", body) == composed and reads == [recruiting.REWRITE_BYTES + 1]
+    big = Answer(huge)
+    serve(big)
+    assert post(api, "seats/draft", body) == composed and sum(big.reads) <= recruiting.REWRITE_BYTES + 1
     fine = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads our support desk, every day of the week."}]}}]}).encode()
-    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: Answer(lambda n: fine[:n]))
+    serve(Answer(fine))
     assert post(api, "seats/draft", body)["source"] == "model"
 
     # A rehearsal or a demo never reads a key or asks a model.
     touched = []
     monkeypatch.setattr(docs_qa, "key", lambda: touched.append("key") or "k")
-    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: touched.append("model") or Answer(lambda n: fine[:n]))
+    monkeypatch.setattr(recruiting, "urlopen", lambda *a, **k: touched.append("model") or Answer(fine))
     for flag in ("rehearsal", "demo"):
         monkeypatch.setattr(api.app.state.onboarding.settings, flag, True)
         assert post(api, "seats/draft", body) == composed

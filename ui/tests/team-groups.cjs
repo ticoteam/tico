@@ -30,7 +30,7 @@ const hiring = page => page.evaluate(() => ['Post a job', typeof teamBuildOpen =
 async function open(browser, me, branches = false) {
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
   const errors = [], calls = [], failures = new Set();
-  const deletion = {status: 0, hold: null}, seatSave = {status: 0, hire: 0, draftHold: null};
+  const deletion = {status: 0, hold: null}, seatSave = {status: 0, hire: 0, draftHold: null, draftText: null};
   const people = [
     {id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: '', inbox_bot: 'inbox'},
     {id: 'ben', name: 'Ben Cole', org_parent: 'p:ana', team: 'marketing', reports_to: 'ana'},
@@ -113,6 +113,7 @@ async function open(browser, me, branches = false) {
     if (p === '/api/v2/seats/draft' && method === 'POST') {
       const body = request.postDataJSON(); calls.push(['POST', 'draft', body]);
       if (seatSave.draftHold) await seatSave.draftHold;
+      if (seatSave.draftText) return json({description: seatSave.draftText(body), source: 'catalog'});
       return json({description: body.redraft ? 'Keeps the books, closes each month and files the taxes.' : 'Keeps the books and closes each month.',
         source: 'catalog'});
     }
@@ -717,6 +718,40 @@ async function teamAdd(browser) {
   assert.equal(await post.locator('[name=description]').inputValue(), 'Files the receipts.');
   await page.keyboard.press('Escape');
   calls.length = 0;
+  // Drafts that overlap: words drafted for one title are never posted under another, and a draft overtaken by a newer
+  // one is never what posting waits for. The title cannot change while the job is being posted.
+  seatSave.draftText = body => 'Drafted for ' + body.title + '.';
+  const postedAs = async seat => {
+    await page.waitForFunction(id => location.hash === '#/seat/' + id, seat);
+    const posted = calls.find(c => c[1] === 'seats')[2];
+    calls.length = 0;
+    await page.evaluate(() => { location.hash = '#/updates'; });
+    await page.waitForFunction(() => location.hash === '#/updates');
+    return [posted.title, posted.description];
+  };
+  await choose('Post a job');                                  // A drafted, then the title changed to B and posted
+  await post.locator('[name=title]').fill('Cashier');
+  await post.locator('[name=title]').blur();
+  await expectValue(post.locator('[name=description]'), 'Drafted for Cashier.');
+  await post.locator('[name=title]').fill('Payroll clerk');
+  release = held();
+  await post.locator('[name=title]').press('Enter');
+  await page.waitForFunction(() => document.querySelector('#recruit-post [name=title]').readOnly);
+  await page.waitForTimeout(150);
+  assert.equal(calls.some(c => c[1] === 'seats'), false, 'the earlier title\'s words are not posted');
+  release();
+  assert.deepEqual(await postedAs('seat5'), ['Payroll clerk', 'Drafted for Payroll clerk.']);
+  await choose('Post a job');                                  // A still on its way, overtaken by B, then posted
+  release = held();
+  await post.locator('[name=title]').fill('Cashier');
+  await post.locator('[name=title]').blur();
+  await post.locator('[name=title]').fill('Tax preparer');
+  await post.locator('[name=title]').press('Enter');
+  await page.waitForTimeout(150);
+  assert.equal(calls.some(c => c[1] === 'seats'), false);
+  release();
+  assert.deepEqual(await postedAs('seat6'), ['Tax preparer', 'Drafted for Tax preparer.']);
+  seatSave.draftText = null;
 
   // A failed add keeps the entered human available for correction and retry.
   await choose('Add human');

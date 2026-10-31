@@ -168,28 +168,46 @@ async function recruitPostJob(seed = {}) {
   dialog.querySelector('[data-post-place]')?.addEventListener('click', event => {
     event.currentTarget.hidden = true; dialog.querySelector('[data-post-pair]').hidden = false; f.team.focus();
   });
-  // The description is drafted from the title once it is left (and again on Redraft). A draft lands only if nobody
-  // typed in the description since it was asked for, so it never replaces words written by hand, and only the newest
-  // answer lands.
-  let typed = false, drafted = '', asked = 0, edits = 0, pending = null;
+  // The description is drafted from the title once it is left (and again on Redraft). Each draft is asked for one
+  // title; it lands only if it is still the newest and nobody typed in the description since it was asked for, so it
+  // never replaces words written by hand. `draftedFor` is the title the drafted words belong to.
+  let typed = false, drafted = '', draftedFor = '', asked = 0, edits = 0, pending = null, pendingTitle = '';
   text.oninput = () => { edits++; typed = text.value.trim() !== '' && text.value !== drafted; };
   const ask = async (title, again, mine, seen) => {
     ldotSet(dot, 'thinking'); redraft.disabled = true; text.setAttribute('aria-busy', 'true');
     try {
       const found = await post('/v2/seats/draft', {title, team: recruitGroupName(f.team.value), reports_to: f.reports_to.value, redraft: again});
-      if (mine !== asked || !dialog.open) return;
-      if (found.description && edits === seen) { text.value = drafted = found.description; typed = false; }
+      if (mine !== asked || !dialog.open) return 'stale';
+      // A title no template fits clears words drafted for an earlier title, but never words typed by hand.
+      if (edits === seen && (found.description || text.value === drafted)) {
+        text.value = drafted = found.description || ''; draftedFor = title; typed = false;
+      }
       ldotSet(dot, 'done');
-    } catch (e) { if (mine === asked) { ldotSet(dot, 'idle'); error.textContent = e.message; error.hidden = false; } }
-    finally { if (mine === asked) { redraft.disabled = false; text.removeAttribute('aria-busy'); pending = null; } }
+      return 'ok';
+    } catch (e) {
+      if (mine !== asked) return 'stale';
+      ldotSet(dot, 'idle'); error.textContent = e.message; error.hidden = false;
+      return 'error';
+    } finally { if (mine === asked) { redraft.disabled = false; text.removeAttribute('aria-busy'); pending = null; } }
   };
   const draftNow = (again = false) => {
     const title = f.title.value.trim();
-    if (!title || (!again && (typed || drafted && title === draftNow.title))) return pending || Promise.resolve();
-    if (!again && pending && title === draftNow.title) return pending;
-    draftNow.title = title;
+    if (!title || (!again && typed)) return pending || Promise.resolve('ok');
+    if (!again && pending && pendingTitle === title) return pending;
+    if (!again && !pending && draftedFor === title) return Promise.resolve('ok');
+    pendingTitle = title;
     pending = ask(title, again, ++asked, edits);
     return pending;
+  };
+  // Before posting, the description must be the person's own words or the draft for the title being posted: wait for
+  // that draft (the newest, if one in flight is overtaken), asking for it when none is on its way.
+  const needsDraft = () => !typed && draftedFor !== f.title.value.trim();
+  const settle = async () => {
+    for (let tries = 0; tries < 5 && dialog.open; tries++) {
+      if (!needsDraft()) return true;
+      if (await draftNow() === 'error') return false;
+    }
+    return !needsDraft();
   };
   f.title.addEventListener('blur', () => { void draftNow(); });
   f.title.addEventListener('input', () => { redraft.disabled = !f.title.value.trim(); });
@@ -205,9 +223,10 @@ async function recruitPostJob(seed = {}) {
     const title = f.title.value.trim();
     if (!title) { error.textContent = 'Give the job a title.'; error.hidden = false; f.title.focus(); return; }
     if (!S.me?.id || !settingsCanCreateBots()) { error.textContent = 'You no longer have permission to add bots.'; error.hidden = false; return; }
-    posting = true; form.querySelector('[type=submit]').disabled = true;
-    // An empty description waits for the draft: the one still on its way, or one for a title submitted with Enter.
-    if (!text.value.trim()) await draftNow();
+    const submit = form.querySelector('[type=submit]');
+    const unlock = () => { posting = false; submit.disabled = false; f.title.readOnly = false; };
+    posting = true; submit.disabled = true; f.title.readOnly = true;      // the title being posted stays put
+    if (!await settle()) { unlock(); return; }
     if (!dialog.open) return;
     try {
       const seat = await post('/v2/seats', {title, reports_to: f.reports_to.value, description: text.value.trim(),
@@ -216,7 +235,7 @@ async function recruitPostJob(seed = {}) {
       dialog.close();
       void refresh(true);
       await recruitSeat(seat.id, {arrive: true});
-    } catch (e) { error.textContent = e.message; error.hidden = false; posting = false; form.querySelector('[type=submit]').disabled = false; }
+    } catch (e) { error.textContent = e.message; error.hidden = false; unlock(); }
   };
   dialog.showModal();
   // On a phone the dialog itself takes focus, so no field shows a ring and no keyboard opens until a tap.

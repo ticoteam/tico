@@ -17,6 +17,7 @@ menu's Post a job, which creates the seat first:
      BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
 import json
 import threading
+import time
 from dataclasses import replace
 from urllib.request import Request, urlopen
 
@@ -32,6 +33,8 @@ CHART = "chart"                         # `description_by` for a chart model's t
 DRAFT_OWNS = 5                          # bullets under "What you'll do"
 REWRITE_SECONDS = 5                     # the whole rewrite: key, request and answer
 REWRITE_BYTES = 64 * 1024               # the most of the model's answer read
+REWRITE_CHUNK = 8 * 1024                # read in pieces, so the deadline is checked as the answer arrives
+_REWRITES = threading.BoundedSemaphore(2)   # rewrites at once; a third keeps the composed text instead of queueing
 REWRITE_MODEL = "gemini-3.7-flash"
 # The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
 # set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
@@ -138,38 +141,60 @@ def may_draft(who):
         raise Problem("forbidden", "Only a person drafts a job description", 403)
 
 
-def _rewrite_call(text, title, boss):
-    """One Gemini call that rewrites the composed description for this role. It raises when there is no key or the
-    call fails; `_rewrite` bounds it."""
+def _rewrite_call(text, title, boss, deadline):
+    """One Gemini call that rewrites the composed description for this role, given up at `deadline` (a monotonic
+    time): no request starts once it has passed, each socket wait is at most the time left, and the answer is read in
+    pieces with the deadline checked between them. It raises when there is no key, the call fails or time is up."""
     from clients.docs_qa import key
+    secret = key()
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the key came too late")
     prompt = (f"Rewrite this job description for the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
               + ". Keep its shape: one opening line, then \"What you'll do\" with three to five short bullets "
               "starting with \"- \", then one \"Works in:\" line. Plain words, under 150 words, no other headings, and "
               "never name a template, a model or a vendor. Answer with the text only.\n\n" + text)
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
     request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
-                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": key()})
-    with urlopen(request, timeout=REWRITE_SECONDS) as response:
-        raw = response.read(REWRITE_BYTES + 1)
-    if len(raw) > REWRITE_BYTES:
-        raise ValueError("the model's answer is too long")
+                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+    raw = b""
+    with urlopen(request, timeout=left) as response:
+        while True:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("the answer came too slowly")
+            chunk = response.read(min(REWRITE_CHUNK, REWRITE_BYTES + 1 - len(raw)))
+            if not chunk:
+                break
+            raw += chunk
+            if len(raw) > REWRITE_BYTES:
+                raise ValueError("the model's answer is too long")
     parts = json.loads(raw)["candidates"][0]["content"]["parts"]
     return "".join(part.get("text", "") for part in parts).strip()
 
 
 def _rewrite(text, title, boss):
-    """The rewrite, or "" when it fails or is not done within REWRITE_SECONDS in all: finding the key (which may wait on
-    a secret store), the request and reading the answer. A late answer is dropped; its thread ends on its own."""
+    """The rewrite, or "" when it fails, is not done within REWRITE_SECONDS in all (finding the key, which may wait on a
+    secret store, the request and reading the answer), or two are already running. The worker holds its place until it
+    ends, which is at most about one socket wait past the deadline, so slow calls never pile up."""
+    if not _REWRITES.acquire(blocking=False):
+        return ""
+    deadline = time.monotonic() + REWRITE_SECONDS
     out = {}
 
     def work():
         try:
-            out["text"] = _rewrite_call(text, title, boss)
+            out["text"] = _rewrite_call(text, title, boss, deadline)
         except Exception:  # noqa: BLE001 - no key, slow, failed or odd: the caller keeps the composed text
             out["text"] = ""
+        finally:
+            _REWRITES.release()
 
     worker = threading.Thread(target=work, name="seat-draft-rewrite", daemon=True)
-    worker.start()
+    try:
+        worker.start()
+    except RuntimeError:
+        _REWRITES.release()
+        return ""
     worker.join(REWRITE_SECONDS)
     return "" if worker.is_alive() else out.get("text", "")
 
