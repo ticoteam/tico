@@ -840,6 +840,29 @@ def test_a_summarized_sale_recategorized_after_its_month_closed_still_reconciles
         assert "summary" not in json.loads(_feed(c, "txn_0001")["raw_json"])
 
 
+def test_a_refund_of_a_posted_sale_applied_by_hand_reopens_the_receivable_it_gives_back(books):
+    """A $100 sale posted in its day's summary and refunded $50 before anything paid an invoice. Then $50 of it is applied
+    by hand to a $50 invoice, and the last $50 is refunded. The invoice owes its $50 again, so the books carry it in
+    receivables; the sale's income is reversed once, and the balance is empty."""
+    stripe = FakeStripe()
+    connect_stripe(books, stripe)
+    iid = _invoice(books, _customer(books, "Acme Retail"), 5_000)
+    stripe.add("charge", 10_000, 0, "Acme Shop")
+    stripe_pass(books, stripe)
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T13:00:00.000000Z")
+    with books.transaction() as c:
+        sale = str(_feed(c, "txn_0001")["id"])
+        made = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": sale, "amount": 5_000})
+        assert made.status == "committed", made
+    stripe.add("refund", -5_000, link="ch_txn_0001")
+    stripe_pass(books, stripe, "2026-10-15T14:00:00.000000Z")
+    with books.read() as c:
+        assert (_sum(c, "1200"), _sum(c, "4000"), _sum(c, "1050")) == (5_000, -5_000, 0)
+        assert _every_entry_balances(c)
+    assert _invoice_row(books, iid) == (0, "sent")
+
+
 def test_a_webhook_with_a_bad_or_stale_signature_is_refused():
     body = json.dumps({"id": "evt_1", "type": "payout.paid", "data": {}}).encode()
     now = int(time.time())

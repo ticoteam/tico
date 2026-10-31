@@ -300,9 +300,9 @@ def _carried(ctx: Ctx, raw: Mapping[str, Any]) -> list[Share]:
 
 # ------------------------------------------------------------------------------------------------ refunds and disputes
 def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) -> None:
-    """A refund, dispute or returned refund reverses (or restores) its sale: the sale's own counter lines take the
-    opposite of the gross in proportion to what each carried, its fee is an expense, and the balance takes the net. What
-    the sale settled gives back its share too. A sale that has not arrived yet waits as new."""
+    """A refund, dispute or returned refund reverses (or restores) its sale. What the sale's settlements take back reopens
+    each document they paid, through that document's control account. The rest reverses the sale's own counter lines in
+    proportion, its fee is an expense, and the balance takes the net. A sale that has not arrived yet waits as new."""
     fid = str(row["id"])
     link = str(t.raw.get("link") or "")
     if not link:
@@ -317,36 +317,52 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
     if not counter:
         _ask(ctx, fid, "the sale it names has no lines to reverse")
         return
-    before = SK.stripe_refunded(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link)
-    now = before - gross
+    given = SK.stripe_given(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link)
+    shares = _shares(ctx, original, gross, given)
+    # The plain part is what this refund takes from the sale itself: the refunds so far, less what settlements gave back.
+    before = SK.stripe_refunded(ctx.c, str(money["id"]), F.STRIPE_UNWINDS, link) - sum(given.values())
+    plain = -gross - sum(move for _, move in shares)
     lines = [banking.feed_line(account, amount, tags, contact) for account, amount, tags, contact
-             in _reversal(counter, before, now)]
+             in _reversal(counter, before, before + plain)]
+    lines += [_reopened(ctx, s, move) for s, move in shares if move]
     if fee:
         lines.append(banking.feed_line(_fees(ctx).id, fee))
     entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
-    gave = _give_back(ctx, original, row, link, gross, entry)
+    gave = _give_back(ctx, row, shares, entry)
     if gave:
         raw = {**SK.loads(row["raw_json"]), GAVE: gave}
         SK.update(ctx.c, "fin_feed_txns", fid, {"raw_json": SK.dump(raw), "updated_at": ctx.at})
 
 
-def _give_back(ctx: Ctx, original: Any, row: Any, link: str, gross: int, entry: str) -> dict[str, int]:
-    """What the refunded sale's settlements give back for this refund, and what a restored refund takes back again. A
-    refund shares out over what each settlement still holds after the refunds before it (what they gave, kept on those
-    refunds as `gave`), so a settlement made later never takes a share of an earlier refund. Once nothing is left, the
-    rest is a plain refund (the credit it leaves). Each document owes what its settlement gave back (a negative
-    settlement from the refund's row, on its entry). Returns what this refund gave each settlement."""
+def _shares(ctx: Ctx, original: Any, gross: int, given: Mapping[str, int]) -> list[tuple[Any, int]]:
+    """What each settlement of the refunded sale gives back for this refund: a positive share reopens its document, a
+    restore is negative. A refund shares out over what each settlement still holds after the refunds before it, so a
+    settlement made later takes none of an earlier refund, and nothing goes past what a settlement received."""
     live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
-    given = SK.stripe_given(ctx.c, str(original["money_account_id"]), F.STRIPE_UNWINDS, link)
     held = [max(given.get(str(s["id"]), 0), 0) for s in live]
     if gross < 0:
         remaining = [max(int(s["amount"]) - h, 0) for s, h in zip(live, held, strict=True)]
         moves = _allocate(min(-gross, sum(remaining)), remaining)
     else:
         moves = [-x for x in _allocate(min(gross, sum(held)), held)]
+    return list(zip(live, moves, strict=True))
+
+
+def _reopened(ctx: Ctx, settlement: Any, move: int) -> dict[str, object]:
+    """The line that owes a settled document again: its control account takes what the settlement gave back, the way
+    the settlement moved it (a receivable is a debit, a payable a credit), so the books match the document."""
+    kind = str(settlement["to_kind"])
+    doc = SAP.get(ctx.c, SAP.DOCS[kind][0], str(settlement["to_id"]))
+    return banking.feed_line(documents.control(ctx, kind).id, -documents.SIGN[kind] * move, {},
+                             str(doc[f"{documents.CONTACT_OF[kind]}_id"]))
+
+
+def _give_back(ctx: Ctx, row: Any, shares: Sequence[tuple[Any, int]], entry: str) -> dict[str, int]:
+    """Each document a settlement gave back owes that much again: a negative settlement from the refund's row, on its
+    entry. Returns what this refund gave each settlement, kept on the refund as `gave`."""
     gave: dict[str, int] = {}
-    for s, move in zip(live, moves, strict=True):
+    for s, move in shares:
         if move:
             gave[str(s["id"])] = move
             documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=-move, day=str(row["txn_date"]),
