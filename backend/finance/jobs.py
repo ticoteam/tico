@@ -14,6 +14,7 @@ from .posting import ensure_period
 from .setup import AI, VIDEO, setup
 from .store import budgets as SB
 from .store import ledger as SL
+from .store import schema
 from .store import tico
 from .store import usage as SU
 
@@ -25,6 +26,8 @@ CAP_KEY = "gateway_cap"                 # what the Gateway cap worker last pushe
 def ensure_setup(c: sqlite3.Connection, owner_email: str = "", at: str | None = None) -> bool:
     """Set Finance up for the install owner (the stored owner record, else `owner_email`'s person). Idempotent; False
     when the install has no owner yet."""
+    if not schema.current(c):
+        schema.create(c)                # a release's new fin_* tables and columns, added in place
     owner = tico.owner_person(c) or tico.person_by_email(c, owner_email)
     if not owner:
         return False

@@ -1032,6 +1032,38 @@ export type FilterIn = {
   task_types?: Array<string>;
 };
 
+export type FinanceAccess = {
+  can_edit_defaults: boolean;
+  can_view_as: boolean;
+  defaults: {
+  manager: string;
+  manager_payroll: string;
+  member: string;
+};
+  private_lines: Array<{
+  account_id: string;
+  full_detail: Array<string> | null;
+  name: string;
+  others_see: string;
+}>;
+  teammates: Array<{
+  default: "everything" | "team_expenses" | "own_expenses" | "none";
+  grants: Array<Record<string, unknown>>;
+  kind: string;
+  reports_to: string | null;
+  rights: Array<string>;
+  team: string | null;
+  teammate: string;
+}>;
+  teams: Array<{
+  id: string;
+  lead: string | null;
+  name: string;
+  parent: string | null;
+}>;
+  view_version: number;
+};
+
 export type FinanceAction = {
   action_id?: string | null;
   code?: string;
@@ -1046,13 +1078,180 @@ export type FinanceActionRequest = {
   payload?: Record<string, unknown>;
 };
 
+export type FinanceBalanceSheet = {
+  as_of: string;
+  assets: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  currency: string;
+  equity: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  liabilities: Array<{
+  account_id: string | null;
+  balance: number;
+  code: string;
+  entry_sources: Array<string>;
+  name: string;
+  parent_id: string | null;
+  sources: Array<{
+  balance_as_of: string | null;
+  last4: string | null;
+  money_account_id: string;
+  name: string;
+  provider: string;
+  provider_balance: number | null;
+}>;
+  subtype: string;
+}>;
+  scoped: boolean;
+  totals: {
+  asset: number;
+  equity: number;
+  liability: number;
+};
+  view_version: number;
+};
+
 export type FinanceBudgets = {
   budgets: Array<Record<string, unknown>>;
   more: boolean;
   view_version: number;
 };
 
+export type FinanceCards = {
+  cards: Array<{
+  allocation: number | null;
+  budget: Record<string, unknown> | null;
+  created_at: string;
+  currency: string;
+  expires_at: string | null;
+  holder: string;
+  id: string;
+  kind: string;
+  last4: string | null;
+  limit: number | null;
+  limit_interval: string | null;
+  money_account_id: string | null;
+  nickname: string;
+  provider: string;
+  provider_limit: number | null;
+  spent: number | null;
+  status: string;
+  sync_status: string;
+}>;
+  next: string | null;
+  view_version: number;
+};
+
+export type FinancePnl = {
+  basis: string;
+  budget_as_of?: string | null;
+  columns: Array<{
+  end: string;
+  label: string;
+  start: string;
+  state: "past" | "current" | "future";
+}>;
+  end: string;
+  excluded: boolean;
+  expense: Array<number>;
+  income: Array<number>;
+  net: Array<number>;
+  period: string;
+  rows: Array<{
+  account_id: string;
+  actual: Array<number> | null;
+  budget: Array<number | null> | null;
+  code: string;
+  name: string;
+  parent_id: string;
+  private: boolean;
+  projection: Array<number> | null;
+  total: number | null;
+  type: string;
+}>;
+  start: string;
+  team?: string | null;
+  teammate?: string | null;
+  teammates?: Array<{
+  budget: number | null;
+  kind: string;
+  spent: number;
+  teammate: string;
+}>;
+  view: string;
+  view_version: number;
+};
+
 export type FinanceReport = {
+  view_version: number;
+};
+
+export type FinanceSources = {
+  groups: Array<{
+  count: number;
+  group: "banks" | "cards" | "payments" | "payroll" | "bills_invoices" | "tico" | "accounting" | "manual";
+  name: string;
+  rows: Array<Record<string, unknown>>;
+}>;
+  view_version: number;
+};
+
+export type FinanceTransactions = {
+  currency: string;
+  next: string | null;
+  rows: Array<{
+  account?: string;
+  account_id?: string;
+  amount: number;
+  card_id?: string | null;
+  counterparty?: string;
+  currency: string;
+  date: string;
+  description?: string;
+  entry_id?: string | null;
+  id: string;
+  kind: "feed" | "entry";
+  lines?: Array<Record<string, unknown>>;
+  memo?: string;
+  money_account?: Record<string, unknown> | null;
+  pending?: boolean;
+  reconciled?: boolean;
+  reversed?: boolean;
+  source?: string;
+  status?: string;
+  tags?: Record<string, unknown>;
+  vendor?: string;
+}>;
   view_version: number;
 };
 
@@ -4682,12 +4881,25 @@ export type GetFileVersionParams = {
 export type GetFileVersionBody = never;
 export type GetFileVersionResponse = string;
 
+/** GET /api/v2/finance/access */
+export type GetFinanceAccessParams = Record<string, never>;
+export type GetFinanceAccessBody = never;
+export type GetFinanceAccessResponse = FinanceAccess;
+
 /** GET /api/v2/finance/actions/{action_id} */
 export type GetFinanceActionParams = {
   action_id: string;
 };
 export type GetFinanceActionBody = never;
 export type GetFinanceActionResponse = FinanceAction;
+
+/** GET /api/v2/finance/balance-sheet */
+export type GetFinanceBalanceSheetParams = {
+  as_of?: string | null;
+  view_as?: string | null;
+};
+export type GetFinanceBalanceSheetBody = never;
+export type GetFinanceBalanceSheetResponse = FinanceBalanceSheet;
 
 /** GET /api/v2/finance/expenses */
 export type GetFinanceExpensesParams = {
@@ -4716,12 +4928,17 @@ export type GetFinanceLineResponse = FinanceReport;
 /** GET /api/v2/finance/pnl */
 export type GetFinancePnlParams = {
   basis?: "cash" | "accrual";
+  budget_as_of?: string | null;
   end?: string | null;
-  period?: "month" | "quarter" | "year";
+  period?: "day" | "week" | "month" | "quarter" | "year";
   start?: string | null;
+  team?: string | null;
+  teammate?: string | null;
+  view?: "company" | "expenses";
+  view_as?: string | null;
 };
 export type GetFinancePnlBody = never;
-export type GetFinancePnlResponse = FinanceReport;
+export type GetFinancePnlResponse = FinancePnl;
 
 /** GET /api/v2/goals/{gid} */
 export type GetGoalParams = {
@@ -5314,6 +5531,41 @@ export type ListFinanceBudgetsParams = {
 };
 export type ListFinanceBudgetsBody = never;
 export type ListFinanceBudgetsResponse = FinanceBudgets;
+
+/** GET /api/v2/finance/cards */
+export type ListFinanceCardsParams = {
+  cursor?: string | null;
+  holder?: string | null;
+  limit?: number;
+  status?: "active" | "frozen" | "cancelled" | null;
+  view_as?: string | null;
+};
+export type ListFinanceCardsBody = never;
+export type ListFinanceCardsResponse = FinanceCards;
+
+/** GET /api/v2/finance/sources */
+export type ListFinanceSourcesParams = {
+  group?: string | null;
+  view_as?: string | null;
+};
+export type ListFinanceSourcesBody = never;
+export type ListFinanceSourcesResponse = FinanceSources;
+
+/** GET /api/v2/finance/transactions */
+export type ListFinanceTransactionsParams = {
+  account_id?: string | null;
+  cursor?: string | null;
+  end?: string | null;
+  limit?: number;
+  money_account_id?: string | null;
+  q?: string | null;
+  source?: "all" | "feed" | "entry";
+  start?: string | null;
+  status?: "new" | "matched" | "posted" | "ignored" | "pending" | null;
+  view_as?: string | null;
+};
+export type ListFinanceTransactionsBody = never;
+export type ListFinanceTransactionsResponse = FinanceTransactions;
 
 /** GET /api/v2/goals/{gid}/checkins */
 export type ListGoalCheckinsParams = {

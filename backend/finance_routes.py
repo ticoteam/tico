@@ -47,6 +47,19 @@ def install(app, store, auth, mutate):
         except finance.FinanceError as e:
             raise problem(e) from None
 
+    def as_viewer(request, view_as):
+        """The caller, or for the owner the teammate they view Finance as (audited)."""
+        who = viewer(request)
+        if not view_as or view_as == who.actor:
+            return who.actor
+        try:
+            with store.transaction() as c:
+                target = finance_reads.view_as(c, who.actor, view_as)
+                finance.note_view_as(c, who.actor, target)
+        except finance.FinanceError as e:
+            raise problem(e) from None
+        return target
+
     @app.get("/api/v2/finance/budgets")
     def finance_budgets(request: Request, include_inactive: bool = False, limit: int = Query(200, ge=1, le=500)):
         """The budgets the caller sees, each with where it stands today (amount, actual, held, remaining)."""
@@ -55,11 +68,55 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/finance/pnl")
     def finance_pnl(request: Request, start: str | None = None, end: str | None = None,
-                    period: Literal["month", "quarter", "year"] = "month",
-                    basis: Literal["cash", "accrual"] = "cash"):
-        """The P&L the caller sees: income and expense lines by period, with budget and projection beside each actual."""
+                    period: Literal["day", "week", "month", "quarter", "year"] = "month",
+                    basis: Literal["cash", "accrual"] = "cash", view: Literal["company", "expenses"] = "company",
+                    team: str | None = None, teammate: str | None = None, budget_as_of: str | None = None,
+                    view_as: str | None = None):
+        """The P&L the caller sees: income and expense lines by period (past, current and projected columns), with
+        budget and projection beside each actual; the expenses view filters by team or teammate."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.pnl(c, actor, start, end, period, basis, view=view, team=team,
+                                                teammate=teammate, budget_as_of=budget_as_of))
+
+    @app.get("/api/v2/finance/balance-sheet")
+    def finance_balance_sheet(request: Request, as_of: str | None = None, view_as: str | None = None):
+        """Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.balance_sheet(c, actor, as_of))
+
+    @app.get("/api/v2/finance/transactions")
+    def finance_transactions(request: Request, source: Literal["all", "feed", "entry"] = "all",
+                             money_account_id: str | None = None,
+                             status: Literal["new", "matched", "posted", "ignored", "pending"] | None = None,
+                             account_id: str | None = None, start: str | None = None, end: str | None = None,
+                             q: str | None = Query(None, max_length=100), cursor: str | None = Query(None, max_length=600),
+                             limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Feed rows and entries the caller sees, newest first, with filters, search and a cursor."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.transactions(c, actor, source=source, money_account_id=money_account_id,
+                                                         status=status, account_id=account_id, start=start, end=end,
+                                                         q=q, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/cards")
+    def finance_cards(request: Request, status: Literal["active", "frozen", "cancelled"] | None = None,
+                      holder: str | None = None, cursor: str | None = Query(None, max_length=600),
+                      limit: int = Query(100, ge=1, le=200), view_as: str | None = None):
+        """The cards the caller follows, last 4 only, with allocation and spend this period."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.cards(c, actor, status=status, holder=holder, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/sources")
+    def finance_sources(request: Request, group: str | None = None, view_as: str | None = None):
+        """Every source of the books, grouped with counts; mapping, sync and access per source. Owner-only unless
+        granted."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.sources(c, actor, group=group))
+
+    @app.get("/api/v2/finance/access")
+    def finance_access(request: Request):
+        """Who can see what in Finance: the org chart with defaults and grants, private lines and the defaults."""
         who = viewer(request)
-        return read(lambda c: finance_reads.pnl(c, who.actor, start, end, period, basis))
+        return read(lambda c: finance_reads.access(c, who.actor))
 
     @app.get("/api/v2/finance/expenses")
     def finance_expenses(request: Request, start: str | None = None, end: str | None = None,

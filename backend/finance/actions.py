@@ -383,6 +383,11 @@ gateway_ensure = gateway_sync.ensure
 gateway_stop = gateway_sync.stop
 
 
+def note_view_as(c: sqlite3.Connection, owner: str, target: str) -> None:
+    """"View as" is audited (spec §7.5): the owner reads Finance exactly as `target` sees it."""
+    tico.audit(c, owner, "finance.view_as", target, {})
+
+
 # ------------------------------------------------------------------------------------------------ dev copies
 def scrub_dev_copy(c: sqlite3.Connection, at: str) -> dict[str, int]:
     """Make a dev copy's Finance tables inert (backend/devcopy.py empties the rest): an action waiting on approval

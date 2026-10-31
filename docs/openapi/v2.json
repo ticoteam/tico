@@ -7672,6 +7672,47 @@
         ]
       }
     },
+    "/api/v2/finance/access": {
+      "get": {
+        "summary": "Who can see what in Finance: teams, each teammate's default, grants and rights, private lines, the defaults",
+        "operationId": "getFinanceAccess",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceAccess"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/actions": {
       "post": {
         "summary": "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says what would happen",
@@ -7788,6 +7829,81 @@
         ]
       }
     },
+    "/api/v2/finance/balance-sheet": {
+      "get": {
+        "summary": "Assets, liabilities and equity on a day, each line with its sources. Owner-only unless granted",
+        "operationId": "getFinanceBalanceSheet",
+        "parameters": [
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "As Of"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceBalanceSheet"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/budgets": {
       "get": {
         "summary": "The budgets the caller sees, each with where it stands today (amounts in cents)",
@@ -7823,6 +7939,131 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/FinanceBudgets"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/cards": {
+      "get": {
+        "summary": "The cards the caller follows, last 4 only, with allocation and spend this period",
+        "operationId": "listFinanceCards",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "active",
+                    "frozen",
+                    "cancelled"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "holder",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Holder"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 100,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceCards"
                 }
               }
             }
@@ -8117,7 +8358,7 @@
     },
     "/api/v2/finance/pnl": {
       "get": {
-        "summary": "The P&L the caller sees, by month, quarter or year, with budget and projection beside each actual",
+        "summary": "The P&L the caller sees, by day, week, month, quarter or year (past, current and projected columns), with budget and projection beside each actual; view=expenses filters by team or teammate. The owner may pass view_as",
         "operationId": "getFinancePnl",
         "parameters": [
           {
@@ -8158,6 +8399,8 @@
             "required": false,
             "schema": {
               "enum": [
+                "day",
+                "week",
                 "month",
                 "quarter",
                 "year"
@@ -8180,6 +8423,84 @@
               "default": "cash",
               "title": "Basis"
             }
+          },
+          {
+            "name": "view",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "company",
+                "expenses"
+              ],
+              "type": "string",
+              "default": "company",
+              "title": "View"
+            }
+          },
+          {
+            "name": "team",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Team"
+            }
+          },
+          {
+            "name": "teammate",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Teammate"
+            }
+          },
+          {
+            "name": "budget_as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Budget As Of"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
           }
         ],
         "responses": {
@@ -8188,7 +8509,289 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/FinanceReport"
+                  "$ref": "#/components/schemas/FinancePnl"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/sources": {
+      "get": {
+        "summary": "Every source of the books grouped with counts, each with its account mapping, sync and access. Owner-only unless granted",
+        "operationId": "listFinanceSources",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceSources"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
+    "/api/v2/finance/transactions": {
+      "get": {
+        "summary": "Feed rows and entries the caller sees, newest first, with filters, search and a cursor",
+        "operationId": "listFinanceTransactions",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "all",
+                "feed",
+                "entry"
+              ],
+              "type": "string",
+              "default": "all",
+              "title": "Source"
+            }
+          },
+          {
+            "name": "money_account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Money Account Id"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "new",
+                    "matched",
+                    "posted",
+                    "ignored",
+                    "pending"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "account_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "start",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Start"
+            }
+          },
+          {
+            "name": "end",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "End"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 600
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cursor"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceTransactions"
                 }
               }
             }
@@ -31289,6 +31892,174 @@
         "type": "object",
         "title": "FilterIn"
       },
+      "FinanceAccess": {
+        "type": "object",
+        "properties": {
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "parent": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "lead": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "id",
+                "lead",
+                "name",
+                "parent"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "teammates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "teammate": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "team": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reports_to": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "default": {
+                  "type": "string",
+                  "enum": [
+                    "everything",
+                    "team_expenses",
+                    "own_expenses",
+                    "none"
+                  ]
+                },
+                "grants": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "rights": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "default",
+                "grants",
+                "kind",
+                "reports_to",
+                "rights",
+                "team",
+                "teammate"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "private_lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "others_see": {
+                  "type": "string"
+                },
+                "full_detail": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "account_id",
+                "full_detail",
+                "name",
+                "others_see"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "defaults": {
+            "type": "object",
+            "properties": {
+              "manager": {
+                "type": "string"
+              },
+              "member": {
+                "type": "string"
+              },
+              "manager_payroll": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "manager",
+              "manager_payroll",
+              "member"
+            ],
+            "additionalProperties": true
+          },
+          "can_view_as": {
+            "type": "boolean"
+          },
+          "can_edit_defaults": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "can_edit_defaults",
+          "can_view_as",
+          "defaults",
+          "private_lines",
+          "teammates",
+          "teams",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
       "FinanceAction": {
         "type": "object",
         "properties": {
@@ -31344,6 +32115,333 @@
         "title": "FinanceActionRequest",
         "description": "One Finance action: its kind (`budget.create`, `entry.post`, ...), its payload, and whether only to say what would\nhappen."
       },
+      "FinanceBalanceSheet": {
+        "type": "object",
+        "properties": {
+          "as_of": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "scoped": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          },
+          "totals": {
+            "type": "object",
+            "properties": {
+              "asset": {
+                "type": "integer"
+              },
+              "liability": {
+                "type": "integer"
+              },
+              "equity": {
+                "type": "integer"
+              }
+            },
+            "required": [
+              "asset",
+              "equity",
+              "liability"
+            ],
+            "additionalProperties": true
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "balance": {
+                  "type": "integer"
+                },
+                "entry_sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "money_account_id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "last4": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "provider_balance": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "balance_as_of": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "balance_as_of",
+                      "last4",
+                      "money_account_id",
+                      "name",
+                      "provider",
+                      "provider_balance"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "account_id",
+                "balance",
+                "code",
+                "entry_sources",
+                "name",
+                "parent_id",
+                "sources",
+                "subtype"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "liabilities": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "balance": {
+                  "type": "integer"
+                },
+                "entry_sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "money_account_id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "last4": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "provider_balance": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "balance_as_of": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "balance_as_of",
+                      "last4",
+                      "money_account_id",
+                      "name",
+                      "provider",
+                      "provider_balance"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "account_id",
+                "balance",
+                "code",
+                "entry_sources",
+                "name",
+                "parent_id",
+                "sources",
+                "subtype"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "equity": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "subtype": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "balance": {
+                  "type": "integer"
+                },
+                "entry_sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "money_account_id": {
+                        "type": "string"
+                      },
+                      "name": {
+                        "type": "string"
+                      },
+                      "provider": {
+                        "type": "string"
+                      },
+                      "last4": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      },
+                      "provider_balance": {
+                        "type": [
+                          "integer",
+                          "null"
+                        ]
+                      },
+                      "balance_as_of": {
+                        "type": [
+                          "string",
+                          "null"
+                        ]
+                      }
+                    },
+                    "required": [
+                      "balance_as_of",
+                      "last4",
+                      "money_account_id",
+                      "name",
+                      "provider",
+                      "provider_balance"
+                    ],
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "account_id",
+                "balance",
+                "code",
+                "entry_sources",
+                "name",
+                "parent_id",
+                "sources",
+                "subtype"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "as_of",
+          "assets",
+          "currency",
+          "equity",
+          "liabilities",
+          "scoped",
+          "totals",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
       "FinanceBudgets": {
         "type": "object",
         "properties": {
@@ -31368,6 +32466,350 @@
         ],
         "additionalProperties": true
       },
+      "FinanceCards": {
+        "type": "object",
+        "properties": {
+          "cards": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "holder": {
+                  "type": "string"
+                },
+                "nickname": {
+                  "type": "string"
+                },
+                "last4": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "limit": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "limit_interval": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "provider_limit": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "sync_status": {
+                  "type": "string"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "money_account_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "budget": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "allocation": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "spent": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "expires_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "created_at": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "allocation",
+                "budget",
+                "created_at",
+                "currency",
+                "expires_at",
+                "holder",
+                "id",
+                "kind",
+                "last4",
+                "limit",
+                "limit_interval",
+                "money_account_id",
+                "nickname",
+                "provider",
+                "provider_limit",
+                "spent",
+                "status",
+                "sync_status"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "cards",
+          "next",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinancePnl": {
+        "type": "object",
+        "properties": {
+          "start": {
+            "type": "string"
+          },
+          "end": {
+            "type": "string"
+          },
+          "period": {
+            "type": "string"
+          },
+          "basis": {
+            "type": "string"
+          },
+          "view": {
+            "type": "string"
+          },
+          "team": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "teammate": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "budget_as_of": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "columns": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "start": {
+                  "type": "string"
+                },
+                "end": {
+                  "type": "string"
+                },
+                "label": {
+                  "type": "string"
+                },
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "past",
+                    "current",
+                    "future"
+                  ]
+                }
+              },
+              "required": [
+                "end",
+                "label",
+                "start",
+                "state"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "account_id": {
+                  "type": "string"
+                },
+                "code": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "type": {
+                  "type": "string"
+                },
+                "parent_id": {
+                  "type": "string"
+                },
+                "private": {
+                  "type": "boolean"
+                },
+                "actual": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer"
+                  }
+                },
+                "total": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                },
+                "budget": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ]
+                  }
+                },
+                "projection": {
+                  "type": [
+                    "array",
+                    "null"
+                  ],
+                  "items": {
+                    "type": "integer"
+                  }
+                }
+              },
+              "required": [
+                "account_id",
+                "actual",
+                "budget",
+                "code",
+                "name",
+                "parent_id",
+                "private",
+                "projection",
+                "total",
+                "type"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "income": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "expense": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "net": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "excluded": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          },
+          "teammates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "teammate": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "spent": {
+                  "type": "integer"
+                },
+                "budget": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ]
+                }
+              },
+              "required": [
+                "budget",
+                "kind",
+                "spent",
+                "teammate"
+              ],
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "basis",
+          "columns",
+          "end",
+          "excluded",
+          "expense",
+          "income",
+          "net",
+          "period",
+          "rows",
+          "start",
+          "view",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
       "FinanceReport": {
         "type": "object",
         "properties": {
@@ -31376,6 +32818,180 @@
           }
         },
         "required": [
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceSources": {
+        "type": "object",
+        "properties": {
+          "groups": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "group": {
+                  "type": "string",
+                  "enum": [
+                    "banks",
+                    "cards",
+                    "payments",
+                    "payroll",
+                    "bills_invoices",
+                    "tico",
+                    "accounting",
+                    "manual"
+                  ]
+                },
+                "name": {
+                  "type": "string"
+                },
+                "count": {
+                  "type": "integer"
+                },
+                "rows": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                }
+              },
+              "required": [
+                "count",
+                "group",
+                "name",
+                "rows"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "groups",
+          "view_version"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceTransactions": {
+        "type": "object",
+        "properties": {
+          "rows": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "feed",
+                    "entry"
+                  ]
+                },
+                "id": {
+                  "type": "string"
+                },
+                "date": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "currency": {
+                  "type": "string"
+                },
+                "counterparty": {
+                  "type": "string"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "pending": {
+                  "type": "boolean"
+                },
+                "card_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "entry_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reconciled": {
+                  "type": "boolean"
+                },
+                "money_account": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "lines": {
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "additionalProperties": true
+                  }
+                },
+                "account_id": {
+                  "type": "string"
+                },
+                "account": {
+                  "type": "string"
+                },
+                "vendor": {
+                  "type": "string"
+                },
+                "memo": {
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "reversed": {
+                  "type": "boolean"
+                },
+                "tags": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "amount",
+                "currency",
+                "date",
+                "id",
+                "kind"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "next": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "currency": {
+            "type": "string"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "currency",
+          "next",
+          "rows",
           "view_version"
         ],
         "additionalProperties": true

@@ -34,13 +34,16 @@ def update_budget(c: sqlite3.Connection, b: Budget, at: str) -> None:
               "WHERE id=?", (b.name, b.owner, b.warn_pct, b.at_limit, b.rollover, int(b.active), at, b.id))
 
 
-def versions(c: sqlite3.Connection, budget_ids: Sequence[str]) -> dict[str, list[Version]]:
+def versions(c: sqlite3.Connection, budget_ids: Sequence[str], made_by: str = "") -> dict[str, list[Version]]:
+    """Each budget's versions; with `made_by` (an ISO time) only those made by then: the budget as it stood."""
     out: dict[str, list[Version]] = {bid: [] for bid in budget_ids}
     if not budget_ids:
         return out
     marks = ",".join("?" * len(budget_ids))
+    cut = " AND created_at<=?" if made_by else ""
     for r in c.execute(f"SELECT budget_id, version, effective_from, amount FROM fin_budget_versions "
-                       f"WHERE budget_id IN ({marks}) ORDER BY version", list(budget_ids)):
+                       f"WHERE budget_id IN ({marks}){cut} ORDER BY version",
+                       [*budget_ids, *([made_by] if made_by else [])]):
         out[r["budget_id"]].append(Version(budget_id=r["budget_id"], version=int(r["version"]),
                                            effective_from=r["effective_from"], amount=int(r["amount"])))
     return out

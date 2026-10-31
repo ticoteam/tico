@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import cast
 
-from . import budgeting, limits, usage
+from . import budgeting, limits, tab, usage
 from . import context as _context
 from .store import usage as SU
 from .context import Ctx, load
@@ -106,21 +106,63 @@ def _top_budgets(s: _Seen) -> list[B.Budget]:
     return [budgets[i] for i in seen if budgets[i].parent_id not in seen]
 
 
+PNL_VIEWS = ("company", "expenses")
+
+
+def _filter_budgets(s: _Seen, team: str | None, teammate: str | None) -> list[B.Budget]:
+    """The budgets a team or teammate filter shows: theirs, one per scope, never a parent and its child both."""
+    if not team and not teammate:
+        return _top_budgets(s)
+    below = s.ctx.org.below(team) if team else frozenset[str]()
+    budgets = s.ctx.budgets()
+    picked = {b.id for b in budgets.values() if b.active and not b.catch_all and sees_budget(s.ctx, s.view.viewer, b)
+              and ((teammate and b.teammate == teammate) or (not teammate and team and b.team in below))}
+    return [budgets[i] for i in picked if budgets[i].parent_id not in picked]
+
+
+def _column_state(p: date, q: date, today: date) -> str:
+    return "past" if q < today else ("future" if p > today else "current")
+
+
 def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None, period: str = "month",
-        basis: str = "cash", at: str | None = None) -> Row:
+        basis: str = "cash", at: str | None = None, *, view: str = "company", team: str | None = None,
+        teammate: str | None = None, budget_as_of: str | None = None) -> Row:
     """Income and expense lines by period, with budget and projection beside each actual. Income is posted as credits
-    (negative); it shows as positive revenue, so net = income - expense."""
+    (negative); it shows as positive revenue, so net = income - expense. `view=expenses` keeps cost of revenue and
+    operating expenses only, filtered to a team (and the teams under it) or a teammate, hides lines with no spend in
+    the filter, and lists the filter's teammates with spent vs budget. Columns say whether they are past, current or
+    projected; `budget_as_of` compares to the budgets as they stood then. Every posting so far is recognized when cash
+    moves (card spend counts when charged), so both bases read the same rows until bills and invoices arrive."""
     s = _open(c, viewer, at)
-    if basis != s.ctx.book.basis:
-        raise invalid(f"the books are kept on a {s.ctx.book.basis} basis")
+    if basis not in ("cash", "accrual"):
+        raise invalid("basis is cash|accrual")
     if period not in dates.BUCKETS:
         raise invalid(f"period is {'|'.join(dates.BUCKETS)}")
+    if view not in PNL_VIEWS:
+        raise invalid(f"view is {'|'.join(PNL_VIEWS)}")
+    if (team or teammate) and view != "expenses":
+        raise invalid("a team or teammate filter is for the expenses view")
+    if team and team not in s.ctx.org.teams:
+        raise FinanceError(NOT_FOUND, "no such team")
+    made_by = ""
+    if budget_as_of:
+        made_by = budget_as_of if "T" in budget_as_of else dates.day(budget_as_of).isoformat() + "T23:59:59.999999Z"
     a, z = _window(start, end, s.ctx)
     fy = s.ctx.book.fiscal_year_start
+    today = dates.day(s.ctx.today)
     buckets = dates.buckets(period, a, z, fy)
-    pnl_ids = [x.id for x in s.ctx.accounts.values() if x.type in PNL_TYPES and s.view.sees_account(x)]
-    sup = _suppress(s, _cells(s, a, z, pnl_ids), False, a, z)
+    types = ("expense",) if view == "expenses" else PNL_TYPES
+    pnl_ids = [x.id for x in s.ctx.accounts.values() if x.type in types and s.view.sees_account(x)]
+    cells = _cells(s, a, z, pnl_ids)
+    below = s.ctx.org.below(team) if team else None
+    if below is not None:
+        cells = [x for x in cells if x.team in below]
+    if teammate:
+        cells = [x for x in cells if x.teammate == teammate]
+    narrow = bool(teammate) or bool(team) and s.ctx.org.department(team or "") != team
+    sup = _suppress(s, cells, narrow, a, z)
     actual: dict[str, list[int]] = {i: [0] * len(buckets) for i in pnl_ids}
+    spent: dict[str, int] = {}
     for cell in sup.cells:
         if cell.account_id in sup.hidden:
             continue
@@ -128,9 +170,11 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
         if n >= 0 and cell.account_id in actual:
             sign = -1 if s.ctx.accounts[cell.account_id].type == "income" else 1
             actual[cell.account_id][n] += sign * cell.amount
+            if cell.teammate:
+                spent[cell.teammate] = spent.get(cell.teammate, 0) + cell.amount
     budget: dict[str, list[int | None]] = {}
-    tops = _top_budgets(s)
-    versions = SB.versions(c, [b.id for b in tops])
+    tops = _filter_budgets(s, team, teammate)
+    versions = SB.versions(c, [b.id for b in tops], made_by)
     for b in tops:
         cols = [B.in_window(b, versions[b.id], bucket, fy) for bucket in buckets]
         row = budget.setdefault(b.account_id, [None] * len(buckets))
@@ -141,7 +185,8 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
             account = s.ctx.accounts.get(r["account_id"])
             if account is None or account.id not in actual or \
                     (account.id in s.private and account.id not in s.view.full_detail) or \
-                    not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}):
+                    not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
+                    (below is not None and r["team"] not in below) or (teammate and r["teammate"] != teammate):
                 continue
             first = dates.month(r["month"])
             span = (first, dates.month_end(first))
@@ -163,12 +208,51 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      "actual": None if hidden else actual[account_id],
                      "total": None if hidden else sum(actual[account_id]),
                      "budget": budget.get(account_id), "projection": None if hidden else projection.get(account_id)})
-    return {"start": a.isoformat(), "end": z.isoformat(), "period": period, "basis": basis,
-            "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period)}
-                        for p, q in buckets],
-            "rows": rows, "income": totals["income"], "expense": totals["expense"],
-            "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
-            "excluded": sup.excluded, "view_version": s.view.version}
+    if view == "expenses":
+        rows = _with_spend(s, rows)
+    out: Row = {"start": a.isoformat(), "end": z.isoformat(), "period": period, "basis": basis, "view": view,
+                "team": team, "teammate": teammate, "budget_as_of": budget_as_of,
+                "columns": [{"start": p.isoformat(), "end": q.isoformat(), "label": dates.label(p, period),
+                             "state": _column_state(p, q, today)} for p, q in buckets],
+                "rows": rows, "income": totals["income"], "expense": totals["expense"],
+                "net": [i - e for i, e in zip(totals["income"], totals["expense"], strict=False)],
+                "excluded": sup.excluded, "view_version": s.view.version}
+    if view == "expenses":
+        out["teammates"] = _side_panel(s, spent, tops, versions, a, z, team, teammate)
+    return out
+
+
+def _with_spend(s: _Seen, rows: list[Row]) -> list[Row]:
+    """Rows with spend in the filter, a budget or a projection, and the lines above them."""
+    keep: set[str] = set()
+    for r in rows:
+        if r["private"] or any(r.get(k) and any(cast(list[object], r[k])) for k in ("actual", "budget", "projection")):
+            at = str(r["account_id"])
+            while at and at not in keep:
+                keep.add(at)
+                parent = s.ctx.accounts.get(at)
+                at = parent.parent_id if parent else ""
+    return [r for r in rows if r["account_id"] in keep]
+
+
+def _side_panel(s: _Seen, spent: Mapping[str, int], tops: list[B.Budget], versions: Mapping[str, list[B.Version]],
+                a: date, z: date, team: str | None, teammate: str | None) -> list[Row]:
+    """The filter's teammates with what they spent and the sum of their own line budgets in the window."""
+    fy = s.ctx.book.fiscal_year_start
+    budgets: dict[str, int] = {}
+    for b in tops:
+        if b.teammate:
+            amount = B.in_window(b, versions.get(b.id, []), (a, z), fy)
+            if amount is not None:
+                budgets[b.teammate] = budgets.get(b.teammate, 0) + amount
+    people = set(spent) | set(budgets)
+    if teammate:
+        people = {teammate}
+    elif team:
+        people |= {m for m in s.ctx.org.members(s.ctx.org.below(team))}
+    rows: list[Row] = [{"teammate": m, "kind": "bot" if m in s.ctx.org.bots else "person", "spent": spent.get(m, 0),
+                        "budget": budgets.get(m)} for m in sorted(people)]
+    return rows[:MAX_TOP]
 
 
 # ------------------------------------------------------------------------------------------------ expenses
@@ -395,6 +479,15 @@ def view_version(c: sqlite3.Connection) -> int:
     """The counter a cache of any read keys on: it moves on every grant, revoke and privacy change."""
     return SA.view_version(c)
 
+
+
+# The Finance tab's other reads (finance/tab.py).
+balance_sheet = tab.balance_sheet
+transactions = tab.transactions
+cards = tab.cards
+sources = tab.sources
+access = tab.access
+view_as = tab.view_as
 
 
 # What usage limits and the server read (part B).
