@@ -21,7 +21,7 @@ from .core import dates, money
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, descendants, pnl_section
-from .handlers import private_scope, sees_budget, sees_scope, shows_numbers
+from .handlers import fit_reason, private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
 from .store import access as SA
 from .store import banking as SK
@@ -1343,7 +1343,9 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, 
     if not asked and not covers and not approver:
         return None
     shown = covers is True or approver or (covers is None and asked)
+    fit = json.loads(str(row["result_json"] or "{}")).get("fit")
+    reason = fit_reason(ctx, viewer, str(fit["budget_id"])) if fit else str(row["reason"] or "")
     return {"action_id": str(row["id"]), "kind": str(row["kind"]), "status": str(row["status"]),
-            "code": str(row["code"] or ""), "reason": str(row["reason"] or "") if shown else "",
+            "code": str(row["code"] or ""), "reason": reason if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
             "rule": str(row["rule_id"] or "")}

@@ -13,7 +13,7 @@ from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
 from .core import view as VW
-from .core.errors import CONFLICT, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
+from .core.errors import CONFLICT, FIT_REASON, INVALID, NOT_FOUND, PERIOD_CLOSED, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .store import access as SA
 from .store import ap as SAP
@@ -447,6 +447,22 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 apply, {"effective_from": effective}, {"effective_from": effective} if amount is not None else {})
 
 
+def fit_reason(ctx: Ctx, who: str, budget_id: str) -> str:
+    """The sentence a set-aside that does not fit shows `who`, now. Enforcement decides on the true figure; the amount
+    is named only where `who`'s own figure is that same figure, so no private spend shows as a difference. A record
+    keeps the budget id, never the amount."""
+    b = ctx.budgets().get(budget_id)
+    if b is None or not shows_numbers(ctx, who, b):
+        return FIT_REASON
+    day = dates.day(ctx.today)
+    true = budgeting.state(ctx, b.id, day).remaining
+    if true is None:
+        return FIT_REASON
+    if budgeting.state(ctx, b.id, day, read=budgeting.Netted(ctx.view(who))).remaining != true:
+        return f"it does not fit in {b.name}"
+    return f"it does not fit: {b.name} has {true} left"
+
+
 def allocation_set(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Set aside part of a budget for one card, Gateway key or teammate. It must fit what the budget and every parent
     have left; 0 ends it. A card's allocation is on the card's own budget, by someone who sees the card."""
@@ -483,14 +499,7 @@ def allocation_plan(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         for one in B.chain(ctx.budgets(), b.id):
             s = budgeting.state(ctx, one.id, at)
             if s.remaining is not None and grow > s.remaining:
-                if shows_numbers(ctx, who, one):
-                    # Enforcement decides on the true figure; the reason names it only when the viewer's own figure
-                    # is the same one, so no private spend shows as a difference.
-                    seen = budgeting.state(ctx, one.id, at, read=budgeting.Netted(ctx.view(who))).remaining
-                    if seen == s.remaining:
-                        raise invalid(f"it does not fit: {one.name} has {s.remaining} left")
-                    raise invalid(f"it does not fit in {one.name}")
-                raise invalid("it does not fit: not enough left")
+                raise FinanceError(INVALID, fit_reason(ctx, who, one.id), fit_budget=one.id)
     lowered = kind == "card" and grow < 0
 
     def apply(aid: str) -> Result:

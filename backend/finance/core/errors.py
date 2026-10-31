@@ -9,13 +9,19 @@ PERIOD_CLOSED = "period_closed"
 UNBALANCED = "unbalanced"
 
 
-class FinanceError(Exception):
-    """A refusal with a code and a message safe to show the requester (it never names what they cannot see)."""
+FIT_REASON = "it does not fit: not enough left"     # a set-aside that does not fit, as a record keeps it (no figure)
 
-    def __init__(self, code: str, message: str) -> None:
+
+class FinanceError(Exception):
+    """A refusal with a code and a message safe to show the requester (it never names what they cannot see).
+    `fit_budget` is set on a set-aside that does not fit: its record keeps that budget's id and FIT_REASON, and reads
+    render the sentence per reader (handlers.fit_reason)."""
+
+    def __init__(self, code: str, message: str, fit_budget: str = "") -> None:
         super().__init__(message)
         self.code = code
         self.message = message
+        self.fit_budget = fit_budget
 
 
 def invalid(message: str) -> FinanceError:

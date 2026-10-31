@@ -3,8 +3,9 @@ shows its amount or payee to a teammate who sees the bank line but not payroll d
 left out (of lists and of the balance sheet's due-out totals), and a payer whose grant was revoked sees only that their payment exists and its status."""
 from datetime import date
 
-from backend.finance import budgeting
+from backend.finance import budgeting, tab
 from backend.finance import reads as FR
+from backend.finance.store import actions as SX
 from backend.finance.context import load
 from backend.tests.test_finance_fixtures import (  # noqa: F401
     AT, MERCURY, OWNER, FakeMercury, account, act, books, connect, finance_template, store, sync_once)
@@ -130,6 +131,7 @@ def test_a_cards_spent_total_is_not_shown_when_it_holds_a_private_line(books):
 
 NOV = "2026-11-05T12:00:00.000000Z"
 LATER = "2026-10-15T12:30:00.000000Z"
+OCT_END = "2026-10-31T12:00:00.000000Z"
 
 
 def _october_debit_paid_by_a_november_payroll_bill(c) -> None:
@@ -328,6 +330,69 @@ def test_an_allocation_refusal_states_a_budget_figure_only_when_the_viewer_sees_
         gus = act(c, "human:gus", "allocation_set", ask, at=AT)
     assert (owner.code, owner.reason) == ("invalid", "it does not fit: Other expenses has 6000 left")
     assert (gus.code, gus.reason) == ("invalid", "it does not fit in Other expenses")
+
+
+def _card_charge_in_october_paid_by_a_november_payroll_bill(store, fake, holder: str) -> None:
+    """Other expenses on a card held by `holder` (a 5,000 allocation) charges 40.00 on 14 October. The holder has the
+    P&L grant from the start; in November a 4,000 payroll bill is paid from that charge's feed row, closing October
+    first, so the "Pays bill" reclass posts in November."""
+    with store.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Other expenses", "account_id": account(c, "6900"),
+                                               "amount": 10_000})
+        assert made.status == "committed", made
+        budget_id = str(made.result["budget_id"])
+        card = act(c, OWNER, "card_create", {"holder": holder, "budget_id": budget_id, "amount": 5_000,
+                                             "provider_user_id": "user-" + holder.split(":")[1]})
+        assert card.status == "committed", card
+        assert act(c, OWNER, "view_grant", {"subject": holder, "what": "pnl"}).status == "committed"
+    sync_once(store, fake)                  # Mercury makes the card (card-eve); its allocation follows the sync
+    fake.txns["txn-card-oct"] = {**MERCURY["txn_card_posted"], "id": "txn-card-oct", "amount": -40.0}
+    fake.events_list.append({"id": "evt-card-oct", "resourceType": "transaction", "resourceId": "txn-card-oct",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(store, fake, LATER)
+    with store.transaction() as c:
+        payroll = _payroll_line(c)
+        assert act(c, OWNER, "close_period", {"month": "2026-10"}, at=NOV).status == "committed"
+        vendor = act(c, OWNER, "contact_create", {"name": "Acme Payroll", "kind": "vendor"}, at=NOV)
+        made = act(c, OWNER, "bill_create", {"vendor_id": str(vendor.result["contact_id"]), "bill_date": "2026-11-03",
+                                             "lines": [{"account_id": payroll, "amount": 4_000}], "number": "PR-8"},
+                   at=NOV)
+        assert made.status == "committed", made
+        bid = str(made.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}, at=NOV).status == "committed"
+        feed = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-card-oct'").fetchone()[0])
+        paid = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "feed_id": feed}, at=NOV)
+        assert paid.status == "committed" and paid.result["from"] == "feed", paid
+
+
+def test_a_cards_spent_never_counts_a_charge_that_paid_a_private_payroll_bill_for_a_viewer_without_detail(books):
+    """The holder's October charge paid a private payroll bill in November, and the reclass is a bank entry, so the
+    card's own lines show no private account. Read in October, the owner sees the 4,000 it spent; the holder, who has
+    the P&L but no payroll detail, sees 0."""
+    fake = FakeMercury()
+    connect(books, fake)
+    _card_charge_in_october_paid_by_a_november_payroll_bill(books, fake, "human:gus")
+    with books.read() as c:
+        owner = next(r for r in tab.cards(c, OWNER, at=OCT_END)["cards"] if r["holder"] == "human:gus")
+        gus = next(r for r in tab.cards(c, "human:gus", at=OCT_END)["cards"] if r["holder"] == "human:gus")
+    assert owner["spent"] == 4_000
+    assert gus["spent"] == 0
+
+
+def test_a_refusal_read_by_id_names_the_budget_figure_only_where_the_reader_sees_that_figure(books):
+    """The owner's refused set-aside stores its reason without the figure. Read by id, the owner sees the 6,000 that
+    refused it; a P&L grantee without payroll detail sees only that it does not fit in Other expenses."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        refused = act(c, OWNER, "allocation_set", {"budget_id": budget_id, "target_kind": "gateway_key",
+                                                   "target_id": "gw-1", "amount": 8_000}, at=AT)
+        assert refused.code == "invalid" and refused.action_id, refused
+    with books.read() as c:
+        assert "6000" not in str(SX.by_id(c, refused.action_id)["reason"])
+        assert FR.action_for(c, OWNER, refused.action_id)["reason"] == "it does not fit: Other expenses has 6000 left"
+        assert FR.action_for(c, "human:gus", refused.action_id)["reason"] == "it does not fit in Other expenses"
 
 
 def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll_line(books):

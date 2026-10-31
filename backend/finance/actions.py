@@ -19,7 +19,7 @@ from .context import Ctx, load
 from .core import gates as G
 from .core import kinds as K
 from .core import org as O
-from .core.errors import DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, CONFLICT, FinanceError
+from .core.errors import CONFLICT, DENIED, FIT_REASON, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError
 from .store import actions as SX
 from .store import budgets as SB
 from .store import usage as SU
@@ -284,7 +284,9 @@ def _finish_refused(c: sqlite3.Connection, p: O.Principal, kind: str, body: Mapp
         return ActionResult(status=status, kind=kind, code=e.code, reason=e.message, dry_run=True)
     when = at or tico.now()
     SX.insert(c, action_id=action_id, kind=kind, payload=body, actor=p.actor, on_behalf_of=p.for_actor,
-              rule_id=p.rule, key=key, rules=[], status=status, result={}, code=e.code, reason=e.message, by=p.actor,
+              rule_id=p.rule, key=key, rules=[], status=status,
+              result={"fit": {"budget_id": e.fit_budget}} if e.fit_budget else {}, code=e.code,
+              reason=FIT_REASON if e.fit_budget else e.message, by=p.actor,
               at=when)
     _audit(c, p, action_id, kind, status, e.code)
     return ActionResult(status=status, kind=kind, action_id=action_id, code=e.code, reason=e.message)
