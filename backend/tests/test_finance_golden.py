@@ -150,3 +150,82 @@ def test_a_drill_down_over_a_closed_month_lists_the_entries_its_total_counts(boo
         assert drill["total"] == 1_100
         assert [(e["date"], e["amount"]) for e in drill["entries"]] == [("2026-09-12", 300)]
         assert drill["more"] is True
+
+
+def test_a_drill_down_lists_no_entry_its_month_hides_from_the_viewer(books):  # noqa: F811
+    # A $123.45 sale sat on seats under other expenses when September closed. Seats then moved under software, where
+    # Cara's company-wide grant reaches it. September hides the sale from her, so the drill-down lists nothing.
+    both = ("2026-09-01", "2026-10-31")
+    with books.transaction() as c:
+        assert act(c, OWNER, "account_create", {"code": "6110", "name": "Seats", "type": "expense",
+                                                "parent_id": account(c, "6900")}).status == "committed"
+        spend(c, "6110", 12_345, day="2026-09-12")
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"),
+                                                "parent_id": account(c, "6100")}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:cara", "what": "pnl_lines",
+                                            "account_ids": [account(c, "6100")], "whose": "company"}
+                   ).status == "committed"
+        drill = FR.line_detail(c, "human:cara", account(c, "6000"), *both, at=AT)
+        assert drill["total"] == 0
+        assert drill["entries"] == []
+
+
+def test_a_drill_down_entry_follows_the_view_of_the_month_it_is_in(books):  # noqa: F811
+    # Seats' $3.00 was unattributed under software in September, then moved under other expenses, where Dan's grant
+    # reaches it. September's view never showed Dan that line, so the entries must not show it to him either.
+    both = ("2026-09-01", "2026-10-31")
+    with books.transaction() as c:
+        assert act(c, OWNER, "account_create", {"code": "6110", "name": "Seats", "type": "expense",
+                                                "parent_id": account(c, "6100")}).status == "committed"
+        spend(c, "6110", 300, day="2026-09-05")
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"),
+                                                "parent_id": account(c, "6900")}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:dan", "what": "pnl_lines",
+                                            "account_ids": [account(c, "6900")], "whose": "company"}
+                   ).status == "committed"
+        drill = FR.line_detail(c, "human:dan", account(c, "6110"), *both, at=AT)
+        assert drill["total"] == 0
+        assert drill["entries"] == []
+
+
+def test_a_drill_down_limit_applies_the_view_before_it_cuts(books):  # noqa: F811
+    # Eve is granted web's expenses. September's one web line is her only entry; October's five sales lines on the same
+    # account are newer and not hers. A limit of one must still list the web line, which is the whole of her total.
+    both = ("2026-09-01", "2026-10-31")
+    with books.transaction() as c:
+        spend(c, "6100", 300, day="2026-09-05", team="web")
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:eve", "what": "expenses",
+                                            "whose": "team", "whose_team": "web"}).status == "committed"
+        for n in range(1, 6):
+            spend(c, "6100", 100, day=f"2026-10-0{n}", team="sales")
+        drill = FR.line_detail(c, "human:eve", account(c, "6100"), *both, limit=1, at=AT)
+        assert drill["total"] == 300
+        assert [(e["date"], e["amount"]) for e in drill["entries"]] == [("2026-09-05", 300)]
+        assert drill["more"] is False
+
+
+def test_a_multi_month_budget_read_omits_a_budget_its_viewer_cannot_see_in_every_month(books):  # noqa: F811
+    # Seats' budget sat under other expenses when September closed, and its $123.45 sale with it. Seats then moved under
+    # software, where Cara's company-wide grant reaches it. September alone omits the budget, so September to October
+    # omits it too, and its actuals never show the closed month's sale.
+    with books.transaction() as c:
+        assert act(c, OWNER, "account_create", {"code": "6110", "name": "Seats", "type": "expense",
+                                                "parent_id": account(c, "6900")}).status == "committed"
+        spend(c, "6110", 12_345, day="2026-09-12")
+        assert act(c, OWNER, "budget_create", {"name": "Seats", "account_id": account(c, "6110"), "amount": 20_000,
+                                               "effective_from": "2026-09-01"}).status == "committed"
+        assert act(c, OWNER, "close_period", {"month": "2026-09"}).status == "committed"
+        assert act(c, OWNER, "account_update", {"account_id": account(c, "6110"),
+                                                "parent_id": account(c, "6100")}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:cara", "what": "pnl_lines",
+                                            "account_ids": [account(c, "6100")], "whose": "company"}
+                   ).status == "committed"
+
+        def seats(a, z):
+            return [r for r in FR.budget_vs_actual(c, "human:cara", a, z, "month", at=AT)["budgets"]
+                    if r["name"] == "Seats"]
+        assert seats(*SEP) == []
+        assert seats("2026-09-01", "2026-10-31") == []
+        assert [r["actual"] for r in seats(*OCT)] == [[0]]      # October alone: visible, and nothing in it

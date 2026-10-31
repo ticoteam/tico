@@ -245,7 +245,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     for row in SK.actions_since(ctx.c, since, TEST_MOST):
         if not everything and str(row["actor"]) != who:
             continue
-        body = SK.loads(row["payload_json"])
+        body = {k: v for k, v in SK.loads(row["payload_json"]).items() if k not in K.SERVER_ONLY_KEYS}
         found: dict[str, object] = {"kind": str(row["kind"]), "actor": str(row["actor"]),
                                     "actor.kind": "bot" if str(row["actor"]) in ctx.org.bots else "human",
                                     **{k: v for k, v in body.items() if isinstance(v, (int, str, bool))}}

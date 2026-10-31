@@ -659,7 +659,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     # Each month counts the line and the lines under it on the tree it closed with (the live tree while it is open), and
     # is suppressed on that tree alone, as a read of that month is. A private month's cells come from its whole fiscal
     # quarters, so suppressing the window at once would count them once for each month that reads them.
-    spans: list[tuple[str, str, set[str]]] = []
+    spans: list[tuple[str, str, _Seen, set[str]]] = []
     whole_cells: list[VW.Cell] = []
     split_cells: list[VW.Cell] = []
     whole_hidden: set[str] = set()
@@ -668,7 +668,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     for sa, sz in _segments(a, z):
         tree = _closed(s, viewer, sa, sz)[0]
         mine = set(descendants(tree.ctx.accounts, account_id))
-        spans.append((sa.isoformat(), sz.isoformat(), mine))
+        spans.append((sa.isoformat(), sz.isoformat(), tree, mine))
         cells = _cells(tree, sa, sz, sorted(mine))
         if vendor is not None:
             cells = [x for x in cells if x.vendor == vendor]
@@ -681,7 +681,7 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         whole_hidden |= whole.hidden
         hidden |= whole.hidden | split.hidden
         excluded = excluded or split.excluded
-    ids = sorted({i for _, _, mine in spans for i in mine})
+    ids = sorted({i for _, _, _, mine in spans for i in mine})
     now_ids = sorted(descendants(s.ctx.accounts, account_id))
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
@@ -705,34 +705,28 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     private = any(i in s.private and i not in s.view.full_detail for i in ids)
     if not private:
         most = max(1, min(int(limit), 500))
+        cap = most * 4 + 1
         keys = None if vendor is None else SAP.vendor_keys(c, s.ctx.book.id, vendor) or [""]
-        # Each month asks for its own newest entries on its own tree, so a newer month's lines never crowd them out.
-        rows: list[Any] = []
-        for lo, hi, mine in spans:
+        # Each month reads its own newest lines on its own tree and keeps only those that month's view takes, before the
+        # cut: a newer line the viewer cannot see never pushes out an older one they can.
+        visible: list[tuple[Any, dict[str, str]]] = []
+        for lo, hi, tree, mine in spans:
             if mine:
-                rows += SL.entries_on(c, s.ctx.book.id, sorted(mine), lo, hi, most * 4 + 1, keys)
-        rows.sort(key=lambda r: str(r["line_id"]))
-        rows.sort(key=lambda r: str(r["entry_date"]), reverse=True)
-        rows = rows[:most * 4 + 1]
-        tags = SL.line_tags(c, [r["line_id"] for r in rows])
+                visible += _month_entries(c, s.ctx.book.id, tree, lo, hi, mine, f, keys, cap)
+        visible.sort(key=lambda pair: str(pair[0]["line_id"]))
+        visible.sort(key=lambda pair: str(pair[0]["entry_date"]), reverse=True)
+        visible = visible[:cap]
+        more = len(visible) > most
         seen: list[Row] = []
-        for r in rows:
-            line_account = s.ctx.accounts[r["account_id"]]
-            mark = tags.get(r["line_id"], {})
-            if not s.view.sees(line_account, mark) or \
-                    (f.any and not f.keeps(str(mark.get("team") or ""), str(mark.get("teammate") or ""))):
-                continue
+        for r, mark in visible:
             seen.append({"amount": int(r["amount"]), "card_id": r["card_id"], "money_account_id": r["money_account_id"],
                          "source": r["source"]})
-            if len(entries) == most:
-                more = True
-                continue
-            entries.append({"line_id": r["line_id"], "entry_id": r["entry_id"], "date": r["entry_date"],
-                            "account_id": r["account_id"], "amount": int(r["amount"]), "vendor": r["contact_id"],
-                            "description": r["description"], "memo": r["memo"], "source": r["source"],
-                            "status": str(r["entry_status"]), "reverses": r["reverses_id"] or None,
-                            "tags": tags.get(r["line_id"], {})})
-        more = more or len(rows) > most * 4
+            if len(entries) < most:
+                entries.append({"line_id": r["line_id"], "entry_id": r["entry_id"], "date": r["entry_date"],
+                                "account_id": r["account_id"], "amount": int(r["amount"]), "vendor": r["contact_id"],
+                                "description": r["description"], "memo": r["memo"], "source": r["source"],
+                                "status": str(r["entry_status"]), "reverses": r["reverses_id"] or None,
+                                "tags": mark})
         names = tab_ap.vendor_labels(s.ctx, s.view, [str(e["vendor"] or "") for e in entries])
         for e in entries:
             e["vendor_name"] = names.get(str(e["vendor"] or ""), "")
@@ -741,6 +735,34 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
         out["paid_by"] = None
     out["entries"] = entries
     out["more"] = more
+    return out
+
+
+_ENTRY_BATCH = 200
+
+
+def _month_entries(c: sqlite3.Connection, book_id: str, tree: _Seen, lo: str, hi: str, mine: set[str], f: _Filter,
+                   keys: list[str] | None, cap: int) -> list[tuple[Any, dict[str, str]]]:
+    """The newest lines on `mine` in [lo, hi] that `tree`'s view takes and the filter keeps, up to `cap`, each with its
+    tags. Read in batches, so a run of lines the view hides never cuts a visible one short."""
+    out: list[tuple[Any, dict[str, str]]] = []
+    offset = 0
+    while len(out) < cap:
+        batch = SL.entries_on(c, book_id, sorted(mine), lo, hi, _ENTRY_BATCH, keys, offset)
+        tags = SL.line_tags(c, [r["line_id"] for r in batch]) if batch else {}
+        for r in batch:
+            mark = tags.get(r["line_id"], {})
+            account = tree.ctx.accounts.get(r["account_id"])
+            if account is None or not tree.view.sees(account, mark):
+                continue
+            if f.any and not f.keeps(str(mark.get("team") or ""), str(mark.get("teammate") or "")):
+                continue
+            out.append((r, mark))
+            if len(out) == cap:
+                break
+        if len(batch) < _ENTRY_BATCH:
+            break
+        offset += _ENTRY_BATCH
     return out
 
 
@@ -793,10 +815,13 @@ def budget_vs_actual(c: sqlite3.Connection, viewer: str, start: str | None = Non
     buckets = dates.buckets(period, a, z, s.ctx.book.fiscal_year_start)
     base = s
     s, snap = _closed(base, viewer, a, z)
-    seen = _visible(s, False)
+    trees = [(sa, sz, _closed(base, viewer, sa, sz)[0].ctx) for sa, sz in _segments(a, z)]
+    # Listed only where the viewer sees it in every month of the window, each judged on that month's own tree, as a read
+    # of that month alone judges it. A month whose tree lacks the budget's account has no spend on it to show.
+    seen = [b for b in _visible(s, False)
+            if all(sees_budget(ctx, viewer, b) for _, _, ctx in trees if b.catch_all or b.account_id in ctx.accounts)]
     most = max(1, min(int(limit), 500))
     versions = SB.versions(c, [b.id for b in seen[:most]])
-    trees = [(sa, sz, _closed(base, viewer, sa, sz)[0].ctx) for sa, sz in _segments(a, z)]
     rows: list[Row] = []
     for b in seen[:most]:
         # Judged on each month's own tree: a private line can sit under this budget in a closed month and not now.

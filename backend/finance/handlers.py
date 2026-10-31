@@ -421,7 +421,7 @@ def _raise_parent(ctx: Ctx, route: _Route, effective: str, who: str) -> None:
 
 def _raise_check(ctx: Ctx, raise_to: int | None) -> str | None:
     """A keyed fingerprint of the parent raise a change needs, so a waiting change is judged again when the total moves.
-    It is stored with the action only (actions.SERVER_ONLY_KEYS): a readable value would show a hidden sibling total."""
+    It is stored with the action only (kinds.SERVER_ONLY_KEYS): a readable value would show a hidden sibling total."""
     return None if raise_to is None else tico.fingerprint(ctx.c, "budget-raise", str(raise_to))
 
 
