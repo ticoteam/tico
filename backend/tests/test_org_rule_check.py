@@ -1695,3 +1695,64 @@ def test_a_warned_daily_with_slides_carries_its_line_on_the_stored_bullets(ruled
     assert row["body"].startswith("Warning:") and row["body"].endswith("- Our favorite color is blue.")
     # The slides a daily drops are not judged.
     assert "Ship the palette" not in judge.calls[-1]["state"]["output"]
+
+
+def test_a_task_questions_options_and_card_lines_are_judged_with_it(ruled):
+    api, judge = ruled
+    color_rule(api)
+    options = [{"label": "Ship", "description": "Our favorite color is blue.", "then": "Ops ships it today"},
+               {"label": "Wait", "then": "Ops waits a week"}]
+    got = ask(api, "Ship it?", options=options, if_no_answer={"do": "Ops waits a week", "kind": "reversible"})
+    assert got["held"] and set(got) == {"held"}
+    said = judge.calls[-1]["state"]["output"]
+    assert "Ops ships it today" in said and "Ops waits a week" in said
+    assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+    [hold] = sql(api, "SELECT payload_json FROM org_rule_holds WHERE operation='task_question'")
+    assert "Our favorite color is blue." in hold["payload_json"]
+
+
+def test_a_warned_summary_at_the_cap_publishes_with_its_line(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": summary})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    assert got["rule_warning"], got
+    shown = public_output(api, drafted["id"])
+    assert shown["summary"].startswith("Warning:") and shown["summary"].endswith(summary)
+
+
+def test_a_new_task_public_by_its_types_default_carries_the_line_on_its_summary(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    changelog = post(api, "task-types", {"name": "Changelog", "default_visibility": "public",
+                                         "steps": [{"name": "Drafted", "status": "open"}]})["type"]
+    made = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "type": changelog["id"],
+                               "public_title": "Our favorite color is blue"}, token="ops-test")
+    made = made.get("task", made)
+    assert made["visibility"] == "public"
+    shown = public_output(api, made["id"])
+    assert shown["title"] == "Our favorite color is blue" and shown["summary"].startswith("Warning:")
+
+
+def test_send_anyway_posts_the_held_days_update_or_nothing(ruled, monkeypatch):
+    from backend import updates
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-29")             # a Thursday
+    thursday = post(api, "updates", {"body": "- Our favorite color is blue."}, token="ops-test")["held"]["id"]
+    payload = json.loads(hold_row(api, thursday)["payload_json"])["replay"]["body"]
+    assert payload["day"] == "2026-10-29" and payload["kind"] == "daily"
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-30")             # Friday: a week in review's day
+    got = send_anyway(api, thursday, expected=409)
+    assert got["error"]["code"] == "changed"
+    assert hold_row(api, thursday)["state"] == "held" and sql(api, "SELECT id FROM updates WHERE bot='ops'") == []
+    # Sent the day it was held, it is that day's daily.
+    monkeypatch.setattr(updates, "today", lambda at=None: "2026-10-29")
+    send_anyway(api, thursday)
+    assert [(r["kind"], r["day"]) for r in sql(api, "SELECT kind, day FROM updates WHERE bot='ops'")] == \
+        [("daily", "2026-10-29")]

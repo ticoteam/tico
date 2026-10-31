@@ -2856,40 +2856,47 @@ def create_app(settings=None):
 
     def rule_warned_fields(gate, body, row=None, approved=False):
         """A warned task write's recipient copies: the warning on every multi-line text field the write sets. A title
-        (and public title) is kept whole and unmarked: a new task with one carries the line on its body. A write that
-        publishes (a public title on a task that is or becomes public, or making it public) carries the line on the
-        public summary the roadmap shows, unless the public text goes out only as a person approved it (`approved`,
-        roadmaps.exact_approval): that text is kept exactly as approved, the approver its safeguard. Any other change
-        that sets no other text field (a title, a hand-off alone) puts the line before the task's note (`row`'s), which
-        stays whole."""
+        (and public title) is kept whole and unmarked: a new task carries the line on its body, and on its public
+        summary when the store makes it public (its type's default included: H.task_create's `public_warning`). A
+        change that publishes (a public title on a task that is or becomes public, or making it public) carries the
+        line on the public summary the roadmap shows. Neither does when the public text goes out only as a person
+        approved it (`approved`, roadmaps.exact_approval): that text is kept exactly as approved, the approver its
+        safeguard. Any other change that sets no other text field (a title, a hand-off alone) puts the line before the
+        task's note (`row`'s), which stays whole."""
         out = {}
-        for key in ("body", "note") if approved else ("body", "note", "public_summary"):
+        for key in ("body", "note") if approved or row is None else ("body", "note", "public_summary"):
             value = getattr(body, key, None)
             if value:
                 out[key] = org_rule_check.warned_text(gate, value)
+        if row is None:
+            if "body" not in out:
+                out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
+            return out
         if not approved and "public_summary" not in out and rule_shows_public(body, row):
             # The public roadmap shows the public title and summary, never the note: the line goes on the summary it
             # will show (the one kept, or the line alone when there is none), the title kept whole.
             summary = getattr(body, "public_summary", None)
-            kept = summary if summary is not None else (row or {}).get("public_summary") or ""
+            kept = summary if summary is not None else row.get("public_summary") or ""
             out["public_summary"] = org_rule_check.warned_note(gate, kept)
-        if row is None:
-            if "body" not in out:
-                out["body"] = org_rule_check.warned_note(gate, getattr(body, "body", None) or "")
-        elif not out:
+        if not out:
             out["note"] = org_rule_check.warned_note(gate, row.get("note") or "")
         return out
+
+    def rule_summary_allowance(gate, warned):
+        """How far a warned public summary may pass the cap: the length of the line the server put before it."""
+        line = org_rule_check.warn_line(gate)
+        return len(line) + 2 if line and "public_summary" in warned else 0
 
     def rule_newly_public(body, row):
         """Whether a task change makes a task public that was not: its public text, written before, now reaches
         everyone."""
         return getattr(body, "visibility", None) == "public" and row.get("visibility") != "public"
 
-    def rule_shows_public(body, row=None):
-        """Whether a task write puts public text before the public roadmap's readers: it makes the task public (a new
-        public task, or a change), or gives one that is or becomes public a new public title."""
-        public = (getattr(body, "visibility", None) or (row or {}).get("visibility")) == "public"
-        return public and (row is None or rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))
+    def rule_shows_public(body, row):
+        """Whether a task change puts public text before the public roadmap's readers: it makes the task public, or
+        gives one that is or becomes public a new public title."""
+        public = (getattr(body, "visibility", None) or row.get("visibility")) == "public"
+        return public and (rule_newly_public(body, row) or bool(getattr(body, "public_title", None)))
 
     def rule_publishes(body, row):
         """Whether a task change puts text before the whole company: it writes public text, or makes the task
@@ -3177,10 +3184,11 @@ def create_app(settings=None):
             return json.dumps(slides, sort_keys=True) if slides else ""
         return body.body.strip()
 
-    def update_write(c, who, body, rc=None):
-        """One update, as `POST /api/v2/updates` posts it and Send anyway replays it: a bot's is checked against the
-        org rules for the whole company, which reads it. Held, nothing is posted; warned, the line leads the update
-        (a week in review's goal, its headline)."""
+    def update_write(c, who, body, rc=None, replayed=False):
+        """One update, as `POST /api/v2/updates` posts it and Send anyway replays it (`replayed`): a bot's is checked
+        against the org rules for the whole company, which reads it. Held, nothing is posted; warned, the line leads
+        the update (a week in review's goal, its headline). `body` names its day and kind (update_fixed), so a replay
+        posts the update that was held, or nothing: a day that can no longer be posted is a 409, the hold kept."""
         # A bot posts its own; a person posts their own, for today, as `human:<id>`. A person's
         # draft is written by the server (updates.write_draft), never posted through here.
         if who.role == "bot":
@@ -3190,7 +3198,13 @@ def create_app(settings=None):
         else:
             raise Problem("identity", "A bot or a person posts their own update", 403)
         slides = body.slides.model_dump(exclude_none=True) if body.slides else None
-        updates.check_day(c, author, body.day)
+        try:
+            updates.check_day(c, author, body.day)
+        except Problem:
+            if not replayed:
+                raise
+            raise Problem("changed", f"The {body.kind or 'held'} update for {body.day} can no longer be posted; "
+                          "it stays held. Post it again for today to check it.", 409) from None
         rule = org_rule_check.apply(c, rc, update_text(body), {"body": body.model_dump(mode="json")})
         if rule and rule.get("held"):
             return org_rule_check.answer(rule)
@@ -3204,15 +3218,23 @@ def create_app(settings=None):
                                        replace_draft=body.replace_draft, reader=updates.meeting_reader(who)),
                 **org_rule_check.answer(rule)}
 
+    def update_fixed(body):
+        """The update a post means, its day and kind named, before anything is checked: a hold keeps them, so Send
+        anyway posts that day's update of that kind, never today's or a week in review a Friday would make it."""
+        day = body.day or updates.today()
+        return body.model_copy(update={"day": day, "kind": updates.effective_kind(body.kind, body.slides, day)})
+
     @app.post("/api/v2/updates")
     def update_post(request: Request, body: M.UpdatePost):
         who = request.state.identity
-        rc = rule_check(who, "update", update_text(body), lambda c: org_rule_check.company(c))
-        return mutate(request, body, lambda c: update_write(c, who, body, rc))
+        fixed = update_fixed(body)
+        rc = rule_check(who, "update", update_text(fixed), lambda c: org_rule_check.company(c))
+        return mutate(request, body, lambda c: update_write(c, who, fixed, rc))
 
     @org_rule_check.replayer("update", audience=lambda c, bot, replay: org_rule_check.company(c))
     def rule_replay_update_post(c, bot, hold, replay, ingest, gate=None):
-        return update_write(c, bot, M.UpdatePost.model_validate(replay["body"]), org_rule_check.decided(gate))
+        return update_write(c, bot, M.UpdatePost.model_validate(replay["body"]), org_rule_check.decided(gate),
+                            replayed=True)
 
     @app.post("/api/v2/updates/redo")
     def update_redo(request: Request, body: M.UpdateRedo):
@@ -4048,9 +4070,12 @@ def create_app(settings=None):
                                          {"body": body.model_dump(mode="json", by_alias=True)}) if rule else None
         if rule_gate and rule_gate.get("held"):
             return org_rule_check.answer(rule_gate)
+        public_warning = ""
         if rule_gate and rule_gate.get("warn"):
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body,
-                                                             approved=exact_approval(c, who.actor)))
+            approved = exact_approval(c, who.actor)
+            body = body.model_copy(update=rule_warned_fields(rule_gate, body, approved=approved))
+            # Whether the task is public is the store's to say (its type's default included): it adds the line there.
+            public_warning = "" if approved else org_rule_check.warn_line(rule_gate)
         # Ask ingest (backend/ask_ingest.py): a bot's task for a person, judged before the write. Sent back or FYI
         # with the filter on, it stays the bot's own task; the reply says why.
         gate = None
@@ -4091,6 +4116,7 @@ def create_app(settings=None):
         row = H.task_create(c, who.actor, body.title, body.body, owner, body.due, parent_id,
                             requester_actor=requester_actor, visibility=body.visibility,
                             public_title=body.public_title, public_summary=body.public_summary,
+                            public_warning=public_warning,
                             private=private, conversation_id=rooms.task_conversation_id(c, auth, owner, who.actor),
                             lane=body.lane, labels=body.labels, top=body.top, lint=lint,
                             goal_id=body.goal_id, next_run=body.next_run, type=body.type, step=body.step,
@@ -4308,10 +4334,11 @@ def create_app(settings=None):
             if rule else None
         if rule_gate and rule_gate.get("held"):
             return org_rule_check.answer(rule_gate)
+        allowance = 0
         if rule_gate and rule_gate.get("warn"):
             # The warning line goes on the change itself, where the recipient reads it.
-            body = body.model_copy(update=rule_warned_fields(rule_gate, body, row,
-                                                             approved=exact_approval(c, who.actor)))
+            warned = rule_warned_fields(rule_gate, body, row, approved=exact_approval(c, who.actor))
+            body, allowance = body.model_copy(update=warned), rule_summary_allowance(rule_gate, warned)
         if body.close:
             if any(v is not None for v in (body.title, body.status, body.owner, body.due, body.body, body.lane,
                                            body.labels, body.waiting_on, body.rank, body.roles,
@@ -4360,7 +4387,7 @@ def create_app(settings=None):
                 if new_owner != row["owner"]:
                     task_caps.check(c, who.actor, new_owner)
             after = H.task_update(c, who.actor, task_id, **fields, mover=mover(c, who) or None, review_prs=snapshots,
-                                  receipt_owner=Access.load_owner(c, settings)["email"])
+                                  receipt_owner=Access.load_owner(c, settings)["email"], public_allowance=allowance)
             if fields.get("owner") and body.owner and new_owner != row["owner"]:
                 task_caps.record(c, task_id, who.actor, new_owner)
             warnings = after.get("warnings")

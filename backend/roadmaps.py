@@ -157,7 +157,10 @@ def approve(c, actor, task_id, operation, values, approval_id=None):
     H.approval_consume(c, actor, approval_id)
 
 
-def publication(c, actor, row, visibility=None, public_title=None, public_summary=None, approval_id=None):
+def publication(c, actor, row, visibility=None, public_title=None, public_summary=None, approval_id=None,
+                allowance=0):
+    """A task's public fields as a write sets them. `allowance` is the length of an org rule's Warn line the server put
+    before the summary (backend/app.py, rule_warned_fields): the cap is the bot's own text's, the line past it."""
     fields = {k: v for k, v in (('visibility', visibility), ('public_title', public_title),
                                 ('public_summary', public_summary)) if v is not None}
     if not fields:
@@ -166,7 +169,7 @@ def publication(c, actor, row, visibility=None, public_title=None, public_summar
         H.refuse(c, actor, 'kind', 'visibility is public or private')
     if public_title is not None and (not public_title.strip() or len(public_title) > 300):
         H.refuse(c, actor, 'lint', 'Public title is 1 to 300 characters')
-    if public_summary is not None and len(public_summary) > 8000:
+    if public_summary is not None and len(public_summary) > 8000 + allowance:
         H.refuse(c, actor, 'lint', 'Public summary is at most 8000 characters')
     if fields.get('visibility', row['visibility']) == 'public' and H.task_private(c, row):
         H.refuse(c, actor, 'private', 'A two-party private task cannot be published')

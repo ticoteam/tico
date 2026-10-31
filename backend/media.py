@@ -563,11 +563,21 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         return guest
 
     def question_text(body):
-        """What a task question says, as the org rule check reads it: its title, body, question and why, one output."""
+        """What a task question says, as the org rule check reads it, one output: every line its card and task show
+        (title, body, question, why; each option's label, description, what happens and file name; the spend; what
+        happens with no answer), never a file's bytes. The hold keeps this same text for a later recheck."""
         question = body.question.strip()
-        return "\n\n".join(f"{label}: {value}" for label, value in (
-            ("Title", body.title or question), ("Body", body.body), ("Question", question), ("Why", body.why.strip()))
-            if value)
+        parts = [("Title", body.title or question), ("Body", body.body), ("Question", question),
+                 ("Why", body.why.strip())]
+        for option in body.options:
+            parts += [("Option", option.label), ("Description", option.description), ("Then", option.then),
+                      ("File", option.file.name if option.file else "")]
+        if body.spend:
+            parts.append(("Spend", f"{body.spend.label}: {body.spend.amount} for {body.spend.what} "
+                                   f"({body.spend.account})"))
+        if body.if_no_answer:
+            parts.append(("If no answer", body.if_no_answer.do))
+        return "\n\n".join(f"{label}: {value}" for label, value in parts if value)
 
     def question_ingest(who, body):
         """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
@@ -773,16 +783,28 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         return [H.resolve_actor(c, replay["body"]["on"])]
 
     def question_prepare(store_, bot, replay):
-        return question_ingest(bot, M.TaskQuestion.model_validate(replay["body"]))
+        """Outside the write, as the route runs them: ask ingest's preflight, and the review gate's fresh read for a
+        question titled for a review step under a Dev ticket (the PR's head and checks as they are now)."""
+        body = M.TaskQuestion.model_validate(replay["body"])
+        out = {"ingest": question_ingest(bot, body), "snapshots": None}
+        if body.parent:
+            try:
+                out["snapshots"] = review_preflight(bot, body.parent, child_title=(body.title or body.question.strip())
+                                                    .strip())
+            except Problem:
+                pass                    # the write's own review gate refuses it, the hold kept
+        return out
 
     from . import org_rule_check as rule_checks
 
     @rule_checks.replayer("task_question", prepare=question_prepare, audience=question_audience)
     def question_replay_write(c, bot, hold, replay, ingest, gate=None):
-        # The bytes of option files were stored before the hold; the replay registers them by digest.
+        # The bytes of option files were stored before the hold; the replay registers them by digest. `ingest` is
+        # question_prepare's: ask ingest's preflight and the review gate's snapshots.
+        prepared = ingest or {}
         return question_write(c, bot, M.TaskQuestion.model_validate(replay["body"]),
                               [tuple(f) if f else None for f in replay.get("files") or []], replay.get("stored") or [],
-                              ingest, None, rule_checks.decided(gate))
+                              prepared.get("ingest"), prepared.get("snapshots"), rule_checks.decided(gate))
 
     @app.get("/api/v2/tasks/{tid}/files")
     def task_files(request: Request, tid: str):

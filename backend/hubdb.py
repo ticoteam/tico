@@ -5838,9 +5838,12 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
                 quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None,
-                occurrence_step=None, rule_due_id=None):
+                occurrence_step=None, rule_due_id=None, public_warning=""):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
+
+    `public_warning` is an org rule's Warn line (backend/org_rule_check.py): when the task is stored public, its
+    public summary carries the line, past the summary's cap the bot's own text met.
 
     `next_run` files it for the bot's next run instead of starting one: the notice is written
     quietly, and the next run the bot has for any reason carries the task in its prompt
@@ -6035,6 +6038,8 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
     if not public_title:
         # A type that defaults to public publishes only tasks created with public text.
         public = 'private'
+    if public == 'public' and public_warning:
+        public_summary = public_warning + ("\n\n" + public_summary if public_summary else "")
     conn.execute('UPDATE tasks SET visibility=?,public_title=?,public_summary=? WHERE id=?',
                  (public, public_title, public_summary, row['id']))
     for field, value in (('public_title', public_title), ('public_summary', public_summary)):
@@ -6178,7 +6183,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None):
+                verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6620,7 +6625,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     if task_private(conn, updated_row):
         conn.execute("UPDATE tasks SET visibility='private' WHERE id=?", (task_id,))
         updated_row = task(conn, task_id)
-    publication(conn, actor, updated_row, visibility, public_title, public_summary, approval_id)
+    publication(conn, actor, updated_row, visibility, public_title, public_summary, approval_id,
+                allowance=public_allowance)
     if size is not None or clear_size:
         import math
         if size is not None and (not math.isfinite(size) or size < 0):
