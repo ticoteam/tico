@@ -318,6 +318,10 @@ export type AutomationVersions = {
 }>;
 };
 
+export type BillsAddress = {
+  address?: string | null;
+};
+
 export type Bot = {
   access: Access;
   can_complete_onboarding?: boolean;
@@ -1208,6 +1212,11 @@ export type FinanceBills = {
   view_version: number;
 };
 
+export type FinanceBillsAddress = {
+  bills_email: string | null;
+  inbox_id: string | null;
+};
+
 export type FinanceBudgets = {
   budgets: Array<Record<string, unknown>>;
   more: boolean;
@@ -1338,7 +1347,7 @@ export type FinanceDocument = (FinanceDocumentRow & {
   created_by: string;
   entry_id: string | null;
   from_id: string | null;
-  from_kind: "payment" | "feed" | "credit" | "account";
+  from_kind: "payment" | "feed" | "credit" | "account" | "expected";
   id: string;
   settled_on: string;
   voided_at: string | null;
@@ -7519,6 +7528,11 @@ export type SetExtraRepositoriesParams = {
 };
 export type SetExtraRepositoriesBody = ExtraRepos;
 export type SetExtraRepositoriesResponse = unknown;
+
+/** PUT /api/v2/finance/bills-address */
+export type SetFinanceBillsAddressParams = Record<string, never>;
+export type SetFinanceBillsAddressBody = BillsAddress;
+export type SetFinanceBillsAddressResponse = FinanceBillsAddress;
 
 /** POST /api/v2/goals/{gid}/kpis/{kid} */
 export type SetGoalKpiTargetParams = {

@@ -24,7 +24,7 @@ policy is silent, the accountant decides. Your output is summaries and entries f
 
 ## Lines with neighbours
 Invoices are issued by the Billing Specialist (`billing`) and collected by the Accounts Receivable
-Specialist (`ar-followup`); the rest of the close is the Bookkeeper's (`bookkeeping`). The recurring
+Specialist (`ar-followup`); the rest of the close is the Bookkeeper's (`bookkeeper`). The recurring
 revenue KPI belongs to the Strategy Bot: you explain its movement, you do not keep it. Sales tax on
 revenue is the Tax Specialist's (`tax`).
 

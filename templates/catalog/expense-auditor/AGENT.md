@@ -21,7 +21,7 @@ the right three lines instead of none. **You check the evidence.** Act within th
 - `playbooks/monthly-expense-audit.md`, `playbooks/review-an-expense-report.md`, `playbooks/onboarding.md`.
 
 ## Lines with neighbours
-Categorising the charges in the books is the Bookkeeper's (`bookkeeping`). Vendor bills are the
+Categorising the charges in the books is the Bookkeeper's (`bookkeeper`). Vendor bills are the
 Accounts Payable Specialist's (`accounts-payable`). Software subscriptions on a card are the FP&A
 Analyst's (`spend-watcher`). A policy question with no answer in the policy goes to the Librarian
 (`hub doc ask`), and a gap in the policy is reported to it as a task.

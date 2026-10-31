@@ -108,10 +108,12 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 
 ### Finance
 
+The books themselves are kept by the built-in [Bookkeeper](bookkeeper.md), which every install has once Finance is set
+up. The `bookkeeping` template is retired: it is no longer offered, and bots already built from it keep running.
+
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `account_balance_wallet` | `finance-lead` | Head of Finance (head) | A weekly finance summary: cash today and the 13-week outlook against the minimum, close status, what is due in and out, the next 14 days of the finance calendar, decisions needed; routes finance work and proposes finance hires | default | Tico only; bank and accounting exports on a task; docs, email and calendar optional |
-| `menu_book` | `bookkeeping` | Bookkeeper | A category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done; read-only to the books | default | An exported transaction file on a task |
 | `request_quote` | `ar-followup` | Accounts Receivable Specialist | A weekly aging summary and a reminder ready for each overdue invoice, friendly first and firmer later, each drafted until outbound sending is on | common | An invoice aging export on a task |
 | `receipt_long` | `accounts-payable` | Accounts Payable Specialist | A bills register with each bill matched and checked for duplicates and changed bank details, and a proposed weekly payment run | common | Bills on a task; a bills mailbox optional |
 | `credit_card` | `expense-auditor` | Expense Auditor | A monthly audit of every expense report and card charge against the written policy (receipts, limits, duplicates, late claims), one section per approver | niche | A card or expense export on a task |

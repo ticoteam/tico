@@ -1,0 +1,57 @@
+# Bookkeeper
+
+The Bookkeeper is a built-in helper bot that keeps the books: categorizing bank and card rows, entering bills,
+scheduling payments, chasing overdue invoices, matching receipts, reconciling, the month's close and a monthly report.
+Like the Task Manager it sits outside the org chart and is listed under Settings → Bots.
+
+## When it appears
+
+Finance is set up on every install. The Bookkeeper is built once onboarding is done and a computer is enrolled; an
+install from before it gets it at the next start. Pausing or archiving it is respected: it is not rebuilt.
+
+## What it may do
+
+It comes with finance.book, ap, ar, pay and cards, granted once. Revoking one in Finance → Access sticks. It is never a
+finance admin and never changes views, rights, payment settings or bank connections.
+
+It sees only what its Finance view covers. The owner gets one task, "Let the Bookkeeper see the books", to give it
+Everything in Finance → Access. Payroll's private lines stay private either way.
+
+It touches the books only through the [Finance tools](finance-tools.md), as itself. Approvals follow the company's
+rules; it never approves its own action. The owner approves a month's close.
+
+## How work reaches it
+
+| What | How | Task |
+|---|---|---|
+| Rows to categorize, draft bills, receipts and emailed bills to match, missing receipts, failed syncs, budgets near their limit, books not reconciled for over 35 days | **Books check**, hourly: plain code reads its Finance work queue | One "Books check (n)" task, only when something is new |
+| A bill due in 7 days, 1 day or today | `finance.bill.due_soon` routine | One per bill and stage |
+| An invoice 1, 7, 30, 60 or 90 days overdue | `finance.invoice.overdue` routine | One per invoice and stage |
+| A month ready to close | `finance.period.ready` routine | One per month |
+| Monthly report into Docs | Routine on the 3rd at 09:00 | One a month |
+
+**Books check** (system routine `bookkeeper_check`) runs hourly by default; change it under
+[System routines](system-routines.md). With nothing new it is a quiet run: no task and no model call. An item listed
+in the last day is not news unless its facts changed. A still-open Books check task takes the next check's list
+instead of a second task opening. The task is private to the Bookkeeper. It opens nothing while the Bookkeeper is
+paused.
+
+## The bills address
+
+The bills address is one email address per install that vendors send bills to. The owner or an admin sets it:
+
+```
+PUT /api/v2/finance/bills-address   {"address": "bills@acme.example"}    # null clears it
+→ {"bills_email": "bills@acme.example", "inbox_id": "ibx_1"}
+```
+
+`GET /api/v2/finance/bills` returns it as `bills_email`.
+
+Mail reaches Tico through an Email & Phone inbox. When the bills address is one of those inboxes, each PDF or image
+attached to an email that reaches it is filed once in the Bookkeeper's Library and handed to Finance as an unmatched
+receipt. The next Books check lists it with the sender and subject. The Bookkeeper reads the file, finds or adds the
+vendor, and enters the bill with `bill_create` (origin `email`, the file attached). Finance raises
+`finance.bill.received` and the file leaves the unmatched receipts. A re-delivered email adds nothing.
+
+When `inbox_id` is null, no inbox receives the address and mail to it never reaches Tico. Uploading a bill still
+works either way.

@@ -33,7 +33,7 @@ Show the inputs next to every number, so a human can check it in a minute.
 ## Where the lines are
 A new supplier or a large one-off purchase is `procurement`'s. Supplier contracts and renewals are
 `vendor-manager`'s. Shipments in transit and carrier problems are `logistics`'. Stock value in the
-books is the Bookkeeper's (`bookkeeping`).
+books is the Bookkeeper's (`bookkeeper`).
 
 ## First message: setup
 If `state.md` says setup has not finished, do this before any other work:

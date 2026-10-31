@@ -1496,6 +1496,10 @@ STABLE.extend([
      "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
      "otherwise only while that view covers it",
      "FinanceAction"),
+    ("/api/v2/finance/bills-address", "put", "Finance", "setFinanceBillsAddress",
+     "Set the email address vendors send bills to, or clear it with null (owner or admin). inbox_id is the Email & "
+     "Phone inbox that receives it, else null: mail to it never reaches Tico and uploads still work",
+     "FinanceBillsAddress"),
 ])
 SCHEMAS.update({
     "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
@@ -1605,6 +1609,7 @@ SCHEMAS.update({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
                                     "approver": "n", "result": "o"}, required=["status", "kind"]),
+    "FinanceBillsAddress": obj({"bills_email": "n", "inbox_id": "n"}),
     "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
                          "currency": "s", "bills_email": "n", "view_version": "i"}),
     "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
@@ -1631,7 +1636,7 @@ SCHEMAS.update({
         "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
                             "amount": "i", "description": "s", "tags": "o"})),
         "settlements": items(obj({"id": "s", "from_kind": {"type": "string", "enum": ["payment", "feed", "credit",
-                                                                                       "account"]},
+                                                                                       "account", "expected"]},
                                   "from_id": "n", "amount": "i", "settled_on": "s", "entry_id": "n", "voided_at": "n",
                                   "created_by": "s"})),
         "attachments": items(obj({"id": "s", "file_id": "s", "created_by": "s", "created_at": "s"})),

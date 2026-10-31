@@ -3,6 +3,9 @@ slug: bookkeeping
 name: "Bookkeeper"
 required: false
 bootstrap: false
+# Retired: the built-in Bookkeeper (templates/catalog/bookkeeper) does this job, so neither the catalog, the org builder
+# nor a company model offers it. Bots already built from it keep running; the files stay for them.
+retired: true
 group: finance
 pack: basics
 icon: menu_book

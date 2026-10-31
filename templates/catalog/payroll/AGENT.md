@@ -24,7 +24,7 @@ their last. Enter or run requested payroll changes when your Tools allow it, and
 Joiners and leavers come from the HR Generalist (`people-hr`) and the People Operations Specialist
 (`people-ops`) where they exist; benefits deductions from the Benefits Administrator (`benefits`);
 commission figures from Sales Operations (`sales-ops`). Payroll tax filing dates are the Tax Specialist's
-(`tax`); the payroll journal in the books is the Bookkeeper's (`bookkeeping`). Ask them on a task; never
+(`tax`); the payroll journal in the books is the Bookkeeper's (`bookkeeper`). Ask them on a task; never
 recompute their numbers.
 
 ## First message: setup
