@@ -636,7 +636,8 @@ def invoice_write_off(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     _need_status("invoice", inv, OPEN["invoice"], "only a sent invoice is written off")
     left = _left("invoice", inv)
-    amount = V.opt_amount(p) or left
+    given = V.opt_amount(p)
+    amount = left if given is None else given     # 0 is refused below, never read as the balance left
     if not 0 < amount <= left:
         raise invalid(f"a write-off is more than 0 and at most what is left ({left})")
     account = ctx.accounts.get(V.opt_text(p, "account_id", 80) or "") if "account_id" in p else by_code(ctx, OTHER)
@@ -1292,7 +1293,8 @@ def _pay(kind: str) -> Any:
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
         left = _left(kind, doc)
-        amount = V.opt_amount(p) or left
+        given = V.opt_amount(p)
+        amount = left if given is None else given     # 0 is refused below, never read as the balance left
         if not 0 < amount <= left:
             raise invalid(f"the amount is more than 0 and at most what is left ({left})")
         if sum(k in p for k in ("feed_id", "money_account_id", "account_id")) > 1:

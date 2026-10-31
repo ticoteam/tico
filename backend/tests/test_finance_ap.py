@@ -981,3 +981,40 @@ def test_rescheduling_a_bill_withdraws_its_waiting_pay_approval_so_the_old_day_n
         refused = act(c, OWNER, "bill_schedule", {"bill_id": bid, "pay_on": "2026-11-20", "money_account_id": _checking(c)},
                       at="2026-11-15T12:00:00.000000Z")
         assert (refused.status, refused.code) == ("failed", "conflict"), refused
+
+
+def _settled(c, table: str, row_id: str) -> tuple[dict[str, object], int]:
+    """A document's whole row and the number of journal entries: what a refused settlement must leave as it was."""
+    row = dict(c.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone())
+    return row, int(c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0])
+
+
+def test_an_explicit_zero_settles_nothing_on_an_invoice_write_off_or_payment(books):
+    """An amount of 0 (or less) is refused, never read as the whole balance left: the write-off and the payment fail
+    before anything posts, and the invoice and the journal stay exactly as they were."""
+    with books.transaction() as c:
+        customer = str(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}).result["contact_id"])
+        iid = str(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-01", "lines": [
+            {"account_id": account(c, "4000"), "amount": 30_000}]}).result["invoice_id"])
+        assert act(c, OWNER, "invoice_send", {"invoice_id": iid}).status == "committed"
+        before = _settled(c, "fin_invoices", iid)
+        for amount in (0, -1):
+            off = act(c, OWNER, "invoice_write_off", {"invoice_id": iid, "amount": amount})
+            paid = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "amount": amount,
+                                                            "account_id": account(c, "1000")})
+            assert (off.status, off.code) == ("failed", "invalid"), off
+            assert (paid.status, paid.code) == ("failed", "invalid"), paid
+        assert _settled(c, "fin_invoices", iid) == before
+
+
+def test_an_explicit_zero_pays_nothing_of_a_bill(books):
+    """bill_mark_paid with an amount of 0 (or less) is refused before anything posts: the bill stays open with its
+    whole balance, and the journal is unchanged."""
+    with books.transaction() as c:
+        bid = _bill(c, _vendor(c), [{"account_id": account(c, "6100"), "amount": 20_000}])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
+        before = _settled(c, "fin_bills", bid)
+        for amount in (0, -1):
+            got = act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "account_id": account(c, "1000"), "amount": amount})
+            assert (got.status, got.code) == ("failed", "invalid"), got
+        assert _settled(c, "fin_bills", bid) == before
