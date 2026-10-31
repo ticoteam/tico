@@ -202,6 +202,42 @@ def test_a_budget_cannot_go_below_its_cards_and_child_budgets(books):
         assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 50_000}).status == "committed"
 
 
+def test_a_pause_freezes_the_cards_keeping_allocations_and_a_raise_that_leaves_room_lifts_them(books):
+    fake = FakeMercury()
+    budget, coder, seller = _world(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "card_freeze", {"card_id": coder}).status == "committed"     # a person froze coder
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 0}).status == "committed"
+        assert _status(c, seller) == "frozen" and _frozen_by(c, seller) == "budget"
+        assert _frozen_by(c, coder) == "person"
+        allocated = c.execute("SELECT amount FROM fin_allocations WHERE budget_id=? AND target_kind='card' "
+                              "ORDER BY target_id", (budget,)).fetchall()
+        assert [int(r[0]) for r in allocated] == [20_000, 20_000]
+    sync_once(books, fake, LATER)
+    assert sorted(fake.sent("card_state")) == [("card-coder", "freeze"), ("card-seller", "freeze")]
+    with books.transaction() as c:
+        # Zero leaves no room: the reserves are over it, so raising to exactly them does not lift the seller's card.
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 40_000}).status == "committed"
+        assert _status(c, seller) == "frozen"
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 100_000}).status == "committed"
+        assert _status(c, seller) == "active" and _frozen_by(c, seller) is None
+        assert _status(c, coder) == "frozen" and _frozen_by(c, coder) == "person"
+    sync_once(books, fake, LATER)
+    sent = fake.sent("card_state")
+    assert ("card-seller", "unfreeze") in sent and ("card-coder", "unfreeze") not in sent
+
+
+def test_a_pause_takes_effect_now_and_a_zero_raise_is_not_a_pause_of_later_days(books):
+    fake = FakeMercury()
+    budget, coder, _ = _world(books, fake)
+    with books.transaction() as c:
+        later = act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 0, "effective_from": "2026-11-01"})
+        assert later.code == "invalid" and "takes effect now" in later.reason
+        assert _status(c, coder) == "active"
+        # Lowering to a non-zero amount below the reserves is still refused: only a pause may go to zero.
+        assert act(c, OWNER, "budget_update", {"budget_id": budget, "amount": 39_000}).code == "invalid"
+
+
 def test_a_card_that_used_more_than_its_allocation_reserves_what_it_used(books):
     fake = FakeMercury()
     budget, coder, _ = _world(books, fake)

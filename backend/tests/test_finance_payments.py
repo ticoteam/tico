@@ -112,9 +112,9 @@ def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
                       event="finance.budget.warn", subject="e1", revision=None)
         assert not by_bot["ok"] and _card(c, eve)["status"] == "frozen"         # a bot's rule has only the bot's rights
         paused = pause(c, "rule-3", OWNER, {}, values, event="finance.budget.warn", subject="e2", revision=None)
-        # Pausing sets the budget to 0, below the 20.00 the card reserves: refused, and the reason names the card (§4.4).
-        assert not paused["ok"] and "lower these cards first" in paused["detail"]
-        assert FA.budget_state(c, budget_id, AT).amount == 30_000
+        assert paused["ok"]
+        assert FA.budget_state(c, budget_id, AT).amount == 0
+        assert _card(c, eve)["status"] == "frozen"         # a pause freezes the budget's cards, keeping allocations
         rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
         assert tuple(rule_of)[1] == OWNER
 

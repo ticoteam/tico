@@ -370,7 +370,7 @@ def _cards_fit(ctx: Ctx, who: str, b: B.Budget, effective: str, amount: int) -> 
     amounts there (§4.4): a card reserves the more of its allocation and what it has used (holds and actuals). Names
     the cards to lower first where `who` may see them and the budget's numbers. Separate from `_fit`, which checks the
     children alone."""
-    if not b.id:
+    if not b.id or amount == 0:      # a pause (0) freezes its cards instead (cards.freeze_paused)
         return
     from .cards import sees as sees_card
     versions = SB.versions(ctx.c, [b.id])[b.id]
@@ -468,6 +468,8 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if amount is not None and amount < 0:
         raise invalid("a budget amount is 0 or more")
     effective = _effective(ctx, old, V.opt_day(p, "effective_from"))
+    if amount == 0 and dates.day(effective) > dates.day(ctx.today):
+        raise invalid("a pause takes effect now: leave effective_from out")
     if amount is not None:
         _fit(ctx, who, old, effective, amount)
         _cards_fit(ctx, who, old, effective, amount)
@@ -477,8 +479,11 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         version = SB.insert_version(ctx.c, old.id, effective, amount, ctx.book.base_currency, who, ctx.at) \
             if amount is not None else None
         ctx.changed()
-        if amount is not None:
-            from .cards import unfreeze_with_room      # a raise that leaves room lifts the cutoff freezes under it
+        if amount == 0:
+            from .cards import freeze_paused           # a pause freezes the cards on it and under it (§8.2)
+            freeze_paused(ctx, old.id, aid, who)
+        elif amount is not None:
+            from .cards import unfreeze_with_room      # a raise that leaves room lifts the freezes under it
             unfreeze_with_room(ctx, old.id, aid)
         return {"budget_id": old.id, "version": version}
     return Plan(K.default_gate(ctx.org, who, "budget_update"), f"Change budget {old.name}" +

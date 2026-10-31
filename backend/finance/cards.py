@@ -454,6 +454,20 @@ def unfreeze_with_room(ctx: Ctx, budget_id: str = "", aid: str = "") -> int:
     return lifted
 
 
+def freeze_paused(ctx: Ctx, budget_id: str, aid: str, by: str) -> int:
+    """A budget set to 0 (a pause) freezes every active card on it and under it, as `frozen_by` budget. Their
+    allocations stay; a raise that leaves room lifts them (`unfreeze_with_room`). Each freeze goes to Mercury through
+    `sync`. How many."""
+    from .budgeting import subtree
+    cards = SK.cards_on_budgets(ctx.c, subtree(ctx, budget_id))
+    for card in cards:
+        cid = str(card["id"])
+        SK.update(ctx.c, "fin_cards", cid, {"status": "frozen", "freeze_by": "budget", "freeze_budget_id": budget_id,
+                                            "updated_at": ctx.at})
+        sync(ctx, cid, aid, by)
+    return len(cards)
+
+
 def _over(ctx: Ctx, budget_id: str, at: date) -> bool:
     """Whether a budget is at or past its amount on `at`, counting spend, holds and reserves."""
     from .budgeting import state

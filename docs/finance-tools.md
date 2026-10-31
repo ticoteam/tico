@@ -59,9 +59,11 @@ all.
 A card's cutoff freeze (its budget reached its decline amount) is recorded as `frozen_by: budget` on the card row. It
 lifts by itself once every budget over the card has room again: a new period, a raise that leaves room, or a hold or
 reserve released (checked at each hourly look and at each raise). A freeze a person made (`frozen_by: person`), or one a
-person claims by freezing the card, stays until a person unfreezes it. A budget can't be set below what its cards
-reserve (each card's allocation, or what it has used if more) plus its child budgets; the refusal names the cards to
-lower first.
+person claims by freezing the card, stays until a person unfreezes it. A pause (the budget set to 0, which takes
+effect now) freezes every active card on the budget and under it, also as `frozen_by: budget`, and keeps their
+allocations; a raise that leaves room lifts them the same way. A budget can't be set to a non-zero amount below what its
+cards reserve (each card's allocation, or what it has used if more) plus its child budgets; the refusal names the cards
+to lower first.
 
 `hub finance search --kind card --vendor "Acme Cloud"` answers "which of my cards works at this vendor". `card_unsave`
 records that a card was removed from a vendor's account. Both are gated: a bot's `card_save` or `card_unsave` waits for
