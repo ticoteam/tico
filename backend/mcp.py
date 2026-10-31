@@ -35,11 +35,14 @@ RAW_BLOCK_BYTES = 1024 * 1024
 
 def raw_body(raw):
     """(the request's content, its headers) for `raw` as `Client.request` sends it: a file or a MultipartBody streamed a
-    block at a time with its size up front, anything else as bytes."""
+    block at a time with its size up front, anything else as bytes. A seekable file is rewound first, so it is sent
+    whole, as its size says."""
     content_type = getattr(raw, "content_type", "application/octet-stream")
     if isinstance(raw, MultipartBody):
         return raw_blocks(raw), {"Content-Type": content_type, "Content-Length": str(raw.size)}
     if hasattr(raw, "read"):
+        if hasattr(raw, "seek"):
+            raw.seek(0)
         return raw_blocks(raw), {"Content-Type": content_type, "Content-Length": str(os.fstat(raw.fileno()).st_size)}
     return bytes(raw), {"Content-Type": content_type}
 

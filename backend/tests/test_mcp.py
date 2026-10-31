@@ -537,6 +537,27 @@ def test_a_raw_file_over_the_servers_limit_is_refused_before_it_is_sent(api, doo
     assert refused.value.status == 413 and refused.value.code == "too_large"   # the Content-Length check, up front
 
 
+def test_raw_file_position(api, door, tmp_path):
+    """A file passed after its header was read is sent whole: its Content-Length is the file's size, so its bytes are
+    too (as Client.request rewinds a file before sending it)."""
+    _, _, attempt = setup_attempt(api)
+    path = tmp_path / "plan.md"
+    expected = b"# Plan\nComplete document.\n"
+    path.write_bytes(expected)
+    with path.open("rb") as source:
+        source.read(7)
+        made = door(attempt["token"]).request(
+            "POST", "/api/v2/files/uploads?name=plan.md",
+            raw=source, key="repro-file-position",
+        )
+    response = api.get(
+        "/api/v2/files/" + made["file"]["id"],
+        headers=headers(attempt["token"]),
+    )
+    assert response.status_code == 200
+    assert response.content == expected
+
+
 def test_a_raw_body_and_a_json_body_are_one_or_the_other():
     with pytest.raises(ValueError):
         InProcessApi(None, None, "Bearer unused", "http://testserver").request(
