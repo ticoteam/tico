@@ -562,7 +562,7 @@ def view_hold(c, who, hold, role=None, summary=False):
         rule_ids, destinations = rule_ids[:SUMMARY_RULES], destinations[:SUMMARY_NAMES]
     rules = []
     for rid in rule_ids:
-        row = c.execute("SELECT id, text, version, status, if_broken FROM org_rules WHERE id=?", (rid,)).fetchone()
+        row = c.execute("SELECT id, kind, text, version, status, if_broken FROM org_rules WHERE id=?", (rid,)).fetchone()
         if row:
             rules.append({**dict(row), "text": row["text"][:SUMMARY_CHARS]} if summary else dict(row))
     reviewer_name = H.person_name(c, H.actor_id(hold["reviewer"])) if hold["reviewer"] else None

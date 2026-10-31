@@ -155,6 +155,7 @@ async function pageRules() {
           settings: [], settingsBy: new Map(), settingsLeft: 0, filter: {q: '', who: '', with: '', from: '', due: false, status: '', routine: '', settings: false, moreFrom: false},
           seq: 0, loaded: new Set(), error: ''};
     ruWire();
+    void ruleChecksMount(RU.root.querySelector('.ru-ph'));
   }
   const state = RU;
   if (state.tab !== tab) {

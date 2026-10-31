@@ -55,7 +55,7 @@ function ruleHoldHTML(h) {
   const reviewer = !!h.nonce || h.can_send;
   const decided = h.state === 'sent' ? `Sent anyway${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}`
     : h.state === 'kept' ? `Kept blocked${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}` : '';
-  const ruleId = h.rules?.[0]?.id;
+  const rule = h.rules?.[0];
   return `<article class="rh-card" data-hold="${esc(h.id)}">
     <header><span class="rh-pill ${cls}">${word}</span><span class="rh-to muted">${esc(h.author_name || actorLabel(h.author))}${
       (h.to || []).length ? ' → ' + esc(h.to.join(', ')) : ''}</span></header>
@@ -63,7 +63,7 @@ function ruleHoldHTML(h) {
     <div><div class="rh-lbl">Rule</div>${rules || '<div class="rh-rule muted">A rule that no longer exists</div>'}</div>
     ${h.why ? `<div><div class="rh-lbl">Appeal</div><div class="rh-why">${esc(h.why)}</div></div>` : ''}
     ${decided ? `<p class="muted rh-done">${decided}</p>` : reviewer ? `<div class="rh-acts">
-      ${ruleId ? `<a class="ghost small rh-btn" href="#/rules?rule=${encodeURIComponent(ruleId)}">Edit rule</a>` : ''}
+      ${rule ? `<a class="ghost small rh-btn" href="${esc(ruHref(rule.kind, {rule: rule.id}))}">Edit rule</a>` : ''}
       ${h.can_send ? `<button class="ghost small" type="button" data-hold-send="${esc(h.nonce || '')}">Send anyway</button>` : ''}
       <span class="spacer"></span><button class="primary small" type="button" data-hold-keep>Keep blocked</button></div>` : ''}
     <p class="rh-err" role="status" hidden></p>
@@ -107,6 +107,7 @@ function ruleChecksLineText(s) {
   if (s.usd_left != null) parts.push(`$${Math.round(s.usd_left)} left`);
   return parts.join(' · ');
 }
+// Called by pageRules once it has drawn its header.
 async function ruleChecksMount(head) {
   if (!head || head.querySelector('.ru-checks')) return;
   const line = document.createElement('span');
@@ -118,16 +119,3 @@ async function ruleChecksMount(head) {
     line.classList.toggle('warn', !!stats.on && stats.unchecked_today > 0 && stats.unchecked_today >= stats.checks_today / 4);
   } catch { line.remove(); }
 }
-// The Rules page draws its header itself; the line joins it once it is there.
-function ruleChecksWatch() {
-  if (!String(location.hash || '').startsWith('#/rules')) return;
-  let tries = 0;
-  const look = () => {
-    const head = document.querySelector('#ru-root .ru-ph');
-    if (head) return void ruleChecksMount(head);
-    if (++tries < 100) setTimeout(look, 100);
-  };
-  look();
-}
-window.addEventListener('hashchange', ruleChecksWatch);
-document.addEventListener('DOMContentLoaded', ruleChecksWatch);
