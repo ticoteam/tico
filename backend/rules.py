@@ -133,6 +133,7 @@ WAKE_EVENTS = {
     "release_published": "a release was published",
     "release_now": "a person asked for a release now",
     "task_manager_report": "the Task Manager's report for a department",
+    "bookkeeper_check": "the Bookkeeper's Books check found new Finance work",
     "pr_checks_done": "every check on a pull request head finished",
     "pr_review": "a GitHub review or review comment on a pull request, not from a person",
     "subtask_finished": "a subtask finished",

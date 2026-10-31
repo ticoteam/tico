@@ -122,9 +122,19 @@ def run_invariants(store, auth, at, failures=None):
         SR.write(store, run)
 
 
+def run_bookkeeper_check(store, auth, at, failures=None):
+    # The Bookkeeper's Finance work queue, read in plain code (backend/bookkeeper.py). Nothing new is a quiet run: no task
+    # and no model call. Something new opens or updates one "Books check" task for the Bookkeeper.
+    with SR.recording(store, "bookkeeper_check", failures, "bookkeeper") as run:
+        from . import bookkeeper
+        with store.transaction() as c:
+            made = bookkeeper.check(c, auth, stamp(at))
+        run.did(made["words"], quiet=not made["items"])
+
+
 QUICK = {"still_wanted": run_still_wanted, "kpi_asks": run_kpi_asks, "health_scan": run_health_scan,
          "ask_deadlines": run_ask_deadlines, "task_manager_report": run_task_manager_report,
-         "engineering_exceptions": run_engineering_exceptions}
+         "engineering_exceptions": run_engineering_exceptions, "bookkeeper_check": run_bookkeeper_check}
 
 
 def run_now(store, auth, key, actor):

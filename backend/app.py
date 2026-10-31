@@ -184,6 +184,13 @@ def create_app(settings=None):
                 finance.ensure_setup(c, settings.owner_email)
         except Exception as exc:
             telemetry.capture("finance_setup", exc)
+        # The Bookkeeper once Finance is set up (backend/bookkeeper.py): built if missing, its rights, one view ask.
+        try:
+            from . import bookkeeper
+            with store.transaction() as c:
+                bookkeeper.ensure(c, onboarding, auth)
+        except Exception as exc:
+            telemetry.capture("bookkeeper", exc)
         # The Librarian gets the market posts from Listening, once (Settings > Listening).
         try:
             from . import listening
@@ -7715,6 +7722,8 @@ def create_app(settings=None):
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
     from . import finance_routes
     finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
+    from . import bills_address
+    bills_address.install(app, store, auth)             # the bills address: emailed bills become draft bills
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)
