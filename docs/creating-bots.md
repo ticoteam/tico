@@ -635,7 +635,7 @@ Levers set in **Settings → Bots**, not in the repository:
   the runtime refused). **None (fail)** is the default. A pick is saved with
   **Save bot**, like every change in the bot editor ([harnesses.md](harnesses.md#choosing-a-harness-model-and-effort)). The hop runs in a side session of its own; the primary's session is kept for its next turn. OpenRouter
   is not a bot harness. With none set, a usage limit still moves the turn to another provider signed in on
-  the bot's computer unless the owner turned that off in **Settings → Computers → Models** (docs/how-it-works.md).
+  the bot's computer unless the owner turned that off in **Settings → Models** (docs/how-it-works.md).
 - **Task model**, **Task effort** and **Task context length**: a separate harness and model, effort, and context
   length for task sessions, each **Same as bot** until set. Set them in the editor and press **Save bot**, or click
   **Tasks** beside the model in the bots list. A task effort and a task context length work without a task model.
@@ -785,7 +785,7 @@ is supplied. Leave `slug` out: Tico picks a free one from `name` (else the templ
 reserved slugs, and returns it. Restore an archived bot only when asked.
 Use `build: false` to register only the record,
 for example when building it yourself on a Computer. BotOps defaults to record-only registration.
-An empty model in Add from template also inherits the Team default; choose one in Settings > Computers > Models
+An empty model in Add from template also inherits the Team default; choose one in Settings > Models
 if none is saved. `hub_template_list` includes Setup questions, first-routine output and draft-only status,
 and the example result. Unknown templates are refused before creating a record. To correct an existing
 record, update its `template` through the definition API or `hub_bot_update`; this changes metadata,
