@@ -3,6 +3,7 @@ signed cents, the webhook signature check, statement balances, and the hash that
 recipient. Mercury is the first provider; its documented gaps are settled here, once, in tested functions."""
 import hashlib
 import hmac
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from decimal import Decimal, InvalidOperation
@@ -188,3 +189,43 @@ REQUEST_STATUS = {"pendingApproval": "awaiting_bank_approval", "approved": "subm
 def request_status(value: object) -> str:
     """A Mercury send-money request's status as a payment status; anything unknown stays where it is ("")."""
     return REQUEST_STATUS.get(str(value or ""), "")
+
+
+# ------------------------------------------------------------------------------------------------ Stripe
+STRIPE_BALANCE = "balance"        # Stripe's balance transactions all sit on the one balance account
+STRIPE_PAYOUT = "payout"          # the balance moved to the bank: a transfer, matched to the deposit, never income
+STRIPE_SALES = ("charge", "payment", "refund", "payment_refund", "adjustment")   # income, or its reversal (disputes)
+STRIPE_COSTS = ("stripe_fee", "network_cost", "tax_fee")                         # Stripe's own charges, no income
+
+
+def _int(value: object) -> int:
+    """A Stripe amount: whole cents (Stripe never sends a fraction of one)."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise invalid("a Stripe amount is a whole number of cents")
+    return value
+
+
+def stripe_txn(raw: dict[str, Any]) -> FeedTxn:
+    """A Stripe balance transaction. Its `net` (gross less fee) is what the balance moved, so it is the feed amount;
+    gross and fee are kept in the raw copy for posting (`stripe_parts`). The day is the UTC day it was created. Only
+    the billing name is kept from the source, the part that matches an invoice; the source is kept by id."""
+    tid = str(raw.get("id") or "")
+    if not tid:
+        raise invalid("a balance transaction has an id")
+    gross, fee, net = _int(raw.get("amount")), _int(raw.get("fee")), _int(raw.get("net"))
+    created = _int(raw.get("created"))
+    day = datetime.fromtimestamp(created, timezone.utc).date().isoformat()
+    source = raw.get("source")
+    billing = _dict(_dict(source).get("billing_details"))
+    keep: dict[str, Any] = {"id": tid, "type": str(raw.get("type") or ""), "amount": gross, "fee": fee, "net": net,
+                            "currency": str(raw.get("currency") or ""),
+                            "description": str(raw.get("description") or "")[:500],
+                            "source": str(_dict(source).get("id") or source or "")[:200]}
+    return FeedTxn(provider_id=tid, account_id=STRIPE_BALANCE, amount=net, txn_date=day, status=POSTED,
+                   kind=str(raw.get("type") or ""), counterparty=str(billing.get("name") or "")[:200],
+                   description=str(raw.get("description") or "")[:500], version=1, raw=keep)
+
+
+def stripe_parts(raw: Mapping[str, Any]) -> tuple[int, int]:
+    """A stored Stripe balance transaction's (gross, fee) in cents."""
+    return _int(raw.get("amount")), _int(raw.get("fee"))

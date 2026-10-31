@@ -478,6 +478,8 @@ banking_ring = sync.ring
 banking_step = sync.step
 mercury_delivery = sync.delivery
 mercury_probe = sync.probe_credential
+stripe_delivery = sync.stripe_delivery
+stripe_probe = sync.stripe_probe
 
 
 # ------------------------------------------------------------------------------------------------ watch rules

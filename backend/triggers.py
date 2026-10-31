@@ -532,6 +532,12 @@ def _route(c, found, delivery, type_, via, body, headers, auth):
     shown = content + (f"\nThe rest: hub trigger delivery {trigger_id} {delivery} --part 2" if cut else "")
     payload = _payload_of(body)
     fired = []
+    if effective_preset(found) == "stripe_finance":
+        # Stripe's balance events are Finance's alone (backend/finance/stripe_sync.py): kept once by event id, a
+        # doorbell only, never shown to rules.
+        from .finance import actions as finance
+        kept = finance.stripe_delivery(c, payload if isinstance(payload, dict) else {})
+        return fired, [{"outcome": "finance", "target": "finance", "ok": True, "detail": "kept" if kept else "seen"}]
     if effective_preset(found) == "mercury":
         # Mercury's events are Finance's alone (backend/finance/sync.py): kept once by event id, never shown to rules.
         from .finance import actions as finance

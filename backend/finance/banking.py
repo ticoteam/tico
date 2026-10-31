@@ -79,6 +79,9 @@ def connection_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     and savings are bank assets, IO is a credit card liability. Payments through Mercury's approval queue turn on
     only when someone other than the token's creator can approve in Mercury; Finance never falls back to direct
     send."""
+    if V.opt_text(p, "provider", 20) == "stripe":
+        from . import stripe_sync        # lazy: it imports this module
+        return stripe_sync.connection_create(ctx, who, p)
     V.only(p, ("provider", "credential_id", "name", "probe", "approver_email", "token_creator_email", "server_ip"))
     V.choice(p, "provider", ("mercury",))
     cred = V.text(p, "credential_id", 120)
@@ -309,6 +312,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
         row = SK.get(ctx.c, "fin_feed_txns", fid)
     if str(row["status"]) == "ignored":
         return
+    if str(money["kind"]) == "stripe":
+        from . import stripe_post        # lazy: it posts through this module's helpers
+        stripe_post.settle(ctx, row, money, t)
+        return
     gl = _gl(ctx, money)
     pay = SK.payment_by_request(ctx.c, t.request_id) if t.request_id else None
     if pay is None and t.amount < 0:
@@ -325,7 +332,7 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     if t.kind in F.TRANSFER_KINDS:
         other = _counterpart(ctx, row, money)
         if other is not None:
-            _transfer(ctx, row, money, other)
+            transfer(ctx, row, money, other)
         return                      # one side of a move between our accounts: it posts when the other side arrives
     if program and card is not None:
         # A charge or refund on a card Tico issued posts against the card liability: to the line a posting rule picks,
@@ -355,6 +362,10 @@ def _settle(ctx: Ctx, row: Any, money: Any, card: Any, t: F.FeedTxn) -> None:
     # Anything else: a payment marked paid from this account, else the one open bill or invoice it pays, else the
     # first posting rule (or the counterparty's default line), else a debit posts to Other expenses and a credit
     # waits, and a person is asked (needs_category).
+    if t.amount > 0:
+        from . import stripe_post        # a deposit may be the transfer of a Stripe payout
+        if stripe_post.bank_deposit(ctx, row, money, t):
+            return
     expected = documents.expected_match(ctx, row, money, t)
     if expected:
         if expected == documents.ASK:   # it may pay one of several marked payments: it stays new, a person picks
@@ -634,7 +645,7 @@ def _counterpart(ctx: Ctx, row: Any, money: Any) -> Any:
     return found[0] if found else None
 
 
-def _transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
+def transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
     """One entry for both sides: Dr the account money went to, Cr the one it left."""
     other_money = SK.get(ctx.c, "fin_money_accounts", str(other["money_account_id"]))
     here, there = _gl(ctx, money), _gl(ctx, other_money)
