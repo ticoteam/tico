@@ -9,6 +9,7 @@ from decimal import Decimal
 from backend import usage_limits
 from backend.finance import actions as FA
 from backend.finance import gateway_sync
+from backend.finance import reads as FR
 from backend.finance.store import tico as finance_tico
 from backend.tests.test_api import api, get, headers  # noqa: F401
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, budget, finance_template, spend, store  # noqa: F401
@@ -16,8 +17,8 @@ from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, 
 NOON = datetime(2026, 10, 15, 12, tzinfo=timezone.utc)
 
 
-def _turn(c, bot, finished, cost, model="tico-medium", billing="api"):
-    tid = f"t{bot}{finished}{model}"
+def _turn(c, bot, finished, cost, model="tico-medium", billing="api", tid=None):
+    tid = tid or f"t{bot}{finished}{model}"
     c.execute("INSERT INTO turns(id, bot, started, finished, model, est_cost_usd, billing) VALUES(?,?,?,?,?,?,?)",
               (tid, bot, finished, finished, model, cost, billing))
     return tid
@@ -360,7 +361,118 @@ def test_a_retry_after_a_revoked_grant_shows_no_amount(api):
     assert again["action_id"] == first["action_id"] and "1000" not in json.dumps(again)
     seen = get(api, "finance/actions/" + first["action_id"], token="ben-test")
     assert seen["status"] == first["status"] and "1000" not in json.dumps(seen)
+    with store.transaction() as c:                      # the receipt lapses: Finance replays the action itself
+        c.execute("DELETE FROM idempotency WHERE actor='human:ben'")
+    lapsed = api.post("/api/v2/finance/actions", json=body, headers=key).json()
+    assert lapsed["action_id"] == first["action_id"] and "1000" not in json.dumps(lapsed)
     get(api, "finance/actions/" + first["action_id"], token="cara-test", expected=404)
     with store.transaction() as c:                      # cara is named to decide it: she reads what she decides
         c.execute("UPDATE fin_actions SET approval_to='human:cara' WHERE id=?", (first["action_id"],))
     assert "1000" in get(api, "finance/actions/" + first["action_id"], token="cara-test")["reason"]
+
+
+def _attempt(c, jid, aid, state="running"):
+    _job(c, jid, state)
+    c.execute("INSERT OR IGNORE INTO runners(id, label, operator, token_hash, created) VALUES('r1', 'r1', 'ana', 'h', ?)",
+              (AT,))
+    c.execute("INSERT INTO attempts(id, job_id, bot, runner_id, generation, token_hash, state, lease_until, created) "
+              "VALUES(?,?,?,?,?,?,?,?,?)", (aid, jid, "coder", "r1", 1, "h" + aid, "running", AT, AT))
+
+
+def _hold(c, hid):
+    return tuple(c.execute("SELECT status, entry_id FROM fin_holds WHERE id=?", (hid,)).fetchone())
+
+
+def test_a_reason_naming_a_budget_above_hides_once_that_budget_is_out_of_view(books):
+    with books.transaction() as c:
+        soft = account(c, "6100")
+        root = act(c, OWNER, "budget_create", {"name": "Software", "account_id": soft, "amount": 1_000,
+                                               "at_limit": "decline"}).result["budget_id"]
+        web = act(c, OWNER, "budget_create", {"name": "Software web", "account_id": soft, "team": "web",
+                                              "parent_id": root, "amount": 500, "at_limit": "decline"}).result["budget_id"]
+        spend(c, "6100", 600)
+        grant = act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "expenses"})
+        made = act(c, "human:cara", "allocation_set", {"budget_id": web, "target_kind": "teammate",
+                                                       "target_id": "human:eve", "amount": 450})
+        assert "400" in made.reason
+        act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]})
+        assert FR.action_for(c, "human:cara", made.action_id)["reason"] == ""
+        assert "400" in FR.action_for(c, OWNER, made.action_id)["reason"]
+
+
+def test_an_image_hold_does_not_count_beside_the_ai_posting(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        _attempt(c, "jimg", "aimg")
+        FA.run_hold(c, "coder", "jimg", at=AT)
+        _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.60, model="tico-image", tid="aimg")
+        assert FA.run_ended(c, "jimg", "aimg", "2026-10-15T13:00:01.000000Z") == "settled"
+        FA.usage_snapshot(c, _meter("2026-10-15T16:00:00Z", **{"tico-medium": "0.50", "tico-image": "0.60"}),
+                          fetched_at=AT)
+        FA.post_usage(c, "2026-10-15T16:05:00.000000Z")
+        assert _events(c, ai) == []
+
+
+def test_a_replaced_snapshot_assigns_nothing_twice(books):
+    with books.transaction() as c:
+        _turn(c, "coder", "2026-10-15T13:00:00.000000Z", 0.50)
+        FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.50"}), fetched_at=AT)
+        FA.post_usage(c, "2026-10-15T14:05:00.000000Z")
+        FA.usage_snapshot(c, _meter("2026-10-15T14:00:00Z", **{"tico-medium": "0.70"}),
+                          fetched_at="2026-10-15T14:10:00.000000Z")
+        FA.post_usage(c, "2026-10-15T14:15:00.000000Z")
+        assert _usage_lines(c) == {("bot:coder", "5100"): 50, ("", "5100"): 20, ("", "1100"): -70}
+
+
+def test_no_settled_hold_outlives_its_months_final_posting(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
+        # Claimed on Oct 31, still running at October's final posting, ended in November.
+        late = FA.run_hold(c, "coder", "joct", at="2026-10-31T23:00:00.000000Z").hold_id
+        FA.usage_snapshot(c, _meter("2026-11-04T00:00:00Z", **{"tico-medium": "0.50"}) | {"month": "2026-10"},
+                          fetched_at="2026-11-04T00:00:00.000000Z")
+        FA.post_usage(c, "2026-11-04T00:05:00.000000Z")
+        run = _turn(c, "coder", "2026-11-05T00:00:00.000000Z", 0.30)
+        FA.run_ended(c, "joct", run, "2026-11-05T00:00:01.000000Z")
+        FA.usage_snapshot(c, _meter("2026-11-06T00:00:00Z", **{"tico-medium": "0.30"}) | {"month": "2026-11"},
+                          fetched_at="2026-11-06T00:00:00.000000Z")
+        FA.post_usage(c, "2026-11-06T00:05:00.000000Z")
+        assert _hold(c, late)[1] is not None
+    with books.transaction() as c:
+        # Settled in September, but September's meter billed nothing: the final posting frees it.
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000, "effective_from": "2026-09-01"})
+        lone = FA.run_hold(c, "coder", "jsep", at="2026-09-20T10:00:00.000000Z").hold_id
+        run = _turn(c, "coder", "2026-09-20T11:00:00.000000Z", 0.20)
+        FA.run_ended(c, "jsep", run, "2026-09-20T11:00:01.000000Z")
+        FA.usage_snapshot(c, {"month": "2026-09", "rows": [], "as_of": "2026-10-04T00:00:00Z"},
+                          fetched_at="2026-10-04T00:00:00.000000Z")
+        FA.post_usage(c, "2026-10-04T00:05:00.000000Z")
+        assert _hold(c, lone) == ("released", None)
+
+
+def test_expiry_never_releases_a_live_runs_hold_past_its_page(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 1_000})
+        _job(c, "live1", "running")
+        _job(c, "live2", "leased")
+        first = FA.run_hold(c, "coder", "live1", at="2026-10-15T10:00:00.000000Z").hold_id
+        second = FA.run_hold(c, "coder", "live2", at="2026-10-15T11:00:00.000000Z").hold_id
+        dead = FA.run_hold(c, "coder", "dead", at=AT).hold_id
+        at = "2026-10-16T01:00:00.000000Z"
+        assert FA.expire_holds(c, at, most=1) == 1
+        assert [_hold(c, h)[0] for h in (first, second, dead)] == ["held", "held", "released"]
+
+
+def test_a_claim_may_spend_what_is_left_of_the_bots_own_allocation(books):
+    with books.transaction() as c:
+        ai = budget(c, "AI services")
+        act(c, OWNER, "budget_update", {"budget_id": ai, "amount": 100})
+        act(c, OWNER, "allocation_set", {"budget_id": ai, "target_kind": "teammate", "target_id": "bot:coder",
+                                         "amount": 100})
+        spend(c, "5100", 97, teammate="bot:coder")
+        held = FA.run_hold(c, "coder", "job1", at=AT)
+        assert not held.refused and held.hold_id
+        assert c.execute("SELECT amount FROM fin_holds WHERE id=?", (held.hold_id,)).fetchone()[0] == 3

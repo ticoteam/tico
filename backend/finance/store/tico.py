@@ -207,15 +207,13 @@ def video_jobs(c: sqlite3.Connection, job_ids: Sequence[str], video_models: Sequ
     return out
 
 
-def live_jobs(c: sqlite3.Connection, job_ids: Sequence[str]) -> set[str]:
-    """The jobs still out with a runner (leased, running, or not yet known to have ended)."""
-    out: set[str] = set()
-    for i in range(0, len(job_ids), 500):
-        chunk = list(job_ids[i:i + 500])
-        rows = c.execute(f"SELECT id FROM jobs WHERE id IN ({','.join('?' * len(chunk))}) "
-                         "AND state IN ('leased', 'running', 'uncertain')", chunk).fetchall()
-        out.update(str(r[0]) for r in rows)
-    return out
+def live_expired_run_holds(c: sqlite3.Connection, at: str) -> list[str]:
+    """Run holds past their expiry whose job is still out with a runner (leased, running, or not yet known to have
+    ended)."""
+    return [str(r[0]) for r in c.execute(
+        "SELECT h.id FROM fin_holds h JOIN jobs j ON j.id = substr(h.source_id, 5) WHERE h.source='run' "
+        "AND h.status='held' AND h.expires_at IS NOT NULL AND h.expires_at<=? AND substr(h.source_id, 1, 4)='job:' "
+        "AND j.state IN ('leased', 'running', 'uncertain')", (at,))]
 
 
 def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:

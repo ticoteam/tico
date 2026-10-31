@@ -69,13 +69,13 @@ def last_entry(c: sqlite3.Connection, book_id: str, prefix: str) -> str | None:
 
 
 def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int = 1000) -> list[tuple[str, str]]:
-    """(hold id, source id) of every run hold placed in `month` (YYYY-MM) whose run ended (settled) at or before
-    `through` and that no entry has taken in yet, read a page at a time."""
+    """(hold id, source id) of every run hold whose run ended (settled) in `month` (YYYY-MM) at or before `through`
+    and that no entry has taken in yet, read a page at a time."""
     out: list[tuple[str, str]] = []
     last = ""
     while True:
         rows = c.execute("SELECT id, source_id FROM fin_holds WHERE source='run' AND status='settled' AND entry_id IS NULL "
-                         "AND substr(held_on, 1, 7)=? AND settled_at<=? AND id>? ORDER BY id LIMIT ?",
+                         "AND substr(settled_at, 1, 7)=? AND settled_at<=? AND id>? ORDER BY id LIMIT ?",
                          (month, through, last, page)).fetchall()
         out += [(str(r[0]), str(r[1])) for r in rows]
         if len(rows) < page:
@@ -83,10 +83,19 @@ def run_holds_settled(c: sqlite3.Connection, month: str, through: str, page: int
         last = str(rows[-1][0])
 
 
-def expired_run_holds(c: sqlite3.Connection, at: str, most: int) -> list[tuple[str, str]]:
-    return [(str(r[0]), str(r[1])) for r in c.execute(
-        "SELECT id, source_id FROM fin_holds WHERE source='run' AND status='held' AND expires_at IS NOT NULL "
-        "AND expires_at<=? ORDER BY expires_at LIMIT ?", (at, most))]
+def posted_by_teammate(c: sqlite3.Connection, book_id: str, account_id: str, prefix: str) -> dict[str, int]:
+    """{teammate: cents} usage entries whose source id starts `prefix` put on each teammate on one account."""
+    rows = c.execute("SELECT t.value, coalesce(sum(l.amount), 0) FROM fin_lines l JOIN fin_entries e ON e.id = l.entry_id "
+                     "JOIN fin_line_tags t ON t.line_id = l.id AND t.kind = 'teammate' WHERE e.book_id=? "
+                     "AND e.source='usage' AND substr(e.source_id, 1, ?) = ? AND l.account_id=? GROUP BY t.value",
+                     (book_id, len(prefix), prefix, account_id)).fetchall()
+    return {str(r[0]): int(r[1]) for r in rows}
+
+
+def release_settled(c: sqlite3.Connection, hold_id: str, at: str) -> int:
+    """A settled run hold no posting will ever stand for (its month's meter billed nothing on its line) frees up."""
+    return c.execute("UPDATE fin_holds SET status='released', released_at=? WHERE id=? AND status='settled' "
+                     "AND entry_id IS NULL", (at, hold_id)).rowcount
 
 
 def extend_hold(c: sqlite3.Connection, hold_id: str, expires_at: str) -> int:

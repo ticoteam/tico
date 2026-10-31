@@ -8,6 +8,7 @@ from datetime import datetime, timedelta
 
 from . import budgeting
 from .context import load
+from .core import dates
 from .core.org import SYSTEM
 from .setup import AI
 from .store import budgets as SB
@@ -35,6 +36,10 @@ def source_id(job_id: str) -> str:
     return "job:" + job_id
 
 
+def scope_target(bot: str) -> str:
+    return "teammate:bot:" + bot
+
+
 def size(c: sqlite3.Connection, bot: str, at: str) -> int:
     """Cents to hold for one run of `bot`: its recent average Gateway-billed cost, never under FLOOR."""
     average = tico.bot_average_run(c, bot, tico.shift(at, days=-RECENT_DAYS), RECENT_RUNS)
@@ -58,8 +63,10 @@ def hold(c: sqlite3.Connection, bot: str, job_id: str, at: str | None = None) ->
     amount = size(c, bot, at)
     decision = budgeting.hold_place(c, budget_scope=scope, amount=amount, currency=book.base_currency, source="run",
                                     source_id=source_id(job_id), expires_at=expires, at=at)
-    if not decision.allowed and decision.action == "decline" and decision.limit_budget_id:
-        left = budgeting.budget_state(c, decision.limit_budget_id, at).remaining
+    if not decision.allowed and decision.action == "decline" and decision.limit_budget_id and decision.budget_id:
+        ctx = load(c, at)       # what is left for this bot: its own allocations on its path are its to spend
+        left = budgeting.state(ctx, decision.limit_budget_id, dates.day(ctx.today), scope_target(bot),
+                               budgeting.chain_of(ctx, decision.budget_id)).remaining
         if left is not None and 0 < left < amount:
             decision = budgeting.hold_place(c, budget_scope=scope, amount=left, currency=book.base_currency,
                                             source="run", source_id=source_id(job_id), expires_at=expires, at=at)
@@ -97,15 +104,11 @@ def ended(c: sqlite3.Connection, job_id: str, turn_id: str, at: str | None = Non
 
 
 def expire(c: sqlite3.Connection, at: str, most: int = 500) -> int:
-    """Release holds past their expiry. A run hold whose job is still out with a runner is extended instead: its run
-    has not reported back yet. How many were released."""
-    holds = SU.expired_run_holds(c, at, most)
-    if holds:
-        live = tico.live_jobs(c, [sid.removeprefix("job:") for _, sid in holds])
-        later = _hours_after(at, EXPIRES_HOURS)
-        for hid, sid in holds:
-            if sid.removeprefix("job:") in live:
-                SU.extend_hold(c, hid, later)
+    """Release holds past their expiry. Every run hold whose job is still out with a runner is extended first (its run
+    has not reported back yet), so no page of releases reaches one. How many were released."""
+    later = _hours_after(at, EXPIRES_HOURS)
+    for hid in tico.live_expired_run_holds(c, at):
+        SU.extend_hold(c, hid, later)
     return budgeting.holds_expire(c, at, most)
 
 

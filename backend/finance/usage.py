@@ -5,14 +5,15 @@ price since the last posting, Dr AI services (category `image`: Video production
 Amounts stay in nanodollars until the posted total for the month rounds to cents, so each posting is the rounded
 month-to-date total less what is already on the books for that month and line, and a rounding remainder carries
 forward by itself. A posting's source id names (month, line, snapshot), so running the job again posts nothing twice.
-Each bot gets what the install itself recorded it spending on the Gateway over the same window (runs on Tico models,
-image models on Video production; decision calls on AI services), never more than the posting; the rest is
-Unattributed. When the records come to more than the meter moved (the meter lags), the bots share the posting in
+Each bot gets what the install itself recorded it spending on the Gateway this month (runs on Tico models, image models
+on Video production; decision calls on AI services) less what earlier postings already put on it, never more than the
+posting; the rest is Unattributed. When the records come to more than the meter moved (the meter lags), the bots share the posting in
 proportion. Runs on the company's own keys, sign-ins and subscriptions are not on the meter and post nothing.
 
-A posting also takes in the run holds the meter now covers: settled holds placed in the snapshot's month whose run
-ended by the snapshot's time, even when the meter did not move. A month stays on the fetch list until a snapshot taken
-at least FINAL_DAYS after its end is posted, so a server that was down over the turn of the month still reads it."""
+A posting also takes in the run holds the meter now covers: run holds settled in the snapshot's month by the snapshot's
+time, even when the meter did not move. A month stays on the fetch list until a snapshot taken at least FINAL_DAYS after
+its end is posted, so a server that was down over the turn of the month still reads it; that final posting takes in
+(or, where the meter billed nothing on the line, releases) every settled run hold of the month still left."""
 import json
 import sqlite3
 from collections.abc import Mapping, Sequence
@@ -20,6 +21,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import cast
 from decimal import ROUND_HALF_EVEN, Decimal, InvalidOperation
 
+from . import budgeting
 from .context import Ctx, is_set_up, load
 from .core import dates
 from .core.errors import invalid
@@ -162,12 +164,21 @@ def _code_ids(ctx: Ctx) -> dict[str, str]:
     return {a.code: a.id for a in ctx.accounts.values()}
 
 
-def _window(month: str, prior: str | None, as_of: str) -> tuple[str, str]:
-    """(after, through) for attribution: since the month's last posting (else its start) up to the snapshot, cut at the
-    month's end so a late fetch does not take next month's runs."""
-    start = dates.month(month)
-    following = dates.add_months(start, 1).isoformat() + "T00:00:00"
-    return prior or start.isoformat() + "T00:00:00", min(as_of, following)
+def _through(month: str, as_of: str) -> str:
+    """Attribution reads the month's records up to the snapshot, cut at the month's end so a late fetch does not take
+    next month's runs."""
+    return min(as_of, dates.add_months(dates.month(month), 1).isoformat() + "T00:00:00")
+
+
+def unassigned(c: sqlite3.Connection, book_id: str, account_id: str, month: str, through: str, line: str,
+               models: Sequence[str]) -> dict[str, int]:
+    """{bot teammate: nanodollars} the install recorded on `line` this month up to `through` that no usage posting has
+    put on the bot yet. Progress lives in the books, not in snapshot rows, so a replaced snapshot assigns nothing twice."""
+    start = dates.month(month).isoformat() + "T00:00:00"
+    recorded = weights(c, start, through, line, models)
+    given = SU.posted_by_teammate(c, book_id, account_id, f"gateway:{month}:{line}:")
+    left = {k: v - given.get(k, 0) * NANO_PER_CENT for k, v in recorded.items()}
+    return {k: v for k, v in left.items() if v > 0}
 
 
 def _entry_day(ctx: Ctx, month: str, as_of: str) -> str:
@@ -196,18 +207,21 @@ def post(c: sqlite3.Connection, at: str | None = None, by: str = SYSTEM) -> list
 
 
 def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, object]]:
+    """Post one snapshot: each line that moved, then the run holds it covers, then the budget crossings once for all of
+    it (a hold still on AI services until the video line takes it in must not count beside the AI posting)."""
     c, ids = ctx.c, _code_ids(ctx)
     month, as_of, sid = str(snap["month"]), str(snap["as_of"]), str(snap["id"])
     prior = SU.last_posted(c, month)
     if prior is not None and as_of < str(prior["as_of"]):
         SU.ignore(c, sid, ctx.at)
         return []
-    after, through = _window(month, str(prior["as_of"]) if prior else None, as_of)
+    through = _through(month, as_of)
     models = video_models(snap)
     meter = {"ai": int(str(snap["ai_nano"])), "video": int(str(snap["video_nano"]))}
     holds = _holds_by_line(c, month, as_of, models)
     report: dict[str, object] = {"as_of": as_of}
     done: list[dict[str, object]] = []
+    touched: list[tuple[str, str]] = []
     for line, code in LINES:
         account = ids.get(code)
         if not account or CREDIT not in ids:
@@ -216,31 +230,63 @@ def _post_one(ctx: Ctx, snap: Mapping[str, object], by: str) -> list[dict[str, o
         delta = cents(meter[line]) - SU.posted_on(c, ctx.book.id, account, prefix)
         if delta:
             lines: list[dict[str, object]] = []
-            for mate, part in split(delta, weights(c, after, through, line, models)):
+            for mate, part in split(delta, unassigned(c, ctx.book.id, account, month, through, line, models)):
                 item: dict[str, object] = {"account_id": account, "amount": part,
                                            "description": f"Tico AI Gateway, {month}"}
                 if mate:
                     item["tags"] = {"teammate": mate}
                 lines.append(item)
+                touched.append((account, mate))
             lines.append({"account_id": ids[CREDIT], "amount": -delta, "description": f"Tico AI Gateway, {month}"})
             entry = {"date": _entry_day(ctx, month, as_of), "memo": f"Tico AI Gateway usage, {month}",
                      "source": "usage", "source_id": prefix + sid, "lines": lines}
-            made = post_entry(c, entry, by=by, hold_ids=holds[line], at=ctx.at)
+            made = post_entry(c, entry, by=by, hold_ids=holds[line], at=ctx.at, touch=False)
             done.append({"month": month, "line": line, "entry_id": made["entry_id"], "amount": delta})
-        elif holds[line]:
-            # The meter already carries these runs: the month's last posting on this line stands for them.
-            last = SU.last_entry(c, ctx.book.id, prefix)
-            for hid in holds[line] if last else []:
-                SB.absorb(c, hid, last or "")
+        else:
+            _absorb_into_last(ctx, prefix, holds[line], release=False)
         report[line] = {"meter_nano": meter[line], "posted": SU.posted_on(c, ctx.book.id, account, prefix)}
     SU.mark_posted(c, month, as_of, ctx.at)
-    _backlog_done(c, month, str(snap["created_at"]), by, ctx.at)
+    fetched = str(snap["created_at"])
+    if fetched >= _final_after(month):
+        _close_month(ctx, month, models)
+        _backlog_done(c, month, by, ctx.at)
+    _crossings(ctx, touched, by)
     _reconciled(c, month, report, by, ctx.at)
     return done
 
 
+def _absorb_into_last(ctx: Ctx, prefix: str, hold_ids: Sequence[str], *, release: bool) -> None:
+    """Settled run holds the meter already carries: the month's last posting on the line stands for them. With none
+    (the meter never billed that line), `release` frees them: the meter is the record."""
+    if not hold_ids:
+        return
+    last = SU.last_entry(ctx.c, ctx.book.id, prefix)
+    for hid in hold_ids:
+        if last:
+            SB.absorb(ctx.c, hid, last)
+        elif release:
+            SU.release_settled(ctx.c, hid, ctx.at)
+
+
+def _close_month(ctx: Ctx, month: str, models: Sequence[str]) -> None:
+    """The month's final posting: no settled run hold of the month outlives it."""
+    left = _holds_by_line(ctx.c, month, "9999-12-31T23:59:59.999999Z", models)
+    for line, _ in LINES:
+        _absorb_into_last(ctx, f"gateway:{month}:{line}:", left[line], release=True)
+
+
+def _crossings(ctx: Ctx, touched: Sequence[tuple[str, str]], by: str) -> None:
+    ids: list[str] = []
+    for account, mate in dict.fromkeys(touched):
+        b = budgeting.leaf(ctx, account, teammate=mate)
+        if b is not None:
+            ids += budgeting.chain_of(ctx, b.id)
+    if ids:
+        budgeting.crossings(ctx, ids, by)
+
+
 def _holds_by_line(c: sqlite3.Connection, month: str, as_of: str, models: Sequence[str]) -> dict[str, list[str]]:
-    """The settled run holds of `month` whose run ended by `as_of`, by the line their run cost lands on."""
+    """The settled run holds whose run ended (settled) in `month` by `as_of`, by the line their run cost lands on."""
     held = SU.run_holds_settled(c, month, as_of)
     video = tico.video_jobs(c, [sid.removeprefix("job:") for _, sid in held], models) if held else set[str]()
     out: dict[str, list[str]] = {"ai": [], "video": []}
@@ -278,9 +324,9 @@ def remember(c: sqlite3.Connection, month: str, by: str, at: str) -> None:
         SL.set_setting(c, BACKLOG_KEY, sorted([*months, month])[-MOST_BACKLOG:], by, at)
 
 
-def _backlog_done(c: sqlite3.Connection, month: str, fetched_at: str, by: str, at: str) -> None:
+def _backlog_done(c: sqlite3.Connection, month: str, by: str, at: str) -> None:
     months = backlog(c)
-    if month in months and fetched_at >= _final_after(month):
+    if month in months:
         SL.set_setting(c, BACKLOG_KEY, [m for m in months if m != month], by, at)
 
 

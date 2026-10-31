@@ -97,9 +97,10 @@ def system_entry(raw: object, ctx: Ctx) -> L.Entry:
 
 
 def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = SYSTEM,
-               hold_ids: Sequence[str] = (), at: str | None = None) -> dict[str, object]:
+               hold_ids: Sequence[str] = (), at: str | None = None, touch: bool = True) -> dict[str, object]:
     """Post an entry from Tico itself (Gateway and video usage, imports) and absorb the settled holds it stands for,
-    so the spend counts once. A re-sent (source, source_id) returns the first entry and posts nothing."""
+    so the spend counts once. A re-sent (source, source_id) returns the first entry and posts nothing. `touch=False`
+    leaves the budget crossings to a caller posting several entries that belong together."""
     ctx = load(c, at)
     e = system_entry(entry, ctx)
     if e.source_id:
@@ -116,5 +117,6 @@ def post_entry(c: sqlite3.Connection, entry: Mapping[str, object], *, by: str = 
             SB.settle(c, hid, int(row["amount"]), entry_id, ctx.at)
         elif row["status"] == "settled":
             SB.absorb(c, hid, entry_id)
-    touched(ctx, e.lines, by)       # after the holds are taken in: the entry and its holds never count twice
+    if touch:
+        touched(ctx, e.lines, by)   # after the holds are taken in: the entry and its holds never count twice
     return {"entry_id": entry_id, "line_ids": line_ids, "posted": True}

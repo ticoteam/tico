@@ -4,8 +4,9 @@ hub tools call these.
 
 A write goes through `mutate`, and its Idempotency-Key is the action's idempotency key too. `store.mutate` replays a
 saved answer without running the call again, so the saved answer is only the action's id, kind and status: the first
-call also carries the result it just made, and a retry reads the rest afresh through the caller's current view (a
-reason that names amounts shows only while that view still covers them)."""
+call also carries the result it just made, and a retry (the saved answer, or once it has lapsed Finance's own replay of
+the action) reads the rest afresh through the caller's current view: a reason that names amounts shows only while that
+view still covers them."""
 from typing import Any, Literal
 
 from fastapi import Query, Request
@@ -97,7 +98,7 @@ def install(app, store, auth, mutate):
             return {"action_id": done.action_id, "kind": done.kind, "status": done.status}
         saved = mutate(request, body, work)
         done = first.get("result")
-        if done is not None and done.action_id == saved.get("action_id"):
+        if done is not None and not done.replayed and done.action_id == saved.get("action_id"):
             return {**saved, "code": done.code, "reason": done.reason, "approval_id": done.approval_id,
                     "approver": done.approver, "rule": done.rule, "result": dict(done.result),
                     "impact": dict(done.impact)}

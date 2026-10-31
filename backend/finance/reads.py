@@ -411,15 +411,15 @@ def events_waiting(c: sqlite3.Connection) -> bool:
 
 
 def _covers(ctx: Ctx, viewer: str, payload: Mapping[str, object]) -> bool | None:
-    """Whether the viewer's current view covers every budget and line an action's payload names, with the numbers;
-    None when it names none."""
+    """Whether the viewer's current view covers every budget and line an action's payload names, with the numbers, and
+    every budget above each budget it names (a refusal can quote any of them); None when it names none."""
     seen: list[bool] = []
     budgets = ctx.budgets()
     for key in ("budget_id", "parent_id"):
         bid = payload.get(key)
         if isinstance(bid, str) and bid:
-            b = budgets.get(bid)
-            seen.append(b is not None and shows_numbers(ctx, viewer, b))
+            path = B.chain(budgets, bid) if bid in budgets else []   # a reason may name any budget above it
+            seen.append(bool(path) and all(shows_numbers(ctx, viewer, b) for b in path))
     scopes: list[Mapping[str, object]] = [payload] if isinstance(payload.get("account_id"), str) else []
     raw = payload.get("lines")
     for item in cast(list[object], raw) if isinstance(raw, list) else []:

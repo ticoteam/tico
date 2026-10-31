@@ -9,7 +9,7 @@ and budgets, consumes it, and commits, all in one transaction."""
 import json
 import sqlite3
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import cast
 
 from . import budgeting, gateway_sync, handlers, jobs, posting, runs, setup as setup_mod, usage
@@ -57,6 +57,7 @@ class ActionResult:
     rule: str = ""
     dry_run: bool = False
     impact: Mapping[str, object] = field(default_factory=lambda: dict[str, object]())
+    replayed: bool = False              # the key's earlier action, returned again: nothing was done now
 
     def as_dict(self) -> dict[str, object]:
         return {"status": self.status, "kind": self.kind, "action_id": self.action_id, "result": dict(self.result),
@@ -161,7 +162,7 @@ def act(c: sqlite3.Connection, principal: O.Principal | str, kind: str, payload:
                     prior["actor"] != p.actor:
                 return ActionResult(status="failed", kind=kind, code=CONFLICT,
                                     reason="that idempotency key was used for a different request")
-            return _stored(prior)
+            return replace(_stored(prior), replayed=True)
     action_id = tico.new_id()
     try:
         if kind not in K.ALL:
