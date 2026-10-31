@@ -31,7 +31,7 @@ GONE = "gone"           # deleted at the provider and never in the books: nothin
 BOOK_ENTITIES = {  # what a provider's backfill reads, in the order the books take it (one cursor per entity)
     "quickbooks": ("accounts", "parties", "documents", "payments", "entries"),
     "xero": ("accounts", "parties", "invoices", "credit_notes", "payments", "manual_journals",
-             "bank_transactions", "bank_transfers"),
+             "bank_transactions", "bank_transfers", "overpayments", "prepayments"),
 }
 
 
@@ -90,6 +90,7 @@ class Journal:
     lines: tuple[EntryLine, ...]
     basis: str = "both"     # "accrual" when the provider keeps the entry out of its cash-basis reports
     currency: str = ""      # the provider's currency code; "" when the provider names none (the books' own)
+    refund_of: str = ""     # the credit memo or supplier's credit this refunds money for ("" for none)
 
 
 @dataclass(frozen=True)

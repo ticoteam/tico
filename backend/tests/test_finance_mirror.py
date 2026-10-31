@@ -765,3 +765,28 @@ def test_the_books_loop_reads_on_while_the_provider_books_are_not_yet_read_in_fu
     assert books_sync._reading(books)
     assert _drain(books, fake, cid) == []
     assert not books_sync._reading(books)
+
+
+def test_deleting_a_credit_application_leaves_the_cash_view_as_it_was(books):
+    fake = FakeBooks()
+    _chart(fake)
+    _customer(fake)
+    credit = M.Document(M.Ext("CreditMemo", "20", "1"), party="Customer:4", number="CM-20", day="2026-10-10", due="",
+                        total=500, lines=(M.EntryLine("Account:3", 500),))
+    applied = M.Settlement(M.Ext("Payment", "30", "1"), day="2026-10-11", memo="credit applied", party="Customer:4",
+                           bank="", total=0, links=(("Invoice:12", 500),), credits=(("CreditMemo:20", 500),))
+    fake.records["documents"] = [_invoice(12, 1, 2000), credit]
+    fake.records["payments"] = [applied]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        cash_applied = [tuple(r) for r in c.execute("SELECT * FROM fin_cash_rollups ORDER BY 1, 2, 3, 4")]
+    # The credit memo is unchanged; only its application goes, which moves no money and so no cash.
+    fake.changes = [M.Ext("Payment", "30", "2", True)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        inv = _local(c, "Invoice:12", "fin_invoices")
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE id=?", (inv,)).fetchone()) \
+            == ("sent", 0)
+        assert [tuple(r) for r in c.execute("SELECT * FROM fin_cash_rollups ORDER BY 1, 2, 3, 4")] == cash_applied

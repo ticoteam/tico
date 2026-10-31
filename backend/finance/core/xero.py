@@ -28,9 +28,11 @@ CREDIT_KINDS = ("CreditMemo", "VendorCredit")
 CREDIT_SIDE = {"ACCRECCREDIT": "Invoice", "ACCPAYCREDIT": "Bill"}     # the documents a credit note applies to
 SYSTEM_SUBTYPE = {"DEBTORS": "receivable", "CREDITORS": "payable", "GST": M.SALES_TAX}
 PAYMENT_KIND = {"ACCRECPAYMENT": "Payment", "ACCPAYPAYMENT": "BillPayment"}
-REFUND_LINES = {"ARCREDITPAYMENT": ("DEBTORS", 1), "APCREDITPAYMENT": ("CREDITORS", -1)}   # (control, debit sign)
-APPLIED = {"AROVERPAYMENTPAYMENT": "Overpayment", "ARPREPAYMENTPAYMENT": "Prepayment",
-           "APOVERPAYMENTPAYMENT": "Overpayment", "APPREPAYMENTPAYMENT": "Prepayment"}
+# A refund moves money back out of (or into) the bank against its control account: (control, debit sign, the credit
+# memo or supplier's credit it refunds, "" for an overpayment or prepayment, which is not one).
+REFUND_LINES = {"ARCREDITPAYMENT": ("DEBTORS", 1, "CreditMemo"), "APCREDITPAYMENT": ("CREDITORS", -1, "VendorCredit"),
+                "AROVERPAYMENTPAYMENT": ("DEBTORS", 1, ""), "ARPREPAYMENTPAYMENT": ("DEBTORS", 1, ""),
+                "APOVERPAYMENTPAYMENT": ("CREDITORS", -1, ""), "APPREPAYMENTPAYMENT": ("CREDITORS", -1, "")}
 BANK_KIND = {"RECEIVE": "BankTransaction", "SPEND": "BankTransaction", "RECEIVE-OVERPAYMENT": "Overpayment",
              "SPEND-OVERPAYMENT": "Overpayment", "RECEIVE-PREPAYMENT": "Prepayment", "SPEND-PREPAYMENT": "Prepayment"}
 BANK_ID = {"Overpayment": "OverpaymentID", "Prepayment": "PrepaymentID", "BankTransaction": "BankTransactionID"}
@@ -198,7 +200,8 @@ def _allocations(j: Mapping[str, Any], side: str) -> tuple[tuple[str, int], ...]
 def document_record(j: Mapping[str, Any], system: System, credit: bool = False) -> M.Document | M.Ext | M.Refused | None:
     """An invoice, a bill (both Xero Invoices), or a credit note of either side (Xero CreditNotes). A draft or a submitted
     one waits; a voided one is a deleted document, its entry reversed. Its tax is its own amount on the sales tax account,
-    and its rounding (what Total holds beyond its lines and tax) is a line of its own on the rounding account."""
+    and its rounding (what Total holds beyond its lines and tax) is a line of its own on the rounding account. A line Xero
+    puts on the rounding account is that rounding too, so it may be negative."""
     kind = DOC_KIND.get(str(j.get("Type") or ""))
     if kind is None or (kind in CREDIT_KINDS) != credit:
         return None
@@ -209,6 +212,8 @@ def document_record(j: Mapping[str, Any], system: System, credit: bool = False) 
         return None
     try:
         lines, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive")
+        rounding_account = system("ROUNDING")
+        lines = [replace(x, rounding=True) if rounding_account and x.account == rounding_account else x for x in lines]
         total = minor(j["Total"]) if j.get("Total") is not None else sum(x.amount for x in lines) + tax
         rounded = total - sum(x.amount for x in lines) - tax
         if rounded:
@@ -227,7 +232,8 @@ def document_record(j: Mapping[str, Any], system: System, credit: bool = False) 
 def credit_application(j: Mapping[str, Any]) -> M.Settlement | M.Ext | None:
     """The applications a credit note makes, as one payment of nothing: each invoice or bill it is allocated to is settled
     with the credit note's own entry (Xero keeps no payment for a credit note's allocations, so the note is the record).
-    A deleted or voided note, or one with no allocations left, clears what it applied before. A draft makes none."""
+    A deleted or voided note clears what it applied before. A note with no allocations left applies nothing, and that
+    empty state is a revision, not a deletion, so a later allocation is taken as a change. A draft makes none."""
     kind_type = str(j.get("Type") or "")
     ident = str(j.get("CreditNoteID") or "")
     ext = M.Ext("Payment", f"CreditNote:{ident}", stamp(j.get("UpdatedDateUTC")))
@@ -236,24 +242,22 @@ def credit_application(j: Mapping[str, Any]) -> M.Settlement | M.Ext | None:
     if _status(j) not in ("AUTHORISED", "PAID"):
         return None
     applied = _allocations(j, CREDIT_SIDE.get(kind_type, ""))
-    if not applied:
-        return replace(ext, deleted=True)
     total = sum(amount for _, amount in applied)
     return M.Settlement(ext, day=day(j, "Date"), memo=str(j.get("Reference") or ""), party="", bank="", total=0,
                         links=applied, credits=((f"{DOC_KIND.get(kind_type, 'CreditMemo')}:{ident}", total),))
 
 
 def payment_record(j: Mapping[str, Any], system: System) -> M.Settlement | M.Journal | M.Ext | M.Refused | None:
-    """A payment as the books take it, by Xero's PaymentType: a bill's or an invoice's money (a settlement), a refund of a
-    credit note (a journal against the control account), or an overpayment or prepayment applied to a document (a payment
-    of nothing that applies the credit). A payment in another currency waits; a type the books do not know waits."""
+    """A payment as the books take it, by Xero's PaymentType: a bill's or an invoice's money (a settlement), or a refund of
+    a credit note, an overpayment or a prepayment (a journal between the bank and its control account). A payment in
+    another currency waits; a type the books do not know waits."""
     ptype = str(j.get("PaymentType") or "")
     target = as_map(j.get("Invoice")) or {}
     kind = PAYMENT_KIND.get(ptype, "BillPayment" if target.get("Type") == "ACCPAY" else "Payment")
     ext = _ext(kind, j, "PaymentID", text=str(j.get("Reference") or ""))
     if _status(j) == "DELETED":
         return replace(ext, deleted=True)
-    if ptype not in PAYMENT_KIND and ptype not in REFUND_LINES and ptype not in APPLIED:
+    if ptype not in PAYMENT_KIND and ptype not in REFUND_LINES:
         return M.Refused(ext, f"Xero's payment type {ptype or 'none'} is not one the books take in yet")
     if _status(j) != "AUTHORISED":
         return None
@@ -263,7 +267,10 @@ def payment_record(j: Mapping[str, Any], system: System) -> M.Settlement | M.Jou
     memo = str(j.get("Reference") or "")
     amount = minor(j.get("Amount") or 0)
     if ptype in REFUND_LINES:
-        control, debit = REFUND_LINES[ptype]
+        control, debit, credit_kind = REFUND_LINES[ptype]
+        note = as_map(j.get("CreditNote")) or {}
+        if credit_kind and not note.get("CreditNoteID"):
+            return M.Refused(ext, "the refund names no credit note")
         try:
             key = _system(system, control, "a refund")
         except _Unavailable as e:
@@ -271,20 +278,36 @@ def payment_record(j: Mapping[str, Any], system: System) -> M.Settlement | M.Jou
         account = as_map(j.get("Account")) or {}
         bank = f"Account:{account.get('AccountID') or ''}"
         lines = (M.EntryLine(key, debit * amount, description=memo), M.EntryLine(bank, -debit * amount, description=memo))
-        return M.Journal(ext, day(j, "Date"), memo, "sync", lines)
+        return M.Journal(ext, day(j, "Date"), memo, "sync", lines,
+                         refund_of=f"{credit_kind}:{note['CreditNoteID']}" if credit_kind else "")
     side = "Invoice" if ptype.startswith(("ACCREC", "AR")) else "Bill"
-    if ptype in APPLIED:
-        credit = as_map(j.get(APPLIED[ptype])) or {}
-        if not target.get("InvoiceID") or not credit.get(f"{APPLIED[ptype]}ID"):
-            return M.Refused(ext, "the application names no document or credit")
-        return M.Settlement(ext, day=day(j, "Date"), memo=memo, party="", bank="", total=0,
-                            links=((f"{side}:{target['InvoiceID']}", amount),),
-                            credits=((f"{APPLIED[ptype]}:{credit[APPLIED[ptype] + 'ID']}", amount),))
     if not target.get("InvoiceID"):
         return M.Refused(ext, "the payment names no invoice or bill")
     account = as_map(j.get("Account")) or {}
     return M.Settlement(ext, day=day(j, "Date"), memo=memo, party="", bank=f"Account:{account.get('AccountID') or ''}",
                         total=amount, links=((f"{side}:{target['InvoiceID']}", amount),))
+
+
+def applied_record(j: Mapping[str, Any], kind: str) -> M.Settlement | M.Ext | M.Refused | None:
+    """An overpayment's or prepayment's allocations as the applications the books take: the credit it has applied to each
+    invoice or bill it names. Removing every allocation is a revision with nothing applied; only its status deletes it."""
+    ident = str(j.get(BANK_ID[kind]) or "")
+    ext = M.Ext("Payment", f"{kind}:{ident}", stamp(j.get("UpdatedDateUTC")))
+    if _status(j) in ("DELETED", "VOIDED"):
+        return replace(ext, deleted=True)
+    why = _foreign(j)
+    if why:
+        return M.Refused(ext, why)
+    links: list[tuple[str, int]] = []
+    for raw in as_list(j.get("Allocations")):
+        row = as_map(raw) or {}
+        invoice = as_map(row.get("Invoice")) or {}
+        if not invoice.get("InvoiceID"):
+            return M.Refused(ext, "an allocation names no invoice or bill")
+        side = "Invoice" if str(invoice.get("Type") or "").startswith("ACCREC") else "Bill"
+        links.append((f"{side}:{invoice['InvoiceID']}", minor(row.get("Amount") or 0)))
+    return M.Settlement(ext, day=day(j, "Date"), memo=str(j.get("Reference") or ""), party="", bank="", total=0,
+                        links=tuple(links), credits=((f"{kind}:{ident}", sum(amount for _, amount in links)),))
 
 
 def manual_journal_record(j: Mapping[str, Any], system: System) -> M.Journal | M.Ext | None:
@@ -385,6 +408,8 @@ def _build(entity: str, j: Mapping[str, Any], system: System) -> Built:
         return _one(manual_journal_record(j, system))
     if entity == "bank_transactions":
         return _one(bank_record(j, system))
+    if entity in ("overpayments", "prepayments"):
+        return _one(applied_record(j, "Overpayment" if entity == "overpayments" else "Prepayment"))
     if entity == "bank_transfers":
         return _one(transfer_record(j))
     raise ValueError(f"not a Xero entity: {entity}")

@@ -285,6 +285,11 @@ CREATE TABLE IF NOT EXISTS fin_cash_rollups (
   team TEXT NOT NULL DEFAULT '', teammate TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
   amount BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (book_id, day, account_id, tagset));
 
+CREATE TABLE IF NOT EXISTS fin_credit_refunds (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  credit_entry_id TEXT NOT NULL, refund_entry_id TEXT NOT NULL, amount BIGINT NOT NULL, day TEXT NOT NULL,
+  voided_at TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+
 CREATE TABLE IF NOT EXISTS fin_view_grants (
   id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL CHECK (subject_kind IN ('teammate','team')), subject TEXT NOT NULL,
   new_members INTEGER NOT NULL DEFAULT 0, members_json TEXT NOT NULL DEFAULT '[]',
@@ -388,6 +393,8 @@ CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, crea
 CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
 CREATE INDEX IF NOT EXISTS fin_settlements_to ON fin_settlements(to_kind, to_id);
 CREATE INDEX IF NOT EXISTS fin_settlements_from ON fin_settlements(from_kind, from_id);
+CREATE INDEX IF NOT EXISTS fin_credit_refunds_credit ON fin_credit_refunds(credit_entry_id);
+CREATE INDEX IF NOT EXISTS fin_credit_refunds_refund ON fin_credit_refunds(refund_entry_id);
 CREATE INDEX IF NOT EXISTS fin_attachments_subject ON fin_attachments(subject_kind, subject_id);
 CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
 CREATE INDEX IF NOT EXISTS fin_bills_pay_on ON fin_bills(status, pay_on);

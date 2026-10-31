@@ -46,7 +46,7 @@ EXTRA = {"parties": {"includeArchived": "true"}, "bank_transfers": {"includeDele
 UNPAGED = ("accounts", "bank_transfers")   # Xero returns these whole, with no page parameter
 ENDPOINTS = {"accounts": "Accounts", "parties": "Contacts", "invoices": "Invoices", "credit_notes": "CreditNotes",
              "payments": "Payments", "manual_journals": "ManualJournals", "bank_transactions": "BankTransactions",
-             "bank_transfers": "BankTransfers"}
+             "bank_transfers": "BankTransfers", "overpayments": "Overpayments", "prepayments": "Prepayments"}
 WRAPPER = {"Account": "Accounts", "Contact": "Contacts", "Invoice": "Invoices", "Bill": "Invoices",
            "Payment": "Payments", "BillPayment": "Payments", "CreditMemo": "CreditNotes",
            "ManualJournal": "ManualJournals", "BankTransaction": "BankTransactions"}     # a write's kind -> its list

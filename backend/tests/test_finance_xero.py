@@ -27,10 +27,10 @@ TENANT = "acme-tenant"
 BASE_PATH = "/api.xro/2.0"
 BASE = "https://api.xero.test" + BASE_PATH
 ENDPOINTS = ("Accounts", "Contacts", "Invoices", "CreditNotes", "Payments", "ManualJournals", "BankTransactions",
-             "BankTransfers")
+             "BankTransfers", "Overpayments", "Prepayments")
 IDS = {"Accounts": "AccountID", "Contacts": "ContactID", "Invoices": "InvoiceID", "CreditNotes": "CreditNoteID",
        "Payments": "PaymentID", "ManualJournals": "ManualJournalID", "BankTransactions": "BankTransactionID",
-       "BankTransfers": "BankTransferID"}
+       "BankTransfers": "BankTransferID", "Overpayments": "OverpaymentID", "Prepayments": "PrepaymentID"}
 EPOCH = datetime(1970, 1, 1, tzinfo=UTC)
 RETRY_AT = "2026-10-15T13:02:00.000000Z"       # the first retry: after the 60 second wait, before the change feed is due
 _MS = re.compile(r"/Date\((-?\d+)")
@@ -1173,21 +1173,26 @@ def test_a_bank_transfer_is_one_entry_and_its_legs_are_not_counted_again(books):
 def test_a_refund_of_a_credit_note_is_a_journal_that_moves_the_bank_once(books):
     xbooks = XeroBooks()
     _chart(xbooks)
+    xbooks.rows["CreditNotes"] = [{**_credit_note("cn-pay-ar", "", "50.00"), "Allocations": []},
+                                  {**_credit_note("cn-pay-ap", "", "30.00", kind="ACCPAYCREDIT"), "Allocations": []}]
     xbooks.rows["Payments"] = [_refund("pay-ar", "ARCREDITPAYMENT", "50.00"),
                                _refund("pay-ap", "APCREDITPAYMENT", "30.00")]
     cid = _connection(books)
     _mirror(books, cid)
     assert _drain(books, _client(xbooks), cid) == []
     with books.read() as c:
+        # Each credit memo and its refund net to nothing on their control line; the bank pays out 50 and takes 30 in.
         sums = {r[0]: r[1] for r in c.execute("SELECT account_id, SUM(amount) FROM fin_lines GROUP BY account_id")}
-        assert sums == {account(c, "1200"): 5000, account(c, "2000"): -3000, account(c, "1000"): -2000}
-        assert [r[0] for r in c.execute("SELECT DISTINCT source FROM fin_entries")] == ["sync"]
+        assert sums == {account(c, "1200"): 0, account(c, "2000"): 0, account(c, "1000"): -2000,
+                        account(c, "4000"): 5000, account(c, "6100"): -3000}
+        assert [r[0] for r in c.execute("SELECT DISTINCT source FROM fin_entries WHERE source_id LIKE 'Payment:%'")] \
+            == ["sync"]
     xbooks.change("Payments", _refund("pay-ar", "ARCREDITPAYMENT", "50.00", status="DELETED",
                                       updated="2026-10-15T12:45:00Z"))
     assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
     with books.read() as c:
         assert c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_lines WHERE account_id=?",
-                         (account(c, "1200"),)).fetchone()[0] == 0
+                         (account(c, "1200"),)).fetchone()[0] == -5000
         assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
                          (account(c, "1000"),)).fetchone()[0] == 3000
 
@@ -1203,36 +1208,46 @@ def test_refunds_post_against_their_control_account_and_the_bank_in_opposite_dir
     assert {x.account: x.amount for x in ap.lines} == {"Account:acct-2000": -3000, "Account:acct-1000": 3000}
 
 
-def test_an_overpayment_is_a_journal_and_its_application_settles_the_invoice_once(books):
+def test_refunding_an_overpayment_is_a_journal_that_moves_the_bank_once(books):
     xbooks = XeroBooks()
     _chart(xbooks)
-    xbooks.rows["Invoices"] = [{**_invoice("inv-1"), "AmountCredited": "50.00"}]
     xbooks.rows["BankTransactions"] = [{
         "BankTransactionID": "bt-ov", "Type": "RECEIVE-OVERPAYMENT", "Status": "AUTHORISED",
         "Date": ms("2026-10-08T00:00:00Z"), "DateString": "2026-10-08T00:00:00",
         "BankAccount": {"AccountID": "acct-1000"}, "Contact": {"ContactID": "contact-1"}, "CurrencyCode": "USD",
         "LineAmountTypes": "NoTax", "LineItems": [], "Total": "50.00", "OverpaymentID": "ov-1",
         "UpdatedDateUTC": ms("2026-10-08T00:00:00Z")}]
-    applied = {"PaymentID": "pay-ov", "PaymentType": "AROVERPAYMENTPAYMENT", "Status": "AUTHORISED",
-               "Date": ms("2026-10-09T00:00:00Z"), "DateString": "2026-10-09T00:00:00", "Amount": "50.00",
-               "Account": {"AccountID": "acct-1000"}, "Invoice": {"InvoiceID": "inv-1", "Type": "ACCREC"},
-               "Overpayment": {"OverpaymentID": "ov-1"}, "UpdatedDateUTC": ms("2026-10-09T00:00:00Z")}
-    xbooks.rows["Payments"] = [applied]
+    xbooks.rows["Payments"] = [{"PaymentID": "pay-ov-r", "PaymentType": "AROVERPAYMENTPAYMENT", "Status": "AUTHORISED",
+                                "Date": ms("2026-10-09T00:00:00Z"), "DateString": "2026-10-09T00:00:00",
+                                "Amount": "50.00", "Account": {"AccountID": "acct-1000"},
+                                "Overpayment": {"OverpaymentID": "ov-1"}, "UpdatedDateUTC": ms("2026-10-09T00:00:00Z")}]
     cid = _connection(books)
     _mirror(books, cid)
     assert _drain(books, _client(xbooks), cid) == []
     with books.read() as c:
-        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
-            == ("partial", 5000)
-        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
-                         (account(c, "1000"),)).fetchone()[0] == 5000
-    xbooks.change("Payments", {**applied, "Status": "DELETED", "UpdatedDateUTC": ms("2026-10-15T12:45:00Z")})
-    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
-    with books.read() as c:
-        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
-            == ("sent", 0)
-        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
-                         (account(c, "1000"),)).fetchone()[0] == 5000
+        # The overpayment came in and goes back out: the bank nets to nothing and no invoice is settled.
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "1000"),)).fetchone()[0] == 0
+        assert c.execute("SELECT COUNT(*) FROM fin_settlements WHERE voided_at IS NULL").fetchone()[0] == 0
+        assert [r[0] for r in c.execute("SELECT DISTINCT source FROM fin_entries WHERE source_id LIKE 'Payment:%'")] \
+            == ["sync"]
+
+
+def test_overpayment_and_prepayment_refunds_are_journals_against_their_control_account_like_credit_refunds():
+    def system(name: str) -> str:
+        return {"DEBTORS": "Account:acct-1200", "CREDITORS": "Account:acct-2000"}.get(name, "")
+
+    for ptype, control, sign, field in (("AROVERPAYMENTPAYMENT", "acct-1200", 1, "Overpayment"),
+                                        ("ARPREPAYMENTPAYMENT", "acct-1200", 1, "Prepayment"),
+                                        ("APOVERPAYMENTPAYMENT", "acct-2000", -1, "Overpayment"),
+                                        ("APPREPAYMENTPAYMENT", "acct-2000", -1, "Prepayment")):
+        row = {"PaymentID": f"pay-{ptype}", "PaymentType": ptype, "Status": "AUTHORISED",
+               "Date": ms("2026-10-12T00:00:00Z"), "DateString": "2026-10-12T00:00:00", "Amount": "50.00",
+               "Account": {"AccountID": "acct-1000"}, field: {f"{field}ID": f"{field.lower()}-1"},
+               "UpdatedDateUTC": ms("2026-10-12T00:00:00Z")}
+        out = X.payment_record(row, system)
+        assert isinstance(out, M.Journal) and out.refund_of == "", ptype
+        assert {x.account: x.amount for x in out.lines} == {f"Account:{control}": sign * 5000,
+                                                              "Account:acct-1000": -sign * 5000}
 
 
 def test_an_unknown_payment_type_waits_unmapped_and_the_read_moves_past_it(books):
@@ -1377,3 +1392,172 @@ def test_the_xero_pass_reads_its_change_feed_at_least_every_five_minutes(books, 
     monkeypatch.setattr(mirror, "sync_once", spy)
     assert books_sync.pass_once(books, object(), None, now=AT) == []
     assert seen and all(kwargs.get("every") == xero.CHANGE_EVERY for kwargs in seen)
+
+
+def _cash_pnl(c: Any) -> int:
+    """Income on the cash basis: the accrual lines plus the cash view's corrections."""
+    return c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_lines l JOIN fin_accounts a ON a.id = l.account_id "
+                     "WHERE a.type = 'income'").fetchone()[0] + \
+        c.execute("SELECT COALESCE(SUM(r.amount), 0) FROM fin_cash_rollups r JOIN fin_accounts a ON a.id = r.account_id "
+                  "WHERE a.type = 'income'").fetchone()[0]
+
+
+def test_a_credit_note_refund_brings_its_share_of_the_credit_into_the_cash_basis_as_it_is_paid_back(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    xbooks.rows["Payments"] = [_payment("pay-1", "inv-1", "100.00")]
+    xbooks.rows["CreditNotes"] = [{**_credit_note("cn-1", "inv-1", "100.00"), "Allocations": []}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        # The receipt is revenue on the cash basis; the credit note is left out until money goes back.
+        assert _cash_pnl(c) == -10000
+
+    def refund(ident: str, amount: str, updated: str) -> dict[str, Any]:
+        return {**_refund(ident, "ARCREDITPAYMENT", amount, updated=updated), "CreditNote": {"CreditNoteID": "cn-1"}}
+
+    xbooks.change("Payments", refund("pay-r1", "40.00", "2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert _cash_pnl(c) == -6000
+    xbooks.change("Payments", refund("pay-r2", "60.00", "2026-10-15T13:30:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert _cash_pnl(c) == 0
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?",
+                         (account(c, "1000"),)).fetchone()[0] == 0
+
+
+def test_a_refund_taken_back_and_a_revised_credit_note_keep_the_cash_basis_exact(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    xbooks.rows["Payments"] = [_payment("pay-1", "inv-1", "100.00")]
+    xbooks.rows["CreditNotes"] = [{**_credit_note("cn-1", "inv-1", "100.00"), "Allocations": []}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+
+    def refund(status: str, updated: str) -> dict[str, Any]:
+        return {**_refund("pay-r1", "ARCREDITPAYMENT", "40.00", status=status, updated=updated),
+                "CreditNote": {"CreditNoteID": "cn-1"}}
+
+    xbooks.change("Payments", refund("AUTHORISED", "2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert _cash_pnl(c) == -6000
+    xbooks.change("CreditNotes", {**_credit_note("cn-1", "inv-1", "100.00", updated="2026-10-15T13:50:00Z"),
+                                  "Allocations": []})
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert _cash_pnl(c) == -6000
+    xbooks.change("Payments", refund("DELETED", "2026-10-15T14:30:00Z"))
+    assert _drain(books, _client(xbooks), cid, now="2026-10-15T15:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert _cash_pnl(c) == -10000
+
+
+def _held(ident: str, type_: str, allocations: list[tuple[str, str, str]], *, updated: str = "2026-10-10T00:00:00Z",
+          status: str = "AUTHORISED") -> dict[str, Any]:
+    """An overpayment or a prepayment (by its type) with the amounts it has applied: each allocation is (document id,
+    its type, amount)."""
+    key = "PrepaymentID" if "PREPAYMENT" in type_ else "OverpaymentID"
+    return {key: ident, "Type": type_, "Status": status, "Date": ms("2026-10-10T00:00:00Z"),
+            "DateString": "2026-10-10T00:00:00", "Contact": {"ContactID": "contact-1"}, "CurrencyCode": "USD",
+            "Allocations": [{"AllocationID": f"alloc-{ident}-{n}", "Invoice": {"InvoiceID": doc, "Type": side},
+                             "Amount": amount, "Date": ms("2026-10-10T00:00:00Z")}
+                            for n, (doc, side, amount) in enumerate(allocations)],
+            "UpdatedDateUTC": ms(updated)}
+
+
+def _held_bank(ident: str, type_: str, amount: str) -> dict[str, Any]:
+    """The money an overpayment or a prepayment came in or went out with, as the bank transaction that took it."""
+    key = "PrepaymentID" if "PREPAYMENT" in type_ else "OverpaymentID"
+    return {"BankTransactionID": f"bt-{ident}", "Type": type_, "Status": "AUTHORISED",
+            "Date": ms("2026-10-08T00:00:00Z"), "DateString": "2026-10-08T00:00:00",
+            "BankAccount": {"AccountID": "acct-1000"}, "Contact": {"ContactID": "contact-1"}, "CurrencyCode": "USD",
+            "LineAmountTypes": "NoTax", "LineItems": [], "Total": amount, key: ident,
+            "UpdatedDateUTC": ms("2026-10-08T00:00:00Z")}
+
+
+def test_an_overpayment_or_prepayment_settles_the_documents_its_allocations_name_until_they_are_removed(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1"), _invoice("bill-1", kind="ACCPAY")]
+    xbooks.rows["BankTransactions"] = [_held_bank("ov-1", "RECEIVE-OVERPAYMENT", "100.00"),
+                                       _held_bank("pp-1", "SPEND-PREPAYMENT", "50.00")]
+    xbooks.rows["Overpayments"] = [_held("ov-1", "RECEIVE-OVERPAYMENT", [("inv-1", "ACCREC", "100.00")])]
+    xbooks.rows["Prepayments"] = [_held("pp-1", "SPEND-PREPAYMENT", [("bill-1", "ACCPAY", "50.00")])]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("paid", 10000)
+        assert c.execute("SELECT amount_paid FROM fin_bills WHERE number='INV-bill-1'").fetchone()[0] == 5000
+    xbooks.change("Overpayments", _held("ov-1", "RECEIVE-OVERPAYMENT", [], updated="2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()) \
+            == ("sent", 0)
+        # Applying money moves none: the bank still holds what the overpayment and the prepayment took in and paid out.
+        assert c.execute("SELECT SUM(amount) FROM fin_lines WHERE account_id=?", (account(c, "1000"),)).fetchone()[0] \
+            == 5000
+
+
+def test_a_credit_note_whose_allocations_are_all_removed_is_a_revision_and_can_be_applied_again(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1"), _invoice("inv-2")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.change("CreditNotes", _credit_note("cn-r", "inv-1", "40.00", updated="2026-10-15T12:45:00Z"))
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    xbooks.change("CreditNotes", {**_credit_note("cn-r", "inv-1", "40.00", updated=LATER2[:-1] + "0Z"),
+                                  "Allocations": []})
+    assert _drain(books, _client(xbooks), cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 0
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Payment:CreditNote:cn-r'") \
+            .fetchone()[0] == "active"
+    xbooks.change("CreditNotes", _credit_note("cn-r", "inv-2", "40.00", updated="2026-10-15T14:30:00Z"))
+    assert _drain(books, _client(xbooks), cid, now="2026-10-15T14:30:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-2'").fetchone()[0] == 4000
+        assert c.execute("SELECT amount_paid FROM fin_invoices WHERE number='INV-inv-1'").fetchone()[0] == 0
+
+
+def test_an_unallocated_credit_note_whose_memo_waits_leaves_no_application_waiting(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Invoices"] = [_invoice("inv-1")]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    xbooks.change("CreditNotes", {**_credit_note("cn-eur", "inv-1", "40.00", updated="2026-10-15T12:45:00Z"),
+                                  "LineItems": [_line("acct-missing", "40.00")], "Allocations": []})
+    assert _drain(books, _client(xbooks), cid, now=LATER, passes=1) == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_external_refs WHERE external_id='Payment:CreditNote:cn-eur'") \
+            .fetchone()[0] == "active"
+
+
+def test_an_explicit_negative_line_on_the_rounding_account_is_taken_in_as_rounding(books):
+    xbooks = XeroBooks()
+    _chart(xbooks)
+    xbooks.rows["Accounts"].append(_account_row("4900", "Rounding", "EXPENSE", "EXPENSE", "ROUNDING"))
+    xbooks.rows["Invoices"] = [{**_invoice("inv-x", total="99.99"),
+                                "LineItems": [_line("acct-4000", "100.00"), _line("acct-4900", "-0.01")]}]
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_invoices WHERE number='INV-inv-x'").fetchone()[0] == 9999
+        entry = c.execute("SELECT entry_id FROM fin_invoices WHERE number='INV-inv-x'").fetchone()[0]
+        lines = {r[0]: r[1] for r in c.execute("SELECT account_id, SUM(amount) FROM fin_lines WHERE entry_id=? "
+                                               "GROUP BY account_id", (entry,))}
+        assert sum(lines.values()) == 0
+        assert lines[account(c, "4900")] == 1

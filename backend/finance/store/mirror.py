@@ -262,3 +262,38 @@ def withhold_writes(c: sqlite3.Connection, cid: str, why: str, at: str) -> int:
 def connection_owner(c: sqlite3.Connection, cid: str) -> str:
     row = c.execute("SELECT created_by FROM fin_connections WHERE id=?", (cid,)).fetchone()
     return str(row[0]) if row else ""
+
+
+def credit_refunds_of_refund(c: sqlite3.Connection, refund_entry_id: str) -> list[Any]:
+    """The live refunds a refund entry made against a credit memo or supplier's credit."""
+    return c.execute("SELECT * FROM fin_credit_refunds WHERE refund_entry_id=? AND voided_at IS NULL ORDER BY created_at, id",
+                     (refund_entry_id,)).fetchall()
+
+
+def credit_refunds_of_credit(c: sqlite3.Connection, credit_entry_id: str) -> list[Any]:
+    """The live refunds made against a credit memo or supplier's credit entry."""
+    return c.execute("SELECT * FROM fin_credit_refunds WHERE credit_entry_id=? AND voided_at IS NULL ORDER BY created_at, id",
+                     (credit_entry_id,)).fetchall()
+
+
+def credit_refunded(c: sqlite3.Connection, credit_entry_id: str) -> int:
+    """What has been refunded against a credit memo or supplier's credit entry, in minor units."""
+    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_credit_refunds WHERE credit_entry_id=? AND voided_at IS NULL",
+                    (credit_entry_id,)).fetchone()
+    return int(row[0])
+
+
+def credit_refund_insert(c: sqlite3.Connection, *, book_id: str, credit_entry_id: str, refund_entry_id: str, amount: int,
+                         day: str, at: str, by: str) -> None:
+    c.execute("INSERT INTO fin_credit_refunds(id, book_id, credit_entry_id, refund_entry_id, amount, day, created_at, "
+              "created_by) VALUES(?,?,?,?,?,?,?,?)",
+              (new_id(), book_id, credit_entry_id, refund_entry_id, amount, day, at, by))
+
+
+def credit_refund_void(c: sqlite3.Connection, row_id: str, at: str) -> None:
+    c.execute("UPDATE fin_credit_refunds SET voided_at=? WHERE id=? AND voided_at IS NULL", (at, row_id))
+
+
+def credit_refund_move(c: sqlite3.Connection, row_id: str, credit_entry_id: str) -> None:
+    c.execute("UPDATE fin_credit_refunds SET credit_entry_id=? WHERE id=?", (credit_entry_id, row_id))
+

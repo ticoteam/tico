@@ -367,9 +367,56 @@ def _restate(c: sqlite3.Connection, ctx: Ctx, day: str, change: str, entry_id: s
 
 
 def _unsettle_entry(c: sqlite3.Connection, ctx: Ctx, entry_id: str) -> None:
-    """Undo the settlements a payment's entry made, before the entry is reversed: each document owes its money again."""
+    """Undo the settlements a payment's entry made, before the entry is reversed: each document owes its money again.
+    A refund it made gives its share of the credit's P&L back to the accrual-only view."""
     for s in SX.settlements_of(c, entry_id):
         documents.unsettle(ctx, s, cash=str(s["from_kind"]) != "credit")
+    for r in SX.credit_refunds_of_refund(c, entry_id):
+        _unrefund(c, ctx, r)
+
+
+def _refund_cash(c: sqlite3.Connection, ctx: Ctx, credit: str, before: int, after: int, day: str) -> None:
+    """Move the cash view of a credit memo's P&L as its refunds move from `before` to `after`: each line takes its share
+    of what is refunded, in proportion, as a settled document's lines do (see documents._cash). The control line is left
+    out: it is the money owed, not revenue."""
+    entry = SL.entry_row(c, credit)
+    control = documents.control(ctx, "bill" if str(entry["source"]) == "bill" else "invoice").id
+    lines = [line for _, line in SL.entry_lines(c, credit) if line.account_id != control]
+    for x, share in zip(lines, AP.shares([abs(x.amount) for x in lines], before, after), strict=True):
+        account = ctx.accounts.get(x.account_id)
+        if share and account is not None and account.type in L.PNL_TYPES:
+            SAP.cash_roll(c, ctx.book.id, day, x.account_id, x.tags, x.contact_id, share if x.amount >= 0 else -share)
+
+
+def _unrefund(c: sqlite3.Connection, ctx: Ctx, row: Any) -> None:
+    """Undo one refund a credit memo took: its share of the credit's P&L leaves the cash view again."""
+    credit = str(row["credit_entry_id"])
+    before = SX.credit_refunded(c, credit)
+    _refund_cash(c, ctx, credit, before, before - int(row["amount"]), str(row["day"]))
+    SX.credit_refund_void(c, str(row["id"]), ctx.at)
+
+
+def _move_refunds(c: sqlite3.Connection, ctx: Ctx, old: str, new: str) -> None:
+    """A credit memo revised at the provider: the refunds it took move to its new entry, and their share of the P&L
+    moves with the new lines."""
+    rows = SX.credit_refunds_of_credit(c, old)
+    running = sum(int(r["amount"]) for r in rows)
+    for r in reversed(rows):
+        _refund_cash(c, ctx, old, running, running - int(r["amount"]), str(r["day"]))
+        running -= int(r["amount"])
+    for r in rows:
+        _refund_cash(c, ctx, new, running, running + int(r["amount"]), str(r["day"]))
+        running += int(r["amount"])
+        SX.credit_refund_move(c, str(r["id"]), new)
+
+
+def _credit_entry(c: sqlite3.Connection, cid: str, key: str) -> str:
+    """The local entry of a credit memo or supplier's credit a refund returns money for. Raises when it is not in the
+    books yet, so the refund waits for it."""
+    entry = SX.ref(c, cid, "fin_entries", key)
+    if entry is None or str(entry["status"]) != "active" or not entry["local_id"]:
+        raise FinanceError(NOT_AVAILABLE, f"{key} is not in the books yet")
+    return str(entry["local_id"])
 
 
 def _book(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, verdict: str, old: str, day: str,
@@ -401,10 +448,18 @@ def _journal(c: sqlite3.Connection, ctx: Ctx, cid: str, j: M.Journal, at: str) -
     if verdict not in (M.CREATE, M.REPLACE):
         return
     _currency(ctx, j.currency)
+    credit = _credit_entry(c, cid, j.refund_of) if j.refund_of else ""
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
     carry = _entry_tags(c, old)
     new_id = _book(c, ctx, cid, j.ext, verdict, old, j.day, lambda when: _entry(c, cid, ctx, j, when, carry), at)
     _bind(c, cid, "fin_entries", new_id, j.ext, at)
+    if credit:
+        amount = sum(x.amount for x in j.lines if x.amount > 0)
+        day = banking.open_day(ctx, j.day)
+        before = SX.credit_refunded(c, credit)
+        _refund_cash(c, ctx, credit, before, before + amount, day)
+        SX.credit_refund_insert(c, book_id=ctx.book.id, credit_entry_id=credit, refund_entry_id=new_id, amount=amount,
+                                day=day, at=at, by=SYSTEM)
 
 
 def _retire(c: sqlite3.Connection, ctx: Ctx, cid: str, local: str, key: str, at: str) -> None:
@@ -415,6 +470,8 @@ def _retire(c: sqlite3.Connection, ctx: Ctx, cid: str, local: str, key: str, at:
     day = str(entry["entry_date"])
     closed = SL.closed_on(c, ctx.book.id, day)
     _unsettle_entry(c, ctx, local)
+    for r in SX.credit_refunds_of_credit(c, local):
+        _unrefund(c, ctx, r)
     rid = posting.reverse(ctx, local, day=banking.open_day(ctx, day), memo="deleted at the provider", by=SYSTEM)
     SX.unlink_feed(c, local, at)
     if closed:
@@ -579,6 +636,8 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
                    lambda when: _doc_entry(ctx, control_kind=side, sign=sign, source=side,
                                            source_id=f"{d.ext.key}:{d.ext.revision}", contact=contact, rows=rows,
                                            memo=_doc_label(d), day=when, tags=carry), at)
+    if old:
+        _move_refunds(c, ctx, old, new_id)
     _bind(c, cid, "fin_entries", new_id, d.ext, at)
 
 
@@ -637,7 +696,7 @@ def _unsettle_ids(ctx: Ctx, ids: Sequence[str]) -> None:
     for sid in ids:
         s = SAP.get(ctx.c, "fin_settlements", sid)
         if s is not None and s["voided_at"] is None:
-            documents.unsettle(ctx, s)
+            documents.unsettle(ctx, s, cash=str(s["from_kind"]) != "credit")
 
 
 def _allot(credits: Sequence[tuple[str, int]], targets: Sequence[tuple[str, int]]) -> list[tuple[str, str, int]]:
@@ -661,10 +720,16 @@ def _allot(credits: Sequence[tuple[str, int]], targets: Sequence[tuple[str, int]
 def _credit_application(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: str) -> None:
     """A payment of nothing that applies credit memos to invoices, which is how QuickBooks applies a credit: no money
     moves. Each invoice's paid amount moves with the credit applied to it. A revision or a deletion undoes the
-    settlements the application made (its ref holds their ids)."""
+    settlements the application made (its ref holds their ids). An application that applies nothing is only a revision,
+    so the credit memo need not be in the books for it."""
     row = SX.ref(c, cid, APPLICATION_TABLE, s.ext.key)
     verdict = M.decide(_have(row), s.ext)
     if verdict not in (M.CREATE, M.REPLACE):
+        return
+    if not s.links:
+        if verdict == M.REPLACE:
+            _unsettle_ids(ctx, _ids(row))
+        _bind(c, cid, APPLICATION_TABLE, "", s.ext, at)
         return
     if sum(amount for _, amount in s.links) != sum(amount for _, amount in s.credits):
         raise FinanceError(NOT_AVAILABLE, "the credits applied do not match the invoices they apply to")
