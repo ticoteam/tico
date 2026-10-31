@@ -584,15 +584,18 @@ def test_a_vendor_has_one_key_across_its_bills_and_card_rows(books):
         vendor = _vendor(c, "Acme Cloud")
         rule = {"kind": "posting", "name": "Hosting", "when": {"counterparty": {"matches": "CLOUD"}},
                 "outcome": {"outcome": "post", "account_id": line},
-                "examples": [{"input": {"counterparty": "Acme Cloud"}, "expect": "post"}]}
+                "examples": [{"input": {"counterparty": "ACME CLOUD"}, "expect": "post"}]}
         assert act(c, OWNER, "rule_create", rule).status == "committed"
         bid = _bill(c, vendor, [{"account_id": line, "amount": 20_000}])
         assert act(c, OWNER, "bill_approve", {"bill_id": bid}).status == "committed"
-    _arrives(fake, MERCURY["txn_card_pending"], 1, "evt-0001")
+    shouted = {"counterpartyNickname": "ACME CLOUD"}                    # the contact's name in another case
+    _arrives(fake, {**MERCURY["txn_card_pending"], **shouted}, 1, "evt-0001")
     sync_once(books, fake, HOURS[1])
-    _arrives(fake, MERCURY["txn_card_posted"], 2, "evt-0002")
+    _arrives(fake, {**MERCURY["txn_card_posted"], **shouted}, 2, "evt-0002")
     sync_once(books, fake, HOURS[2])
     with books.read() as c:
+        assert c.execute("SELECT counterparty FROM fin_feed_txns WHERE card_id IS NOT NULL").fetchone()[0] == \
+            "ACME CLOUD"
         keys = [str(r[0]) for r in c.execute("SELECT l.contact_id FROM fin_lines l JOIN fin_accounts a ON "
                                              "a.id=l.account_id WHERE a.code='6100' ORDER BY l.amount")]
         assert keys == [vendor, vendor]                                # the card row and the bill line, one key
