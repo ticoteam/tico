@@ -163,6 +163,13 @@ def entry_by_source(c: sqlite3.Connection, book_id: str, source: str, source_id:
                      "ORDER BY created_at LIMIT 1", (book_id, source, source_id)).fetchone()
 
 
+def posted_by_source_prefix(c: sqlite3.Connection, book_id: str, source: str, prefix: str) -> list[Any]:
+    """Live original entries from a source whose id is `prefix` or starts with `prefix:`."""
+    return c.execute("SELECT * FROM fin_entries WHERE book_id=? AND source=? AND (source_id=? OR (source_id>? AND "
+                     "source_id<?)) AND status='posted' AND reverses_id IS NULL ORDER BY created_at",
+                     (book_id, source, prefix, prefix + ":", prefix + ";")).fetchall()
+
+
 def line_tags(c: sqlite3.Connection, line_ids: Sequence[str]) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {lid: {} for lid in line_ids}
     for chunk in _chunks(line_ids):

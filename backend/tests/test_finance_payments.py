@@ -705,12 +705,20 @@ def test_a_debit_returned_before_its_lost_payment_is_found_ends_the_payment(book
         assert _net(c) == {}
 
 
-def test_a_reconciled_debit_found_as_a_lost_payment_takes_in_its_hold_once_without_a_repost(books):
-    """Codex round 6 #4: the debit was reconciled (as an unknown spend) before the recovery found its payment. It
-    stays as booked (no repost: the statement holds it) with a categorize event, the payment settles on it and its
-    hold is taken in once, never left reserving the budget."""
+def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payments_line(books):
+    """Codex round 6 #4 and round 7: a 500.00 Software payment holds 500.00 on a 1,000.00 Software budget; its debit
+    posted as an unknown spend (Other expenses) and was reconciled before the recovery found the payment. The bank
+    line stays as reconciled; the spend moves to the payment's line in an entry that takes in the hold, so Software
+    reads (500 spent, 0 held, 500 left), never (0, 0, 1,000). The categorize event stays."""
     fake = FakeMercury()
     connect(books, fake)
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 100_000})
+        budget_id = str(made.result["budget_id"])
+
+    def software(c):
+        s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
+        return s.actual, s.held, s.remaining
     pid, key = _lost_send(books, fake)
     _debit(fake, "txn-lost", "req-9", "evt-lost")
     sync_once(books, fake, HOURS[2])
@@ -722,7 +730,8 @@ def test_a_reconciled_debit_found_as_a_lost_payment_takes_in_its_hold_once_witho
             c.execute("DELETE FROM fin_reconciliations")
             done = act(c, OWNER, "reconcile", {**args, "statement_balance": -int(off.result["difference"])})
             assert done.result["status"] == "done", done
-        posted = _lines(c)
+        bank = [x for x in _lines(c) if x[0] == "1000"]
+        assert software(c) == (0, 50_000, 50_000)
     fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
     sync_once(books, fake, HOURS[3])
     sync_once(books, fake, HOURS[4])
@@ -730,10 +739,20 @@ def test_a_reconciled_debit_found_as_a_lost_payment_takes_in_its_hold_once_witho
         assert tuple(c.execute("SELECT status, provider_txn_id FROM fin_payments WHERE id=?", (pid,)).fetchone()) \
             == ("settled", fid)
         assert _holds(c) == [(50_000, "settled")]
-        assert c.execute("SELECT entry_id IS NOT NULL FROM fin_holds WHERE source='payment'").fetchone()[0] == 1
-        assert _lines(c) == posted                                                # nothing reposted
+        assert software(c) == (50_000, 0, 50_000)
+        assert [x for x in _lines(c) if x[0] == "1000"] == bank                  # the reconciled bank line as it was
+        assert _net(c) == {"1000": -50_000, "6100": 50_000}
+        tagged = c.execute("SELECT t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id JOIN fin_accounts a "
+                           "ON a.id=l.account_id WHERE a.code='6100' AND t.kind='team'").fetchall()
+        assert [r[0] for r in tagged] == ["eng"]
         assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.feed.needs_category' AND "
                          "payload_json LIKE '%found after it was reconciled%'").fetchone()[0] == 1
+    with books.transaction() as c:                    # unreconciled and re-categorized: the move goes with the entry
+        rec = str(c.execute("SELECT reconciliation_id FROM fin_feed_txns WHERE id=?", (fid,)).fetchone()[0])
+        assert act(c, OWNER, "reconcile_undo", {"reconciliation_id": rec}).status == "committed"
+        again = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {"team": "eng"}})
+        assert again.status == "committed", again
+        assert _net(c) == {"1000": -50_000, "6100": 50_000}
 
 
 def test_a_debit_carrying_a_lost_sends_key_is_the_payment_when_it_arrives(books):

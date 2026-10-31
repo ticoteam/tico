@@ -365,7 +365,8 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
     """A payment just tied to its Mercury request (found again after a lost send answer). A debit for that request a
     sync already took in posted as an unknown spend: it posts again as the payment (its line, tags and vendor),
     settling it and taking in its hold, once. A debit the bank already returned or failed ends the payment (its hold
-    released); a reconciled one is left as booked: the payment settles on it and its hold is taken in, no repost."""
+    released). A reconciled one keeps its bank line: its spend moves to the payment's line (`_reclass`), which takes
+    in the hold, and the payment settles on it."""
     rid = str(pay["provider_request_id"] or "")
     if not rid or str(pay["status"]) in ("settled", "failed", "cancelled", "returned"):
         return
@@ -382,9 +383,9 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
         event(ctx, CATEGORY_EVENT, str(row["id"]), {"feed_id": str(row["id"]),
                                                     "why": "its payment was found after it was reconciled"},
               f"pay:{pay['id']}")
+        moved = _reclass(ctx, row, pay)
         if pay["hold_id"]:
-            budgeting.settle(ctx, str(pay["hold_id"]), -int(row["amount"]),
-                             str(row["entry_id"]) if row["entry_id"] else None)
+            budgeting.settle(ctx, str(pay["hold_id"]), -int(row["amount"]), moved)
         payments.feed_settled(ctx, pay, str(row["id"]))
         return
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
@@ -397,6 +398,34 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
                   txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
                   counterparty=str(row["counterparty"]), description=str(row["description"]), request_id=rid)
     _settle(ctx, row, money, None, t)
+
+
+def _reclass(ctx: Ctx, row: Any, pay: Any) -> str | None:
+    """A reconciled debit found to be a payment: its expense side moves to the payment's line, tags and vendor in an
+    entry on an open day (Cr each line it hit, Dr the payment's line), never touching the reconciled bank line. The
+    entry that now holds the payment's spend (that one, or the debit's own when it already sits on the payment's line
+    and tags), or None when the debit never posted (its hold then stays settled, counting, until it does)."""
+    if not row["entry_id"]:
+        return None
+    entry_id = str(row["entry_id"])
+    spent = [x for _, x in SL.entry_lines(ctx.c, entry_id) if x.role != L.MONEY_ROLE]
+    account = str(pay["account_id"])
+    tags = posting.with_team(ctx, cast(dict[str, str], SK.loads(pay["tags_json"])))
+    if all(x.account_id == account and dict(x.tags) == tags for x in spent):
+        return entry_id
+    rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
+    vendor = payments.vendor_of(rec) if rec is not None else str(row["counterparty"])
+    lines: list[dict[str, object]] = [{"account_id": x.account_id, "amount": -x.amount, "tags": dict(x.tags),
+                                       "contact_id": x.contact_id} for x in spent]
+    lines.append(_line(account, sum(x.amount for x in spent), tags, vendor))
+    fid = str(row["id"])
+    done = posting.post_entry(ctx.c, {"date": open_day(ctx, ctx.today), "source": "bank",
+                                      "source_id": fresh_source(ctx, "bank", f"{fid}:reclass"),
+                                      "memo": f"Payment {pay['id']} found after reconciling"[:200], "lines": lines},
+                              at=ctx.at)
+    if not done.get("posted"):
+        raise FinanceError(CONFLICT, f"feed row {fid} did not reclassify")
+    return str(done["entry_id"])
 
 
 def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:
@@ -499,12 +528,15 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
 
 
 def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
-    """Reverse a row's entry; the other side of a transfer goes back to waiting too."""
+    """Reverse a row's entry (and any reclassification of it, `_reclass`); the other side of a transfer goes back to
+    waiting too."""
     entry_id = str(row["entry_id"])
     entry = SL.entry_row(ctx.c, entry_id)
-    if entry is not None and str(entry["status"]) == "posted" and not entry["reverses_id"]:
-        # Its period may be closed by now: the reversal posts on an open day, as a late item does.
-        posting.reverse(ctx, entry_id, day=open_day(ctx, str(entry["entry_date"])), memo=memo, by=SYSTEM)
+    later = SL.posted_by_source_prefix(ctx.c, ctx.book.id, "bank", f"{row['id']}:reclass")
+    for e in [entry, *later]:
+        if e is not None and str(e["status"]) == "posted" and not e["reverses_id"]:
+            # Its period may be closed by now: the reversal posts on an open day, as a late item does.
+            posting.reverse(ctx, str(e["id"]), day=open_day(ctx, str(e["entry_date"])), memo=memo, by=SYSTEM)
     for r in SK.rows_of_entry(ctx.c, entry_id):
         SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "new", "entry_id": None, "updated_at": ctx.at})
 
