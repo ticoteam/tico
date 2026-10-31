@@ -82,16 +82,21 @@ async function open(browser, viewport, state) {
   return {page, errors};
 }
 
-// The dot's flight: where the copy lands (its box once its transform is spent), and, once it has, where `dot` is.
-async function flight(page, dot) {
-  const ghost = await page.waitForFunction(() => { const g = document.querySelector('.ldot-fly');
-    return g && {left: parseFloat(g.style.left), top: parseFloat(g.style.top), width: parseFloat(g.style.width)}; }).then(h => h.jsonValue());
+// The dot's flight after `act`: where the copy lands (its box once its transform is spent), and, once it has, where
+// `dot` is. The watch starts before `act`: a quick flight can be over before a wait inside `act` returns.
+async function flight(page, dot, act) {
+  const seen = page.waitForFunction(() => { const g = document.querySelector('.ldot-fly');
+    return g && {left: parseFloat(g.style.left), top: parseFloat(g.style.top), width: parseFloat(g.style.width),
+      took: g.getAnimations()[0]?.effect.getTiming().duration}; });
+  await act();
+  const ghost = await seen.then(h => h.jsonValue());
   await page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
   await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
   const r = await page.locator(dot).evaluate(el => { const b = el.getBoundingClientRect(); return {left: b.left, top: b.top, width: b.width}; });
   // the dot breathes (a scale of 3% at most), so its centre is what must match
   const off = Math.hypot(ghost.left + ghost.width / 2 - r.left - r.width / 2, ghost.top + ghost.width / 2 - r.top - r.width / 2);
   assert.ok(off < 2, `the dot landed ${off.toFixed(1)}px off ${dot}: ${JSON.stringify({ghost, r})}`);
+  return ghost;
 }
 const words = text => text.trim().split(/\s+/).length;
 
@@ -146,11 +151,8 @@ const words = text => text.trim().split(/\s+/).length;
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
     // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
     // The flight is quick: under 350 ms however far it goes.
-    await fab.click();
-    await panel.waitFor();
-    const took = await page.waitForFunction(() => document.querySelector('.ldot-fly')?.getAnimations()[0]?.effect.getTiming().duration).then(h => h.jsonValue());
+    const {took} = await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await fab.click(); await panel.waitFor(); });
     assert.ok(took <= 350, `a quick flight: ${took}ms`);
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]');
     assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Ask Tico']);
     assert.equal(await fab.isVisible(), true, 'the row stays');
     assert.equal(await fab.evaluate(el => getComputedStyle(el.querySelector('.ask-x')).opacity), '1', 'a close mark holds its place');
@@ -298,15 +300,11 @@ const words = text => text.trim().split(/\s+/).length;
     // Esc closes the panel: the dot flies back down to the row and lands on its dot, focus back on the row; ⌘J opens it
     // again.
     await box.focus();
-    await page.keyboard.press('Escape');
-    await panel.waitFor({state: 'hidden'});
-    await flight(page, '#ask-row [data-ask-dot]');
+    await flight(page, '#ask-row [data-ask-dot]', async () => { await page.keyboard.press('Escape'); await panel.waitFor({state: 'hidden'}); });
     assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the dot is back on the row');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'ask-row');
     assert.equal(await fab.getAttribute('aria-label'), null);
-    await page.keyboard.press('Control+j');
-    await panel.waitFor();
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]');
+    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await page.keyboard.press('Control+j'); await panel.waitFor(); });
     // The Assistant page is this chat already: there the row is not needed, and Search is the whole row again.
     await page.evaluate(() => { location.hash = '#/assistant'; });
     await fab.waitFor({state: 'hidden'});
@@ -342,9 +340,7 @@ const words = text => text.trim().split(/\s+/).length;
     const said2 = await peek2.locator('[data-peek-text]').innerText();
     assert.equal(said2, '2 questions are waiting on you');
     assert.ok(words(said2) <= 6 && !/asks/i.test(said2), said2);
-    await peek2.locator('[data-peek-go]').click();
-    await page.locator('#ask-panel').waitFor();
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]');
+    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await peek2.locator('[data-peek-go]').click(); await page.locator('#ask-panel').waitFor(); });
     await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').waitFor();
     assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').isVisible(), true);
     assert.equal(await peek2.isHidden(), true, 'no peek while the chat is open');
@@ -364,9 +360,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.waitForFunction(() => !document.querySelector('.ask-fly'));
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll with the chip');
     // Closing flies the dot back down into the tab bar.
-    await tab.click();
-    await page.locator('#ask-panel').waitFor({state: 'hidden'});
-    await flight(page, '#mobile-ask [data-ask-dot]');
+    await flight(page, '#mobile-ask [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor({state: 'hidden'}); });
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
     await page.waitForTimeout(300);
     assert.equal(await peek2.isHidden(), true, 'the line spoke for both questions: no second peek');
