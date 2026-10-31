@@ -40153,6 +40153,22 @@
             ],
             "title": "Watcher"
           },
+          "document": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "off",
+                  "warn",
+                  "hold"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document"
+          },
           "patterns": {
             "anyOf": [
               {
