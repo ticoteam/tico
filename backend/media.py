@@ -812,7 +812,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
 
     def question_review_preflight(who, body):
         """What a review question's files show, read for the check outside the write as the write resolves them, and
-        its seal (question_review_digest); ("", None) when it has none, or the write would refuse them anyway."""
+        its seal (question_review_digest); ("", None) when it has none. Files it cannot read seal as "", which no
+        digest equals: the write refuses them as it resolves them, or as `changed` once they resolve unchecked."""
         from . import file_reviews
         if not body.review:
             return "", None
@@ -821,7 +822,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 person, _ = question_checked(c, who, body)
                 review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
             except Problem:
-                return "", None
+                return "", ""
             text = question_review_text(review, attachments, body)
             return text, question_review_digest(text, review)
 

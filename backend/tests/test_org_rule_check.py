@@ -1832,3 +1832,23 @@ def test_send_anyway_refuses_a_held_review_question_with_no_seal_of_its_files(ru
                   (hold,))
     assert send_anyway(api, hold, expected=409)["error"]["code"] == "changed"
     assert hold_row(api, hold)["state"] == "held" and sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+
+
+def test_a_review_file_the_check_could_not_read_is_refused_once_it_resolves_in_the_write(ruled):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    cut = upload(api, "Our favorite color is blue.md")
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET archived=1 WHERE id=?", (cut["id"],))
+
+    def restored(*args, **kwargs):
+        with api.app.state.store.transaction() as c:
+            c.execute("UPDATE bot_files SET archived=0 WHERE id=?", (cut["id"],))
+        return judge(*args, **kwargs)
+    api.app.state.judge = restored
+    r = api.post("/api/v2/task-questions", json={"on": "human:ana", "question": "Is this cut ready?",
+                                                  "review": [{"file": cut["id"]}]}, headers=headers("ops-test"))
+    assert r.status_code == 409 and r.json()["error"]["code"] == "changed", r.text
+    [checked] = [call["state"]["output"] for call in judge.calls if "output" in call["state"]]
+    assert "Our favorite color is blue" not in checked
+    assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
