@@ -358,7 +358,9 @@ CREATE TABLE IF NOT EXISTS fin_transfers (
   amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE,
   status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted','cancelled')),
-  provider_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT, settled_at TEXT, submitted_at TEXT,
+  provider_txn_id TEXT, provider_credit_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT,
+  settled_at TEXT, submitted_at TEXT, find_after TEXT,
+  counted_json TEXT NOT NULL DEFAULT '[]',
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
   CHECK (from_money_account_id <> to_money_account_id));
 """
@@ -499,6 +501,11 @@ ADDED = (
     ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
     # vendors: seats or licenses, and the next renewal date (spec §12; the renewal stage events come from watch)
     ("fin_contacts", "seats", "INTEGER"), ("fin_contacts", "renewal_on", "TEXT"),
+    # the books gaps (migration 73): fin_transfers' columns added since it was first written
+    ("fin_transfers", "from_feed_id", "TEXT"), ("fin_transfers", "to_feed_id", "TEXT"),
+    ("fin_transfers", "settled_at", "TEXT"), ("fin_transfers", "submitted_at", "TEXT"),
+    ("fin_transfers", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+    ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
 )
 
 

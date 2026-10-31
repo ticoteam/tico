@@ -262,6 +262,111 @@ def test_migration_73_adds_fin_transfers_to_an_install_made_before_it_and_runnin
         assert found[0] == 1
 
 
+# fin_transfers as migration 73 first wrote it: before the columns added since, and the posted and cancelled statuses
+FIRST_FIN_TRANSFERS = """CREATE TABLE IF NOT EXISTS fin_transfers (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id), action_id TEXT NOT NULL,
+  from_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
+  amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
+  idempotency_key TEXT NOT NULL UNIQUE,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed')),
+  provider_txn_id TEXT, last_error TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  CHECK (from_money_account_id <> to_money_account_id));"""
+
+
+def test_migration_73_adds_every_fin_transfers_column_added_since_it_was_first_written(books):
+    """An install that ran migration 73 as first written gets the columns added since, idempotently."""
+    with books.transaction() as c:
+        c.execute("DROP TABLE fin_transfers")
+        c.execute(FIRST_FIN_TRANSFERS)
+        schema.gaps_books(c)
+        schema.gaps_books(c)
+        have = {str(r[1]) for r in c.execute("PRAGMA table_info(fin_transfers)").fetchall()}
+    assert {"from_feed_id", "to_feed_id", "settled_at", "submitted_at", "counted_json", "provider_credit_txn_id",
+            "find_after"} <= have, have
+
+
+def _limit_per_month(books, rule_id_out: list[str] | None = None) -> str:
+    with books.transaction() as c:
+        rule_id = str(act(c, OWNER, "rule_create", {
+            "name": "Moves per month", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "limit", "limit": 50_000, "per": "month"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal", "amount": 10}, "expect": "limit"}]}
+        ).result["rule_id"])
+    return rule_id
+
+
+def _reserved(books, rule_id: str) -> tuple[int, int]:
+    with books.read() as c:
+        return tuple(c.execute("SELECT coalesce(sum(amount),0), coalesce(sum(count),0) FROM fin_rule_counters "
+                               "WHERE rule_id=?", (rule_id,)).fetchone())
+
+
+def test_a_transfer_cancelled_after_a_429_gives_back_the_limit_its_claim_reserved(books):
+    """Mercury answered 429 after the send claim reserved a monthly limit, so the transfer stays queued to go again.
+    Cancelling it takes the limit back: the counter holds only what went."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "held")).status == "committed"
+    rule_id = _limit_per_month(books)
+    fake.queue["create_transfer"] = [Answer(429, {"message": "slow down"})]
+    sync_once(books, fake)
+    assert _reserved(books, rule_id) == (10_000, 1)
+    with books.transaction() as c:
+        tid = str(c.execute("SELECT id FROM fin_transfers").fetchone()[0])
+        assert act(c, OWNER, "payment_cancel", {"transfer_id": tid}).status == "committed"
+    assert _reserved(books, rule_id) == (0, 0)
+    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+
+
+def test_a_transfer_a_later_rule_refuses_after_a_429_gives_back_the_limit_its_claim_reserved(books):
+    """A rule that now refuses a transfer that reserved a limit and was then answered 429: the refusal cancels it,
+    and the limit it reserved comes back."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "held")).status == "committed"
+    rule_id = _limit_per_month(books)
+    fake.queue["create_transfer"] = [Answer(429, {"message": "slow down"})]
+    sync_once(books, fake)
+    assert _reserved(books, rule_id) == (10_000, 1)
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {
+            "name": "No bank moves", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "deny"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal"}, "expect": "deny"}]})
+        assert made.status == "committed", made
+    sync_once(books, fake, LATEST)
+    assert len(fake.sent("create_transfer")) == 1
+    assert _reserved(books, rule_id) == (0, 0)
+    assert tuple(_rows(books, "SELECT status, counted_json FROM fin_transfers")[0]) == ("cancelled", "[]")
+
+
+def test_an_unknown_transfers_out_leg_past_five_thousand_transactions_is_found_by_a_later_poll(books):
+    """The fallback reads REQUEST_PAGES pages of Mercury's transactions a poll, then keeps its place on the transfer,
+    so a later poll reads on from there. The leg sits past the first 5,000 and has its key in externalMemo only, so the
+    search misses it and the paged read finds it."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")        # sent, no answer: unknown; the feed backfills here
+    (sent,) = fake.sent("create_transfer")
+    for i in range(5_000):
+        fake.txns[f"pad-{i}"] = {**_leg(f"pad-{i}", "acct-elsewhere", -1.0, "2026-10-16"), "note": None}
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": None,
+                            "externalMemo": sent["note"], "createdAt": "2026-10-16T00:04:00Z"}
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert tuple(_rows(books, "SELECT status FROM fin_transfers")[0]) == ("unknown",)
+    before = len(fake.sent("transactions"))
+    sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
+    assert tuple(_rows(books, "SELECT status, provider_txn_id FROM fin_transfers")[0]) == ("submitted", "leg-out")
+    # the next poll reads on from where the last one stopped
+    assert fake.sent("transactions")[before:][0] == list(fake.txns)[4_999]
+
+
 def test_a_transfer_needs_both_accounts_in_the_requesters_view_and_names_neither_otherwise(books):
     fake = FakeMercury()
     src, dst = _two(books, fake)
@@ -420,3 +525,192 @@ def test_when_mercury_returns_a_transfer_id_its_legs_settle_that_transfer_not_an
     sync_once(books, fake, POLL)
     rows = dict(_rows(books, "SELECT id, status FROM fin_transfers"))
     assert rows[second] == "posted" and rows[first] == "submitted", rows
+
+
+def _assert_private_to_owner(store, title):
+    """The one Needs-you task with this title is private: the owner (its assignee) reads it, a teammate outside Finance
+    does not."""
+    with store.read() as c:
+        (task_id,) = [r[0] for r in c.execute("SELECT id FROM tasks WHERE title LIKE ?", (title,)).fetchall()]
+        row = H.task(c, task_id)
+        assert row["private"] == 1, dict(row)
+        assert H.task_private_readable(c, OWNER, row)
+        assert not H.task_private_readable(c, "human:gus", row)
+
+
+def test_a_limit_added_after_transfers_were_queued_is_reserved_at_send_once(books):
+    """Two $100 moves are queued; a $100 a day limit is added before they go. The first fits and reserves the counter
+    at its send claim; the second is over it and is cancelled, never sent."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "first")).status == "committed"
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "second")).status == "committed"
+        cap = act(c, OWNER, "rule_create", {
+            "name": "Moves per day", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "limit", "limit": 10_000, "per": "day"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal", "amount": 10}, "expect": "limit"}]})
+        assert cap.status == "committed", cap
+        rule_id = str(cap.result["rule_id"])
+    sync_once(books, fake)
+    assert len(fake.sent("create_transfer")) == 1
+    with books.read() as c:
+        assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
+                               (rule_id,)).fetchone()) == (10_000, 1)
+        assert sorted(r[0] for r in c.execute("SELECT status FROM fin_transfers")) == ["cancelled", "submitted"]
+
+
+def test_a_refused_transfer_gives_back_the_limit_it_reserved(books):
+    """A transfer that reserved a monthly limit at its send claim, then was refused by Mercury, takes it back: only the
+    transfer that went is counted."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000, "refused")).status == "committed"
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 20_000, "sent")).status == "committed"
+        rule_id = str(act(c, OWNER, "rule_create", {
+            "name": "Moves per month", "when": {"kind": "payment_create", "method": "internal"},
+            "outcome": {"outcome": "limit", "limit": 50_000, "per": "month"},
+            "examples": [{"input": {"kind": "payment_create", "method": "internal", "amount": 10}, "expect": "limit"}]}
+        ).result["rule_id"])
+    fake.queue["create_transfer"] = [Answer(422, {"message": "insufficient funds"})]
+    sync_once(books, fake)
+    with books.read() as c:
+        (sent_amount,) = c.execute("SELECT amount FROM fin_transfers WHERE status='submitted'").fetchone()
+        assert c.execute("SELECT count(*) FROM fin_transfers WHERE status='failed'").fetchone()[0] == 1
+        assert tuple(c.execute("SELECT sum(amount), sum(count) FROM fin_rule_counters WHERE rule_id=?",
+                               (rule_id,)).fetchone()) == (sent_amount, 1)
+
+
+def test_a_deny_on_the_owner_rule_added_after_someone_else_queued_a_transfer_cancels_it(books):
+    """Ben queues a move; the owner then adds a deny for payments by anyone but the owner. The send-time facts carry
+    actor.owner as the request did, so the rule applies and nothing is sent."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    _queued_by_ben(books, src, dst)
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {
+            "name": "Only the owner moves money", "when": {"kind": "payment_create", "actor.owner": False},
+            "outcome": {"outcome": "deny"},
+            "examples": [{"input": {"kind": "payment_create", "actor.owner": False}, "expect": "deny"}]})
+        assert made.status == "committed", made
+    sync_once(books, fake)
+    _assert_cancelled_unsent(books, fake)
+
+
+def test_a_cancelled_transfer_notice_is_private_to_the_one_who_must_act(books):
+    """Ben's payment right is revoked after he queued a $100 move: the cancellation's Needs-you names the amount, so
+    it is private to the owner, and a teammate outside Finance cannot read it."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    _queued_by_ben(books, src, dst)
+    with books.transaction() as c:
+        act(c, OWNER, "right_revoke", {"teammate": "human:ben", "right": "finance.pay"})
+    sync_once(books, fake)
+    _assert_cancelled_unsent(books, fake)
+    _assert_private_to_owner(books, "Transfer of 100.00 was not sent%")
+
+
+def test_a_waiting_transfer_notice_is_private_to_the_one_who_must_act(books):
+    """A rule that asks the owner about the checking account, added after Ben queued a $100 move: the waiting Needs-you
+    names the amount, so it is private to the owner."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    _, src_code = _ledger(books, src[0])
+    _queued_by_ben(books, src, dst)
+    with books.transaction() as c:
+        made = act(c, OWNER, "rule_create", {
+            "name": "Checking asks", "when": {"kind": "payment_create", "accounts": src_code},
+            "outcome": {"outcome": "needs_approval", "who": "owner"},
+            "examples": [{"input": {"kind": "payment_create", "accounts": [src_code]}, "expect": "needs_approval"}]})
+        assert made.status == "committed", made
+    sync_once(books, fake)
+    assert fake.sent("create_transfer") == []
+    _assert_private_to_owner(books, "Transfer of 100.00 is waiting%")
+
+
+def test_a_transfer_cut_off_before_midnight_settles_on_the_legs_of_its_submit_day(books):
+    """The worker claimed the call at 23:58 on the 15th; Mercury took the transfer and the worker stopped before it
+    recorded the answer. The recovery runs the next morning. Its legs are dated the 15th, so they settle it: the window
+    starts when the call was made, not when it was recovered."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+        c.execute("UPDATE fin_outbox SET claimed_at=? WHERE op='transfer_create'", ("2026-10-15T23:58:00.000000Z",))
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "unknown"
+    _arrive(fake, src[1], dst[1], 800.0, day="2026-10-15")
+    sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "posted"
+    assert fake.sent("create_transfer") == []
+
+
+def test_a_transfer_cut_off_mid_call_is_found_by_its_note_key_and_takes_mercurys_created_time(books):
+    """Mercury took the transfer and the answer was lost: it is unknown and never sent again. Its out-leg carries the
+    transfer's key in its note, so it is found in Mercury's transactions, and the created time Mercury gave it is the
+    submit day the legs post in (the claim time stands only until Mercury returns it)."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]          # sent, but no answer came back
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "unknown"
+    (sent,) = fake.sent("create_transfer")
+    assert str(sent["note"]).startswith("tico:")                 # the key travels in the note, as payments' do
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": sent["note"],
+                            "createdAt": "2026-10-16T00:04:00Z"}   # Mercury's own submit time, after midnight
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert tuple(_rows(books, "SELECT status, provider_txn_id, submitted_at FROM fin_transfers")[0]) == \
+        ("submitted", "leg-out", "2026-10-16T00:04:00.000000Z")
+    _arrive(fake, src[1], dst[1], 800.0, day="2026-10-16")
+    sync_once(books, fake, "2026-10-16T09:30:00.000000Z")
+    assert _rows(books, "SELECT status FROM fin_transfers")[0][0] == "posted"
+    assert len(fake.sent("create_transfer")) == 1
+
+
+def test_a_transfer_keeps_both_of_mercurys_legs_from_its_answer(books):
+    """Mercury answers a transfer with both of its legs, each a transaction with its own id: both are kept."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 10_000)).status == "committed"
+    sync_once(books, fake)
+    assert tuple(_rows(books, "SELECT status, provider_txn_id, provider_credit_txn_id FROM fin_transfers")[0]) == \
+        ("submitted", "xfer-1", "xfer-1-credit")
+
+
+def test_an_unknown_transfer_is_searched_by_its_note_in_its_account_before_all_transactions_are_read(books):
+    """The lookup narrows first: its account's transactions matching its note, within the days around its claim. Its
+    out-leg is found there and takes Mercury's created time."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]          # sent, but no answer came back
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
+    (sent,) = fake.sent("create_transfer")
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": sent["note"],
+                            "createdAt": "2026-10-16T00:04:00Z"}
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    account, searched, start, end = fake.sent("account_transactions")[-1]
+    assert (account, searched, start, end) == (src[1], sent["note"], "2026-10-14", "2026-10-16")
+    assert tuple(_rows(books, "SELECT status, provider_txn_id, submitted_at FROM fin_transfers")[0]) == \
+        ("submitted", "leg-out", "2026-10-16T00:04:00.000000Z")
+
+
+def test_an_unknown_transfer_the_search_misses_is_still_found_in_the_full_list(books):
+    """Its key only in another memo field, which the search does not read: every transaction is read, and it is found."""
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    fake.queue["create_transfer"] = [Answer(None, {})]
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_create", _payload(src, dst, 80_000)).status == "committed"
+    sync_once(books, fake, "2026-10-15T23:58:00.000000Z")
+    (sent,) = fake.sent("create_transfer")
+    fake.txns["leg-out"] = {**_leg("leg-out", src[1], -800.0, "2026-10-16"), "note": None,
+                            "externalMemo": sent["note"], "createdAt": "2026-10-16T00:04:00Z"}
+    sync_once(books, fake, "2026-10-16T09:00:00.000000Z")
+    assert fake.sent("account_transactions")[-1][1] == sent["note"]          # searched first, and it missed
+    assert tuple(_rows(books, "SELECT status, provider_txn_id FROM fin_transfers")[0]) == ("submitted", "leg-out")

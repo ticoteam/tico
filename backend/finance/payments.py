@@ -446,7 +446,7 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
         maker = str(pay["created_by"])
         person = maker if maker in ctx.org.humans else admin_person(ctx)
         tico.needs_you(ctx.c, person, f"Payment of {int(pay['amount']) / 100:.2f} failed",
-                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.")
+                       f"Mercury refused payment {pay['id']}: {why[:300]}. Fix it and pay again.", private=True)
 
 
 def admin_person(ctx: Ctx) -> str:
@@ -462,7 +462,7 @@ def _hold(ctx: Ctx, pay: Any, why: str) -> str:
     if first:
         tico.needs_you(ctx.c, admin_person(ctx), f"Payment of {int(pay['amount']) / 100:.2f} is waiting",
                        f"Payment {pay['id']} was not sent: {why}. Cancel it, or fix what stops it and it goes on its "
-                       "own.")
+                       "own.", private=True)
     return "wait"
 
 
@@ -570,10 +570,8 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         return why
     assert line is not None and rec is not None and money is not None
     amount = int(pay["amount"])
-    found = {"kind": "payment_create", "actor": who,
-             "actor.kind": "bot" if who in ctx.org.bots else "human", "actor.team": ctx.org.team_of.get(who, ""),
-             "now": ctx.at, "currency": ctx.book.base_currency,
-             **_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money)}
+    found = gating.send_facts(ctx, who, "payment_create",
+                              _facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money))
     mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
@@ -713,18 +711,26 @@ def polled(ctx: Ctx, pay: Any, answer: Answer) -> None:
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
 
-def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
-    """Whether one of Mercury's requests is this payment: its key in a memo field that comes back, the same recipient
-    and the same amount. Mercury does not return the idempotency key."""
-    key = f"{NOTE}{pay['idempotency_key']}"
-    if not any(key in str(r.get(f) or "") for f in ("memo", "note", "externalMemo")):
-        return False
-    if rec is None or str(r.get("recipientId") or "") != str(rec["provider_recipient_id"] or ""):
+KEY_FIELDS = ("memo", "note", "externalMemo")     # the fields Mercury echoes a request's or a transfer's note in
+
+
+def keyed(key: str, row: Mapping[str, object], amount: int) -> bool:
+    """Whether one of Mercury's rows is the instruction with this idempotency key: the key (NOTE + key) in a field that
+    comes back, and this amount (Mercury's sign aside). Mercury does not return the idempotency key itself. Shared by
+    payments (requests) and transfers (transactions)."""
+    if not any(f"{NOTE}{key}" in str(row.get(f) or "") for f in KEY_FIELDS):
         return False
     try:
-        return F.cents(r.get("amount")) == int(pay["amount"])
+        return abs(F.cents(row.get("amount"))) == amount
     except FinanceError:
         return False
+
+
+def matches(pay: Any, rec: Any, r: Mapping[str, object]) -> bool:
+    """Whether one of Mercury's requests is this payment: keyed, and to the same recipient."""
+    if rec is None or str(r.get("recipientId") or "") != str(rec["provider_recipient_id"] or ""):
+        return False
+    return keyed(str(pay["idempotency_key"]), r, int(pay["amount"]))
 
 
 def found(ctx: Ctx, pay: Any, requests: Sequence[Mapping[str, object]]) -> bool:
@@ -753,7 +759,7 @@ def not_found(ctx: Ctx, pay: Any) -> None:
         tico.needs_you(ctx.c, admin_person(ctx), f"Check Mercury for a {int(pay['amount']) / 100:.2f} payment",
                        f"Payment {pay['id']} may or may not have reached Mercury (no answer since {since}). Look for "
                        f"a request or transaction with note {NOTE}{pay['idempotency_key']}. If it is not there, cancel the payment "
-                       "in Finance; Finance will not send it again on its own.")
+                       "in Finance; Finance will not send it again on its own.", private=True)
     SK.update(ctx.c, "fin_payments", str(pay["id"]), fields)
 
 

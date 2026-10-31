@@ -579,6 +579,13 @@ def payments_unlinked(c: sqlite3.Connection, money_account_id: str, amount: int)
                      "AND status IN ('unknown','sending') ORDER BY created_at", (money_account_id, amount)).fetchall()
 
 
+def unknown_transfers(c: sqlite3.Connection, connection_id: str) -> list[Any]:
+    """Transfers whose call may have landed (unknown), from that connection's accounts: looked for by their key."""
+    return c.execute("SELECT * FROM fin_transfers WHERE status='unknown' AND from_money_account_id IN "
+                     "(SELECT id FROM fin_money_accounts WHERE connection_id=?) ORDER BY created_at",
+                     (connection_id,)).fetchall()
+
+
 def payments_due(c: sqlite3.Connection, at: str, most: int, connection_id: str | None = None) -> list[Any]:
     """Payments the worker owes a call: to send (queued), to resolve (unknown, or `sending` left by a crash), or to
     poll (waiting on the bank); with `connection_id`, only those paid from that connection's accounts."""

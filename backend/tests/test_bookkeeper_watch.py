@@ -98,3 +98,127 @@ def test_a_reviewed_finding_is_not_news_again_after_a_day_but_is_when_its_facts_
     monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(changed)])
     with store.transaction() as c:
         assert BK.watch(c, api.app.state.auth, H.shift(later, hours=1))["items"] == 1
+
+
+NEWER = {"kind": "duplicate_charge", "key": "duplicate_charge:f10", "stamp": {"amount": 500, "gap": 2},
+         "label": "Beta: 5.00 charged again 2 day(s) after"}
+
+
+def test_a_finished_watch_task_is_not_listed_again_when_a_new_finding_arrives(environment, monkeypatch):
+    """Finding A is on a Watch task that is finished. When B arrives, the new task lists only B: A was reviewed."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
+    with store.transaction() as c:
+        assert BK.watch(c, api.app.state.auth, H.now())["items"] == 1
+    (first,) = checks(api)
+    with store.transaction() as c:
+        c.execute("UPDATE tasks SET status='done' WHERE id=?", (first["id"],))
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING), dict(NEWER)])
+    with store.transaction() as c:
+        made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
+    assert made["items"] == 1 and made["state"] == "opened", made
+    (task,) = [t for t in checks(api) if t["id"] != first["id"]]
+    assert task["title"] == "Watch (1)" and "duplicate_charge:f10" in task["body"], task
+    assert "duplicate_charge:f9" not in task["body"], task["body"]
+
+
+def test_an_open_watch_task_keeps_what_it_lists_and_adds_the_new_finding(environment, monkeypatch):
+    """Still open, the task lists its own items (A) with the new one (B): an open item is not dropped, and a finding it
+    never listed is not added."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING)])
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (opened,) = checks(api)
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(FINDING), dict(NEWER)])
+    with store.transaction() as c:
+        made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
+    assert made["state"] == "updated", made
+    (task,) = checks(api)
+    assert task["id"] == opened["id"] and task["title"] == "Watch (2)", task
+    assert "duplicate_charge:f9" in task["body"] and "duplicate_charge:f10" in task["body"], task["body"]
+
+
+def _long(kind: str, n: int) -> dict[str, object]:
+    """A finding with a long id and label, as a real one can be: fifty of them fill the body's bytes."""
+    return {"kind": kind, "key": f"{kind}:{'7' * 60}-{n:03d}", "stamp": {"n": n}, "label": "L" * 160}
+
+
+def _seen(api) -> set[str]:
+    with api.app.state.store.read() as c:
+        return {str(row[0]) for row in c.execute("SELECT key FROM bookkeeper_seen")}
+
+
+def test_the_most_important_finding_is_named_first_and_one_the_body_cannot_hold_is_not_stamped_seen(environment,
+                                                                                                    monkeypatch):
+    """Grok's repro: 25 long duplicate charges and 25 long price rises fill the body's bytes before runway, the most
+    important. Runway is still named, and a finding the body cannot hold is not stamped seen: it is news again once
+    there is room for it."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    runway = {"kind": "runway", "key": "runway:acme", "stamp": {"cash": 9}, "label": "Acme: cash covers 9 days of burn"}
+    rest = [_long("duplicate_charge", n) for n in range(25)] + [_long("price_increase", n) for n in range(25)]
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [runway] + rest)
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (task,) = checks(api)
+    assert "runway:acme" in task["body"]
+    dropped = [d for d in rest if d["key"] not in task["body"]]
+    assert dropped, "the body must not hold them all, or this does not test the cut"
+    assert "runway:acme" in _seen(api)
+    assert not any(d["key"] in _seen(api) for d in dropped)
+    # The others clear: what the body dropped is listed on the next pass.
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: list(dropped))
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
+    (task,) = checks(api)
+    assert all(d["key"] in task["body"] for d in dropped)
+
+
+def test_a_finding_past_a_kinds_line_limit_is_not_stamped_seen_and_is_listed_once_there_is_room(environment,
+                                                                                               monkeypatch):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    spend = [{"kind": "unusual_spend", "key": f"unusual_spend:{n:02d}", "stamp": {"n": n}, "label": f"Acme spend {n}"}
+             for n in range(BK.PER_KIND + 1)]
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: list(spend))
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (task,) = checks(api)
+    over = spend[-1]["key"]
+    assert over not in task["body"] and over not in _seen(api)
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [spend[-1]])
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=24))
+    (task,) = checks(api)
+    assert over in task["body"]
+
+
+def test_an_open_watch_task_still_lists_an_item_whose_key_holds_a_space(environment, monkeypatch):
+    """An unusual-spend key carries the vendor's name, spaces and all. When a new finding arrives, the open task keeps
+    that line: what the task lists is recorded beside it, never read back from its text (the first word of a key is not
+    the key)."""
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    spaced = {"kind": "unusual_spend", "key": "unusual_spend:Acme Supplies:2026-10", "stamp": {"amount": 4000},
+              "label": "Acme Supplies: 40.00 this month, above its usual"}
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(spaced), dict(FINDING)])
+    with store.transaction() as c:
+        BK.watch(c, api.app.state.auth, H.now())
+    (opened,) = checks(api)
+    monkeypatch.setattr(FR, "watch_findings", lambda c, viewer, at: [dict(spaced), dict(FINDING), dict(NEWER)])
+    with store.transaction() as c:
+        made = BK.watch(c, api.app.state.auth, H.shift(H.now(), hours=1))
+    assert made["state"] == "updated", made
+    (task,) = checks(api)
+    assert task["id"] == opened["id"], task
+    assert "  - unusual_spend:Acme Supplies:2026-10  Acme Supplies: 40.00 this month" in task["body"], task["body"]
+    with store.read() as c:
+        assert "unusual_spend:Acme Supplies:2026-10" in BK._open_listed(c)

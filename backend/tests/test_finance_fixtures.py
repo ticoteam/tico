@@ -150,11 +150,34 @@ class FakeMercury:
         return self._answer("users", None, MERCURY["users"])
 
     def transactions(self, start_after, limit=500):
-        return self._answer("transactions", start_after, {"transactions": list(self.txns.values()), "page": {}})
+        """Mercury's transaction list a page at a time: the rows after `start_after`, and page.nextPage naming the
+        last row of a page that has more after it (a list of up to `limit` rows answers in one page, as before)."""
+        rows = list(self.txns.values())
+        ids = [str(t["id"]) for t in rows]
+        start = ids.index(start_after) + 1 if start_after in ids else 0
+        chunk = rows[start:start + limit]
+        more = start + limit < len(rows)
+        page = {"nextPage": str(chunk[-1]["id"])} if more and chunk else {}
+        return self._answer("transactions", start_after, {"transactions": chunk, "page": page})
 
     def transaction(self, txn_id):
         raw = self.txns.get(txn_id)
         return self._answer("transaction", txn_id, raw if raw is not None else self.Answer(404, {}))
+
+    def account_transactions(self, account_id, search=None, start=None, end=None, start_after=None, limit=500):
+        """Mercury's search over one account's transactions: `search` matches a transaction's note, description or
+        counterparty; `start` and `end` (dates, YYYY-MM-DD) bound its created day. The whole match comes in one page."""
+        def hit(txn: dict) -> bool:
+            if str(txn.get("accountId")) != account_id:
+                return False
+            if search and not any(search.lower() in str(txn.get(f) or "").lower()
+                                  for f in ("note", "bankDescription", "counterpartyName")):
+                return False
+            day = str(txn.get("createdAt") or "")[:10]
+            return (not start or day >= start) and (not end or day <= end)
+        hits = [t for t in self.txns.values() if hit(t)]
+        return self._answer("account_transactions", (account_id, search, start, end),
+                            {"transactions": hits, "page": {}})
 
     def events(self, start_after, limit=500, newest=False):
         found = list(reversed(self.events_list))[:limit] if newest else self.events_list
@@ -205,9 +228,21 @@ class FakeMercury:
         return answer
 
     def create_transfer(self, body):
-        """An internal transfer: Mercury's transfer at once, numbered in the order sent (xfer-1, ...)."""
+        """An internal transfer, numbered in the order sent (xfer-1, ...). Mercury answers with both legs, each a
+        transaction: the debit (xfer-N, the out-leg) and the credit (xfer-N-credit), each carrying the body's note. Like
+        the others, a leg reaches `txns` only when a test lands it."""
         number = len(self.sent("create_transfer")) + 1
-        return self._answer("create_transfer", dict(body), {"id": f"xfer-{number}", "status": "pending"})
+        amount = float(body["amount"])
+
+        def leg(txn_id: str, account: object, value: float) -> dict[str, object]:
+            return {"id": txn_id, "accountId": str(account), "amount": value, "createdAt": "2026-10-15T12:00:00Z",
+                    "postedAt": None, "status": "pending", "kind": "internalTransfer", "note": body.get("note"),
+                    "externalMemo": None, "bankDescription": "Internal transfer",
+                    "counterpartyName": "Internal transfer", "requestId": None, "cardId": None}
+        return self._answer("create_transfer", dict(body), {
+            "debitTransaction": leg(f"xfer-{number}", body["sourceAccountId"], -amount),
+            "creditTransaction": leg(f"xfer-{number}-credit", body["destinationAccountId"], amount),
+            "status": "pending"})
 
     def create_transaction(self, account_id, body):
         """A direct send: Mercury's transaction at once, numbered in the order sent (txn-direct-1, ...)."""

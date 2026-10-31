@@ -48,10 +48,16 @@ def rule_from(row: Any) -> G.Rule:
 
 def facts(ctx: Ctx, who: str, kind: str, plan: Plan) -> dict[str, object]:
     """What rules match on: the kind, who asks (and their kind and team), the time, plus the planner's own facts."""
+    return send_facts(ctx, who, kind, plan.facts)
+
+
+def send_facts(ctx: Ctx, who: str, kind: str, planned: Mapping[str, object]) -> dict[str, object]:
+    """The same keys `facts` gives an action at request time, rebuilt for the send: a send-time recheck judges the
+    requester as they are now, so a rule that matched at request time (actor.owner included) matches again."""
     actor_kind = "system" if who == SYSTEM else "bot" if who in ctx.org.bots else "human"
     return {"kind": kind, "actor": who, "actor.kind": actor_kind, "actor.team": ctx.org.team_of.get(who, ""),
             "actor.owner": bool(ctx.org.owner) and who == ctx.org.owner,
-            "now": ctx.at, "currency": ctx.book.base_currency, **plan.facts}
+            "now": ctx.at, "currency": ctx.book.base_currency, **planned}
 
 
 def _used(ctx: Ctx) -> G.Used:
