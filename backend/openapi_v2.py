@@ -1454,6 +1454,10 @@ STABLE.extend([
     ("/api/v2/finance/pay-from", "get", "Finance", "listFinancePayFrom",
      "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees "
      "that account", "FinancePayFrom"),
+    ("/api/v2/finance/feed/{feed_id}/expected", "get", "Finance", "listFinanceFeedExpected",
+     "The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account and "
+     "direction, at most its amount, marked within 5 days), capped at 20, for the feed_match action",
+     "FinanceFeedExpected"),
     ("/api/v2/finance/inbox", "get", "Finance", "getFinanceInbox",
      "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, "
      "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
@@ -1622,6 +1626,11 @@ SCHEMAS.update({
                                                   "available_balance": {"type": ["integer", "null"]},
                                                   "balance_as_of": "n"}, required=["id", "name"])),
                            "currency": "s", "view_version": "i"}),
+    "FinanceFeedExpected": obj({"feed_id": "s", "kind": {"type": "string", "enum": ["bill", "invoice"]},
+                                "amount": "i", "date": "s", "expected": items(obj({
+                                    "settlement_id": "s", "kind": "s", "document_id": "s", "number": "s",
+                                    "contact_id": "s", "contact_name": "s", "amount": "i", "marked_on": "s"})),
+                                "more": "b", "view_version": "i"}),
     "FinanceInvoices": obj({"invoices": items(ref("FinanceDocumentRow")), "next_cursor": "n",
                             "open": ref("FinanceOpenTotal"), "currency": "s", "view_version": "i"}),
     "FinanceOpenTotal": obj({"count": "i", "remaining": "i", "more": "b",

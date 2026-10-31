@@ -870,10 +870,8 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
     The contact's name only breaks a tie (a bank often names the rail, not the vendor). "linked"; ASK when candidates
     exist but no single one (the row stays new, never posting a second money line, and a person picks); "" when
     nothing waits, and the row posts as usual."""
-    from .banking import mark_posted
     kind = "bill" if t.amount < 0 else "invoice"
     start, end = _window(t.txn_date)
-    fid = str(row["id"])
     single = [[s] for s in _waiting(ctx, kind, money, abs(t.amount), start, end)]
     group = _pick(single, t.counterparty) if single else None
     if not single:
@@ -883,12 +881,20 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
         group = _pick(sets, t.counterparty)
     if group is None:
         return ASK
+    _link(ctx, row, money, t, group)
+    return "linked"
+
+
+def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
+    """The row is the bank side of these waiting payments: one takes its entry as it is; several are replaced by
+    one entry for the row (the bank moves once). Each settlement now comes from the row. The row's entry id."""
+    from .banking import mark_posted
+    fid = str(row["id"])
     if len(group) == 1:
         mark_posted(ctx, [fid], str(group[0]["entry_id"]))
         SAP.update(ctx.c, "fin_settlements", str(group[0]["id"]), {"from_kind": "feed", "from_id": fid})
-    else:
-        _post_combined(ctx, row, money, t, group)
-    return "linked"
+        return str(group[0]["entry_id"])
+    return _post_combined(ctx, row, money, t, group)
 
 
 def _pick(sets: Sequence[list[Any]], counterparty: str) -> list[Any] | None:
@@ -930,7 +936,7 @@ def _combined(waiting: Sequence[Any], amount: int) -> list[list[Any]]:
     return found
 
 
-def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> None:
+def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
     """One row paying several documents marked paid from its account: their entries are reversed and the row posts
     one entry for them all (the bank moves once), and each settlement now comes from the row."""
     from .banking import mark_posted, open_day, post_row
@@ -951,6 +957,66 @@ def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence
     mark_posted(ctx, [fid], entry_id)
     for s in group:
         SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"from_kind": "feed", "from_id": fid, "entry_id": entry_id})
+    return entry_id
+
+
+EXPECTED_MOST = 20          # waiting payments listed for one row
+
+
+def expected_for(ctx: Ctx, who: str, row: Any) -> tuple[list[Any], bool]:
+    """The payments marked paid that a settled, unposted row may be the bank side of, for a person to pick
+    (feed_match): on its money account, in its direction, of at most its amount, marked within MATCH_DAYS of it, on
+    documents the viewer sees. Capped; True when there were more."""
+    if row["entry_id"] or int(row["pending"]) or str(row["status"]) == "ignored" or not int(row["amount"]):
+        return [], False
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    if money is None:
+        return [], False
+    kind = "bill" if int(row["amount"]) < 0 else "invoice"
+    start, end = _window(str(row["txn_date"]))
+    found = [s for s in _waiting(ctx, kind, money, 0, start, end) if int(s["amount"]) <= abs(int(row["amount"]))
+             and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))]
+    return found[:EXPECTED_MOST], len(found) > EXPECTED_MOST
+
+
+def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
+    """Link a settled bank row to the payments marked paid it is the bank side of (the ones the automatic match could
+    not tell apart): exactly as that match does, so the bank moves once and nothing new is expensed. The payments'
+    amounts add up to the row's; the documents are ones the asker sees and may record payments on."""
+    from .banking import seen
+    V.only(p, ("feed_id", "settlement_ids"))
+    row = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
+    if row is None or not seen(ctx, who, row):
+        raise FinanceError(NOT_FOUND, "no such feed row in your view")
+    if int(row["pending"]) or str(row["status"]) == "ignored" or row["entry_id"]:
+        raise FinanceError(CONFLICT, "only a settled row not yet in the books is linked; re-categorize a posted one")
+    kind = "bill" if int(row["amount"]) < 0 else "invoice"
+    need = R.AP if kind == "bill" else R.AR
+    if not R.has(ctx.org, who, need, ctx.rights(who)):
+        raise denied(f"linking a row to {kind} payments needs {need}")
+    ids = list(dict.fromkeys(V.texts(p, "settlement_ids", COMBINED_MOST)))
+    if not ids:
+        raise invalid("name the waiting payments (settlement_ids) this row pays")
+    waiting = {str(s["id"]): s for s in expected_for(ctx, who, row)[0]}
+    group = [waiting[i] for i in ids if i in waiting]
+    if len(group) != len(ids):
+        raise FinanceError(NOT_FOUND, "no such payment waiting for this row in your view")
+    if len({str(s["contact_id"] or "") for s in group}) > 1:
+        raise invalid("one row pays one contact's payments")
+    total = sum(int(s["amount"]) for s in group)
+    if total != abs(int(row["amount"])):
+        raise invalid(f"those payments add up to {total}, the row to {abs(int(row['amount']))}")
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    docs = [str(s["to_id"]) for s in group]
+
+    def apply(aid: str) -> Result:
+        fresh = SK.get(ctx.c, "fin_feed_txns", str(row["id"]))
+        entry = _link(ctx, fresh, money, _row_txn(fresh), group)
+        return {"feed_id": str(row["id"]), "entry_id": entry, "settlement_ids": ids, f"{kind}_ids": docs}
+    names = ", ".join(f"{kind} {SAP.get(ctx.c, SAP.DOCS[kind][0], d)['number'] or d}" for d in docs)
+    return Plan(K.default_gate(ctx.org, who, "feed_match"),
+                f"Link the {_money(abs(int(row['amount'])))} bank row to the payment(s) marked on {names}"[:300], apply,
+                facts={"amount": abs(int(row["amount"])), "counterparty": str(row["counterparty"])})
 
 
 def _arrived(ctx: Ctx, kind: str, doc: Any, money: Any, amount: int, day: str) -> Any:
@@ -1006,6 +1072,25 @@ def _row_entries(ctx: Ctx, row: Any) -> list[str]:
         ctx.c, ctx.book.id, "bank", f"{row['id']}:{F.RECLASS}") if str(e["status"]) == "posted" and not e["reverses_id"]]
 
 
+def _row_txn(row: Any) -> F.FeedTxn:
+    """A stored settled feed row as the feed transaction it was."""
+    return F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
+                     txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
+                     counterparty=str(row["counterparty"]), description=str(row["description"]),
+                     card_id=str(row["card_id"] or ""))
+
+
+def _auto_default(ctx: Ctx, row: Any) -> set[str]:
+    """The automatic default line a posted row sits on, if it does: Other expenses, when ingest posted it there and
+    asked for a category (needs_category) and no categorize action posted its entry since. Empty otherwise."""
+    from .banking import CATEGORY_EVENT, OTHER, by_code
+    other = by_code(ctx, OTHER)
+    if other is None or not SAP.raised(ctx.c, CATEGORY_EVENT, str(row["id"])) or \
+            SAP.categorized_into(ctx.c, str(row["entry_id"])):
+        return set()
+    return {other.id}
+
+
 def _unapplied(ctx: Ctx, row: Any, ctl: str, sign: int, contact: str) -> int:
     """What a posted row put in AP or AR for this contact that no document took yet (a receipt applied whole to AR
     for its first invoice keeps the rest there for the next one)."""
@@ -1026,8 +1111,8 @@ def _unapplied(ctx: Ctx, row: Any, ctl: str, sign: int, contact: str) -> int:
 def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
     """Post what a feed row paying a document needs. A row not yet in the books posts whole to AP or AR (any amount
     beyond this document stays there, for the next one it pays). A posted row uses what it already put in AP or AR for
-    the contact first, else moves everything it has on other lines to AP or AR (the rest unapplied there), in an
-    entry beside its own (the bank line is never touched, so a reconciled row works too)."""
+    the contact first, then moves the rest from the lines it hit to AP or AR (and whatever it left on the automatic
+    default, unapplied there), in an entry beside its own (the bank line is never touched, so a reconciled row works too)."""
     from .banking import feed_line, fresh_source, mark_posted, open_day, post_row
     ctl = control(ctx, kind)
     contact = str(doc[f"{CONTACT_OF[kind]}_id"])
@@ -1037,10 +1122,7 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
         gl = ctx.accounts.get(str(money["account_id"] or "")) if money is not None else None
         if gl is None:
             raise invalid("that row's money account has no account in the books")
-        t = F.FeedTxn(provider_id=str(row["provider_id"]), account_id="", amount=int(row["amount"]),
-                      txn_date=str(row["txn_date"]), status=F.POSTED, kind=str(row["kind"]),
-                      counterparty=str(row["counterparty"]), description=str(row["description"]),
-                      card_id=str(row["card_id"] or ""))
+        t = _row_txn(row)
         entry = post_row(ctx, fid, t, [feed_line(ctl.id, -t.amount, {}, contact)], gl.id, [])
         mark_posted(ctx, [fid], entry)
         return entry
@@ -1049,14 +1131,22 @@ def _from_feed(ctx: Ctx, kind: str, doc: Any, row: Any, amount: int) -> str:
     left = amount - have
     if not left:
         return str(row["entry_id"])     # the row already put this much in AP or AR for this contact
-    # All of what the row still has on other lines moves: this document takes `left` of it, and the rest stays in AP
-    # or AR for the contact, unapplied (§5), for the next document it pays.
-    spent = _spent(ctx, row, ctl.id, s)
-    moved = sum(abs(x.amount) for x in spent)
+    # This document takes `left` from the lines the row hit (what sits on the automatic default first). Whatever else
+    # sits on that default (Other expenses, posted at ingest and asked about) moves too and stays in AP or AR for the
+    # contact, unapplied (§5); a line a person or a posting rule chose keeps its categorization.
+    auto = _auto_default(ctx, row)
+    spent = sorted(_spent(ctx, row, ctl.id, s), key=lambda y: (y.account_id not in auto, -abs(y.amount)))
+    lines: list[dict[str, object]] = []
+    moved = 0
+    for x in spent:
+        take = abs(x.amount) if x.account_id in auto else min(max(left - moved, 0), abs(x.amount))
+        if take <= 0:
+            continue
+        lines.append({"account_id": x.account_id, "amount": -s * take, "tags": dict(x.tags),
+                      "contact_id": x.contact_id})
+        moved += take
     if left > moved:
         raise invalid("that row has less left to apply than the amount")
-    lines: list[dict[str, object]] = [{"account_id": x.account_id, "amount": -x.amount, "tags": dict(x.tags),
-                                       "contact_id": x.contact_id} for x in spent]
     lines.append({"account_id": ctl.id, "amount": s * moved, "contact_id": contact})
     entry = SL.entry_row(ctx.c, str(row["entry_id"]))
     day = str(entry["entry_date"]) if entry is not None else ctx.today
@@ -1271,8 +1361,9 @@ PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, 
             "bill_update": bill_update, "bill_approve": bill_approve, "bill_schedule": bill_schedule,
             "bill_mark_paid": bill_mark_paid, "bill_void": bill_void, "invoice_create": invoice_create,
             "invoice_send": invoice_send, "invoice_record_payment": invoice_record_payment,
-            "invoice_write_off": invoice_write_off, "invoice_void": invoice_void, "attach": attach}
+            "invoice_write_off": invoice_write_off, "invoice_void": invoice_void, "attach": attach,
+            "feed_match": feed_match}
 
 __all__ = ["PLANNERS", "settle", "unsettle", "feed_gone", "payment_settled", "payment_ended", "match_feed",
            "feed_paid", "pay_due", "watch", "control", "document", "expected_match", "ASK", "bill_payment",
-           "retagged"]
+           "retagged", "expected_for"]

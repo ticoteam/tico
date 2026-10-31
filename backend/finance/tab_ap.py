@@ -325,17 +325,43 @@ ATTRIBUTABLE_MOST = 200
 
 
 def _attributable(ctx: Ctx, viewer: str, account: L.Account) -> list[Row]:
-    """The tags the viewer may put an amount on this line under (handlers.may_write decides each): its teams, then
-    teammates, as {"team": id} or {"teammate": id}."""
+    """The tags the viewer may put an amount on this line under (handlers.may_write decides each): the viewer's own
+    teammate tag first (when allowed), then teams, then other teammates, as {"team": id} or {"teammate": id}."""
     from .handlers import may_write
     view = ctx.view(viewer)
-    out: list[Row] = [{"team": t} for t in sorted(view.teams(account)) if may_write(ctx, viewer, account.id, {"team": t})]
+    mine = may_write(ctx, viewer, account.id, {"teammate": viewer})
+    out: list[Row] = [{"teammate": viewer}] if mine else []     # their own tag first, never cut by the cap
+    for t in sorted(view.teams(account)):
+        if may_write(ctx, viewer, account.id, {"team": t}):
+            out.append({"team": t})
     for m in sorted(ctx.org.humans | ctx.org.bots):
         if len(out) >= ATTRIBUTABLE_MOST:
             break
-        if may_write(ctx, viewer, account.id, {"teammate": m}):
+        if m != viewer and may_write(ctx, viewer, account.id, {"teammate": m}):
             out.append({"teammate": m})
     return out[:ATTRIBUTABLE_MOST]
+
+
+def feed_expected(c: sqlite3.Connection, viewer: str, feed_id: str, at: str | None = None) -> Row:
+    """The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account
+    and direction, at most its amount, marked within 5 days), for feed_match: settlement id, document, contact,
+    amount and day. Capped at 20 (`more`)."""
+    from .banking import seen
+    from .documents import expected_for
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    row = SK.get(c, "fin_feed_txns", feed_id)
+    if row is None or not seen(ctx, viewer, row):
+        raise FinanceError(NOT_FOUND, "no such feed row in your view")
+    kind = "bill" if int(row["amount"]) < 0 else "invoice"
+    found, more = expected_for(ctx, viewer, row)
+    docs = {str(d["id"]): d for d in (SAP.doc_with_contact(c, kind, str(s["to_id"])) for s in found) if d is not None}
+    return {"feed_id": feed_id, "kind": kind, "amount": abs(int(row["amount"])), "date": str(row["txn_date"]),
+            "expected": [{"settlement_id": str(s["id"]), "kind": kind, "document_id": str(s["to_id"]),
+                          "number": str(docs[str(s["to_id"])]["number"] or "") if str(s["to_id"]) in docs else "",
+                          "contact_id": str(s["contact_id"] or ""), "contact_name": str(s["contact_name"] or ""),
+                          "amount": int(s["amount"]), "marked_on": str(s["settled_on"])} for s in found],
+            "more": more, "view_version": view.version}
 
 
 def pay_from(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:

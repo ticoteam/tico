@@ -258,6 +258,12 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.pay_from(c, actor))
 
+    @app.get("/api/v2/finance/feed/{feed_id}/expected")
+    def finance_feed_expected(request: Request, feed_id: ID, view_as: str | None = None):
+        """The payments marked paid a bank row may be the bank side of, for feed_match."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.feed_expected(c, actor, feed_id))
+
     @app.get("/api/v2/finance/inbox")
     def finance_inbox(request: Request, cursor: str | None = Query(None, max_length=100),
                       limit: int = Query(50, ge=1, le=200), view_as: str | None = None):

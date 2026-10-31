@@ -75,6 +75,18 @@ def test_payments_marked_paid_meet_one_combined_row_and_an_unclear_row_waits_ins
         assert c.execute("SELECT status, entry_id FROM fin_feed_txns WHERE id=?", (waits,)).fetchone()[:] == ("new", None)
         assert waits in {s for s, _ in _events(c, "finance.feed.needs_category")}
         assert _balance(c, "1000") - bank == -40_000 and _balance(c, "6900") == 0
+        # A person picks: the row's expected list names both, and feed_match links it like the automatic match.
+        listed = FR.feed_expected(c, OWNER, waits, at=AT)["expected"]
+        assert sorted(x["number"] for x in listed) == ["C-3", "C-4"]
+        pick = {"feed_id": waits, "settlement_ids": [listed[0]["settlement_id"]]}
+        assert act(c, OWNER, "feed_match", {**pick, "settlement_ids": [x["settlement_id"] for x in listed]}).code == \
+            "invalid"                                                                    # 100.00 is not the row's 50.00
+        assert act(c, "human:eve", "feed_match", pick).code in ("denied", "not_found")
+        assert act(c, OWNER, "feed_match", pick, dry_run=True).status == "committed"
+        linked = act(c, OWNER, "feed_match", pick)
+        assert linked.status == "committed", linked
+        assert c.execute("SELECT status FROM fin_feed_txns WHERE id=?", (waits,)).fetchone()[0] == "posted"
+        assert _balance(c, "1000") - bank == -40_000 and FR.feed_expected(c, OWNER, waits, at=AT)["expected"] == []
 
 
 def test_a_tico_card_charge_paying_an_entered_bill_clears_ap_instead_of_a_second_expense(books):  # noqa: F811
@@ -113,7 +125,8 @@ def test_one_receipt_settles_two_invoices_and_a_posted_rows_excess_moves_to_ap_u
             done = act(c, OWNER, "invoice_record_payment", {"invoice_id": iid, "feed_id": got})
             assert done.status == "committed" and done.result["status"] == "paid", done
         assert _balance(c, "1200") == 0
-        # Grok 2: a 500.00 debit in Other expenses pays a 300.00 bill; the other 200.00 waits in AP, then pays the next.
+        # Grok 2: a 500.00 debit ingest left in Other expenses pays a 300.00 bill; the other 200.00 waits in AP for the
+        # next bill. A row a person or a posting rule categorized keeps the rest where they put it.
         vendor = _vendor(c)
         first, second = _approved(c, vendor, 30_000, number="G-1"), _approved(c, vendor, 20_000, number="G-2")
         out = _ingest(c, _txn("txn-out", -500.0, who="Someone Else"))
@@ -123,6 +136,19 @@ def test_one_receipt_settles_two_invoices_and_a_posted_rows_excess_moves_to_ap_u
         assert act(c, OWNER, "bill_mark_paid", {"bill_id": second, "feed_id": out}).status == "committed"
         assert (_balance(c, "6900"), _balance(c, "2000"), _balance(c, "6100")) == (0, 0, 50_000)
         assert FR.bill(c, OWNER, second)["status"] == "paid"
+        by_hand = _ingest(c, _txn("txn-hand", -500.0, who="Someone Else"))
+        assert act(c, OWNER, "categorize", {"feed_id": by_hand, "account_id": account(c, "6000")}).status == "committed"
+        assert act(c, OWNER, "rule_create", {
+            "kind": "posting", "name": "Tools", "when": {"counterparty": {"matches": "Toolshop"}},
+            "outcome": {"outcome": "post", "account_id": account(c, "5000")},
+            "examples": [{"input": {"counterparty": "Acme Toolshop"}, "expect": "post"}]}).status == "committed"
+        by_rule = _ingest(c, _txn("txn-rule", -500.0, who="Acme Toolshop"))
+        before = (_balance(c, "6000"), _balance(c, "5000"))
+        for row in (by_hand, by_rule):
+            bid = _approved(c, vendor, 30_000, number=f"H-{row[:4]}")
+            assert act(c, OWNER, "bill_mark_paid", {"bill_id": bid, "feed_id": row}).status == "committed"
+        assert (_balance(c, "6000"), _balance(c, "5000")) == (before[0] - 30_000, before[1] - 30_000)
+        assert _balance(c, "2000") == 0 and _balance(c, "6900") == 0
 
 
 def test_a_scheduled_bill_is_matched_by_an_early_vendor_pull_and_pay_due_skips_it(books):  # noqa: F811
@@ -241,6 +267,8 @@ def test_reads_cut_private_amounts_unseen_accounts_and_nested_lists(books):  # n
         assert all("cash" not in json.loads(r[0]) for r in data)                         # Codex 7
         line = next(x for x in FR.chart(c, "bot:coder", for_="bill")["accounts"] if x["number"] == "6100")
         assert not line["company_wide"] and {"team": "web"} in line["attributable"]
+        mine = [x for x in line["attributable"] if x == {"teammate": "bot:coder"}]
+        assert mine and line["attributable"][0] == mine[0]                                # their own tag first
         assert all(x.get("attributable") is None for x in FR.chart(c, OWNER)["accounts"])
         report = FR.report(c, OWNER, "pnl", start="2026-10-01", end="2026-10-31", top_n=1)
         assert len([r for r in report["rows"] if r.get("key") != "other"]) == 1

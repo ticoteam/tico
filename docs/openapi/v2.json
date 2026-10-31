@@ -9095,6 +9095,76 @@
         ]
       }
     },
+    "/api/v2/finance/feed/{feed_id}/expected": {
+      "get": {
+        "summary": "The payments marked paid a settled bank row not yet in the books may be the bank side of (same money account and direction, at most its amount, marked within 5 days), capped at 20, for the feed_match action",
+        "operationId": "listFinanceFeedExpected",
+        "parameters": [
+          {
+            "name": "feed_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200,
+              "title": "Feed Id"
+            }
+          },
+          {
+            "name": "view_as",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "View As"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FinanceFeedExpected"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Finance"
+        ]
+      }
+    },
     "/api/v2/finance/inbox": {
       "get": {
         "summary": "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
@@ -37934,6 +38004,86 @@
           "remaining",
           "status",
           "total"
+        ],
+        "additionalProperties": true
+      },
+      "FinanceFeedExpected": {
+        "type": "object",
+        "properties": {
+          "feed_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "bill",
+              "invoice"
+            ]
+          },
+          "amount": {
+            "type": "integer"
+          },
+          "date": {
+            "type": "string"
+          },
+          "expected": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "settlement_id": {
+                  "type": "string"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "document_id": {
+                  "type": "string"
+                },
+                "number": {
+                  "type": "string"
+                },
+                "contact_id": {
+                  "type": "string"
+                },
+                "contact_name": {
+                  "type": "string"
+                },
+                "amount": {
+                  "type": "integer"
+                },
+                "marked_on": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "amount",
+                "contact_id",
+                "contact_name",
+                "document_id",
+                "kind",
+                "marked_on",
+                "number",
+                "settlement_id"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "more": {
+            "type": "boolean"
+          },
+          "view_version": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "amount",
+          "date",
+          "expected",
+          "feed_id",
+          "kind",
+          "more",
+          "view_version"
         ],
         "additionalProperties": true
       },

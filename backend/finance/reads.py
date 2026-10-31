@@ -1155,6 +1155,7 @@ bill = tab_ap.bill
 invoice = tab_ap.invoice
 chart = tab_ap.chart
 pay_from = tab_ap.pay_from
+feed_expected = tab_ap.feed_expected
 bills_email = tab_ap.bills_email
 # Finance's webhook triggers (finance/tab_hooks.py).
 hook_admin = tab_hooks.hook_admin

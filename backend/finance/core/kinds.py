@@ -16,8 +16,10 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        "view_grant", "view_revoke", "private_lines_set",
        "rule_create", "rule_update", "rule_disable", "rule_enable", "rule_test", "contact_create", "contact_update",
        "account_create", "account_update", "right_grant", "right_revoke",
-       # not in §5: the Finance tab's Access and Sources pages (§12), and attaching receipts and documents (§8.4)
-       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach")
+       # not in §5: the Finance tab's Access and Sources pages (§12), attaching receipts and documents (§8.4), and
+       # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
+       "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
+       "feed_match")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -30,7 +32,7 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 2: contacts, bills, invoices and attachments
         "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
         "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
-        "invoice_write_off", "invoice_void", "attach")
+        "invoice_write_off", "invoice_void", "attach", "feed_match")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -44,7 +46,8 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "contact_create": (R.AP, R.AR), "contact_update": (R.AP, R.AR),
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
-         "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR)}
+         "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
+         "feed_match": (R.AP, R.AR)}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -248,6 +251,9 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "attach": (("subject_kind", "entry|feed|bill|invoice|unmatched", "unmatched: receipts waiting for a match"),
                ("subject_id?", "str", "not for unmatched"),
                ("file_ids", "list[str]", "Library file ids (a receipt, a bill's PDF)")),
+    "feed_match": (("feed_id", "str", "a settled bank row not yet in the books"),
+                   ("settlement_ids", "list[str]", "the waiting marked-paid payments it pays (its expected list); "
+                    "their amounts add up to the row's")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -284,6 +290,7 @@ WORDS: dict[str, str] = {
     "invoice_record_payment": "Record money received on an invoice (part or all).",
     "invoice_write_off": "Write off what a customer will not pay.", "invoice_void": "Void an invoice.",
     "attach": "Attach receipts or documents to an entry, a bank or card row, a bill or an invoice.",
+    "feed_match": "Link a bank row to the payments marked paid it is the bank side of (the bank moves once).",
 }
 
 
