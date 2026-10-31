@@ -30,6 +30,7 @@ from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
+from .store import ap as SAP
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
@@ -506,13 +507,14 @@ def feed_line(account_id: str, amount: int, tags: Mapping[str, str] | None = Non
     return line
 
 
-def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], gl_id: str, holds: Sequence[str]) -> str:
+def post_row(ctx: Ctx, fid: str, t: F.FeedTxn, lines: list[dict[str, object]], gl_id: str, holds: Sequence[str],
+             day: str = "") -> str:
     """One entry for a feed row: its other lines, then the money account's own line (`gl_id`), recorded as such
     (L.MONEY_ROLE, kept by reversals): a card's use is read from that line as it was posted, whatever account the
     card program maps to later (store/budgets.card_used). Every revision gets its own source id (`fresh_source`),
-    so a repost is never deduped onto an earlier, reversed entry."""
+    so a repost is never deduped onto an earlier, reversed entry. `day` overrides the row's own open day."""
     source = "card" if t.card else "bank"
-    done = posting.post_entry(ctx.c, {"date": open_day(ctx, t.txn_date), "source": source,
+    done = posting.post_entry(ctx.c, {"date": day or open_day(ctx, t.txn_date), "source": source,
                                       "source_id": fresh_source(ctx, source, fid),
                                       "memo": (t.counterparty or t.description)[:200],
                                       "lines": [*lines, feed_line(gl_id, t.amount)]},
@@ -538,6 +540,12 @@ def open_day(ctx: Ctx, day: str) -> str:
     return ctx.today if SL.closed_on(ctx.c, ctx.book.id, day) else day
 
 
+def _combined_row(ctx: Ctx, row: Any) -> bool:
+    """Whether the row's entry is the one it posted for several payments marked paid (settled from it, on it)."""
+    return len([s for s in SAP.settlements_by_entry(ctx.c, str(row["entry_id"]))
+                if str(s["from_kind"]) == "feed" and str(s["from_id"]) == str(row["id"])]) > 1
+
+
 def mark_posted(ctx: Ctx, ids: Sequence[str], entry_id: str) -> None:
     for fid in ids:
         SK.update(ctx.c, "fin_feed_txns", fid, {"status": "posted", "entry_id": entry_id, "updated_at": ctx.at})
@@ -554,8 +562,10 @@ def _unchanged(ctx: Ctx, row: Any, money: Any) -> bool:
     # A transfer's two sides, or a row linked to a payment marked paid on a bill or invoice, keep their entry's day.
     shared = len(SK.rows_of_entry(ctx.c, str(row["entry_id"]))) > 1 or str(entry["source"]) in L.DOC_SOURCES
     day, posted = str(row["txn_date"]), str(entry["entry_date"])
-    # A row dated in a closed period posted on a later open day (`open_day`): that shift is not a change.
-    same_day = posted == day or (posted > day and SL.closed_on(ctx.c, ctx.book.id, day))
+    # A row dated in a closed period posted on a later open day (`open_day`), or one paying several documents marked
+    # paid posted on its reversals' later day (`documents._post_combined`): that shift is not a change.
+    same_day = posted == day or (posted > day and (SL.closed_on(ctx.c, ctx.book.id, day) or
+                                                   _combined_row(ctx, row)))
     return moved == int(row["amount"]) and (shared or same_day)
 
 

@@ -13,6 +13,7 @@ from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, descendants
 from .store import access as SA
+from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
 
@@ -164,7 +165,25 @@ def payment_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], r: Any)
     account = ctx.accounts.get(str(r["account_id"]))
     if str(r["account_id"]) in cut:
         return False
+    obligation = str(r["obligation"] or "")
+    if obligation.startswith("bill:") and not bill_seen(ctx, view, cut, obligation.removeprefix("bill:")):
+        return False
     return view.everything or (account is not None and view.sees(account, SK.loads(r["tags_json"])))
+
+
+def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: str) -> bool:
+    """A bill's payment (posted to AP) shows only to who sees that bill: a payables view, and no line of the bill on
+    a private account they lack full detail for (so AP never carries a hidden Payroll bill's amount or payee)."""
+    from .tab_ap import sees_side
+    return sees_side(ctx, view, "bill") and not hidden_bills(ctx, cut, [bill_id])
+
+
+def hidden_bills(ctx: Ctx, cut: Sequence[str] | set[str], bill_ids: Sequence[str]) -> set[str]:
+    """Of these bills, the ones with a line on a cut (private) account."""
+    if not cut or not bill_ids:
+        return set()
+    lines = SAP.lines(ctx.c, "bill", list(dict.fromkeys(bill_ids)))
+    return {b for b, xs in lines.items() if any(str(x["account_id"] or "") in cut for x in xs)}
 
 
 def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
@@ -175,11 +194,21 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
         return set()
     entries = SL.entries_touching(ctx.c, sorted({str(r["entry_id"]) for r in rows if r["entry_id"]}), cut)
     out = {str(r["id"]) for r in rows if r["entry_id"] and str(r["entry_id"]) in entries}
+    bills: dict[str, list[str]] = {}         # feed row id: the bills it is the bank side of
     for r in rows:
         if str(r["id"]) not in out and r["request_id"]:
             pay = SK.payment_by_request(ctx.c, str(r["request_id"]))
             if pay is not None and str(pay["account_id"]) in cut:
                 out.add(str(r["id"]))
+            elif pay is not None and str(pay["obligation"] or "").startswith("bill:"):
+                bills.setdefault(str(r["id"]), []).append(str(pay["obligation"]).removeprefix("bill:"))
+    for r in rows:
+        if str(r["id"]) not in out:
+            got = [str(s["to_id"]) for s in SAP.settlements_from(ctx.c, "feed", str(r["id"])) if s["to_kind"] == "bill"]
+            if got:
+                bills.setdefault(str(r["id"]), []).extend(got)
+    hidden = hidden_bills(ctx, cut, [b for xs in bills.values() for b in xs])
+    out |= {fid for fid, xs in bills.items() if hidden & set(xs)}
     return out
 
 

@@ -210,15 +210,16 @@ def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any
 
 
 def expected(c: sqlite3.Connection, kind: str, money_account_id: str, amount: int, start: str, end: str,
-             most: int = 20) -> list[Any]:
+             most: int = 20, ids: Sequence[str] = ()) -> list[Any]:
     """Payments marked from a connected money account still waiting for their bank row, of this amount (0: any) in a
-    window, with the document's `contact_id` and `contact_name`."""
+    window (only these settlement `ids` when given), with the document's `contact_id` and `contact_name`."""
     table, _, _, _, contact = DOCS[kind]
+    only = f" AND s.id IN ({','.join('?' * len(ids))})" if ids else ""
     return c.execute(f"SELECT s.*, d.{contact} AS contact_id, k.name AS contact_name FROM fin_settlements s "
                      f"JOIN {table} d ON d.id=s.to_id LEFT JOIN fin_contacts k ON k.id=d.{contact} "
                      "WHERE s.from_kind='expected' AND s.to_kind=? AND s.from_id=? AND (?=0 OR s.amount=?) AND "
-                     "s.settled_on BETWEEN ? AND ? AND s.voided_at IS NULL ORDER BY s.created_at, s.id LIMIT ?",
-                     (kind, money_account_id, amount, amount, start, end, most)).fetchall()
+                     f"s.settled_on BETWEEN ? AND ? AND s.voided_at IS NULL{only} ORDER BY s.created_at, s.id LIMIT ?",
+                     (kind, money_account_id, amount, amount, start, end, *ids, most)).fetchall()
 
 
 def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:

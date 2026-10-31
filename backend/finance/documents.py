@@ -801,6 +801,12 @@ def _pays_vendor(ctx: Ctx, bill: Any, rec: Any) -> bool:
     return str(rec["id"]) in allowed - {""} or str(rec["contact_id"] or "") == str(bill["vendor_id"])
 
 
+def bill_budget(ctx: Ctx, bill_id: str) -> K.Gate:
+    """What a bill's expense budgets ask of a payment of it now (payments.recheck): ALLOW when the bill is gone."""
+    bill = SAP.get(ctx.c, "fin_bills", bill_id)
+    return _bill_budget_gate(ctx, bill) if bill is not None else K.ALLOW
+
+
 def _bill_budget_gate(ctx: Ctx, bill: Any) -> K.Gate:
     at = dates.day(str(bill["bill_date"]))
     worst: tuple[int, str] = (-1, "")
@@ -872,10 +878,16 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
     nothing waits, and the row posts as usual."""
     kind = "bill" if t.amount < 0 else "invoice"
     start, end = _window(t.txn_date)
-    single = [[s] for s in _waiting(ctx, kind, money, abs(t.amount), start, end)]
+    exact, cut = _waiting(ctx, kind, money, abs(t.amount), start, end)
+    if cut:
+        return ASK              # more waiting than were looked at: which one is unclear
+    single = [[s] for s in exact]
     group = _pick(single, t.counterparty) if single else None
     if not single:
-        sets = _combined(_waiting(ctx, kind, money, 0, start, end), abs(t.amount))
+        waiting, cut = _waiting(ctx, kind, money, 0, start, end)
+        sets, partial = _combined(waiting, abs(t.amount))
+        if cut or partial:
+            return ASK          # the search could not look at every candidate: a person picks (feed_match)
         if not sets:
             return ""
         group = _pick(sets, t.counterparty)
@@ -905,35 +917,43 @@ def _pick(sets: Sequence[list[Any]], counterparty: str) -> list[Any] | None:
     return named[0] if len(named) == 1 else None
 
 
-def _waiting(ctx: Ctx, kind: str, money: Any, amount: int, start: str, end: str) -> list[Any]:
-    """Payments marked paid from this money account still waiting for their row (of `amount`, 0: any), whose entry
-    is posted and no row's yet."""
+def _waiting(ctx: Ctx, kind: str, money: Any, amount: int, start: str, end: str, ids: Sequence[str] = ()
+             ) -> tuple[list[Any], bool]:
+    """Payments marked paid from this money account still waiting for their row (of `amount`, 0: any; only `ids` when
+    given), whose entry is posted and no row's yet; True when there were more than WAITING_MOST to look at."""
     found: list[Any] = []
-    for s in SAP.expected(ctx.c, kind, str(money["id"]), amount, start, end):
+    raw = SAP.expected(ctx.c, kind, str(money["id"]), amount, start, end, most=WAITING_MOST + 1, ids=ids)
+    for s in raw[:WAITING_MOST]:
         entry = SL.entry_row(ctx.c, str(s["entry_id"] or "-"))
         if entry is not None and str(entry["status"]) == "posted" and not SK.rows_of_entry(ctx.c, str(entry["id"])):
             found.append(s)
-    return found
+    return found, len(raw) > WAITING_MOST
 
 
+WAITING_MOST = 200          # waiting payments looked at for one row; with more, the row is unclear (a person picks)
 COMBINED_MOST = 12          # waiting payments to one contact searched for a combined row, up to (2^12 subsets)
 COMBINED_SETS = 4           # sets found before the search stops (more than one is a tie for the name to break)
+MATCH_MOST = 100            # waiting payments one feed_match links
 
 
-def _combined(waiting: Sequence[Any], amount: int) -> list[list[Any]]:
-    """Sets of two or more waiting payments to a single contact that sum to the row's amount."""
+def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], bool]:
+    """Sets of two or more waiting payments to a single contact that sum to the row's amount, and whether the search
+    left some out (a contact with more than COMBINED_MOST candidates of at most the amount): then what it found may
+    not be the only answer, so the row is unclear."""
     by_contact: dict[str, list[Any]] = {}
     for s in waiting:
-        by_contact.setdefault(str(s["contact_id"] or ""), []).append(s)
+        if 0 < int(s["amount"]) <= amount:
+            by_contact.setdefault(str(s["contact_id"] or ""), []).append(s)
+    if any(len(g) > COMBINED_MOST for g in by_contact.values()):
+        return [], True
     found: list[list[Any]] = []
     for group in by_contact.values():
-        group = group[:COMBINED_MOST]
         for mask in range(1, 1 << len(group)):
             if mask & (mask - 1) and sum(int(s["amount"]) for i, s in enumerate(group) if mask >> i & 1) == amount:
                 found.append([s for i, s in enumerate(group) if mask >> i & 1])
                 if len(found) >= COMBINED_SETS:
-                    return found
-    return found
+                    return found, False
+    return found, False
 
 
 def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
@@ -946,14 +966,15 @@ def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence
     kind = str(group[0]["to_kind"])
     ctl = control(ctx, kind)
     fid = str(row["id"])
-    for s in group:
-        entry = SL.entry_row(ctx.c, str(s["entry_id"]))
-        if entry is not None:
-            posting.reverse(ctx, str(entry["id"]), day=open_day(ctx, str(entry["entry_date"])),
-                            memo="its bank row came, paying several at once", by=SYSTEM)
+    entries = [e for e in (SL.entry_row(ctx.c, str(s["entry_id"])) for s in group) if e is not None]
+    # The reversals and the row's one entry share a day (the latest open one of them all), so no period between them
+    # shows the bank moving twice; `banking._unchanged` keeps that day when the row comes again.
+    day = max([open_day(ctx, t.txn_date), *(open_day(ctx, str(e["entry_date"])) for e in entries)])
+    for entry in entries:
+        posting.reverse(ctx, str(entry["id"]), day=day, memo="its bank row came, paying several at once", by=SYSTEM)
     lines: list[dict[str, object]] = [{"account_id": ctl.id, "amount": SIGN[kind] * int(s["amount"]), "tags": {},
                                        "contact_id": str(s["contact_id"] or "")} for s in group]
-    entry_id = post_row(ctx, fid, t, lines, gl.id, [])
+    entry_id = post_row(ctx, fid, t, lines, gl.id, [], day=day)
     mark_posted(ctx, [fid], entry_id)
     for s in group:
         SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"from_kind": "feed", "from_id": fid, "entry_id": entry_id})
@@ -972,11 +993,17 @@ def expected_for(ctx: Ctx, who: str, row: Any) -> tuple[list[Any], bool]:
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     if money is None:
         return [], False
+    found, cut = _candidates(ctx, who, row, money)
+    return found[:EXPECTED_MOST], cut or len(found) > EXPECTED_MOST
+
+
+def _candidates(ctx: Ctx, who: str, row: Any, money: Any, ids: Sequence[str] = ()) -> tuple[list[Any], bool]:
+    """`expected_for` uncapped (only `ids` when given), and whether more waited than were looked at."""
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
     start, end = _window(str(row["txn_date"]))
-    found = [s for s in _waiting(ctx, kind, money, 0, start, end) if int(s["amount"]) <= abs(int(row["amount"]))
-             and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))]
-    return found[:EXPECTED_MOST], len(found) > EXPECTED_MOST
+    waiting, cut = _waiting(ctx, kind, money, 0, start, end, ids)
+    return [s for s in waiting if int(s["amount"]) <= abs(int(row["amount"]))
+            and _sees_doc(ctx, who, kind, _doc(ctx, kind, str(s["to_id"])))], cut
 
 
 def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
@@ -994,10 +1021,12 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     need = R.AP if kind == "bill" else R.AR
     if not R.has(ctx.org, who, need, ctx.rights(who)):
         raise denied(f"linking a row to {kind} payments needs {need}")
-    ids = list(dict.fromkeys(V.texts(p, "settlement_ids", COMBINED_MOST)))
+    ids = list(dict.fromkeys(V.texts(p, "settlement_ids", MATCH_MOST)))
     if not ids:
         raise invalid("name the waiting payments (settlement_ids) this row pays")
-    waiting = {str(s["id"]): s for s in expected_for(ctx, who, row)[0]}
+    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
+    # Checked by id, so a row with more candidates than the automatic search looks at can still be linked.
+    waiting = {str(s["id"]): s for s in _candidates(ctx, who, row, money, ids)[0]} if money is not None else {}
     group = [waiting[i] for i in ids if i in waiting]
     if len(group) != len(ids):
         raise FinanceError(NOT_FOUND, "no such payment waiting for this row in your view")
@@ -1006,7 +1035,6 @@ def feed_match(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     total = sum(int(s["amount"]) for s in group)
     if total != abs(int(row["amount"])):
         raise invalid(f"those payments add up to {total}, the row to {abs(int(row['amount']))}")
-    money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
     docs = [str(s["to_id"]) for s in group]
 
     def apply(aid: str) -> Result:
@@ -1366,4 +1394,4 @@ PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, 
 
 __all__ = ["PLANNERS", "settle", "unsettle", "feed_gone", "payment_settled", "payment_ended", "match_feed",
            "feed_paid", "pay_due", "watch", "control", "document", "expected_match", "ASK", "bill_payment",
-           "retagged", "expected_for"]
+           "retagged", "expected_for", "bill_budget"]

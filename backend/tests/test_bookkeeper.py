@@ -231,3 +231,26 @@ def test_a_failing_fetch_backs_off_then_is_listed_once_and_filed_work_closes(env
         assert BA.reconcile(c) == 1
         assert c.execute("SELECT state FROM bills_inbound WHERE delivery='dlv_2'").fetchone()["state"] == "filed"
         assert BA.for_bookkeeper(c) == []
+
+
+def test_only_the_failed_bills_the_body_lists_are_reported(environment, monkeypatch):
+    api = built(environment)
+    ensure(api)
+    store = api.app.state.store
+    with store.transaction() as c:
+        for i in range(50):
+            c.execute("INSERT INTO bills_inbound(id,delivery,received_at,sender,subject,name,mime,sha256,state,"
+                      "updated_at) VALUES(?,?,?,?,?,?,?,?,'failed',?)",
+                      (f"bin_{i:02d}", f"dlv_{i}", f"2026-10-01T00:{i:02d}:00Z", "ap@acme.example", f"Invoice {i}",
+                       "invoice.pdf", "application/pdf", DIGEST, H.now()))
+    assert check(api)["items"] == 50
+    body = checks(api)[0]["body"]
+    with store.read() as c:
+        reported = {r["id"] for r in c.execute("SELECT id FROM bills_inbound WHERE state='reported'")}
+    assert len(reported) == BK.PER_KIND and all(f"- {i} " in body for i in reported)
+    monkeypatch.setattr(BK, "BODY_BYTES", 900)                     # a body cut short reports only its whole lines
+    items = [{"kind": "bill_email", "id": f"bin_{i:02d}", "label": "Acme Supplies: Invoice " + "x" * 40, "key": str(i)}
+             for i in range(25)]
+    text, shown = BK.render_shown(items, {"bill_email": 25})
+    assert 0 < len(shown) < 25 and all(f"- {x['id']} " in text for x in shown)
+    assert all(f"- {x['id']} " not in text or x in shown for x in items[len(shown) + 1:])

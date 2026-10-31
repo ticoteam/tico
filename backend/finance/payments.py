@@ -571,6 +571,14 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
         why = "its budget hold is gone"
         end(ctx, pay, "cancelled", why)
         return why
+    elif str(pay["obligation"] or "").startswith("bill:"):
+        # A bill's payment holds no budget (the bill spent it): its bill's budgets are judged again as at the action,
+        # so one lowered past its actuals since asks a person first (never refused: the bill is owed either way).
+        from .documents import bill_budget
+        asks = bill_budget(ctx, str(pay["obligation"]).removeprefix("bill:"))
+        if asks.outcome == "needs_approval" and not _approved_for(ctx, action, who, asks.who):
+            budget = ctx.budgets().get(asks.rule.removeprefix("budget:"))
+            return _hold(ctx, pay, f"the {budget.name if budget else 'bill'} budget is over")
     if fresh is not None:
         fresh.extend(h for h in verdict.counts if (h.rule, h.period_key, h.subject) not in mine)
     return ""
