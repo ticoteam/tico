@@ -35,7 +35,7 @@ def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", 
 
 
 BUILTINS = {"coo", "botops", "librarian", "goal-manager", "task-manager", "bookkeeper", "tico-counsel"}
-TWELVE = ("finance-lead", "controller", "bookkeeping", "billing", "ar-followup", "sales-lead", "sales", "sdr-research",
+TWELVE = ("finance-lead", "controller", "payroll", "billing", "ar-followup", "sales-lead", "sales", "sdr-research",
           "marketing-lead", "content", "seo-visibility", "ops-manager")
 
 
@@ -96,7 +96,7 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     seats = {s["id"]: s for s in org["seats"]}
     assert len(seats) == 12 and {s["stage"] for s in seats.values()} == {"recruiting"}
     by_title = {s["title"]: s for s in seats.values()}
-    assert by_title[titles["accounts-payable"]]["org_parent"] == "s:" + by_title[titles["controller"]]["id"]
+    assert by_title[titles["payroll"]]["org_parent"] == "s:" + by_title[titles["controller"]]["id"]
     assert by_title[titles["ops-manager"]]["org_parent"] == "b:coo"
     assert {b["id"]: b["stage"] for b in org["bots"]}["botops"] == "active"
     # The sidebar's chart reads the same seats.
