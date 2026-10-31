@@ -307,15 +307,17 @@ const draggingFiles = ev => [...(ev.dataTransfer?.types || [])].includes('Files'
 ['dragover', 'drop'].forEach(t => window.addEventListener(t, ev => {
   if (draggingFiles(ev) && !ev.target.closest?.('input[type=file]')) ev.preventDefault();
 }));
-function chatDropZone(zone, P) {
-  const pill = pq(P, '.p-pill');
+// `pillNow` is the pill, or a function giving the one there now (the Ask panel keeps its zone and makes a new pill per load).
+function chatDropZone(zone, pillNow) {
+  const cur = () => typeof pillNow === 'function' ? pillNow() : pillNow;
   let depth = 0;
-  const on = v => pill?.classList.toggle('over', v);
+  const on = v => { const P = cur(); if (P) pq(P, '.p-pill')?.classList.toggle('over', v); };
   zone.addEventListener('dragenter', ev => { if (!draggingFiles(ev)) return; ev.preventDefault(); depth++; on(true); });
   zone.addEventListener('dragover', ev => { if (!draggingFiles(ev)) return; ev.preventDefault(); ev.dataTransfer.dropEffect = 'copy'; });
   zone.addEventListener('dragleave', () => { depth = Math.max(0, depth - 1); if (!depth) on(false); });
   zone.addEventListener('drop', ev => {
-    if (!draggingFiles(ev)) return;
+    const P = cur();
+    if (!draggingFiles(ev) || !P) return;
     ev.preventDefault(); depth = 0; on(false);
     P.files.push(...ev.dataTransfer.files); pillChips(P);
     pq(P, '.p-text')?.focus();

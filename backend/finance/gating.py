@@ -48,9 +48,16 @@ def rule_from(row: Any) -> G.Rule:
 
 def facts(ctx: Ctx, who: str, kind: str, plan: Plan) -> dict[str, object]:
     """What rules match on: the kind, who asks (and their kind and team), the time, plus the planner's own facts."""
+    return send_facts(ctx, who, kind, plan.facts)
+
+
+def send_facts(ctx: Ctx, who: str, kind: str, planned: Mapping[str, object]) -> dict[str, object]:
+    """The same keys `facts` gives an action at request time, rebuilt for the send: a send-time recheck judges the
+    requester as they are now, so a rule that matched at request time (actor.owner included) matches again."""
     actor_kind = "system" if who == SYSTEM else "bot" if who in ctx.org.bots else "human"
     return {"kind": kind, "actor": who, "actor.kind": actor_kind, "actor.team": ctx.org.team_of.get(who, ""),
-            "now": ctx.at, "currency": ctx.book.base_currency, **plan.facts}
+            "actor.owner": bool(ctx.org.owner) and who == ctx.org.owner,
+            "now": ctx.at, "currency": ctx.book.base_currency, **planned}
 
 
 def _used(ctx: Ctx) -> G.Used:
@@ -77,6 +84,15 @@ def stricter(gate: K.Gate, verdict: G.Verdict) -> K.Gate:
     if G.higher(gate.who, verdict.who) == gate.who:
         return gate
     return K.Gate("needs_approval", verdict.who, verdict.rule)
+
+
+def combine(right: K.Gate, planned: K.Gate, requester: str) -> K.Gate:
+    """A missing right's gate and the planner's gate together. The higher approver decides, and the person the planner
+    named (a parent budget's owner) goes with it, unless that person is the requester: nobody approves their own ask,
+    so the right's gate (their manager) stands. A tie keeps the right's gate."""
+    if planned.outcome != "needs_approval" or planned.who == right.who or planned.person == requester:
+        return right
+    return planned if G.higher(right.who, planned.who) == planned.who else right
 
 
 def judge(ctx: Ctx, p: Principal, kind: str, gate: K.Gate, plan: Plan, action_id: str) -> Judged:
@@ -143,6 +159,12 @@ def _row(ctx: Ctx, p: V.Payload) -> Any:
     return row
 
 
+def _fixed(row: Any) -> None:
+    """A fixed default (G.FIXED) is the code's: it can't be edited or turned off, whoever asks."""
+    if str(row["id"]) in G.FIXED:
+        raise FinanceError(DENIED, "the code keeps this rule: it can't be changed or turned off")
+
+
 def _as_fields(row: Any) -> dict[str, object]:
     return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["when_json"]),
             "outcome": SK.loads(row["outcome_json"]),
@@ -179,6 +201,7 @@ def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("rule_id", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id"))
     row = _row(ctx, p)
+    _fixed(row)
     kind = str(row["kind"])
     f = _fields(ctx, who, kind, p, _as_fields(row))
 
@@ -196,6 +219,7 @@ def _toggle(on: bool) -> Any:
     def planner(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         V.only(p, ("rule_id",))
         row = _row(ctx, p)
+        _fixed(row)
         if bool(row["active"]) == on:
             raise FinanceError(CONFLICT, f"that rule is already {'on' if on else 'off'}")
 
@@ -236,7 +260,7 @@ def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     for row in SK.actions_since(ctx.c, since, TEST_MOST):
         if not everything and str(row["actor"]) != who:
             continue
-        body = SK.loads(row["payload_json"])
+        body = {k: v for k, v in SK.loads(row["payload_json"]).items() if k not in K.SERVER_ONLY_KEYS}
         found: dict[str, object] = {"kind": str(row["kind"]), "actor": str(row["actor"]),
                                     "actor.kind": "bot" if str(row["actor"]) in ctx.org.bots else "human",
                                     **{k: v for k, v in body.items() if isinstance(v, (int, str, bool))}}

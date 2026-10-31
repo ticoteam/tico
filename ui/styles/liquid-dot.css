@@ -7,24 +7,25 @@
 .ldot{position:relative;display:inline-block;width:24px;aspect-ratio:1;flex:none;vertical-align:middle;pointer-events:none;contain:layout style}
 .ldot>i{position:absolute;display:block;font-style:normal;contain:layout paint style;transform:translate(0)}
 .ldot .shadow{left:16%;right:12%;bottom:-16%;height:18%;border-radius:50%;background:radial-gradient(ellipse at center,var(--dot-shadow) 0%,transparent 70%)}
-.ldot .body{inset:0;border-radius:47% 53% 52% 48%/44% 47% 53% 56%;background:linear-gradient(160deg,var(--dot-hi) 0%,var(--dot) 45%,var(--dot-lo) 100%)}
+.ldot .body{inset:0;border-radius:43% 57% 55% 45%/38% 44% 56% 62%;background:linear-gradient(160deg,var(--dot-hi) 0%,var(--dot) 45%,var(--dot-lo) 100%)}
 /* Under 20px: no shadow, a flat fill, and idle motion only (ldotState idles any other state there too). */
 .ldot.sm .shadow{display:none}
 .ldot.sm .body{background:var(--dot)}
 
-/* Idle breathes, on the dot itself, without a break; every 6-14 s the scheduler (ldotIdle) swaps the body's variant
+/* Idle breathes, on the dot itself, without a break (a 2.5 s breath); every 6-14 s the scheduler (ldotIdle) swaps the body's variant
    (sway, look, squish, hop, or none; the shadow stays put, so it never needs a layer of its own). Each variant loops with a long rest and never ends by itself, so a swap costs one
    style change and no animation ever finishes on the main thread. */
-.ldot[data-state="idle"]{animation:ld-breathe 5s ease-in-out infinite}
+.ldot[data-state="idle"]{animation:ld-breathe 2.5s ease-in-out infinite}
 .ldot[data-idle="sway"] .body{animation:ld-sway 6s ease-in-out infinite}
 .ldot[data-idle="look"] .body{animation:ld-look 6s ease-in-out infinite}
 .ldot[data-idle="squish"] .body{animation:ld-squish 6s cubic-bezier(.3,0,.2,1) infinite}
 .ldot[data-idle="hop"] .body{animation:ld-idle-hop 6s cubic-bezier(.3,0,.2,1) infinite}
-/* States: listening leans in; thinking turns and wobbles; talking squashes and stretches; done hops once. */
-.ldot:not(.sm)[data-state="listening"] .body{transform-origin:50% 100%;animation:ld-listen 1.6s ease-in-out infinite}
-.ldot:not(.sm)[data-state="thinking"] .body{animation:ld-think 2.4s ease-in-out infinite}
-.ldot:not(.sm)[data-state="talking"] .body{animation:ld-talk 1.1s cubic-bezier(.4,0,.2,1) infinite}
-.ldot:not(.sm)[data-state="talking"] .shadow{animation:ld-shadow-talk 1.1s cubic-bezier(.4,0,.2,1) infinite}
+/* States: listening leans in; thinking turns and wobbles; talking squashes and stretches (each a brisk loop); done hops
+   once, at a hop's pace. */
+.ldot:not(.sm)[data-state="listening"] .body{transform-origin:50% 100%;animation:ld-listen 1.07s ease-in-out infinite}
+.ldot:not(.sm)[data-state="thinking"] .body{animation:ld-think 1.6s ease-in-out infinite}
+.ldot:not(.sm)[data-state="talking"] .body{animation:ld-talk .73s cubic-bezier(.4,0,.2,1) infinite}
+.ldot:not(.sm)[data-state="talking"] .shadow{animation:ld-shadow-talk .73s cubic-bezier(.4,0,.2,1) infinite}
 .ldot:not(.sm)[data-state="done"] .body{animation:ld-hop .9s cubic-bezier(.3,0,.2,1) 1}
 .ldot:not(.sm)[data-state="done"] .shadow{animation:ld-shadow-hop .9s cubic-bezier(.3,0,.2,1) 1}
 /* Still (every dot but the one live dot on the screen), off screen or in a hidden tab: nothing runs. */
@@ -32,10 +33,11 @@
 .ldot[data-paused],.ldot[data-paused] .body,.ldot[data-paused] .shadow{animation-play-state:paused}
 
 @keyframes ld-breathe{0%,100%{transform:scale(1)}50%{transform:scale(1.03,1.015)}}
-/* Idle variants move in the first second or so of a 6 s loop and rest after it (the dot keeps breathing). */
-@keyframes ld-sway{0%,40%,100%{transform:rotate(0)}12%{transform:rotate(6deg)}28%{transform:rotate(-6deg)}}
-@keyframes ld-look{0%,43%,100%{transform:translateX(0) rotate(0)}11%,19.5%{transform:translateX(6%) rotate(3deg)}26%,34.7%{transform:translateX(-6%) rotate(-3deg)}}
-@keyframes ld-squish{0%,13.3%,100%{transform:scale(1)}4.7%{transform:scale(1.08,.9)}9.3%{transform:scale(.97,1.04)}}
+/* Idle variants move in the first half second or so of a 6 s loop and rest after it (the dot keeps breathing); the hop
+   takes a second, its own pace. */
+@keyframes ld-sway{0%,20%,100%{transform:rotate(0)}6%{transform:rotate(6deg)}14%{transform:rotate(-6deg)}}
+@keyframes ld-look{0%,21.5%,100%{transform:translateX(0) rotate(0)}5.5%,9.75%{transform:translateX(6%) rotate(3deg)}13%,17.35%{transform:translateX(-6%) rotate(-3deg)}}
+@keyframes ld-squish{0%,6.65%,100%{transform:scale(1)}2.35%{transform:scale(1.08,.9)}4.65%{transform:scale(.97,1.04)}}
 @keyframes ld-idle-hop{0%,15%,100%{transform:translateY(0) scale(1)}2.3%{transform:translateY(5%) scale(1.12,.88)}6.8%{transform:translateY(-30%) scale(.94,1.07)}
   11.3%{transform:translateY(0) scale(1.1,.9)}13.2%{transform:scale(.98,1.02)}}
 @keyframes ld-hop{0%,100%{transform:translateY(0) scale(1)}15%{transform:translateY(5%) scale(1.12,.88)}45%{transform:translateY(-30%) scale(.94,1.07)}

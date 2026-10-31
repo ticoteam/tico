@@ -32,6 +32,7 @@ from .core import ledger as L
 from .core import rights as R
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
+from .core.tax import SALES_TAX, taxable_default
 from .core.org import SYSTEM
 from .handlers import Plan, Result, may_write
 from .store import ap as SAP
@@ -41,11 +42,17 @@ from .store import ledger as SL
 from .store import tico
 
 RECEIVED, DUE_SOON, OVERDUE = "finance.bill.received", "finance.bill.due_soon", "finance.invoice.overdue"
+RENEWAL_DUE = "finance.vendor.renewal_due"
 CONTROL = {"bill": ("2000", "payable", "accounts payable"), "invoice": ("1200", "receivable", "accounts receivable")}
 CONTACT_OF = {"bill": "vendor", "invoice": "customer"}
 SIGN = {"bill": 1, "invoice": -1}       # a bill's lines are debits, an invoice's credits
 OPEN = {"bill": AP.OPEN_BILL, "invoice": AP.OPEN_INVOICE}
 LINE_TYPES = {"bill": ("expense", "asset"), "invoice": ("income",)}
+
+
+def _line_type_ok(kind: str, account: L.Account) -> bool:
+    """A line posts to the kind's own types, or to a sales tax account: a bill remits it, an invoice collects it."""
+    return account.type in LINE_TYPES[kind] or account.subtype == SALES_TAX
 NAME_MIN = 4                            # a counterparty matches a contact's name on at least this many characters
 CLEARING = ("1050", "Payments clearing", "asset", "clearing")
 
@@ -98,7 +105,8 @@ def _money(amount: int) -> str:
 
 
 # ------------------------------------------------------------------------------------------------ contacts
-CONTACT_FIELDS = ("name", "kind", "emails", "default_account_id", "is_1099", "recipient_id", "active")
+CONTACT_FIELDS = ("name", "kind", "emails", "default_account_id", "is_1099", "recipient_id", "active", "seats",
+                  "renewal_on")
 TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
 
 
@@ -145,6 +153,14 @@ def _contact_fields(ctx: Ctx, p: V.Payload, old: Any = None) -> dict[str, object
         last4 = V.opt_text(p, "tax_id_last4", 4) or ""
         out["tax_id_last4"] = last4 or None
         out["tax_id_ref"] = (V.opt_text(p, "tax_id_ref", 80) or None) if last4 else None
+    if "seats" in p or "renewal_on" in p:
+        kind = str(out.get("kind") or (old["kind"] if old is not None else ""))
+        if kind == "customer":
+            raise invalid("seats and renewal dates belong to vendors")
+    if "seats" in p:
+        out["seats"] = None if p.get("seats") is None else V.integer(p, "seats", 0, 1_000_000)
+    if "renewal_on" in p:
+        out["renewal_on"] = V.opt_day(p, "renewal_on")
     return out
 
 
@@ -254,7 +270,7 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
     ctl = control(ctx, kind).id
     for x in out:
         account = ctx.accounts.get(x.account_id)
-        if account is None or not account.active or account.id == ctl or account.type not in LINE_TYPES[kind]:
+        if account is None or not account.active or account.id == ctl or not _line_type_ok(kind, account):
             raise FinanceError(NOT_FOUND, f"no such {'/'.join(LINE_TYPES[kind])} account for a {kind} line")
         tags = posting.with_team(ctx, x.tags)
         if not may_write(ctx, who, account.id, tags):
@@ -264,8 +280,10 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
 
 
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str, object]]:
+    """The rows a document's lines are stored as. Only an invoice line says whether it is taxable."""
     return [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
-             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who} for x in lines]
+             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
+             **({"taxable": int(x.taxable)} if x.taxable is not None else {})} for x in lines]
 
 
 def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
@@ -492,8 +510,12 @@ def bill_schedule(ctx: Ctx, who: str, p: V.Payload) -> Plan:
              "memo": V.opt_text(p, "memo", 140) or "", "by": who}
 
     def apply(aid: str) -> Result:
+        from .actions import withdraw_bill_asks
         SAP.update(ctx.c, "fin_bills", str(bill["id"]), {"status": "scheduled", "pay_on": pay_on,
                                                          "schedule_json": SK.dump(sched), "updated_at": ctx.at})
+        # A rescheduled bill pays only on its new day: an earlier ask to pay it (waiting on approval) is withdrawn,
+        # after the new schedule is written so its end does not reopen the bill.
+        withdraw_bill_asks(ctx, str(bill["id"]), aid, "the bill was rescheduled")
         return {"bill_id": str(bill["id"]), "status": "scheduled", "pay_on": pay_on}
     return Plan(K.default_gate(ctx.org, who, "bill_schedule"),
                 f"Pay the {_money(_left('bill', bill))} bill from {vendor['name']} on {pay_on}", apply,
@@ -545,7 +567,10 @@ def invoice_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     day = V.day(p, "invoice_date")
     terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else None
     due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
-    lines, _ = _resolve(ctx, who, "invoice", customer, AP.doc_lines(p.get("lines")))
+    lines, _ = _resolve(ctx, who, "invoice", customer, AP.doc_lines(p.get("lines"), invoice=True))
+    carries_tax = any(ctx.accounts[x.account_id].subtype == SALES_TAX for x in lines)
+    lines = [replace(x, taxable=taxable_default(x.taxable, ctx.accounts[x.account_id].type == "income", carries_tax))
+             for x in lines]
     link = V.opt_text(p, "payment_link", 500) or None
     if link and not link.startswith("https://"):
         raise invalid("a payment link is an https:// address")
@@ -611,7 +636,8 @@ def invoice_write_off(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     inv = _doc(ctx, "invoice", V.text(p, "invoice_id", 80))
     _need_status("invoice", inv, OPEN["invoice"], "only a sent invoice is written off")
     left = _left("invoice", inv)
-    amount = V.opt_amount(p) or left
+    given = V.opt_amount(p)
+    amount = left if given is None else given     # 0 is refused below, never read as the balance left
     if not 0 < amount <= left:
         raise invalid(f"a write-off is more than 0 and at most what is left ({left})")
     account = ctx.accounts.get(V.opt_text(p, "account_id", 80) or "") if "account_id" in p else by_code(ctx, OTHER)
@@ -883,7 +909,7 @@ def payment_ended(ctx: Ctx, pay: Any) -> None:
 def payment_ask_ended(ctx: Ctx, action_id: str, body: Mapping[str, object], status: str, reason: str) -> None:
     """The payment a scheduled bill asked for ended without running (denied, expired, withdrawn or failed on its
     approval): the bill is open again with no schedule, and says how the ask ended."""
-    obligation = str(body.get("obligation") or "")
+    obligation = str(body.get("obligation") or "").strip()
     bill = SAP.get(ctx.c, "fin_bills", obligation.removeprefix("bill:")) if obligation.startswith("bill:") else None
     if bill is None or str(bill["status"]) != "scheduled":
         return
@@ -1303,7 +1329,8 @@ def _pay(kind: str) -> Any:
         if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
             raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
         left = _left(kind, doc)
-        amount = V.opt_amount(p) or left
+        given = V.opt_amount(p)
+        amount = left if given is None else given     # 0 is refused below, never read as the balance left
         if not 0 < amount <= left:
             raise invalid(f"the amount is more than 0 and at most what is left ({left})")
         if sum(k in p for k in ("feed_id", "money_account_id", "account_id")) > 1:
@@ -1491,6 +1518,13 @@ def watch(ctx: Ctx) -> int:
         if stage:
             _event(ctx, OVERDUE, str(inv["id"]), {"invoice_id": str(inv["id"]), "stage": stage,
                                                   "due_date": inv["due_date"]}, stage)
+            n += 1
+    for vendor in SAP.renewals_due(ctx.c, ctx.book.id):
+        stage = AP.renewal_stage(vendor["renewal_on"], today)
+        if stage:
+            _event(ctx, RENEWAL_DUE, str(vendor["id"]), {"contact_id": str(vendor["id"]), "stage": stage,
+                                                         "renewal_on": vendor["renewal_on"]},
+                   f"{vendor['renewal_on']}:{stage}")
             n += 1
     return n
 

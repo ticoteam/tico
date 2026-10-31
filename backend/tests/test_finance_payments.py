@@ -89,8 +89,25 @@ def test_a_decline_budget_at_cutoff_freezes_its_cards_and_unfreezing_waits_for_r
     sync_once(books, fake, HOURS[0])
     assert fake.sent("card_state") == [("card-eve", "freeze")]
     with books.transaction() as c:
-        act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 60_000})
-        assert act(c, OWNER, "card_unfreeze", {"card_id": eve}).status == "committed"
+        # 60.00 leaves room (30.00 spent, 20.00 reserved), so the cutoff freeze lifts with the raise (§8.2).
+        assert act(c, OWNER, "budget_update", {"budget_id": budget_id, "amount": 60_000}).status == "committed"
+        assert _card(c, eve)["status"] == "active"
+        assert act(c, OWNER, "card_unfreeze", {"card_id": eve}).code == "conflict"
+    sync_once(books, fake, HOURS[1])
+    assert ("card-eve", "unfreeze") in fake.sent("card_state")
+
+
+def test_a_card_holder_who_cannot_see_the_budget_is_refused_without_its_name(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    _budget_id, eve = _budget_and_card(books)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:eve", "right": "finance.cards"}).status == "committed"
+        spend(c, "6100", 30_000)
+        FA.drain_events(c, AT)
+        refused = act(c, "human:eve", "card_unfreeze", {"card_id": eve})
+    assert refused.code == "denied" and "Cloud" not in refused.reason, refused
 
 
 def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
@@ -110,6 +127,7 @@ def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
         paused = pause(c, "rule-3", OWNER, {}, values, event="finance.budget.warn", subject="e2", revision=None)
         assert paused["ok"]
         assert FA.budget_state(c, budget_id, AT).amount == 0
+        assert _card(c, eve)["status"] == "frozen"         # a pause freezes the budget's cards, keeping allocations
         rule_of = c.execute("SELECT on_behalf_of, actor FROM fin_actions WHERE kind='budget_update'").fetchone()
         assert tuple(rule_of)[1] == OWNER
 
@@ -220,7 +238,7 @@ def test_a_409_with_the_request_is_accepted_and_a_cut_off_send_is_unknown(books)
     assert [b["amount"] for b in fake.sent("request_send_money")] == [100]       # the cut-off one is not resent
 
 
-def test_a_payment_settles_once_when_its_bank_transaction_posts_and_direct_send_stays_off(books):
+def test_a_payment_settles_once_when_its_bank_transaction_posts_and_direct_send_is_refused_while_off(books):
     fake = FakeMercury()
     connect(books, fake)
     rid = _payee(books, fake)
@@ -232,10 +250,11 @@ def test_a_payment_settles_once_when_its_bank_transaction_posts_and_direct_send_
         direct = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 1, "account_id": account(c, "6100"),
                                                   "mode": "direct", "money_account_id": _checking(c)})
         assert direct.code == "not_available" and "off" in direct.reason
+        assert act(c, "human:ben", "payment_settings", {"direct_send": True}).code == "denied"
         assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
         direct = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 1, "account_id": account(c, "6100"),
                                                   "mode": "direct", "money_account_id": _checking(c)})
-        assert direct.code == "not_available" and "approval queue" in direct.reason
+        assert direct.code == "denied" and "paid before" in direct.reason     # on, but this payee is not known yet
         assert act(c, "human:ben", "payment_settings", {"direct_send": False}).code == "denied"
     sync_once(books, fake, HOURS[1])
     paid = {**MERCURY["txn_bank_fee"], "id": "txn-pay", "amount": -500.0, "kind": "outgoingPayment",
@@ -451,6 +470,10 @@ def test_a_wire_needs_its_purpose_and_a_refusal_is_never_silent(books):
         assert c.execute("SELECT count(*) FROM fin_events WHERE name='finance.payment.failed'").fetchone()[0] == 1
         assert _asks(c, "Payment of 300.01 failed") == 1
         assert status(fixable) == "queued" and _asks(c, "Payment of 300.02 is waiting") == 1   # a fixable refusal
+        # The notices name the amount, so they are private to the one who must act.
+        assert c.execute("SELECT private FROM tasks WHERE title LIKE 'Payment of 300.01 failed%'").fetchone()[0] == 1
+        waiting = c.execute("SELECT private FROM tasks WHERE title LIKE 'Payment of 300.02 is waiting%'").fetchone()
+        assert waiting[0] == 1
         assert (30_002, "held") in _holds(c)
 
 
@@ -858,3 +881,141 @@ def test_payee_and_payment_actions_work_on_an_app_with_timers_off(stale_vault, a
                "account_id": account(c, "6100"), "amount": 2_500}
     paid = post(api, "finance/actions", {"kind": "payment_create", "payload": pay})
     assert paid["status"] == "committed", paid
+
+
+def test_direct_send_is_for_a_paid_recipient_once_the_owner_turns_it_on_and_skips_the_approval_queue(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
+                                                "tags": {"team": "eng"}, "money_account_id": _checking(c)})
+        assert made.status == "committed"
+    sync_once(books, fake, HOURS[1])
+    fake.txns["txn-pay"] = {**MERCURY["txn_bank_fee"], "id": "txn-pay", "amount": -500.0, "kind": "outgoingPayment",
+                            "counterpartyName": "Acme Supplies", "requestId": "req-1", "postedAt": "2026-10-16T10:00:00Z"}
+    fake.events_list.append({"id": "evt-pay", "resourceType": "transaction", "resourceId": "txn-pay",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[3])
+    sync_once(books, fake, HOURS[6])
+    with books.transaction() as c:
+        direct = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 10_000, "account_id": account(c, "6100"),
+                                                  "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
+        assert direct.status == "committed"
+        dpid = str(direct.result["payment_id"])
+    sync_once(books, fake, HOURS[8])
+    assert len(fake.sent("create_transaction")) == 1 and len(fake.sent("request_send_money")) == 1
+    with books.read() as c:
+        assert tuple(c.execute("SELECT mode, status, provider_request_id FROM fin_payments WHERE id=?",
+                               (dpid,)).fetchone()) == ("direct", "submitted", "txn-direct-1")
+    fake.txns["txn-direct-1"] = {**MERCURY["txn_bank_fee"], "id": "txn-direct-1", "amount": -100.0,
+                                 "kind": "outgoingPayment", "counterpartyName": "Acme Supplies",
+                                 "postedAt": "2026-10-16T12:00:00Z"}
+    fake.events_list.append({"id": "evt-direct", "resourceType": "transaction", "resourceId": "txn-direct-1",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[10])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "settled"
+
+
+def _paid_acme(books, fake):
+    """Direct send on, and one payment to Acme Supplies paid through Mercury: the payee is known and paid."""
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": 50_000, "account_id": account(c, "6100"),
+                                                "tags": {"team": "eng"}, "money_account_id": _checking(c)})
+        assert made.status == "committed", made
+    sync_once(books, fake, HOURS[1])
+    fake.txns["txn-pay"] = {**MERCURY["txn_bank_fee"], "id": "txn-pay", "amount": -500.0, "kind": "outgoingPayment",
+                            "counterpartyName": "Acme Supplies", "requestId": "req-1", "postedAt": "2026-10-16T10:00:00Z"}
+    fake.events_list.append({"id": "evt-pay", "resourceType": "transaction", "resourceId": "txn-pay",
+                             "operationType": "create", "resourceVersion": 1})
+    sync_once(books, fake, HOURS[3])
+    sync_once(books, fake, HOURS[6])
+    return rid
+
+
+def _direct(books, rid, amount=10_000):
+    with books.transaction() as c:
+        made = act(c, OWNER, "payment_create", {"recipient_id": rid, "amount": amount, "account_id": account(c, "6100"),
+                                                "mode": "direct", "money_account_id": _checking(c)}, at=HOURS[7])
+        assert made.status == "committed", made
+        return str(made.result["payment_id"])
+
+
+def test_turning_direct_send_off_before_a_queued_direct_payment_goes_sends_it_by_the_approval_queue(books):
+    """Item 4: the company switch is read again at send. A direct payment queued while it was on goes to Mercury's
+    approval queue once it is off, and is never sent as a direct transaction."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    dpid = _direct(books, rid)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": False}).status == "committed"
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+    assert len(fake.sent("request_send_money")) == 2
+    with books.read() as c:
+        mode, status = c.execute("SELECT mode, status FROM fin_payments WHERE id=?", (dpid,)).fetchone()
+    assert mode == "approval_queue" and status not in ("failed", "cancelled"), (mode, status)
+
+
+def test_a_rule_on_direct_payments_added_after_queueing_cancels_the_send(books):
+    """Codex P1: the send-time recheck builds the same facts as the create did, mode included, so a deny on direct
+    payments added after the payment was queued cancels it, and no direct transaction is made."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "payment_settings", {"direct_send": True}).status == "committed"
+    dpid = _direct(books, rid)
+    with books.transaction() as c:
+        _rule(c, OWNER, "No direct pays", {"kind": "payment_create", "mode": "direct"}, {"outcome": "deny"},
+              [{"input": {"kind": "payment_create", "mode": "direct"}, "expect": "deny"}])
+    sync_once(books, fake, HOURS[8])
+    assert fake.sent("create_transaction") == []
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "cancelled"
+
+
+def test_a_direct_payment_the_bank_cancels_with_no_request_id_fails_and_its_hold_is_released(books):
+    """Item 8: a direct send has no request id, so its own Mercury transaction id ends it when the bank voids the row."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _paid_acme(books, fake)
+    dpid = _direct(books, rid)
+    sync_once(books, fake, HOURS[8])
+    assert len(fake.sent("create_transaction")) == 1
+    fake.txns["txn-direct-1"] = {**MERCURY["txn_bank_fee"], "id": "txn-direct-1", "amount": -100.0,
+                                 "kind": "outgoingPayment", "counterpartyName": "Acme Supplies",
+                                 "status": "cancelled", "postedAt": "2026-10-16T12:00:00Z"}
+    fake.events_list.append({"id": "evt-direct-cancel", "resourceType": "transaction", "resourceId": "txn-direct-1",
+                             "operationType": "update", "resourceVersion": 2})
+    sync_once(books, fake, HOURS[10])
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_payments WHERE id=?", (dpid,)).fetchone()[0] == "failed"
+        assert (10_000, "released") in _holds(c)
+
+
+def test_a_send_time_rule_on_who_asks_cancels_a_payment_someone_else_queued(books):
+    """Ben queues a payment; the owner then adds a deny for payments by anyone but the owner. The send-time facts carry
+    actor.owner as the request did, so the payment is cancelled before Mercury sees it."""
+    fake = FakeMercury()
+    connect(books, fake)
+    rid = _payee(books, fake)
+    with books.transaction() as c:
+        act(c, OWNER, "rule_disable", {"rule_id": "rule:new-recipient"})
+        act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": "finance.pay"})
+        body = {"recipient_id": rid, "account_id": account(c, "6100"), "tags": {"team": "eng"},
+                "money_account_id": _checking(c)}
+        queued = act(c, "human:ben", "payment_create", {**body, "amount": 5_000})
+        assert queued.status == "committed", queued
+        _rule(c, OWNER, "Only the owner pays", {"kind": "payment_create", "actor.owner": False},
+              {"outcome": "deny"}, [{"input": {"kind": "payment_create", "actor.owner": False}, "expect": "deny"}])
+    sync_once(books, fake, HOURS[1])
+    assert fake.sent("request_send_money") == []
+    with books.read() as c:
+        status = c.execute("SELECT status || ':' || coalesce(last_error, '') FROM fin_payments").fetchone()[0]
+        assert status.startswith("cancelled:Only the owner pays"), status

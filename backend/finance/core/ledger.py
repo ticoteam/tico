@@ -55,6 +55,7 @@ class Line:
 
 
 NAME_MAX = 80               # a vendor name's length: names are capped to it before they are keyed, never keys after
+KEY_MAX = 3 * NAME_MAX      # a key's: folding turns a character into up to three (ß is ss)
 
 
 def name_key(name: str) -> str:
@@ -135,8 +136,17 @@ def line(raw: object, base: str) -> Line:
     if amount == 0:
         raise invalid("a line moves money: amount is not 0")
     return Line(account_id=account_id, amount=amount, currency=cur, original_amount=amount, fx_rate=Decimal(1),
-                contact_id=V.opt_text(p, "contact_id", 80) or "", description=V.opt_text(p, "description") or "",
-                tags=tags(p.get("tags")))
+                contact_id=vendor_text(p), description=V.opt_text(p, "description") or "", tags=tags(p.get("tags")))
+
+
+def vendor_text(p: V.Payload, key: str = "contact_id") -> str:
+    """A vendor (a line's, a budget's): a contact's id or a name of up to NAME_MAX characters, or a key already folded
+    (name_key), which folding may have made longer (up to KEY_MAX): a line Tico posts again (a reclass) keeps its
+    stored key, and a budget can be made on a vendor key a report shows."""
+    value = V.opt_text(p, key, KEY_MAX) or ""
+    if len(value) > NAME_MAX and name_key(value) != value:
+        raise invalid(f"{key} is longer than {NAME_MAX} characters")
+    return value
 
 
 def entry(raw: object, book: Book) -> Entry:

@@ -49,7 +49,7 @@ EMPTY = (
     "webhooks", "webhook_events", "webhook_sends", "webhook_attempts",   # outgoing: a copy never sends an event out
     "task_rules", "schedules", "schedule_config", "schedule_occurrences", "triggers", "trigger_deliveries", "trigger_bodies", "trigger_seen", "rule_events_seen", "rule_task_runs", "rule_task_state", "trigger_relays", "hook_relay_state", "sleep_idle_state", "tico_notices", "mail_items", "mail_intake", "mail_reads", "mail_private_backfill", "watcher_runs", "watcher_items", "watcher_refs",
     "task_manager_seen", "task_manager_reports",    # the Task Manager's repeat ledger and last checks: the copy starts its hourly report fresh
-    "bookkeeper_seen",   # the Bookkeeper's repeat ledger: the copy starts its Books check fresh
+    "bookkeeper_seen", "bookkeeper_watch_listed",   # the Bookkeeper's ledgers: the copy starts its checks fresh
     "org_rule_holds",    # org rules: a held output could still be sent anyway from the copy
     "org_rule_verdicts",  # org rule checks: the model's verdicts, a cache
     "watcher_pending", "watcher_triage",    # support triage: tickets waiting for their check (customer text), and its verdicts
@@ -95,7 +95,7 @@ EMPTY = (
     # inbox, cards and their authorizations, payees and payments) and spend holds. Its pending actions and undrained events are trimmed
     # in prune; the books, budgets, views and rules are kept.
     "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
-    "fin_recipients", "fin_payments", "fin_provider_users",
+    "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
@@ -144,6 +144,7 @@ KEEP = frozenset((
     "fin_settlements", "fin_cash_rollups", "fin_credit_refunds", "fin_vendor_aliases", "fin_vendor_labels",
     "fin_vendor_legacy",
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
+    "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

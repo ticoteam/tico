@@ -1,13 +1,18 @@
 """The hub's MCP door: same tools as the `hub` CLI, same rules, no privileged path."""
 
+import asyncio
 import base64
 import hashlib
 import json
+import threading
+from urllib.parse import urlencode
 
 import pytest
 
+from backend.mcp import ApiProblem, InProcessApi
 from backend.tests.test_api import api, assign, claim, get, headers, post, ready, restrict, runner, setup_attempt  # noqa: F401
-from clients import hubcli, hubtools
+from clients import bot_files as BF, hubcli, hubtools
+from clients.tico import MultipartBody
 
 
 def rpc(api, method, params=None, token="ana-test", rid=1):
@@ -457,3 +462,103 @@ def test_a_member_reads_neither_a_computer_nor_a_bot_they_cannot_see_in_the_summ
     assert call(api, "hub_computer_list", {"computer": "Ana Mac"}, token="ben-test")[0]
     err, everything = call(api, "hub_computer_list", {"computer": "Shared Mac"})
     assert not err and set(everything["readiness"]["bots"]) == {"ops", "finance"}         # the owner still reads it
+
+
+@pytest.fixture
+def door(api):
+    """The server's own MCP door for a caller: an InProcessApi on a loop of its own, the app answering through it."""
+    loop = asyncio.new_event_loop()
+    thread = threading.Thread(target=loop.run_forever, daemon=True)
+    thread.start()
+    yield lambda token: InProcessApi(api.app, loop, "Bearer " + token, "http://testserver")
+    loop.call_soon_threadsafe(loop.stop)
+    thread.join()
+    loop.close()
+
+
+def test_a_bot_sends_raw_bodies_through_the_door_and_they_arrive_as_sent(api, door, monkeypatch, tmp_path):
+    """The tools that send a file as its own body (publish a file or a page, attach it to a task, import it) run on the
+    server's door as they do from the CLI: the bytes and name arrive unchanged, under the bot's own rights."""
+    _, _, attempt = setup_attempt(api)
+    bot, token = door(attempt["token"]), attempt["token"]
+    monkeypatch.setattr(BF, "checkout_root", lambda cwd=None: tmp_path)
+    text = "# Pipeline\n\nAcme grew 12%.\n".encode()
+    (tmp_path / "reports").mkdir()
+    (tmp_path / "reports" / "pipeline.md").write_bytes(text)
+
+    made = hubtools.files_publish_path(bot, {"path": "reports/pipeline.md", "operation_id": "op-read-1"})
+    assert api.get("/api/v2/files/" + made["file"]["id"], headers=headers(token)).content == text
+    assert "pipeline.md" in api.get("/api/v2/bots/ops/files", headers=headers("ana-test")).text
+
+    # A streamed file (a file object, read a block at a time) is the same file.
+    with (tmp_path / "reports" / "pipeline.md").open("rb") as stream:
+        copy = bot.request("POST", "/api/v2/files/uploads?" + urlencode({"name": "pipeline-copy.md"}), raw=stream,
+                           key="op-stream-1")
+    assert api.get("/api/v2/files/" + copy["file"]["id"], headers=headers(token)).content == text
+
+    (tmp_path / "pages").mkdir()
+    (tmp_path / "pages" / "weekly.html").write_text("<h1>Weekly</h1><p>Pipeline grew to 42 deals.</p>")
+    shown = hubtools.pages_publish_path(bot, {"path": "pages/weekly.html", "title": "Weekly", "cadence": "weekly"})
+    assert shown["page"]["title"] == "Weekly"
+    assert "42 deals" in api.get("/api/v2/files/" + shown["page"]["file_id"], headers=headers(token)).text
+
+    # An import is copied from S3 by the bot's computer; the server stores the bytes it is sent with their source.
+    source = "s3://acme-exports/q3/pipeline.md"
+    imported = bot.request("POST", "/api/v2/files/imports?" + urlencode({"source": source, "etag": "etag-1",
+                                                                       "name": "pipeline.md"}),
+                           raw=b"# From S3\n", key="op-import-1")
+    assert api.get("/api/v2/files/" + imported["file"]["id"], headers=headers(token)).content == b"# From S3\n"
+
+    # Several files in one multipart body, as a task attachment sends them.
+    task = post(api, "tasks", {"owner": "ops", "title": "Plan", "body": "Write the plan."})
+    (tmp_path / "notes.txt").write_bytes(b"Notes for the plan.\n")
+    attached = bot.request("POST", f"/api/v2/tasks/{task['id']}/files",
+                           raw=MultipartBody({"file": tmp_path / "notes.txt"}, {"name": "notes.txt"}),
+                           key="op-multi-1")
+    assert api.get("/api/v2/files/" + attached["file_id"], headers=headers(token)).content == b"Notes for the plan.\n"
+
+
+def test_a_raw_body_gets_the_callers_own_rights_as_over_http(api, door):
+    http = api.post("/api/v2/files/uploads?name=plan.md", content=b"# Plan",
+                    headers={**headers("ana-test"), "Content-Type": "application/octet-stream"})
+    assert http.status_code == 403
+    with pytest.raises(ApiProblem) as refused:
+        door("ana-test").request("POST", "/api/v2/files/uploads?name=plan.md", raw=b"# Plan", key="op-person-1")
+    assert refused.value.status == 403
+
+
+def test_a_raw_file_over_the_servers_limit_is_refused_before_it_is_sent(api, door, tmp_path):
+    _, _, attempt = setup_attempt(api)
+    big = tmp_path / "big.md"
+    with big.open("wb") as stream:
+        stream.truncate(27_000_001)              # a bot's raw upload stops at 27 MB (backend/app.py: published)
+    with big.open("rb") as stream, pytest.raises(ApiProblem) as refused:
+        door(attempt["token"]).request("POST", "/api/v2/files/uploads?name=big.md", raw=stream, key="op-big-1")
+    assert refused.value.status == 413 and refused.value.code == "too_large"   # the Content-Length check, up front
+
+
+def test_raw_file_position(api, door, tmp_path):
+    """A file passed after its header was read is sent whole: its Content-Length is the file's size, so its bytes are
+    too (as Client.request rewinds a file before sending it)."""
+    _, _, attempt = setup_attempt(api)
+    path = tmp_path / "plan.md"
+    expected = b"# Plan\nComplete document.\n"
+    path.write_bytes(expected)
+    with path.open("rb") as source:
+        source.read(7)
+        made = door(attempt["token"]).request(
+            "POST", "/api/v2/files/uploads?name=plan.md",
+            raw=source, key="repro-file-position",
+        )
+    response = api.get(
+        "/api/v2/files/" + made["file"]["id"],
+        headers=headers(attempt["token"]),
+    )
+    assert response.status_code == 200
+    assert response.content == expected
+
+
+def test_a_raw_body_and_a_json_body_are_one_or_the_other():
+    with pytest.raises(ValueError):
+        InProcessApi(None, None, "Bearer unused", "http://testserver").request(
+            "POST", "/api/v2/files/uploads", body={"name": "plan.md"}, raw=b"# Plan")

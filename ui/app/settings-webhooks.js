@@ -108,8 +108,11 @@ function whSubmit(dialog, fn) {
 }
 
 // ---------------------------------------------------------------------------------------------------------- Incoming
+// Finance's own triggers (consumer finance: Mercury, Stripe, QuickBooks, Xero) are managed in Finance › Sources, not here.
+const WH_FINANCE_PRESETS = ['mercury', 'stripe_finance', 'intuit', 'xero'];
 async function whTriggersFresh() {
-  WH_TRIGGERS = (await get('/v2/triggers', {fresh: true})).triggers || [];
+  WH_TRIGGERS = ((await get('/v2/triggers', {fresh: true})).triggers || [])
+    .filter(t => t.consumer ? t.consumer !== 'finance' : !WH_FINANCE_PRESETS.includes(t.preset));
   return WH_TRIGGERS;
 }
 function whCountsHTML(t) {

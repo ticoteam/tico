@@ -1,5 +1,5 @@
 // Ask (ui/app/ask-panel.js): the person's chat bot on every page. On a computer the "Ask Tico" row at the bottom of
-// the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel beside the rail that names the
+// the sidebar, with Search's icon at its end (or ⌘J), opens "Tico Assistant", a panel straight above the row that names the
 // page it sees and sends it with the message, and a close mark takes the row's dot place; on a phone the dot in the middle of the tab bar opens a sheet and closes it again. Its dot flies up to
 // its place beside the panel's name and lands there exactly, and flies back down on close; Tico's turns carry no dot.
 // The header has no + and no Show chat: "Loop in Support", a link at the top right, has an open request's messages
@@ -51,6 +51,14 @@ async function open(browser, viewport, state) {
       state.messages.push(user, bot);
       return json({message: user, reply: bot, fast: true});
     }
+    if (p === '/api/v2/uploads/assistant/messages') {
+      const raw = route.request().postDataBuffer().toString('latin1'), field = name => raw.match(new RegExp(`name="${name}"\\r\\n\\r\\n([^\\r]*)`))?.[1];
+      const body = {text: field('text'), page: JSON.parse(field('page') || 'null'), files: [...raw.matchAll(/filename="([^"]+)"/g)].map(m => m[1])};
+      state.uploaded = (state.uploaded || []).concat([body]);
+      const user = msg('f' + state.uploaded.length, 'human:ben', body.text, new Date().toISOString());
+      state.messages.push(user, msg('g' + state.uploaded.length, 'bot:coo', 'Read it.', new Date().toISOString()));   // the turn's reply, by the snapshot
+      return json({message: user, reply: null, fast: false});
+    }
     const ticket = p.match(/^\/api\/v2\/support\/tickets\/([^/]+)\/(messages|read)$/), listing = () => json({enabled: true, tickets: state.tickets, unread: state.tickets.filter(t => t.unread).length});
     if (ticket) {
       const t = state.tickets.find(x => x.id === ticket[1]);
@@ -74,16 +82,21 @@ async function open(browser, viewport, state) {
   return {page, errors};
 }
 
-// The dot's flight: where the copy lands (its box once its transform is spent), and, once it has, where `dot` is.
-async function flight(page, dot) {
-  const ghost = await page.waitForFunction(() => { const g = document.querySelector('.ldot-fly');
-    return g && {left: parseFloat(g.style.left), top: parseFloat(g.style.top), width: parseFloat(g.style.width)}; }).then(h => h.jsonValue());
+// The dot's flight after `act`: where the copy lands (its box once its transform is spent), and, once it has, where
+// `dot` is. The watch starts before `act`: a quick flight can be over before a wait inside `act` returns.
+async function flight(page, dot, act) {
+  const seen = page.waitForFunction(() => { const g = document.querySelector('.ldot-fly');
+    return g && {left: parseFloat(g.style.left), top: parseFloat(g.style.top), width: parseFloat(g.style.width),
+      took: g.getAnimations()[0]?.effect.getTiming().duration}; });
+  await act();
+  const ghost = await seen.then(h => h.jsonValue());
   await page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
   await page.locator('#ask-panel').evaluate(el => Promise.all(el.getAnimations().map(a => a.finished)));
   const r = await page.locator(dot).evaluate(el => { const b = el.getBoundingClientRect(); return {left: b.left, top: b.top, width: b.width}; });
   // the dot breathes (a scale of 3% at most), so its centre is what must match
   const off = Math.hypot(ghost.left + ghost.width / 2 - r.left - r.width / 2, ghost.top + ghost.width / 2 - r.top - r.width / 2);
   assert.ok(off < 2, `the dot landed ${off.toFixed(1)}px off ${dot}: ${JSON.stringify({ghost, r})}`);
+  return ghost;
 }
 const words = text => text.trim().split(/\s+/).length;
 
@@ -115,6 +128,8 @@ const words = text => text.trim().split(/\s+/).length;
     const search = page.locator('#search-open');
     assert.equal(await search.getAttribute('aria-label'), 'Search (⌘K)');
     assert.equal(await search.innerText(), 'search', 'an icon, no words beside Ask');
+    const hit = await search.evaluate(el => { const b = el.getBoundingClientRect(); return {w: b.width, h: b.height}; });
+    assert.ok(hit.w >= 44 && hit.h >= 34, `Search is easy to press: ${JSON.stringify(hit)}`);
     await search.click();
     await page.locator('#search-modal[open]').waitFor();
     await page.keyboard.press('Escape');
@@ -134,16 +149,17 @@ const words = text => text.trim().split(/\s+/).length;
     assert.equal(await peek.isHidden(), true);
     assert.deepEqual(await page.evaluate(() => JSON.parse(localStorage.getItem('tico.ask.peek.ben')).dismissed), ['m9', 't4']);
     // Open: the row's dot flies up to its place beside the panel's name and lands exactly there. The row stays, a close
-    // mark in its dot's place; the panel stands beside the rail and leaves the row in view.
-    await fab.click();
-    await panel.waitFor();
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]');
+    // mark in its dot's place; the panel stands straight above the row, over the sidebar, and leaves the row in view.
+    // The flight is quick: under 350 ms however far it goes.
+    const {took} = await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await fab.click(); await panel.waitFor(); });
+    assert.ok(took <= 350, `a quick flight: ${took}ms`);
     assert.deepEqual([await fab.getAttribute('aria-expanded'), await fab.getAttribute('aria-label')], ['true', 'Close Ask Tico']);
     assert.equal(await fab.isVisible(), true, 'the row stays');
     assert.equal(await fab.evaluate(el => getComputedStyle(el.querySelector('.ask-x')).opacity), '1', 'a close mark holds its place');
-    const beside = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect();
-      return {gap: b('#ask-panel').left - b('#side').right, foot: innerHeight - b('#ask-panel').bottom}; });
-    assert.ok(beside.gap > 0 && beside.gap < 16 && beside.foot <= 16, `the panel rises from the bottom left: ${JSON.stringify(beside)}`);
+    const above = await page.evaluate(() => { const b = s => document.querySelector(s).getBoundingClientRect(), p = b('#ask-panel'), r = b('#ask-row');
+      return {left: p.left - b('#side').left, gap: r.top - p.bottom, top: p.top}; });
+    assert.ok(above.left >= 0 && above.left <= 12 && above.gap >= 0 && above.gap <= 12 && above.top >= 0,
+      `the panel stands on the row: ${JSON.stringify(above)}`);
     // The header's dot is the one live dot while it is open; Tico's turns carry none.
     const dots = () => page.evaluate(() => ['#ask-row [data-ask-dot]', '#ask-panel [data-ask-dot]'].map(s => document.querySelector(s)?.dataset.state || ''));
     const landed = () => page.waitForFunction(() => !document.querySelector('.ldot-fly, .ldot-away'));
@@ -259,7 +275,24 @@ const words = text => text.trim().split(/\s+/).length;
     assert.equal(await panel.locator('[data-ask-thread] .ldot').count(), 0, 'a new turn takes no dot either');
     assert.equal(state.sent[0].text, 'The board will not load');
     assert.equal(state.sent[0].page.path, '#/tasks');
-    await panel.getByRole('link', {name: 'Loop in Tico support'}).click();
+    // The clip attaches a file (as a drop or a paste does); it goes with the words and the page.
+    await panel.locator('.p-attach').waitFor();
+    await panel.locator('.p-file').setInputFiles({name: 'plan.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4')});
+    await box.fill('Read this');
+    await box.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#ask-panel .p-text').value === '');
+    assert.deepEqual(state.uploaded, [{text: 'Read this', page: {path: '#/tasks', title: state.uploaded[0].page.title}, files: ['plan.pdf']}]);
+    assert.equal(state.sent.length, 1, 'with a file it goes up as an upload');
+    // A file dropped anywhere on the panel attaches too.
+    await page.evaluate(() => { const dt = new DataTransfer(), panel = document.querySelector('#ask-panel');
+      dt.items.add(new File(['notes'], 'notes.txt', {type: 'text/plain'}));
+      for (const type of ['dragenter', 'dragover', 'drop']) panel.querySelector('[data-ask-thread]').dispatchEvent(new DragEvent(type, {dataTransfer: dt, bubbles: true, cancelable: true})); });
+    await panel.locator('.p-chips > *').first().waitFor();
+    await box.fill('And this');
+    await box.press('Enter');
+    await page.waitForFunction(() => !document.querySelector('#ask-panel .p-chips')?.children.length);
+    assert.deepEqual(state.uploaded.map(u => u.files), [['plan.pdf'], ['notes.txt']]);
+    await panel.getByRole('link', {name: 'Loop in Tico support'}).first().click();
     await page.locator('#support-pop[open]').waitFor();
     assert.equal(await page.evaluate(() => location.hash), '#/tasks', 'the page behind stays');
     await page.keyboard.press('Escape');
@@ -267,15 +300,11 @@ const words = text => text.trim().split(/\s+/).length;
     // Esc closes the panel: the dot flies back down to the row and lands on its dot, focus back on the row; ⌘J opens it
     // again.
     await box.focus();
-    await page.keyboard.press('Escape');
-    await panel.waitFor({state: 'hidden'});
-    await flight(page, '#ask-row [data-ask-dot]');
+    await flight(page, '#ask-row [data-ask-dot]', async () => { await page.keyboard.press('Escape'); await panel.waitFor({state: 'hidden'}); });
     assert.deepEqual(await dots(), ['idle', 'still'], 'closed: the dot is back on the row');
     assert.equal(await page.evaluate(() => document.activeElement?.id), 'ask-row');
     assert.equal(await fab.getAttribute('aria-label'), null);
-    await page.keyboard.press('Control+j');
-    await panel.waitFor();
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]');
+    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await page.keyboard.press('Control+j'); await panel.waitFor(); });
     // The Assistant page is this chat already: there the row is not needed, and Search is the whole row again.
     await page.evaluate(() => { location.hash = '#/assistant'; });
     await fab.waitFor({state: 'hidden'});
@@ -311,9 +340,7 @@ const words = text => text.trim().split(/\s+/).length;
     const said2 = await peek2.locator('[data-peek-text]').innerText();
     assert.equal(said2, '2 questions are waiting on you');
     assert.ok(words(said2) <= 6 && !/asks/i.test(said2), said2);
-    await peek2.locator('[data-peek-go]').click();
-    await page.locator('#ask-panel').waitFor();
-    await flight(page, '#ask-panel .ask-head [data-ask-dot]');
+    await flight(page, '#ask-panel .ask-head [data-ask-dot]', async () => { await peek2.locator('[data-peek-go]').click(); await page.locator('#ask-panel').waitFor(); });
     await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').waitFor();
     assert.equal(await page.locator('#ask-panel .ask-card[data-ask-q="m8"]').isVisible(), true);
     assert.equal(await peek2.isHidden(), true, 'no peek while the chat is open');
@@ -333,9 +360,7 @@ const words = text => text.trim().split(/\s+/).length;
     await page.waitForFunction(() => !document.querySelector('.ask-fly'));
     assert.equal(await page.locator('#ask-panel').evaluate(el => [...el.querySelectorAll('*')].every(x => x.getBoundingClientRect().right <= innerWidth + 1)), true, 'no horizontal scroll with the chip');
     // Closing flies the dot back down into the tab bar.
-    await tab.click();
-    await page.locator('#ask-panel').waitFor({state: 'hidden'});
-    await flight(page, '#mobile-ask [data-ask-dot]');
+    await flight(page, '#mobile-ask [data-ask-dot]', async () => { await tab.click(); await page.locator('#ask-panel').waitFor({state: 'hidden'}); });
     assert.deepEqual([await tab.getAttribute('aria-label'), await glyph()], [null, 'dot']);
     await page.waitForTimeout(300);
     assert.equal(await peek2.isHidden(), true, 'the line spoke for both questions: no second peek');

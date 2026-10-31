@@ -6,7 +6,7 @@
    Access: who sees what in Finance, on the org chart (each teammate's default and grants), private lines, the owner's
    "View as", Edit defaults, and a teammate's "Grant more".
    Reads: GET /api/v2/finance/sources, /finance/access, /finance/balance-sheet (the lines an account maps to). Writes:
-   POST /api/v2/credentials, /finance/connections; connection_sync, connection_disconnect, connection_map, view_grant,
+   POST /api/v2/credentials, /finance/connections, /finance/books/connect, /finance/books/{id}/disconnect; connection_sync, connection_disconnect, connection_map, view_grant,
    view_revoke and view_defaults_set through POST /api/v2/finance/actions.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
@@ -18,12 +18,15 @@ function finSourcesPage() {
   FIN.src = {groups: [], lines: [], load: 0};
   $('#fin-body').innerHTML = `<div class="fin-bar"><label class="fin-search"><span class="nav-icon" aria-hidden="true">search</span><input type="search" data-fin-q value="${esc(s.q)}" placeholder="Search sources, accounts, cards" aria-label="Search sources"></label>
       <button type="button" class="ghost" data-fin-collapse>Collapse all</button><span class="spacer"></span>
-      ${caps.may('finance.admin') ? '<button type="button" class="primary" data-fin-connect>+ Source</button>' : ''}</div>`
+      ${finSourceMenuHtml(caps)}</div>`
     + finSplit(`<div class="fin-scroll" id="fin-src">${skelRows(8, {dot: false})}</div>`, '', 'Selected source');
   const body = $('#fin-body');
   body.querySelector('[data-fin-q]').oninput = ev => { s.q = ev.target.value.trim().toLowerCase(); finSrcDraw(); };
   body.onclick = ev => {
-    if (ev.target.closest('[data-fin-connect]')) { finConnectMercury(); return; }
+    const add = ev.target.closest('[data-fin-connect]');
+    if (add) { finPop(add, $('#fin-connect')); return; }
+    const pick = ev.target.closest('[data-fin-connect-item]');
+    if (pick) { $('#fin-connect').hidden = true; add?.setAttribute('aria-expanded', 'false'); finConnect(pick.dataset.finConnectItem); return; }
     if (ev.target.closest('[data-fin-collapse]')) { s.open.clear(); finSrcDraw(); return; }
     const g = ev.target.closest('[data-fin-group]');
     if (g) { const k = g.dataset.finGroup; if (s.open.has(k)) s.open.delete(k); else s.open.add(k); finSrcDraw(); return; }
@@ -63,7 +66,8 @@ function finSrcCols(r) {
     how = sync ? 'Live' : r.kind === 'connection' ? '' : 'By hand';
     const at = sync?.last_ok_at || sync?.last_sync_at || r.balance_as_of;
     last = at ? ago(at) : '';
-    status = sync?.status === 'disconnected' ? ['idle', 'Disconnected'] : err ? ['fail', 'Error'] : !sync ? ['idle', '—']
+    status = sync?.status === 'disconnected' ? ['idle', 'Disconnected'] : sync?.status === 'reconnect' ? ['fail', 'Reconnect']
+      : err ? ['fail', 'Error'] : !sync ? ['idle', '—']
       : sync.status === 'new' ? ['waiting', 'Starting'] : ['ok', 'OK'];
   }
   return {has, feeds, how, last, status};
@@ -95,20 +99,36 @@ function finSrcRail() {
   const c = finSrcCols(r), sync = r.sync, feed = Object.entries(r.feed || {}), cards = Object.entries(r.cards || {});
   const access = r.access || [], admin = finCaps().may('finance.admin');
   const conn = r.kind === 'connection' ? r.id : sync?.connection_id || '', live = !!conn && sync?.status !== 'disconnected';
+  const books = r.kind === 'connection' && !!FIN_BOOKS[r.provider];
+  const stripe = r.provider === 'stripe' && (r.kind === 'connection' || r.kind === 'stripe');
   const money = finSrcMoney(r), mine = r.kind === 'connection' ? state.groups.flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id) : [];
   finRail(`<div class="fin-rail-title"><h2>${esc(r.name || r.provider || '')}</h2>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</div>
     ${r.provider ? finKv('Provider', esc(r.provider)) : ''}${r.last4 ? finKv('Account', '••' + esc(r.last4)) : ''}
     ${r.kind !== 'connection' && 'balance' in r ? finKv('Balance', finUsd(r.balance) + (r.balance_as_of ? ` <span class="muted">${esc(finDayLabel(r.balance_as_of))}</span>` : '')) : ''}
+    ${r.kind !== 'connection' && r.available_balance != null && r.available_balance !== r.balance ? finKv('Available', finUsd(r.available_balance)) : ''}
     ${money ? finKv('Books as', finMapCell(r, admin)) : ''}
     ${mine.length ? `<h3 class="fin-h">Accounts</h3>${mine.map(x => finKv((x.name || '') + (x.last4 ? ' ••' + x.last4 : ''), finMapCell(x, admin))).join('')}` : ''}
-    ${sync?.last_ok_at ? finKv('Last sync', esc(ago(sync.last_ok_at))) : ''}${sync?.last_error ? finKv('Error', esc(sync.last_error), 'fin-bad') : ''}
+    ${sync?.last_ok_at ? finKv('Last sync', esc(ago(sync.last_ok_at))) : ''}${sync?.last_error ? finKv(sync.status === 'reconnect' ? 'Reason' : 'Error', esc(FIN_RECONNECT[sync.last_error] || sync.last_error), 'fin-bad') : ''}
+    ${books ? finBooksRail(r) : ''}
     ${feed.length ? `<h3 class="fin-h">Feed</h3>${feed.map(([k, v]) => finKv(k, String(v))).join('')}` : ''}
     ${cards.length ? `<h3 class="fin-h">Cards</h3>${cards.map(([k, v]) => finKv(k, String(v))).join('')}` : ''}
-    ${r.payments ? `<h3 class="fin-h">Payments</h3>${finKv('Approval queue', r.payments.eligible ? 'Eligible' : 'Not eligible')}${finKv('Payments', r.payments.enabled ? 'On' : 'Off')}${r.payments.why_not ? finKv('Note', esc(r.payments.why_not)) : ''}` : ''}
+    ${r.payments && r.provider !== 'stripe' ? finMercuryPayments(r.payments) : ''}
+    ${stripe && admin ? `<h3 class="fin-h">Webhook</h3><div data-fin-hook>${finKv('Status', '<span class="muted">…</span>')}</div>` : ''}
     ${access.length ? `<h3 class="fin-h">Access</h3>${access.map(a => finKv(finWho(a.who), esc(a.via === 'default' ? 'Default' : a.via || ''))).join('')}` : ''}
-    ${admin && live ? `<div class="fin-foot">${r.kind === 'connection' ? '<button type="button" class="ghost" data-fin-disconnect>Disconnect</button>' : ''}<button type="button" class="primary" data-fin-sync>Sync now</button></div>` : ''}`);
+    ${admin && (live || books) ? `<div class="fin-foot">${r.kind === 'connection' && live ? '<button type="button" class="ghost" data-fin-disconnect>Disconnect</button>' : ''}${
+      books && sync?.status === 'reconnect' ? '<button type="button" class="primary" data-fin-reconnect>Reconnect</button>' : live ? '<button type="button" class="primary" data-fin-sync>Sync now</button>' : ''}</div>` : ''}`);
   const rail = $('#fin-rail'); if (!rail) return;
   rail.querySelectorAll('select[data-fin-map]').forEach(sel => { sel.onchange = () => void finSrcMap(sel); });
+  rail.querySelector('[data-fin-reconnect]')?.addEventListener('click', () => finConnect(r.provider));
+  rail.querySelector('[data-fin-mirror]')?.addEventListener('click', ev => {
+    const on = ev.currentTarget.dataset.finMirror === 'start', name = FIN_BOOKS[r.provider];
+    finDialog(on ? `Use ${name} as the books` : `Stop using ${name}`, '', on ? 'Use as books' : 'Stop', async () => {
+      const res = await finAct(on ? 'mirror_start' : 'mirror_stop', on ? {connection_id: r.id} : {});
+      if (res.status === 'committed') toast(on ? 'Mirroring' : 'Stopped');
+      void finSrcLoad();
+    });
+  });
+  if (stripe && admin) void finStripeHook();
   rail.querySelector('[data-fin-sync]')?.addEventListener('click', async ev => {
     const btn = ev.currentTarget; btn.disabled = true;
     try { const res = await finAct('connection_sync', {connection_id: conn}); if (res.status === 'committed') toast('Syncing'); void finSrcLoad(); }
@@ -116,8 +136,9 @@ function finSrcRail() {
   });
   rail.querySelector('[data-fin-disconnect]')?.addEventListener('click', () => {
     finDialog('Disconnect ' + (r.name || r.provider || ''), '', 'Disconnect', async () => {
-      const res = await finAct('connection_disconnect', {connection_id: conn});
-      if (res.status === 'committed') toast('Disconnected');
+      // QuickBooks and Xero go through HQ's broker (it drops its grant first); the rest are a Finance action.
+      if (books) { await post(`/v2/finance/books/${encodeURIComponent(conn)}/disconnect`, {}); toast('Disconnected'); }
+      else { const res = await finAct('connection_disconnect', {connection_id: conn}); if (res.status === 'committed') toast('Disconnected'); }
       void finSrcLoad();
     });
   });
@@ -173,6 +194,109 @@ function finConnectMercury() {
     if (FIN?.src) void finSrcLoad();
     if (FIN?.bs) void finBsLoad();
   });
+}
+
+// "+ Source": a bank or card account (Mercury), Stripe, or the company's books (QuickBooks, Xero). Finance admins only.
+function finSourceMenuHtml(caps) {
+  if (!caps.may('finance.admin')) return '';
+  const items = [['mercury', 'Mercury'], ['stripe', 'Stripe'], ['quickbooks', 'QuickBooks'], ['xero', 'Xero']];
+  return `<span class="fin-pop-at"><button type="button" class="primary" data-fin-connect aria-haspopup="menu" aria-expanded="false" aria-controls="fin-connect">+ Source</button>
+    <div class="fin-pop fin-menu" id="fin-connect" role="menu" aria-label="Connect" hidden>${items.map(([v, l]) =>
+      `<button type="button" role="menuitem" data-fin-connect-item="${v}">${l}</button>`).join('')}</div></span>`;
+}
+function finConnect(v) {
+  if (v === 'mercury') finConnectMercury();
+  else if (v === 'stripe') finConnectStripe();
+  else if (FIN_BOOKS[v]) finConnectBooks(v);
+}
+// Connect Stripe (revenue): a restricted key into the credential vault, then the connection from it, as with Mercury.
+function finConnectStripe() {
+  let cred = null, stored = '';
+  finDialog('Connect Stripe', `<label>Restricted key<input name="token" type="password" required autocomplete="off" spellcheck="false" placeholder="rk_live_…"></label>`, 'Connect', async form => {
+    const token = form.elements.token.value.trim();
+    if (!token) throw new Error('Paste the key');
+    if (!cred) {
+      cred = await post('/v2/credentials', {name: 'Stripe', kind: 'token', secret: token, username: '', env: '', source: 'finance'});
+      if (!cred?.id) { cred = null; throw new Error('The key was not stored'); }
+      stored = token;
+    } else if (token !== stored) {
+      cred = await post('/v2/credentials/' + encodeURIComponent(cred.id), {name: 'Stripe', kind: 'token', secret: token, username: '', env: '',
+        source: 'finance', ...(cred.revision ? {expected_revision: cred.revision} : {})}) || cred;
+      stored = token;
+    }
+    const r = await post('/v2/finance/connections', {provider: 'stripe', credential_id: cred.id, name: 'Stripe'});
+    if (r?.status === 'needs_approval') toast(r.approver ? `Sent to ${finWho(r.approver)} for approval` : 'Sent for approval');
+    else if (r?.status !== 'committed') throw new Error(r?.reason || 'Not connected');
+    else toast('Stripe connected');
+    form.elements.token.value = '';
+    if (FIN?.src) void finSrcLoad();
+    if (FIN?.bs) void finBsLoad();
+  });
+}
+// QuickBooks or Xero: POST /api/v2/finance/books/connect {provider} -> {url, expires_in}, HQ's consent page. The server
+// takes the browser's return (GET /api/v2/finance/books/return/{flow}) and sends it to #/finance?books=connected or
+// ?books=error&reason=<code> (finBooksReturn in finance.js).
+function finConnectBooks(provider) {
+  const name = FIN_BOOKS[provider];
+  finDialog('Connect ' + name, '', 'Continue', async () => {
+    const r = await post('/v2/finance/books/connect', {provider});
+    if (!String(r?.url || '').startsWith('https://')) throw new Error(name + ' did not answer');
+    location.assign(r.url);
+    return false;
+  });
+}
+// Why a books connection needs a person (backend/finance/books_link.py): its codes, in words.
+const FIN_RECONNECT = {reconnect_required: 'Sign-in expired', vault_pending: 'Saving sign-in', vault_write_failed: 'Sign-in not saved'};
+const FIN_MIRROR = {on: 'On', backfill: 'Backfilling', backfilling: 'Backfilling', off: 'Off', stopped: 'Off'};
+const FIN_OUTBOX = [['pending', 'Waiting'], ['sent', 'Sent'], ['failed', 'Failed'], ['withheld', 'Withheld']];
+// A books connection: whether it is the books (mirror), what waits to be written to it, and the owner's switch.
+function finBooksRail(r) {
+  const state = typeof r.mirror === 'string' ? r.mirror : r.mirror?.state || '';
+  const out = r.outbox || {}, rows = FIN_OUTBOX.filter(([k]) => out[k]);
+  const live = r.sync?.status === 'active' || r.sync?.status === 'new';
+  const btn = finCaps().may('finance.book') && live
+    ? `<div class="fin-foot"><button type="button" class="ghost" data-fin-mirror="${state === 'on' || state.startsWith('backfill') ? 'stop">Stop mirror' : 'start">Use as books'}</button></div>` : '';
+  return (state ? finKv('Mirror', esc(FIN_MIRROR[state] || state)) : '') + (r.mirror?.last_at ? finKv('Last change', esc(ago(r.mirror.last_at))) : '')
+    + (rows.length ? `<h3 class="fin-h">Outbox</h3>${rows.map(([k, l]) => finKv(l, Number(out[k]).toLocaleString('en-US'), k === 'failed' ? 'fin-bad' : '')).join('')}` : '') + btn;
+}
+// Mercury's payments: money out waits in Mercury's own approval queue (spec §9), unless the owner turned on direct send.
+function finMercuryPayments(p) {
+  return `<h3 class="fin-h">Payments</h3>${finKv('Payments', p.enabled ? 'On' : 'Off')}${finKv('Approve in', p.eligible ? 'Mercury' : '<span class="fin-bad">No approver</span>')}${
+    finKv('Direct send', p.direct_send ? 'On' : 'Off')}${p.why_not ? finKv('Note', esc(p.why_not)) : ''}`;
+}
+// Stripe's webhook is a Finance trigger (preset stripe_finance, backend/trigger_presets.py): Settings hides it, so it is
+// made here. The address and the signing secret show once.
+const finIsFinTrigger = t => t.consumer === 'finance' || ['mercury', 'stripe_finance', 'intuit', 'xero'].includes(t.preset);
+async function finStripeHook() {
+  const box = $('#fin-rail [data-fin-hook]'); if (!box) return;
+  let list = [];
+  try { list = (await get('/v2/triggers', {fresh: true})).triggers || []; } catch { box.innerHTML = ''; return; }
+  if (!box.isConnected) return;
+  const t = list.find(x => x.preset === 'stripe_finance');
+  box.innerHTML = t ? finKv('Last call', t.last_received ? esc(ago(t.last_received)) : '<span class="muted">Never</span>')
+      + (t.refused_24h ? finKv('Refused', String(t.refused_24h), 'fin-bad') : '')
+    : '<div class="fin-foot"><button type="button" class="ghost" data-fin-hook-add>Add webhook</button></div>';
+  box.querySelector('[data-fin-hook-add]')?.addEventListener('click', finStripeHookAdd);
+}
+function finStripeHookAdd() {
+  let made = null;
+  finDialog('Stripe webhook', `<label>Signing secret<input name="secret" maxlength="300" autocomplete="off" spellcheck="false" placeholder="Leave empty to make one"></label>`, 'Add', async form => {
+    if (!made) made = (await post('/v2/triggers', {name: 'Stripe (Finance)'})).trigger;
+    const secret = form.elements.secret.value.trim();
+    const signed = (await post(`/v2/triggers/${encodeURIComponent(made.id)}/signing`, {preset: 'stripe_finance', ...(secret ? {secret} : {})})).trigger;
+    const shown = [made.replayed ? null : ['Address', made.url], secret || signed.replayed ? null : ['Signing secret', signed.signing_secret]].filter(x => x?.[1]);
+    form.elements.secret.value = '';
+    setTimeout(() => finShowOnce('Stripe webhook', shown), 0);
+    if (FIN?.src) void finStripeHook();
+  });
+}
+// Values a person copies now and never sees again (an address with its secret, a signing secret).
+function finShowOnce(title, pairs) {
+  if (!pairs.length) return;
+  const dlg = finDialog(title, pairs.map(([k, v], i) => `<div class="trigger-secret" role="status"><p><strong>${esc(k)}</strong> <span class="muted">Shown once</span></p>
+    <div class="row"><code class="trigger-url">${esc(v)}</code><button class="ghost" type="button" data-fin-copy="${i}">Copy</button></div></div>`).join(''), 'Done', () => {});
+  dlg.querySelector('.fin-foot [data-close]')?.remove();
+  dlg.querySelectorAll('[data-fin-copy]').forEach(b => { b.onclick = async () => { await copyText(pairs[Number(b.dataset.finCopy)][1]); toast('Copied'); }; });
 }
 
 // ----------------------------------------------------------------- access

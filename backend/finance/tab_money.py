@@ -1,4 +1,4 @@
-"""The Finance tab's money-out and control reads (spec §9, §6, §12): payments, recipients, reconciliations, statements
+"""The Finance tab's money-out and control reads (spec §9, §6, §12): payments, transfers, recipients, reconciliations, statements
 and finance rules. Each cuts to the viewer: a payment shows to whoever sees the line it posts to (a private line
 needs full detail), and only its status to whoever made it otherwise; a reconciliation or statement with its money
 account; recipients to whoever may pay; rules to whoever may write them.
@@ -7,6 +7,7 @@ import sqlite3
 from typing import Any
 
 from .context import load
+from .core import gates as G
 from .core import rights as R
 from .core.errors import denied
 from .store import banking as SK
@@ -91,6 +92,30 @@ def payments(c: sqlite3.Connection, viewer: str, *, status: str | None = None, c
     return {"payments": out, "next_cursor": nxt}
 
 
+def transfers(c: sqlite3.Connection, viewer: str, *, cursor: str | None = None, limit: int = 50,
+              at: str | None = None) -> Row:
+    """Internal transfers (payment_create method "internal") between money accounts the viewer sees both of, newest
+    first, with their status. The provider's error shows to whoever made the transfer or a finance admin."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    money = {str(m["id"]): m for m in SK.money_accounts(c, ctx.book.id) if sees_money_account(ctx, view, m)}
+    admin = R.is_admin(ctx.org, viewer, ctx.rights(viewer))
+    most = page_size(limit)
+    rows = SK.transfers(c, list(money), before=cursor or "", most=most + 1)
+    nxt = str(rows[most - 1]["created_at"]) if len(rows) > most else None
+
+    def side(mid: str) -> Row:
+        m = money[mid]
+        return {"id": mid, "name": str(m["name"]), "last4": m["last4"]}
+    return {"transfers": [{"id": str(r["id"]), "status": str(r["status"]), "amount": int(r["amount"]),
+                           "currency": str(r["currency"]), "memo": str(r["memo"]),
+                           "from": side(str(r["from_money_account_id"])), "to": side(str(r["to_money_account_id"])),
+                           "created_by": str(r["created_by"]), "created_at": str(r["created_at"]),
+                           "settled_at": r["settled_at"],
+                           "last_error": r["last_error"] if admin or str(r["created_by"]) == viewer else None}
+                          for r in rows[:most]], "next_cursor": nxt}
+
+
 def recipients(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     """Current recipients (last 4 only) for whoever may pay (finance.pay) or administer Finance."""
     ctx = load(c, at)
@@ -144,12 +169,16 @@ def rules(c: sqlite3.Connection, viewer: str, *, external_rule_id: str | None = 
         raise denied("finance rules are for teammates who may write them")
     rows = SK.rules_for_external(c, external_rule_id) if external_rule_id else \
         [*SK.rules(c, "gate", active_only=False), *SK.rules(c, "posting", active_only=False)]
-    return {"rules": [{"id": str(r["id"]), "kind": str(r["kind"]), "priority": int(r["priority"]),
+    floors: list[Row] = [] if external_rule_id else [
+        {"id": fid, "kind": "floor", "priority": 0, "name": name, "words": words, "when": {"where": where},
+         "outcome": {}, "examples": [], "external_rule_id": None, "owner": "", "active": True, "created_at": "",
+         "fixed": True, "runs": []} for fid, name, words, where in G.FLOORS]
+    return {"rules": floors + [{"id": str(r["id"]), "kind": str(r["kind"]), "priority": int(r["priority"]),
                        "name": str(r["name"]), "words": str(r["words"]),
                        "when": SK.loads(r["when_json"]), "outcome": SK.loads(r["outcome_json"]),
                        "examples": SK.loads_list(r["examples_json"]),
                        "external_rule_id": r["external_rule_id"], "owner": str(r["owner"]), "active": bool(r["active"]),
-                       "created_at": str(r["created_at"]),
+                       "created_at": str(r["created_at"]), "fixed": str(r["id"]) in G.FIXED,
                        "runs": [{"action_id": x["action_id"], "outcome": SK.loads(x["outcome_json"]).get("outcome"),
                                  "at": str(x["created_at"])} for x in SK.rule_runs(c, str(r["id"]), 5)]}
                       for r in rows]}

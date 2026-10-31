@@ -46,15 +46,19 @@ machine; a shared machine's facts are its member bots' together:
     want     a bot of the machine is active and in cloud mode, and has a turn out, claimable queued work (the claim's
              own rule, execution.bot_claimable, on the machine's last report; a reason only a stopped machine leaves
              stale wakes it too), a watcher due (its last run plus its interval), or it waits to move here; or the
-             machine is Always on. On the shared machine any member's want wakes it, the newest work first.
+             machine is Always on. On the shared machine any member's want wakes it, the newest work first. Failing
+             those, a stopped machine whose computer reports an older release than this server's is wanted to update
+             (`update:<release>`, `runner_behind`: never for a blank, dev or unparsed release, nor pinned or blocked).
     wake     a stopped machine with a want is started (created on first use); the size set since applies here
     keep     a running machine gets a heartbeat every HEARTBEAT seconds; HQ's ttl stops it if they stop coming
     idle     with no turn out on it, and no attempt or watcher activity on it for the size's `idle_stop_s` since the
              later of its start, its last activity and its want (a job queued for it, a watcher due: work its runner
              has not taken yet), it is stopped, unless Always on: the shared one only once every member is idle. A
-             watcher running often keeps it on by itself. With no active bot left on it, it stops.
+             watcher running often keeps it on by itself, and so does a runner still updating (`runner_updating`).
+             With no active bot left on it, it stops.
     guard    a machine woken for one want that saw no activity is not woken again for that same want: a job its
-             runner never takes would otherwise start (4 cents) and idle-stop it forever. New work wakes it.
+             runner never takes would otherwise start (4 cents) and idle-stop it forever. New work wakes it. An update
+             wake is held the same way, for its release, and flags nothing: no bot's work waits on it.
     enroll   a machine being made has until its newest code's expiry (ENROLL_MINUTES, plus ENROLL_GRACE) to enroll; it
              is not idle-stopped meanwhile. One that has not by then never can (a resume gets no new code), and it has
              nothing worth keeping: it is deleted, and the next want makes a new one with a fresh code. After
@@ -87,7 +91,7 @@ import httpx
 from clients import gateway as G
 from clients.gateway import user_agent
 
-from . import cloud_access, outbound_tls
+from . import cloud_access, outbound_tls, releases
 from .store import H, Problem, digest
 
 log = logging.getLogger(__name__)
@@ -127,6 +131,8 @@ ENROLL_TRIES = 3                # machines made in a row that never enrolled bef
 STOP_HOLD = 120                 # a stop's reservation lapses this late: a server that died mid-stop strands no work
 DEAD = ("deleted", "failed")     # HQ's word for a machine that is gone or never got a computer: a want makes a new one
 GOING = ("stopping", "stopped")  # HQ's word for a machine that is going down, or down: its runner takes no new turn
+UPDATE_WANT = "update:"          # a stopped machine's want to update, keyed "update:" and this server's release
+UPDATE_STALE = 15 * 60           # an update its runner reports with no progress this long has failed (runner-rs follow.rs)
 # A claim refusal that only says the machine's last report is stale: a stopped machine is woken for it, and its
 # runner reports afresh (the guard keeps a refusal that stays from waking it again).
 STALE = ("readiness_unknown", "not_ready", "isolation_unknown", "lane_held", "maintaining")
@@ -523,7 +529,8 @@ def facts(c, settings, current, at):
     bot of it should be on it at all, whether a turn is out on it, the last attempt or watcher activity on it (epoch
     seconds), its first want (a stable key, or None): the newest claimable job of any of its bots, else a bot
     waiting to move here, else a watcher due, and `want_at`, the latest moment any of its bots' wants arose (epoch
-    seconds; 0 for none, or a move)."""
+    seconds; 0 for none, or a move). `update`: a stopped machine's want to update to this server's release
+    (`runner_behind`), or None; `updating`: its runner is part-way through an update (`runner_updating`)."""
     key, runner_id = current["bot"], current["runner_id"]
     bots = hosted(c, key)
     # Turns and activity on its computer: its bots', and a bot's that just left with a turn still out there.
@@ -539,7 +546,7 @@ def facts(c, settings, current, at):
                         (bot, runner_id)).fetchone()[0]
         activity = max([activity] + [t for t in (epoch(latest), epoch(ran)) if t])
     out = {"active": False, "turns": turns, "activity": activity, "want": None, "want_at": 0,
-           "frozen": cloud_access.frozen(c), "retry_now": False}
+           "frozen": cloud_access.frozen(c), "retry_now": False, "update": None, "updating": False}
     if current["problem"] == "out_of_credit" and not out["frozen"]:
         said = cloud_access.state(c) or {}
         out["retry_now"] = bool(said.get("checked") and current["problem_at"] and said["checked"] > current["problem_at"])
@@ -551,7 +558,54 @@ def facts(c, settings, current, at):
         if want and (best is None or rank > best[0]):
             best = (rank, want)
     out["want"] = best[1] if best else None
+    if out["active"] and runner_id and current["state"] == "stopped" and current["machine_id"] \
+            and runner_behind(c, runner_id):
+        out["update"] = UPDATE_WANT + releases.version()
+    out["updating"] = bool(runner_id) and runner_updating(c, runner_id, at)
     return out
+
+
+def runner_behind(c, runner_id):
+    """Whether computer `runner_id` reports a release older than this server's and will follow the server's: not one its
+    owner pinned, or one blocked from updating (the runner says so), nor one whose update to this same release failed
+    (the runner waits hours before it tries that again: a wake now would be spent on nothing). A blank or unparsed
+    release, and a development server, are never behind: nothing is woken for what cannot be compared."""
+    found = c.execute("SELECT release,update_state,update_target FROM runner_versions WHERE runner_id=?",
+                      (runner_id,)).fetchone()
+    have, want = releases.parse(found["release"]) if found else None, releases.parse(releases.version())
+    if not (have and want and have < want) or found["update_state"] in ("pinned", "blocked"):
+        return False
+    return not (found["update_state"] in ("failed", "rolled_back") and releases.parse(found["update_target"]) == want)
+
+
+def covers(woke_for, key):
+    """Whether a machine woken for `woke_for` was woken for `key`: an update wake names the work want it stood in for
+    ("update:0.5.21 job:..."), so neither is woken for again while nothing runs."""
+    return bool(key) and key in (woke_for or "").split(" ")
+
+
+def wake_for(current, found):
+    """(key, stuck) for a stopped machine: what to wake it for, or None, and whether its bots' work waits on a wake
+    already spent. Always on first, then its work, then an update. Work woken for once with nothing run is not woken
+    for again; an update can still stand in for it (its runner may be too old to take the work), once per release."""
+    if current["always_on"]:
+        return "always_on", False
+    fresh = (found["activity"] or 0) > (current["woke_at"] or 0)
+    spent = lambda k: covers(current["wake_key"], k) and current["state"] not in DEAD and not fresh   # noqa: E731
+    want, update = found["want"], found.get("update")
+    if want and not spent(want):
+        return want, False
+    if update and not spent(update):
+        return (update + " " + want) if want else update, False
+    return None, bool(want)
+
+
+def runner_updating(c, runner_id, at):
+    """Whether computer `runner_id` reports an update under way that is still fresh. One that has gone quiet for
+    UPDATE_STALE is a dead runner's last word, and holds nothing up."""
+    found = c.execute("SELECT reported FROM runner_versions WHERE runner_id=? AND update_state='updating'",
+                      (runner_id,)).fetchone()
+    return bool(found) and at - (epoch(found["reported"]) or 0) < UPDATE_STALE
 
 
 def bot_want(c, settings, bot, runner_id, at):
@@ -605,18 +659,18 @@ def decide(current, found, at, idle_s):
         return "delete", None                               # its code expired unused: it can never enroll
     if on:
         # Work queued for it that its runner has not taken yet is activity: stopping now would only start it again.
+        # So is an update under way: stopping it would cut the update short, and the wake for it would be spent.
         last = max(found["activity"] or 0, current["active_at"] or 0, found["want_at"] or 0)
-        if not found["turns"] and not current["always_on"] and not booting and at - last >= idle_s:
+        if not found["turns"] and not found["updating"] and not current["always_on"] and not booting \
+                and at - last >= idle_s:
             return "stop", None
         if at - (current["heartbeat_at"] or 0) >= HEARTBEAT:
             return "heartbeat", None
         return None, None
-    key = "always_on" if current["always_on"] else found["want"]
+    key, stuck = wake_for(current, found)
     if not key:
-        return None, None
-    if key not in ("always_on",) and key == current["wake_key"] and current["state"] not in DEAD and not (
-            (found["activity"] or 0) > (current["woke_at"] or 0)):
-        return None, "stuck"                                # woken for this once already, and nothing ran
+        # Woken for this once already, and nothing ran. A spent update flags nothing: no bot's work waits on it.
+        return None, ("stuck" if stuck else None)
     # (A dead machine never ran it: the next is made, and enroll_fails caps how many.)
     if not current["machine_id"] or current["state"] in DEAD:
         if current["enroll_fails"] >= ENROLL_TRIES:
@@ -804,7 +858,8 @@ class Manager:
         if problem is not None and problem != current["problem"] and not action:
             with self.store.transaction() as c:
                 save(c, key, problem=problem, problem_at=H.now())
-        elif problem is None and not action and current["problem"] == "stuck" and found["want"] != current["wake_key"]:
+        elif problem is None and not action and current["problem"] == "stuck" \
+                and not covers(current["wake_key"], found["want"]):
             with self.store.transaction() as c:
                 save(c, key, problem="", problem_at=None)
         if action:
@@ -859,7 +914,7 @@ class Manager:
         if action == "create" and machine["state"] == "failed":
             fields.update(enroll_by=None, enroll_fails=current["enroll_fails"] + 1)   # as when HQ's list says so
         elif action in ("create", "start"):
-            woke_for = "always_on" if current["always_on"] else found["want"]
+            woke_for = wake_for(current, found)[0]
             fields.update(active_at=at, heartbeat_at=at, wake_key=woke_for, woke_at=at)
         with self.store.transaction() as c:
             save(c, key, **fields, failures=0, next_try=None, problem="", problem_at=None, stop_until=None)

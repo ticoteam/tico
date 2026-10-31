@@ -174,7 +174,7 @@ class Client:
                 raise failure
             time.sleep(min(2 ** attempt, 5) + random.random() * 0.2)
 
-    def get(self, path, **query):
+    def get(self, path, /, **query):  # positional: a query may carry its own "path" (file-approvals does)
         filtered = {k: v for k, v in query.items() if v is not None}
         suffix = "?" + urllib.parse.urlencode(filtered) if filtered else ""
         return self.request("GET", "/api/v2/" + path + suffix)

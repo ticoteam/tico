@@ -1,5 +1,5 @@
 /* Ask (ui/app/ask-panel.js): on a computer "Ask Tico" is the sidebar's bottom row, above the account, and opens the
-   person's chat bot in a panel beside the rail, rising from the bottom left; on a phone the Liquid Dot sits in the
+   person's chat bot in a panel straight above that row, over the sidebar; on a phone the Liquid Dot sits in the
    centre of the tab bar and opens it as a sheet over the page, above the tab bar. Its mark is the Liquid Dot
    (liquid-dot.css). While the panel is open the dot sits beside its name (ldotFly carries it there and back) and a
    close mark holds its place in the row (or the tab). Nothing floats over the page while it is closed. */
@@ -35,10 +35,11 @@
 @keyframes ask-out{from{opacity:0;transform:translateX(-8px) scale(.97)}to{opacity:1;transform:none}}
 @keyframes ask-rise{from{opacity:0;transform:translateY(8px) scale(.97)}to{opacity:1;transform:none}}
 
-/* Beside the rail, its foot level with the account row's, so the Ask row it came from stays in view. */
-.ask-panel{position:fixed;left:calc(var(--rail-left) + 12px);bottom:12px;z-index:41;   /* over a "things need you" sheet (settings.css) */
-  width:min(400px,calc(100vw - var(--rail-left) - 24px));
-  height:min(560px,calc(100vh - 24px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
+/* Straight above the Ask row, over the sidebar rather than the page, its foot just over the row (askToggle measures
+   --ask-foot), so the row and its close mark stay in view. */
+.ask-panel{position:fixed;left:8px;bottom:var(--ask-foot,64px);z-index:41;   /* over a "things need you" sheet (settings.css) */
+  width:min(400px,calc(100vw - 16px));transform-origin:bottom left;
+  height:min(560px,calc(100vh - var(--ask-foot,64px) - 12px));display:flex;flex-direction:column;background:var(--surface);border:1px solid var(--line);
   border-radius:12px;box-shadow:0 18px 50px rgba(0,0,0,.4);overflow:hidden;font-size:var(--t-base);line-height:var(--lh)}
 /* Closed (askSync): the panel keeps its box, never display:none (shown again from that, it lays out cold), but draws
    none of it, takes no press (what is under it is pressable at once) and, inert, no focus. */

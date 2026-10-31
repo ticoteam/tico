@@ -14,6 +14,9 @@ from .errors import invalid
 OUTCOMES = ("allow", "deny", "needs_approval", "limit")
 RANK = {"allow": 0, "limit": 1, "needs_approval": 2, "deny": 3}
 WHO = ("manager", "finance_admin", "owner")          # lowest to highest
+# Who decides, lowest to highest. A parent budget's owner (budget_owner) is not a rule's choice, but a parent raise
+# asks them, and that outranks the manager a missing right sends to (§4.4).
+RANK_WHO = ("manager", "budget_owner", "finance_admin", "owner")
 OPS = ("gt", "gte", "lt", "lte", "not", "matches")
 PERIODS = ("action", "day", "week", "month")
 SUBJECTS = ("company", "actor", "recipient")
@@ -279,8 +282,8 @@ def strictest(hits: Sequence[Hit], counts: Sequence[Hit] = ()) -> Verdict:
 
 
 def higher(a: str, b: str) -> str:
-    """The higher of two approvers (owner > finance_admin > manager)."""
-    return max(a, b, key=lambda w: WHO.index(w) if w in WHO else -1)
+    """The higher of two approvers (owner > finance_admin > budget_owner > manager)."""
+    return max(a, b, key=lambda w: RANK_WHO.index(w) if w in RANK_WHO else -1)
 
 
 # ------------------------------------------------------------------------------------------------ examples
@@ -329,8 +332,9 @@ def words_for(when: Mapping[str, object], outcome: Mapping[str, object]) -> str:
 
 # ------------------------------------------------------------------------------------------------ defaults
 # §6.4 rules 1, 2, 3 and 5, seeded at setup (every start, so existing installs get new ones once) and editable like any
-# rule; a seeded rule a person changed or turned off stays as they left it. Rule 4 is the cutoff freeze in jobs.drain;
-# rule 6 is kinds.default_gate. (id, name, words, when, outcome, examples)
+# rule; a seeded rule a person changed or turned off stays as they left it. Rule 6 is seeded too, and fixed: nobody can
+# edit or turn it off (FIXED), and kinds.default_gate enforces it whatever the row says. (id, name, words, when, outcome,
+# examples)
 DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[dict[str, object]]], ...] = (
     ("rule:new-recipient", "New recipient", "Paying a recipient (or changed payment details) for the first time asks "
      "a finance admin.", {"kind": "payment_create", "recipient.known": False},
@@ -370,4 +374,23 @@ DEFAULTS: tuple[tuple[str, str, str, dict[str, object], dict[str, object], list[
      "admin.", {"kind": "account_create", "actor.kind": "bot"}, {"outcome": "needs_approval", "who": "finance_admin"},
      [{"input": {"kind": "account_create", "actor.kind": "bot"}, "expect": "needs_approval"},
       {"input": {"kind": "account_create", "actor.kind": "human"}, "expect": "allow"}]),
+    ("rule:close-reopen-owner", "Closing or reopening a period", "Closing or reopening a period asks the owner, unless "
+     "the owner does it.", {"kind": ["close_period", "reopen_period"], "actor.kind": {"not": "system"},
+                            "actor.owner": False},
+     {"outcome": "needs_approval", "who": "owner"},
+     [{"input": {"kind": "close_period", "actor.kind": "human", "actor.owner": False}, "expect": "needs_approval"},
+      {"input": {"kind": "reopen_period", "actor.kind": "bot", "actor.owner": False}, "expect": "needs_approval"},
+      {"input": {"kind": "close_period", "actor.kind": "human", "actor.owner": True}, "expect": "allow"},
+      {"input": {"kind": "close_period", "actor.kind": "system", "actor.owner": False}, "expect": "allow"}]),
 )
+
+# §6.4 rule 4 (budget at its limit with decline denies new holds and freezes the budget's cards) is an event reaction,
+# not an action gate, and fin_rules holds only gate and posting rows. Finance shows it read-only beside the rules; the
+# code enforces it: budgeting denies holds at a decline budget, and jobs.drain freezes its cards on the cutoff event.
+# (id, name, words, where)
+FLOORS: tuple[tuple[str, str, str, str], ...] = (
+    ("floor:budget-cutoff-freeze", "Budget at limit", "A budget at its limit with decline denies new holds and freezes "
+     "its cards.", "finance.budget.cutoff with at limit decline"),
+)
+# Rules nobody can change or turn off: the code keeps them (kinds.default_gate). Editing one is refused.
+FIXED = ("rule:close-reopen-owner",)

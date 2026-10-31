@@ -208,6 +208,13 @@ def vendor_key(c: sqlite3.Connection, book_id: str, key: str) -> str:
     return str(row[0]) if row is not None else key.strip()
 
 
+def renewals_due(c: sqlite3.Connection, book_id: str) -> list[Any]:
+    """Active vendors with a renewal date: the watch raises each one's renewal stages."""
+    return c.execute("SELECT id, renewal_on FROM fin_contacts WHERE book_id=? AND active=1 "
+                     "AND kind IN ('vendor','both') AND renewal_on IS NOT NULL AND renewal_on<>''",
+                     (book_id,)).fetchall()
+
+
 def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
     """The vendor a budget or a charge means: a contact's id stays; a name aliased to a contact (even one no longer
     active: its history still maps) is that contact's id; any other name is its name key."""
@@ -269,8 +276,10 @@ def settlement_count(c: sqlite3.Connection, kind: str, doc_id: str) -> int:
                          ).fetchone()[0])
 
 
-def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any]:
-    return c.execute("SELECT * FROM fin_settlements WHERE from_kind=? AND from_id=? AND voided_at IS NULL "
+def settlements_from(c: sqlite3.Connection, kind: str, from_id: str, *, voided: bool = False) -> list[Any]:
+    """What a feed row or payment settled. `voided` keeps the ones since reversed: a privacy link must outlive them."""
+    live = "" if voided else " AND voided_at IS NULL"
+    return c.execute(f"SELECT * FROM fin_settlements WHERE from_kind=? AND from_id=?{live} "
                      "ORDER BY created_at", (kind, from_id)).fetchall()
 
 
@@ -287,9 +296,26 @@ def expected(c: sqlite3.Connection, kind: str, money_account_id: str, amount: in
                      (kind, money_account_id, amount, amount, start, end, *ids, most)).fetchall()
 
 
-def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
-    return c.execute("SELECT * FROM fin_settlements WHERE entry_id=? AND voided_at IS NULL ORDER BY created_at",
+def settlements_by_entry(c: sqlite3.Connection, entry_id: str, *, voided: bool = False) -> list[Any]:
+    live = "" if voided else " AND voided_at IS NULL"
+    return c.execute(f"SELECT * FROM fin_settlements WHERE entry_id=?{live} ORDER BY created_at",
                      (entry_id,)).fetchall()
+
+
+def documents_paid_by(c: sqlite3.Connection, entry_ids: Sequence[str], *, voided: bool = False
+                      ) -> dict[str, list[Any]]:
+    """The live settlements each entry made, with the document's kind, id and number: what a "Pays bill" entry pays.
+    With `voided`, the voided ones too (an entry that once paid a document still names it in its memo)."""
+    if not entry_ids:
+        return {}
+    out: dict[str, list[Any]] = {}
+    live = "" if voided else " AND s.voided_at IS NULL"
+    for r in c.execute(f"SELECT s.entry_id, s.to_kind, s.to_id, s.voided_at, COALESCE(b.number, i.number, '') AS number "
+                       f"FROM fin_settlements s LEFT JOIN fin_bills b ON s.to_kind='bill' AND b.id=s.to_id "
+                       f"LEFT JOIN fin_invoices i ON s.to_kind='invoice' AND i.id=s.to_id WHERE s.entry_id IN "
+                       f"({_marks(entry_ids)}){live} ORDER BY s.created_at, s.id", list(entry_ids)):
+        out.setdefault(str(r["entry_id"]), []).append(r)
+    return out
 
 
 def settled(c: sqlite3.Connection, kind: str, doc_id: str) -> int:

@@ -5,8 +5,10 @@ import base64
 import json
 import sqlite3
 from collections.abc import Callable, Mapping, Sequence
+from datetime import date
 from typing import Any, cast
 
+from . import closing as CL
 from .context import Ctx, load
 from .core import dates
 from .core import rights as R
@@ -18,6 +20,7 @@ from .store import ap as SAP
 from .store import banking as SK
 from .store import ledger as SL
 from .store import mirror as SX
+from .store import raw_totals as SR
 
 Row = dict[str, object]
 MAX_PAGE = 200
@@ -75,16 +78,30 @@ def feed_scope(ctx: Ctx, view: VW.View) -> tuple[list[str], list[str]]:
 
 
 # ------------------------------------------------------------------------------------------------ balance sheet
+def imported_months(c: sqlite3.Connection, ctx: Ctx, view: VW.View, first: str, last: str, basis: str) -> list[Row]:
+    """The months from first to last (YYYY-MM) that hold a standing history import stating a basis other than
+    `basis`: the cells a report labels as imported (§4.1). Anyone whose view covers everything gets them, since they
+    read the same report lines and need the label to read the numbers; it carries months and bases, never amounts."""
+    if not view.everything:
+        return []
+    return [{"month": str(r["month"]), "basis": str(r["basis"])}
+            for r in SR.live_months(c, ctx.book.id, first, last) if str(r["basis"]) != basis]
+
+
 def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, at: str | None = None) -> Row:
     """Assets, liabilities and equity on a day (today by default), each line with what makes it up: the money accounts
     mapped to it and the kinds of entry posted to it. Owner-only unless granted; a line grant shows that whole line.
     Equity includes the P&L's running total so the sheet balances; it shows only with the whole balance sheet."""
     ctx = load(c, at)
+    day = dates.day(as_of or ctx.today).isoformat()
+    closed = CL.frozen(ctx, day[:7])
+    snap = CL.marker(c, ctx.book.id, day[:7]) if closed is not None else None
+    if closed is not None:
+        ctx = closed
     view = ctx.view(viewer)
     whole = view.everything or view.balance_sheet
     if not whole and not view.bs_lines:
         raise denied("the balance sheet is the owner's unless granted")
-    day = dates.day(as_of or ctx.today).isoformat()
     shown = [a for a in ctx.accounts.values() if a.type not in PNL_TYPES and (whole or a.id in view.bs_lines)]
     sums = SK.balances(c, ctx.book.id, day, [a.id for a in shown])
     kinds = SK.sources_by_account(c, ctx.book.id, day, [a.id for a in shown])
@@ -118,7 +135,10 @@ def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, 
         totals["equity"] += earned
     return {"as_of": day, "assets": sections["asset"], "liabilities": sections["liability"],
             "equity": sections["equity"], "totals": totals, "scoped": not whole, "currency": ctx.book.base_currency,
-            "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version}
+            "closed_through": SL.closed_through(c, ctx.book.id), "view_version": view.version,
+            # The sheet has no basis of its own: it is stated in the book's.
+            "imported": imported_months(c, ctx, view, "0001-01", day[:7], ctx.book.basis),
+            "snapshot": snap}
 
 
 # ------------------------------------------------------------------------------------------------ transactions
@@ -182,9 +202,14 @@ def bill_seen(ctx: Ctx, view: VW.View, cut: Sequence[str] | set[str], bill_id: s
 
 def hidden_bills(ctx: Ctx, cut: Sequence[str] | set[str], bill_ids: Sequence[str]) -> set[str]:
     """Of these bills, the ones with a line on a cut (private) account."""
-    if not cut or not bill_ids:
+    return hidden_documents(ctx, cut, "bill", bill_ids)
+
+
+def hidden_documents(ctx: Ctx, cut: Sequence[str] | set[str], kind: str, doc_ids: Sequence[str]) -> set[str]:
+    """Of these bills or invoices, the ones with a line on a cut (private) account."""
+    if not cut or not doc_ids:
         return set()
-    lines = SAP.lines(ctx.c, "bill", list(dict.fromkeys(bill_ids)))
+    lines = SAP.lines(ctx.c, kind, list(dict.fromkeys(doc_ids)))
     return {b for b, xs in lines.items() if any(str(x["account_id"] or "") in cut for x in xs)}
 
 
@@ -216,9 +241,10 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
                 bills.setdefault(fid, []).append(str(pay["obligation"]).removeprefix("bill:"))
         if fid in out:
             continue
-        # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share).
-        found = [*SAP.settlements_from(ctx.c, "feed", fid),
-                 *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"])) if r["entry_id"] else [])]
+        # Bills it settled, whatever the settlement came from (the row, its payment or the entry they share). Voided
+        # settlements count: reversing a "Pays bill" entry must not make its row's amounts visible again.
+        found = [*SAP.settlements_from(ctx.c, "feed", fid, voided=True),
+                 *(SAP.settlements_by_entry(ctx.c, str(r["entry_id"]), voided=True) if r["entry_id"] else [])]
         got = [str(s["to_id"]) for s in found if s["to_kind"] == "bill"]
         if got:
             bills.setdefault(fid, []).extend(got)
@@ -227,10 +253,64 @@ def private_feed(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> set[str]:
     return out
 
 
-def _feed_origin(r: Any) -> str:
+def feed_origin(r: Any) -> str:
     """The feed row a bank or card entry (or its reversal) was posted for, from its source id ("" for other entries):
     so an earlier posting of a feed row that now stands for a private line can't show its amount either."""
     return str(r["source_id"]).split(":")[0] if str(r["source"]) in ("bank", "card") else ""
+
+
+def private_origins(ctx: Ctx, view: VW.View, origins: Sequence[str]) -> set[str]:
+    """Which of these feed rows (by id) stand for a private line this viewer has no full detail for (private_feed).
+    The one rule every read of settled private money uses: the P&L's lines (settled_lines) and a budget's actual, card
+    and held amounts (budgeting)."""
+    ids = sorted({str(x) for x in origins} - {""})
+    if not ids or not private_cut(ctx, view):
+        return set()
+    return private_feed(ctx, view, list(SK.feed_rows(ctx.c, ids).values()))
+
+
+def settled_lines(ctx: Ctx, view: VW.View, a: date, z: date, account_ids: Sequence[str], basis: str) -> list[Any]:
+    """The lines a totals read takes out before it sums them (spec §7.5): on these accounts in the window, of the bank
+    and card entries posted for a feed row that stands for a private line this viewer has no full detail for. Those
+    are the row's posting, its "Pays bill" reclass and any reversal, which copies its origin. The cash basis takes
+    only the entries the cash view takes as posted (Entry.cash_view), since the others are corrected out of its cells."""
+    if not account_ids or not private_cut(ctx, view):
+        return []
+    rows = SL.bank_lines(ctx.c, ctx.book.id, a.isoformat(), z.isoformat(), account_ids)
+    cut = private_origins(ctx, view, [feed_origin(r) for r in rows])
+    return [r for r in rows if feed_origin(r) in cut and (basis != "cash" or str(r["basis"]) == "both")]
+
+
+def pays_labels(ctx: Ctx, view: VW.View, rows: Sequence[Any]) -> tuple[dict[str, str], set[str]]:
+    """For these lines (entry_id, source, source_id, reverses_id): what a "Pays bill" entry shows as its line, the
+    documents it pays ("Bill AC-105") rather than the line it moves the spend off (that spend now counts on the bill's
+    own lines), to a viewer who can open those documents. Also the entries naming a bill or invoice this viewer can't
+    open, whose memo and description must not show: its own entry, an entry that ever paid it (a voided settlement
+    still names it) and either one's reversal."""
+    from .tab_ap import sees_side
+    cut = set(private_cut(ctx, view))
+    out: dict[str, str] = {}
+    named: dict[str, list[tuple[str, str]]] = {}
+    ids = {str(r["entry_id"]) for r in rows} | {str(r["reverses_id"]) for r in rows if r["reverses_id"]}
+    paid = SAP.documents_paid_by(ctx.c, sorted(ids), voided=True)
+    for r in rows:
+        eid = str(r["entry_id"])
+        mine = named.setdefault(eid, [])
+        if str(r["source"]) in ("bill", "invoice"):
+            mine.append((str(r["source"]), str(r["source_id"]).split(":")[0]))
+        for d in [*paid.get(eid, []), *paid.get(str(r["reverses_id"] or ""), [])]:
+            mine.append((str(d["to_kind"]), str(d["to_id"])))
+    kinds = {k for docs in named.values() for k, _ in docs}
+    hidden = {(k, i) for k in kinds if sees_side(ctx, view, k)
+              for i in hidden_documents(ctx, cut, k, sorted({i for docs in named.values() for x, i in docs if x == k}))}
+    closed = {eid for eid, docs in named.items()
+              if any(not sees_side(ctx, view, k) or (k, i) in hidden for k, i in docs)}
+    for eid in named:
+        live = [d for d in paid.get(eid, []) if d["voided_at"] is None]
+        if live and eid not in closed and len({str(d["to_kind"]) for d in live}) == 1:
+            out[eid] = f"{str(live[0]['to_kind']).capitalize()} " + \
+                ", ".join(str(d["number"] or d["to_id"])[:40] for d in live)
+    return out, closed
 
 
 def _visible_lines(ctx: Ctx, view: VW.View, entry_ids: Sequence[str]) -> dict[str, list[Row]]:
@@ -368,10 +448,11 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
     def show_lines(batch: list[Any]) -> list[tuple[tuple[str, str], Row]]:
         tags = SL.line_tags(c, [str(r["line_id"]) for r in batch])
         stands = SK.feed_by_entry(c, sorted({str(r["entry_id"]) for r in batch}))
-        origins = {str(r["line_id"]): _feed_origin(r) for r in batch}
+        origins = {str(r["line_id"]): feed_origin(r) for r in batch}
         history = SK.feed_rows(c, sorted({o for o in origins.values() if o}))
         cut = private_feed(ctx, view, [*stands.values(), *history.values()])
         names = vendor_labels(ctx, view, [str(r["contact_id"]) for r in batch])
+        pays, closed = pays_labels(ctx, view, batch)
         out: list[tuple[tuple[str, str], Row]] = []
         for r in batch:
             account = ctx.accounts[str(r["account_id"])]
@@ -382,13 +463,18 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
                     (money_account_id and (fed is None or str(fed["money_account_id"]) != money_account_id)) or \
                     (org is not None and not org(tagged.get("team", ""), tagged.get("teammate", ""))):
                 continue
+            if text and str(r["entry_id"]) in closed and text.casefold() not in str(r["contact_id"]).casefold():
+                continue        # matched only on the memo or description it can't show
             out.append((_key_of(r), {"kind": "entry", "id": str(r["line_id"]), "date": str(r["entry_date"]),
                                      "amount": int(r["amount"]), "currency": ctx.book.base_currency,
-                                     "entry_id": str(r["entry_id"]), "account_id": account.id, "account": account.name,
+                                     "entry_id": str(r["entry_id"]), "account_id": account.id,
+                                     "account": pays.get(str(r["entry_id"]), account.name)
+                                     if origins[str(r["line_id"])] else account.name,
                                      "vendor": str(r["contact_id"]),
                                      "vendor_name": names.get(str(r["contact_id"]), ""),
-                                     "description": str(r["description"]),
-                                     "memo": str(r["memo"]), "source": str(r["source"]),
+                                     "description": "" if str(r["entry_id"]) in closed else str(r["description"]),
+                                     "memo": "" if str(r["entry_id"]) in closed else str(r["memo"]),
+                                     "source": str(r["source"]),
                                      "reversed": str(r["entry_status"]) == "reversed", "tags": tagged}))
         return out
 
@@ -421,16 +507,24 @@ def transactions(c: sqlite3.Connection, viewer: str, *, source: str = "all", mon
 
 
 # ------------------------------------------------------------------------------------------------ cards
-def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None) -> Row:
-    """A card as anyone sees it: last 4 only, never the number or CVC (Tico never has them)."""
+def _frozen_by(r: Any) -> str | None:
+    """Why a frozen card is frozen: `budget` (its budget's cutoff, lifted once the budget has room) or `person`."""
+    return str(r["freeze_by"]) if str(r["status"]) == "frozen" and r["freeze_by"] else None
+
+
+def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None,
+             excluded: bool = False) -> Row:
+    """A card as anyone sees it: last 4 only, never the number or CVC (Tico never has them). `excluded` marks a spent
+    total with its settled private part taken out, as the budget rows are marked."""
     budget = ctx.budgets().get(str(r["budget_id"] or ""))
     return {"id": str(r["id"]), "provider": str(r["provider"]), "holder": str(r["holder"]),
             "nickname": str(r["nickname"] or ""), "last4": r["last4"], "kind": str(r["kind"]),
-            "status": str(r["status"]), "limit": r["limit_amount"], "limit_interval": r["limit_interval"],
+            "status": str(r["status"]), "frozen_by": _frozen_by(r), "limit": r["limit_amount"],
+            "limit_interval": r["limit_interval"],
             "provider_limit": r["provider_limit"], "sync_status": str(r["sync_status"] or ""),
             "currency": str(r["currency"]), "money_account_id": r["money_account_id"],
             "budget": {"id": budget.id, "name": budget.name} if budget else None, "allocation": allocation,
-            "spent": spent, "expires_at": r["expires_at"], "created_at": str(r["created_at"])}
+            "spent": spent, "excluded": excluded, "expires_at": r["expires_at"], "created_at": str(r["created_at"])}
 
 
 def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
@@ -440,10 +534,27 @@ def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
     return not any(str(x["account_id"]) in cut for x in lines)
 
 
+SAVED_ON_MOST = 10      # vendor accounts shown per card; `vendor=` on the cards read finds every one
+
+
+def _saved_on(c: sqlite3.Connection, card_ids: Sequence[str]) -> dict[str, list[Row]]:
+    """The vendor accounts each card is saved on now (the first SAVED_ON_MOST, oldest first): the vendor (its key, for
+    `vendor=`), its label, who saved it and when."""
+    out: dict[str, list[Row]] = {}
+    for r in SK.card_saves(c, card_ids):
+        saved = out.setdefault(str(r["card_id"]), [])
+        if len(saved) < SAVED_ON_MOST:
+            saved.append({"vendor": str(r["vendor_key"]), "label": str(r["vendor_label"]),
+                          "saved_by": str(r["saved_by"]), "saved_at": str(r["saved_at"])})
+    return out
+
+
 def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, holder: str | None = None,
-          cursor: str | None = None, limit: int = 100, at: str | None = None) -> Row:
-    """The cards the viewer follows (their own, their teams', or all for the owner), with each card's allocation and
-    what it spent this budget period."""
+          vendor: str | None = None, q: str | None = None, cursor: str | None = None, limit: int = 100,
+          at: str | None = None) -> Row:
+    """The cards the viewer follows (their own, their teams', or all for the owner), with each card's allocation, what
+    it spent this budget period and the vendor accounts it is saved on (`saved_on`). `vendor` keeps the cards saved on
+    that vendor (a contact's id or a name); `q` matches a card's nickname, last 4 or holder."""
     from . import budgeting
     from .store import budgets as SB
     ctx = load(c, at)
@@ -455,6 +566,8 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
     after = marks[0] if marks else ""
     accounts = _card_accounts(ctx)
     cut = set(private_cut(ctx, view))
+    saved_at = SK.cards_saved_at(c, ctx.book.id, SAP.vendor_keys(c, ctx.book.id, vendor)) if vendor else None
+    text = (q or "").strip().lower()
     out: list[Row] = []
     scanned = 0
     today = dates.day(ctx.today)
@@ -465,9 +578,14 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
         scanned += len(batch)
         for r in batch:
             after = str(r["id"])
+            if saved_at is not None and str(r["id"]) not in saved_at:
+                continue
+            if text and text not in f"{r['nickname']} {r['last4'] or ''} {r['holder']}".lower():
+                continue
             if not sees_card(ctx, view, r, accounts.get(str(r["budget_id"] or ""), "")):
                 continue
             alloc = spent = None
+            excluded = False
             bid = str(r["budget_id"] or "")
             if bid in ctx.budgets():
                 row = SB.allocation(c, bid, "card", str(r["id"]))
@@ -478,13 +596,21 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
                 if cut and not _card_spend_seen(cut, SB.card_lines(c, str(r["id"]), st.period_start,
                                                                    st.period_end)):
                     spent = None
-            out.append(card_row(ctx, r, spent, alloc))
+                elif cut:       # the settled private part comes out, as the P&L's and the budgets' do
+                    netted = budgeting.Netted(view)
+                    spent -= budgeting.settled_used(ctx, netted, budgeting.subtree(ctx, bid),
+                                                    st.period_start, st.period_end, f"card:{r['id']}", absorbed=True)
+                    excluded = netted.excluded
+            out.append(card_row(ctx, r, spent, alloc, excluded))
             if len(out) > most:
                 break
         if len(batch) < most * 2:
             break
     more = len(out) > most or scanned >= SCAN
     page = out[:most]
+    saves = _saved_on(c, [str(row["id"]) for row in page])
+    for row in page:
+        row["saved_on"] = saves.get(str(row["id"]), [])
     nxt = encode_cursor([str(page[-1]["id"]) if len(out) > most else after]) if more and (page or after) else None
     return {"cards": page, "next": nxt, "view_version": view.version}
 
@@ -521,6 +647,11 @@ def _books_mirror(c: sqlite3.Connection, book: Book, cid: str, status: str) -> s
         return "native"
     export = SX.as_map(SX.mirror_state(c, cid).get("export"))
     return "mirror" if not export or export.get("done") else "exporting"
+
+def _direct_on(c: sqlite3.Connection) -> bool:
+    """The owner's company switch for direct send (payments.DIRECT_KEY)."""
+    from .payments import DIRECT_KEY
+    return SL.setting(c, DIRECT_KEY) is True
 
 
 def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at: str | None = None) -> Row:
@@ -564,7 +695,7 @@ def sources(c: sqlite3.Connection, viewer: str, *, group: str | None = None, at:
                                      "payments": {"mode": "approval_queue",
                                                   "eligible": bool(s.get("approval_eligible")),
                                                   "enabled": bool(s.get("payments_enabled")),
-                                                  "direct_send": bool(s.get("direct_send")),
+                                                  "direct_send": _direct_on(c),
                                                   "why_not": s.get("approval_note")}})
         elif str(r["purpose"]) == "books":
             cid = str(r["id"])

@@ -99,22 +99,29 @@ function askSettled(el) {
   return dy ? {left: r.left, top: r.top - dy, width: r.width, height: r.height} : r;
 }
 // Open: the row's dot flies up to its place beside the panel's name; close: back down to the row. Both ends are
-// measured once, before anything moves.
+// measured once, before anything moves. On a computer the panel stands on the row (ask.css --ask-foot), measured
+// with them. The flight is quick (a third of a free dot's): the panel is a click away and waits on nothing.
 function askToggle(open = !ASK?.open, focus = true) {
   ASK ||= {open: false, mounted: false};
   document.querySelectorAll('[data-ask-dot]').forEach(d => d._ldotFly?.cancel());   // a flight the other way lands at once
   const from = askLiveDot()?.getBoundingClientRect(), back = open ? null : askHomeDot()?.getBoundingClientRect();
+  const foot = open ? askFootNow() : null;
   const inside = !!$('#ask-panel')?.contains(document.activeElement);   // read before the closed panel goes inert
+  askFoot(foot);
   ASK.open = open;
   askSync();
   const to = askLiveDot();
-  ldotFly(to, from, {to: open ? to && askSettled(to) : back});
+  ldotFly(to, from, {to: open ? to && askSettled(to) : back, pace: 3});
   if (open && !ASK.mounted) { ASK.mounted = true; void askLoad(ASK); }
   else if (open) void ASK.refresh?.();       // cards answered or confirmed elsewhere meanwhile
   // A phone keeps its keyboard down until the person taps the box.
   if (open && focus && !askPhone()) setTimeout(() => $('#ask-panel .ask-form .p-text')?.focus(), 0);
   else if (!open && focus && inside) (askPhone() ? $('#mobile-ask') : $('#ask-row'))?.focus();
 }
+// Where the panel's foot goes on a computer: just over the Ask row (ask.css --ask-foot). Read with the other boxes before
+// anything moves, then written; a phone's sheet has its own place.
+const askFootNow = () => { const r = askPhone() ? null : $('#ask-row')?.getBoundingClientRect(); return r?.height ? Math.round(innerHeight - r.top + 6) : null; };
+const askFoot = px => { if (px != null) $('#ask-panel')?.style.setProperty('--ask-foot', px + 'px'); };
 // Opens the panel with words already in its box (Add bot's "connecting an agent"); words already typed stay.
 function askDraft(text) {
   ASK ||= {open: false, mounted: false};
@@ -478,11 +485,12 @@ async function askLoad(chat) {
   };
   const send = async text => {
     text = String(text || '').trim();
-    const P = chat.composer;
-    if (!text || !P || P.sending) return;
-    P.sending = true; pillButtons(P); fail('');
-    // Tico Support in the chat: the box writes to its request.
+    const P = chat.composer, files = P?.files.slice() || [];
+    if ((!text && !files.length) || !P || P.sending) return;
+    // Tico Support in the chat: the box writes to its request, which takes words only.
     const to = askSendTo(askSupport());
+    if (to.to === 'support' && files.length) { fail('Tico Support gets words only. Remove the file to send.'); return; }
+    P.sending = true; pillButtons(P); fail('');
     if (to.to === 'support') {
       try { await window.supportReply(to.id, text); if (current()) { pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw(); } }
       catch (e) { fail('Not sent. ' + e.message); }
@@ -490,12 +498,12 @@ async function askLoad(chat) {
       return;
     }
     try {
-      const r = await post('/v2/assistant/messages', {text, page: askPage()});
+      const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.', page: askPage()}, files);
       CHAT_CACHE.delete(info.bot);                    // the Assistant page reads the conversation again when it opens
       if (!current()) return;
       for (const m of [r.message, r.reply].filter(Boolean)) if (!messages.some(x => x.id === m.id)) messages.push(m);
       if (r.message?.conversation_id && r.message.conversation_id !== info.room_id) { info.room_id = r.message.conversation_id; watch(); }
-      pillAcknowledge(P, text, []); stickScroll(thread).toBottom(); draw();
+      pillAcknowledge(P, text, files); stickScroll(thread).toBottom(); draw();
       if (!es && !poll) watch();
       await snapshot();
     } catch (e) { fail(e.message); }
@@ -513,7 +521,8 @@ async function askLoad(chat) {
     return;
   }
   messages = info.messages || []; execution = info.execution || null; pending = info.pending || [];
-  chat.composer = makePill({mode: 'chat', files: false, label: 'Message ' + askName(), placeholder: 'Message ' + askName(),
+  if (!el._dropZone) { el._dropZone = true; chatDropZone(el, () => ASK?.live ? ASK.composer : null); }   // a dropped file attaches
+  chat.composer = makePill({mode: 'chat', label: 'Message ' + askName(), placeholder: 'Message ' + askName(),
                             send: (P, text) => send(text)});
   pq(chat.composer, '.p-text').maxLength = 4000;
   el.querySelector('.ask-form').replaceChildren(chat.composer.el);
@@ -577,5 +586,5 @@ document.addEventListener('tico:support', () => { askPeople(); ASK?.draw?.(); })
 document.addEventListener('focusout', ev => { if (askTypes(ev.target)) setTimeout(askPeek, 0); });
 liveOn('needs-list', () => { ASK?.draw?.(); askPeek(); });
 addEventListener('hashchange', () => setTimeout(askSync, 0));
-addEventListener('resize', () => askSync());
+addEventListener('resize', () => { if (ASK?.open) askFoot(askFootNow()); askSync(); });
 setTimeout(askPeek, ASK_PEEK_WAIT_MS + 100);
