@@ -2,12 +2,14 @@
 last 4 only), signatures (a wrong one refused, a replay kept once), connecting (bank assets, IO a liability, payments
 only with another approver), a card authorization held and then settled in place and posted once, the IO bill clearing
 the card liability, and reconciliation's difference, lock and undo. Migration 65 is in test_finance_ledger."""
+import http.client
 import http.server
 import io
 import json
 import threading
 import time
 import urllib.error
+from decimal import Decimal
 
 from backend import trigger_presets as P
 from backend.finance import actions as FA
@@ -720,3 +722,26 @@ def test_the_client_calls_real_urlopen_over_http_with_the_timeout_by_keyword_and
     assert post[2] == "Bearer tok-acme"
     assert json.loads(post[3]) == {"amount": 12.5, "recipientId": "rcp-1"}
     assert isinstance(json.loads(post[3])["amount"], float)
+
+
+def test_a_response_cut_short_and_an_amount_too_big_to_send_exactly_answer_unreachable_and_never_raise():
+    class Short(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            self.send_response(200)
+            self.send_header("Content-Length", "100")                                    # promises 100 bytes...
+            self.end_headers()
+            self.wfile.write(b'{"accounts": []}')                                       # ...sends 17, then closes
+
+        def log_message(self, *args: object) -> None:
+            return None
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Short)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        assert Mercury("tok", base=f"http://127.0.0.1:{server.server_address[1]}/api/v1").accounts() == Answer(None, {})
+    finally:
+        server.shutdown()
+        server.server_close()
+    sent = []
+    assert Mercury("tok", opener=lambda r, *, timeout: sent.append(r)).request_send_money(
+        "acct", {"amount": Decimal("1e13")}) == Answer(None, {}) and not sent
