@@ -18,6 +18,7 @@ from .core import ap as AP
 from .core import budgets as B
 from .core import rights as R
 from .core import dates, money
+from .core import projections as PJ
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, descendants, pnl_section
@@ -275,7 +276,9 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
         row = budget.setdefault(b.account_id, [None] * len(buckets))
         budget[b.account_id] = [x if y is None else (y if x is None else x + y) for x, y in zip(row, cols, strict=False)]
     projection: dict[str, list[int]] = {}
+    methods: dict[str, set[str]] = {}
     if buckets:
+        stored: set[tuple[str, str]] = set()
         for r in SB.projections(c, s.ctx.book.id, buckets[0][0].isoformat()[:7], buckets[-1][1].isoformat()[:7]):
             account = s.ctx.accounts.get(r["account_id"])
             if account is None or account.id not in actual or \
@@ -283,6 +286,8 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                     not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
                     (f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
                 continue
+            stored.add((account.id, str(r["month"])))
+            methods.setdefault(account.id, set()).add(str(r["method"]))
             first = dates.month(r["month"])
             span = (first, dates.month_end(first))
             cols = projection.setdefault(account.id, [0] * len(buckets))
@@ -290,6 +295,19 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                 share = dates.overlap(span, bucket)
                 if share:
                     cols[n] += money.prorate(int(r["amount"]), share, dates.days(*span))
+        # A month nobody projected gets the line's default from its posted history.
+        for (account_id, month), (amount, method) in _defaults(s, pnl_ids, _months(buckets[0][0], buckets[-1][1]),
+                                                               basis, f).items():
+            if (account_id, month) in stored:
+                continue
+            first = dates.month(month)
+            span = (first, dates.month_end(first))
+            methods.setdefault(account_id, set()).add(method)
+            cols = projection.setdefault(account_id, [0] * len(buckets))
+            for n, bucket in enumerate(buckets):
+                share = dates.overlap(span, bucket)
+                if share:
+                    cols[n] += money.prorate(amount, share, dates.days(*span))
     rows: list[Row] = []
     totals = {"income": [0] * len(buckets), "expense": [0] * len(buckets)}
     for account_id in pnl_ids:
@@ -306,7 +324,8 @@ def pnl(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str |
                      # "Payroll (private)" with no amount (§7.5): its budget is withheld too, since a narrow
                      # filter's payroll budget can be one person's planned pay.
                      "budget": None if hidden else budget.get(account_id),
-                     "projection": None if hidden else projection.get(account_id)})
+                     "projection": None if hidden else projection.get(account_id),
+                     "projection_method": None if hidden else _method(methods.get(account_id))})
     if view == "expenses":
         rows = _with_spend(s, rows)
     out: Row = {"start": a.isoformat(), "end": z.isoformat(), "period": period, "basis": basis, "view": view,
@@ -446,21 +465,86 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
 # ------------------------------------------------------------------------------------------------ one line
 def _next_month(s: _Seen, ids: Sequence[str], f: _Filter | None = None) -> Row:
     """The line's projection for the month after this one, as far as the viewer sees it and within the org filter
-    (projections are by line, team and teammate; there are none by vendor). None on a private line without its
-    detail."""
+    (projections are by line, team and teammate; there are none by vendor). A line with no stored projection for that
+    month gets its default from posted history. None on a private line without its detail."""
     nxt = dates.month_end(dates.day(s.ctx.today)) + timedelta(days=1)
     month = nxt.isoformat()[:7]
     if any(i in s.private and i not in s.view.full_detail for i in ids):
-        return {"month": month, "projection": None}
+        return {"month": month, "projection": None, "projection_method": None}
     total, found = 0, False
+    methods: set[str] = set()
+    stored: set[str] = set()
     for r in SB.projections(s.ctx.c, s.ctx.book.id, month, month):
         account = s.ctx.accounts.get(r["account_id"])
         if account is None or account.id not in ids or \
                 not s.view.sees(account, {"team": r["team"], "teammate": r["teammate"]}) or \
                 (f is not None and f.any and not f.keeps(str(r["team"] or ""), str(r["teammate"] or ""))):
             continue
+        stored.add(account.id)
+        methods.add(str(r["method"]))
         total, found = total + int(r["amount"]), True
-    return {"month": month, "projection": total if found else None}
+    for (account_id, _), (amount, method) in _defaults(s, ids, [nxt], "accrual", f).items():
+        if account_id in stored:
+            continue
+        methods.add(method)
+        total, found = total + amount, True
+    return {"month": month, "projection": total if found else None, "projection_method": _method(methods)}
+
+
+def _months(a: date, z: date) -> list[date]:
+    """The first day of each month from `a`'s month to `z`'s."""
+    count = (z.year * 12 + z.month) - (a.year * 12 + a.month)
+    return [dates.add_months(a, k) for k in range(count + 1)]
+
+
+def _method(found: set[str] | None) -> str | None:
+    """The one method behind a projection, or "mixed" when its months came from several."""
+    if not found:
+        return None
+    return next(iter(found)) if len(found) == 1 else "mixed"
+
+
+def _defaults(s: _Seen, ids: Iterable[str], months: Sequence[date], basis: str, f: _Filter | None
+              ) -> dict[tuple[str, str], tuple[int, str]]:
+    """The default projection per line and month (`YYYY-MM`) from the posted history this viewer sees, for the months
+    that are this one or later. A line with no history, or one this viewer sees no full detail of, gets none. Stored
+    projections override these, so callers leave those months out."""
+    today = dates.day(s.ctx.today)
+    cur = today.replace(day=1)
+    targets = [m for m in months if m >= cur]
+    lines = sorted(i for i in ids if i in s.ctx.accounts and not (i in s.private and i not in s.view.full_detail))
+    if not targets or not lines:
+        return {}
+    first = dates.add_months(cur, -PJ.TREND_MONTHS)
+    recent_from = today - timedelta(days=PJ.RATE_DAYS - 1)
+    cells = _cells(s, first, today, lines, basis)
+    if f is not None and f.any:
+        cells = [x for x in cells if f.keeps(x.team, x.teammate)]
+    sup = _suppress(s, cells, f is not None and f.narrow(s.ctx.org), first, today)
+    monthly = {i: [0] * PJ.TREND_MONTHS for i in lines}
+    recent = dict.fromkeys(lines, 0)
+    for cell in sup.cells:
+        if cell.account_id in sup.hidden or cell.account_id not in monthly:
+            continue
+        account = s.ctx.accounts[cell.account_id]
+        amount = (-1 if account.type == "income" else 1) * cell.amount
+        day = dates.day(cell.day)
+        if day >= recent_from:
+            recent[cell.account_id] += amount
+        if day < cur:
+            monthly[cell.account_id][(day.year - first.year) * 12 + day.month - first.month] += amount
+    out: dict[tuple[str, str], tuple[int, str]] = {}
+    for i in lines:
+        if i in sup.hidden:
+            continue
+        account = s.ctx.accounts[i]
+        method = PJ.default_method(account.type, account.subtype)
+        for m in targets:
+            ahead = (m.year - cur.year) * 12 + m.month - cur.month + 1
+            value = PJ.estimate(method, monthly[i], recent[i], dates.days(m, dates.month_end(m)), ahead)
+            if value is not None:
+                out[(i, m.isoformat()[:7])] = (value, method)
+    return out
 
 
 def _paid_by(s: _Seen, rows: Sequence[Row]) -> list[Row]:

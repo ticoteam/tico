@@ -16,6 +16,25 @@ from backend.tests.test_finance_tab import _bank
 OCT = ("2026-10-01", "2026-10-31")
 
 
+def test_a_line_without_a_projection_projects_from_its_posted_history(books):
+    with books.transaction() as c:
+        spend(c, "6100", 800, day="2026-09-05")          # software recurs: September's total is next month's guess
+        spend(c, "6100", 400, day="2026-09-20")
+        spend(c, "5100", 3_100, day="2026-10-10")        # AI services runs at its last 30 days
+        act(c, OWNER, "projection_set", {"account_id": account(c, "5100"), "month": "2026-11", "amount": 9_000})
+        soft = FR.line_detail(c, OWNER, account(c, "6100"), *OCT, at=AT)["next_month"]
+        assert soft == {"month": "2026-11", "projection": 1_200, "projection_method": "recurring"}
+        ai = FR.line_detail(c, OWNER, account(c, "5100"), *OCT, at=AT)["next_month"]
+        assert ai == {"month": "2026-11", "projection": 9_000, "projection_method": "manual"}
+        none = FR.line_detail(c, OWNER, account(c, "6900"), *OCT, at=AT)["next_month"]
+        assert none == {"month": "2026-11", "projection": None, "projection_method": None}
+        rows = {r["code"]: r for r in FR.pnl(c, OWNER, *OCT, at=AT)["rows"]}
+        assert rows["6100"]["projection"] == [1_200] and rows["6100"]["projection_method"] == "recurring"
+        assert rows["5100"]["projection"] == [3_203]            # October's run rate: 3100 x 31 / 30, a stored November
+        assert rows["5100"]["projection_method"] == "run_rate"  # does not change October
+        assert rows["6900"]["projection"] is None and rows["6900"]["projection_method"] is None
+
+
 def test_only_the_owner_edits_view_defaults_and_unbacked_grants_are_suspended(books):
     with books.transaction() as c:
         spend(c, "6100", 1_000, team="web", teammate="human:eve")
@@ -68,7 +87,7 @@ def test_a_line_opens_per_vendor_with_how_it_was_paid_and_next_month(books):
         act(c, OWNER, "projection_set", {"account_id": account(c, "6900"), "month": "2026-11", "amount": 9_000})
         line = account(c, "6900")
         whole = FR.line_detail(c, OWNER, line, *OCT, at=AT)
-        assert whole["next_month"] == {"month": "2026-11", "projection": 9_000}
+        assert whole["next_month"] == {"month": "2026-11", "projection": 9_000, "projection_method": "manual"}
         assert {(p["kind"], p["name"], p["amount"]) for p in whole["paid_by"]} == {
             ("card", "Card ••1111", 1_200), ("card", "Card ••2222", 3_400), ("entry", "usage", 700)}
         tools = FR.line_detail(c, OWNER, line, *OCT, vendor="acme-tools", at=AT)
