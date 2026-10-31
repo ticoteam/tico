@@ -240,7 +240,8 @@ CREATE TABLE IF NOT EXISTS fin_view_versions (
 
 CREATE TABLE IF NOT EXISTS fin_settlements (
   id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
-  from_kind TEXT NOT NULL CHECK (from_kind IN ('payment','feed','credit','account')), from_id TEXT NOT NULL DEFAULT '',
+  from_kind TEXT NOT NULL CHECK (from_kind IN ('payment','feed','credit','account','expected')),
+  from_id TEXT NOT NULL DEFAULT '',
   to_kind TEXT NOT NULL CHECK (to_kind IN ('bill','invoice')), to_id TEXT NOT NULL, amount BIGINT NOT NULL,
   settled_on TEXT NOT NULL, entry_id TEXT, action_id TEXT, voided_at TEXT, voided_by TEXT,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL);
