@@ -315,6 +315,21 @@ def test_a_gateway_key_allocation_never_recovers_a_settled_payroll_charge_for_a_
         assert owner["excluded"] is False and gus["excluded"] is True
 
 
+def test_an_allocation_refusal_states_a_budget_figure_only_when_the_viewer_sees_that_figure(books):
+    """Other expenses has 6,000 left for the owner (the October debit counts) and 10,000 for a viewer without payroll
+    detail. Setting aside 8,000 is refused on the owner's figure for everyone, but the viewer is told only that it does
+    not fit in Other expenses, never the 6,000 they cannot check."""
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        budget_id = _other_budget(c, at=AT)
+        _october_debit_paid_by_a_november_payroll_bill(c)
+        ask = {"budget_id": budget_id, "target_kind": "gateway_key", "target_id": "gw-1", "amount": 8_000}
+        owner = act(c, OWNER, "allocation_set", ask, at=AT)
+        gus = act(c, "human:gus", "allocation_set", ask, at=AT)
+    assert (owner.code, owner.reason) == ("invalid", "it does not fit: Other expenses has 6000 left")
+    assert (gus.code, gus.reason) == ("invalid", "it does not fit in Other expenses")
+
+
 def test_cash_flow_for_a_balance_sheet_grantee_is_the_bank_total_with_no_payroll_line(books):
     """The bank total is true for a balance-sheet grantee. Nothing isolates the payroll payment: it sits in the same
     net as the owner's, and the report has no line naming payroll or its payee."""
