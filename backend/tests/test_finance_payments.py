@@ -705,6 +705,58 @@ def test_a_debit_returned_before_its_lost_payment_is_found_ends_the_payment(book
         assert _net(c) == {}
 
 
+def _reconcile(c, provider_id):
+    """Reconcile checking through Oct 16 with this feed row cleared; its id."""
+    fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id=?", (provider_id,)).fetchone()[0])
+    args = {"money_account_id": _checking(c), "statement_end": "2026-10-16", "cleared": [fid]}
+    off = act(c, OWNER, "reconcile", {**args, "statement_balance": 0})
+    if off.result["status"] != "done":
+        c.execute("DELETE FROM fin_reconciliations")
+        done = act(c, OWNER, "reconcile", {**args, "statement_balance": -int(off.result["difference"])})
+        assert done.result["status"] == "done", done
+    return fid
+
+
+def test_a_reconciled_debit_on_the_payments_line_under_another_vendor_still_moves_to_its_vendor(books):
+    """Codex round 8 #1: the debit was categorized to the payment's line and tags but under the bank's counterparty,
+    not the recipient's vendor, then reconciled. Found as the payment, its spend moves to the vendor (the hold on the
+    vendor's budget is taken in by that move), so the vendor budget reads (500, 0, 500), never (0, 0, 1,000)."""
+    fake = FakeMercury()
+    connect(books, fake)
+    with books.transaction() as c:
+        line = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 200_000})
+        made = act(c, OWNER, "budget_create", {"name": "Acme", "account_id": account(c, "6100"),
+                                               "vendor": "Acme Supplies", "amount": 100_000,
+                                               "parent_id": line.result["budget_id"]})
+        assert made.status == "committed", made
+        budget_id = str(made.result["budget_id"])
+    pid, key = _lost_send(books, fake)
+    with books.read() as c:
+        rec = c.execute("SELECT r.contact_id, r.name FROM fin_payments p JOIN fin_recipients r ON r.id=p.recipient_id "
+                        "WHERE p.id=?", (pid,)).fetchone()
+        assert str(rec[0] or rec[1]) == "Acme Supplies"
+        assert c.execute("SELECT budget_id FROM fin_holds WHERE source='payment'").fetchone()[0] == budget_id
+
+    def acme(c):
+        s = FA.budget_state(c, budget_id, "2026-10-20T12:00:00.000000Z")
+        return s.actual, s.held, s.remaining
+    _debit(fake, "txn-lost", "req-9", "evt-lost", counterpartyName="ACME SUPPLY CO")
+    sync_once(books, fake, HOURS[2])
+    with books.transaction() as c:
+        fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-lost'").fetchone()[0])
+        done = act(c, OWNER, "categorize", {"feed_id": fid, "account_id": account(c, "6100"), "tags": {"team": "eng"}})
+        assert done.status == "committed", done
+        _reconcile(c, "txn-lost")
+        assert acme(c) == (0, 50_000, 50_000)
+    fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
+    sync_once(books, fake, HOURS[3])
+    with books.read() as c:
+        assert str(c.execute("SELECT status FROM fin_payments WHERE id=?", (pid,)).fetchone()[0]) == "settled"
+        assert acme(c) == (50_000, 0, 50_000)
+        assert c.execute("SELECT count(*) FROM fin_events WHERE name LIKE 'finance.budget.%' AND subject=?",
+                         (budget_id,)).fetchone()[0] == 0
+
+
 def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payments_line(books):
     """Codex round 6 #4 and round 7: a 500.00 Software payment holds 500.00 on a 1,000.00 Software budget; its debit
     posted as an unknown spend (Other expenses) and was reconciled before the recovery found the payment. The bank
@@ -723,13 +775,7 @@ def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payme
     _debit(fake, "txn-lost", "req-9", "evt-lost")
     sync_once(books, fake, HOURS[2])
     with books.transaction() as c:
-        fid = str(c.execute("SELECT id FROM fin_feed_txns WHERE provider_id='txn-lost'").fetchone()[0])
-        args = {"money_account_id": _checking(c), "statement_end": "2026-10-16", "cleared": [fid]}
-        off = act(c, OWNER, "reconcile", {**args, "statement_balance": 0})
-        if off.result["status"] != "done":
-            c.execute("DELETE FROM fin_reconciliations")
-            done = act(c, OWNER, "reconcile", {**args, "statement_balance": -int(off.result["difference"])})
-            assert done.result["status"] == "done", done
+        fid = _reconcile(c, "txn-lost")
         bank = [x for x in _lines(c) if x[0] == "1000"]
         assert software(c) == (0, 50_000, 50_000)
     fake.land({"recipientId": "rcp-1", "amount": 500.0, "externalMemo": f"tico:{key} Acme"}, "req-9", "approved")
@@ -740,6 +786,9 @@ def test_a_reconciled_debit_found_as_a_lost_payment_moves_its_spend_to_the_payme
             == ("settled", fid)
         assert _holds(c) == [(50_000, "settled")]
         assert software(c) == (50_000, 0, 50_000)
+        # Round 8 #2: the move and the hold never count together, so no warn or cutoff fired on the way.
+        assert c.execute("SELECT count(*) FROM fin_events WHERE name LIKE 'finance.budget.%' AND subject=?",
+                         (budget_id,)).fetchone()[0] == 0
         assert [x for x in _lines(c) if x[0] == "1000"] == bank                  # the reconciled bank line as it was
         assert _net(c) == {"1000": -50_000, "6100": 50_000}
         tagged = c.execute("SELECT t.value FROM fin_line_tags t JOIN fin_lines l ON l.id=t.line_id JOIN fin_accounts a "

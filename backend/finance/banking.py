@@ -383,9 +383,7 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
         event(ctx, CATEGORY_EVENT, str(row["id"]), {"feed_id": str(row["id"]),
                                                     "why": "its payment was found after it was reconciled"},
               f"pay:{pay['id']}")
-        moved = _reclass(ctx, row, pay)
-        if pay["hold_id"]:
-            budgeting.settle(ctx, str(pay["hold_id"]), -int(row["amount"]), moved)
+        _reclass(ctx, row, pay)
         payments.feed_settled(ctx, pay, str(row["id"]))
         return
     money = SK.get(ctx.c, "fin_money_accounts", str(row["money_account_id"]))
@@ -400,21 +398,27 @@ def payment_linked(ctx: Ctx, pay: Any) -> None:
     _settle(ctx, row, money, None, t)
 
 
-def _reclass(ctx: Ctx, row: Any, pay: Any) -> str | None:
+def _reclass(ctx: Ctx, row: Any, pay: Any) -> None:
     """A reconciled debit found to be a payment: its expense side moves to the payment's line, tags and vendor in an
-    entry on an open day (Cr each line it hit, Dr the payment's line), never touching the reconciled bank line. The
-    entry that now holds the payment's spend (that one, or the debit's own when it already sits on the payment's line
-    and tags), or None when the debit never posted (its hold then stays settled, counting, until it does)."""
+    entry on an open day (Cr each line it hit, Dr the payment's line), never touching the reconciled bank line, and
+    that entry takes in the payment's hold in the same post (so budget crossings see the final state, never the move
+    and the hold both). When the debit already sits on the payment's line, tags and vendor, its own entry takes the
+    hold in; when it never posted, the hold stays settled, counting, until it does."""
+    hold = str(pay["hold_id"] or "")
     if not row["entry_id"]:
-        return None
+        if hold:
+            budgeting.settle(ctx, hold, -int(row["amount"]), None)
+        return
     entry_id = str(row["entry_id"])
     spent = [x for _, x in SL.entry_lines(ctx.c, entry_id) if x.role != L.MONEY_ROLE]
     account = str(pay["account_id"])
     tags = posting.with_team(ctx, cast(dict[str, str], SK.loads(pay["tags_json"])))
-    if all(x.account_id == account and dict(x.tags) == tags for x in spent):
-        return entry_id
     rec = SK.get(ctx.c, "fin_recipients", str(pay["recipient_id"]))
-    vendor = payments.vendor_of(rec) if rec is not None else str(row["counterparty"])
+    vendor = (payments.vendor_of(rec) if rec is not None else str(row["counterparty"]))[:80]
+    if all(x.account_id == account and dict(x.tags) == tags and x.contact_id == vendor for x in spent):
+        if hold:
+            budgeting.settle(ctx, hold, -int(row["amount"]), entry_id)
+        return
     lines: list[dict[str, object]] = [{"account_id": x.account_id, "amount": -x.amount, "tags": dict(x.tags),
                                        "contact_id": x.contact_id} for x in spent]
     lines.append(_line(account, sum(x.amount for x in spent), tags, vendor))
@@ -422,10 +426,9 @@ def _reclass(ctx: Ctx, row: Any, pay: Any) -> str | None:
     done = posting.post_entry(ctx.c, {"date": open_day(ctx, ctx.today), "source": "bank",
                                       "source_id": fresh_source(ctx, "bank", f"{fid}:reclass"),
                                       "memo": f"Payment {pay['id']} found after reconciling"[:200], "lines": lines},
-                              at=ctx.at)
+                              hold_ids=[hold] if hold else [], at=ctx.at)
     if not done.get("posted"):
         raise FinanceError(CONFLICT, f"feed row {fid} did not reclassify")
-    return str(done["entry_id"])
 
 
 def card_line(ctx: Ctx, card: Any) -> tuple[str, dict[str, str]]:
