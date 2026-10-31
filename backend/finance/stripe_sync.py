@@ -1,12 +1,12 @@
 """The Stripe sync worker (spec §9): one Stripe connection's balance, its balance transactions and its webhook doorbells,
 run by the bank worker (finance/sync.py) for each Stripe connection. Stripe is called outside any transaction and what
-came back is recorded in a short one. The first backfill walks balance transactions newest first, a few pages a step,
-and sets the opening balance when the list ends: the balance read at the start, less the rows created by then, so every
-transaction counts once. Catch-up walks newest first from where it last stopped until it reaches a row already taken in,
-so a long run of new rows is read across passes and none is skipped. Each balance transaction is taken in once by its
-id, so a repeat read changes nothing. A rehearsal copy calls nothing."""
+came back is recorded in a short one. The first backfill step reads the first page and the balance together, between
+two reads of the newest row that agree, so the balance holds exactly the rows the walk starts from; the walk then runs
+newest first, a few pages a step, and sets the opening balance when the list ends. Catch-up walks newest first down to
+the newest row of the last completed walk (the boundary). A walk that did not finish resumes from its cursor, so a page
+that failed is read again and nothing above or below it is skipped. Each balance transaction is taken in once by its id,
+so a repeat read changes nothing. A rehearsal copy calls nothing."""
 import logging
-import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Any, cast
@@ -21,18 +21,18 @@ from .core.errors import CONFLICT, FinanceError, invalid
 from .handlers import Plan, Result
 from .store import banking as SK
 from .store import tico
+from .mercury import Answer
 from .stripe import Provider, Stripe, base_url, error_text, has_more, listed
 
 log = logging.getLogger(__name__)
 
 BALANCE_CODE, BALANCE_NAME = "1050", "Stripe balance"
 BACKFILL_PAGES = 4               # balance-transaction pages per step: the first backfill is paced across steps
-CATCH_UP_PAGES = 10              # newest pages read per step until a row already taken in
+CATCH_UP_PAGES = 10              # newest pages read per step until the boundary
+BRACKET_TRIES = 3                # reads of the first page and balance before a backfill step waits for the next
 POLL_MINUTES = 15                # how often a connection is read without a webhook
 INBOX_MOST = 200
 Make = Callable[[str], Any]      # a factory from the key to a provider (tests pass a fake)
-_clock: Callable[[], float] = time.time    # the moment the backfill cuts its balance (tests set it)
-Walk = tuple[str | None, list[str], bool]  # (cursor to resume from, problems, finished)
 
 
 def _now() -> str:
@@ -216,112 +216,135 @@ def balances(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
 
 
 def catch_up(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
-    """Backfill while it runs; once it is done, newest balance transactions from the saved cursor until a row already
-    taken in. The webhook doorbells and polls both read what came after the last read, so nothing waits for the list."""
+    """Backfill while it runs; once it is done, the newest balance transactions down to the boundary, a few pages a
+    step. The webhook doorbells and polls both read what came after the last completed walk."""
     with store.read() as c:
         row = SK.get(c, "fin_connections", cid)
     if row is None:
         return []
-    if not _settings(row).get("backfilled"):
+    conf = _settings(row)
+    if not conf.get("backfilled"):
         return _backfill(store, provider, cid, row, now)
-    _, problems, _ = _walk(store, provider, cid, str(_settings(row).get("account") or ""),
-                           now, str(row["cursor"] or "") or None, CATCH_UP_PAGES, stop_known=True)
-    return problems
+    cursor, head, conf = _resume(row)
+    return _walk(store, provider, cid, conf, cursor, head, CATCH_UP_PAGES, now,
+                 stop=str(conf.get("boundary") or "") or None, backfill=False)
+
+
+def _resume(row: Any) -> tuple[str | None, str | None, dict[str, Any]]:
+    """Where a walk stands: its cursor (the row to read older rows from; None at the top), its head (the newest row it
+    started from; None before its first page) and the settings it carries."""
+    conf = _settings(row)
+    head = str(conf.pop("head", "") or "") or None
+    return str(row["cursor"] or "") or None, head, conf
 
 
 def _backfill(store: Any, provider: Provider, cid: str, row: Any, now: str) -> list[str]:
-    """Balance transactions newest first from the cursor, a few pages a step. The cut (the balance and the clock at the
-    start) is taken once and kept; when the list ends, the opening balance is set from it."""
-    conf = _settings(row)
-    if "cutoff" not in conf:
-        cut, why = _cut(store, provider, now)
-        if why:
-            return [why]
-        conf = {**conf, **cut}
-        with store.transaction() as c:
-            SK.update(c, "fin_connections", cid, {"settings_json": SK.dump(conf)})
-    _, problems, finished = _walk(store, provider, cid, str(conf.get("account") or ""), now,
-                                  str(row["cursor"] or "") or None, BACKFILL_PAGES, stop_known=False)
-    if problems or not finished:
-        return problems
-    _finish(store, cid, conf, now)
+    """The first step reads the first page and the balance together (see _bracket) and walks from there. Each later
+    step continues from its cursor, BACKFILL_PAGES pages at a time, until the list ends."""
+    cursor, head, conf = _resume(row)
+    if cursor is not None or head is not None:
+        return _walk(store, provider, cid, conf, cursor, head, BACKFILL_PAGES, now, stop=None, backfill=True)
+    with store.read() as c:
+        base = load(c, now).book.base_currency
+    page, held, why = _bracket(provider, base)
+    if page is None:
+        return [why]
+    return _walk(store, provider, cid, {**conf, "held": held}, None, None, BACKFILL_PAGES, now, stop=None,
+                 backfill=True, first=page)
+
+
+def _bracket(provider: Provider, base: str) -> tuple[Answer | None, int, str]:
+    """The first page and the balance in the book's currency, read so that they agree: the newest row is the same
+    before and after the balance is read, so no row came in between and the balance holds exactly the rows the page
+    starts from. After BRACKET_TRIES disagreements the step gives up and the next one reads again."""
+    for _ in range(BRACKET_TRIES):
+        page = provider.transactions(None)
+        if not page.ok:
+            return None, 0, error_text(page)
+        got = provider.balance()
+        if not got.ok:
+            return None, 0, error_text(got)
+        again = provider.transactions(None, limit=1)
+        if not again.ok:
+            return None, 0, error_text(again)
+        if _newest(again) == _newest(page):
+            return page, _sum(got.body, "available", base) + _sum(got.body, "pending", base), ""
+    return None, 0, "the Stripe balance changed while it was read: it is read again next time"
+
+
+def _newest(answer: Answer) -> str:
+    rows = listed(answer)
+    return str(rows[0].get("id") or "") if rows else ""
+
+
+def _walk(store: Any, provider: Provider, cid: str, conf: dict[str, Any], cursor: str | None, head: str | None,
+          pages: int, now: str, *, stop: str | None, backfill: bool, first: Answer | None = None) -> list[str]:
+    """Up to `pages` pages newest first from `cursor` (None: the top), each taken in and then the walk's place saved.
+    The walk ends at `stop` (the boundary: rows from it on are already in), at the list's end, or as complete. A problem
+    returns at once and keeps the place the last page saved, so the next step reads the failed page again. A complete
+    walk's head becomes the boundary; a backfill also sets the opening balance. `first` is a page already read."""
+    page = first
+    for _ in range(pages):
+        if page is None:
+            page = provider.transactions(cursor)
+        if not page.ok:
+            return [error_text(page)]
+        rows = listed(page)
+        ids = [str(r.get("id") or "") for r in rows]
+        if head is None and ids:
+            head = ids[0]
+        problems = _take(store, cid, str(conf.get("account") or ""), rows, now, stop=stop)
+        if problems:
+            return problems
+        if (stop is not None and stop in ids) or not has_more(page) or not rows:
+            _complete(store, cid, now, conf, head, backfill)
+            return []
+        cursor = ids[-1]
+        _save(store, cid, now, conf, cursor, head)
+        page = None
     return []
 
 
-def _cut(store: Any, provider: Provider, now: str) -> tuple[dict[str, object], str]:
-    """The balance as the backfill starts. It is read first and the clock after, so a transaction created before the cut
-    is in the balance and one created after it is not (to the second: Stripe's ids carry no snapshot)."""
-    got = provider.balance()
-    if not got.ok:
-        return {}, error_text(got)
-    with store.read() as c:
-        base = load(c, now).book.base_currency
-    held = _sum(got.body, "available", base) + _sum(got.body, "pending", base)
-    return {"cutoff": int(_clock()), "cutoff_balance": held}, ""
-
-
-def _finish(store: Any, cid: str, conf: Mapping[str, Any], now: str) -> None:
-    """Each Stripe money account's opening balance: the cut's balance less the rows the cut had created, dated the day
-    before the first row (today with none). Later rows are never counted in it."""
-    cut, held = int(conf["cutoff"]), int(conf["cutoff_balance"])
+def _save(store: Any, cid: str, now: str, conf: Mapping[str, Any], cursor: str, head: str | None) -> None:
+    state = {**conf, "head": head} if head else dict(conf)
     with store.transaction() as c:
-        ctx = load(c, now)
-        for m in SK.money_accounts(c, ctx.book.id):
-            if str(m["connection_id"] or "") != cid or str(m["kind"]) != "stripe":
-                continue
-            mid = str(m["id"])
-            first = SK.first_feed_day(c, mid)
-            day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
-            banking.set_opening(ctx, m, held - SK.stripe_settled_through(c, mid, cut), day)
-        SK.update(c, "fin_connections", cid, {"settings_json": SK.dump({**conf, "backfilled": True}), "cursor": None,
-                                              "updated_at": now})
+        SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings_json": SK.dump(state), "updated_at": now})
 
 
-def _walk(store: Any, provider: Provider, cid: str, acct: str, now: str, start: str | None, pages: int, *,
-          stop_known: bool) -> Walk:
-    """Up to `pages` pages newest first from `start`, each taken in. The walk ends at a page that reaches a row already
-    taken in (with stop_known), at the list's end, or at a problem (its cursor is kept, so the page is read again).
-    Otherwise the cursor saved is the oldest row read, and the next step continues from there."""
-    cursor = start
-    for _ in range(pages):
-        page = provider.transactions(cursor)
-        if not page.ok:
-            return cursor, [error_text(page)], False
-        rows = listed(page)
-        problems, known = _take(store, cid, acct, rows, now, stop_known=stop_known)
-        if problems:
-            return cursor, problems, False
-        ended = known or not has_more(page) or not rows
-        cursor = None if ended else str(rows[-1]["id"])
-        with store.transaction() as c:
-            SK.update(c, "fin_connections", cid, {"cursor": cursor})
-        if ended:
-            return None, [], True
-    return cursor, [], False
+def _complete(store: Any, cid: str, now: str, conf: Mapping[str, Any], head: str | None, backfill: bool) -> None:
+    """A walk that reached its end: its head is the boundary the next walk stops at. A backfill sets each Stripe money
+    account's opening balance too: the balance it read, less every row now taken in (all of them at or before its
+    head, since the walk started there)."""
+    done = {k: v for k, v in conf.items() if k != "held"}
+    done["boundary"] = head or conf.get("boundary") or ""
+    with store.transaction() as c:
+        if backfill:
+            ctx = load(c, now)
+            for m in SK.money_accounts(c, ctx.book.id):
+                if str(m["connection_id"] or "") != cid or str(m["kind"]) != "stripe":
+                    continue
+                mid = str(m["id"])
+                first = SK.first_feed_day(c, mid)
+                day = (dates.day(first) - timedelta(days=1)).isoformat() if first else ctx.today
+                banking.set_opening(ctx, m, int(conf["held"]) - SK.feed_total(c, mid), day)
+            done["backfilled"] = True
+        SK.update(c, "fin_connections", cid, {"settings_json": SK.dump(done), "cursor": None, "updated_at": now})
 
 
-def _take(store: Any, cid: str, acct: str, rows: list[dict[str, Any]], now: str, *, stop_known: bool
-          ) -> tuple[list[str], bool]:
+def _take(store: Any, cid: str, acct: str, rows: list[dict[str, Any]], now: str, *, stop: str | None) -> list[str]:
     """Take a page's rows in, oldest first, each in its own savepoint, in one transaction; then the batch is done (see
-    stripe_post.batch_done). With stop_known, rows from the first already taken in onward are not read. A row in another
-    currency than the book's is read and not posted. Returns the problems (the page stops at the first failure) and
-    whether a known row was reached."""
+    stripe_post.batch_done). Rows from `stop` on are not read. A row in another currency than the book's is read and not
+    posted. Returns the problems: the page stops at the first failure, and the rows before it stay in."""
     problems: list[str] = []
-    known = False
-    ids = [str(r.get("id") or "") for r in rows]
     with store.transaction() as c:
         ctx = load(c, now)
         base = ctx.book.base_currency
         money = SK.money_account_by_provider(c, cid, acct)
         if money is None:
-            return ["the Stripe account has no money account on the books"], False
+            return ["the Stripe account has no money account on the books"]
         cut = len(rows)
-        if stop_known:
-            taken = SK.provider_rows(c, str(money["id"]), ids)
-            for i, tid in enumerate(ids):
-                if tid in taken:
-                    cut, known = i, True
-                    break
+        if stop is not None:
+            cut = next((i for i, r in enumerate(rows) if str(r.get("id") or "") == stop), len(rows))
         for raw in reversed(rows[:cut]):
             if str(raw.get("currency") or "").upper() != base.upper():
                 continue
@@ -336,4 +359,4 @@ def _take(store: Any, cid: str, acct: str, rows: list[dict[str, Any]], now: str,
                 break
             ctx.c.execute("RELEASE fin_stripe")
         stripe_post.batch_done(ctx, money)
-    return problems, known
+    return problems

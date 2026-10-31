@@ -247,14 +247,20 @@ def row_effects(c: sqlite3.Connection, book_id: str, money_account_id: str, gl_a
                 through: str) -> list[Any]:
     """This money account's rows no done reconciliation cleared, each with what its entries moved on the account's GL
     line: `through`, every entry ever posted for it (originals, their reversals, replacements, a shared transfer)
-    dated through that day; `live`, its current posted entry, whatever its date."""
+    dated through that day; `live`, its current posted entry, whatever its date. A Stripe row in a day's summary shares
+    its entry with the day's other rows, so it counts its own amount (its net) rather than the whole entry's line."""
+    summary = "json_extract(f.raw_json, '$.summary')=1"
     return c.execute(
-        "SELECT f.id, COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
+        f"SELECT f.id, CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
+        "AND e.status='posted' AND e.entry_date<=:through) THEN f.amount ELSE 0 END ELSE "
+        "COALESCE((SELECT SUM(l.amount) FROM fin_entries e JOIN fin_lines l ON l.entry_id=e.id AND "
         "l.account_id=:gl WHERE e.book_id=:book AND e.source IN ('bank','card') AND e.entry_date<=:through AND "
         "(e.source_id=f.id OR substr(e.source_id, 1, length(f.id) + 1)=f.id || ':' OR (e.source_id LIKE 'transfer:%' "
-        "AND instr(e.source_id, f.id)>0))), 0) AS through_amount, "
+        "AND instr(e.source_id, f.id)>0))), 0) END AS through_amount, "
+        f"CASE WHEN {summary} THEN CASE WHEN EXISTS (SELECT 1 FROM fin_entries e WHERE e.id=f.entry_id "
+        "AND e.status='posted') THEN f.amount ELSE 0 END ELSE "
         "COALESCE((SELECT SUM(l.amount) FROM fin_lines l JOIN fin_entries e ON e.id=l.entry_id AND e.status='posted' "
-        "WHERE l.entry_id=f.entry_id AND l.account_id=:gl), 0) AS live_amount "
+        "WHERE l.entry_id=f.entry_id AND l.account_id=:gl), 0) END AS live_amount "
         "FROM fin_feed_txns f WHERE f.money_account_id=:money AND f.reconciliation_id IS NULL",
         {"gl": gl_account_id, "book": book_id, "through": through, "money": money_account_id}).fetchall()
 
@@ -718,19 +724,10 @@ def recipient_paid(c: sqlite3.Connection, recipient_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ Stripe
-def provider_rows(c: sqlite3.Connection, money_account_id: str, provider_ids: Sequence[str]) -> set[str]:
-    """Which of these provider ids already have a feed row on this money account."""
-    if not provider_ids:
-        return set()
-    rows = c.execute(f"SELECT provider_id FROM fin_feed_txns WHERE money_account_id=? AND provider_id IN "
-                     f"({_marks(provider_ids)})", [money_account_id, *provider_ids]).fetchall()
-    return {str(r[0]) for r in rows}
-
-
-def stripe_settled_through(c: sqlite3.Connection, money_account_id: str, cutoff: int) -> int:
-    """What a Stripe balance held of the rows created at or before `cutoff` (unix seconds): their nets, summed."""
-    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=? AND "
-                    "CAST(json_extract(raw_json, '$.created') AS INTEGER) <= ?", (money_account_id, cutoff)).fetchone()
+def feed_total(c: sqlite3.Connection, money_account_id: str) -> int:
+    """What a money account's feed rows add up to: a Stripe balance's nets, every row taken in so far."""
+    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_feed_txns WHERE money_account_id=?",
+                    (money_account_id,)).fetchone()
     return int(row[0])
 
 

@@ -1,16 +1,18 @@
 """Stripe balance activity in the books (spec §9). The Stripe balance is one money account, and each balance transaction
-posts by its own day. A sale is income, or the open invoice it pays when the contact's name matches: one settles it, an
-invoice already paid takes a customer credit and a person is asked, and several candidates post nothing and ask. Other
-sales and Stripe's own charges post as one summary entry per day, linked to their rows; a row that arrives for a day
+posts by its own day. A sale is the open invoice it pays when the contact's name matches: one settles it, an invoice
+already paid takes a customer credit and a person is asked, and several candidates post nothing and ask. A sale that
+matches no invoice takes its posting rule's account, tags and contact (income when no rule covers it) and posts with the
+day's summary entry, linked to its row; a rule that asks holds the sale for a person. A row that arrives for a day
 already summarized adds an adjusting entry. A refund, dispute or returned refund reverses or restores its sale's own
-lines in proportion. A payout posts on its day to payouts in transit and clears when the bank deposit of the same amount
-arrives: a deposit that looks like Stripe's, and no other receipt. Called from banking's settle step and from the sync
-worker, inside the caller's transaction."""
+lines in proportion, and gives back its share of any invoice the sale paid. A payout posts on its day to payouts in
+transit and clears when the bank deposit of the same amount arrives: a deposit that looks like Stripe's, and no other
+receipt. Called from banking's settle step and from the sync worker, inside the caller's transaction."""
+from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from datetime import timedelta
-from typing import Any, Sequence
+from typing import Any, cast
 
-from . import banking, documents, posting
+from . import banking, documents, posting, posting_rules
 from .context import Ctx
 from .core import dates
 from .core import feeds as F
@@ -26,11 +28,13 @@ FEES_CODE, FEES_NAME = "6200", "Payment processing fees"
 TRANSIT_CODE, TRANSIT_NAME = "1060", "Stripe payouts in transit"
 STALE_DAYS = 7                   # an item still waiting after this many days is asked about
 SUMMARY = "summary"              # the raw copy's mark: the row posts in its day's summary entry
+COUNTER = "counter"              # a summarized sale's own counter lines: [account, amount, tags, contact] each
 WAITING = (*F.STRIPE_UNWINDS, *F.STRIPE_PAYOUT_BACK)     # rows that wait for the sale or payout they are about
 WAITING_MOST = 200
 FAR_PAST = "0000-01-01"
 
 Share = tuple[str, int, dict[str, str], str]     # (account id, amount, tags, contact id) of one line to post
+
 
 
 def settle(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> None:
@@ -99,14 +103,16 @@ def stale(ctx: Ctx) -> None:
 
 # ------------------------------------------------------------------------------------------------ sales
 def _sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) -> None:
-    """A sale the same way a bank receipt is matched: a payment marked from this account first, then the one open
-    invoice of its gross amount from a contact the billing name matches, then the customer's credit when that invoice is
-    paid already. Anything unclear asks and posts nothing; a sale that matches nothing is income (at the day's summary)."""
+    """A sale the way a bank receipt is matched: a payment marked from this account first (the sale's fee posts with
+    it), then the one open invoice of its gross amount from a contact the billing name matches, then the customer's
+    credit when that invoice is paid already. Anything unclear asks and posts nothing; a sale that matches none is
+    ordinary (see _ordinary)."""
     fid = str(row["id"])
     if gross <= 0:
-        _to_summary(ctx, row)
+        _to_summary(ctx, row, [(_income(ctx).id, -gross, {}, "")])
         return
-    match = documents.expected_match(ctx, row, money, replace(t, amount=gross))
+    fees = [banking.feed_line(_fees(ctx).id, fee)] if fee else []
+    match = documents.expected_match(ctx, row, money, replace(t, amount=gross), posted=t, fees=fees)
     if match == documents.ASK:
         _ask(ctx, fid, "several marked payments could be this sale", "ambiguous")
         return
@@ -131,7 +137,25 @@ def _sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) ->
     if named_paid:
         _credit(ctx, row, money, t, gross, fee, named_paid[0])
         return
-    _to_summary(ctx, row)
+    _ordinary(ctx, row, money, t, gross)
+
+
+def _ordinary(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int) -> None:
+    """A sale no invoice takes: the first posting rule that covers it says where its gross goes (an account, its tags and
+    a contact, as on a bank row), and it posts with the day's summary. A rule that asks holds it for a person; with no
+    rule it is income."""
+    fid = str(row["id"])
+    facts = {"amount": gross, "counterparty": t.counterparty, "description": t.description, "kind": t.kind}
+    rule = posting_rules.first_for(ctx, posting_rules.feed_facts(facts, money))
+    if rule is None:
+        counter: list[Share] = [(_income(ctx).id, -gross, {}, "")]
+    elif rule.then.outcome == "post" and posting_rules.usable(ctx, rule.then):
+        counter = [(str(line["account_id"]), cast(int, line["amount"]), cast(dict[str, str], line["tags"]),
+                    str(line.get("contact_id") or "")) for line in posting_rules.lines_for(ctx, facts, rule)]
+    else:
+        _ask(ctx, fid, "a posting rule asks a person about this sale")
+        return
+    _to_summary(ctx, row, counter)
 
 
 def _settle_invoice(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int, doc: Any) -> None:
@@ -159,9 +183,12 @@ def _post_sale(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: in
     return entry
 
 
-def _to_summary(ctx: Ctx, row: Any) -> None:
-    """Marks the row for its day's summary entry (see _summarize), which posts it with the day's other ordinary rows."""
+def _to_summary(ctx: Ctx, row: Any, counter: Sequence[Share] | None = None) -> None:
+    """Marks the row for its day's summary entry (see _summarize_day), which posts it with the day's other ordinary rows.
+    A sale carries the counter lines it posts to; a Stripe charge of its own (a cost) carries none."""
     raw = {**SK.loads(row["raw_json"]), SUMMARY: True}
+    if counter is not None:
+        raw[COUNTER] = [[account, amount, dict(tags), contact] for account, amount, tags, contact in counter]
     SK.update(ctx.c, "fin_feed_txns", str(row["id"]), {"raw_json": SK.dump(raw), "updated_at": ctx.at})
 
 
@@ -174,21 +201,24 @@ def _summarize(ctx: Ctx, money: Any) -> None:
 
 
 def _summarize_day(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
-    """One entry for a day's ordinary sales and Stripe charges: income is the sales' gross, expenses are the fees and
-    Stripe's own charges, and the balance takes the nets. The first entry of a day takes the day's id; a later batch's
-    rows add an adjusting entry for their own rows only."""
-    income = fees = net = 0
+    """One entry for a day's ordinary sales and Stripe charges: each sale's counter lines are summed per account, tags and
+    contact; the fees and Stripe's own charges are expenses, and the balance takes the nets. The first entry of a day takes
+    the day's id; a later batch's rows add an adjusting entry for their own rows only."""
+    counter: dict[tuple[str, tuple[tuple[str, str], ...], str], int] = {}
+    fees = net = 0
     for r in rows:
-        gross, fee = F.stripe_parts(SK.loads(r["raw_json"]))
+        raw = SK.loads(r["raw_json"])
+        gross, fee = F.stripe_parts(raw)
         net += int(r["amount"])
         fees += fee
         if str(r["kind"]) in F.STRIPE_CHARGES:
-            income -= gross
+            for account, amount, tags, contact in _carried(ctx, raw):
+                key = (account, tuple(sorted(tags.items())), contact)
+                counter[key] = counter.get(key, 0) + amount
         else:
             fees -= gross
-    lines: list[dict[str, object]] = []
-    if income:
-        lines.append(banking.feed_line(_income(ctx).id, income))
+    lines: list[dict[str, object]] = [banking.feed_line(account, amount, dict(tags), contact)
+                                      for (account, tags, contact), amount in sorted(counter.items()) if amount]
     if fees:
         lines.append(banking.feed_line(_fees(ctx).id, fees))
     roles: dict[int, str] = {}
@@ -201,16 +231,26 @@ def _summarize_day(ctx: Ctx, money: Any, day: str, rows: list[Any]) -> None:
     else:
         source_id = banking.fresh_source(ctx, "sync", f"stripe:adjust:{money['id']}:{day}:{rows[0]['id']}")
     done = posting.post_entry(ctx.c, {"date": banking.open_day(ctx, day), "source": "sync", "source_id": source_id,
-                                      "memo": f"Stripe sales and fees, {day}", "lines": lines}, at=ctx.at,
-                              roles=roles)
+                                      "memo": f"Stripe sales and fees, {day}", "lines": banking.vendor_lines(ctx, lines)},
+                              at=ctx.at, roles=roles)
     banking.mark_posted(ctx, [str(r["id"]) for r in rows], str(done["entry_id"]))
+
+
+def _carried(ctx: Ctx, raw: Mapping[str, Any]) -> list[Share]:
+    """The counter lines a summarized sale carries: the ones its posting rule set, else its gross to income."""
+    lines = raw.get(COUNTER)
+    if not lines:
+        gross, _ = F.stripe_parts(raw)
+        return [(_income(ctx).id, -gross, {}, "")]
+    return [(str(account), int(amount), {str(k): str(v) for k, v in dict(tags).items()}, str(contact))
+            for account, amount, tags, contact in lines]
 
 
 # ------------------------------------------------------------------------------------------------ refunds and disputes
 def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) -> None:
     """A refund, dispute or returned refund reverses (or restores) its sale: the sale's own counter lines take the
-    opposite of the gross in proportion to what each carried, its fee is an expense, and the balance takes the net. A
-    sale that has not arrived yet waits as new."""
+    opposite of the gross in proportion to what each carried, its fee is an expense, and the balance takes the net. What
+    the sale settled gives back its share too. A sale that has not arrived yet waits as new."""
     fid = str(row["id"])
     link = str(t.raw.get("link") or "")
     if not link:
@@ -231,15 +271,25 @@ def _unwind(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, gross: int, fee: int) 
         lines.append(banking.feed_line(_fees(ctx).id, fee))
     entry = banking.post_row(ctx, fid, t, lines, _gl_of(ctx, money).id, [])
     banking.mark_posted(ctx, [fid], entry)
+    _give_back(ctx, original, row, -gross, entry)
+
+
+def _give_back(ctx: Ctx, original: Any, row: Any, refunded: int, entry: str) -> None:
+    """What the refunded sale settled gives back its share of the refund, in proportion to each settlement: the document
+    owes it again and its status follows (a negative settlement from the refund's row, on its entry)."""
+    live = SAP.settlements_from(ctx.c, "feed", str(original["id"]))
+    for s, part in zip(live, _shares([int(x["amount"]) for x in live], refunded), strict=True):
+        if part:
+            documents.settle(ctx, str(s["to_kind"]), str(s["to_id"]), amount=-part, day=str(row["txn_date"]),
+                             from_kind="feed", from_id=str(row["id"]), entry_id=entry)
 
 
 def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
     """The counter lines a sale posted (negative), to be reversed. A summarized sale has no lines of its own (the day's
-    entry is shared), so its income is what it carried. None while the sale is not posted yet."""
+    entry is shared), so its carried lines are what it posted to. None while the sale is not posted yet."""
     raw = SK.loads(original["raw_json"])
     if raw.get(SUMMARY):
-        gross, _ = F.stripe_parts(raw)
-        return [(_income(ctx).id, -gross, {}, "")]
+        return _carried(ctx, raw)
     if not original["entry_id"]:
         return None
     return [(line.account_id, line.amount, dict(line.tags), line.contact_id)
@@ -250,14 +300,21 @@ def _counter(ctx: Ctx, original: Any) -> list[Share] | None:
 def _split(counter: Sequence[Share], total: int) -> list[Share]:
     """Each counter line's share of `total`, in proportion to its own amount, in whole cents: the last line takes the
     rounding, and a zero share is dropped. `counter` is non-empty and negative."""
-    base = sum(amount for _, amount, _, _ in counter)
-    out: list[Share] = []
+    parts = _shares([amount for _, amount, _, _ in counter], total)
+    return [(account, part, tags, contact) for (account, _, tags, contact), part in zip(counter, parts, strict=True)
+            if part]
+
+
+def _shares(weights: Sequence[int], total: int) -> list[int]:
+    """Each weight's share of `total`, in proportion, in whole cents: the last takes the rounding."""
+    base = sum(weights)
+    out: list[int] = []
     left = total
-    for i, (account, amount, tags, contact) in enumerate(counter):
-        part = left if i == len(counter) - 1 else _trunc_div(amount * total, base)
+    for i, weight in enumerate(weights):
+        last = i == len(weights) - 1
+        part = left if last else (_trunc_div(weight * total, base) if base else 0)
+        out.append(part)
         left -= part
-        if part:
-            out.append((account, part, tags, contact))
     return out
 
 

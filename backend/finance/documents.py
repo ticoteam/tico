@@ -935,14 +935,17 @@ def _named(counterparty: str, name: str) -> bool:
 ASK = "ask"                 # expected_match: the row may pay a marked payment, but which is unclear; a person picks
 
 
-def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
+def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, *, posted: F.FeedTxn | None = None,
+                   fees: Sequence[dict[str, object]] = ()) -> str:
     """Link a new settled row to a payment marked paid from its money account that waits for it (same direction and
     amount, marked within MATCH_DAYS of the row): the row takes that entry, nothing new posts, and the settlement now
     comes from the row (so a bank change or cancellation makes the document owe it again). None of that amount: a set
     of two or more payments to one contact that sums to it (several bills in one transfer), whose entries become one.
-    The contact's name only breaks a tie (a bank often names the rail, not the vendor). "linked"; ASK when candidates
-    exist but no single one (the row stays new, never posting a second money line, and a person picks); "" when
-    nothing waits, and the row posts as usual."""
+    The contact's name only breaks a tie (a bank often names the rail, not the vendor). `posted` is the balance the row
+    posts when it differs from the amount matched (a Stripe sale matches its gross and posts its net), and `fees` are
+    the lines beyond the payments; with either, the row's entry is its own. "linked"; ASK when candidates exist but no
+    single one (the row stays new, never posting a second money line, and a person picks); "" when nothing waits, and
+    the row posts as usual."""
     kind = "bill" if t.amount < 0 else "invoice"
     start, end = _window(t.txn_date)
     exact, cut = _waiting(ctx, kind, money, abs(t.amount), start, end)
@@ -960,20 +963,22 @@ def expected_match(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn) -> str:
         group = _pick(sets, t.counterparty)
     if group is None:
         return ASK
-    _link(ctx, row, money, t, group)
+    _link(ctx, row, money, posted or t, group, fees)
     return "linked"
 
 
-def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
-    """The row is the bank side of these waiting payments: one takes its entry as it is; several are replaced by
-    one entry for the row (the bank moves once). Each settlement now comes from the row. The row's entry id."""
+def _link(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
+          fees: Sequence[dict[str, object]] = ()) -> str:
+    """The row is the bank side of these waiting payments: one takes its entry as it is; several, or one with fees
+    beyond the payment, are replaced by one entry for the row (the bank moves once). Each settlement now comes from the
+    row. The row's entry id."""
     from .banking import mark_posted
     fid = str(row["id"])
-    if len(group) == 1:
+    if len(group) == 1 and not fees:
         mark_posted(ctx, [fid], str(group[0]["entry_id"]))
         SAP.update(ctx.c, "fin_settlements", str(group[0]["id"]), {"from_kind": "feed", "from_id": fid})
         return str(group[0]["entry_id"])
-    return _post_combined(ctx, row, money, t, group)
+    return _post_combined(ctx, row, money, t, group, fees)
 
 
 def _pick(sets: Sequence[list[Any]], counterparty: str) -> list[Any] | None:
@@ -1023,9 +1028,11 @@ def _combined(waiting: Sequence[Any], amount: int) -> tuple[list[list[Any]], boo
     return found, False
 
 
-def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any]) -> str:
-    """One row paying several documents marked paid from its account: their entries are reversed and the row posts
-    one entry for them all (the bank moves once), and each settlement now comes from the row."""
+def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence[Any],
+                   fees: Sequence[dict[str, object]] = ()) -> str:
+    """One row paying the documents marked paid from its account (several, or one with the fees it carries): their
+    entries are reversed and the row posts one entry for them all, with `fees`, and the bank moves once. Each settlement
+    now comes from the row."""
     from .banking import mark_posted, open_day, post_row
     gl = ctx.accounts.get(str(money["account_id"] or ""))
     if gl is None:
@@ -1038,10 +1045,10 @@ def _post_combined(ctx: Ctx, row: Any, money: Any, t: F.FeedTxn, group: Sequence
     # shows the bank moving twice; `banking._unchanged` keeps that day when the row comes again.
     day = max([open_day(ctx, t.txn_date), *(open_day(ctx, str(e["entry_date"])) for e in entries)])
     for entry in entries:
-        posting.reverse(ctx, str(entry["id"]), day=day, memo="its bank row came, paying several at once", by=SYSTEM)
+        posting.reverse(ctx, str(entry["id"]), day=day, memo="its bank row came", by=SYSTEM)
     lines: list[dict[str, object]] = [{"account_id": ctl.id, "amount": SIGN[kind] * int(s["amount"]), "tags": {},
                                        "contact_id": str(s["contact_id"] or "")} for s in group]
-    entry_id = post_row(ctx, fid, t, lines, gl.id, [], day=day)
+    entry_id = post_row(ctx, fid, t, [*lines, *fees], gl.id, [], day=day)
     mark_posted(ctx, [fid], entry_id)
     for s in group:
         SAP.update(ctx.c, "fin_settlements", str(s["id"]), {"from_kind": "feed", "from_id": fid, "entry_id": entry_id})
