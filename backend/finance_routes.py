@@ -165,6 +165,13 @@ def install(app, store, auth, mutate):
         actor = as_viewer(request, view_as)
         return read(lambda c: finance_reads.payments(c, actor, status=status, cursor=cursor, limit=limit))
 
+    @app.get("/api/v2/finance/transfers")
+    def finance_transfers(request: Request, cursor: str | None = Query(None, max_length=100),
+                          limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """Internal transfers between money accounts the caller sees, newest first, with their status."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.transfers(c, actor, cursor=cursor, limit=limit))
+
     @app.get("/api/v2/finance/recipients")
     def finance_recipients(request: Request):
         """Current recipients, last 4 only, for teammates who may pay."""

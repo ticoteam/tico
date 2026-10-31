@@ -618,6 +618,20 @@ def payments(c: sqlite3.Connection, *, status: str = "", before: str = "", most:
                      [*args, most]).fetchall()
 
 
+def transfers(c: sqlite3.Connection, money_account_ids: Sequence[str], *, before: str = "", most: int = 100) -> list[Any]:
+    """Internal transfers between two of these money accounts, newest first."""
+    if not money_account_ids:
+        return []
+    marks = ",".join("?" * len(money_account_ids))
+    where = f"from_money_account_id IN ({marks}) AND to_money_account_id IN ({marks})"
+    args: list[object] = [*money_account_ids, *money_account_ids]
+    if before:
+        where += " AND created_at<?"
+        args.append(before)
+    return c.execute(f"SELECT * FROM fin_transfers WHERE {where} ORDER BY created_at DESC, id DESC LIMIT ?",
+                     [*args, most]).fetchall()
+
+
 # ------------------------------------------------------------------------------------------------ inbox and outbox
 def inbox_add(c: sqlite3.Connection, *, connection_id: str | None, provider: str, event_id: str,
               payload: Mapping[str, object], at: str) -> bool:

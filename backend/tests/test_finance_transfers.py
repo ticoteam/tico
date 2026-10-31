@@ -420,3 +420,23 @@ def test_when_mercury_returns_a_transfer_id_its_legs_settle_that_transfer_not_an
     sync_once(books, fake, POLL)
     rows = dict(_rows(books, "SELECT id, status FROM fin_transfers"))
     assert rows[second] == "posted" and rows[first] == "submitted", rows
+
+
+def test_the_transfers_read_lists_moves_between_accounts_the_viewer_sees_both_of_newest_first(books):
+    from backend.finance import reads as FR
+    fake = FakeMercury()
+    src, dst = _two(books, fake)
+    tid = _queued_by_ben(books, src, dst)
+    src_ledger, _ = _ledger(books, src[0])
+    with books.transaction() as c:
+        mine = FR.transfers(c, "human:ben")
+        (row,) = mine["transfers"]
+        assert row["id"] == tid and row["status"] == "queued" and row["amount"] == 10_000 and mine["next_cursor"] is None
+        assert (row["from"]["id"], row["to"]["id"]) == (src[0], dst[0]) and row["created_by"] == "human:ben"
+        assert FR.transfers(c, OWNER)["transfers"][0]["id"] == tid
+        # One of the two accounts is not enough to see the move.
+        act(c, OWNER, "view_grant", {"subject_kind": "teammate", "subject": "human:cara", "what": "bs_lines",
+                                     "whose": "company", "account_ids": [src_ledger]})
+        assert FR.transfers(c, "human:cara")["transfers"] == []
+        act(c, "human:ben", "payment_cancel", {"transfer_id": tid})
+        assert FR.transfers(c, "human:ben")["transfers"][0]["status"] == "cancelled"

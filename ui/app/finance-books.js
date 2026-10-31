@@ -606,7 +606,7 @@ async function finXferLoad(more) {
   if (FIN?.tx !== state || state.load !== load || !$('#fin-tx')) return;
   const rows = (d.transfers || []).map(x => ({...x, kind: 'transfer'}));
   state.rows = more ? [...state.rows, ...rows] : rows;
-  state.next = d.next || null;
+  state.next = d.next_cursor || null;
   if (!state.rows.some(r => finTxKey(r) === state.sel)) state.sel = state.rows[0] ? finTxKey(state.rows[0]) : '';
   finXferDraw(); finXferRail();
 }
