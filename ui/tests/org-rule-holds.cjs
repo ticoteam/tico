@@ -118,8 +118,13 @@ async function review(browser, {viewport, theme, paged = false}) {
         await line.waitFor();
         assert.equal(await line.innerText(), 'Checks on · 12 today · 0 unchecked · $48 left');
         assert.equal(await page.locator('.ru-checks').count(), 1);
+        // The header on its own (on a phone the panel is a sheet over it), once the page change has settled.
+        await page.evaluate(() => { location.hash = '#/rules'; });
+        await page.locator('#ru-side').waitFor({state: 'hidden'});
+        await page.waitForTimeout(600);
         const wide = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
         assert.ok(wide <= 1, `no sideways scroll on Rules (${wide}px)`);
+        assert.equal(await page.locator('.ru-checks').count(), 1);
         await shot(page, `rules-header-${viewport.width}-${theme}`);
         // The held reply in a chat, drawn by the same code the chat uses.
         await page.evaluate(() => {
@@ -131,6 +136,7 @@ async function review(browser, {viewport, theme, paged = false}) {
         });
         const note = page.locator('#rh-sample .rh-note');
         assert.match(await note.innerText(), /reply was held: it broke the rule/);
+        await page.waitForTimeout(300);
         await shot(page, `held-note-${viewport.width}-${theme}`);
         assert.deepEqual(errors, []);
         await page.close();
