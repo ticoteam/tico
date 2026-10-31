@@ -463,16 +463,35 @@ def _default_hub_get(path):
 HUB_GET = _default_hub_get
 
 
+# One try at the org rule check: the server's longest check deadline (backend/org_rule_check.py DEADLINES, 15 s at
+# High) plus a margin for the write around it. A server that has not answered by then has let the check go.
+RULE_CHECK_TIMEOUT = 20
+
+
+class HubFailed(Exception):
+    """Tico was asked and gave no usable answer. `reason`: forbidden (the token is not this bot's), http_<status>,
+    unavailable (timed out or unreachable) or error."""
+
+    def __init__(self, reason):
+        super().__init__(reason)
+        self.reason = reason
+
+
 def _default_hub_post(path, body):
-    """One Tico POST. Tests replace `HUB_POST`. None means: no cloud credential, or the server did not answer."""
+    """One Tico POST, one try within RULE_CHECK_TIMEOUT. Tests replace `HUB_POST`. None means no cloud credential
+    (outside a turn); a request Tico refused or did not answer raises HubFailed."""
     url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
     if not url or not token:
         return None
+    from clients.tico import APIError, Client
     try:
-        from clients.tico import Client
-        return Client(url, token, timeout=20, retries=1).post(path, body)
+        return Client(url, token, timeout=RULE_CHECK_TIMEOUT, retries=0).post(path, body)
+    except APIError as exc:
+        reason = "forbidden" if exc.status == 403 else f"http_{exc.status}" if exc.status else \
+            "unavailable" if exc.code == "unavailable" else "error"
+        raise HubFailed(reason) from None
     except Exception:
-        return None
+        raise HubFailed("error") from None
 
 
 HUB_POST = _default_hub_post
@@ -480,10 +499,17 @@ HUB_POST = _default_hub_post
 
 def rule_check(slug, to, cc, subject, body):
     """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
-    {"outcome": "pass" | "held" | "warn" | "unchecked", ...}. None when Tico cannot be asked: the send goes on, as
-    every other failure of the check lets an output through."""
-    answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
-                                                  "subject": subject or "", "body": body or ""})
+    {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
+    A check that failed (refused, timed out, a server error) lets the send go on, as every other failure of the check
+    lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason}, for the send
+    to log and answer with. The server records its own side (a `rules.unchecked` event) for a refusal or an error."""
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
+                                                      "subject": subject or "", "body": body or ""})
+    except HubFailed as exc:
+        import sys
+        print(f"mail: the org rule check failed ({exc.reason}); this send goes out unchecked", file=sys.stderr)
+        return {"outcome": "unchecked", "failed": exc.reason}
     return answer if isinstance(answer, dict) else None
 
 

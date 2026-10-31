@@ -9,7 +9,9 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   person's own writes, and their Assistant's, are never checked.
 - Which rules: `org_rules.matching(c, author, recipients)`, the full audience of the write. No matching rule is no
   call, which is most outputs.
-- What is judged: the whole output, short or long. An output whose state is over Decide's limit is held, not passed.
+- What is judged: the whole output, short or long. An output whose state is over Decide's limit is held, not passed,
+  when any rule it meets is Block or Escalate; when all are Warn it is delivered with a line saying it was too long to
+  check, and a `rules.unchecked` event (reason `too_large`).
 - If broken, per rule, strictest wins: Block holds it (a 200 `held` answer, never a refusal, so no quarantine) and
   the bot is told the rule and whom to appeal to; Escalate also files one review task for the reviewer; Warn
   delivers it with a warning line on the recipient's copy. The 3rd block of one rule by one bot in a UTC day
@@ -18,6 +20,11 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   replays the normal write once, as the bot (`REPLAY`), with a one-shot nonce and no second Decide call.
 - Fails open: checks Off, no engine, the rules budget, the day's call cap, the deadline, an error or a malformed
   answer let the output through with a `rules.unchecked` event. Events never carry the text.
+- Bounded: at most `rule_check_concurrency` calls run at once in this process (`_Calls`); with every slot in use the
+  output goes through unchecked at once (`busy`), never waiting for one. After BREAKER_FAILURES timeouts or errors in a
+  row no call is made for BREAKER_SECONDS (`breaker`), then one call probes. Each level has its own deadline
+  (DEADLINES), and the call itself is cut off then (`J.within`), so an abandoned call never runs on to the Gateway's
+  own timeout holding its slot.
 - Cache: verdicts are kept by a digest of the check input, the matched rules and versions, the set and the level, so
   `hub rules check` on a draft and then sending it costs one call.
 """
@@ -28,6 +35,8 @@ import json
 import logging
 import secrets
 import threading
+import time
+import weakref
 
 from clients import judge as J
 from . import judge as B
@@ -38,7 +47,11 @@ from .store import H, Problem
 LOG = logging.getLogger("tico.org_rule_check")
 QUESTION_SET = "rule-check"
 RULES_TARGET = B.RULES_TARGET             # the judge.call rows a rule check writes (`rule-check@<version>`)
-DEADLINE = 10
+# The most one check waits for its answer, by Decide level (Low is Jev; Medium and High are language models).
+DEADLINES = {"low": 5, "medium": 10, "high": 15}
+CONCURRENCY = 8               # calls at once, per process, when the setting names none
+BREAKER_FAILURES, BREAKER_SECONDS = 5, 60
+NEUTRAL = ("spend_cap", "invalid")    # failures that say nothing of the provider's health: they never trip the breaker
 BUDGET = ("rules_monthly_usd", "rules.spend")     # backend/judge.py: its own cap and spend rows, apart from Decide's
 STRICT = {"warn": 1, "block": 2, "escalate": 3}
 REPEAT_BLOCKS = 3             # the 3rd block of one rule by one bot in a UTC day escalates for the rest of that day
@@ -123,7 +136,7 @@ def watched(c, bot):
     """Whether any active rule's Who names this bot: its live reply text stays hidden until delivered."""
     slug = H.actor_id(bot)
     try:
-        if not on(c) or not c.execute("SELECT 1 FROM org_rules WHERE status='active' LIMIT 1").fetchone():
+        if not R.any_active(c) or not on(c):
             return False
         key = R.who_key(c, "bot:" + slug)
         return any(R._hits(row["who"], key) for row in R._active(c))
@@ -198,24 +211,101 @@ def _questions(qset, rules):
     return out
 
 
-def _ask(engine, state, questions, label, level):
-    """The engine's answer within DEADLINE seconds: (result, None), (None, error code) or (None, 'timeout')."""
+def deadline(level):
+    """How long a check at `level` waits for its answer, in seconds."""
+    return DEADLINES.get(str(level or "").lower(), DEADLINES["medium"])
+
+
+class _Calls:
+    """One store's rule-check calls in flight and its circuit breaker: process-local, under one lock. A call holds its
+    slot until its thread ends, not until its caller stops waiting, so abandoned calls still count against the cap."""
+
+    def __init__(self, size):
+        self.size = size
+        self.slots = threading.BoundedSemaphore(size)
+        self.lock = threading.Lock()
+        self.failures, self.until, self.probing = 0, 0.0, False
+
+    def admit(self):
+        """(None, probe) when a call may start, its slot taken; else (`breaker` or `busy`, False), at once. The first
+        call after the cool-off is the probe, one at a time."""
+        probe = False
+        with self.lock:
+            if self.failures >= BREAKER_FAILURES:
+                if self.probing or time.monotonic() < self.until:
+                    return "breaker", False
+                self.probing = probe = True
+        if not self.slots.acquire(blocking=False):
+            if probe:
+                with self.lock:
+                    self.probing = False
+            return "busy", False
+        return None, probe
+
+    def done(self, ok, probe):
+        """A call's end as its caller saw it: True answered, False timed out or failed, None neither (a spend cap)."""
+        with self.lock:
+            if probe:
+                self.probing = False
+            if ok:
+                self.failures = 0
+            elif ok is False:
+                self.failures += 1
+                if self.failures >= BREAKER_FAILURES:
+                    if self.failures == BREAKER_FAILURES or probe:
+                        LOG.warning("Rule checks pause for %ss after %s failed calls in a row", BREAKER_SECONDS,
+                                    self.failures)
+                    self.until = time.monotonic() + BREAKER_SECONDS
+
+
+_CALLS, _CALLS_LOCK = weakref.WeakKeyDictionary(), threading.Lock()
+
+
+def calls_for(store):
+    """The store's `_Calls`, sized by its `rule_check_concurrency` setting (a new size starts a new set of slots)."""
+    size = max(1, int(getattr(store.settings, "rule_check_concurrency", 0) or CONCURRENCY))
+    with _CALLS_LOCK:
+        calls = _CALLS.get(store)
+        if calls is None or calls.size != size:
+            calls = _CALLS[store] = _Calls(size)
+        return calls
+
+
+def _ask(calls, engine, state, questions, label, level):
+    """The engine's answer within the level's deadline: (result, None) or (None, error code): `timeout`, or `busy` and
+    `breaker` at once, asking nothing. The deadline is the call's own too (`J.within`): the Gateway, Jev and a
+    company's own model each stop at it, so the thread and its slot end with it."""
+    refused, probe = calls.admit()
+    if refused:
+        return None, refused
+    seconds = deadline(level)
     box = {}
 
     def work():
         try:
-            box["result"] = B.ask(engine, state, questions, label, level)
+            with J.within(seconds):
+                box["result"] = B.ask(engine, state, questions, label, level)
         except J.JudgeError as exc:
             box["error"] = exc.code or "error"
         except Exception as exc:  # noqa: BLE001 - a fake, a provider bug: the write never breaks on it
             LOG.warning("Rule check call failed: %s", type(exc).__name__)
             box["error"] = "error"
+        finally:
+            calls.slots.release()
     worker = threading.Thread(target=work, name="org-rule-check", daemon=True)
-    worker.start()
-    worker.join(DEADLINE)
+    try:
+        worker.start()
+    except RuntimeError:                    # no thread to be had: the slot goes back and the output goes unchecked
+        calls.slots.release()
+        calls.done(None, probe)
+        return None, "busy"
+    worker.join(seconds)
     if worker.is_alive():
+        calls.done(False, probe)
         return None, "timeout"
-    return box.get("result"), box.get("error")
+    error = box.get("error")
+    calls.done(None if error in NEUTRAL else not error, probe)
+    return box.get("result"), error
 
 
 def preflight(store, primary, who, operation, output, recipients=(), context=None, obj="", draft=False, skip=()):
@@ -228,17 +318,17 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
         return None
     verdict = None
     try:
-        output = output if isinstance(output, str) else json.dumps(output, sort_keys=True, default=str)
         recipients = sorted({r for r in recipients or () if r and r != author})
         with store.read() as c:
-            if not on(c):
-                return None
+            if not R.any_active(c) or not on(c):
+                return None             # no rule in force: nothing more is read, and the output is never serialized
             rules = _rule_rows(R.matching(c, author, recipients))
             matched = sorted((r["id"], r["version"]) for r in rules)
             skip = {tuple(x) for x in skip or ()}
             rules = [r for r in rules if (r["id"], r["version"]) not in skip]
             if not rules:
                 return None
+            output = output if isinstance(output, str) else json.dumps(output, sort_keys=True, default=str)
             level = store.settings.rule_check_level or "medium"
             qset = J.load_set(QUESTION_SET)
             key = digest(operation, author, recipients, output, obj, rules, qset["label"], level, context)
@@ -263,7 +353,9 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
                 return {**verdict, "outcome": "unchecked", "error": "budget" if capped else "no_engine"}
             if calls_today(c) >= B.daily_cap(store.settings, "bot"):
                 return {**verdict, "outcome": "unchecked", "error": "day_cap"}
-        result, error = _ask(engine, state, questions, qset["label"], level)
+        result, error = _ask(calls_for(store), engine, state, questions, qset["label"], level)
+        if error in ("busy", "breaker"):
+            return {**verdict, "outcome": "unchecked", "error": error}      # nothing was asked: no judge.call row
         if result is not None and not isinstance(result, dict):
             result, error = None, "shape"
         broken = None
@@ -306,11 +398,7 @@ def preflight(store, primary, who, operation, output, recipients=(), context=Non
 
 def holds(verdict):
     """Whether a verdict will hold the write (so a caller skips ask ingest's own call: a block skips it)."""
-    if not verdict:
-        return False
-    if verdict["outcome"] == "too_large":
-        return True
-    if verdict["outcome"] != "broken":
+    if not verdict or verdict["outcome"] not in ("broken", "too_large"):
         return False
     return any(r["if_broken"] != "warn" for r in verdict["rules"] if r["id"] in verdict["broken"])
 
@@ -320,20 +408,41 @@ def _day(at=None):
     return (at or H.now())[:10] + "T00:00:00"
 
 
+def _present(c, actor):
+    """A person who can act on a hold now: on the roster, not marked as left, their sign-in not turned off."""
+    from .auth import standing
+    pid = H.actor_id(actor) if actor else ""
+    return bool(pid and H.human(c, pid) and not standing(c, pid))
+
+
+def owner_or_admin(c):
+    """The team owner, else the first Admin, who is on the team: whoever decides a hold nobody nearer the bot can."""
+    from . import access
+    for email in access.owner_and_admin_emails(c):
+        row = c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchone()
+        if row and _present(c, row["id"]):
+            return H.human_actor(row["id"])
+    return None
+
+
 def reviewer_for(c, author, rules):
     """Who reviews a hold: a broken rule's named reviewer, else the first person up the bot's chain, else its operator,
-    else the default person. Never a bot."""
+    else the default person (screening's `person_for`), else the team owner, else an Admin; each one still on the team.
+    Never a bot. None only when the team has none of them: the hold is then the owner's and Admins' (`_reader`)."""
     for rule in rules:
         pid = rule.get("reviewer")
-        if pid and H.human(c, pid):
+        if pid and _present(c, pid):
             return H.human_actor(pid)
     from .report_managers import person_above
     from .screening import person_for
     slug = H.actor_id(author)
     above = person_above(c, slug)
-    if above and H.human(c, H.actor_id(above)):
+    if above and _present(c, above):
         return H.human_actor(H.actor_id(above))
-    return person_for(c, slug)
+    found = person_for(c, slug)
+    if found and _present(c, found):
+        return found
+    return owner_or_admin(c)
 
 
 def _repeats(c, author, rule_id):
@@ -440,7 +549,16 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
     strictest = max(broken, key=lambda r: STRICT[r["if_broken"]])
     mode = strictest["if_broken"]
     if too_large and mode == "warn":
-        mode = "block"                             # an output too large to check is held, never passed
+        # Every rule it meets is Warn: delivered, its line saying it went unchecked. A Block or Escalate rule holds it.
+        H.event(c, author, "rules.unchecked", operation, {
+            "operation": operation, "reason": "too_large", "rules": [r["id"] for r in broken]})
+        line = f"Warning: {_bot_name(c, author)}'s message was too long to check against the rule '{strictest['text']}'."
+        told = f"Your {OPERATIONS.get(operation, operation)} was delivered with a warning: it is too long to check " \
+               f"against the rule '{strictest['text']}'."
+        if tell:
+            _tell_bot(c, author, told)
+        return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken],
+                                         "text": told, "too_large": True}}
     repeat = False
     if mode == "block" and _repeats(c, author, strictest["id"]) >= REPEAT_BLOCKS - 1:
         mode, repeat = "escalate", True
@@ -455,6 +573,8 @@ def apply(c, verdict, payload=None, replay=None, tell=False, obj_now=None):
         return {"warn": line, "warned": {"rules": [{"id": r["id"], "text": r["text"]} for r in broken],
                                          "text": told}}
     reviewer = reviewer_for(c, author, broken)
+    if mode == "escalate" and not reviewer:
+        mode = "block"          # nobody to file a review task for: a Block the owner or an Admin can still release
     hold_id, nonce = H.new_id(), secrets.token_urlsafe(24)
     task_id = None
     if mode == "escalate":
@@ -544,20 +664,27 @@ def _hold(c, hold_id):
     return dict(row)
 
 
-def _reader(who, hold):
-    """The author bot and the reviewer read a hold; nobody else (an admin included)."""
+def _reader(who, hold, c=None, auth=None):
+    """The author bot and the reviewer read a hold; nobody else (an admin included), except that a hold with no
+    reviewer, or one no longer on the team, is the owner's and Admins' to review (with `c` and `auth` given), so no hold
+    is ever left with nobody to release it."""
     actor = who.actor
     if who.role == "bot" and actor == hold["author"] and not who.via:
         return "author"
-    if H.is_human(actor) and actor == hold["reviewer"] and who.via not in ("botops", "assistant"):
+    if not H.is_human(actor) or who.via in ("botops", "assistant"):
+        return None
+    if actor == hold["reviewer"]:
+        return "reviewer"
+    if c is not None and auth is not None and auth.bot_admin(who) and \
+            not (hold["reviewer"] and _present(c, hold["reviewer"])):
         return "reviewer"
     return None
 
 
-def view_hold(c, who, hold, role=None, summary=False):
+def view_hold(c, who, hold, role=None, summary=False, auth=None):
     """One hold as its reader sees it. `summary` leaves out the held text, the appeal and the nonce (a list's row:
     the reader opens each hold for those)."""
-    role = role or _reader(who, hold)
+    role = role or _reader(who, hold, c, auth)
     if not role:
         raise Problem("not_found", "There is no hold " + hold["id"], 404)
     stored = {} if summary else json.loads(hold["payload_json"] or "{}")
@@ -658,9 +785,9 @@ def _decide(c, who, hold, state):
     _finish_task(c, {**hold, "state": state})
 
 
-def keep(c, who, hold_id):
+def keep(c, who, hold_id, auth=None):
     hold = _hold(c, hold_id)
-    if _reader(who, hold) != "reviewer":
+    if _reader(who, hold, c, auth) != "reviewer":
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
@@ -771,7 +898,7 @@ def send(c, who, hold_id, nonce, ingest=None, table=None, check=None, auth=None,
     checks: a refusal keeps the hold, its nonce unspent. A hold that kept no route (written before holds kept one)
     cannot be guarded that way, so it is refused: the bot writes it again."""
     hold = _hold(c, hold_id)
-    if _reader(who, hold) != "reviewer":
+    if _reader(who, hold, c, auth) != "reviewer":
         raise Problem("not_found", "There is no hold " + hold_id, 404)
     if hold["state"] != "held":
         raise Problem("conflict", "This hold is already decided", 409)
@@ -1001,13 +1128,45 @@ def install(app, store, auth, mutate):
         subject: str = Field(default="", max_length=2000)
         body: str = Field(default="", max_length=500_000)
 
+    def mail_unchecked(author, bot, body, reason):
+        """A mail check that could not run (refused, or the server failed): the connector sends the mail unchecked, so
+        it counts as unchecked here, for the Rules header and the Health finding, when a rule applies to that bot."""
+        try:
+            with store.transaction() as c:
+                if not R.any_active(c) or not on(c):
+                    return
+                rules = R.matching(c, "bot:" + bot, mail_recipients(c, [*body.to, *body.cc]))
+                if rules:
+                    H.event(c, author, "rules.unchecked", "mail", {"operation": "mail", "reason": reason,
+                                                                  "rules": [r["id"] for r in rules], "bot": bot})
+        except Exception as exc:  # noqa: BLE001 - recording a failure never adds one
+            LOG.warning("Recording a failed mail check failed: %s", type(exc).__name__)
+
     @app.post("/api/v2/bots/{bot}/mail-check")
     def mail_check(request: Request, bot: str, body: MailCheck):
         """The org rule check of one mail, asked by the bot's mail tool before it sends (connectors/mail): held, the
-        mail stays a draft. Only the bot itself (or BotOps for it) asks."""
+        mail stays a draft. Only the bot itself asks. A person's own mail, their Assistant's included, is never
+        checked (`not_checked`). Another bot's token is refused, and a refusal or a server error is recorded as
+        unchecked: the connector sends on a failed check."""
         who = request.state.identity
-        if who.role != "bot" or who.actor != "bot:" + bot:
+        author = author_of(who, store.settings.assistant_bot)
+        if not author:
+            return {"outcome": "not_checked"}
+        if author != "bot:" + bot:
+            LOG.warning("A mail check for %s came with another bot's token", bot)
+            mail_unchecked(author, bot, body, "forbidden")
             raise Problem("forbidden", "A bot checks only its own mail", 403)
+        try:
+            return mail_checked(request, who, body)
+        except Problem as exc:
+            if exc.status >= 500:
+                mail_unchecked(author, bot, body, "error")
+            raise
+        except Exception:
+            mail_unchecked(author, bot, body, "error")
+            raise
+
+    def mail_checked(request, who, body):
         key = mail_digest(body.to, body.cc, body.subject, body.body)
         output = (f"Subject: {body.subject}\n\n" if body.subject else "") + body.body
         with store.read() as c:
@@ -1073,12 +1232,12 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         with store.read() as c:
             hold = _hold(c, hold_id)
-            return view_hold(c, who, hold)
+            return view_hold(c, who, hold, auth=auth)
 
     @app.post("/api/v2/rule-holds/{hold_id}/keep")
     def rule_hold_keep(request: Request, hold_id: str, body: HoldEmpty):
         who = request.state.identity
-        return mutate(request, body, lambda c: keep(c, who, hold_id))
+        return mutate(request, body, lambda c: keep(c, who, hold_id, auth))
 
     @app.post("/api/v2/rule-holds/{hold_id}/send")
     def rule_hold_send(request: Request, hold_id: str, body: HoldSend):
@@ -1086,7 +1245,7 @@ def install(app, store, auth, mutate):
         ingest, check = None, None
         with store.read() as c:
             hold = _hold(c, hold_id)
-            ready = _reader(who, hold) == "reviewer" and hold["state"] == "held" and \
+            ready = _reader(who, hold, c, auth) == "reviewer" and hold["state"] == "held" and \
                 not store.saved(c, who, request.url.path, request.headers.get("idempotency-key"))
         if ready:
             # Both outside the write: rules changed since the hold are a new check, and ask ingest runs as it would

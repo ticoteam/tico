@@ -348,17 +348,28 @@ def _active(c):
     return [_row(r) for r in c.execute("SELECT * FROM org_rules WHERE status='active' ORDER BY created_at, id")]
 
 
+def any_active(c):
+    """Whether any rule is in force: one indexed row, read before anything else on every bot write (most writes meet no
+    rule, and an install with none never builds the roster for them)."""
+    return c.execute("SELECT 1 FROM org_rules WHERE status='active' LIMIT 1").fetchone() is not None
+
+
 def matching(c, author, recipients=()):
-    """The active rules that apply to one write: the author is in Who, and With is empty or names a recipient."""
+    """The active rules that apply to one write: the author is in Who, and With is empty or names a recipient. With no
+    rule in force it reads nothing more; the recipients are looked up only once a rule's Who names the author."""
+    if not any_active(c):
+        return []
     ctx = _ctx(c)
     author_key = who_key(c, author, ctx)
-    keys = [who_key(c, r, ctx) for r in recipients]
+    keys = None
     out = []
     for row in _active(c):
         if not _hits(row["who"], author_key):
             continue
-        if _has(row["with"]) and not any(_hits(row["with"], k) for k in keys):
-            continue
+        if _has(row["with"]):
+            keys = [who_key(c, r, ctx) for r in recipients] if keys is None else keys
+            if not any(_hits(row["with"], k) for k in keys):
+                continue
         out.append(row)
     return out
 
@@ -705,6 +716,22 @@ def due_row(c, text):
     return rows[0]
 
 
+def _check_due_owner(c, auth, who, rule, owner):
+    """Who may own a due date: its routine makes the due date's tasks as that owner, outside `task_caps`, so the caller
+    names only themselves, a teammate the rule's Who names, or someone they manage (a person below them on the chart,
+    a bot they manage). The owner and Admins name anyone."""
+    if owner == who.actor or auth.bot_admin(who):
+        return
+    if _hits(rule["who"], who_key(c, owner)):
+        return
+    kind, _, ident = owner.partition(":")
+    if kind == "human" and auth.manages(c, who, "person", ident):
+        return
+    if kind == "bot" and auth.bot_manager(c, who, ident):
+        return
+    raise Problem("forbidden", "A due date's owner is you, a teammate the rule's Who names, or someone you manage", 403)
+
+
 def add_due(c, auth, who, rule_id, body):
     row = _get(c, rule_id)
     if row["status"] == "retired":
@@ -716,6 +743,7 @@ def add_due(c, auth, who, rule_id, body):
     repeats = D.parse_repeats(body.get("repeats"))
     zone = D.parse_zone(body.get("timezone"))
     owner = owner_actor(c, body.get("owner"))
+    _check_due_owner(c, auth, who, row, owner)
     from . import rule_due_routine as RR
     days = RR.task_days_of(body)
     due_id = D.add(c, who.actor, rule_id, first.isoformat(), repeats, zone, owner)
@@ -744,6 +772,9 @@ def edit_due(c, auth, who, due_text, body):
         changes["timezone"] = D.parse_zone(body["timezone"])
     if body.get("owner") is not None:
         changes["owner"] = owner_actor(c, body["owner"])
+        if changes["owner"] != row["owner"]:
+            # A changed owner passes the same test as a new one; an owner kept as it is is never asked again.
+            _check_due_owner(c, auth, who, rule, changes["owner"])
     from . import rule_due_routine as RR
     days = RR.task_days_of(body)
     if days is RR.UNCHANGED:

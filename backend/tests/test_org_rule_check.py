@@ -6,6 +6,7 @@ failure lets the output through with `rules.unchecked`, except an output too lar
 Acme is the fictional company (backend/tests/test_org_rules.py's org): Ana owns it, Ben is the person above Ops."""
 import json
 import threading
+import time
 
 import pytest
 
@@ -108,14 +109,29 @@ def test_the_end_of_a_long_output_is_judged_whole(ruled):
     assert judge.calls[0]["state"]["output"] == text
 
 
-def test_too_large_to_check_is_held_not_passed(ruled, monkeypatch):
+def test_too_large_to_check_is_held_when_any_rule_it_meets_is_block(ruled, monkeypatch):
     api, judge = ruled
-    color_rule(api, if_broken="warn")
+    color_rule(api)
+    rule(api, {"kind": "internal", "text": "Keep replies short.", "who": {"bots": ["ops"]}, "if_broken": "warn"})
     from clients import judge as J
     monkeypatch.setattr(J, "MAX_STATE_CHARS", 2000)
     got = say(api, "All good here. " * 400)
     assert got["held"]["too_large"] and judge.calls == []
     assert bodies(api, "All good here") == []
+
+
+def test_too_large_under_warn_rules_only_is_delivered_with_its_line_and_counted_unchecked(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api, if_broken="warn")
+    from clients import judge as J
+    monkeypatch.setattr(J, "MAX_STATE_CHARS", 2000)
+    text = "All good here. " * 400
+    got = say(api, text)
+    assert "held" not in got and got["rule_warning"]["too_large"] and judge.calls == []
+    [row] = sql(api, "SELECT body FROM messages WHERE body LIKE ?", ("%All good here%",))
+    assert row["body"] != text and row["body"].endswith(text.rstrip())       # the warning line, then the text whole
+    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["too_large"]
+    assert events(api, "rules.warned") == [] and get(api, "rules/stats")["unchecked_today"] == 1
 
 
 def test_botops_acting_as_a_person_is_checked(ruled):
@@ -293,6 +309,51 @@ def test_send_anyway_delivers_once_with_no_second_call(ruled):
     assert sql(api, "SELECT status FROM tasks WHERE id=?", (task,))[0]["status"] in ("done", "closed")
 
 
+def _nobody_near_ops(api):
+    """Ops with no person up its chain, no operator, and a default person (Dan) who has left the team."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET operator='', reports_to=NULL, config_json=json_remove(config_json, "
+                  "'$.reports_to') WHERE bot='ops'")
+        c.execute("INSERT INTO humans(id, name, email) VALUES('dan', 'Dan', 'dan@acme.example')")
+        raw = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        raw["default_user"] = "dan"
+        raw["people"].append({"id": "dan", "email": "dan@acme.example", "hidden": True})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(raw),))
+    with api.app.state.store.read() as c:
+        from backend.report_managers import person_above
+        assert not person_above(c, "ops") and H.default_human(c) == "dan"
+
+
+def test_an_escalate_with_nobody_near_the_bot_files_its_review_task_for_the_owner(ruled):
+    api, _ = ruled
+    _nobody_near_ops(api)
+    color_rule(api, if_broken="escalate", reviewer="dan")          # the named reviewer has left too
+    held = say(api, "Our favorite color is gold")["held"]
+    assert held["outcome"] == "escalated"
+    row = hold_row(api, held["id"])
+    assert row["reviewer"] == "human:ana"
+    assert sql(api, "SELECT owner FROM tasks WHERE id=?", (row["task_id"],))[0]["owner"] == "human:ana"
+    view = get(api, f"rule-holds/{held['id']}")
+    assert post(api, f"rule-holds/{held['id']}/send", {"nonce": view["nonce"]})["hold"]["state"] == "sent"
+
+
+def test_a_hold_with_no_reviewer_is_a_block_the_owner_or_an_admin_releases(ruled, monkeypatch):
+    api, _ = ruled
+    _nobody_near_ops(api)
+    monkeypatch.setattr(K, "owner_or_admin", lambda c: None)       # no person on the team at all
+    color_rule(api, if_broken="escalate")
+    held = say(api, "Our favorite color is gold")["held"]
+    row = hold_row(api, held["id"])
+    assert held["outcome"] == "blocked" and row["reviewer"] is None and row["task_id"] is None
+    get(api, f"rule-holds/{held['id']}", token="cara-test", expected=404)          # a plain member never reads it
+    view = get(api, f"rule-holds/{held['id']}", token="ben-test")                 # an admin decides it
+    assert view["can_send"] and post(api, f"rule-holds/{held['id']}/keep", {}, token="ben-test")["state"] == "kept"
+    again = say(api, "Our favorite color is teal")["held"]
+    view = get(api, f"rule-holds/{again['id']}")                                  # the owner sends one anyway
+    assert post(api, f"rule-holds/{again['id']}/send", {"nonce": view["nonce"]})["hold"]["state"] == "sent"
+    assert len(bodies(api, "favorite color is teal")) == 1
+
+
 def test_keep_blocked_and_only_the_reviewer_or_author_reads_a_hold(ruled):
     api, _ = ruled
     color_rule(api, reviewer="ben")
@@ -348,7 +409,7 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
     api, judge = ruled
     color_rule(api)
     if how == "timeout":
-        monkeypatch.setattr(K, "DEADLINE", 0.2)
+        monkeypatch.setitem(K.DEADLINES, "medium", 0.2)
         judge.hold = threading.Event()
     elif how == "budget":
         api.app.state.store.settings.rules_monthly_usd = 1.0
@@ -362,6 +423,74 @@ def test_failing_open_delivers_and_writes_unchecked(ruled, monkeypatch, how):
     assert "held" not in got and len(bodies(api, "favorite color is gold")) == 1
     reasons = [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")]
     assert reasons == [{"timeout": "timeout", "budget": "budget", "error": "error"}[how]]
+
+
+def test_with_no_rule_in_force_a_bot_write_reads_no_roster_and_asks_nothing(ruled, monkeypatch):
+    api, judge = ruled
+    rule(api, {"kind": "internal", "text": COLOR, "who": {"bots": ["ops"]}}, token="ops-test")    # suggested only
+    built = []
+    real = K.R._ctx
+    monkeypatch.setattr(K.R, "_ctx", lambda c: built.append(1) or real(c))
+    assert "held" not in say(api, "Our favorite color is gold")
+    task = task_for_ops(api)
+    post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")
+    assert built == [] and judge.calls == []
+
+
+def test_the_check_runs_under_its_levels_deadline(ruled):
+    api, judge = ruled
+    color_rule(api)
+    from clients import judge as J
+    left = []
+
+    def engine(state, questions, label=None, level=None):
+        left.append(J.time_left(999))           # what the provider's own try may take: cut to the check's deadline
+        return judge(state, questions, label, level)
+    api.app.state.judge = engine
+    assert say(api, "Our favorite color is gold")["held"]
+    assert 0 < left[0] <= K.deadline("medium")
+
+
+def test_a_full_pool_goes_through_unchecked_at_once(ruled):
+    api, judge = ruled
+    color_rule(api)
+    api.app.state.store.settings.rule_check_concurrency = 1
+    judge.hold = threading.Event()
+    first = threading.Thread(target=say, args=(api, "Our favorite color is gold"))
+    first.start()
+    try:
+        for _ in range(200):
+            if judge.calls:
+                break
+            time.sleep(0.01)
+        started = time.monotonic()
+        got = say(api, "Our favorite color is teal")            # the one slot is taken: no waiting for it
+        assert time.monotonic() - started < 2
+    finally:
+        judge.hold.set()
+        first.join(10)
+    assert "held" not in got and len(judge.calls) == 1 and len(bodies(api, "favorite color is teal")) == 1
+    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["busy"]
+
+
+def test_an_open_breaker_goes_through_unchecked_at_once_and_a_probe_closes_it(ruled):
+    api, judge = ruled
+    color_rule(api)
+    judge.fail = RuntimeError("provider down")
+    for n in range(K.BREAKER_FAILURES):
+        assert "held" not in say(api, f"Our favorite color is gold {n}")
+    assert len(judge.calls) == K.BREAKER_FAILURES
+    started = time.monotonic()
+    assert "held" not in say(api, "Our favorite color is teal")
+    assert time.monotonic() - started < 2 and len(judge.calls) == K.BREAKER_FAILURES     # nothing was asked
+    reasons = [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")]
+    assert reasons == ["error"] * K.BREAKER_FAILURES + ["breaker"]
+    # After the cool-off the next check is the probe: it answers, and checks run again.
+    calls = K.calls_for(api.app.state.store)
+    calls.until = time.monotonic() - 1
+    judge.fail = None
+    assert say(api, "Our favorite color is red")["held"]
+    assert calls.failures == 0 and say(api, "Our favorite color is blue")["held"]
 
 
 def test_the_rules_budget_is_apart_from_decides(ruled):
@@ -639,6 +768,27 @@ def test_a_mail_approval_is_spent_once(ruled):
     for t in threads:
         t.join()
     assert sorted(outcomes) == ["held", "held", "pass"]
+
+
+def test_a_mail_check_that_cannot_run_is_counted_unchecked_and_a_persons_mail_is_not_checked(ruled, monkeypatch):
+    api, judge = ruled
+    color_rule(api)
+    mail = {"to": ["vendor@outside.example"], "subject": "Hi", "body": "Our favorite color is gold."}
+    # Another bot's token: refused, and the mail the connector then sends unchecked counts as unchecked.
+    post(api, "bots/ops/mail-check", mail, token="finance-test", expected=403)
+    [event] = events(api, "rules.unchecked")
+    assert event["actor"] == "bot:finance" and json.loads(event["detail_json"])["reason"] == "forbidden"
+    # A person's Assistant writing as them: their own mail, never checked, and no refusal.
+    settings = api.app.state.auth.settings
+    settings.test_identities["ben-assistant"] = Identity("human:ben", "human", "ben@acme.example", via="assistant")
+    assert post(api, f"bots/{settings.assistant_bot}/mail-check", mail, token="ben-assistant") == \
+        {"outcome": "not_checked"}
+    # A server error inside the check: recorded before it surfaces.
+    monkeypatch.setattr(K, "mail_approved", lambda *a: (_ for _ in ()).throw(RuntimeError("boom")))
+    with pytest.raises(RuntimeError):
+        api.post("/api/v2/bots/ops/mail-check", json=mail, headers=headers("ops-test"))
+    assert [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")] == ["forbidden", "error"]
+    assert judge.calls == [] and get(api, "rules/stats")["unchecked_today"] == 2
 
 
 def test_a_warned_mail_carries_its_line_and_external_addresses_split_the_cache(ruled):

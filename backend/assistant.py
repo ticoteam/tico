@@ -91,6 +91,10 @@ def write_allowed(method, path, settings=None, body=b"", actor="", owns=None, di
     # checks below.
     if re.fullmatch(r"/api/v2/settings/catalog/[^/]+/plan", path):
         return True
+    # The mail tool's org rule check before a send changes nothing: a person's own mail is never checked
+    # (backend/org_rule_check.py answers `not_checked`), and the send itself meets its own checks.
+    if re.fullmatch(r"/api/v2/bots/[^/]+/mail-check", path):
+        return True
     try:
         fields = json.loads(body or b"{}")
     except ValueError:

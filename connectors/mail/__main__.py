@@ -1857,8 +1857,12 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         base["review_advisory"] = review_note
 
     # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
-    # the bot is told the rule and whom to appeal to. Tico not answering lets it through, as every check failure does.
+    # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
+    # logged and named in the answer.
     ruled = pl.rule_check(ctx.slug, to, cc, subject, body)
+    if ruled and ruled.get("failed"):
+        ctx.audit("rule-check-failed", draft_id or thread_id, {"reason": ruled["failed"], "to": to, "cc": cc})
+        base["rule_check"] = "unchecked: the org rule check failed (" + str(ruled["failed"]) + ")"
     if ruled and ruled.get("outcome") == "held":
         return downgrade((ruled.get("held") or {}).get("text") or "held by an org rule", "rules")
     warning_line = ""

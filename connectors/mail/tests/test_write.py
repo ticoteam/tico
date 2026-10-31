@@ -67,6 +67,20 @@ class Sending(Writing):
         self.assertTrue(text.startswith(line), text[:200])
         self.assertIn(GOOD_BODY.strip().splitlines()[0], text)
 
+    def test_a_failed_rule_check_lets_the_send_go_but_logs_it_and_says_so(self):
+        # Tico refused the check (another bot's token) or failed: the send goes out, never quietly.
+        did = self.make()
+
+        def refused(path, body):
+            raise pl.HubFailed("forbidden")
+        pl.HUB_POST = refused
+        rc, p, err = self.run_json("send", "--as", "influencer", "--draft", did, "--issue", "42")
+        self.assertEqual(rc, 0, err)
+        self.assertTrue(p["sent"])
+        self.assertIn("forbidden", p["rule_check"])
+        [failed] = [a for a in self.audit_lines() if a["action"] == "rule-check-failed"]
+        self.assertEqual(failed["detail"]["reason"], "forbidden")
+
     def test_the_idempotency_row_is_written_before_the_api_call(self):
         did = self.make()
         self.service.send_fails = True
