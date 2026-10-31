@@ -19,8 +19,9 @@ def budgets(c: sqlite3.Connection, book_id: str) -> dict[str, Budget]:
     """Every budget in the book, active or not (a tree is small: dozens of rows). A budget on a vendor name goes by
     the contact's id once a contact has that name (fin_vendor_aliases; the name key compared exactly)."""
     return {r["id"]: _budget(r) for r in c.execute(
-        "SELECT b.*, COALESCE((SELECT a.contact_id FROM fin_vendor_aliases a WHERE b.vendor<>'' AND "
-        "a.book_id=b.book_id AND a.name_key=b.vendor), b.vendor) AS vendor_key FROM fin_budgets b WHERE b.book_id=? "
+        "SELECT b.*, CASE WHEN EXISTS (SELECT 1 FROM fin_contacts k WHERE k.id=b.vendor) THEN b.vendor ELSE "
+        "COALESCE((SELECT a.contact_id FROM fin_vendor_aliases a WHERE b.vendor<>'' AND a.book_id=b.book_id AND "
+        "a.name_key=b.vendor), b.vendor) END AS vendor_key FROM fin_budgets b WHERE b.book_id=? "
         "ORDER BY b.created_at, b.id", (book_id,))}
 
 

@@ -665,3 +665,50 @@ def test_vendor_keys_fold_names_aliases_keep_history_and_inactive_contacts_captu
         rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
         labels = {r["label"]: r["amount"] for r in rows}
         assert labels["GitHub"] == 800 and labels["Globex"] == 2_000    # the newest row's text; the alias's contact
+
+
+def test_phase_one_vendor_names_still_count_after_migration_66_and_keys_are_whole_and_never_contact_ids(books):
+    """Codex review: phase 1 posted vendor names as written; migration 66 records them (fin_vendor_legacy), so a
+    budget on the name, then the contact that takes it, still count those lines, and the name labels its key. A key is
+    folded whole (two long names never meet by truncation) and folding it again changes nothing. A contact's id is
+    never another vendor's name, and a stored contact id never goes by an alias."""
+    from backend.finance import budgeting
+    from backend.finance.core.ledger import name_key
+    from backend.finance.store import budgets as SB
+    from backend.finance.store import schema
+    from backend.tests.test_finance_fixtures import spend
+    assert name_key("A" * 79 + "ß") != name_key("A" * 79 + "s")
+    assert all(name_key(name_key(x)) == name_key(x) for x in (" ÉCOLE ", "A" * 79 + "ß", "ﬃ STRASSE "))
+    with books.transaction() as c:
+        line, misc = account(c, "6100"), account(c, "6900")
+
+        def budget(name, on, vendor=""):
+            root = act(c, OWNER, "budget_create", {"name": f"{name} line", "account_id": on, "amount": 90_000})
+            return str(act(c, OWNER, "budget_create", {"name": name, "account_id": on, "vendor": vendor, "amount": 5_000,
+                                                       "parent_id": root.result["budget_id"]}).result["budget_id"])
+
+        bid = budget("Acme", line, "acme cloud")
+        spend(c, "6100", 10_000, vendor="ACME CLOUD")
+        # As phase 1 left it: the line, its rollups and the budget under the name as written, no label.
+        c.execute("DROP TRIGGER fin_lines_no_update")
+        c.execute("UPDATE fin_lines SET contact_id='ACME CLOUD' WHERE contact_id='acme cloud'")
+        for table in ("fin_rollups", "fin_cash_rollups"):
+            c.execute(f"UPDATE {table} SET vendor='ACME CLOUD' WHERE vendor='acme cloud'")
+        c.execute("UPDATE fin_budgets SET vendor='ACME CLOUD' WHERE id=?", (bid,))
+        c.execute("DELETE FROM fin_vendor_labels")
+        schema.create(c)
+        assert budgeting.budget_state(c, bid, AT).actual == 0                 # what the upgrade would lose
+        schema.phase2(c)
+        assert c.execute("SELECT vendor FROM fin_budgets WHERE id=?", (bid,)).fetchone()[0] == "acme cloud"
+        assert budgeting.budget_state(c, bid, AT).actual == 10_000
+        rows = FR.spend_by(c, OWNER, "vendor", "2026-10-01", "2026-10-31", account_id=line)["rows"]
+        assert [(r["label"], r["amount"]) for r in rows] == [("ACME CLOUD", 10_000)]
+        vendor = _vendor(c, "Acme Cloud")
+        assert budgeting.budget_state(c, bid, AT).actual == 10_000             # through the contact's alias too
+        held = budget("Acme Co", misc, vendor)
+        took = act(c, OWNER, "contact_create", {"name": vendor.upper(), "kind": "vendor"})
+        assert (took.status, took.code) == ("failed", "invalid")
+        book = str(c.execute("SELECT id FROM fin_books").fetchone()[0])
+        other = _vendor(c, "Globex")
+        c.execute("INSERT INTO fin_vendor_aliases VALUES(?,?,?,?)", (book, vendor, other, AT))   # as if it got in
+        assert SB.budgets(c, book)[held].vendor == vendor

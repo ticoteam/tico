@@ -155,6 +155,8 @@ def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
     if kind not in ("vendor", "both"):
         return ""
     nk = L.name_key(name)
+    if SAP.is_contact(ctx.c, nk):                       # a name that is a contact's id would take that contact's keys
+        raise invalid("a vendor's name can't be a contact's id")
     owner = SAP.alias_of(ctx.c, ctx.book.id, nk)
     if owner == contact_id and owner:
         return ""

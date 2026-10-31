@@ -219,9 +219,21 @@ def vendor_resolved(c: sqlite3.Connection, book_id: str, key: str) -> str:
 
 def vendor_keys(c: sqlite3.Connection, book_id: str, key: str) -> list[str]:
     """Every key a vendor's lines carry: a contact's id and each name it went by (lines posted under a name before it
-    was the contact's still count, and a rename never loses them); a plain name's own key."""
+    was the contact's still count, and a rename never loses them); a plain name's own key; and for each name, the
+    values phase 1 posted it under as written (fin_vendor_legacy)."""
     vendor = vendor_resolved(c, book_id, key)
-    return [vendor, *aliases_of(c, vendor)] if is_contact(c, vendor) else [vendor] if vendor else []
+    if not vendor:
+        return []
+    names = aliases_of(c, vendor) if is_contact(c, vendor) else [vendor]
+    legacy = legacy_of(c, book_id, names)
+    return list(dict.fromkeys([vendor, *names, *legacy]))
+
+
+def legacy_of(c: sqlite3.Connection, book_id: str, name_keys: Sequence[str]) -> list[str]:
+    if not name_keys:
+        return []
+    return [str(r[0]) for r in c.execute(f"SELECT raw FROM fin_vendor_legacy WHERE book_id=? AND name_key IN "
+                                         f"({_marks(name_keys)}) ORDER BY raw", (book_id, *name_keys))]
 
 
 def owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str]) -> dict[str, int]:

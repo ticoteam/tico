@@ -53,10 +53,15 @@ class Line:
     role: str = ""          # what the line is to Tico, set only by Tico's own postings (MONEY_ROLE), never a request
 
 
+NAME_MAX = 80               # a vendor name's length: names are capped to it before they are keyed, never keys after
+
+
 def name_key(name: str) -> str:
     """A vendor's plain name as a key (a line's contact_id when no contact has it, a budget's vendor, an alias):
-    stripped and case-folded, so ÉCOLE and école are one vendor. A contact's id is its own key (already folded)."""
-    return name.strip().casefold()[:80]
+    case-folded, then stripped, so ÉCOLE and école are one vendor. The only place a vendor is normalised. The key is
+    whole (folding can lengthen it; cutting it after could make two names one) and folding it again changes nothing.
+    A contact's id is its own key (already folded)."""
+    return name.casefold().strip()
 
 
 MONEY_ROLE = "money"        # a feed row's own line: the money account's side (for a card, the card program's)

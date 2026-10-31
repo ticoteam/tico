@@ -140,7 +140,7 @@ KEEP = frozenset((
     "fin_feed_txns", "fin_invoice_lines", "fin_invoices", "fin_line_tags", "fin_lines", "fin_money_accounts",
     "fin_periods", "fin_private_lines", "fin_projections", "fin_reconciliations", "fin_rights", "fin_rollups",
     "fin_rule_counters", "fin_rule_runs", "fin_rules", "fin_settings", "fin_statements", "fin_usage_snapshots",
-    "fin_settlements", "fin_cash_rollups", "fin_vendor_aliases", "fin_vendor_labels",
+    "fin_settlements", "fin_cash_rollups", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy",
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
