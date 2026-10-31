@@ -511,8 +511,10 @@ def _frozen_by(r: Any) -> str | None:
     return str(r["freeze_by"]) if str(r["status"]) == "frozen" and r["freeze_by"] else None
 
 
-def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None) -> Row:
-    """A card as anyone sees it: last 4 only, never the number or CVC (Tico never has them)."""
+def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None = None,
+             excluded: bool = False) -> Row:
+    """A card as anyone sees it: last 4 only, never the number or CVC (Tico never has them). `excluded` marks a spent
+    total with its settled private part taken out, as the budget rows are marked."""
     budget = ctx.budgets().get(str(r["budget_id"] or ""))
     return {"id": str(r["id"]), "provider": str(r["provider"]), "holder": str(r["holder"]),
             "nickname": str(r["nickname"] or ""), "last4": r["last4"], "kind": str(r["kind"]),
@@ -521,7 +523,7 @@ def card_row(ctx: Ctx, r: Any, spent: int | None = None, allocation: int | None 
             "provider_limit": r["provider_limit"], "sync_status": str(r["sync_status"] or ""),
             "currency": str(r["currency"]), "money_account_id": r["money_account_id"],
             "budget": {"id": budget.id, "name": budget.name} if budget else None, "allocation": allocation,
-            "spent": spent, "expires_at": r["expires_at"], "created_at": str(r["created_at"])}
+            "spent": spent, "excluded": excluded, "expires_at": r["expires_at"], "created_at": str(r["created_at"])}
 
 
 def _card_spend_seen(cut: set[str], lines: Sequence[Any]) -> bool:
@@ -582,6 +584,7 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
             if not sees_card(ctx, view, r, accounts.get(str(r["budget_id"] or ""), "")):
                 continue
             alloc = spent = None
+            excluded = False
             bid = str(r["budget_id"] or "")
             if bid in ctx.budgets():
                 row = SB.allocation(c, bid, "card", str(r["id"]))
@@ -593,9 +596,11 @@ def cards(c: sqlite3.Connection, viewer: str, *, status: str | None = None, hold
                                                                    st.period_end)):
                     spent = None
                 elif cut:       # the settled private part comes out, as the P&L's and the budgets' do
-                    spent -= budgeting.settled_used(ctx, budgeting.Netted(view), budgeting.subtree(ctx, bid),
+                    netted = budgeting.Netted(view)
+                    spent -= budgeting.settled_used(ctx, netted, budgeting.subtree(ctx, bid),
                                                     st.period_start, st.period_end, f"card:{r['id']}", absorbed=True)
-            out.append(card_row(ctx, r, spent, alloc))
+                    excluded = netted.excluded
+            out.append(card_row(ctx, r, spent, alloc, excluded))
             if len(out) > most:
                 break
         if len(batch) < most * 2:

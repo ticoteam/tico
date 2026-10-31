@@ -97,6 +97,19 @@ def test_a_decline_budget_at_cutoff_freezes_its_cards_and_unfreezing_waits_for_r
     assert ("card-eve", "unfreeze") in fake.sent("card_state")
 
 
+def test_a_card_holder_who_cannot_see_the_budget_is_refused_without_its_name(books):
+    fake = FakeMercury()
+    connect(books, fake)
+    _budget_id, eve = _budget_and_card(books)
+    sync_once(books, fake)
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:eve", "right": "finance.cards"}).status == "committed"
+        spend(c, "6100", 30_000)
+        FA.drain_events(c, AT)
+        refused = act(c, "human:eve", "card_unfreeze", {"card_id": eve})
+    assert refused.code == "denied" and "Cloud" not in refused.reason, refused
+
+
 def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
     fake = FakeMercury()
     connect(books, fake)

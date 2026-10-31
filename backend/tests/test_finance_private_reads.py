@@ -377,6 +377,7 @@ def test_a_cards_spent_never_counts_a_charge_that_paid_a_private_payroll_bill_fo
         gus = next(r for r in tab.cards(c, "human:gus", at=OCT_END)["cards"] if r["holder"] == "human:gus")
     assert owner["spent"] == 4_000
     assert gus["spent"] == 0
+    assert owner["excluded"] is False and gus["excluded"] is True
 
 
 def test_a_refusal_read_by_id_names_the_budget_figure_only_where_the_reader_sees_that_figure(books):
