@@ -50,6 +50,7 @@ def facts(ctx: Ctx, who: str, kind: str, plan: Plan) -> dict[str, object]:
     """What rules match on: the kind, who asks (and their kind and team), the time, plus the planner's own facts."""
     actor_kind = "system" if who == SYSTEM else "bot" if who in ctx.org.bots else "human"
     return {"kind": kind, "actor": who, "actor.kind": actor_kind, "actor.team": ctx.org.team_of.get(who, ""),
+            "actor.owner": bool(ctx.org.owner) and who == ctx.org.owner,
             "now": ctx.at, "currency": ctx.book.base_currency, **plan.facts}
 
 
@@ -143,6 +144,12 @@ def _row(ctx: Ctx, p: V.Payload) -> Any:
     return row
 
 
+def _fixed(row: Any) -> None:
+    """A fixed default (G.FIXED) is the code's: it can't be edited or turned off, whoever asks."""
+    if str(row["id"]) in G.FIXED:
+        raise FinanceError(DENIED, "the code keeps this rule: it can't be changed or turned off")
+
+
 def _as_fields(row: Any) -> dict[str, object]:
     return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["when_json"]),
             "outcome": SK.loads(row["outcome_json"]),
@@ -179,6 +186,7 @@ def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("rule_id", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id"))
     row = _row(ctx, p)
+    _fixed(row)
     kind = str(row["kind"])
     f = _fields(ctx, who, kind, p, _as_fields(row))
 
@@ -196,6 +204,7 @@ def _toggle(on: bool) -> Any:
     def planner(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         V.only(p, ("rule_id",))
         row = _row(ctx, p)
+        _fixed(row)
         if bool(row["active"]) == on:
             raise FinanceError(CONFLICT, f"that rule is already {'on' if on else 'off'}")
 

@@ -101,9 +101,9 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
 
 
 def default_gate(org: Org, actor: str, kind: str) -> Gate:
-    """The defaults that are not editable rules: closing or reopening a period asks the owner (unless the owner asks,
-    §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a finance admin. The other §6.4
-    defaults are seeded gate rules (gates.DEFAULTS)."""
+    """The code's floor under the defaults (gates.FIXED): closing or reopening a period asks the owner (unless the owner
+    asks, §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a finance admin. The seeded
+    gate rules (gates.DEFAULTS) say the same for closing, and the others are editable rules."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
