@@ -136,14 +136,16 @@ def statements(c: sqlite3.Connection, viewer: str, *, money_account_id: str | No
 
 
 def rules(c: sqlite3.Connection, viewer: str, *, external_rule_id: str | None = None, at: str | None = None) -> Row:
-    """Finance gate rules for whoever may write them (finance.rules, or a finance admin), with their plain words,
+    """Finance gate and posting rules for whoever may write them (finance.rules, or a finance admin), with their plain words,
     condition, outcome, examples, linked external rule and latest runs. `external_rule_id` lists the rules linked to
     one external rule (General Counsel's side of the link)."""
     ctx = load(c, at)
     if not R.has(ctx.org, viewer, R.RULES, ctx.rights(viewer)):
         raise denied("finance rules are for teammates who may write them")
-    rows = SK.rules_for_external(c, external_rule_id) if external_rule_id else SK.rules(c, "gate", active_only=False)
-    return {"rules": [{"id": str(r["id"]), "name": str(r["name"]), "words": str(r["words"]),
+    rows = SK.rules_for_external(c, external_rule_id) if external_rule_id else \
+        [*SK.rules(c, "gate", active_only=False), *SK.rules(c, "posting", active_only=False)]
+    return {"rules": [{"id": str(r["id"]), "kind": str(r["kind"]), "priority": int(r["priority"]),
+                       "name": str(r["name"]), "words": str(r["words"]),
                        "when": SK.loads(r["when_json"]), "outcome": SK.loads(r["outcome_json"]),
                        "examples": SK.loads_list(r["examples_json"]),
                        "external_rule_id": r["external_rule_id"], "owner": str(r["owner"]), "active": bool(r["active"]),

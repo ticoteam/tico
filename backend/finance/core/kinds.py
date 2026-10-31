@@ -26,7 +26,11 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         "card_freeze", "card_unfreeze", "card_cancel", "card_resolve", "recipient_add", "payment_create",
         "payment_cancel",
         "rule_create", "rule_update", "rule_enable", "rule_disable", "rule_test",
-        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map")
+        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map",
+        # phase 2: contacts, bills, invoices and attachments
+        "contact_create", "contact_update", "bill_create", "bill_update", "bill_approve", "bill_schedule",
+        "bill_mark_paid", "bill_void", "invoice_create", "invoice_send", "invoice_record_payment",
+        "invoice_write_off", "invoice_void", "attach")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -40,7 +44,7 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "contact_create": (R.AP, R.AR), "contact_update": (R.AP, R.AR),
          "bill_create": R.AP, "bill_update": R.AP, "bill_approve": R.AP, "bill_schedule": R.AP, "bill_mark_paid": R.AP,
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
-         "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": R.BOOK}
+         "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR)}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -49,9 +53,6 @@ OWNER_ONLY = ("payment_settings", "view_defaults_set")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
 SYSTEM_KINDS = ("card_freeze",)
 SPEND = ("payment_create",)
-# A bot categorizing or posting more than this in one action (an entry's debits, or the lines it tags) asks a finance
-# admin (§6.4 rule 5).
-BOT_CATEGORIZE_LIMIT = 500_000
 
 
 def approval_kind(kind: str) -> str:
@@ -96,17 +97,13 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     return Gate("deny", rule=f"right:{right}")
 
 
-def default_gate(org: Org, actor: str, kind: str, *, total: int = 0, new_account: bool = False) -> Gate:
-    """The phase-0 defaults (§6.4): closing or reopening a period asks the owner (unless the owner asks); a bot's
-    categorization or entry totalling over $5,000, a bot's new account, or a bot settling a cut-off card creation
-    (card_resolve) asks a finance admin."""
+def default_gate(org: Org, actor: str, kind: str) -> Gate:
+    """The defaults that are not editable rules: closing or reopening a period asks the owner (unless the owner asks,
+    §6.4 rule 6), and a bot settling a cut-off card creation (card_resolve) asks a finance admin. The other §6.4
+    defaults are seeded gate rules (gates.DEFAULTS)."""
     owner = bool(org.owner) and actor == org.owner
     if kind in ("close_period", "reopen_period") and not owner and actor != SYSTEM:
         return Gate("needs_approval", "owner", "default:close")
-    if actor in org.bots and kind in ("categorize", "journal") and total > BOT_CATEGORIZE_LIMIT:
-        return Gate("needs_approval", "finance_admin", "default:bot-over-5000")
-    if actor in org.bots and new_account:
-        return Gate("needs_approval", "finance_admin", "default:bot-new-account")
     if actor in org.bots and kind == "card_resolve":
         # Whether Mercury issued a cut-off card is a person's call: a bot's answer waits for a finance admin.
         return Gate("needs_approval", "finance_admin", "default:bot-card-resolve")
@@ -125,7 +122,8 @@ _RULE: tuple[Field, ...] = (
     ("when", "obj", "conditions on the action's or row's facts (amount, counterparty, account, tags.*, actor...)"),
     ("outcome", "obj", "gate: allow|deny|needs_approval|limit; posting: {outcome: post, account_id, tags?, "
      "contact_id?, split?: [{account_id, share: basis points, tags?}]} or {outcome: ask}"),
-    ("examples", "list[obj]", "cases that must pass before the rule saves: {facts, expect}"),
+    ("examples", "list[obj]", "cases that must pass before the rule saves: {input, expect} (posting: expect "
+     "post|ask|none, account_id?)"),
     ("priority?", "int", "posting rules: lower runs first (default 100)"),
     ("external_rule_id?", "str", "the company rule this one carries out"))
 SHAPES: dict[str, tuple[Field, ...]] = {
@@ -245,7 +243,8 @@ SHAPES: dict[str, tuple[Field, ...]] = {
                           ("account_id?", "str", "default: Other expenses"), ("date?", "day", ""),
                           ("memo?", "str", "")),
     "invoice_void": (("invoice_id", "str", ""), ("reason?", "str", "")),
-    "attach": (("subject_kind", "entry|feed|bill|invoice", ""), ("subject_id", "str", ""),
+    "attach": (("subject_kind", "entry|feed|bill|invoice|unmatched", "unmatched: receipts waiting for a match"),
+               ("subject_id?", "str", "not for unmatched"),
                ("file_ids", "list[str]", "Library file ids (a receipt, a bill's PDF)")),
 }
 WORDS: dict[str, str] = {

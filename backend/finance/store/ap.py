@@ -187,6 +187,11 @@ def settlements_from(c: sqlite3.Connection, kind: str, from_id: str) -> list[Any
                      "ORDER BY created_at", (kind, from_id)).fetchall()
 
 
+def settlements_by_entry(c: sqlite3.Connection, entry_id: str) -> list[Any]:
+    return c.execute("SELECT * FROM fin_settlements WHERE entry_id=? AND voided_at IS NULL ORDER BY created_at",
+                     (entry_id,)).fetchall()
+
+
 def settled(c: sqlite3.Connection, kind: str, doc_id: str) -> int:
     row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_settlements WHERE to_kind=? AND to_id=? AND "
                     "voided_at IS NULL", (kind, doc_id)).fetchone()
@@ -287,3 +292,33 @@ def cash_rows(c: sqlite3.Connection, book_id: str, start: str, end: str, account
 def posting_rules(c: sqlite3.Connection) -> list[Any]:
     """Active posting rules, first to run first."""
     return c.execute("SELECT * FROM fin_rules WHERE kind='posting' AND active=1 ORDER BY priority, id").fetchall()
+
+
+def settled_from(c: sqlite3.Connection, from_kind: str, from_id: str) -> int:
+    """How much of a payment or feed row is applied to documents already."""
+    row = c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_settlements WHERE from_kind=? AND from_id=? AND "
+                    "voided_at IS NULL", (from_kind, from_id)).fetchone()
+    return int(row[0])
+
+
+def open_owing(c: sqlite3.Connection, kind: str, book_id: str, left: int, most: int = 20) -> list[Any]:
+    """Open documents that still owe exactly `left`, with `contact_name` (what a new feed row may be paying)."""
+    table, _, _, _, contact = DOCS[kind]
+    paid = "amount_paid" if kind == "bill" else "amount_paid + written_off"
+    statuses = ("open",) if kind == "bill" else ("sent", "partial")
+    return c.execute(f"SELECT d.*, k.name AS contact_name FROM {table} d LEFT JOIN fin_contacts k ON k.id=d.{contact} "
+                     f"WHERE d.book_id=? AND d.status IN ({_marks(statuses)}) AND d.total - {paid} = ? "
+                     "ORDER BY d.id LIMIT ?", (book_id, *statuses, left, most)).fetchall()
+
+
+def drop_unmatched(c: sqlite3.Connection, book_id: str, file_ids: Sequence[str]) -> int:
+    """Files filed to a subject leave the unmatched receipts."""
+    if not file_ids:
+        return 0
+    return c.execute(f"DELETE FROM fin_attachments WHERE book_id=? AND subject_kind='unmatched' AND file_id IN "
+                     f"({_marks(file_ids)})", (book_id, *file_ids)).rowcount
+
+
+def doc_count(c: sqlite3.Connection, kind: str, book_id: str) -> int:
+    table = DOCS[kind][0]
+    return int(c.execute(f"SELECT COUNT(*) FROM {table} WHERE book_id=?", (book_id,)).fetchone()[0])

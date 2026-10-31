@@ -30,6 +30,7 @@ from .store import budgets as SB
 from .store import ledger as SL
 from .store import tico
 
+CASH_BELOW_KEY = "finance_cash_below"   # the owner's cash alert floor (minor units; 0 or unset: off)
 DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2); v1 sends nothing directly either way
 METHODS = ("ach", "wire", "check")
 MERCURY_METHOD = {"ach": "ach", "wire": "domesticWire", "check": "check"}
@@ -51,9 +52,12 @@ def settings(c: Any, connection_id: str) -> dict[str, Any]:
 
 
 # ------------------------------------------------------------------------------------------------ recipients
-SEALED_KINDS = ("recipient_add",)
-BANK_FIELDS = ("account_number", "routing_number")
+TAX_KINDS = ("contact_create", "contact_update")          # a contact's tax id is sealed the same way (§4.2)
+SEALED_KINDS = ("recipient_add", *TAX_KINDS)
+BANK_FIELDS = ("account_number", "routing_number", "tax_id")
 SEALED_FIELDS = ("details_ref", "details_fp", "last4")     # what Finance keeps in their place; never sent by a caller
+TAX_FIELDS = ("tax_id_ref", "tax_id_fp", "tax_id_last4")
+REFS = ("details_ref", "tax_id_ref")
 
 
 def _bank_details(p: Mapping[str, object]) -> tuple[str, dict[str, Any]]:
@@ -73,6 +77,8 @@ def strip_details(c: Any, kind: str, body: Mapping[str, object]) -> tuple[dict[s
     out = dict(body)
     if kind not in SEALED_KINDS:
         return out, ""
+    if kind in TAX_KINDS:
+        return _strip_tax_id(c, out)
     if any(k in body for k in SEALED_FIELDS):
         raise invalid("send account_number and routing_number; Finance keeps them in the credential vault")
     method, info = _bank_details(body)
@@ -85,10 +91,37 @@ def strip_details(c: Any, kind: str, body: Mapping[str, object]) -> tuple[dict[s
     return out, json.dumps(info, sort_keys=True)
 
 
+def _strip_tax_id(c: Any, out: dict[str, object]) -> tuple[dict[str, object], str]:
+    """A contact's tax id taken out the same way: a keyed fingerprint and the last 4 stay, the number is sealed. An
+    empty `tax_id` clears it."""
+    if any(k in out for k in TAX_FIELDS):
+        raise invalid("send tax_id; Finance keeps it in the credential vault")
+    if "tax_id" not in out:
+        return out, ""
+    raw = out.pop("tax_id")
+    if raw in (None, ""):
+        out["tax_id_last4"] = ""
+        return out, ""
+    if not isinstance(raw, str):
+        raise invalid("tax_id is text")
+    digits = "".join(ch for ch in raw if ch.isalnum())
+    if not 4 <= len(digits) <= 20 or len(digits) != len(raw.replace("-", "").replace(" ", "")):
+        raise invalid("a tax id is 4-20 letters and digits (dashes and spaces allowed)")
+    out["tax_id_fp"] = tico.fingerprint(c, "taxid", digits)
+    out["tax_id_last4"] = digits[-4:]
+    return out, json.dumps({"tax_id": digits})
+
+
 def seal_details(c: Any, body: Mapping[str, object], plain: str, by: str, at: str) -> dict[str, object]:
-    """Seal stripped bank details into the vault (inside the action's savepoint, so a refusal rolls it back too)."""
+    """Seal stripped bank details (or a tax id) into the vault inside the action's savepoint, so a refusal rolls it
+    back too."""
     if not plain:
         return dict(body)
+    if "tax_id_fp" in body:
+        last4 = str(body.get("tax_id_last4") or "")
+        ref = tico.seal_credential(c, f"Finance tax id {str(body.get('name') or '')[:100]} ••{last4}", plain,
+                                   f"••{last4}", by, at)
+        return {**body, "tax_id_ref": ref}
     last4 = str(body.get("last4") or "")
     ref = tico.seal_credential(c, f"Finance payee {str(body.get('name') or '')[:100]} ••{last4}", plain,
                                f"••{last4}", by, at)
@@ -96,10 +129,11 @@ def seal_details(c: Any, body: Mapping[str, object], plain: str, by: str, at: st
 
 
 def drop_details(c: Any, body: Mapping[str, object]) -> None:
-    """An action that will never run deletes the bank details it sealed."""
-    ref = body.get("details_ref")
-    if isinstance(ref, str) and ref:
-        tico.drop_credential(c, ref)
+    """An action that will never run deletes the bank details (or tax id) it sealed."""
+    for key in REFS:
+        ref = body.get(key)
+        if isinstance(ref, str) and ref:
+            tico.drop_credential(c, ref)
 
 
 def open_details(c: Any, ref: str) -> dict[str, Any]:
@@ -338,14 +372,26 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def payment_settings(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    """The owner's company switch for direct send (§9). v1 builds the switch only: direct payments stay refused."""
-    V.only(p, ("direct_send",))
-    on = V.flag(p, "direct_send")
+    """The owner's company switches: direct send (§9; v1 builds the switch only, direct payments stay refused) and the
+    cash alert (finance.cash.below fires when the books' cash drops under `cash_below`; 0 turns it off)."""
+    V.only(p, ("direct_send", "cash_below"))
+    if not p:
+        raise invalid("say direct_send or cash_below")
+    on = V.flag(p, "direct_send") if "direct_send" in p else SL.setting(ctx.c, DIRECT_KEY) is True
+    floor = V.integer(p, "cash_below", 0, 10**15) if "cash_below" in p else None
 
     def apply(aid: str) -> Result:
-        SL.set_setting(ctx.c, DIRECT_KEY, on, who, ctx.at)
-        return {"direct_send": on, "available": False}
-    return Plan(K.ALLOW, f"Turn direct send {'on' if on else 'off'} for the company", apply)
+        out: Result = {"direct_send": on, "available": False}
+        if "direct_send" in p:
+            SL.set_setting(ctx.c, DIRECT_KEY, on, who, ctx.at)
+        if floor is not None:
+            SL.set_setting(ctx.c, CASH_BELOW_KEY, floor, who, ctx.at)
+            out["cash_below"] = floor
+        return out
+    words = [f"turn direct send {'on' if on else 'off'}"] if "direct_send" in p else []
+    if floor is not None:
+        words.append(f"alert when cash drops under {floor / 100:.2f}" if floor else "turn the cash alert off")
+    return Plan(K.ALLOW, f"{' and '.join(words).capitalize()} for the company", apply)
 
 
 # ------------------------------------------------------------------------------------------------ worker steps
@@ -366,6 +412,8 @@ def end(ctx: Ctx, pay: Any, status: str, why: str = "") -> None:
     if status in ("failed", "cancelled"):
         unreserve(ctx, pay)
     _event(ctx, FAILED, pay, why or status)
+    from .documents import payment_ended
+    payment_ended(ctx, pay)                        # a bill it paid is owed again
     if status == "failed":
         maker = str(pay["created_by"])
         person = maker if maker in ctx.org.humans else admin_person(ctx)
@@ -650,10 +698,12 @@ def cut_off(ctx: Ctx, pay: Any) -> None:
 
 
 def feed_settled(ctx: Ctx, pay: Any, feed_id: str) -> None:
-    """Its bank transaction posted: settled, and the entry absorbed the hold."""
+    """Its bank transaction posted: settled, the entry absorbed the hold, and the bill it pays (if any) is settled."""
     SK.update(ctx.c, "fin_payments", str(pay["id"]), {"status": "settled", "provider_txn_id": feed_id,
                                                       "settled_at": ctx.at, "next_try_at": None, "updated_at": ctx.at})
     _event(ctx, SENT, pay)
+    from .documents import payment_settled
+    payment_settled(ctx, pay, feed_id)             # a bill it pays is settled on the bank row's day
 
 
 def feed_failed(ctx: Ctx, request_id: str, status: str) -> None:

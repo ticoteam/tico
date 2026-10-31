@@ -1429,7 +1429,8 @@ STABLE.extend([
     ("/api/v2/finance/statements", "get", "Finance", "listFinanceStatements",
      "Bank and card statements for the money accounts the caller sees", "FinanceStatements"),
     ("/api/v2/finance/rules", "get", "Finance", "listFinanceRules",
-     "Finance gate rules with their words, condition, outcome, examples and latest runs, for teammates who may write "
+     "Finance gate and posting rules with their kind, priority, words, condition, outcome, examples and latest runs, "
+     "for teammates who may write "
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
     ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
      "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
@@ -1447,6 +1448,12 @@ STABLE.extend([
     ("/api/v2/finance/contacts", "get", "Finance", "listFinanceContacts",
      "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
      "tax id's last 4 only for a finance admin", "FinanceContacts"),
+    ("/api/v2/finance/chart", "get", "Finance", "getFinanceChart",
+     "The lines the caller may post to (id, number, name, type), for the bill, invoice and journal forms; for= bill "
+     "keeps expense and asset lines, invoice income lines; for teammates who write to the books", "FinanceChart"),
+    ("/api/v2/finance/pay-from", "get", "Finance", "listFinancePayFrom",
+     "The connected bank accounts the caller may pay bills from (finance.pay); balances only where the caller sees "
+     "that account", "FinancePayFrom"),
     ("/api/v2/finance/inbox", "get", "Finance", "getFinanceInbox",
      "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, "
      "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
@@ -1587,7 +1594,8 @@ SCHEMAS.update({
         "starting_balance": {"type": ["integer", "null"]}, "ending_balance": "i", "currency": "s", "source": "s"},
         required=["id", "money_account_id", "end_date", "ending_balance"]))}),
     "FinanceRules": obj({"rules": items(obj({
-        "id": "s", "name": "s", "words": "s", "when": "o", "outcome": "o",
+        "id": "s", "kind": {"type": "string", "enum": ["gate", "posting"]}, "priority": "i", "name": "s", "words": "s",
+        "when": "o", "outcome": "o",
         "examples": items({"type": "object", "additionalProperties": True}), "external_rule_id": "n", "owner": "s",
         "active": "b", "created_at": "s",
         "runs": items(obj({"action_id": "n", "outcome": "n", "at": "s"}))}, required=["id", "name", "when", "outcome"]))}),
@@ -1596,8 +1604,18 @@ SCHEMAS.update({
     "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
-                                    "approver": "n", "result": "o"}, required=["status", "kind"]),    "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
-                         "currency": "s", "view_version": "i"}),
+                                    "approver": "n", "result": "o"}, required=["status", "kind"]),
+    "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
+                         "currency": "s", "bills_email": "n", "view_version": "i"}),
+    "FinanceChart": obj({"accounts": items(obj({"id": "s", "number": "s", "name": "s", "type": "s", "subtype": "s",
+                                                "parent_id": "n", "company_wide": "b"},
+                                               required=["id", "number", "name", "type"])),
+                         "more": "b", "view_version": "i"}),
+    "FinancePayFrom": obj({"accounts": items(obj({"id": "s", "name": "s", "provider": "s", "last4": "n",
+                                                  "balance": {"type": ["integer", "null"]},
+                                                  "available_balance": {"type": ["integer", "null"]},
+                                                  "balance_as_of": "n"}, required=["id", "name"])),
+                           "currency": "s", "view_version": "i"}),
     "FinanceInvoices": obj({"invoices": items(ref("FinanceDocumentRow")), "next_cursor": "n",
                             "open": ref("FinanceOpenTotal"), "currency": "s", "view_version": "i"}),
     "FinanceOpenTotal": obj({"count": "i", "remaining": "i", "more": "b",

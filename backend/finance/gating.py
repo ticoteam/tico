@@ -19,6 +19,7 @@ from .handlers import Plan, Result
 from .store import banking as SK
 
 TEST_DAYS = 90
+RULE_KINDS = ("gate", "posting")
 TEST_MOST = 5000
 
 
@@ -137,7 +138,7 @@ def _checked(p: V.Payload, base: Mapping[str, object] | None = None) -> dict[str
 
 def _row(ctx: Ctx, p: V.Payload) -> Any:
     row = SK.get(ctx.c, "fin_rules", V.text(p, "rule_id", 80))
-    if row is None or str(row["kind"]) != "gate":
+    if row is None or str(row["kind"]) not in RULE_KINDS:
         raise FinanceError(NOT_FOUND, "no such rule")
     return row
 
@@ -146,33 +147,47 @@ def _as_fields(row: Any) -> dict[str, object]:
     return {"name": str(row["name"]), "words": str(row["words"]), "when": SK.loads(row["when_json"]),
             "outcome": SK.loads(row["outcome_json"]),
             "examples": cast(list[dict[str, object]], SK.loads_list(row["examples_json"])),
-            "external_rule_id": row["external_rule_id"]}
+            "external_rule_id": row["external_rule_id"], "priority": int(row["priority"])}
+
+
+def _fields(ctx: Ctx, who: str, kind: str, p: V.Payload, base: Mapping[str, object] | None = None) -> dict[str, object]:
+    if kind == "posting":
+        from .posting_rules import checked
+        return checked(ctx, who, p, base)
+    if "priority" in p:
+        raise FinanceError("invalid", "priority is for posting rules")
+    return _checked(p, base)
 
 
 def rule_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, ("name", "words", "when", "outcome", "examples", "external_rule_id"))
-    f = _checked(p)
+    """A gate rule (before an action commits) or a posting rule (on a new feed row or bill line)."""
+    V.only(p, ("kind", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id"))
+    kind = V.choice(p, "kind", RULE_KINDS, "gate")
+    f = _fields(ctx, who, kind, p)
 
     def apply(aid: str) -> Result:
         rid = SK.insert(ctx.c, "fin_rules", {
-            "kind": "gate", "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
+            "kind": kind, "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
             "outcome_json": SK.dump(f["outcome"]), "examples_json": SK.dump(f["examples"]),
             "external_rule_id": f["external_rule_id"], "owner": who, "active": 1, "created_at": ctx.at,
-            "created_by": who})
-        return {"rule_id": rid}
-    return Plan(_gate(ctx, who, "rule_create"), f"Add the finance rule \"{f['name']}\": {f['words']}"[:300], apply)
+            "created_by": who, **({"priority": f["priority"]} if kind == "posting" else {})})
+        return {"rule_id": rid, "kind": kind}
+    return Plan(_gate(ctx, who, "rule_create"), f"Add the finance rule \"{f['name']}\": {f['words']}"[:300], apply,
+                facts={"rule.kind": kind})
 
 
 def rule_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
-    V.only(p, ("rule_id", "name", "words", "when", "outcome", "examples", "external_rule_id"))
+    V.only(p, ("rule_id", "name", "words", "when", "outcome", "examples", "priority", "external_rule_id"))
     row = _row(ctx, p)
-    f = _checked(p, _as_fields(row))
+    kind = str(row["kind"])
+    f = _fields(ctx, who, kind, p, _as_fields(row))
 
     def apply(aid: str) -> Result:
         SK.update(ctx.c, "fin_rules", str(row["id"]), {
             "name": f["name"], "words": f["words"], "when_json": SK.dump(f["when"]),
             "outcome_json": SK.dump(f["outcome"]), "examples_json": SK.dump(f["examples"]),
-            "external_rule_id": f["external_rule_id"], "updated_at": ctx.at})
+            "external_rule_id": f["external_rule_id"], "updated_at": ctx.at,
+            **({"priority": f["priority"]} if kind == "posting" else {})})
         return {"rule_id": str(row["id"])}
     return Plan(_gate(ctx, who, "rule_update"), f"Change the finance rule \"{f['name']}\": {f['words']}"[:300], apply)
 
@@ -198,13 +213,22 @@ rule_disable = _toggle(False)
 
 def rule_test(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Run a draft (or saved) rule over the last 90 days of actions and feed rows the tester can see and say what it
-    would have changed. Writes nothing but the action's own record."""
-    V.only(p, ("rule_id", "when", "outcome"))
-    if "rule_id" in p:
-        rule = rule_from(_row(ctx, p))
+    would have changed (a posting rule: the feed rows it would post, and where). Writes nothing but the action's own
+    record."""
+    V.only(p, ("rule_id", "when", "outcome", "kind"))
+    since = (dates.day(ctx.today) - timedelta(days=TEST_DAYS)).isoformat()
+    row = _row(ctx, p) if "rule_id" in p else None
+    if (str(row["kind"]) if row is not None else V.choice(p, "kind", RULE_KINDS, "gate")) == "posting":
+        from .core import ap as AP
+        from .posting_rules import rule_of, test
+        draft = rule_of(row) if row is not None else \
+            AP.PostingRule("draft", "draft", G.parse_when(p.get("when")), AP.parse_posting(p.get("outcome")))
+        found = test(ctx, who, draft, since, TEST_MOST)
+        return Plan(K.ALLOW, f"Test a posting rule over {TEST_DAYS} days", lambda aid: found, {"test": found})
+    if row is not None:
+        rule = rule_from(row)
     else:
         rule = G.rule_of("draft", "draft", G.parse_when(p.get("when")), G.parse_outcome(p.get("outcome")))
-    since = (dates.day(ctx.today) - timedelta(days=TEST_DAYS)).isoformat()
     everything = _is_admin(ctx, who)
     day = dates.day(ctx.today)
     changed: list[Result] = []

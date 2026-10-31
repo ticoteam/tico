@@ -37,7 +37,8 @@ class DocLine:
 
 
 def doc_lines(raw: object) -> list[DocLine]:
-    """A bill's or invoice's lines: each an account and a positive amount, with a description and tags."""
+    """A bill's or invoice's lines: each a positive amount with an account (a bill's may leave it out for the vendor's
+    default or a posting rule to fill), a description and tags."""
     out: list[DocLine] = []
     for item in V.items(raw, "lines", L.MAX_LINES):
         q = V.obj(item, "a line")
@@ -45,7 +46,7 @@ def doc_lines(raw: object) -> list[DocLine]:
         amount = V.amount(q)
         if amount <= 0:
             raise invalid("a document line's amount is more than 0")
-        out.append(DocLine(V.text(q, "account_id", 80), amount, V.opt_text(q, "description") or "",
+        out.append(DocLine(V.opt_text(q, "account_id", 80) or "", amount, V.opt_text(q, "description") or "",
                            L.tags(q.get("tags"))))
     return out
 
@@ -90,18 +91,25 @@ def invoice_stage(due: str | None, today: date) -> str | None:
     return reached[-1] if reached else None
 
 
-def recognized(line: int, paid: int, total: int) -> int:
-    """How much of a document line the cash view has recognized once `paid` of `total` is settled. Exact at
-    paid == total, so cash and accrual agree once a document is fully paid."""
+def recognized(lines: Sequence[int], paid: int) -> list[int]:
+    """How much of each document line the cash view has recognized once `paid` of the lines' total is settled: in
+    proportion, the cents rounding leaves going to the lines with the largest remainders (then the first), so the parts
+    always sum to `paid` exactly and cash and accrual agree once a document is fully paid."""
+    total = sum(lines)
     if total <= 0:
-        return 0
+        return [0 for _ in lines]
     paid = max(0, min(paid, total))
-    return line * paid // total
+    base = [x * paid // total for x in lines]
+    short = paid - sum(base)
+    order = sorted(range(len(lines)), key=lambda i: (-(lines[i] * paid % total), i))
+    for i in order[:short]:
+        base[i] += 1
+    return base
 
 
-def shares(lines: Sequence[int], total: int, before: int, after: int) -> list[int]:
+def shares(lines: Sequence[int], before: int, after: int) -> list[int]:
     """Each line's cash-view change when a document's settled amount moves from `before` to `after`."""
-    return [recognized(x, after, total) - recognized(x, before, total) for x in lines]
+    return [b - a for a, b in zip(recognized(lines, before), recognized(lines, after), strict=True)]
 
 
 # ------------------------------------------------------------------------------------------------ posting rules
