@@ -173,7 +173,9 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")
-    plan = PLANNERS[kind](ctx, p.who, payload)
+    # A mirrored book sends its documents to the provider first: the mirror's planner queues the write.
+    planner = mirror.DOC_PLANNERS.get(kind) if ctx.book.mode == "mirror" else None
+    plan = (planner or PLANNERS[kind])(ctx, p.who, payload)
     gate = by_right or plan.gate
     if by_right is not None and plan.gate.outcome == "needs_approval":
         gate = gating.stricter(by_right, G.Verdict("needs_approval", plan.gate.who, plan.gate.rule))

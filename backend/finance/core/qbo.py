@@ -2,7 +2,7 @@
 request bodies. No I/O (the HTTP client is finance/qbo.py). QuickBooks sends money as decimal text, so amounts go through
 Decimal and come out as integer minor units; nothing here is a float. A deleted row (CDC marks it "Deleted") is its
 identity only, and the books take it as a deletion."""
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from decimal import Decimal, InvalidOperation
 from typing import Any, cast
 
@@ -161,9 +161,11 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
     party_kind = "Vendor" if kind == "Bill" else "Customer"
     party_value = _ref(row, "VendorRef" if kind == "Bill" else "CustomerRef")
     lines = tuple(x for x in (_doc_line(raw, items) for raw in as_list(row.get("Line"))) if x is not None)
+    links = _links(row, "Invoice") if kind == "CreditMemo" else ()
     return M.Document(ext, party=f"{party_kind}:{party_value}" if party_value else "",
                       number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")), due=_id(row.get("DueDate")),
-                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_id(row.get("PrivateNote")))
+                      total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_id(row.get("PrivateNote")),
+                      links=links)
 
 
 def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
@@ -179,7 +181,16 @@ def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
         bank = _ref(check, "BankAccountRef") or _ref(card, "CCAccountRef")
         party_kind, party_value = "Vendor", _ref(row, "VendorRef")
         target = "Bill"
-    links: list[tuple[str, int]] = []
+    return M.Settlement(ext, day=_id(row.get("TxnDate")), memo=_id(row.get("PrivateNote")),
+                        party=f"{party_kind}:{party_value}" if party_value else "",
+                        bank=f"Account:{bank}" if bank else "", total=_units(row.get("TotalAmt")) or 0,
+                        links=_links(row, target))
+
+
+def _links(row: Mapping[str, Any], target: str) -> tuple[tuple[str, int], ...]:
+    """What a payment or a credit memo applies to: each line's linked transaction of the target type ("Bill" or
+    "Invoice") with that line's amount, as ("Bill:12", amount)."""
+    out: list[tuple[str, int]] = []
     for raw in as_list(row.get("Line")):
         line = as_map(raw)
         if line is None:
@@ -188,11 +199,8 @@ def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
         for txn_raw in as_list(line.get("LinkedTxn")):
             txn = as_map(txn_raw) or {}
             if _id(txn.get("TxnType")) == target and _id(txn.get("TxnId")) and units is not None:
-                links.append((f"{target}:{_id(txn.get('TxnId'))}", units))
-    return M.Settlement(ext, day=_id(row.get("TxnDate")), memo=_id(row.get("PrivateNote")),
-                        party=f"{party_kind}:{party_value}" if party_value else "",
-                        bank=f"Account:{bank}" if bank else "", total=_units(row.get("TotalAmt")) or 0,
-                        links=tuple(links))
+                out.append((f"{target}:{_id(txn.get('TxnId'))}", units))
+    return tuple(out)
 
 
 def item_accounts(rows: Iterable[object]) -> dict[str, dict[str, str]]:
@@ -297,3 +305,82 @@ def delete_body(ext_key: str, revision: str) -> dict[str, Any]:
     """The body that deletes a journal entry: its id and the SyncToken it was last read with."""
     _, _, value = ext_key.partition(":")
     return {"Id": value, "SyncToken": revision}
+
+
+def _account_id(key: object) -> str:
+    kind, _, value = str(key).partition(":")
+    if kind != "Account" or not value:
+        raise ValueError(f"not a QuickBooks account: {key!r}")
+    return value
+
+
+def _party_id(key: object, kind: str) -> str:
+    found = _party_ref(str(key))
+    if found is None or found[0] != kind:
+        raise ValueError(f"not a QuickBooks {kind.lower()}: {key!r}")
+    return found[1]
+
+
+def _header(body: Mapping[str, Any]) -> dict[str, Any]:
+    return {"TxnDate": str(body["day"]), "PrivateNote": str(body.get("memo") or "")[:4000]}
+
+
+def _applied(links: Sequence[Sequence[Any]]) -> list[dict[str, Any]]:
+    """Each applied amount as a line linked to the bill or invoice it pays."""
+    out: list[dict[str, Any]] = []
+    for key, amount in links:
+        kind, _, value = str(key).partition(":")
+        out.append({"Amount": decimal_text(int(amount)), "LinkedTxn": [{"TxnId": value, "TxnType": kind}]})
+    return out
+
+
+def bill_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A bill's request body from an outbox payload (keys already translated to QuickBooks ids). Each line is an
+    expense on its account; QuickBooks posts the bill when it is saved."""
+    lines = [{"DetailType": "AccountBasedExpenseLineDetail", "Amount": decimal_text(int(x["amount"])),
+              "Description": str(x.get("description") or ""),
+              "AccountBasedExpenseLineDetail": {"AccountRef": {"value": _account_id(x["account"])}}}
+             for x in body["lines"]]
+    out: dict[str, Any] = {**_header(body), "VendorRef": {"value": _party_id(body["party"], "Vendor")}, "Line": lines}
+    if body.get("number"):
+        out["DocNumber"] = str(body["number"])
+    if body.get("due"):
+        out["DueDate"] = str(body["due"])
+    return out
+
+
+def invoice_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str, Any]:
+    """An invoice's request body. QuickBooks bills lines by item, so each line uses the item that sells to its account
+    (`income` maps an account id to an item id). A line with no such item is refused, so nothing is half-written."""
+    lines: list[dict[str, Any]] = []
+    for x in body["lines"]:
+        account = _account_id(x["account"])
+        item = income.get(account)
+        if item is None:
+            raise ValueError(f"no QuickBooks item sells to account {account}; add one in QuickBooks")
+        units = int(x["amount"])
+        lines.append({"DetailType": "SalesItemLineDetail", "Amount": decimal_text(units),
+                      "Description": str(x.get("description") or ""),
+                      "SalesItemLineDetail": {"ItemRef": {"value": item}, "Qty": 1,
+                                              "UnitPrice": decimal_text(units)}})
+    out: dict[str, Any] = {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")},
+                           "Line": lines}
+    if body.get("number"):
+        out["DocNumber"] = str(body["number"])
+    if body.get("due"):
+        out["DueDate"] = str(body["due"])
+    return out
+
+
+def bill_payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A bill payment: paid from one bank account to one vendor, applied to the bill it settles."""
+    return {**_header(body), "VendorRef": {"value": _party_id(body["party"], "Vendor")}, "PayType": "Check",
+            "CheckPayment": {"BankAccountRef": {"value": _account_id(body["bank"])}},
+            "TotalAmt": decimal_text(int(body["total"])), "Line": _applied(body["links"])}
+
+
+def payment_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A received payment: one customer's money into one bank account, applied to the invoice it settles."""
+    return {**_header(body), "CustomerRef": {"value": _party_id(body["party"], "Customer")},
+            "DepositToAccountRef": {"value": _account_id(body["bank"])},
+            "TotalAmt": decimal_text(int(body["total"])), "Line": _applied(body["links"])}

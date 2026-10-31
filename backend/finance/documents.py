@@ -1456,6 +1456,12 @@ def watch(ctx: Ctx) -> int:
     return n
 
 
+# The rules the mirror's document planners share with the native ones (mirror.py takes the same checks, then queues the
+# write to the provider instead of posting here).
+doc_of, contact_of, left_of, need_status = _doc, _contact, _left, _need_status
+resolve_lines, next_number, money_of = _resolve, _next_number, _money
+
+
 PLANNERS = {"contact_create": contact_create, "contact_update": contact_update, "bill_create": bill_create,
             "bill_update": bill_update, "bill_approve": bill_approve, "bill_schedule": bill_schedule,
             "bill_mark_paid": bill_mark_paid, "bill_void": bill_void, "invoice_create": invoice_create,

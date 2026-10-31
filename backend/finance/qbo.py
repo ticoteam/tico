@@ -235,8 +235,14 @@ class QuickBooks:
     def send(self, op: str, body: Mapping[str, Any], key: str) -> Sent:
         """One write, idempotent by its RequestId. Only a refusal from QuickBooks itself is final."""
         request_id = str(uuid.uuid5(NAMESPACE, key))
+        items: dict[str, dict[str, str]] = {}
+        if op == "invoice.create":
+            found = self._item_accounts()
+            if isinstance(found, str):
+                return Sent(False, error=found)
+            items = found
         try:
-            kind, path, payload, query = _write_of(op, body)
+            kind, path, payload, query = _write_of(op, body, items)
         except (KeyError, ValueError, TypeError) as e:
             return Sent(False, error=f"not a QuickBooks write: {e}"[:MAX_TEXT], final=True)
         if kind is None:
@@ -252,8 +258,9 @@ class QuickBooks:
         return Sent(False, error=_fault(reply.body, reply.status), final=final)
 
 
-def _write_of(op: str, body: Mapping[str, Any]) -> tuple[str | None, str, dict[str, Any], dict[str, str]]:
-    """The record kind, path, body and query one outbox operation sends."""
+def _write_of(op: str, body: Mapping[str, Any],
+              items: Mapping[str, Mapping[str, str]]) -> tuple[str | None, str, dict[str, Any], dict[str, str]]:
+    """The record kind, path, body and query one outbox operation sends. `items` maps each item to its accounts."""
     if op == "account.create":
         return "Account", "account", Q.account_body(body), {}
     if op == "party.create":
@@ -264,4 +271,17 @@ def _write_of(op: str, body: Mapping[str, Any]) -> tuple[str | None, str, dict[s
     if op == "journal.delete":
         return "JournalEntry", "journalentry", Q.delete_body(str(body["ext"]), str(body["revision"])), {
             "operation": "delete"}
+    if op == "bill.create":
+        return "Bill", "bill", Q.bill_body(body), {}
+    if op == "invoice.create":
+        income = {v["income"]: k for k, v in items.items() if v.get("income")}
+        return "Invoice", "invoice", Q.invoice_body(body, income), {}
+    if op == "bill.void":
+        return "Bill", "bill", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "delete"}
+    if op == "invoice.void":
+        return "Invoice", "invoice", Q.delete_body(str(body["ext"]), str(body["revision"])), {"operation": "void"}
+    if op == "payment.bill":
+        return "BillPayment", "billpayment", Q.bill_payment_body(body), {}
+    if op == "payment.invoice":
+        return "Payment", "payment", Q.payment_body(body), {}
     return None, "", {}, {}

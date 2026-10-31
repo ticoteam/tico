@@ -353,3 +353,73 @@ def test_withheld_rehearsal_writes_stay_visible_and_are_not_sent(books):
     with books.read() as c:
         row = c.execute("SELECT status, last_error FROM fin_outbox WHERE idempotency_key='rehearse-1'").fetchone()
     assert tuple(row) == ("withheld", books_sync.REHEARSAL_WHY)
+
+
+def test_a_bill_made_here_is_posted_as_an_expense_on_its_account_with_its_vendor_and_number():
+    wire = Wire(QC.Reply(200, {"Bill": {"Id": "901", "SyncToken": "0"}}))
+    sent = _client(wire).send("bill.create", {"party": "Vendor:9", "number": "B-77", "day": "2026-10-05",
+                                              "due": "2026-11-05", "memo": "", "lines": [
+                                                  {"account": "Account:2", "amount": 1500, "description": "seats"}]},
+                              "bill-key")
+    assert (sent.ok, sent.kind, sent.external_id) == (True, "Bill", "901")
+    body = json.loads(wire.sent[0][3] or b"{}")
+    assert body["VendorRef"] == {"value": "9"} and body["DocNumber"] == "B-77" and body["DueDate"] == "2026-11-05"
+    assert body["Line"] == [{"DetailType": "AccountBasedExpenseLineDetail", "Amount": "15.00", "Description": "seats",
+                             "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "2"}}}]
+
+
+def test_an_invoice_line_is_billed_by_the_item_that_sells_to_its_account_or_refused_before_any_post():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "3"}}]}}),
+                QC.Reply(200, {"Invoice": {"Id": "902", "SyncToken": "0"}}))
+    sent = _client(wire).send("invoice.create", {"party": "Customer:4", "number": "I-5", "day": "2026-10-05",
+                                                 "due": "", "memo": "", "lines": [
+                                                     {"account": "Account:3", "amount": 2000, "description": "x"}]},
+                              "invoice-key")
+    assert (sent.ok, sent.kind, sent.external_id) == (True, "Invoice", "902")
+    line = json.loads(wire.sent[1][3] or b"{}")["Line"][0]
+    assert line["SalesItemLineDetail"] == {"ItemRef": {"value": "7"}, "Qty": 1, "UnitPrice": "20.00"}
+    assert line["Amount"] == "20.00"
+
+    wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "40"}}]}}))
+    sent = _client(wire).send("invoice.create", {"party": "Customer:4", "number": "I-6", "day": "2026-10-05",
+                                                 "due": "", "memo": "", "lines": [
+                                                     {"account": "Account:3", "amount": 2000, "description": "x"}]},
+                              "invoice-key-2")
+    assert sent.ok is False and sent.final is True and "no QuickBooks item sells to account 3" in sent.error
+    assert [method for method, *_ in wire.sent] == ["GET"]     # the only call was the read of the items
+
+
+def test_voids_and_payments_are_the_quickbooks_writes_they_name_and_apply_to_what_they_settle():
+    wire = Wire(QC.Reply(200, {"Invoice": {"Id": "901", "SyncToken": "2"}}),
+                QC.Reply(200, {"Bill": {"Id": "902", "SyncToken": "1"}}),
+                QC.Reply(200, {"Payment": {"Id": "903", "SyncToken": "0"}}),
+                QC.Reply(200, {"BillPayment": {"Id": "904", "SyncToken": "0"}}))
+    client = _client(wire)
+    assert client.send("invoice.void", {"ext": "Invoice:901", "revision": "1"}, "void-1").ok
+    assert client.send("bill.void", {"ext": "Bill:902", "revision": "0"}, "void-2").ok
+    paid = client.send("payment.invoice", {"party": "Customer:4", "bank": "Account:1", "total": 2000, "day": "2026-10-12",
+                                           "memo": "", "links": [["Invoice:12", 2000]]}, "pay-1")
+    settled = client.send("payment.bill", {"party": "Vendor:9", "bank": "Account:1", "total": 1500, "day": "2026-10-12",
+                                           "memo": "", "links": [["Bill:12", 1500]]}, "pay-2")
+    assert (paid.kind, paid.external_id) == ("Payment", "903") and (settled.kind, settled.external_id) == (
+        "BillPayment", "904")
+    void_invoice, void_bill, received, sent_bill = wire.sent
+    assert "/invoice?" in void_invoice[1] and "operation=void" in void_invoice[1]
+    assert json.loads(void_invoice[3] or b"{}") == {"Id": "901", "SyncToken": "1"}
+    assert "operation=delete" in void_bill[1] and json.loads(void_bill[3] or b"{}") == {"Id": "902", "SyncToken": "0"}
+    got = json.loads(received[3] or b"{}")
+    assert (got["CustomerRef"], got["DepositToAccountRef"], got["TotalAmt"]) == ({"value": "4"}, {"value": "1"}, "20.00")
+    assert got["Line"] == [{"Amount": "20.00", "LinkedTxn": [{"TxnId": "12", "TxnType": "Invoice"}]}]
+    got = json.loads(sent_bill[3] or b"{}")
+    assert got["PayType"] == "Check" and got["CheckPayment"] == {"BankAccountRef": {"value": "1"}}
+    assert got["Line"] == [{"Amount": "15.00", "LinkedTxn": [{"TxnId": "12", "TxnType": "Bill"}]}]
+
+
+def test_a_credit_memo_applied_to_an_invoice_carries_the_invoice_it_settles_and_its_amount():
+    items = Q.item_accounts([{"Id": "7", "IncomeAccountRef": {"value": "40"}}])
+    memo = Q.document_record({"Id": "20", "SyncToken": "1", "DocNumber": "CM-20", "TxnDate": "2026-10-10",
+                              "TotalAmt": "5.00", "CustomerRef": {"value": "4"}, "Line": [
+                                  {"Amount": "5.00", "DetailType": "SalesItemLineDetail", "Description": "consulting",
+                                   "SalesItemLineDetail": {"ItemRef": {"value": "7"}},
+                                   "LinkedTxn": [{"TxnType": "Invoice", "TxnId": "12"}]}]}, "CreditMemo", items)
+    assert (memo.party, memo.total, memo.links) == ("Customer:4", 500, (("Invoice:12", 500),))

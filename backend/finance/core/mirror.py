@@ -2,9 +2,9 @@
 record the books take, how a bank row finds the entry it is, how a backfill pages through a provider's records, when
 the change feed is read, and which provider class a tag sends. The store and the sync call these."""
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime, timedelta, timezone
-from typing import cast
+from typing import Any, cast
 
 from . import dates
 
@@ -88,6 +88,7 @@ class Document:
     total: int          # minor units, positive
     lines: tuple[EntryLine, ...]
     memo: str = ""
+    links: tuple[tuple[str, int], ...] = ()     # a credit memo's applied invoices ("Invoice:5", amount)
 
 
 @dataclass(frozen=True)
@@ -118,7 +119,8 @@ def decide(have: tuple[str, str] | None, ext: Ext) -> str:
         return GONE if ext.deleted else CREATE
     revision, status = have
     if status == "deleted":
-        return SAME if ext.deleted else CREATE
+        # The same revision again is our own write echoing back (a void the books made), not a new record.
+        return SAME if ext.deleted or ext.revision == revision else CREATE
     if ext.deleted:
         return DELETE
     order = revision_order(ext.revision, revision)
@@ -192,3 +194,48 @@ def class_refs(tags: Mapping[str, str], mapping: Mapping[str, Mapping[str, str]]
         if cls:
             out[kind] = cls
     return out
+
+
+# ------------------------------------------------------------------------------------------------ parked records
+Record = ChartAccount | Party | Journal | Document | Settlement | Ext
+
+
+def encode(r: Record) -> dict[str, Any]:
+    """A record as JSON data: the records the books could not take in yet are kept this way until they can be."""
+    return {"record": type(r).__name__, **asdict(r)}
+
+
+def _ext(d: Mapping[str, Any]) -> Ext:
+    return Ext(str(d["kind"]), str(d["external_id"]), str(d["revision"]), bool(d.get("deleted", False)))
+
+
+def _lines(raw: Any) -> tuple[EntryLine, ...]:
+    return tuple(EntryLine(str(x["account"]), int(x["amount"]), str(x.get("party", "")),
+                           str(x.get("description", ""))) for x in raw)
+
+
+def _pairs(raw: Any) -> tuple[tuple[str, int], ...]:
+    return tuple((str(a), int(b)) for a, b in raw)
+
+
+def decode(d: Mapping[str, Any]) -> Record:
+    """The record `encode` wrote."""
+    kind = str(d["record"])
+    if kind == "Ext":
+        return _ext(d)
+    ext = _ext(d["ext"])
+    if kind == "ChartAccount":
+        return ChartAccount(ext, str(d["code"]), str(d["name"]), str(d["type"]), str(d.get("subtype", "")),
+                            bool(d.get("active", True)))
+    if kind == "Party":
+        return Party(ext, str(d["name"]), str(d["kind"]), bool(d.get("active", True)),
+                     tuple(str(x) for x in d.get("emails", [])))
+    if kind == "Journal":
+        return Journal(ext, str(d["day"]), str(d["memo"]), str(d["source"]), _lines(d["lines"]))
+    if kind == "Document":
+        return Document(ext, str(d["party"]), str(d["number"]), str(d["day"]), str(d["due"]), int(d["total"]),
+                        _lines(d["lines"]), str(d.get("memo", "")), _pairs(d.get("links", [])))
+    if kind == "Settlement":
+        return Settlement(ext, str(d["day"]), str(d["memo"]), str(d["party"]), str(d["bank"]), int(d["total"]),
+                          _pairs(d.get("links", [])))
+    raise ValueError(f"not a mirror record: {kind}")

@@ -14,13 +14,14 @@ from typing import Any, Protocol, cast
 
 from . import banking, documents, handlers, posting
 from .context import Ctx, load
+from .core import ap as AP
 from .core import dates
 from .core import feeds as F
 from .core import kinds as K
 from .core import ledger as L
 from .core import mirror as M
 from .core import validate as V
-from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, invalid
+from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .store import ap as SAP
 from .store import banking as SK
@@ -32,12 +33,12 @@ OUTBOX_MOST = 50                            # writes out claimed in one pass
 RETRY = (60, 300, 1800, 3600)               # seconds to wait after each failed try of a write (the last repeats)
 CLAIM_MINUTES = 10                          # a write claimed this long ago with no answer was cut off mid-call
 MATCH_MOST = 500                            # bank rows looked at in one pass to find their provider entry
+PENDING_MOST = 500                          # provider records the books could not take in, kept to be read again
 # In the order the books take them in: documents need the parties and accounts, payments need the documents.
 ENTITIES = ("accounts", "parties", "documents", "payments", "entries")
 TAG_SETTING = "mirror.tags"                 # {"enabled": bool, "map": {tag kind: {tag value: provider class id}}}
 # Actions a mirrored book refuses: the provider holds these records, so Tico cannot write them here.
-REFUSED = ("bill_create", "bill_update", "bill_approve", "bill_schedule", "bill_mark_paid", "bill_void",
-           "invoice_create", "invoice_send", "invoice_record_payment", "invoice_write_off", "invoice_void",
+REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send", "invoice_write_off",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match")
 
@@ -102,22 +103,53 @@ def _group(r: Record) -> str:
 
 def apply(c: sqlite3.Connection, cid: str, records: Sequence[Record], at: str) -> None:
     """Take in provider records: accounts first (parties and entries name them), then parties, then entries. Each
-    record is its own savepoint; a record the books cannot take is marked unmapped and the rest go in."""
+    record is its own savepoint. A record the books cannot take in is marked unmapped and kept (see _pending) to be
+    read again with the next change feed; the rest go in."""
+    pending = _pending(c, cid)
+    changed = False
     for group in ENTITIES:
         for r in records:
-            if _group(r) == group:
-                _unit(c, cid, r, at)
+            if _group(r) != group:
+                continue
+            key = _ext_of(r).key
+            if _unit(c, cid, r, at):
+                changed = pending.pop(key, None) is not None or changed
+            else:
+                pending[key] = M.encode(r)
+                changed = True
+    while len(pending) > PENDING_MOST:
+        pending.pop(next(iter(pending)))
+        changed = True
+    if changed:
+        SX.set_mirror_state(c, cid, {"pending": pending})
     _link_open_rows(c, cid, at)
 
 
-def _unit(c: sqlite3.Connection, cid: str, r: Record, at: str) -> None:
+def _unit(c: sqlite3.Connection, cid: str, r: Record, at: str) -> bool:
+    """One record taken in under its own savepoint. False when the books could not take it: it is marked unmapped."""
     c.execute("SAVEPOINT mirror_unit")
     try:
         _do(c, load(c, at), cid, r, at)
     except (FinanceError, sqlite3.IntegrityError) as e:
         c.execute("ROLLBACK TO mirror_unit")
         _unmapped(c, cid, r, e.message if isinstance(e, FinanceError) else str(e), at)
+        c.execute("RELEASE mirror_unit")
+        return False
     c.execute("RELEASE mirror_unit")
+    return True
+
+
+def _ext_of(r: Record) -> M.Ext:
+    return r if isinstance(r, M.Ext) else r.ext
+
+
+def _pending(c: sqlite3.Connection, cid: str) -> dict[str, dict[str, Any]]:
+    """Provider records the books could not take in, by key. Each is read again with the change feed, so a record that
+    waits on a party or an account goes in once that arrives, even when the record itself has not changed."""
+    raw = SX.mirror_state(c, cid).get("pending")
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): cast(dict[str, Any], v) for k, v in cast(dict[str, object], raw).items()}
 
 
 def _do(c: sqlite3.Connection, ctx: Ctx, cid: str, r: Record, at: str) -> None:
@@ -367,13 +399,28 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
         _credit(c, ctx, cid, d, at)
         return
     table = DOC_TABLES[d.ext.kind]
-    kind = "bill" if table == "fin_bills" else "invoice"
     row = SX.ref(c, cid, table, d.ext.key)
     verdict = M.decide(_have(row), d.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
+    if d.ext.kind == "Invoice" and d.total == 0:
+        # QuickBooks zeroes a voided invoice rather than deleting it: a zero invoice is one the books void.
+        if verdict == M.REPLACE and row is not None and row["local_id"]:
+            local = str(row["local_id"])
+            _void(c, ctx, table, local, at)
+            _bind(c, cid, table, local, d.ext, at, status="deleted")
+        return
     contact = _mapped(c, cid, "fin_contacts", d.party)
     rows = _doc_lines(c, cid, d)
+    _write_document(c, ctx, cid, d, verdict, row, contact, rows, at)
+
+
+def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, verdict: str, row: Any, contact: str,
+                    rows: Sequence[tuple[str, int, str]], at: str) -> str:
+    """A bill or invoice's row, lines and entry, from its rows (local account ids). A replaced document keeps its row
+    and id; its entry is reversed and posted again. Returns the document's local id."""
+    table = DOC_TABLES[d.ext.kind]
+    kind = "bill" if table == "fin_bills" else "invoice"
     total = sum(amount for _, amount, _ in rows)
     if verdict == M.REPLACE and row is not None and row["local_id"]:
         local = str(row["local_id"])
@@ -396,22 +443,33 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
                                               contact=contact, rows=rows, memo=_doc_label(d), day=when), at)
     SAP.update(c, table, local, {"entry_id": new_entry, "updated_at": at})
     _bind(c, cid, table, local, d.ext, at)
+    return local
 
 
 def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -> None:
-    """A credit memo: debits to income against receivables, one entry (it has no row of its own)."""
+    """A credit memo: debits to income against receivables, one entry (it has no row of its own). What it applies to
+    is settled against those invoices, so their paid amounts move with it, and deleting it undoes that."""
     row = SX.ref(c, cid, "fin_entries", d.ext.key)
     verdict = M.decide(_have(row), d.ext)
     if verdict not in (M.CREATE, M.REPLACE):
         return
     contact = _mapped(c, cid, "fin_contacts", d.party)
     rows = _doc_lines(c, cid, d)
+    applied = sum(amount for _, amount in d.links)
+    if applied > d.total:
+        raise FinanceError(NOT_AVAILABLE, "the credit memo applies more than its total")
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
     new_id = _book(c, ctx, cid, d.ext, verdict, old, d.day,
                    lambda when: _doc_entry(ctx, control_kind="invoice", sign=1, source="invoice",
                                            source_id=f"{d.ext.key}:{d.ext.revision}", contact=contact, rows=rows,
                                            memo=_doc_label(d), day=when), at)
     _bind(c, cid, "fin_entries", new_id, d.ext, at)
+    for key, amount in d.links:
+        kind, invoice = _settle_target(c, cid, key)
+        if kind != "invoice":
+            raise FinanceError(NOT_AVAILABLE, "a credit memo applies to invoices")
+        documents.settle(ctx, "invoice", invoice, amount=amount, day=d.day, from_kind="credit", from_id=new_id,
+                         entry_id=new_id, by=SYSTEM)
 
 
 def _doc_label(d: M.Document) -> str:
@@ -457,9 +515,10 @@ def _settle_target(c: sqlite3.Connection, cid: str, key: str) -> tuple[str, str]
     return ("bill" if name == "Bill" else "invoice"), _mapped(c, cid, DOC_TABLES[name], key)
 
 
-def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: str) -> None:
+def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: str, feed: str = "") -> None:
     """A bill payment (Dr payables, Cr bank) or a received payment (Dr bank, Cr receivables), and the bills or invoices
-    it settles: each link is a settlement, so the document's paid amount and status move with the money."""
+    it settles: each link is a settlement, so the document's paid amount and status move with the money. A payment sent
+    for a bank row (feed) is that row's entry: the row is marked posted with it."""
     row = SX.ref(c, cid, "fin_entries", s.ext.key)
     verdict = M.decide(_have(row), s.ext)
     if verdict not in (M.CREATE, M.REPLACE):
@@ -487,9 +546,14 @@ def _settlement(c: sqlite3.Connection, ctx: Ctx, cid: str, s: M.Settlement, at: 
                   lambda when: L.Entry(book_id=ctx.book.id, entry_date=when, memo=(s.memo or s.ext.kind)[:200],
                                        source="sync", source_id=f"{s.ext.key}:{s.ext.revision}", lines=lines),
                   at)
+    source, source_id = ("feed", feed) if feed else ("account", bank)
     for kind, doc_id, amount in targets:
-        documents.settle(ctx, kind, doc_id, amount=amount, day=s.day, from_kind="account", from_id=bank,
+        documents.settle(ctx, kind, doc_id, amount=amount, day=s.day, from_kind=source, from_id=source_id,
                          entry_id=entry, by=SYSTEM)
+    if feed:
+        frow = SK.get(c, "fin_feed_txns", feed)
+        if frow is not None and str(frow["status"]) == "new":
+            banking.mark_posted(ctx, [feed], entry)
     _bind(c, cid, "fin_entries", entry, s.ext, at)
 
 
@@ -640,10 +704,50 @@ def _key(c: sqlite3.Connection, cid: str, table: str, local_id: str) -> str | No
     return None if row is None or str(row["status"]) == "unmapped" else str(row["external_id"])
 
 
+def _need(key: str | None, what: str) -> str:
+    if key is None:
+        raise _Missing(f"{what} is not in the provider yet")
+    return key
+
+
+def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
+    """A bill or invoice as the provider takes it: its party and each line's account by their provider keys."""
+    lines = [{"account": _need(_key(c, cid, "fin_accounts", str(x["account_id"])), f"account {x['account_id']}"),
+              "amount": x["amount"], "description": x["description"]} for x in local["lines"]]
+    return {"party": _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}"),
+            "number": local["number"], "day": local["day"], "due": local["due"], "memo": local["memo"], "lines": lines}
+
+
+def _void_out(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any]) -> dict[str, Any]:
+    """The provider's id and the revision it holds now: a void sent with a stale revision is refused."""
+    ref = SX.ref_for_local(c, cid, table, str(local["id"]))
+    if ref is None or str(ref["status"]) != "active":
+        raise _Missing(f"{local['id']} is not in the provider yet")
+    return {"ext": str(ref["external_id"]), "revision": str(ref["revision"])}
+
+
+def _pay_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
+    """A bill payment or a received payment as the provider takes it: the party, the bank account, and the one bill or
+    invoice it applies to, by their provider keys."""
+    doc_kind = "Bill" if local["kind"] == "bill" else "Invoice"
+    doc = _need(_key(c, cid, DOC_TABLES[doc_kind], str(local["doc_id"])), f"{doc_kind} {local['doc_id']}")
+    amount = int(local["amount"])
+    return {"kind": str(local["kind"]), "day": local["day"], "memo": local["memo"],
+            "party": _need(_key(c, cid, "fin_contacts", str(local["party"])), f"contact {local['party']}"),
+            "bank": _need(_key(c, cid, "fin_accounts", str(local["bank"])), f"account {local['bank']}"),
+            "total": amount, "links": [[doc, amount]], "feed_id": str(local.get("feed_id") or "")}
+
+
 def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """What the provider is sent: its keys for accounts and parties, and the tags as its classes when that is on. A
     write waits (_Missing) while an account or party it names is not in the provider yet; an export drops a contact
     the provider does not hold."""
+    if op in ("bill.create", "invoice.create"):
+        return _doc_out(c, cid, local)
+    if op in ("bill.void", "invoice.void"):
+        return _void_out(c, cid, DOC_TABLES["Bill" if op.startswith("bill") else "Invoice"], local)
+    if op in ("payment.bill", "payment.invoice"):
+        return _pay_out(c, cid, local)
     if op != "journal.create":
         return dict(local)
     export = bool(local.get("local_entry_id"))
@@ -724,7 +828,43 @@ def _confirm_entry(c: sqlite3.Connection, cid: str, local: Mapping[str, Any], ex
         banking.mark_posted(ctx, [feed], entry)
 
 
-def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
+def _confirm_document(c: sqlite3.Connection, cid: str, sent: Sent, local: Mapping[str, Any], now: str) -> None:
+    """A bill or invoice the provider took from Tico: its row, lines and entry come in as its record would, from the
+    local write (the provider took the same accounts and party). A change feed read that got there first stands."""
+    ext = M.Ext(kind=sent.kind, external_id=sent.external_id, revision=sent.revision)
+    row = SX.ref(c, cid, DOC_TABLES[ext.kind], ext.key)
+    if row is not None and str(row["status"]) == "active":
+        return
+    rows = [(str(x["account_id"]), int(x["amount"]), str(x["description"])) for x in local["lines"]]
+    # Only the head is read here: the lines come in as rows, and the party as its local id.
+    head = M.Document(ext, party="", number=str(local["number"]), day=str(local["day"]), due=str(local["due"]),
+                      total=sum(amount for _, amount, _ in rows), lines=(), memo=str(local["memo"]))
+    _write_document(c, load(c, now), cid, head, M.CREATE, row, str(local["party"]), rows, now)
+
+
+def _confirm_void(c: sqlite3.Connection, cid: str, table: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:
+    """The provider voided a bill or invoice Tico voided: its entry is reversed, and its ref takes the revision the void
+    left, so the change feed's echo of that void is the same record and brings nothing new."""
+    doc_id = str(local["id"])
+    _void(c, load(c, now), table, doc_id, now)
+    ref = SX.ref_for_local(c, cid, table, doc_id)
+    if ref is not None:
+        SX.ref_set(c, str(ref["id"]), local_id=doc_id, revision=sent.revision, status="deleted", at=now)
+
+
+def _confirm_payment(c: sqlite3.Connection, cid: str, local: Mapping[str, Any], provider: Mapping[str, Any],
+                     sent: Sent, now: str) -> None:
+    """The provider recorded a bill payment or a received payment Tico sent: its entry and its settlement come in as
+    the provider's record would, and a bank row it was sent for is marked posted with that entry."""
+    ext = M.Ext(kind=sent.kind, external_id=sent.external_id, revision=sent.revision)
+    s = M.Settlement(ext, day=str(provider["day"]), memo=str(provider["memo"]), party=str(provider["party"]),
+                     bank=str(provider["bank"]), total=int(provider["total"]),
+                     links=tuple((str(k), int(a)) for k, a in provider["links"]))
+    _settlement(c, load(c, now), cid, s, now, feed=str(local.get("feed_id") or ""))
+
+
+def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], provider: Mapping[str, Any],
+             sent: Sent, now: str) -> None:
     """The provider confirmed a write: only now does the local book change."""
     ext = M.Ext(kind=sent.kind, external_id=sent.external_id, revision=sent.revision)
     if op == "account.create":
@@ -739,14 +879,21 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
         if row is not None:
             SX.ref_set(c, str(row["id"]), local_id=entry, revision=str(row["revision"]), status="deleted", at=now)
         _retire(c, load(c, now), cid, entry, str(local["ext"]), now)
+    elif op in ("bill.create", "invoice.create"):
+        _confirm_document(c, cid, sent, local, now)
+    elif op in ("bill.void", "invoice.void"):
+        _confirm_void(c, cid, DOC_TABLES["Bill" if op.startswith("bill") else "Invoice"], local, sent, now)
+    elif op in ("payment.bill", "payment.invoice"):
+        _confirm_payment(c, cid, local, provider, sent, now)
 
 
-def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], sent: Sent, now: str) -> None:
+def _record(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], provider: Mapping[str, Any],
+            sent: Sent, now: str) -> None:
     oid, attempts = str(o["id"]), int(o["attempts"]) + 1
     if sent.ok:
         SK.update(c, "fin_outbox", oid, {"status": "sent", "attempts": attempts, "claimed_at": None,
                                          "last_error": None, "updated_at": now})
-        _confirm(c, cid, str(o["op"]), local, sent, now)
+        _confirm(c, cid, str(o["op"]), local, provider, sent, now)
     elif sent.final:
         SK.update(c, "fin_outbox", oid, {"status": "failed", "attempts": attempts, "claimed_at": None,
                                          "last_error": sent.error[:300], "updated_at": now})
@@ -775,7 +922,7 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
         local, provider = prepared
         sent = books.send(str(o["op"]), provider, str(o["idempotency_key"]))
         with store.transaction() as c:
-            _record(c, cid, o, local, sent, now)
+            _record(c, cid, o, local, provider, sent, now)
         if not sent.ok:
             problems.append(f"{o['op']}: {sent.error}")
     return problems
@@ -807,7 +954,8 @@ def _backfill(store: Any, books: Books, cid: str, now: str, size: int) -> str:
 
 
 def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False) -> str:
-    """The change feed, once the backfill is through and it is due, or at once when a webhook is waiting."""
+    """The change feed, once the backfill is through and it is due, or at once when a webhook is waiting. Each read also
+    brings in again the records the books could not take in before (a party that has come since is enough)."""
     with store.read() as c:
         st = SX.mirror_state(c, cid)
     raw = st.get("changed_at")
@@ -818,7 +966,8 @@ def _changes(store: Any, books: Books, cid: str, now: str, waiting: bool = False
     if not read.ok:
         return f"changes: {read.error}"
     with store.transaction() as c:
-        apply(c, cid, read.records, now)
+        waiting_records = [M.decode(v) for v in _pending(c, cid).values()]
+        apply(c, cid, [*read.records, *waiting_records], now)
         SX.set_mirror_state(c, cid, {"changed_at": now})
     return ""
 
@@ -962,3 +1111,149 @@ def mirror_tags(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
 
 PLANNERS: dict[str, handlers.Planner] = {"mirror_start": mirror_start, "mirror_stop": mirror_stop,
                                          "mirror_tags": mirror_tags}
+
+
+# ------------------------------------------------------------------------------------------------ documents out
+def _create_planner(kind: str) -> handlers.Planner:
+    """A bill or invoice written to the provider first: QuickBooks posts it when it is saved, so the books take its entry
+    when the provider confirms the write. Its lines are checked the way the native planner checks them."""
+    party_field, day_field = ("vendor_id", "bill_date") if kind == "bill" else ("customer_id", "invoice_date")
+    allowed = (party_field, "number", day_field, "due_date", "terms_days", "memo", "lines", "origin", "attachments")
+    if kind == "invoice":
+        allowed += ("payment_link",)
+
+    def planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+        V.only(p, allowed)
+        cid = _cid(ctx)
+        if p.get("attachments") or p.get("payment_link") not in (None, ""):
+            raise FinanceError(NOT_AVAILABLE, "attachments and payment links are not sent to the provider yet")
+        contact = documents.contact_of(ctx, V.text(p, party_field, 80), kind)
+        number = V.opt_text(p, "number", 80) or ("" if kind == "bill" else documents.next_number(ctx, str(contact["id"])))
+        if len(number) > 21:
+            raise invalid("a number is up to 21 characters (the provider's limit)")
+        if number and SAP.number_taken(ctx.c, kind, str(contact["id"]), number):
+            raise FinanceError(CONFLICT, f"{contact['name']} already has {kind} {number}")
+        day = V.day(p, day_field)
+        terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else None
+        due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
+        lines, _ = documents.resolve_lines(ctx, who, kind, contact, AP.doc_lines(p.get("lines")))
+        total = sum(x.amount for x in lines)
+        body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
+                "memo": V.opt_text(p, "memo", 500) or "",
+                "lines": [{"account_id": x.account_id, "amount": x.amount, "description": x.description}
+                          for x in lines]}
+
+        def apply(aid: str) -> handlers.Result:
+            oid = _queue(ctx.c, cid, f"{kind}.create", body, by=who, action_id=aid, at=ctx.at)
+            return {"outbox_id": oid, "status": "queued", "total": total}
+        return handlers.Plan(K.default_gate(ctx.org, who, f"{kind}_create"),
+                             f"Send a {documents.money_of(total)} {ctx.book.base_currency} {kind} for {contact['name']}",
+                             apply, facts={"amount": total, "counterparty": str(contact["name"])})
+    return planner
+
+
+def _void_planner(kind: str) -> handlers.Planner:
+    """A bill or invoice voided at the provider (QuickBooks deletes a bill and voids an invoice). Money settled against it
+    is undone first, as it is natively; the books void it when the provider confirms."""
+    table = DOC_TABLES["Bill" if kind == "bill" else "Invoice"]
+    now_allowed = ("open", "scheduled") if kind == "bill" else ("sent",)
+
+    def planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+        V.only(p, (f"{kind}_id", "reason"))
+        cid = _cid(ctx)
+        doc = documents.doc_of(ctx, kind, V.text(p, f"{kind}_id", 80))
+        documents.need_status(kind, doc, now_allowed, "it cannot be voided")
+        if int(doc["amount_paid"]) or (kind == "invoice" and int(doc["written_off"])) or \
+                (kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None):
+            raise FinanceError(CONFLICT, "money is settled or on its way against this; undo that first")
+        ref = SX.ref_for_local(ctx.c, cid, table, str(doc["id"]))
+        if ref is None or str(ref["status"]) != "active":
+            raise FinanceError(CONFLICT, "that is not in the provider yet")
+        body = {"id": str(doc["id"]), "reason": V.opt_text(p, "reason", 300) or ""}
+
+        def apply(aid: str) -> handlers.Result:
+            oid = _queue(ctx.c, cid, f"{kind}.void", body, by=who, action_id=aid, at=ctx.at)
+            return {f"{kind}_id": str(doc["id"]), "outbox_id": oid, "status": "queued"}
+        return handlers.Plan(K.default_gate(ctx.org, who, f"{kind}_void"),
+                             f"Void {kind} {doc['number'] or doc['id']}", apply,
+                             facts={"amount": int(doc["total"]), "counterparty": str(doc["contact_name"] or "")})
+    return planner
+
+
+def _payment_planner(kind: str) -> handlers.Planner:
+    """A bill paid (or an invoice paid) written to the provider as a bill payment (or a received payment), from a bank
+    account the books hold or from a bank feed row. The books take the entry and the settlement when the provider
+    confirms, and a feed row is marked posted with that entry, so the bank line is not posted twice."""
+    words = "bill_mark_paid" if kind == "bill" else "invoice_record_payment"
+    table = DOC_TABLES["Bill" if kind == "bill" else "Invoice"]
+
+    def planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+        V.only(p, (f"{kind}_id", "amount", "date", "feed_id", "money_account_id", "account_id"))
+        cid = _cid(ctx)
+        doc = documents.doc_of(ctx, kind, V.text(p, f"{kind}_id", 80))
+        documents.need_status(kind, doc, documents.OPEN[kind], "only an open one is paid")
+        if kind == "bill" and SK.live_payment(ctx.c, f"bill:{doc['id']}") is not None:
+            raise FinanceError(CONFLICT, "a payment for this bill is live; it settles the bill when it clears")
+        ref = SX.ref_for_local(ctx.c, cid, table, str(doc["id"]))
+        if ref is None or str(ref["status"]) != "active":
+            raise FinanceError(CONFLICT, "that is not in the provider yet")
+        left = documents.left_of(kind, doc)
+        amount = V.opt_amount(p) or left
+        if not 0 < amount <= left:
+            raise invalid(f"the amount is more than 0 and at most what is left ({left})")
+        if sum(k in p for k in ("feed_id", "money_account_id", "account_id")) > 1:
+            raise invalid("say one of feed_id (the bank or card row), money_account_id or account_id")
+        day = V.opt_day(p, "date") or ctx.today
+        feed: Any = None
+        if "feed_id" in p:
+            feed = SK.get(ctx.c, "fin_feed_txns", V.text(p, "feed_id", 80))
+            if feed is None or not banking.seen(ctx, who, feed):
+                raise FinanceError(NOT_FOUND, "no such feed row in your view")
+            if int(feed["pending"]) or str(feed["status"]) != "new":
+                raise FinanceError(CONFLICT, "that row is pending, matched or ignored")
+            if (int(feed["amount"]) < 0) != (kind == "bill"):
+                raise invalid("a bill is paid by money out, an invoice by money in")
+            free = abs(int(feed["amount"])) - SAP.settled_from(ctx.c, "feed", str(feed["id"]))
+            if amount > free:
+                raise invalid(f"that row has {free} left to apply")
+            day = V.opt_day(p, "date") or str(feed["txn_date"])
+            money = SK.get(ctx.c, "fin_money_accounts", str(feed["money_account_id"]))
+            bank_id = str(money["account_id"] or "") if money is not None else ""
+        elif "money_account_id" in p:
+            money = SK.get(ctx.c, "fin_money_accounts", V.text(p, "money_account_id", 80))
+            if money is None or str(money["book_id"]) != ctx.book.id:
+                raise FinanceError(NOT_FOUND, "no such money account")
+            bank_id = str(money["account_id"] or "")
+        elif "account_id" in p:
+            bank_id = V.text(p, "account_id", 80)
+        else:
+            raise FinanceError(NOT_AVAILABLE, "a payment in the provider needs a bank account: say feed_id, "
+                                              "money_account_id or account_id")
+        bank = ctx.accounts.get(bank_id)
+        if bank is None or not bank.active or bank.type not in ("asset", "liability") or \
+                bank.id == documents.control(ctx, kind).id:
+            raise FinanceError(NOT_AVAILABLE, "that money account has no account the books hold")
+        if not handlers.may_write(ctx, who, bank.id, {}):
+            raise denied("that line is outside your view")
+        party = str(doc["vendor_id"] if kind == "bill" else doc["customer_id"])
+        body = {"kind": kind, "doc_id": str(doc["id"]), "amount": amount, "day": day, "party": party,
+                "bank": bank.id, "memo": f"Pays {kind} {doc['number'] or doc['id']}"[:200],
+                "feed_id": str(feed["id"]) if feed is not None else ""}
+
+        def apply(aid: str) -> handlers.Result:
+            oid = _queue(ctx.c, cid, f"payment.{kind}", body, by=who, action_id=aid, at=ctx.at)
+            return {f"{kind}_id": str(doc["id"]), "outbox_id": oid, "status": "queued", "amount": amount}
+        verb = "paid on" if kind == "bill" else "received on"
+        return handlers.Plan(K.default_gate(ctx.org, who, words),
+                             f"Record {documents.money_of(amount)} {verb} {kind} {doc['number'] or doc['id']}", apply,
+                             facts={"amount": amount, "counterparty": str(doc["contact_name"] or "")})
+    return planner
+
+
+# Mirror-mode planners for the document actions: the provider takes the write first, so these queue it instead of
+# posting here (actions.py uses them in place of the native planners while the books are a provider's).
+DOC_PLANNERS: dict[str, handlers.Planner] = {
+    "bill_create": _create_planner("bill"), "invoice_create": _create_planner("invoice"),
+    "bill_void": _void_planner("bill"), "invoice_void": _void_planner("invoice"),
+    "bill_mark_paid": _payment_planner("bill"), "invoice_record_payment": _payment_planner("invoice"),
+}
