@@ -2,6 +2,7 @@
 payload voids and asks again, decline denies, a withdrawn or expired approval ends the action)."""
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import reads as FR
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
 
 
@@ -187,3 +188,32 @@ def test_the_bot_gate_counts_the_whole_entry(books):
                                                  {"account_id": account(c, "1000"), "amount": -300_000},
                                                  {"account_id": account(c, "2000"), "amount": -300_000}]}
         assert act(c, "bot:coder", "journal", split).status == "needs_approval"
+
+
+def test_a_recheck_refusal_that_named_a_sibling_hides_its_name_once_the_asker_cannot_see_it(books):
+    body = {"name": "Eng tools", "team": "eng", "amount": 5_000}
+    with books.transaction() as c:
+        parent = _software(c)
+        grant = act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "everything"})
+        assert grant.status == "committed"
+        asked = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
+                                                      "parent_id": parent}, "eng-ask")
+        assert (asked.status, asked.approver) == ("needs_approval", "human:cara")
+        # Before the manager decides, an overlapping sibling is added; the recheck at approval refuses naming it.
+        payroll = act(c, OWNER, "budget_create", {"name": "Payroll", "team": "eng", "amount": 5_000,
+                                                  "account_id": account(c, "6100"), "parent_id": parent})
+        assert payroll.status == "committed"
+        H.approval_decide(c, "human:cara", asked.approval_id, "approved")
+        closed = FA.approval_decided(c, asked.approval_id, AT)
+        assert closed.status == "failed" and "Payroll" in closed.reason
+        assert act(c, OWNER, "view_revoke", {"grant_id": grant.result["grant_id"]}).status == "committed"
+        stored = c.execute("SELECT reason FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        assert "Payroll" not in stored
+        replay = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
+                                                       "parent_id": parent}, "eng-ask")
+        assert replay.replayed and "Payroll" not in replay.reason
+        assert "Payroll" not in FR.action_for(c, "human:eve", asked.action_id)["reason"]
+        assert act(c, OWNER, "view_grant", {"subject": "human:eve", "what": "everything"}).status == "committed"
+        again = act(c, "human:eve", "budget_create", {**body, "account_id": account(c, "6100"),
+                                                      "parent_id": parent}, "eng-ask")
+        assert again.replayed and "Payroll" in again.reason
