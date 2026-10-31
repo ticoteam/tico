@@ -208,7 +208,7 @@ def _create_task(c, auto, run_id, args, values, step=None):
     due, marker, refs = _occurrence(auto, args, values)
     row = H.task_create(c, actor, title, _text(args, "body") or title, owner, due=due, lint=False,
                         deduplicate=False, wake_refs={**refs, **_chain_refs(auto)}, occurrence=marker,
-                        occurrence_step=str(step) if marker and step else None)
+                        occurrence_step=str(step) if marker and step else None, rule_due_id=refs.get("rule_due_id"))
     return {"ok": True, "detail": f"task {row['id']}", "task": row["id"]}
 
 
@@ -426,7 +426,7 @@ def start_turn(c, auto, run_id, step_id, who, prompt, assistant_bot, key="0", la
     due, marker, occ_refs = _occurrence(auto, {}, {"due": occurrence} if occurrence else {})
     task = H.task_create(c, actor, title, prompt, H.bot_actor(bot), due=due, lint=False, deduplicate=False,
                          routine=True, trigger="other", trigger_source="automation:" + auto["id"], occurrence=marker,
-                         occurrence_step=str(step_id) if marker else None,
+                         occurrence_step=str(step_id) if marker else None, rule_due_id=occ_refs.get("rule_due_id"),
                          wake_refs={**occ_refs, "automation_run": run_id, "automation_step": step_id,
                                     "automation_key": str(key), **_chain_refs(auto)})
     if run_model:

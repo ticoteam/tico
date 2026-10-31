@@ -354,34 +354,18 @@ def _completes(task, actor):
     return task.get("status") == "closed" and H.is_human(actor)
 
 
-def _fired_for(c, aid, due_on, task_id):
-    """The due date a routine's run for that day was fired for: the `rule_due_id` saved in the run's payload when it
-    started (automations.due_input), so later edits to the routine or the due date never change it. The run that
-    opened the task wins, then the latest that did not fail."""
-    rows = c.execute("SELECT state_json, status FROM automation_runs WHERE automation_id=? AND trigger_ref=? "
-                     "ORDER BY started DESC", (aid, "due:" + due_on)).fetchall()
-    rows = sorted(rows, key=lambda r: (task_id not in (r["state_json"] or ""), r["status"] == "failed"))
-    for r in rows:
-        try:
-            due = (json.loads(r["state_json"] or "{}").get("payload") or {}).get("due") or {}
-        except ValueError:
-            continue
-        if due.get("rule_due_id"):
-            return str(due["rule_due_id"])
-    return None
-
-
 def _occurrence_row(c, task):
     """The due date and the day a routine's task stands for: the day from its occurrence marker
-    (`<automation>:<due_on>`), the row from the run that opened it (`_fired_for`), so a task opened before an edit marks
-    the ended row and a task outliving its routine still marks its day. (None, None) when it is not a rule's routine or
-    that due date was removed."""
-    aid, _, due_on = str(task.get("occurrence") or "").rpartition(":")
+    (`<automation>:<due_on>`), the row from `tasks.rule_due_id`, which the run that opened the task saved from its
+    payload (automation_actions), scheduled or Run now. Later edits to the routine or the due date never change it, so
+    a task opened before an edit marks the ended row and a task outliving its routine still marks its day. (None, None)
+    when it is not a rule's routine or that due date was removed."""
+    _, _, due_on = str(task.get("occurrence") or "").rpartition(":")
     try:
         day = date.fromisoformat(due_on)
     except ValueError:
         return None, None
-    row = one(c, _fired_for(c, aid, due_on, str(task.get("id") or ""))) if aid else None
+    row = one(c, task.get("rule_due_id")) if task.get("rule_due_id") else None
     if not row or row["retired_at"] or not is_occurrence(parse_date(row["first_due"]), row["repeats"], day):
         return None, None
     return row, due_on

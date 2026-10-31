@@ -1320,6 +1320,8 @@ def migrate(conn, adopt_legacy=False):
     add_column(conn, "tasks", "occurrence_step", "TEXT")
     conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS tasks_occurrence_step ON tasks(occurrence, occurrence_step) "
                  "WHERE occurrence IS NOT NULL")
+    # The rule due date an occurrence's run was fired for (backend/rule_due.py marks it when the task completes).
+    add_column(conn, "tasks", "rule_due_id", "TEXT")
     task_columns = {r[1] for r in conn.execute("PRAGMA table_info(tasks)")}
     if "private" in task_columns:
         # The few private tasks, which every privacy-checked read loads (backend/privacy_index.py).
@@ -5828,7 +5830,7 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
                 wake_refs=None, trigger="status_or_relation", trigger_source=None, review_prs=None,
                 change_paths=None, qa=None, qa_not_checkable_live=False, receipt_owner=None,
                 quiet_notice=False, from_private=False, routine=False, same=None, occurrence=None,
-                occurrence_step=None):
+                occurrence_step=None, rule_due_id=None):
     """Rule 5. Anyone may open a task for any active owner; a human owner's General task is
     linted (rule 7).
 
@@ -5989,13 +5991,14 @@ def task_create(conn, actor, title, body, owner, due=None, parent_id=None, *, de
            "created": ts, "updated": ts, "done_at": None, "closed_at": None, "closed_by": None,
            "note": "", "lane": lane, "rank": _queue_end(conn, target, top),
            "goal_id": goal_id or None, "next_run": 1 if next_run else 0, "number": number, "private": int(private),
-           "occurrence": occurrence or None, "occurrence_step": occurrence_step or None}
+           "occurrence": occurrence or None, "occurrence_step": occurrence_step or None,
+           "rule_due_id": (rule_due_id or None) if occurrence else None}
     conn.execute("INSERT INTO tasks (id, title, body, requester, owner, due, "
                  "conversation_id, created, updated, done_at, closed_at, closed_by, note, lane, rank, "
-                 "goal_id, next_run, number, private, occurrence, occurrence_step) VALUES "
+                 "goal_id, next_run, number, private, occurrence, occurrence_step, rule_due_id) VALUES "
                  "(:id, :title, :body, :requester, :owner, :due, "
                  ":conversation_id, :created, :updated, :done_at, :closed_at, :closed_by, :note, "
-                 ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence, :occurrence_step)", row)
+                 ":lane, :rank, :goal_id, :next_run, :number, :private, :occurrence, :occurrence_step, :rule_due_id)", row)
     _building(conn, row["id"])     # its first status and step are part of task.created, not changes (_task_changed)
     if parent:
         # Filed under its parent as it is made: _task_parent above checked the parent.

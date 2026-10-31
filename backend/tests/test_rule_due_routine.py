@@ -184,3 +184,32 @@ def test_due_soon_follows_the_routines_lead_time(api):
                                                 "task_days": 45})
     assert plain["status"] == "upcoming" and plain["task_days"] is None    # 30 days with no routine
     assert early["status"] == "due_soon"
+
+
+def prune_runs(api, days_after):
+    """automations.prune as the nightly sweep runs it, `days_after` the latest run finished: run detail is gone."""
+    from backend import automations
+    last = sql(api, "SELECT max(finished) AS f FROM automation_runs")[0]["f"]
+    with api.app.state.store.transaction() as c:
+        automations.prune(c, H.shift(last, days=days_after))
+    assert not sql(api, "SELECT id FROM automation_runs WHERE state_json IS NOT NULL")
+
+
+def test_a_late_completion_after_run_detail_is_pruned_still_marks_its_day_and_the_ended_row(api):
+    _, due = linked(api, first="2030-03-01", repeats="yearly", days=0)
+    tick(api, datetime(2030, 3, 1, 0, 0, 5, tzinfo=timezone.utc))
+    [task] = tasks(api, due["routine_id"])
+    edited = post(api, f"rule-due/{due['id']}", {"repeats": "quarterly"})
+    prune_runs(api, 31)
+    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
+    assert marks(api, edited["id"]) == []
+
+
+def test_a_task_opened_by_run_now_marks_its_day(api):
+    _, due = linked(api, first="2030-03-01", repeats="yearly")
+    run = post(api, f"automations/{due['routine_id']}/run", {})["run"]
+    assert run["trigger_ref"] == "manual"
+    [task] = tasks(api, due["routine_id"])
+    write(api, H.task_update, "bot:ops", task["id"], status="done")
+    assert [m["due_on"] for m in marks(api, due["id"])] == ["2030-03-01"]
