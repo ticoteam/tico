@@ -27,6 +27,12 @@ const detailOf = seat => {
   return {seat, agent: known, steps: ['requested', 'building', 'ready'], tasks: [{id: 't-1', title: 'Fix the flaky retry test', status: 'open'}]};
 };
 
+// The team builder's briefing: one role, which Devin fills and the builder offers to Request.
+const devinPick = {id: 'devin', name: 'Devin', maker: 'Cognition', site: 'devin.ai', line: 'A cloud agent.', supported: false,
+  connect_id: null, source: 'cloud', template: '', icon: '', department: '', tags: [], owns: [], prerequisites: [], match: ''};
+const briefing = {team: 'eng', department: 'engineering', roles: [{role: 'Second pair of hands', pick: devinPick, alternatives: [],
+  on_team: false, checked: false}]};
+
 async function open(browser, viewport, {reducedMotion = 'no-preference', seats = [requested]} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block'});
   const errors = [], calls = [], state = {seats, failRequest: false, failAdd: false};
@@ -55,6 +61,7 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
     if (p === '/api/v2/agent-skill') return json({mcp_url: 'https://mcp.tico.test/api/v2/mcp', access_bypass: false});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
     if (p === '/api/v2/cloud-agents' && method === 'GET') return json({agents: AGENTS});
+    if (p === '/api/v2/team-build/suggest') return json(briefing);
     const detail = p.match(/^\/api\/v2\/seats\/([^/]+)\/request$/);
     if (detail && method === 'GET') {
       const seat = state.seats.find(s => s.id === detail[1]);
@@ -81,6 +88,7 @@ async function open(browser, viewport, {reducedMotion = 'no-preference', seats =
       const body = request.postDataJSON();
       calls.push({method, path: p, body});
       if (state.failAdd) return json({error: {code: 'requested', detail: 'Cancel the request first', retryable: false}}, 409);
+      if (!body.seat_id) return json({error: {code: 'seat', detail: 'A cloud agent joins a team by filling a seat, so Tico knows what it does. Add it to a seat.', retryable: false}}, 409);
       state.seats = state.seats.filter(s => s.id !== body.seat_id);
       return json({bot: 'rust-engineer-2', harness: add[1], model: 'claude-opus-5-5', seat: body.seat_id || ''});
     }
@@ -165,8 +173,12 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await add.waitFor();
       assert.equal(await page.locator('dialog.connect-agent').count(), 0, 'Add does not open the personal connect steps');
       await add.locator('button[type="submit"]').click();
-      await add.waitFor({state: 'detached'});
+      // A team alone has no seat to build the bot's repository for, so Tico refuses and the dialog says why.
+      await add.locator('[data-cloud-error]').waitFor({state: 'visible'});
+      assert.match(await add.locator('[data-cloud-error]').innerText(), /filling a seat/);
       assert.deepEqual(calls.at(-1), {method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer', team: 'eng'}});
+      await page.keyboard.press('Escape');
+      await add.waitFor({state: 'detached'});
 
       // Another agent: the typed name is the agent, and the request says so.
       await grid.locator('input[name="name"]').fill('Acme Agent');
@@ -179,9 +191,11 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
       await seatDialog.locator('[data-close]').first().click();
       await seatDialog.waitFor({state: 'detached'});
 
-      // The team builder's Request link: the same dialog and the same seat, filed in the team and under the head it names.
-      const pick = {...AGENTS.find(a => a.id === 'devin'), source: 'cloud'};
-      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), pick);
+      // The team builder's Request link, pressed for real: the builder passes the team alone, and the dialog files the request
+      // under the team's head, which cloudAgentRequest finds itself (as cloudAgentsOpen does).
+      await page.evaluate(() => teamBuildOpen('eng'));
+      await page.locator('#team-build-dialog .tb-card', {hasText: 'Devin'}).waitFor();
+      await page.locator('#team-build-dialog [data-tb-request]').click();
       await request.waitFor();
       await request.locator('button[type="submit"]').click();
       await seatDialog.locator('.cloud-step').nth(2).waitFor();
@@ -189,14 +203,19 @@ const pulseIsOpacityOnly = page => page.evaluate(() => {
         body: {first_task: '', team: 'eng', reports_to: 'rust-engineer'}});
       await seatDialog.locator('[data-close]').first().click();
       await seatDialog.waitFor({state: 'detached'});
+      await page.locator('#team-build-dialog [data-tb-close]').click();
+      await page.locator('#team-build-dialog').waitFor({state: 'detached'});
 
-      // The same link with a supported agent hires it under the head it names. The request route refuses one, so no seat is filed.
+      // A supported agent under the same team-only call is an add, which a team alone cannot take: Tico refuses it, and
+      // the head it was given is the team's own.
       const count = calls.length;
-      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng', reports_to: 'rust-engineer'}), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
+      await page.evaluate(p => window.cloudAgentRequest(p, {team: 'eng'}), {...AGENTS.find(a => a.id === 'claude'), source: 'cloud'});
       await add.waitFor();
       await add.locator('button[type="submit"]').click();
-      await add.waitFor({state: 'detached'});
+      await add.locator('[data-cloud-error]').waitFor({state: 'visible'});
       assert.deepEqual(calls.slice(count), [{method: 'POST', path: '/api/v2/cloud-agents/claude/add', body: {reports_to: 'rust-engineer', team: 'eng'}}]);
+      await page.keyboard.press('Escape');
+      await add.waitFor({state: 'detached'});
 
       assert.deepEqual(errors, []);
       console.log('cloud-agents: desktop ok');

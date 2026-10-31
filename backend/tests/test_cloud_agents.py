@@ -5,6 +5,7 @@ import json
 import threading
 import time
 import uuid
+from pathlib import Path
 
 from backend import cloud_agents, lifecycle, support
 from backend import hubdb as H
@@ -12,6 +13,8 @@ from backend.auth import Identity
 from backend.store import Problem
 from backend.tests.test_onboarding import as_person, environment, signed_in  # noqa: F401
 from backend.tests.test_support import hq  # noqa: F401
+
+SHIPPED = Path(__file__).resolve().parents[2] / "templates" / "catalog"   # Recruit's candidates
 
 
 def filed(hq):
@@ -295,7 +298,7 @@ def test_a_token_is_not_a_person_and_cannot_request_add_or_cancel(environment, h
 
 
 def test_adding_a_supported_agent_hires_a_bot_on_its_harness_and_fills_the_seat(environment, hq):
-    api = environment()
+    api = environment(catalog_dir=SHIPPED)
     seat = ask(api, "seats", {"title": "Support lead", "description": "Runs the support queue"})
     added = ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]})
     assert added["harness"] == "claude" and added["seat"] == seat["id"] and added["bot"]
@@ -309,14 +312,43 @@ def test_adding_a_supported_agent_hires_a_bot_on_its_harness_and_fills_the_seat(
     assert seats(api) == [] and hq.seen == []
 
 
-def test_adding_without_a_seat_places_the_bot_under_the_line_it_names(environment, hq):
-    api = environment()
-    line = ask(api, "seats", {"title": "Ops lead"})["reports_to"]
-    added = ask(api, "cloud-agents/codex/add", {"reports_to": line})
-    assert added["harness"] == "codex" and added["seat"] == ""
+def onboarding_artifacts(api, bot):
+    """What Onboarding leaves on a bot a seat is filled with: its state, its template, whether its computer builds its
+    repository, and the BotOps setup task that builds it when the template is not a starter."""
     with api.app.state.store.read() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
-    assert config["harness"] == "codex" and config["runtime"] == "codex" and config["reports_to"] == line
+        state, config_json = c.execute("SELECT onboarding_state, config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = json.loads(config_json)
+        task = H.task(c, config["setup_task_id"]) if config.get("setup_task_id") else None
+    return {"state": state, "template": config.get("template"), "materialize": bool(config.get("materialize")),
+            "template_version": bool(config.get("template_version")), "setup": task["title"] if task else None}
+
+
+def test_an_added_supported_agent_lands_in_onboarding_like_a_template_hire(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
+    hired_seat = ask(api, "seats", {"title": "Support lead", "description": "Runs the support queue"})
+    added_seat = ask(api, "seats", {"title": "Support lead", "description": "Runs the support queue"})
+    top = ask(api, f"seats/{hired_seat['id']}/recruit", {})["candidates"][0]["template"]
+    hired = ask(api, f"seats/{hired_seat['id']}/hire", {"template": top})
+    added = ask(api, "cloud-agents/claude/add", {"seat_id": added_seat["id"]})
+    assert added["template"] == hired["template"] == top
+    assert onboarding_artifacts(api, added["bot"]) == onboarding_artifacts(api, hired["slug"])
+    assert onboarding_artifacts(api, added["bot"])["state"] == lifecycle.statuses.NEEDS_SETUP
+    assert [s["id"] for s in seats(api)] == []
+
+
+def test_adding_without_a_seat_is_refused_because_the_bot_needs_a_role(environment, hq):
+    api = environment()
+    before = bot_count(api)
+    assert ask(api, "cloud-agents/codex/add", {}, expected=409)["error"]["code"] == "seat"
+    assert bot_count(api) == before
+
+
+def test_a_seat_no_template_fits_refuses_the_add_and_builds_nothing(environment, hq):
+    api = environment()                              # the fixture catalog offers no template to any seat
+    seat = ask(api, "seats", {"title": "Support lead"})
+    before = bot_count(api)
+    assert ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, expected=409)["error"]["code"] == "template"
+    assert bot_count(api) == before and [s["id"] for s in seats(api)] == [seat["id"]]
 
 
 def test_only_connected_agents_are_added_and_a_seat_with_a_request_takes_no_bot(environment, hq):
@@ -329,8 +361,45 @@ def test_only_connected_agents_are_added_and_a_seat_with_a_request_takes_no_bot(
 
 def test_a_person_placing_a_bot_under_someone_else_is_refused(environment, hq):
     api = environment()
-    line = ask(api, "seats", {"title": "Owner's seat"})["reports_to"]
-    ask(api, "cloud-agents/claude/add", {"reports_to": line}, headers=as_person(api, "riley"), expected=403)
+    seat = ask(api, "seats", {"title": "Owner's seat"})
+    ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, headers=as_person(api, "riley"), expected=403)
+
+
+def test_a_member_cannot_request_an_agent_for_a_seat_in_a_team_they_cannot_add_to(environment, hq):
+    api = environment()
+    team = ask(api, "groups", {"name": "Engineering"})["id"]
+    quinn = as_person(api, "quinn")
+    seat = ask(api, "seats", {"title": "Engineer", "team": team, "reports_to": "human:quinn"})
+    refused = api.post(f"/api/v2/seats/{seat['id']}/request-agent", json={"agent": "copilot"}, headers=quinn)
+    assert refused.status_code == 403 and refused.json()["error"]["code"] == "forbidden"
+    assert filed(hq) == [] and api.get(f"/api/v2/seats/{seat['id']}/request", headers=signed_in()).status_code == 404
+    # The check is the team's, not the seat's: the owner may request for the same seat.
+    assert ask(api, f"seats/{seat['id']}/request-agent", {"agent": "copilot"})["agent"] == "copilot"
+    assert len(filed(hq)) == 1
+
+
+def test_a_request_left_by_a_dead_process_is_recovered_by_the_next_guarded_action(environment, hq):
+    """A process that died mid-request leaves its seat filing (or cancelling). Past the window, the next request or cancel
+    on that seat recovers it on the spot, without a restart; a fresh one still refuses, since a live process owns it."""
+    api = environment()
+    stale = H.shift(H.now(), seconds=-(lifecycle.FILING_STALE_SECONDS + 1))
+    filing = ask(api, "seats", {"title": "Engineer"})
+    fresh = ask(api, "seats", {"title": "Designer"})
+    with api.app.state.store.transaction() as c:
+        for seat_id, created in ((filing["id"], stale), (fresh["id"], H.now())):
+            c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?",
+                      (lifecycle.FILING, seat_id))
+            c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+                      "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, "dead-process", "key-" + seat_id, "x", seat_id,
+                                                 "filing", created, 0))
+    assert ask(api, f"seats/{fresh['id']}/request-agent", {"agent": "copilot"}, expected=409)["error"]["code"] == "filing"
+    assert ask(api, f"seats/{filing['id']}/request-agent", {"agent": "copilot"})["agent"] == "copilot"
+    assert len(filed(hq)) == 1
+    cancelling = ask(api, "seats", {"title": "Analyst"})
+    ask(api, f"seats/{cancelling['id']}/request-agent", {"agent": "copilot"})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE seats SET request_state=?,updated=? WHERE id=?", (lifecycle.CANCELLING, stale, cancelling["id"]))
+    assert ask(api, f"seats/{cancelling['id']}/cancel-request", {})["request_state"] == "cancelled"
 
 
 def test_the_listing_is_the_catalog_the_route_serves_and_a_copy(environment):
@@ -457,34 +526,28 @@ def test_a_cancel_whose_last_step_fails_leaves_the_request_requested_so_it_can_b
     assert ask(api, f"seats/{seat['id']}/cancel-request", {})["request_state"] == "cancelled"
 
 
-def test_an_added_bot_joins_the_seats_team_or_the_team_the_request_names(environment, hq):
-    api = environment()
+def test_an_added_bot_joins_the_seats_team(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
     seat = ask(api, "seats", {"title": "Support lead", "team": "support"})
     added = ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]})
-    line = ask(api, "seats", {"title": "Ops lead"})["reports_to"]
-    named = ask(api, "cloud-agents/codex/add", {"reports_to": line, "team": "operations"})
     with api.app.state.store.read() as c:
-        teams = {bot: c.execute("SELECT team FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
-                 for bot in (added["bot"], named["bot"])}
-    assert teams == {added["bot"]: "support", named["bot"]: "operations"}
+        assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == "support"
 
 
 def test_a_team_add_or_request_needs_the_rule_every_add_to_a_team_obeys(environment, hq):
-    api = environment()
+    api = environment(catalog_dir=SHIPPED)
     team = ask(api, "groups", {"name": "Engineering"})["id"]
     quinn = as_person(api, "quinn")                  # a plain member: not a bot admin, and leads no team
     # The seat is placed under Quinn, so placement passes and the team's rule is what refuses.
     seat = ask(api, "seats", {"title": "Engineer", "team": team, "reports_to": "human:quinn"})
     before, seats_before = bot_count(api), len(seats(api))
-    assert ask(api, "cloud-agents/claude/add", {"reports_to": "human:quinn", "team": team}, headers=quinn,
-               expected=403)["error"]["code"] == "forbidden"
     assert ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]}, headers=quinn,
                expected=403)["error"]["code"] == "forbidden"
     assert ask(api, "cloud-agents/devin/request", {"reports_to": "human:quinn", "team": team}, headers=quinn,
                expected=403)["error"]["code"] == "forbidden"
     assert bot_count(api) == before and len(seats(api)) == seats_before and filed(hq) == []
     # The owner may add into the team, and the bot joins it.
-    added = ask(api, "cloud-agents/claude/add", {"team": team})
+    added = ask(api, "cloud-agents/claude/add", {"seat_id": seat["id"]})
     with api.app.state.store.read() as c:
         assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == team
 

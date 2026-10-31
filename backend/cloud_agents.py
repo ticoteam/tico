@@ -26,6 +26,7 @@ from . import lifecycle
 from . import task_privacy as privacy
 from .models import BotDefinitionCreate, Contract
 from .providers import MODEL_CATALOG
+from . import recruiting
 from .recruiting import end_draft
 from .store import Problem, digest, encode
 from .support import CONTROL, SupportTicket, require_on, require_person
@@ -179,14 +180,17 @@ def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, f
     """Inside the write transaction: check the request, make its seat and first task, mark the seat as being filed, and
     record the reservation under the key. Nothing else can take, move, close or fill the seat from here until it is kept
     or released, since every such change refuses a seat that is filing."""
-    if team:
-        Groups.may_add(c, auth, who, team)      # the agent joins this team when it connects: an add to it
     if seat_id:
+        _recover_stale(c, seat_id)
         row = lifecycle.seat(c, seat_id)
         lifecycle.refuse_if_requested(row)
+        if row["team"]:
+            Groups.may_add(c, auth, who, row["team"])   # the agent joins the seat's team when it connects
         lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
         kept, made = seat_id, 0
     else:
+        if team:
+            Groups.may_add(c, auth, who, team)          # a new seat in this team, which the agent joins
         placed = lifecycle.placement(auth, c, who, reports_to)
         kept = lifecycle.create_seat(auth, c, who, agent["name"], "", placed, team)["id"]
         made = 1
@@ -236,15 +240,25 @@ def _release(c, actor, row):
     c.execute("DELETE FROM seat_requests WHERE id=?", (row["id"],))
 
 
-def release_abandoned(store):
-    """At start: release what a process that died mid-request left behind. A reservation with no answer from Tico and a
-    cancel that never finished are both older than any live request's window, so nothing running is touched."""
+def _recover_stale(c, seat_id=""):
+    """Inside a write transaction: recover what a process that died mid-request left behind, once it is older than any live
+    request's window. A filing reservation is released, so its seat goes back to empty, and a cancelling seat goes back to
+    requested, so its person can try again. Only `seat_id` is looked at when it is named, so a guarded action recovers the
+    seat it touches without waiting for a restart."""
     stale = H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS)
+    scope = " AND seat_id=?" if seat_id else ""
+    for row in c.execute("SELECT * FROM seat_requests WHERE state='filing' AND created<?" + scope,
+                         (stale, seat_id) if seat_id else (stale,)).fetchall():
+        _release(c, row["actor"], row)
+    scope = " AND id=?" if seat_id else ""
+    c.execute("UPDATE seats SET request_state=? WHERE request_state=? AND updated<?" + scope,
+              (lifecycle.REQUESTED, lifecycle.CANCELLING, stale) + ((seat_id,) if seat_id else ()))
+
+
+def release_abandoned(store):
+    """At start: release what a process that died mid-request left behind (see _recover_stale)."""
     with store.transaction() as c:
-        for row in c.execute("SELECT * FROM seat_requests WHERE state='filing' AND created<?", (stale,)).fetchall():
-            _release(c, row["actor"], row)
-        c.execute("UPDATE seats SET request_state=? WHERE request_state=? AND updated<?",
-                  (lifecycle.REQUESTED, lifecycle.CANCELLING, stale))
+        _recover_stale(c)
 
 
 def _request(request, store, auth, settings, who, agent_id, *, name="", first_task="", team="", reports_to="",
@@ -336,6 +350,7 @@ def cancel_request(request, store, auth, settings, who, seat_id):
     require_person(who)
     require_on(settings)
     with store.transaction() as c:
+        _recover_stale(c, seat_id)
         row = _requested(c, seat_id)
         if row["request_state"] == lifecycle.CANCELLED:
             return _cancelled(c, seat_id)
@@ -359,30 +374,40 @@ def cancel_request(request, store, auth, settings, who, seat_id):
         raise
 
 
-def _add_bot(c, auth, settings_admin, who, agent, body):
-    """Add the agent as a Tico bot through the bot editor's own create, so the same rules apply: who may add a bot, under
-    whom, on which model. The bot runs on the agent's harness, under the line the seat names (or `reports_to`), joins the
-    seat's team (or `team`), and fills the seat when one is named."""
+def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
+    """Add the agent as a Tico bot that fills the seat it names, on the harness the agent runs on, under the line the seat
+    names. Its role is the template Recruit ranks first for the seat, and it lands exactly where that template's hire does:
+    in Onboarding, with its repository built by its computer or by BotOps (recruiting.onboard). A team without a seat has
+    no role to build a repository for, so its add waits for one."""
+    from .onboarding import BOTOPS
+    if not body.seat_id:
+        raise Problem("seat", "A cloud agent joins a team by filling a seat, so Tico knows what it does. Add it to a seat.",
+                      409)
+    _recover_stale(c, body.seat_id)
+    row = lifecycle.seat(c, body.seat_id)
+    lifecycle.refuse_if_requested(row)
+    placed = lifecycle.placement(auth, c, who, row["reports_to"], body.seat_id)
+    if row["team"]:
+        Groups.may_add(c, auth, who, row["team"])   # the bot joins the seat's team: the rule every add to a team obeys
+    card = recruiting.top_card(auth, onboarding, c, who, row)
+    if not card:
+        raise Problem("template", "No Tico template fits this seat, so there is no repository to build the bot in. Hire "
+                      "from Recruit instead.", 409)
+    if not card["starter"] and not H.bot(c, BOTOPS):
+        raise Problem("botops", "BotOps builds this bot, and this team has no BotOps; add it from Templates first", 409)
     model = _model_for(agent["connect_id"])
-    if body.seat_id:
-        row = lifecycle.seat(c, body.seat_id)
-        lifecycle.refuse_if_requested(row)
-        title, description, team = row["title"], row["description"], row["team"]
-        placed = lifecycle.placement(auth, c, who, row["reports_to"], body.seat_id)
-    else:
-        title, description, team = agent["name"], "", body.team.strip()
-        placed = lifecycle.placement(auth, c, who, body.reports_to)
-    if team:
-        Groups.may_add(c, auth, who, team)      # the bot joins this team: the rule every add to a team obeys
-    created = settings_admin.create_bot(c, who, BotDefinitionCreate(
-        display_name=title[:100], description=str(description or "")[:2000],
-        reports_to=lifecycle.bot_parent(c, placed) or None, status="planned", model=model["id"],
-        harness=agent["connect_id"], owners=[H.actor_id(who.actor)]))
-    if team:
-        c.execute("UPDATE bot_config SET team=? WHERE bot=?", (team, created["slug"]))
-    if body.seat_id:
-        lifecycle.fill_seat(c, who, body.seat_id, created["slug"])
-    return {"bot": created["slug"], "harness": agent["connect_id"], "model": model["id"], "seat": body.seat_id}
+    name = row["title"][:100]
+    slug = onboarding.admin.pick_slug(c, name)
+    record, rendered, description, instructions = recruiting.brief(c, onboarding, card, row)
+    settings_admin.create_bot(c, who, BotDefinitionCreate(
+        slug=slug, display_name=name, description=description[:2000], status="planned", repo="bot-" + slug,
+        thread_mode="personal", reports_to=lifecycle.bot_parent(c, placed) or None, shared=bool(card.get("shared")),
+        template=card["template"], model=model["id"], harness=agent["connect_id"], owners=[H.actor_id(who.actor)]))
+    setup_task = recruiting.onboard(c, who, onboarding, row, card, slug, name=name, description=description,
+                                    instructions=instructions, rendered=rendered, answers=record["answers"],
+                                    model=model["id"])
+    return {"bot": slug, "harness": agent["connect_id"], "model": model["id"], "seat": body.seat_id,
+            "template": card["template"], "setup_task_id": setup_task}
 
 
 def _seat_agent(c, who, row):
@@ -390,7 +415,7 @@ def _seat_agent(c, who, row):
             "tasks": _waiting(c, who, row)}
 
 
-def install(app, store, auth, settings, mutate, settings_admin):
+def install(app, store, auth, settings, mutate, settings_admin, onboarding):
     from fastapi import Request
 
     @app.get("/api/v2/cloud-agents")
@@ -407,7 +432,7 @@ def install(app, store, auth, settings, mutate, settings_admin):
         auth.domain(who)
         require_person(who)
         agent = addable(agent_id)
-        return mutate(request, body, lambda c: _add_bot(c, auth, settings_admin, who, agent, body))
+        return mutate(request, body, lambda c: _add_bot(c, auth, onboarding, settings_admin, who, agent, body))
 
     @app.post("/api/v2/cloud-agents/{agent_id}/request")
     def cloud_agent_request(request: Request, agent_id: str, body: CloudAgentRequest):

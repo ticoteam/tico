@@ -225,12 +225,13 @@
   };
 
   // The team builder's Request link (ui/app/team-build.js) opens this dialog for the agent it picked, filed in the team
-  // and under the head it names. A supported agent is added as a bot under that head, not requested: the request route
-  // refuses one.
+  // and under the head it names, or under the team's own head when it names none (as cloudAgentsOpen does). A supported
+  // agent is added as a bot under that head, not requested: the request route refuses one.
   window.cloudAgentRequest = function cloudAgentRequest(agent, {team = '', reports_to = ''} = {}) {
     if (!agent) return;
-    if (agent.supported) return addDialog(agent, {team, reports_to});
-    requestDialog(agent, {team, reports_to});
+    const head = reports_to || (team ? teamHead(team) : '');
+    if (agent.supported) return addDialog(agent, {team, reports_to: head});
+    requestDialog(agent, {team, reports_to: head});
   };
   window.cloudAgentsSeat = seatPage;
 })();

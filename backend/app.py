@@ -7948,7 +7948,7 @@ def create_app(settings=None):
     from .support import install as install_support
     install_support(app, store, settings, census)
     from .cloud_agents import install as install_cloud_agents
-    install_cloud_agents(app, store, auth, settings, mutate, settings_admin)
+    install_cloud_agents(app, store, auth, settings, mutate, settings_admin, onboarding)
     from .inbound import install as install_inbound
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
