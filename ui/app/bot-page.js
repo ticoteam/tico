@@ -15,16 +15,16 @@ async function recentRuns() {
 // Header (name, alert, goal) stays visible; work and configuration tabs live in the URL
 // as #/bot/<slug>/<tab>, so refresh and Back keep the tab. Panes stay in the DOM once loaded; only
 // the conversation is torn down when you leave Chat, because it polls.
-// Configuration has its own four tabs; old More, Docs and Session links retain a destination.
-const BOT_DETAIL_TABS = ['info', 'instructions', 'history', 'settings'];
+// Configuration has its own five tabs (Rules lists what the bot must follow, ui/app/org-rules.js); old More, Docs and Session links retain a destination.
+const BOT_DETAIL_TABS = ['info', 'rules', 'instructions', 'history', 'settings'];
 const BOT_TABS = ['chat', 'tasks', ...BOT_DETAIL_TABS];
 // The assistant is chatted with only on each person's own Assistant page (#/assistant), so its bot page has no Chat.
 const botTabs = slug => {
   const tabs = slug === assistantBot() ? BOT_TABS.filter(t => t !== 'chat') : BOT_TABS;
   const mine = S.emps.find(e => e.name === slug)?.my_access;
   // Seen but not read: no updates or docs, and Chat and Tasks only for someone who may write to it (the
-  // page then holds their own threads and tasks with the bot, and the request box).
-  return mine && !mine.read ? tabs.filter(t => t === 'info' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
+  // page then holds their own threads and tasks with the bot, and the request box). Every teammate reads its Rules.
+  return mine && !mine.read ? tabs.filter(t => t === 'info' || t === 'rules' || (mine.write && (t === 'chat' || t === 'tasks'))) : tabs;
 };
 const botLimited = e => !!e?.my_access && !e.my_access.read;
 const botPersonName = id => (S.people || []).find(p => p.id === id)?.name || settingsPersonName(id);
@@ -471,6 +471,7 @@ async function pageBot(slug, tab) {
 
   </div>`}
 
+  <div id="pane-rules" role="tabpanel" aria-labelledby="bot-tab-rules" hidden><div id="bot-rules" class="ru-bot"></div></div>
   ${limited ? '<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>' : `<div id="pane-docs" role="tabpanel" aria-labelledby="bot-tab-instructions" hidden>
     <section class="card"><header><h2>Instructions</h2></header><div class="md" id="agent">Loading…</div>
       <div id="bot-instructions-editor"></div></section>
@@ -661,13 +662,14 @@ function showBotTab(tab) {
   $('#bot-details').hidden = work;
   $('#pane-more').hidden = view !== 'info';
   $('#pane-docs').hidden = view !== 'instructions';
-  for (const t of ['history', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
+  for (const t of ['history', 'rules', 'settings']) if ($('#pane-' + t)) $('#pane-' + t).hidden = view !== t;
   $('#bot-detail-tabs').querySelectorAll('[data-bot-detail-tab]').forEach(button => {
     const on = button.dataset.botDetailTab === view;
     button.classList.toggle('cur', on); button.setAttribute('aria-selected', String(on));
     button.tabIndex = on ? 0 : -1;
   });
   if (view === 'history') void botHistoryLoad(BOT.slug);
+  if (view === 'rules') void botRulesLoad(BOT.slug);   // read each time: rules change on the Rules page
   placeBotHead();
   if (!work) { botScreenRefresh(BOT.slug); botInfoRefresh(BOT.slug); }
   if (chat && BOT_PILL?.focusOnOpen) {

@@ -202,6 +202,26 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub proposal list [--status pending|confirmed|rejected|all] [--goal ID] [--kpi ID]
     hub proposal decide <id> confirm|reject [--note "..."] [--option N]
                                            a person's own decision; a bot is refused. --option: a recovery's other option
+    hub rules list [--kind internal|external] [--status active|suggested|retired|any] [--who N] [--with N]
+                   [--source N] [--bot N] [--mine] [--cursor C] [--limit N]
+                                           the org rules in force; --mine: your bot's rules and its settings as sentences
+    hub rules read <id>                    one rule: its sentence, Who and With, From, due dates, the quote it cites
+    hub rules suggested                    the suggestions waiting for a person
+    hub rules add --kind internal|external --text "..." [--who N ...] [--everyone] [--all-bots] [--with N ...]
+                  [--from SOURCE] [--description "..."] [--if-broken block|escalate|warn] [--reviewer P]
+    hub rules edit <id> --version N [--text ...] [--who N ...] [--everyone] [--all-bots] [--with N ...] [--from SOURCE]
+    hub rules accept <id> --version N [--who N ...] [--everyone] [--all-bots]   a person; a bot is refused
+    hub rules skip <id> --version N        set a suggestion aside
+    hub rules retire <id> --version N      retire a rule in force; its due dates come back
+    hub rules due [--next 90d] [--status overdue|due_soon|upcoming|satisfied] [--limit N]
+                                           the due dates of rules in force (`hub rules due list` is the same)
+    hub rules due add <rule-id> --first YYYY-MM-DD --repeats once|weekly|monthly|quarterly|yearly --owner N
+                      [--timezone Z] [--task-days N]   --task-days: a routine opens the owner's task N days before
+    hub rules due edit <id> [--first ...] [--repeats ...] [--owner N] [--timezone Z] [--task-days N | --no-routine]
+    hub rules due satisfied <id> [--on YYYY-MM-DD]   a due date's or its rule's id; --on when two are open
+    hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
+                                           a bot checks a draft against its rules; sending it then costs no second check
+    hub rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
@@ -1671,6 +1691,114 @@ def parser():
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help="turn or the message id of the owner's plain yes to a goal read-back")
     s.set_defaults(fn="proposal decide")
 
+    rules = sub.add_parser("rules", help="org rules: what teammates follow (internal) and what someone outside requires "
+                                         "(external), and their due dates").add_subparsers(dest="sub")
+    s = rules.add_parser("list", help="the rules in force; --mine: your bot's rules and its settings as sentences")
+    s.add_argument("--kind", choices=["internal", "external"])
+    s.add_argument("--status", choices=["suggested", "active", "retired", "any"])
+    s.add_argument("--who", help="a group, person or bot the rule's Who names")
+    s.add_argument("--with", dest="with", help="a group, person or bot the rule's With names")
+    s.add_argument("--source", help="a From, by name or id")
+    s.add_argument("--bot", help="the rules that apply to this bot")
+    s.add_argument("--mine", action="store_true", help="the rules that apply to your bot, and its settings")
+    s.add_argument("--cursor")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="rules list")
+    s = rules.add_parser("read", help="one rule, with its due dates and the quote it cites where you can read it")
+    s.add_argument("id")
+    s.set_defaults(fn="rules read")
+    s = rules.add_parser("suggested", help="the suggestions waiting for a person to accept or skip")
+    s.add_argument("--cursor")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="rules suggested")
+    s = rules.add_parser("add", help="add a rule: a bot's is a suggestion; only owners and admins add Everyone")
+    s.add_argument("--kind", required=True, choices=["internal", "external"])
+    s.add_argument("--text", required=True, help="the rule in one sentence")
+    s.add_argument("--description")
+    s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME",
+                   help="a group, person or bot by id or name; repeatable")
+    s.add_argument("--everyone", action="store_true")
+    s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME",
+                   help="internal: a group, person or bot the rule is about; repeatable")
+    s.add_argument("--from", dest="source_id", metavar="SOURCE", help="external: the From, by name or id")
+    s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
+    s.add_argument("--reviewer")
+    s.set_defaults(fn="rules add")
+    s = rules.add_parser("edit", help="change a rule, only the fields given, against the version you read")
+    s.add_argument("id")
+    s.add_argument("--version", type=int, required=True)
+    s.add_argument("--text")
+    s.add_argument("--description")
+    s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
+    s.add_argument("--everyone", action="store_true")
+    s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.add_argument("--with", dest="with_names", action="append", default=[], metavar="NAME")
+    s.add_argument("--from", dest="source_id", metavar="SOURCE")
+    s.add_argument("--if-broken", dest="if_broken", choices=["block", "escalate", "warn"])
+    s.add_argument("--reviewer")
+    s.set_defaults(fn="rules edit")
+    s = rules.add_parser("accept", help="a person accepts a suggestion, optionally changing its Who")
+    s.add_argument("id")
+    s.add_argument("--version", type=int)
+    s.add_argument("--who", dest="who_names", action="append", default=[], metavar="NAME")
+    s.add_argument("--everyone", action="store_true")
+    s.add_argument("--all-bots", dest="all_bots", action="store_true")
+    s.set_defaults(fn="rules accept")
+    s = rules.add_parser("skip", help="set a suggestion aside")
+    s.add_argument("id")
+    s.add_argument("--version", type=int)
+    s.set_defaults(fn="rules skip")
+    s = rules.add_parser("retire", help="retire a rule in force; its due dates come back")
+    s.add_argument("id")
+    s.add_argument("--version", type=int)
+    s.set_defaults(fn="rules retire")
+    due = rules.add_parser("due", help="due dates on rules: the next ones, add one, mark one satisfied")
+    # The list's flags work on `due` itself and on `list`, which is the same command. SUPPRESS keeps a flag given on
+    # one from being reset by the other's default.
+    due.add_argument("--next", default=argparse.SUPPRESS, help="days ahead to list, such as 90d (default 90d)")
+    due.add_argument("--status", default=argparse.SUPPRESS, choices=["overdue", "due_soon", "upcoming", "satisfied"])
+    due.add_argument("--cursor", default=argparse.SUPPRESS)
+    due.add_argument("--limit", type=int, default=argparse.SUPPRESS)
+    due.set_defaults(fn="rules due")
+    due_sub = due.add_subparsers(dest="subsub")
+    s = due_sub.add_parser("list", help="the due dates of rules in force: overdue first, then those due within --next days")
+    s.add_argument("--next", default=argparse.SUPPRESS)
+    s.add_argument("--status", default=argparse.SUPPRESS, choices=["overdue", "due_soon", "upcoming", "satisfied"])
+    s.add_argument("--cursor", default=argparse.SUPPRESS)
+    s.add_argument("--limit", type=int, default=argparse.SUPPRESS)
+    s.set_defaults(fn="rules due")
+    s = due_sub.add_parser("add", help="a due date on a rule: first day, repeat, owner")
+    s.add_argument("id", help="the rule's id")
+    s.add_argument("--first", dest="first_due", required=True, metavar="YYYY-MM-DD")
+    s.add_argument("--repeats", required=True, choices=["once", "weekly", "monthly", "quarterly", "yearly"])
+    s.add_argument("--owner", required=True, help="a bot or person, by name or id")
+    s.add_argument("--timezone")
+    s.add_argument("--task-days", type=int, metavar="N", help="a routine opens the owner's task N days before each one")
+    s.set_defaults(fn="rules due set")
+    s = due_sub.add_parser("edit", help="change a due date; a new first day or repeat starts a new one, history kept")
+    s.add_argument("id", help="the due date's id")
+    s.add_argument("--first", dest="first_due", metavar="YYYY-MM-DD")
+    s.add_argument("--repeats", choices=["once", "weekly", "monthly", "quarterly", "yearly"])
+    s.add_argument("--owner", help="a bot or person, by name or id")
+    s.add_argument("--timezone")
+    routine = s.add_mutually_exclusive_group()
+    routine.add_argument("--task-days", type=int, metavar="N", help="a routine opens the owner's task N days before")
+    routine.add_argument("--no-routine", action="store_true", default=None, help="turn the routine off")
+    s.set_defaults(fn="rules due edit")
+    s = due_sub.add_parser("satisfied", help="mark the current occurrence satisfied")
+    s.add_argument("id", help="a due date's id, or its rule's when it has one due date")
+    s.add_argument("--on", dest="due_on", metavar="YYYY-MM-DD", help="which occurrence, when two are open")
+    s.set_defaults(fn="rules due satisfied")
+    s = rules.add_parser("check", help="check a draft against the rules that apply to you, as the write it will be")
+    s.add_argument("text", help="the draft, whole")
+    s.add_argument("--to", required=True, help="the teammate it goes to")
+    s.add_argument("--as", dest="as_", default="message", choices=["message", "comment", "task", "assign"])
+    s.set_defaults(fn="rules check")
+    s = rules.add_parser("appeal", help="ask the reviewer to look at your held output")
+    s.add_argument("id", help="the hold's id, from the held answer")
+    s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
+    s.set_defaults(fn="rules appeal")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
     s.set_defaults(fn="strategy show")

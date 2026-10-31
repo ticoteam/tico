@@ -901,6 +901,32 @@ export type DocsSetup = {
   sources?: Array<string>;
 };
 
+export type DraftCheck = {
+  as?: "message" | "comment" | "task" | "assign";
+  text: string;
+  to: string;
+};
+
+export type DueAdd = {
+  first_due: string;
+  owner: string;
+  repeats: "once" | "weekly" | "monthly" | "quarterly" | "yearly";
+  task_days?: number | null;
+  timezone?: string | null;
+};
+
+export type DueEdit = {
+  first_due?: string | null;
+  owner?: string | null;
+  repeats?: "once" | "weekly" | "monthly" | "quarterly" | "yearly" | null;
+  task_days?: number | null;
+  timezone?: string | null;
+};
+
+export type DueSatisfied = {
+  due_on?: string | null;
+};
+
 export type Empty = Record<string, unknown>;
 
 export type EventType = {
@@ -1824,6 +1850,16 @@ export type Health = {
 
 export type HeldAction = {
   action: string;
+};
+
+export type HoldAppeal = {
+  why?: string;
+};
+
+export type HoldEmpty = Record<string, unknown>;
+
+export type HoldSend = {
+  nonce: string;
 };
 
 export type IfNoAnswer = {
@@ -2842,6 +2878,47 @@ export type RoadmapSettings = {
   labels?: Array<string> | null;
   suggestion_limit?: number | null;
   suggestions_bot?: string | null;
+};
+
+export type RuleCreate = {
+  description?: string;
+  if_broken?: "block" | "escalate" | "warn" | null;
+  kind: "internal" | "external";
+  reviewer?: string | null;
+  source_id?: string | null;
+  text: string;
+  who?: RuleScope | null;
+  with?: RuleScope | null;
+};
+
+export type RuleDecide = {
+  version?: number | null;
+  who?: RuleScope | null;
+};
+
+export type RuleEdit = {
+  description?: string | null;
+  if_broken?: "block" | "escalate" | "warn" | null;
+  reviewer?: string | null;
+  source_id?: string | null;
+  text?: string | null;
+  version: number;
+  who?: RuleScope | null;
+  with?: RuleScope | null;
+};
+
+export type RuleScope = {
+  all_bots?: boolean;
+  bots?: Array<string>;
+  everyone?: boolean;
+  groups?: Array<string>;
+  names?: Array<string>;
+  people?: Array<string>;
+};
+
+export type RuleSourceCreate = {
+  kind: "vendor" | "customer" | "government" | "other";
+  name: string;
 };
 
 export type RunNow = {
@@ -3952,7 +4029,7 @@ export type UsageLimit = {
 };
 
 export type UsageLimitView = {
-  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | null;
+  blocked: "per_30m" | "hourly" | "daily" | "weekly" | "monthly" | "quarterly" | "yearly" | "budget" | null;
   blocked_by: Record<string, unknown> | null;
   daily_usd: number | null;
   day_spent: number | null;
@@ -4245,6 +4322,14 @@ export type AcceptInboundPhoneQuoteParams = {
 export type AcceptInboundPhoneQuoteBody = AcceptPhone;
 export type AcceptInboundPhoneQuoteResponse = unknown;
 
+/** POST /api/v2/rules/{rule_id}/accept */
+export type AcceptRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type AcceptRuleBody = RuleDecide;
+export type AcceptRuleResponse = unknown;
+
 /** POST /api/v2/cards */
 export type AddCardParams = {
   "Idempotency-Key": string;
@@ -4313,6 +4398,28 @@ export type AddPublicRoadmapCommentParams = {
 export type AddPublicRoadmapCommentBody = PublicCommentInput;
 export type AddPublicRoadmapCommentResponse = unknown;
 
+/** POST /api/v2/rules */
+export type AddRuleParams = {
+  "Idempotency-Key": string;
+};
+export type AddRuleBody = RuleCreate;
+export type AddRuleResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id}/due */
+export type AddRuleDueParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type AddRuleDueBody = DueAdd;
+export type AddRuleDueResponse = unknown;
+
+/** POST /api/v2/rule-sources */
+export type AddRuleSourceParams = {
+  "Idempotency-Key": string;
+};
+export type AddRuleSourceBody = RuleSourceCreate;
+export type AddRuleSourceResponse = unknown;
+
 /** POST /api/v2/strategy/bets */
 export type AddStrategyBetParams = {
   "Idempotency-Key": string;
@@ -4343,6 +4450,14 @@ export type AnswerTaskQuestionParams = {
 };
 export type AnswerTaskQuestionBody = TaskAnswer;
 export type AnswerTaskQuestionResponse = TaskAnswerResult;
+
+/** POST /api/v2/rule-holds/{hold_id}/appeal */
+export type AppealRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type AppealRuleHoldBody = HoldAppeal;
+export type AppealRuleHoldResponse = unknown;
 
 /** POST /api/v2/kpis/{kid}/archive */
 export type ArchiveKpiParams = {
@@ -4432,6 +4547,13 @@ export type ChatWithBotParams = {
 };
 export type ChatWithBotBody = ChatCreate;
 export type ChatWithBotResponse = ChatResult;
+
+/** POST /api/v2/rules/check */
+export type CheckRuleDraftParams = {
+  "Idempotency-Key": string;
+};
+export type CheckRuleDraftBody = DraftCheck;
+export type CheckRuleDraftResponse = unknown;
 
 /** POST /api/v2/tasks/dry-run */
 export type CheckTaskParams = {
@@ -4962,6 +5084,16 @@ export type GetBotRepositoriesParams = {
 export type GetBotRepositoriesBody = never;
 export type GetBotRepositoriesResponse = BotRepositories;
 
+/** GET /api/v2/bots/{bot}/rules */
+export type GetBotRulesParams = {
+  bot: string;
+  external_cursor?: string | null;
+  internal_cursor?: string | null;
+  limit?: number;
+};
+export type GetBotRulesBody = never;
+export type GetBotRulesResponse = unknown;
+
 /** GET /api/v2/bots/{bot}/subscription */
 export type GetBotSubscriptionParams = {
   bot: string;
@@ -5306,6 +5438,37 @@ export type GetRoadmapSettingsParams = Record<string, never>;
 export type GetRoadmapSettingsBody = never;
 export type GetRoadmapSettingsResponse = unknown;
 
+/** GET /api/v2/rules/{rule_id} */
+export type GetRuleParams = {
+  rule_id: string;
+};
+export type GetRuleBody = never;
+export type GetRuleResponse = unknown;
+
+/** GET /api/v2/rules/stats */
+export type GetRuleCheckStatsParams = Record<string, never>;
+export type GetRuleCheckStatsBody = never;
+export type GetRuleCheckStatsResponse = unknown;
+
+/** GET /api/v2/rule-due/{due_id} */
+export type GetRuleDueParams = {
+  due_id: string;
+};
+export type GetRuleDueBody = never;
+export type GetRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds/{hold_id} */
+export type GetRuleHoldParams = {
+  hold_id: string;
+};
+export type GetRuleHoldBody = never;
+export type GetRuleHoldResponse = unknown;
+
+/** GET /api/v2/rules/counts */
+export type GetRulesCountsParams = Record<string, never>;
+export type GetRulesCountsBody = never;
+export type GetRulesCountsResponse = unknown;
+
 /** GET /api/v2/screening */
 export type GetScreeningParams = Record<string, never>;
 export type GetScreeningBody = never;
@@ -5514,6 +5677,14 @@ export type ImportMeetingBody = {
   transcript?: string | Array<Record<string, unknown>>;
 };
 export type ImportMeetingResponse = unknown;
+
+/** POST /api/v2/rule-holds/{hold_id}/keep */
+export type KeepRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type KeepRuleHoldBody = HoldEmpty;
+export type KeepRuleHoldResponse = unknown;
 
 /** POST /api/v2/goals/{gid}/kpis */
 export type LinkGoalKpiParams = {
@@ -5996,6 +6167,48 @@ export type ListRepositoriesParams = Record<string, never>;
 export type ListRepositoriesBody = never;
 export type ListRepositoriesResponse = RepositoryList;
 
+/** GET /api/v2/rules/due */
+export type ListRuleDueParams = {
+  cursor?: string | null;
+  limit?: number;
+  next?: string;
+  status?: string | null;
+};
+export type ListRuleDueBody = never;
+export type ListRuleDueResponse = unknown;
+
+/** GET /api/v2/rule-holds */
+export type ListRuleHoldsParams = {
+  cursor?: string | null;
+  limit?: number;
+  task: string;
+};
+export type ListRuleHoldsBody = never;
+export type ListRuleHoldsResponse = unknown;
+
+/** GET /api/v2/rule-sources */
+export type ListRuleSourcesParams = {
+  cursor?: string | null;
+  limit?: number;
+};
+export type ListRuleSourcesBody = never;
+export type ListRuleSourcesResponse = unknown;
+
+/** GET /api/v2/rules */
+export type ListRulesParams = {
+  bot?: string | null;
+  cursor?: string | null;
+  kind?: string | null;
+  limit?: number;
+  mine?: boolean;
+  source?: string | null;
+  status?: string | null;
+  who?: string | null;
+  with?: string | null;
+};
+export type ListRulesBody = never;
+export type ListRulesResponse = unknown;
+
 /** GET /api/v2/seats */
 export type ListSeatsParams = Record<string, never>;
 export type ListSeatsBody = never;
@@ -6182,6 +6395,14 @@ export type MarkChangelogReadParams = {
 };
 export type MarkChangelogReadBody = ChangelogRead;
 export type MarkChangelogReadResponse = ChangelogReadResult;
+
+/** POST /api/v2/rule-due/{due_id}/satisfied */
+export type MarkRuleDueSatisfiedParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type MarkRuleDueSatisfiedBody = DueSatisfied;
+export type MarkRuleDueSatisfiedResponse = unknown;
 
 /** POST /api/v2/updates/read */
 export type MarkUpdatesReadParams = {
@@ -6490,6 +6711,14 @@ export type RemovePublicRoadmapRequesterParams = {
 export type RemovePublicRoadmapRequesterBody = never;
 export type RemovePublicRoadmapRequesterResponse = unknown;
 
+/** POST /api/v2/rule-due/{due_id}/remove */
+export type RemoveRuleDueParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type RemoveRuleDueBody = DueSatisfied;
+export type RemoveRuleDueResponse = unknown;
+
 /** DELETE /api/v2/task-caps */
 export type RemoveTaskCapParams = {
   "Idempotency-Key": string;
@@ -6648,6 +6877,14 @@ export type ResumeWebhookParams = {
 export type ResumeWebhookBody = Empty;
 export type ResumeWebhookResponse = WebhookChanged;
 
+/** POST /api/v2/rules/{rule_id}/retire */
+export type RetireRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type RetireRuleBody = RuleDecide;
+export type RetireRuleResponse = unknown;
+
 /** POST /api/v2/webhooks/{hook_id}/sends/{send_id}/retry */
 export type RetryWebhookSendParams = {
   "Idempotency-Key": string;
@@ -6799,6 +7036,14 @@ export type SendMessageParams = {
 };
 export type SendMessageBody = MessageCreate;
 export type SendMessageResponse = Message;
+
+/** POST /api/v2/rule-holds/{hold_id}/send */
+export type SendRuleHoldParams = {
+  "Idempotency-Key": string;
+  hold_id: string;
+};
+export type SendRuleHoldBody = HoldSend;
+export type SendRuleHoldResponse = unknown;
 
 /** POST /api/v2/webhooks/{hook_id}/send */
 export type SendWebhookParams = {
@@ -7064,6 +7309,14 @@ export type SignTriggerParams = {
 export type SignTriggerBody = TriggerSigning;
 export type SignTriggerResponse = unknown;
 
+/** POST /api/v2/rules/{rule_id}/skip */
+export type SkipRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type SkipRuleBody = RuleDecide;
+export type SkipRuleResponse = unknown;
+
 /** POST /api/v2/tasks/{tid}/snooze */
 export type SnoozeTaskParams = {
   "Idempotency-Key": string;
@@ -7318,6 +7571,22 @@ export type UpdateRepositoryParams = {
 };
 export type UpdateRepositoryBody = RepoUpdate;
 export type UpdateRepositoryResponse = unknown;
+
+/** POST /api/v2/rules/{rule_id} */
+export type UpdateRuleParams = {
+  "Idempotency-Key": string;
+  rule_id: string;
+};
+export type UpdateRuleBody = RuleEdit;
+export type UpdateRuleResponse = unknown;
+
+/** POST /api/v2/rule-due/{due_id} */
+export type UpdateRuleDueParams = {
+  "Idempotency-Key": string;
+  due_id: string;
+};
+export type UpdateRuleDueBody = DueEdit;
+export type UpdateRuleDueResponse = unknown;
 
 /** PATCH /api/v2/seats/{seat_id} */
 export type UpdateSeatParams = {

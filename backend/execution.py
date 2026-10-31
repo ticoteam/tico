@@ -225,6 +225,18 @@ def session_task_id(c, bot, config, task_id, roots):
     return H.session_root(c, bot, task_id, config) if roots and task_id else task_id
 
 
+def reply_target(message, conversation, task):
+    """Whom a turn's reply goes to: the message's sender, or for the keeper's wake on a task, the personal room's
+    owner, else its first person, else the task's requester. The completion posts to it; the org rule check
+    (backend/org_rule_check.py) checks the reply against it before the completion's write."""
+    target = message["from_actor"]
+    if target == H.KEEPER and task:
+        humans = [p for p in conversation.get("participants") or [] if str(p).startswith("human:")]
+        target = ((conversation.get("owner_actor") if conversation.get("scope") == "personal" else None)
+                  or (humans[0] if humans else None) or task["requester"])
+    return target
+
+
 def work_task_id(message, conversation=None):
     """The work attached to a turn; parked urgent notices retain their task refs only as news.
 
@@ -4411,7 +4423,29 @@ class Execution:
                  "commands": [{"exit": cmd.exit, "killed": cmd.killed} for cmd in body.commands]})
         return {"woke": woke}
 
-    def complete(self, c, who, aid, body):
+    @staticmethod
+    def forget_held_reply(c, row, aid, conversation_id, note):
+        """A reply the org rule check held is kept nowhere but its hold: the run's live text and raw capture keep only
+        the note (a later capture upload is refused: `held_reply`), and the provider thread that wrote it is never
+        resumed (the run forgets it, the bot's session row goes, the conversation's and the bot's shared thread's
+        epochs move, so the next turn starts fresh)."""
+        c.execute("DELETE FROM attempt_events WHERE attempt_id=? AND kind='delta'", (aid,))
+        c.execute("UPDATE attempt_events SET payload_json=? WHERE attempt_id=? AND kind='message'",
+                  (encode({"text": note}), aid))
+        c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (aid,))
+        c.execute("DELETE FROM deltas WHERE turn_id=?", (aid,))
+        thread = c.execute("SELECT thread_id FROM attempts WHERE id=?", (aid,)).fetchone()[0]
+        c.execute("UPDATE attempts SET thread_id=NULL WHERE id=?", (aid,))
+        c.execute("UPDATE turns SET thread_id=NULL WHERE id=?", (aid,))
+        if thread:
+            c.execute("DELETE FROM bot_sessions WHERE bot=? AND thread_id=?", (row["bot"], thread))
+        c.execute("INSERT INTO session_epochs VALUES(?,1,?) ON CONFLICT(conversation_id) DO UPDATE SET "
+                  "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
+        bump_bot_session_epoch(c, row["bot"])
+        H.event(c, H.KEEPER, "reply.held", aid, {"bot": row["bot"]})
+
+    def complete(self, c, who, aid, body, rule_check=None):
+        """`rule_check`: the org rule check of the reply (backend/org_rule_check.py), made before this write."""
         row = self.attempt(c, who, aid, final=True)
         # A turn a quarantine stopped ends stopped whatever it reports: a quarantined bot can post no answer, so one
         # finished in the seconds before its runner heard stays on the run. Its job goes back in the queue with the
@@ -4476,7 +4510,7 @@ class Execution:
                         include_deleted=True)
         conv = H.conversation(c, msg["conversation_id"])
         actor = "bot:" + row["bot"]
-        reply = None
+        reply, held = None, False
         # Nothing is posted under a comment taken back mid-turn: the reply would stand where it was and could
         # restate it. The turn's own result is still recorded below.
         if body.text and body.outcome == "completed" and msg["deleted_at"] is None:
@@ -4493,18 +4527,16 @@ class Execution:
                 (actor + ":" + aid, "/api/v2/messages", "/api/v2/conversations/" + conv["id"] + "/messages",
                  conv["id"], actor, text)).fetchone()
             task = H.task(c, work_task_id(msg, conv)) if work_task_id(msg, conv) else None
-            if task and task["owner"] == actor:
-                # Record the owner's final verdict even when the reply is withheld until Done.
-                H.record_verdict(c, actor, task, text=text)
             # A bot delivered through a desktop app: the computer may have reported the reply from the app first.
             same = same or app_delivery.echoes(c, conv["id"], actor, text, any_source=False)
-            if not already and not same and (msg["kind"] in ("say", "ask", "steer") or task):
+            # A reply the turn already sent (a tool message) is not posted again; the rule check's verdict on the final
+            # text still applies (held, the run keeps only the note), so `posting` decides only the post.
+            posting = not already and not same
+            if msg["kind"] in ("say", "ask", "steer") or task:
                 target = msg["from_actor"]
                 replyable = not str(target).startswith("bot:") or msg["kind"] == "ask"
                 if target == H.KEEPER and task:
-                    humans = [p for p in conv.get("participants") or [] if str(p).startswith("human:")]
-                    target = ((conv.get("owner_actor") if conv.get("scope") == "personal" else None)
-                              or (humans[0] if humans else None) or task["requester"])
+                    target = reply_target(msg, conv, task)
                     # A task in the bot's chat room always delivers, and so does one filed from a chat into
                     # its own room (H.task_from_chat). Any other dedicated task thread waits until the owner
                     # has marked the work done, or, for a finished turn that came in after its lease lapsed,
@@ -4516,18 +4548,25 @@ class Execution:
                             task["status"] == "done" or (late and task["status"] == "closed"))
                     # Woken by Tico on a task finished before it started, a turn that wrote nothing has no news: the
                     # person would only read "nothing changed" again. Its text stays on the run (Dev 359).
-                    if replyable and quiet_recheck(c, aid, body, task, msg):
+                    if posting and replyable and quiet_recheck(c, aid, body, task, msg):
                         replyable = False
                         H.event(c, H.KEEPER, "reply.withheld", aid, {"bot": row["bot"], "task": task["id"],
                                                                      "to": target, "reason": "no_change"})
-                if target not in (H.KEEPER, actor) and replyable:
+                # A reply the turn already sent is not posted again, but the person waiting still hears of a hold.
+                reaches = replyable
+                replyable = replyable and posting
+                if target not in (H.KEEPER, actor):
                     refs = {"turn_id": aid, **({"task": task["id"]} if task else {}),
                             **({"warnings": notices} if notices and msg["kind"] != "ask" else {})}
+                    refused = False
                     try:
-                        privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"], refs, msg)
-                    except Problem as refused:
-                        if refused.code != "privacy":
+                        if replyable:
+                            privacy.require_destination(c, Identity(actor, "bot", attempt_id=aid), target, conv["id"],
+                                                        refs, msg)
+                    except Problem as refusal:
+                        if refusal.code != "privacy":
                             raise
+                        refused = True
                         # The run is done; only its reply may not go here. The result stays on the
                         # run, which only the private task's own parties can read, and the person
                         # who expected the reply is told, with nothing from the task named.
@@ -4535,11 +4574,40 @@ class Execution:
                             H._write_message(c, H.KEEPER, target, f"{row['bot']} finished, but its reply drew on "
                                              "a private task you can't read, so it was not posted here.",
                                              conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
-                    else:
+                    # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
+                    # waits on the run until Done: held, the run keeps only the note, never the reply.
+                    rule_gate, asked_text = None, body.text
+                    if rule_check and not refused:
+                        from . import org_rule_check
+                        checked = rule_check if target in rule_check["recipients"] else \
+                            {**rule_check, "outcome": "unchecked", "error": "target_changed"}
+                        rule_gate = org_rule_check.apply(c, checked, text, {"attempt": aid, "message": msg["id"],
+                                                                           "text": body.text}, tell=True)
+                    if rule_gate and rule_gate.get("held"):
+                        held = True
+                        note = org_rule_check.held_note(c, actor, rule_gate["rule"])
+                        if H.is_human(target) and reaches:
+                            H._write_message(c, H.KEEPER, target, note, conv, "notice",
+                                             {"org_rule": {"hold": rule_gate["hold_id"], "bot": row["bot"]},
+                                              **({"task": task["id"]} if task else {})}, None, None)
+                        body = body.model_copy(update={"text": note})
+                        self.forget_held_reply(c, row, aid, conv["id"], note)
+                        replyable = False
+                    elif rule_gate and rule_gate.get("warn"):
+                        text = org_rule_check.warned_text(rule_gate, text)
+                        body = body.model_copy(update={"text": org_rule_check.warned_text(rule_gate, body.text)})
+                    if replyable and not refused:
                         def post_reply():
-                            sent = H.answer(c, actor, msg["id"], body.text) if msg["kind"] == "ask" else H.say(
-                                c, actor, target, text, conversation_id=conv["id"],
-                                in_reply_to=msg["id"], refs=refs)
+                            if msg["kind"] == "ask":
+                                # The pick is resolved on the reply's own words; a warning goes on what the asker
+                                # reads (task_review.reply_answer).
+                                from .task_review import reply_answer
+                                from . import org_rule_check
+                                sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
+                                                    asked_text, org_rule_check.warn_line(rule_gate))
+                            else:
+                                sent = H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"],
+                                             refs=refs)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, msg)
                             return sent
@@ -4550,6 +4618,10 @@ class Execution:
                             H.event(c, H.KEEPER, "reply.withheld", aid, {
                                 "bot": row["bot"], "to": target, "reason": "queue_full",
                                 **({"task": task["id"]} if task else {})})
+            if task and task["owner"] == actor and not held:
+                # Record the owner's final verdict even when the reply is withheld until Done: from the text as
+                # delivered, after the rule check, never from a held reply.
+                H.record_verdict(c, actor, task, text=text)
         # A turn on a check subtask ran on the check's model, not the bot's (backend/check_models.py).
         # Decided by what the claim handed out: a check handed to another bot mid-turn still ran on the check's model.
         check_task, check = check_models.handed_out(c, aid)
@@ -4572,7 +4644,9 @@ class Execution:
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
                    encode({**body.model_dump(exclude={"load_snapshot"}), **({'source_pause': 'quota'} if source_pause else {}),
-                           **({"check": check["runtime"]} if check else {})}), aid))
+                           **({"check": check["runtime"]} if check else {}),
+                           # A held reply's marker: its capture is never taken again (attempt_capture).
+                           **({"held_reply": True} if held else {})}), aid))
         quota_continue = False
         if source_pause and not body.fallback and row['thread_id'] and worked:
             computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()

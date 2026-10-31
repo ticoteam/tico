@@ -1269,10 +1269,12 @@ SCHEMAS = {
     "UsageLimitView": obj({**{p + "_usd": NUM_N for p in PERIODS}, "source": {"type": "object", "description": "Where each cap comes "
                        "from: bot, company or null"}, **{p + "_spent": NUM_N for p in ("hour", "day", "week", "month")},
                        "percent": {"type": "integer", "description": "The highest share of one of the bot's own limits reached"},
-                       "blocked": {"enum": [*PERIODS, None], "description": "Set while a limit is met, the bot's own or a pool's: "
-                                   "the bot takes no new job"},
-                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company "
-                                      "or group:<id>), name (a pool's), period, and spent and limit (a pool's to the owner and "
+                       "blocked": {"enum": [*PERIODS, "quarterly", "yearly", "budget", None], "description": "Set while a "
+                                   "limit is met, the bot's own, a pool's or a Finance budget's (quarterly, yearly, or budget "
+                                   "for a one-time budget): the bot takes no new job"},
+                       "blocked_by": {"type": ["object", "null"], "description": "Whose limit holds the bot: scope (bot, company, "
+                                      "group:<id> or budget), name (a pool's or budget's), period, until for a budget (\"\" "
+                                      "when it never turns over), and spent and limit (a pool's to the owner and "
                                       "administrators only)", "additionalProperties": True},
                        **{"own_" + p + "_usd": NUM_N for p in PERIODS}, "may_edit": "b"}),
     "UsageDefaultView": obj({"default": obj({**{p + "_usd": NUM_N for p in PERIODS}, "count_subscription": "b"})}),
@@ -1756,6 +1758,8 @@ SCHEMAS['TaskType']['properties'].update({'default_visibility': {'enum': ['publi
                                          'role': {'type': ['string', 'null'], 'enum': ['product-roadmap', 'engineering', None],
                                                   'description': 'The Product roadmap or Dev tickets type, whoever manages it'}})
 
+TAGS['Rules'] = ("Org rules: what teammates follow (internal) and what someone outside requires (external), with their "
+                 "due dates and sources.")
 TAGS['Strategy'] = ("The team's strategy: a draft the owner edits, numbered published versions, and the bets goals "
                     "serve.")
 STABLE.extend([
@@ -2027,6 +2031,32 @@ STABLE.extend([
      'and the KPIs and pages the caller may pick', None),
     ('/api/v2/cards/{cid}', 'patch', 'Cards and pins', 'updateCard', 'Change a card\'s heading or settings', None),
     ('/api/v2/cards/{cid}', 'delete', 'Cards and pins', 'removeCard', 'Remove a card and every pin of it', None),
+])
+STABLE.extend([
+    ('/api/v2/rules', 'get', 'Rules', 'listRules', 'The org rules, newest first, paged; mine=true adds the bot\'s settings as sentences', None),
+    ('/api/v2/rules', 'post', 'Rules', 'addRule', 'Add an org rule: a bot\'s is a suggestion; only owners and admins add Everyone', None),
+    ('/api/v2/rules/counts', 'get', 'Rules', 'getRulesCounts', 'Internal and external rules in force, due dates open, suggestions waiting', None),
+    ('/api/v2/rules/due', 'get', 'Rules', 'listRuleDue', 'Due dates of rules in force: overdue, then those falling due within next days', None),
+    ('/api/v2/rules/{rule_id}', 'get', 'Rules', 'getRule', 'One rule, its due dates, and the quote it cites where its file is readable', None),
+    ('/api/v2/rule-due/{due_id}', 'get', 'Rules', 'getRuleDue', 'One due date in full: its status, open occurrences, and its chain of edits (ended and removed rows included)', None),
+    ('/api/v2/rules/{rule_id}', 'post', 'Rules', 'updateRule', 'Edit a rule against its version; a bot cannot edit', None),
+    ('/api/v2/rules/{rule_id}/accept', 'post', 'Rules', 'acceptRule', 'Accept a suggestion, optionally changing its Who; a person only', None),
+    ('/api/v2/rules/{rule_id}/skip', 'post', 'Rules', 'skipRule', 'Set a suggestion aside', None),
+    ('/api/v2/rules/{rule_id}/retire', 'post', 'Rules', 'retireRule', 'Retire a rule in force; its due dates come back', None),
+    ('/api/v2/rules/{rule_id}/due', 'post', 'Rules', 'addRuleDue', 'Add a due date to a rule: first day, repeat, owner, routine lead time', None),
+    ('/api/v2/rule-due/{due_id}', 'post', 'Rules', 'updateRuleDue', 'Edit a due date; a change to first day or repeat starts a new row', None),
+    ('/api/v2/rule-due/{due_id}/remove', 'post', 'Rules', 'removeRuleDue', 'Remove a due date; its history is kept', None),
+    ('/api/v2/rule-due/{due_id}/satisfied', 'post', 'Rules', 'markRuleDueSatisfied', 'Mark the current occurrence satisfied; due_on when two are open', None),
+    ('/api/v2/rule-sources', 'get', 'Rules', 'listRuleSources', 'Where external rules come from (From), by name', None),
+    ('/api/v2/rule-sources', 'post', 'Rules', 'addRuleSource', 'Add a From; one that exists by name is returned', None),
+    ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
+    ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
+    ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
+    ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
+    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),
+    ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
                                                         'automation_runs', 'latest_pages']},

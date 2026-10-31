@@ -16,7 +16,7 @@ const helpBubble = (text, attrs = '') => `<span class="rd-help"${attrs ? ' ' + a
 // The rail is rearranged in place, once, not drawn again: the links keep their own badges and handlers (sidebar.js,
 // notices.js).
 let RD_NAV_DONE = false;
-const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag'};
+const RD_NAV_ICONS = {automations: 'bolt', library: 'local_library', strategy: 'flag', rules: 'gavel'};
 function redesignNav() {
   const nav = $('#side .side-scroll');
   if (!nav || RD_NAV_DONE) return;
@@ -42,11 +42,22 @@ function redesignNav() {
   const tools = link('tools', RD_TOOLS, 'api', 'Tools');   // ui/app/redesign-library.js
   const files = link('files', RD_FILES, 'folder_shared', 'Files');   // ui/app/pages.js
   subs.append(...[pick('a[data-nav="docs"]'), files, pick('a[data-nav="meetings"]'), tools].filter(Boolean));
+  // Rules (ui/app/org-rules.js) folds the same way, its tabs under it, folded until opened.
+  const rules = link('rules', RULES_ROUTE, RD_NAV_ICONS.rules, 'Rules'); rules.classList.add('rd-lib-head');
+  const rulesRow = document.createElement('div'); rulesRow.className = 'nav-row rd-lib-row rd-rules-row';
+  const rulesToggle = Object.assign(document.createElement('button'), {type: 'button', className: 'rd-lib-toggle rd-rules-toggle',
+    innerHTML: '<span class="section-chev" aria-hidden="true">›</span>'});
+  rulesToggle.setAttribute('aria-label', 'Rules pages');
+  rulesToggle.setAttribute('aria-controls', 'rd-rules');
+  rulesToggle.onclick = () => { const open = rdRulesOpen(); RD_RULES.inside = false; rdRulesRemember(!open); rdLibSync(); };
+  rulesRow.append(rules, rulesToggle);
+  const ruleSubs = document.createElement('div'); ruleSubs.className = 'rd-lib rd-rules'; ruleSubs.id = 'rd-rules';
+  ruleSubs.append(...RU_TABS.map(([k, label]) => link('rules-' + k, ruHref(k), 'gavel', label)));
   if (strategyLink) { strategyLink.setAttribute('href', MARKET_ROUTE); strategyLink.querySelector('.nav-icon').textContent = RD_NAV_ICONS.strategy; }
   const order = [pick('#side-update'), pick('a[data-nav="overview"]'), pick('#nav-welcome'), strategyLink,
     pick('a[data-nav="updates"]'), pick('a[data-nav="tasks"]'), automations, libRow, subs,
-    pick('#nav-pins')].filter(Boolean);
-  const rest = before.filter(el => !order.includes(el) && !subs.contains(el));
+    rulesRow, ruleSubs, pick('#nav-pins')].filter(Boolean);
+  const rest = before.filter(el => !order.includes(el) && !subs.contains(el) && !ruleSubs.contains(el));
   nav.append(...order, ...rest);
   rdLibSync();
   renderTree();   // marks the current page again: Automations and Tools did not exist when the first route drew the rail
@@ -59,14 +70,32 @@ const rdInLibrary = r => [DOCS, MEETINGS, '#/library'].some(base => rdUnder((r |
 function rdLibRemember(open) { try { localStorage.setItem(RD_LIB_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
 function rdLibSaved() { try { return localStorage.getItem(RD_LIB_KEY) !== 'closed'; } catch { return true; } }
 const rdLibOpen = () => RD_LIB.inside || rdLibSaved();
+// Rules folds the other way round: folded unless this browser opened it, opened while a Rules page is showing.
+const RD_RULES_KEY = 'tico.nav.rules';
+const RD_RULES = {inside: false, was: false};
+function rdRulesRemember(open) { try { localStorage.setItem(RD_RULES_KEY, open ? 'open' : 'closed'); } catch { /* not kept */ } }
+function rdRulesSaved() { try { return localStorage.getItem(RD_RULES_KEY) === 'open'; } catch { return false; } }
+const rdRulesOpen = () => RD_RULES.inside || rdRulesSaved();
 function rdLibSync() {
-  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('.rd-lib-toggle');
+  rdRulesSync();
+  const subs = document.getElementById('rd-lib'), toggle = document.querySelector('.rd-lib-toggle:not(.rd-rules-toggle)');
   if (!subs || !toggle) return;
   const here = rdInLibrary(S.route);
   if (here && !RD_LIB.was) RD_LIB.inside = true;
   if (!here) RD_LIB.inside = false;
   RD_LIB.was = here;
   const open = rdLibOpen();
+  subs.hidden = !open;
+  toggle.setAttribute('aria-expanded', String(open));
+}
+function rdRulesSync() {
+  const subs = document.getElementById('rd-rules'), toggle = document.querySelector('.rd-rules-toggle');
+  if (!subs || !toggle) return;
+  const here = rdUnder((S.route || '').split('?')[0], RULES_ROUTE);
+  if (here && !RD_RULES.was) RD_RULES.inside = true;
+  if (!here) RD_RULES.inside = false;
+  RD_RULES.was = here;
+  const open = rdRulesOpen();
   subs.hidden = !open;
   toggle.setAttribute('aria-expanded', String(open));
 }
@@ -78,6 +107,8 @@ function redesignNavCurrent(nav) {
   if (nav === 'files') return rdUnder(r, RD_FILES);
   if (nav === 'strategy') return rdUnder(r, '#/strategy');
   if (nav === 'finance') return rdUnder(r, FIN_ROUTE);
+  if (nav === 'rules') return rdUnder(r, RULES_ROUTE);
+  if (nav.startsWith('rules-')) return rdUnder(r, RULES_ROUTE) && ruTabOf(r) === nav.slice(6);
   return false;
 }
 
@@ -102,6 +133,7 @@ function redesignRoute(r) {
     return true;
   }
   if (rdToolsRoute(r)) return true;
+  if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.js)
   if (rdUnder(r, RD_GOALS)) { pageGoals(); return true; }
   if (rdUnder(r, RD_ORG)) { pageRdOrg(); return true; }
@@ -116,6 +148,7 @@ function redesignRoute(r) {
 function redesignAfterRoute() {
   if (!rdUnder(S.route || '', RD_AUTOMATIONS)) window.automationsStop?.();
   if (!rdUnder(S.route || '', RD_TOOLS)) rdToolsStop();
+  if (!rdUnder(S.route || '', RULES_ROUTE)) rulesStop();
   pagesStop(S.route || '');
   rdLibSync();
   financeStop();

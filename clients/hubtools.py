@@ -62,6 +62,7 @@ INSTRUCTIONS = ("Tico: tasks, messages, Decisions, status. "
 
 TOOLS = []
 CLI_TOOL_ALIASES = {
+    "hub_rules_due_list": ("hub_rules_due",), "hub_rules_due_add": ("hub_rules_due_set",),
     "hub_task_child": ("hub_task_child_create",),
     "hub_automation_show": ("hub_automation_get",), "hub_automation_inbox": ("hub_inbox_send",),
     "hub_repo_tick": ("hub_repo_update",), "hub_repo_untick": ("hub_repo_update",),
@@ -5919,6 +5920,175 @@ def mail_read(api,args):
     return api.get('postal/items/'+quote(args['item_id'],safe=''))
 
 
+# ----------------------------------------------------------------------------- org rules (backend/org_rules.py)
+def _rule_scope(description):
+    names = {"type": "array", "items": {"type": "string"}}
+    return {"type": "object", "additionalProperties": False, "description": description, "properties": {
+        "everyone": {"type": "boolean"}, "all_bots": {"type": "boolean"}, "groups": names, "bots": names,
+        "people": names, "names": {**names, "description": "A group, person or bot, by id or name"}}}
+
+
+def _present(values):
+    return {k: v for k, v in values.items() if v is not None}
+
+
+RULE_VERSION = {"type": "integer", "minimum": 1, "description": "The rule's version as you read it"}
+
+
+@tool("hub_rules_list", "The org rules in force, newest first, paged: internal (between teammates) and external "
+      "(what someone outside requires). mine=true reads your bot's rules, and its settings as sentences.",
+      {"kind": {"type": "string", "enum": ["internal", "external"]},
+       "status": {"type": "string", "enum": ["suggested", "active", "retired", "any"]},
+       "who": _s("A group, person or bot the rule's Who names"),
+       "with": _s("A group, person or bot the rule's With names"),
+       "source": _s("A From, by name or id"),
+       "bot": _s("The rules that apply to this bot"),
+       "mine": {"type": "boolean"},
+       "cursor": _s("next_cursor from the last page"),
+       "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
+def rules_list(api, args):
+    query = _present({"kind": args.get("kind"), "status": args.get("status"), "who": args.get("who"),
+                      "with": args.get("with"), "source": args.get("source"), "bot": args.get("bot"),
+                      "mine": "true" if args.get("mine") else None, "cursor": args.get("cursor"),
+                      "limit": args.get("limit")})
+    # `mine` is the caller's own bot: BotOps reads its own rules and settings, not its requester's. Anything else reads
+    # as the person (BotOps's requester), like the rest of the rules.
+    return (api if args.get("mine") else _as_person(api)).get("rules", **query)
+
+
+@tool("hub_rules_suggested", "The org rule suggestions waiting for a person to accept or skip.",
+      {"cursor": _s("next_cursor from the last page"), "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
+def rules_suggested(api, args):
+    return _as_person(api).get("rules", status="suggested", cursor=args.get("cursor"), limit=args.get("limit"))
+
+
+@tool("hub_rules_read", "One org rule: its sentence, Who and With, From, the due dates, and the quote it cites where "
+      "you can read that file.", {"id": _s("The rule's id")}, required=("id",))
+def rules_read(api, args):
+    return _as_person(api).get(f"rules/{args['id']}")
+
+
+@tool("hub_rules_add", "Add an org rule. Internal: Who (and With, the teammates it is about). External: Who and From "
+      "(source_id, a name or id). A bot's add is a suggestion; only the owner and admins add an Everyone rule. The "
+      "Assistant adds one as the person, citing their words (on_behalf_of).",
+      {"kind": {"type": "string", "enum": ["internal", "external"]},
+       "text": _s("The rule in one sentence"), "description": _s("Optional, longer"),
+       "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: who it is about"),
+       "source_id": _s("External: the From, by name or id"),
+       "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
+       "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
+      required=("kind", "text", "who"), writes=True)
+def rules_add(api, args):
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "if_broken",
+                                              "reviewer")})
+    who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
+    return who.post("rules", body, key=_key(args))
+
+
+@tool("hub_rules_edit", "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
+      {"id": _s("The rule's id"), "version": RULE_VERSION, "text": _s("The rule in one sentence"),
+       "description": _s("Longer text"), "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: with whom"),
+       "source_id": _s("External: the From, by name or id"),
+       "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]}, "reviewer": _s("A reviewer")},
+      required=("id", "version"), writes=True)
+def rules_edit(api, args):
+    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "source_id",
+                                              "if_broken", "reviewer")})
+    return _as_person(api).post(f"rules/{args['id']}", body, key=_key(args))
+
+
+@tool("hub_rules_accept", "Accept a suggested org rule (optionally changing its Who first). A person does this.",
+      {"id": _s("The rule's id"), "version": RULE_VERSION, "who": _rule_scope("Who, if it changes")},
+      required=("id",), writes=True)
+def rules_accept(api, args):
+    body = _present({"version": args.get("version"), "who": args.get("who")})
+    return _as_person(api).post(f"rules/{args['id']}/accept", body, key=_key(args))
+
+
+@tool("hub_rules_skip", "Skip a suggested org rule: it is set aside and is not in force.",
+      {"id": _s("The rule's id"), "version": RULE_VERSION}, required=("id",), writes=True)
+def rules_skip(api, args):
+    return _as_person(api).post(f"rules/{args['id']}/skip", _present({"version": args.get("version")}), key=_key(args))
+
+
+@tool("hub_rules_retire", "Retire an org rule in force. Its due dates come back so you can remove them too.",
+      {"id": _s("The rule's id"), "version": RULE_VERSION}, required=("id",), writes=True)
+def rules_retire(api, args):
+    return _as_person(api).post(f"rules/{args['id']}/retire", _present({"version": args.get("version")}),
+                                key=_key(args))
+
+
+@tool("hub_rules_due", "The due dates of rules in force: overdue always, then those falling due within next (default "
+      "90d). status narrows to overdue, due_soon, upcoming or satisfied.",
+      {"next": _s("A number of days, such as 90d"),
+       "status": {"type": "string", "enum": ["overdue", "due_soon", "upcoming", "satisfied"]},
+       "cursor": _s("next_cursor from the last page"), "limit": {"type": "integer", "minimum": 1, "maximum": 200}})
+def rules_due(api, args):
+    return _as_person(api).get("rules/due", **_present({"next": args.get("next"), "status": args.get("status"),
+                                                        "cursor": args.get("cursor"), "limit": args.get("limit")}))
+
+
+TASK_DAYS = {"type": "integer", "minimum": 0, "maximum": 366,
+             "description": "A routine opens the owner's task this many days before each due day"}
+
+
+@tool("hub_rules_due_set", "Add a due date to an org rule: a first day, a repeat, an owner (a bot or a person), and the "
+      "routine's lead time in days.",
+      {"id": _s("The rule's id"), "first_due": _s("YYYY-MM-DD"),
+       "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
+       "task_days": TASK_DAYS},
+      required=("id", "first_due", "repeats", "owner"), writes=True)
+def rules_due_set(api, args):
+    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
+    return _as_person(api).post(f"rules/{args['id']}/due", body, key=_key(args))
+
+
+@tool("hub_rules_due_edit", "Change a rule's due date. A new first day or repeat starts a new due date and keeps the old "
+      "one in its history; an owner or zone changes it in place. task_days sets the routine's lead time; no_routine "
+      "turns the routine off.",
+      {"id": _s("The due date's id"), "first_due": _s("YYYY-MM-DD"),
+       "repeats": {"type": "string", "enum": ["once", "weekly", "monthly", "quarterly", "yearly"]},
+       "owner": _s("The bot or person who owns it, by name or id"), "timezone": _s("An IANA zone, such as America/Chicago"),
+       "task_days": TASK_DAYS, "no_routine": {"type": "boolean", "description": "Turn the routine off"}},
+      required=("id",), writes=True)
+def rules_due_edit(api, args):
+    body = _present({k: args.get(k) for k in ("first_due", "repeats", "owner", "timezone", "task_days")})
+    if args.get("no_routine"):
+        if "task_days" in body:
+            raise APIError("validation", "Give task_days or no_routine, not both", 422)
+        body["task_days"] = None
+    return _as_person(api).post(f"rule-due/{args['id']}", body, key=_key(args))
+
+
+@tool("hub_rules_due_satisfied", "Mark a rule's due date satisfied for its current occurrence. With more than one open, "
+      "due_on says which. The id is a due date's, or the rule's when it has one due date.",
+      {"id": _s("A due date's id, or its rule's"), "due_on": _s("YYYY-MM-DD, when more than one is open")},
+      required=("id",), writes=True)
+def rules_due_satisfied(api, args):
+    return _as_person(api).post(f"rule-due/{args['id']}/satisfied", _present({"due_on": args.get("due_on")}),
+                                key=_key(args))
+
+
+@tool("hub_rules_check", "Check a draft against the org rules that apply to you, as the write it will be (as: message, "
+      "comment, task, assign). Answers pass, broken (with the rules) or unchecked. Sending that exact draft to the same "
+      "teammate then costs no second check.",
+      {"text": _s("The draft, whole"), "to": _s("The teammate it goes to"),
+       "as": {"type": "string", "enum": ["message", "comment", "task", "assign"]}},
+      required=("text", "to"), writes=True)
+def rules_check(api, args):
+    body = _present({"text": args.get("text"), "to": args.get("to"), "as": args.get("as") or args.get("as_")})
+    return api.post("rules/check", body, key=_key(args))
+
+
+@tool("hub_rules_appeal", "Ask the reviewer to look at your held output: they get a review task with your reason and "
+      "may send it anyway. Never checked by a rule.",
+      {"id": _s("The hold's id, from the held answer"), "why": _s("Why the rule does not apply")},
+      required=("id",), writes=True)
+def rules_appeal(api, args):
+    return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
+
+
 BY_NAME = {t["name"]: t for t in TOOLS}
 
 
@@ -5987,6 +6157,10 @@ AUDIENCE = {
                                    "hub_meeting_pending", "hub_meeting_approve", "hub_meeting_dismiss", "hub_meeting_restore")},
     # The Assistant only.
     "hub_assistant_propose": ("assistant",), "hub_approval_read_back": ("assistant",),
+    # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
+    "hub_rules_add": KINDS,
+    # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
+    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,

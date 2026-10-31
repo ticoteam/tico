@@ -1856,6 +1856,16 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
                   {"reason": review_note, "approval": appr["issue"], "to": to, "cc": cc})
         base["review_advisory"] = review_note
 
+    # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
+    # the bot is told the rule and whom to appeal to. Tico not answering lets it through, as every check failure does.
+    ruled = pl.rule_check(ctx.slug, to, cc, subject, body)
+    if ruled and ruled.get("outcome") == "held":
+        return downgrade((ruled.get("held") or {}).get("text") or "held by an org rule", "rules")
+    warning_line = ""
+    if ruled and ruled.get("outcome") == "warn":
+        base["rule_warning"] = (ruled.get("rule_warning") or {}).get("text") or ""
+        warning_line = str(ruled.get("warning_line") or "")
+
     decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
                              attachments=files, draft=draft_id, thread_id=thread_id,
                              approval=approval, verbs=None, conn=ctx.conn, body=body,
@@ -1866,6 +1876,11 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         return dict(base, sent=False, would_send=True, checks=decision["checks"],
                     reason="", note="dry run: every gate passed, nothing was sent.")
 
+    if warning_line and draft_id:
+        # A Warn rule: the warning line goes on the recipient's copy, written onto the draft just before it is sent.
+        ctx.gmail.update_draft(draft_id, compose.with_warning(ctx.gmail.get_draft_raw(draft_id), warning_line),
+                               thread_id)
+        ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
     key = compose.send_key(ctx.slug, ctx.issue, draft_id)
     day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
     row, claimed = db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,

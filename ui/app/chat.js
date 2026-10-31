@@ -384,6 +384,8 @@ function v2MessageHTML(m) {
     const title = Object.values(m.ref_tasks || {})[0]?.title || chatLine(plainActors(m.body), 80);
     return `<details class="chat-system chat-fold" ${v2FoldAttrs(m)}><summary><b>Note</b> · ${esc(title)} ${when}</summary><div class="md">${safeMd(plainActors(m.body), {shortLinks: true})}</div></details>`;
   }
+  // A bot's reply held by an org rule: one line naming the rule, never the text (ui/app/org-rule-holds.js).
+  if (m.refs?.org_rule && m.kind === 'notice') return ruleHeldNoteHTML(m);
   if (m.kind === 'notice') return `<div class="chat-system" data-message="${esc(m.id || '')}"><b>Task</b> ${esc(plainActors(m.body))}<div class="chat-meta">${when}</div></div>`;
   // One bot's message to another, landed in a person's room: shown as an aside, not a reply.
   if (String(m.from_actor || '').startsWith('bot:') && String(m.to_actor || '').startsWith('bot:') && m.to_actor !== m.from_actor)

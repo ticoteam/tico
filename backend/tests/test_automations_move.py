@@ -186,7 +186,7 @@ def test_the_container_starts_an_old_install_with_no_setting(tmp_path):
 GONE_ROUTES = (("GET", "settings/redesign"), ("PUT", "settings/redesign"), ("GET", "routines"),
                ("GET", "bots/coo/routines"), ("POST", "bots/coo/routines"), ("POST", "routines/sch_1"),
                ("POST", "routines/sch_1/delete"), ("POST", "routines/sch_1/run"), ("GET", "routines/sch_1/occurrences"),
-               ("GET", "rules"), ("POST", "rules"), ("GET", "rules/r1"), ("POST", "rules/r1"), ("POST", "rules/r1/delete"),
+               ("POST", "rules/r1/delete"),     # GET/POST rules and rules/{id} are org rules now (backend/org_rules.py)
                ("GET", "rules/suggestions"), ("POST", "rules/suggestions/s1/apply"),
                ("POST", "rules/suggestions/s1/dismiss"), ("POST", "redesign/migration/dry-run"),
                ("POST", "redesign/migration/resolve"), ("POST", "redesign/migration/convert"),
