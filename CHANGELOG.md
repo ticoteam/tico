@@ -8,6 +8,20 @@ below word for word as its notes.
 
 ## [Unreleased]
 
+## [0.5.16] - 2026-10-30
+
+### Added
+- **Loop Tico Support into an Ask chat.** Turn on **Loop in Tico Support** to share the chat's last 20 turns with an open support request, or create one, and continue the conversation there. Turn it off to stop sharing from that chat ([The Assistant](docs/assistant.md)).
+- **Shared hosts can report health to HQ.** A host can send system and company health summaries each minute, and staff can request allow-listed diagnostics. The collector scrubs free text and does not send company data rows, files or container environments ([Cell stats and debug tools](docs/cell-stats.md)).
+
+### Changed
+- **Ask gets the Paper & Ink look.** The desktop Ask button is now a pill, and the Liquid Dot opens Ask from the centre of the phone tab bar. Tico's colours and typography follow the new palette ([The Assistant](docs/assistant.md)).
+- **Shared-host companies use regular Tico updates.** Companies on a shared host can use **Update now** and support's idle-time updates again ([Many companies on one host](docs/cell.md#updates)).
+- **Database backups sync once a minute by default.** Set `TICO_BACKUP_SYNC_INTERVAL` from `1s` to `1h` to change the interval. Losing a host can lose up to one interval of database changes ([Backups and restore](docs/install.md#backups-and-restore)).
+
+### Fixed
+- **Turning off support hides every open request from Ask.** The switch now applies to all open requests, so messages from that chat stop going to support while the requests stay open ([The Assistant](docs/assistant.md)).
+
 ## [0.4.15] - 2026-10-27
 
 ### Fixed
