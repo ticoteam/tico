@@ -447,12 +447,13 @@ def budget_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
                 apply, {"effective_from": effective}, {"effective_from": effective} if amount is not None else {})
 
 
-def fit_reason(ctx: Ctx, who: str, budget_id: str) -> str:
-    """The sentence a set-aside that does not fit shows `who`, now. Enforcement decides on the true figure; the amount
-    is named only where `who`'s own figure is that same figure, so no private spend shows as a difference. A record
-    keeps the budget id, never the amount."""
+def fit_reason(ctx: Ctx, who: str, budget_id: str, approver: bool = False) -> str:
+    """The sentence a set-aside that does not fit shows `who`, now. Enforcement decides on the true figure. The budget
+    is named with its figure only where `who` sees the budget (or decides the action, who reads its budget impact), and
+    the figure is named only where `who`'s own figure is that same figure, so no private spend shows as a difference.
+    A record keeps the budget id, never the amount."""
     b = ctx.budgets().get(budget_id)
-    if b is None or not shows_numbers(ctx, who, b):
+    if b is None or not (approver or sees_budget(ctx, who, b)):
         return FIT_REASON
     day = dates.day(ctx.today)
     true = budgeting.state(ctx, b.id, day).remaining

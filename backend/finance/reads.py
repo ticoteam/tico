@@ -1344,7 +1344,7 @@ def action_for(c: sqlite3.Connection, viewer: str, action_id: str) -> dict[str, 
         return None
     shown = covers is True or approver or (covers is None and asked)
     fit = json.loads(str(row["result_json"] or "{}")).get("fit")
-    reason = fit_reason(ctx, viewer, str(fit["budget_id"])) if fit else str(row["reason"] or "")
+    reason = fit_reason(ctx, viewer, str(fit["budget_id"]), approver) if fit else str(row["reason"] or "")
     return {"action_id": str(row["id"]), "kind": str(row["kind"]), "status": str(row["status"]),
             "code": str(row["code"] or ""), "reason": reason if shown else "",
             "approval_id": str(row["approval_id"] or "") or None, "approver": str(row["approval_to"] or "") or None,
