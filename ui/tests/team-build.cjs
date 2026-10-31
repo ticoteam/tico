@@ -116,6 +116,10 @@ async function scenario(browser, {name, viewport, theme}) {
   const hireButton = page.locator('#team-build-dialog .tb-hire');
   assert.equal(await count(), 2);                                                    // the two checked defaults
   assert.equal(await hireButton.isDisabled(), false);
+  // Request hands the cloud agent to the Cloud agents page with this team, so its seat lands here.
+  await page.evaluate(() => { window.cloudAgentRequest = (pick, options) => { window.__cloudRequest = {name: pick.name, team: options.team}; }; });
+  await page.locator('#team-build-dialog [data-card="4"] [data-tb-request]').click();
+  assert.deepEqual(await page.evaluate(() => window.__cloudRequest), {name: 'Devin', team: 'engineering'});
   // Change opens that role's alternatives; picking one swaps it in and picks the role.
   await page.locator('#team-build-dialog [data-card="1"] [data-tb-change]').click();
   assert.equal(await page.locator('#team-build-dialog [data-card="1"] [data-tb-change]').getAttribute('aria-expanded'), 'true');

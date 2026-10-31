@@ -49,7 +49,7 @@ function teamBuildOpen(group) {
     const alt = t.closest('[data-tb-alt]');
     if (alt) { const [i, j] = alt.dataset.tbAlt.split(':').map(Number); return tbPick(state, i, j); }
     const request = t.closest('[data-tb-request]');
-    if (request) return tbRequest(state.rows[Number(request.dataset.tbRequest)].pick);
+    if (request) return tbRequest(state, state.rows[Number(request.dataset.tbRequest)].pick);
     if (t.closest('.tb-hire')) void tbHire(state);
   });
   dialog.addEventListener('change', event => {
@@ -170,9 +170,10 @@ function tbPick(state, i, j) {
   state.dialog.querySelector(`[data-card="${i}"] [data-tb-change]`)?.focus();
 }
 
-// A cloud agent is requested from the Cloud agents page. Until that page can take the request here, the toast says where.
-function tbRequest(pick) {
-  if (typeof window.cloudAgentRequest === 'function') return window.cloudAgentRequest(pick);
+// A cloud agent is requested from the Cloud agents page, into this team: the seat lands here, not at the top of the chart.
+// Until that page is there, the toast says where to go.
+function tbRequest(state, pick) {
+  if (typeof window.cloudAgentRequest === 'function') return window.cloudAgentRequest(pick, {team: state.team});
   toast(`Request ${pick.name} from Cloud agents.`, false, null, {host: TEAM_BUILD?.dialog});
 }
 
