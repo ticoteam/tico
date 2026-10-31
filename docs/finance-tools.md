@@ -28,6 +28,8 @@ everyone. The tools call the Finance API under `/api/v2/finance/`; nothing else 
 the first call's result. A denied or failed key stays that way; a new attempt needs a new key. `--dry-run` says what
 would happen and changes nothing; it needs no key.
 
+A vendor takes `seats` (a whole number) and `renewal_on` (`YYYY-MM-DD`; empty clears it) on `contact_update`. Its renewal date raises `finance.vendor.renewal_due` 30 and 7 days before it, once per date and stage. Customers refuse both.
+
 ```
 hub finance act categorize --payload '{"feed_id":"fd_1","account_id":"acc_6100"}' --operation-id categorize:fd_1
 hub finance action fa_123

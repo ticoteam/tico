@@ -596,6 +596,12 @@ def rules(c: sqlite3.Connection, kind: str = "gate", active_only: bool = True) -
     return c.execute(sql + " ORDER BY created_at, id", (kind,)).fetchall()
 
 
+def posting_rules_since(c: sqlite3.Connection, since: str) -> list[Any]:
+    """Posting rules made since a time, newest first (the Bookkeeper's weekly digest)."""
+    return c.execute("SELECT * FROM fin_rules WHERE kind='posting' AND created_at>=? ORDER BY created_at DESC, id",
+                     (since,)).fetchall()
+
+
 def rules_for_external(c: sqlite3.Connection, external_rule_id: str) -> list[Any]:
     return c.execute("SELECT * FROM fin_rules WHERE external_rule_id=? ORDER BY created_at, id",
                      (external_rule_id,)).fetchall()

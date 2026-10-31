@@ -19,6 +19,7 @@ from .core import budgets as B
 from .core import rights as R
 from .core import dates, money
 from .core import view as VW
+from .core import watch as W
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, descendants, pnl_section
 from .handlers import private_scope, sees_budget, sees_scope, shows_numbers
@@ -1196,6 +1197,88 @@ def transactions(c: sqlite3.Connection, viewer: str, *, teams: Iterable[str] = (
     s = _open(c, viewer, at)
     f = _org_filter(s, teams, teammates, who, unattributed)
     return tab.transactions(c, viewer, at=at, org=f.keeps if f.any else None, **kw)
+
+
+# ------------------------------------------------------------------------------------------------ watch
+WATCH_HISTORY_DAYS = 120       # posted debits read for duplicate charges and price increases
+WATCH_PAGES = 10              # pages of 200 read per check of the debits
+
+
+def _month_windows(today: date, n: int = 4) -> list[tuple[str, str, str]]:
+    """The last n calendar months as (label, first day, last day), oldest first; the newest ends on the day itself."""
+    out: list[tuple[str, str, str]] = []
+    for back in range(n - 1, -1, -1):
+        year, month = today.year, today.month - back
+        while month <= 0:
+            month, year = month + 12, year - 1
+        first = date(year, month, 1)
+        nxt = date(year + 1, 1, 1) if month == 12 else date(year, month + 1, 1)
+        out.append((first.strftime("%Y-%m"), first.isoformat(), (nxt - timedelta(days=1)).isoformat()))
+    return out
+
+
+def _charges(c: sqlite3.Connection, viewer: str, at: str) -> list[W.Charge]:
+    """Posted debits of the last WATCH_HISTORY_DAYS as the viewer's view shows them (feed rows, not pending)."""
+    today = date.fromisoformat(at[:10])
+    start = (today - timedelta(days=WATCH_HISTORY_DAYS)).isoformat()
+    out: list[W.Charge] = []
+    cursor: str | None = None
+    for _ in range(WATCH_PAGES):
+        try:
+            page = transactions(c, viewer, start=start, end=today.isoformat(), limit=200, cursor=cursor)
+        except FinanceError:
+            break
+        for row in cast(list[Row], page.get("rows") or []):
+            payee = str(row.get("counterparty") or "").strip().lower()
+            amount = int(cast(int, row.get("amount") or 0))
+            if row.get("kind") != "feed" or row.get("pending") or row.get("status") == "ignored" or amount >= 0 \
+                    or not payee:
+                continue
+            out.append(W.Charge(id=str(row["id"]), payee=payee, amount=-amount,
+                                day=date.fromisoformat(str(row["date"])[:10])))
+        cursor = cast(str | None, page.get("next"))
+        if not cursor:
+            break
+    return out
+
+
+def watch_findings(c: sqlite3.Connection, viewer: str, at: str) -> list[dict[str, Any]]:
+    """Every Watch check's findings now: runway, unusual spend per payee over the last four months, and the posted
+    debits read for duplicate charges and price increases. Every read goes through the viewer's view."""
+    today = date.fromisoformat(at[:10])
+    found: list[dict[str, Any]] = []
+    figures: Row = {}
+    try:
+        figures = metric(c, viewer, "runway_months", at=at)
+    except FinanceError:
+        pass
+    value = figures.get("value")
+    found += W.runway(float(cast(float, value)) if value is not None else None,
+                      cast(int | None, figures.get("cash")))
+    months = _month_windows(today)
+    series: dict[str, list[int]] = {}
+    for index, (_, first, last) in enumerate(months):
+        rows: list[Row] = []
+        try:
+            rows = cast(list[Row], spend_by(c, viewer, "vendor", first, last, top_n=500, at=at)["rows"])
+        except FinanceError:
+            pass
+        for row in rows:
+            payee = str(row.get("label") or "")
+            if not payee or row.get("key") in ("", "unattributed"):
+                continue
+            series.setdefault(payee, [0] * len(months))[index] += int(cast(int, row.get("amount") or 0))
+    found += W.unusual_spend(series, months[-1][0])
+    charges = _charges(c, viewer, at)
+    found += W.duplicate_charges(charges) + W.price_increases(charges)
+    return found
+
+
+def new_posting_rules(c: sqlite3.Connection, since: str) -> list[Row]:
+    """Posting rules made since a time, newest first: the Bookkeeper's weekly digest (rules are company-wide)."""
+    from .store import banking as SK
+    return [{"id": str(r["id"]), "name": str(r["name"]), "created_by": str(r["created_by"] or ""),
+             "active": bool(r["active"])} for r in SK.posting_rules_since(c, since)]
 
 
 def view_version(c: sqlite3.Connection) -> int:
