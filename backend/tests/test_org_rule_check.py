@@ -11,6 +11,7 @@ import uuid
 
 import pytest
 
+from backend import call_slots as CS
 from backend import org_rule_check as K
 from backend.auth import Identity
 from backend.store import H
@@ -502,14 +503,14 @@ def test_an_open_breaker_goes_through_unchecked_at_once_and_a_probe_closes_it(ru
     api, judge = ruled
     color_rule(api)
     judge.fail = RuntimeError("provider down")
-    for n in range(K.BREAKER_FAILURES):
+    for n in range(CS.BREAKER_FAILURES):
         assert "held" not in say(api, f"Our favorite color is gold {n}")
-    assert len(judge.calls) == K.BREAKER_FAILURES
+    assert len(judge.calls) == CS.BREAKER_FAILURES
     started = time.monotonic()
     assert "held" not in say(api, "Our favorite color is teal")
-    assert time.monotonic() - started < 2 and len(judge.calls) == K.BREAKER_FAILURES     # nothing was asked
+    assert time.monotonic() - started < 2 and len(judge.calls) == CS.BREAKER_FAILURES     # nothing was asked
     reasons = [json.loads(e["detail_json"])["reason"] for e in events(api, "rules.unchecked")]
-    assert reasons == ["error"] * K.BREAKER_FAILURES + ["breaker"]
+    assert reasons == ["error"] * CS.BREAKER_FAILURES + ["breaker"]
     # After the cool-off the next check is the probe: it answers, and checks run again.
     calls = K.calls_for(api.app.state.store)
     calls.until = time.monotonic() - 1

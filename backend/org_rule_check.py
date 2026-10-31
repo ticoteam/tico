@@ -20,11 +20,11 @@ code then applies the verdict inside the write (`apply`). Nothing here calls an 
   replays the normal write once, as the bot (`REPLAY`), with a one-shot nonce and no second Decide call.
 - Fails open: checks Off, no engine, the rules budget, the day's call cap, the deadline, an error or a malformed
   answer let the output through with a `rules.unchecked` event. Events never carry the text.
-- Bounded: at most `rule_check_concurrency` calls run at once in this process (`_Calls`); with every slot in use the
-  output goes through unchecked at once (`busy`), never waiting for one. After BREAKER_FAILURES timeouts or errors in a
-  row no call is made for BREAKER_SECONDS (`breaker`), then one call probes. Each level has its own deadline
-  (DEADLINES), and the call itself is cut off then (`J.within`), so an abandoned call never runs on to the Gateway's
-  own timeout holding its slot.
+- Bounded: at most `rule_check_concurrency` calls run at once in this process (`call_slots.Calls`); with every slot in
+  use the output goes through unchecked at once (`busy`), never waiting for one. After BREAKER_FAILURES timeouts or
+  errors in a row no call is made for BREAKER_SECONDS (`breaker`), then one call probes. Each level has its own
+  deadline (DEADLINES), and the call itself is cut off then (`J.within`), so an abandoned call never runs on to the
+  Gateway's own timeout holding its slot.
 - Cache: verdicts are kept by a digest of the check input, the matched rules and versions, the set and the level, so
   `hub rules check` on a draft and then sending it costs one call.
 """
@@ -37,7 +37,6 @@ import re
 import secrets
 import sqlite3
 import threading
-import time
 import weakref
 from datetime import datetime, timedelta, timezone
 
@@ -45,6 +44,7 @@ from clients import judge as J
 from . import judge as B
 from . import org_rules as R
 from . import team_rules
+from .call_slots import NEUTRAL, Calls
 from .store import H, Problem
 
 LOG = logging.getLogger("tico.org_rule_check")
@@ -53,8 +53,6 @@ RULES_TARGET = B.RULES_TARGET             # the judge.call rows a rule check wri
 # The most one check waits for its answer, by Decide level (Low is Jev; Medium and High are language models).
 DEADLINES = {"low": 5, "medium": 10, "high": 15}
 CONCURRENCY = 8               # calls at once, per process, when the setting names none
-BREAKER_FAILURES, BREAKER_SECONDS = 5, 60
-NEUTRAL = ("spend_cap", "invalid")    # failures that say nothing of the provider's health: they never trip the breaker
 BUDGET = ("rules_monthly_usd", "rules.spend")     # backend/judge.py: its own cap and spend rows, apart from Decide's
 STRICT = {"warn": 1, "block": 2, "escalate": 3}
 REPEAT_BLOCKS = 3             # the 3rd block of one rule by one bot in a UTC day escalates for the rest of that day
@@ -246,58 +244,16 @@ def deadline(level):
     return DEADLINES.get(str(level or "").lower(), DEADLINES["medium"])
 
 
-class _Calls:
-    """One store's rule-check calls in flight and its circuit breaker: process-local, under one lock. A call holds its
-    slot until its thread ends, not until its caller stops waiting, so abandoned calls still count against the cap."""
-
-    def __init__(self, size):
-        self.size = size
-        self.slots = threading.BoundedSemaphore(size)
-        self.lock = threading.Lock()
-        self.failures, self.until, self.probing = 0, 0.0, False
-
-    def admit(self):
-        """(None, probe) when a call may start, its slot taken; else (`breaker` or `busy`, False), at once. The first
-        call after the cool-off is the probe, one at a time."""
-        probe = False
-        with self.lock:
-            if self.failures >= BREAKER_FAILURES:
-                if self.probing or time.monotonic() < self.until:
-                    return "breaker", False
-                self.probing = probe = True
-        if not self.slots.acquire(blocking=False):
-            if probe:
-                with self.lock:
-                    self.probing = False
-            return "busy", False
-        return None, probe
-
-    def done(self, ok, probe):
-        """A call's end as its caller saw it: True answered, False timed out or failed, None neither (a spend cap)."""
-        with self.lock:
-            if probe:
-                self.probing = False
-            if ok:
-                self.failures = 0
-            elif ok is False:
-                self.failures += 1
-                if self.failures >= BREAKER_FAILURES:
-                    if self.failures == BREAKER_FAILURES or probe:
-                        LOG.warning("Rule checks pause for %ss after %s failed calls in a row", BREAKER_SECONDS,
-                                    self.failures)
-                    self.until = time.monotonic() + BREAKER_SECONDS
-
-
 _CALLS, _CALLS_LOCK = weakref.WeakKeyDictionary(), threading.Lock()
 
 
 def calls_for(store):
-    """The store's `_Calls`, sized by its `rule_check_concurrency` setting (a new size starts a new set of slots)."""
+    """The store's `Calls`, sized by its `rule_check_concurrency` setting (a new size starts a new set of slots)."""
     size = max(1, int(getattr(store.settings, "rule_check_concurrency", 0) or CONCURRENCY))
     with _CALLS_LOCK:
         calls = _CALLS.get(store)
         if calls is None or calls.size != size:
-            calls = _CALLS[store] = _Calls(size)
+            calls = _CALLS[store] = Calls(size, "Rule checks")
         return calls
 
 
