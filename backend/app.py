@@ -176,6 +176,13 @@ def create_app(settings=None):
                 onboarding.ensure_task_manager(c)
         except Exception as exc:
             telemetry.capture("librarian", exc)
+        # Finance on every install (backend/finance/setup.py): idempotent, after the migrations, one short transaction.
+        try:
+            from .finance import actions as finance
+            with store.transaction() as c:
+                finance.ensure_setup(c, settings.owner_email)
+        except Exception as exc:
+            telemetry.capture("finance_setup", exc)
         # The Librarian gets the market posts from Listening, once (Settings > Listening).
         try:
             from . import listening
@@ -332,6 +339,10 @@ def create_app(settings=None):
         if webhooks_on:
             from . import webhook_delivery
             webhook_delivery.start(store, app.state.vault, rehearsal=settings.rehearsal)
+            # Finance's Gateway worker (backend/finance/gateway_sync.py): the key's self cap and its usage meter. A
+            # rehearsal copy runs it only to record what it would send as withheld.
+            from .finance import actions as finance
+            finance.gateway_start(store, app.state.vault, settings, rehearsal=settings.rehearsal)
         # Webhooks waiting at Tico Gateway; the loop does nothing without a relay or a key.
         hook_relay_task = asyncio.create_task(app.state.hook_relay.loop(stop)) if timers else None
         # Physical mail (backend/postal_mail.py): reads and routes the letters the relay and the mail-intake inbox kept.
@@ -427,6 +438,7 @@ def create_app(settings=None):
                 await asyncio.to_thread(recorder_thread.stop)
             if webhooks_on:
                 await asyncio.to_thread(webhook_delivery.stop)
+                await asyncio.to_thread(finance.gateway_stop)
             telemetry.close()
 
     app = FastAPI(title=settings.app_name + " API", version="2.0.0", lifespan=lifespan,
@@ -4847,6 +4859,9 @@ def create_app(settings=None):
             decided = H.approval_decide(c, who.actor, aid, body.decision, body.note)
             if row["kind"] in proposals.KINDS and body.decision == "approved":
                 proposals.apply(c, auth, settings, who, row)     # the hub applies it itself (CONTRACT §5)
+            if row["kind"] in ("finance", "spend"):
+                from .finance import actions as finance
+                finance.approval_decided(c, aid)                 # Finance acts on it in the same transaction
             return decided
         return mutate(request, body, work)
 
@@ -7249,6 +7264,8 @@ def create_app(settings=None):
     release_flow.install(app, store, auth, mutate)
     from . import screening
     screening.install(app, store, auth, mutate)    # prompt-injection screening at webhooks, mail, ideas and watchers
+    from . import finance_routes
+    finance_routes.install(app, store, auth, mutate)    # Finance: budgets, P&L, expenses, actions (backend/finance)
     outcome_stats.install(app, store, auth)
     from .live_meetings import install_live_meetings
     install_live_meetings(app, store, auth, mutate)

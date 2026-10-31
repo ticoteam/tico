@@ -1384,6 +1384,36 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
     "rows": {"type": "array", "items": {"type": "object", "additionalProperties": True}},
     "next": {"type": ["string", "null"]}}}})
 
+# Finance (backend/finance_routes.py): every read is cut to the caller's own view.
+TAGS["Finance"] = ("Budgets, the P&L, expenses and one line's detail, as far as the caller sees; Finance actions, "
+                   "committed or sent to one person for approval.")
+STABLE.extend([
+    ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
+     "The budgets the caller sees, each with where it stands today (amounts in cents)", "FinanceBudgets"),
+    ("/api/v2/finance/pnl", "get", "Finance", "getFinancePnl",
+     "The P&L the caller sees, by month, quarter or year, with budget and projection beside each actual", "FinanceReport"),
+    ("/api/v2/finance/expenses", "get", "Finance", "getFinanceExpenses",
+     "Expenses the caller sees, grouped by department, team, teammate, bot, person, vendor or line", "FinanceReport"),
+    ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
+     "One line's spend by vendor, team and teammate, and its entries, as far as the caller sees", "FinanceReport"),
+    ("/api/v2/finance/actions", "post", "Finance", "requestFinanceAction",
+     "Request a Finance action: committed, sent to one person for approval, denied or failed. The Idempotency-Key is "
+     "the action's key; a retry re-reads the rest through the caller's current view. dry_run writes nothing and says "
+     "what would happen",
+     "FinanceAction"),
+    ("/api/v2/finance/actions/{action_id}", "get", "Finance", "getFinanceAction",
+     "An action's status, for whoever asked, its approver, or whose view covers it; its reason for the approver, and "
+     "otherwise only while that view covers it",
+     "FinanceAction"),
+])
+SCHEMAS.update({
+    "FinanceBudgets": obj({"budgets": items({"type": "object", "additionalProperties": True}), "more": "b",
+                           "view_version": "i"}),
+    "FinanceReport": obj({"view_version": "i"}),
+    "FinanceAction": obj({"status": "s", "kind": "s", "action_id": "n", "code": "s", "reason": "s"},
+                         required=["status", "kind"]),
+})
+
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.
 STABLE.extend([
     ("/api/v2/approvals", "post", "Needs you", "requestApproval",

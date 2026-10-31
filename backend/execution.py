@@ -1649,6 +1649,41 @@ def checkpoint_safe(c, aid, task):
 DRAINING_SQL = "EXISTS(SELECT 1 FROM bot_control ctl WHERE ctl.bot=a.bot AND ctl.draining=1)"
 
 
+# What a Finance hook may raise that must not hold a bot's work: its own refusals and a bug in it.
+FINANCE_FAULTS = (ValueError, LookupError, TypeError, ArithmeticError, AttributeError)
+
+
+def finance_run_hold(c, bot, job_id):
+    """Hold the run's likely Gateway cost on the Finance budget that covers the bot, in the claim's transaction
+    (backend/finance/runs.py). True when a budget at its cutoff refuses the run. A fault in Finance holds nothing and
+    refuses nothing; a storage error fails the claim as any other does."""
+    from .finance import actions as finance
+    c.execute("SAVEPOINT finance_hold")
+    try:
+        refused = finance.run_hold(c, bot, job_id).refused
+    except (*FINANCE_FAULTS, finance.FinanceError) as exc:
+        c.execute("ROLLBACK TO finance_hold")
+        c.execute("RELEASE finance_hold")
+        report("finance_hold", job_id, exc)
+        return False
+    c.execute("RELEASE finance_hold")
+    return refused
+
+
+def finance_run_ended(c, job_id, turn_id):
+    """Settle the job's run hold at the run's priced Gateway cost, or release it when nothing was Gateway-billed."""
+    from .finance import actions as finance
+    c.execute("SAVEPOINT finance_settle")
+    try:
+        finance.run_ended(c, job_id, turn_id)
+    except (*FINANCE_FAULTS, finance.FinanceError) as exc:
+        c.execute("ROLLBACK TO finance_settle")
+        c.execute("RELEASE finance_settle")
+        report("finance_settle", turn_id, exc)
+        return
+    c.execute("RELEASE finance_settle")
+
+
 def claim_refusal(c, settings, runner, bot, config_json, draining, ready, held_bots=(), subscription_context=None,
                   default=None):
     """Why `runner`'s claim passes over all of `bot`'s queued work, or (None, config) when it may look at the bot's
@@ -3336,6 +3371,8 @@ class Execution:
                 return {"attempt": None}    # the bot is over its run budget: held now, its queue kept
             if run_backoff.probe(c, row["bot"]):
                 return {"attempt": None}    # held for failed runs and its next try is not due, or another took it
+        if finance_run_hold(c, row["bot"], row["id"]):
+            return {"attempt": None}        # a Finance budget at its cutoff refuses the run (usage_limits holds the bot)
         live_ref = (msg.get("refs") or {}).get("live_meeting")
         if (isinstance(live_ref, dict) and msg.get("from_actor") == H.KEEPER
                 and msg.get("to_actor") == "bot:" + row["bot"]):
@@ -4772,6 +4809,7 @@ class Execution:
                        wake_rules.settled_state(c, checkpoint_task, row["bot"], started, aid) if started else None,
                        checkpoint_task["id"]))
         usage_limits.after_run(c, row["bot"], self.store.settings.owner_email)
+        finance_run_ended(c, row["job_id"], aid)
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
         runtime, model = providers.bot_choice(c, self.store.settings, json.loads(config[0]) if config else {})
         # A turn on the bot's task model ran on that model (backend/task_models.py): its usage and limit are that login's.

@@ -7,7 +7,7 @@ typical payload, in Acme's words. "Send example" posts it and the docs show it. 
 
 `aliases` are spellings that came before the catalog and still work (`release_published`). `sourceless` marks events
 that are not a message to a bot and have no task, so a rule judges them with `rules.judge_event` (scopes team,
-department and bot only). `outbound=False` marks the two only rules see: an outgoing webhook cannot subscribe to them.
+department and bot only). `outbound=False` marks those only rules see: an outgoing webhook cannot subscribe to them.
 `webhook.<id>` (one incoming webhook) and `custom.<x>` (anything a bot or rule sends) are not listed one by one:
 `canonical` lets them through.
 
@@ -112,6 +112,11 @@ def _build():
     add("tico.notice", "A notice from the Tico team reached this install.",
         {"id": "tn1", "kind": "info", "body": "Version 1.4.1 fixes a mail sync bug.", "url": "https://tico.team/notices/1"},
         sourceless=True, outbound=False)
+    # Finance's budget crossings (backend/finance/jobs.py): ids only, so whoever acts reads the budget in their own view.
+    add("finance.budget.warn", "A Finance budget reached its warning level this period.",
+        {"budget_id": "b1", "event_id": "e1", "period": "2026-10-01"}, sourceless=True, outbound=False)
+    add("finance.budget.cutoff", "A Finance budget reached its limit this period.",
+        {"budget_id": "b1", "event_id": "e2", "period": "2026-10-01"}, sourceless=True, outbound=False)
     add("custom.*", "Anything a bot or rule sends: custom.<name>.",
         {"note": "custom.<name> carries whatever its sender puts in data."})
     return found

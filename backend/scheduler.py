@@ -171,7 +171,48 @@ class Scheduler:
         self.stale_checked = None
         self.hosted_checked = None
         self.invariants_checked = None
+        self.finance_checked = {}   # Finance job -> its last start in this process
         self.marks = {}             # a controlled job's last start in this process, if its record could not be written
+
+    def finance_due(self, key, at, every):
+        last = self.finance_checked.get(key)
+        if last is not None and at - last < every:
+            return False
+        self.finance_checked[key] = at                 # marked first: a failing job retries on its interval
+        return True
+
+    def finance_tick(self, at, failures):
+        """Finance's short jobs (backend/finance/jobs.py), each in its own short transaction and none on the network:
+        waiting `finance.*` events every tick, run holds past expiry every ten minutes, Gateway usage postings hourly
+        (the Gateway worker fetches the meter), setup when missing and next month's period daily."""
+        from .finance import actions as finance, reads as finance_reads
+        steps = []
+        try:
+            finance.gateway_ensure()                   # a Gateway worker that died comes back on the next tick
+            with self.store.read() as c:
+                ready = finance_reads.is_set_up(c)
+                waiting = ready and finance_reads.events_waiting(c)
+        except Exception as exc:
+            failures.append({"finance": type(exc).__name__})
+            return
+        if not ready:
+            if self.finance_due("setup", at, timedelta(hours=1)):
+                steps.append(("finance_setup", lambda c: finance.ensure_setup(c, self.store.settings.owner_email)))
+        else:
+            if waiting:
+                steps.append(("finance_events", lambda c: finance.drain_events(c, stamp(at))))
+            if self.finance_due("holds", at, timedelta(minutes=10)):
+                steps.append(("finance_holds", lambda c: finance.expire_holds(c, stamp(at))))
+            if self.finance_due("usage", at, timedelta(hours=1)):
+                steps.append(("finance_usage", lambda c: finance.post_usage(c, stamp(at))))
+            if self.finance_due("period", at, timedelta(days=1)):
+                steps.append(("finance_period", lambda c: finance.open_next_period(c, stamp(at))))
+        for name, step in steps:
+            try:
+                with self.store.transaction() as c:
+                    step(c)
+            except Exception as exc:
+                failures.append({name: type(exc).__name__})
 
     def due(self, key, at, cfgs, last):
         """Whether a controlled job (backend/system_routines.py CONTROLS) runs now: on, and due on its saved preset since
@@ -413,6 +454,7 @@ class Scheduler:
             webhook_delivery.ensure()                          # a delivery worker that died comes back on the next tick
         except Exception as exc:
             failures.append({"webhook_delivery": type(exc).__name__})
+        self.finance_tick(at, failures)
         if self.swept is None or at - self.swept >= timedelta(hours=1):
             # Outside the scheduling transaction: the sweep takes its own short write
             # locks. Marked first so a failing sweep retries hourly, not every tick.
@@ -704,6 +746,13 @@ class Scheduler:
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
                                      "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
+            # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
+            try:
+                from .finance import actions as finance
+                with self.store.transaction() as c:
+                    finance.approvals_sweep(c, stamp(at))
+            except Exception as exc:
+                failures.append({"finance_approvals": type(exc).__name__})
             # ...and each weekday morning, questions unanswered two business days go back to their bots, one wake per
             # bot (backend/still_needed.py).
             with SR.recording(self.store, "still_needed", failures) as run:
