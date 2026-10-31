@@ -2876,7 +2876,8 @@ def create_app(settings=None):
             # The public roadmap shows the public title and summary, never the note: the line goes on the summary it
             # will show (the one kept, or the line alone when there is none), the title kept whole.
             summary = getattr(body, "public_summary", None)
-            kept = summary if summary is not None else row.get("public_summary") or ""
+            # A kept summary warned before carries only this line: the bot's own text stays within the cap.
+            kept = summary if summary is not None else org_rule_check.unwarned(row.get("public_summary"))
             out["public_summary"] = org_rule_check.warned_note(gate, kept)
         if not out:
             out["note"] = org_rule_check.warned_note(gate, row.get("note") or "")

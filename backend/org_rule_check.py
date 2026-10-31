@@ -649,6 +649,21 @@ def warn_line(gate):
     return (gate or {}).get("warn") or ""
 
 
+# A warning line as apply writes it (`warn`), alone in its paragraph at the head of a text warned_note built.
+WARN_LINE = re.compile(r"Warning: [^\n]*'s message (?:may break|was too long to check against) the rule '[^\n]*'\.")
+
+
+def unwarned(text):
+    """`text` without the warning lines a warned write put before it (warned_note's shape), the text kept whole: a
+    copy kept and warned again carries one line, the current one."""
+    text = text or ""
+    while True:
+        head, sep, rest = text.partition("\n\n")
+        if not WARN_LINE.fullmatch(head):
+            return text
+        text = rest if sep else ""
+
+
 def warned_note(gate, note):
     """A note the warning line is put before, the note kept whole (a hand-off's note, a title change's note)."""
     line = warn_line(gate)

@@ -1756,3 +1756,54 @@ def test_send_anyway_posts_the_held_days_update_or_nothing(ruled, monkeypatch):
     send_anyway(api, thursday)
     assert [(r["kind"], r["day"]) for r in sql(api, "SELECT kind, day FROM updates WHERE bot='ops'")] == \
         [("daily", "2026-10-29")]
+
+
+def upload(api, name, text="# Draft", token="ops-test"):
+    r = api.post("/api/v2/files/uploads", json={"name": name, "text": text, "scope": "bot"},
+                 headers=headers(token))
+    assert r.status_code == 200, r.text
+    return r.json()["file"]
+
+
+def test_a_pick_questions_file_titles_and_the_picks_they_make_are_judged(ruled):
+    api, judge = ruled
+    color_rule(api)
+    files = [upload(api, "Our favorite color is blue.md"), upload(api, "Wait.md")]
+    got = ask(api, "Which cut should ship?", pick=True, review=[{"file": f["id"]} for f in files])
+    assert got["held"] and set(got) == {"held"}
+    said = judge.calls[-1]["state"]["output"]
+    assert "Option: Our favorite color is blue" in said and "This one is approved" in said
+    assert sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+    [hold] = sql(api, "SELECT payload_json FROM org_rule_holds WHERE operation='task_question'")
+    assert "Option: Our favorite color is blue" in hold["payload_json"]
+
+
+def test_send_anyway_refuses_a_review_question_whose_files_changed_since_the_check(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="escalate", reviewer="ben")
+    files = [upload(api, "Cut one.md"), upload(api, "Cut two.md")]
+    hold = ask(api, "Which cut should ship?", body="Our favorite color is blue.", pick=True,
+               review=[{"file": f["id"]} for f in files])["held"]["id"]
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_files SET title='Our favorite color is green' WHERE id=?", (files[0]["id"],))
+    assert send_anyway(api, hold, expected=409)["error"]["code"] == "changed"
+    assert hold_row(api, hold)["state"] == "held" and sql(api, "SELECT id FROM tasks WHERE owner='bot:ops'") == []
+
+
+def test_a_second_warned_publish_of_a_summary_at_the_cap_keeps_one_line(ruled):
+    api, _ = ruled
+    color_rule(api, if_broken="warn")
+    post(api, "roadmaps/settings", {"bot_public_approval": False})
+    summary = ("Our favorite color is red. " * 400)[:7999] + "Z"
+    drafted = post(api, "tasks", {"owner": "ops", "title": "Palette", "body": "Draft it.", "visibility": "private",
+                                  "public_title": "New palette", "public_summary": summary})
+    got = post(api, f"tasks/{drafted['id']}", {"version": drafted["version"], "visibility": "public"},
+               token="ops-test")
+    task = got.get("task", got)
+    got = post(api, f"tasks/{drafted['id']}", {"version": task["version"], "public_title": "Our favorite color is blue"},
+               token="ops-test")
+    assert got["rule_warning"], got
+    shown = public_output(api, drafted["id"])
+    assert shown["title"] == "Our favorite color is blue"
+    assert shown["summary"].count("Warning:") == 1 and shown["summary"].startswith("Warning:")
+    assert shown["summary"].endswith("\n\n" + summary)

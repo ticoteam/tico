@@ -562,10 +562,11 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             raise question_unreadable(person) from exc
         return guest
 
-    def question_text(body):
+    def question_text(body, review_text=""):
         """What a task question says, as the org rule check reads it, one output: every line its card and task show
         (title, body, question, why; each option's label, description, what happens and file name; the spend; what
-        happens with no answer), never a file's bytes. The hold keeps this same text for a later recheck."""
+        happens with no answer; the files under review and the picks they make, `review_text`), never a file's
+        bytes. The hold keeps this same text for a later recheck."""
         question = body.question.strip()
         parts = [("Title", body.title or question), ("Body", body.body), ("Question", question),
                  ("Why", body.why.strip())]
@@ -577,7 +578,23 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                                    f"({body.spend.account})"))
         if body.if_no_answer:
             parts.append(("If no answer", body.if_no_answer.do))
-        return "\n\n".join(f"{label}: {value}" for label, value in parts if value)
+        return "\n\n".join([*(f"{label}: {value}" for label, value in parts if value), *filter(None, [review_text])])
+
+    def question_review_text(review, attachments, body):
+        """What a review question's card adds, as the org rule check reads it: each file's title and name (its chip),
+        and in a pick the options the files make (file_reviews.options: a label from each title, what happens)."""
+        from . import file_reviews
+        if not review:
+            return ""
+        lines = [f"File: {a['title'] or a['name']}" + (f" ({a['name']})" if a["title"] and a["name"] != a["title"]
+                                                        else "") for a in attachments]
+        if body.pick:
+            picks = file_reviews.options([dict(e) for e in review], attachments, True, body.options)
+            lines += [f"Option: {o.label}\n\nThen: {o.then}" for o in picks]
+        return "\n\n".join(lines)
+
+    def question_review_digest(text):
+        return hashlib.sha256(text.encode()).hexdigest()
 
     def question_ingest(who, body):
         """Ask ingest's preflight of a task question (backend/ask_ingest.py), outside the write."""
@@ -586,21 +603,24 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         return ask_ingest.preflight(store, app.state.judge, who, body.on, body.title or question,
                                     "\n\n".join(filter(None, (question, body.why, body.body))), kind="task_question")
 
-    def question_replay(body, option_files, stored):
+    def question_replay(body, option_files, stored, review_text=""):
         """What Send anyway needs to ask a held question again: the request without its option files' bytes (they are
-        stored already, by digest), each file's size, name and type, and the digests."""
+        stored already, by digest), each file's size, name and type, the digests, and what its files under review
+        showed when it was checked (a digest: Send anyway refuses once that changed)."""
         data = body.model_dump(mode="json")
         for option in data.get("options") or []:
             if option.get("file"):
                 option["file"]["content_base64"] = "-"
-        return {"body": data, "files": [list(f) if f else None for f in option_files], "stored": list(stored)}
+        return {"body": data, "files": [list(f) if f else None for f in option_files], "stored": list(stored),
+                **({"review": question_review_digest(review_text)} if body.review else {})}
 
-    def question_write(c, who, body, option_files, stored, ingest=None, snapshots=None, rc=None):
+    def question_write(c, who, body, option_files, stored, ingest=None, snapshots=None, rc=None, review_checked=None):
         """One task question, in its write, as the route asks it and Send anyway replays it. `option_files` is each
         option's (size, name, type) or None, `stored` its blob digest. The org rule check's verdict comes first: held,
         no task, fold, comment or note is written; warned, its line leads the question the person reads and the task's
-        body."""
-        from . import ask_ingest, org_rule_check
+        body. `review_checked` is the digest of what the files under review showed when the check read them: changed
+        since (a file renamed, a new current version), the question is refused as `changed`, never asked unchecked."""
+        from . import ask_ingest, file_reviews, org_rule_check
         options = body.options or [M.QuestionChoice(label="Yes"), M.QuestionChoice(label="No")]
         question = body.question.strip()
         asked = {"question": question, "why": body.why, "multi": body.multi,
@@ -609,17 +629,22 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         person, parent = question_checked(c, who, body)
         private = question_private(c, who, body, parent)
         guest = question_readable_by(c, who, person, private, parent)
-        rule = org_rule_check.apply(c, rc, question_text(body), question_replay(body, option_files, stored))
+        # Files under review (backend/file_reviews.py): versions the person can open, and the options they make. What
+        # their card shows is judged with the question.
+        review = attachments = None
+        if body.review:
+            review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+        review_text = question_review_text(review, attachments, body)
+        if review_checked is not None and question_review_digest(review_text) != review_checked:
+            raise Problem("changed", "The files under review changed since the question was checked; ask it again",
+                          409)
+        rule = org_rule_check.apply(c, rc, question_text(body, review_text),
+                                    question_replay(body, option_files, stored, review_text))
         if rule and rule.get("held"):
             return org_rule_check.answer(rule)
         said_text = org_rule_check.warned_text(rule, question) if rule else question
         if guest:
             H.task_reach(c, who.actor, parent, person)
-        # Files under review (backend/file_reviews.py): versions the person can open, and the options they make.
-        from . import file_reviews
-        review = attachments = None
-        if body.review:
-            review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
         topic = H.question_topic(body.topic)
         # One open question per topic: asked again while the first waits, it joins that one (hubdb.fold_question).
         found = H.open_question(c, who.actor, person, parent=parent["id"] if parent else None, topic=topic,
@@ -765,8 +790,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                 question_readable_by(c, who, person, question_private(c, who, body, parent), parent)
         # The org rule check (backend/org_rule_check.py), outside the write as a new task's is: one output, to the
         # person asked. A held question skips ask ingest's call.
-        rc = rule_check(who, "task_question", question_text(body), lambda c: [H.resolve_actor(c, body.on)]) \
-            if rule_check else None
+        review_text = question_review_preflight(who, body) if rule_check else ""
+        rc = rule_check(who, "task_question", question_text(body, review_text),
+                        lambda c: [H.resolve_actor(c, body.on)]) if rule_check else None
         # Ask ingest (backend/ask_ingest.py): judged before the write. Sent back with the filter on, the question is
         # withdrawn as soon as it is asked and the task does not wait on the person.
         ingest = None if org_rule_check.holds(rc) else question_ingest(who, body)
@@ -774,10 +800,25 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         plain = not H.is_bot(who.actor) or not H.question_refusal(body.on, [asked])
         stored = [blobs.put(item[0], item[2]) if item and plain else None for item in decoded]
         option_files = [(len(item[0]), item[1], item[2]) if item else None for item in decoded]
+        checked = question_review_digest(review_text) if rc and body.review else None
         result = mutate(request, body, lambda c: question_write(c, who, body, option_files, stored, ingest, snapshots,
-                                                                rc))
+                                                                rc, checked))
         app.state.file_metadata.wake.set()
         return result
+
+    def question_review_preflight(who, body):
+        """What a review question's files show, read for the check outside the write as the write resolves them; ""
+        when it has none, or the write would refuse them anyway."""
+        from . import file_reviews
+        if not body.review:
+            return ""
+        with store.read() as c:
+            try:
+                person, _ = question_checked(c, who, body)
+                review, attachments = file_reviews.resolve(c, auth, blobs, who, person, body.review)
+            except Problem:
+                return ""
+            return question_review_text(review, attachments, body)
 
     def question_audience(c, bot, replay):
         return [H.resolve_actor(c, replay["body"]["on"])]
@@ -804,7 +845,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
         prepared = ingest or {}
         return question_write(c, bot, M.TaskQuestion.model_validate(replay["body"]),
                               [tuple(f) if f else None for f in replay.get("files") or []], replay.get("stored") or [],
-                              prepared.get("ingest"), prepared.get("snapshots"), rule_checks.decided(gate))
+                              prepared.get("ingest"), prepared.get("snapshots"), rule_checks.decided(gate),
+                              replay.get("review"))
 
     @app.get("/api/v2/tasks/{tid}/files")
     def task_files(request: Request, tid: str):
