@@ -86,6 +86,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     import io
     import threading
     import time
+    from urllib.request import Request
     from clients import docs_qa
     composed = post(api, "seats/draft", {"title": "Customer support lead"})
     body = {"title": "Customer support lead", "redraft": True}
@@ -97,10 +98,10 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
         def __init__(self, data, pause=0.0):
             super().__init__(data)
             self.pause, self.reads = pause, []
-        def read(self, n=-1):
+        def read1(self, n=-1):
             self.reads.append(n)
             time.sleep(self.pause)
-            return super().read(n)
+            return super().read1(n)
 
     def serve(answer):
         def urlopen(request, timeout):
@@ -137,15 +138,50 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     drained()
     assert opened == [], "no request starts after the deadline"
 
-    # Reading the answer is bounded too: a server that trickles it is cut off at the deadline, the socket waits no
-    # longer than the time left, and the worker ends soon after.
-    monkeypatch.setattr(docs_qa, "key", lambda: "k")
-    trickle = Answer(b" " * 10000, pause=0.2)
-    trickle.read = lambda n=-1, read=trickle.read: read(min(n, 1))
-    serve(trickle)
-    out, took = timed()
-    assert out == composed and took < 1.5 and 0 < opened[-1] <= 0.3
-    drained()
+    # Reading the answer is bounded too, against a real server that sends a byte every 50 ms and so never lets a read
+    # time out: both workers are cut off at the deadline and end within half a second of it, and the next rewrite
+    # then gets a slot.
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    from urllib.request import urlopen as real_urlopen
+
+    class Trickle(BaseHTTPRequestHandler):
+        def do_POST(self):
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", "10000")
+            self.end_headers()
+            try:
+                for _ in range(10000):
+                    self.wfile.write(b" ")
+                    self.wfile.flush()
+                    time.sleep(0.05)
+            except OSError:
+                pass                        # the client hung up at its deadline
+        def log_message(self, *_):
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Trickle)
+    server.daemon_threads = True
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    try:
+        monkeypatch.setattr(docs_qa, "key", lambda: "k")
+        url = f"http://127.0.0.1:{server.server_address[1]}/"
+        monkeypatch.setattr(recruiting, "urlopen",
+                            lambda request, timeout: opened.append(timeout) or real_urlopen(Request(url, data=request.data), timeout=timeout))
+        started = time.monotonic()
+        both = [threading.Thread(target=lambda: recruiting._rewrite("Composed.", "Support lead", "")) for _ in range(2)]
+        for one in both:
+            one.start()
+        time.sleep(0.1)
+        assert workers() == 2
+        drained()
+        assert time.monotonic() - started <= recruiting.REWRITE_SECONDS + 0.5
+        assert opened and all(0 < t <= 0.3 for t in opened)
+        serve(Answer(json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads support."}]}}]}).encode()))
+        assert recruiting._rewrite("Composed.", "Support lead", "") == "Leads support."
+    finally:
+        server.shutdown()
+        server.server_close()
 
     # An answer longer than the cap is not read past it, and is not used.
     huge = json.dumps({"candidates": [{"content": {"parts": [{"text": "Leads support. " * 20000}]}}]}).encode()

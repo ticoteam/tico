@@ -16,6 +16,7 @@ menu's Post a job, which creates the seat first:
      repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
      BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
 import json
+import socket
 import threading
 import time
 from dataclasses import replace
@@ -159,17 +160,46 @@ def _rewrite_call(text, title, boss, deadline):
                       data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
     raw = b""
     with urlopen(request, timeout=left) as response:
-        while True:
-            if time.monotonic() >= deadline:
-                raise TimeoutError("the answer came too slowly")
-            chunk = response.read(min(REWRITE_CHUNK, REWRITE_BYTES + 1 - len(raw)))
-            if not chunk:
-                break
-            raw += chunk
-            if len(raw) > REWRITE_BYTES:
-                raise ValueError("the model's answer is too long")
+        # A server that keeps trickling bytes never lets a read time out, so the connection is cut at the deadline,
+        # which ends any read waiting on it; each read also returns whatever has arrived and waits no longer than the
+        # time left.
+        sock = _socket_of(response)
+        cut = threading.Timer(max(deadline - time.monotonic(), 0), _cut, (sock,))
+        cut.daemon = True
+        cut.start()
+        try:
+            while True:
+                left = deadline - time.monotonic()
+                if left <= 0:
+                    raise TimeoutError("the answer came too slowly")
+                if sock is not None:
+                    sock.settimeout(left)
+                want = min(REWRITE_CHUNK, REWRITE_BYTES + 1 - len(raw))
+                chunk = response.read1(want) if hasattr(response, "read1") else response.read(want)
+                if not chunk:
+                    break
+                raw += chunk
+                if len(raw) > REWRITE_BYTES:
+                    raise ValueError("the model's answer is too long")
+        finally:
+            cut.cancel()
     parts = json.loads(raw)["candidates"][0]["content"]["parts"]
     return "".join(part.get("text", "") for part in parts).strip()
+
+
+def _socket_of(response):
+    """The socket under an HTTP response, when there is one (http.client keeps it in its reader)."""
+    sock = getattr(getattr(getattr(response, "fp", None), "raw", None), "_sock", None)
+    return sock if isinstance(sock, socket.socket) else None
+
+
+def _cut(sock):
+    if sock is None:
+        return
+    try:
+        sock.shutdown(socket.SHUT_RDWR)
+    except OSError:
+        pass                                # already closed
 
 
 def _rewrite(text, title, boss):
