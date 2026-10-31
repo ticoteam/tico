@@ -1387,8 +1387,10 @@ SCHEMAS.update({"AuditPage": {"type": "object", "required": ["rows", "next"], "p
     "next": {"type": ["string", "null"]}}}})
 
 # Finance (backend/finance_routes.py): every read is cut to the caller's own view.
-TAGS["Finance"] = ("Budgets, the P&L, expenses and one line's detail, as far as the caller sees; Finance actions, "
-                   "committed or sent to one person for approval.")
+DOC_CONTACT = {"type": ["object", "null"], "properties": {"id": {"type": ["string", "null"]},
+                                                          "name": {"type": ["string", "null"]}}}
+TAGS["Finance"] = ("Budgets, the P&L, expenses, bills, invoices, contacts, reports and the work inbox, as far as the "
+                   "caller sees; Finance actions, committed or sent to one person for approval.")
 STABLE.extend([
     ("/api/v2/finance/budgets", "get", "Finance", "listFinanceBudgets",
      "The budgets the caller sees, each with where it stands today, or with at=YYYY-MM-DD in the period holding that "
@@ -1429,6 +1431,43 @@ STABLE.extend([
     ("/api/v2/finance/rules", "get", "Finance", "listFinanceRules",
      "Finance gate rules with their words, condition, outcome, examples and latest runs, for teammates who may write "
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
+    ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
+     "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
+     "or unpaid), vendor, dates, aging bucket and a search, with the open total by aging bucket and a cursor",
+     "FinanceBills"),
+    ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
+     "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
+     "FinanceDocument"),
+    ("/api/v2/finance/invoices", "get", "Finance", "listFinanceInvoices",
+     "Invoices the caller sees (receivables: a view grant or finance.ar), newest first, with the same filters as bills",
+     "FinanceInvoices"),
+    ("/api/v2/finance/invoices/{invoice_id}", "get", "Finance", "getFinanceInvoice",
+     "One invoice with its lines, the payments received, its attachments and the actions and approvals on it",
+     "FinanceDocument"),
+    ("/api/v2/finance/contacts", "get", "Finance", "listFinanceContacts",
+     "Vendors (to whoever sees payables) and customers (receivables) by name, with what their open documents owe; a "
+     "tax id's last 4 only for a finance admin", "FinanceContacts"),
+    ("/api/v2/finance/inbox", "get", "Finance", "getFinanceInbox",
+     "The caller's Finance work queue: uncategorized rows, bills to enter, unmatched and missing receipts, bills due, "
+     "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
+     "FinanceInbox"),
+    ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
+     "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
+     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row",
+     "FinanceReportOf"),
+    ("/api/v2/finance/search", "get", "Finance", "searchFinance",
+     "Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees; with kind it pages by "
+     "cursor, without it returns the first few of each kind", "FinanceSearch"),
+    ("/api/v2/finance/metrics/{name}", "get", "Finance", "getFinanceMetric",
+     "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
+     "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
+     "unreconciled_days", "FinanceMetric"),
+    ("/api/v2/finance/close/{month}", "get", "Finance", "getFinanceCloseChecklist",
+     "A month's close checklist (YYYY-MM) for teammates who do the books, and whether it is ready to close",
+     "FinanceCloseChecklist"),
+    ("/api/v2/finance/action-kinds", "get", "Finance", "listFinanceActionKinds",
+     "Every Finance action kind in a line, or with kind= one kind's payload fields, right and approval kind",
+     "FinanceActionKinds"),
     ("/api/v2/finance/connections", "post", "Finance", "createFinanceConnection",
      "Connect Mercury with a stored token credential (finance admins): the token is tested, its accounts listed and "
      "mapped into the books. The Idempotency-Key is the action's key", "FinanceConnectionResult"),
@@ -1557,7 +1596,59 @@ SCHEMAS.update({
     "FinanceWebhookDeliveries": obj({"deliveries": items(obj({
         "trigger": "s", "delivery": "s", "received_at": "s", "type": "s", "via": "s", "outcome": "s", "body": "s"}))}),
     "FinanceConnectionResult": obj({"action_id": "n", "kind": "s", "status": "s", "code": "s", "reason": "s",
-                                    "approver": "n", "result": "o"}, required=["status", "kind"]),
+                                    "approver": "n", "result": "o"}, required=["status", "kind"]),    "FinanceBills": obj({"bills": items(ref("FinanceDocumentRow")), "next_cursor": "n", "open": ref("FinanceOpenTotal"),
+                         "currency": "s", "view_version": "i"}),
+    "FinanceInvoices": obj({"invoices": items(ref("FinanceDocumentRow")), "next_cursor": "n",
+                            "open": ref("FinanceOpenTotal"), "currency": "s", "view_version": "i"}),
+    "FinanceOpenTotal": obj({"count": "i", "remaining": "i", "more": "b",
+                             "aging": obj({k: "i" for k in ("current", "1_30", "31_60", "61_90", "over_90")})}),
+    "FinanceDocumentRow": obj({
+        "id": "s", "kind": {"type": "string", "enum": ["bill", "invoice"]}, "number": "s",
+        "vendor": DOC_CONTACT, "customer": DOC_CONTACT, "date": "s", "due_date": "n", "status": "s", "currency": "s",
+        "total": "i", "paid": "i", "remaining": "i", "aging": "n", "days_late": "i", "memo": "s", "entry_id": "n",
+        "attachments": "i", "created_by": "s", "created_at": "s", "origin": "s", "approved_by": "n",
+        "approved_at": "n", "pay_on": "n", "sent_at": "n", "written_off": "i", "payment_link": "n"},
+        required=["id", "kind", "number", "date", "status", "currency", "total", "paid", "remaining"]),
+    "FinanceDocument": {"allOf": [ref("FinanceDocumentRow"), obj({
+        "lines": items(obj({"id": "s", "account": {"type": ["object", "null"], "additionalProperties": True},
+                            "amount": "i", "description": "s", "tags": "o"})),
+        "settlements": items(obj({"id": "s", "from_kind": {"type": "string", "enum": ["payment", "feed", "credit",
+                                                                                       "account"]},
+                                  "from_id": "n", "amount": "i", "settled_on": "s", "entry_id": "n", "voided_at": "n",
+                                  "created_by": "s"})),
+        "attachments": items(obj({"id": "s", "file_id": "s", "created_by": "s", "created_at": "s"})),
+        "actions": items(obj({"action_id": "s", "kind": "s", "status": "s", "actor": "s", "approval_id": "n",
+                              "approval_to": "n", "rule_id": "n", "created_at": "s"})),
+        "terms_days": {"type": ["integer", "null"]}, "schedule": {"type": ["object", "null"]}, "view_version": "i"},
+        required=["lines", "settlements", "attachments", "actions"])]},
+    "FinanceContacts": obj({"contacts": items(obj({
+        "id": "s", "name": "s", "kind": {"type": "string", "enum": ["vendor", "customer", "both"]},
+        "emails": items({"type": "string"}), "default_account": {"type": ["object", "null"], "additionalProperties": True},
+        "is_1099": "b", "has_tax_id": "b", "tax_id_last4": "n", "recipient_id": "n", "active": "b",
+        "owed": obj({"bills": "i", "invoices": "i"}, required=[]), "created_at": "s"},
+        required=["id", "name", "kind", "active"])), "next_cursor": "n", "view_version": "i"}),
+    "FinanceInbox": obj({"items": items(obj({"kind": {"type": "string", "enum": [
+        "uncategorized", "bill_to_enter", "unmatched_receipt", "missing_receipt", "bill_due", "invoice_overdue",
+        "budget_near_limit", "sync_failed", "period_ready"]}, "id": "s", "label": "s"})),
+        "counts": {"type": "object", "additionalProperties": {"type": "integer"}}, "more": items({"type": "string"}),
+        "next_cursor": "n", "currency": "s", "view_version": "i"}),
+    "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "balance_sheet", "cash_flow",
+                                                                 "budget_vs_actual", "ap_aging", "ar_aging",
+                                                                 "spend_by"]},
+                            "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
+    "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
+        "entry", "feed", "bill", "invoice", "contact", "rule"]}, "id": "s", "label": "s"})),
+        "next_cursor": "n", "currency": "s", "view_version": "i"}),
+    "FinanceMetric": obj({"name": "s", "value": {"type": ["integer", "string", "null"]}, "unit": {
+        "type": "string", "enum": ["minor", "percent", "months", "count", "days"]}, "as_of": "s",
+        "data_as_of": "n", "stale": "b", "currency": "s", "view_version": "i"}, required=["name", "value", "unit",
+                                                                                         "as_of"]),
+    "FinanceCloseChecklist": obj({"month": "s", "start": "s", "end": "s", "status": "s", "ready": "b",
+                                  "checks": items(obj({"key": "s", "ok": "b", "label": "s"})), "view_version": "i"}),
+    "FinanceActionKinds": obj({"kinds": items(obj({"kind": "s", "words": "s", "live": "b"})), "kind": "s",
+                               "words": "s", "right": "s", "live": "b", "approval_kind": "s",
+                               "fields": items(obj({"name": "s", "type": "s", "required": "b", "words": "s"}))},
+                              required=[]),
 })
 
 # Proposals (backend/proposals.py): a change a person decides, applied by the hub on approve.

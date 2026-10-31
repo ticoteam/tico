@@ -404,6 +404,26 @@ def action(c: sqlite3.Connection, action_id: str) -> ActionResult:
     return _stored(row)
 
 
+def help(kind: str | None = None) -> dict[str, object]:
+    """Plain-words docs for one action kind (`finance_act kind=help`), or every kind in one line each: what it does,
+    its payload fields, the right it needs and whether it is live yet."""
+    def need(k: str) -> str:
+        n = K.NEEDS.get(k)
+        if k in K.OWNER_ONLY:
+            return "owner"
+        if k in K.ADMIN_ONLY:
+            return "finance.admin"
+        return " or ".join(n) if isinstance(n, tuple) else (n or "")
+    if kind is None:
+        return {"kinds": [{"kind": k, "words": K.WORDS[k], "live": k in K.LIVE} for k in K.ALL]}
+    if kind not in K.ALL:
+        raise FinanceError(INVALID, f"unknown action kind {kind}")
+    return {"kind": kind, "words": K.WORDS[kind], "right": need(kind), "live": kind in K.LIVE,
+            "approval_kind": K.approval_kind(kind),
+            "fields": [{"name": n.rstrip("?"), "type": t, "required": not n.endswith("?"), "words": w}
+                       for n, t, w in K.SHAPES[kind]]}
+
+
 # What the server, the scheduler and the run hooks call (part B).
 ensure_setup = jobs.ensure_setup
 drain_events = jobs.drain

@@ -321,6 +321,13 @@ def last_reconciliation(c: sqlite3.Connection, money_account_id: str) -> Any:
                      "ORDER BY statement_end DESC LIMIT 1", (money_account_id,)).fetchone()
 
 
+def first_feed_day(c: sqlite3.Connection, money_account_id: str) -> str:
+    """The date of a money account's first settled feed row ("" when it has none)."""
+    row = c.execute("SELECT MIN(txn_date) FROM fin_feed_txns WHERE money_account_id=? AND pending=0",
+                    (money_account_id,)).fetchone()
+    return str(row[0] or "") if row else ""
+
+
 def locked_through(c: sqlite3.Connection, money_account_id: str) -> str:
     row = last_reconciliation(c, money_account_id)
     return str(row["statement_end"]) if row else ""

@@ -62,6 +62,15 @@ def sees_money_account(ctx: Ctx, view: VW.View, r: Any) -> bool:
     return view.everything or (account is not None and view.sees_account(account))
 
 
+def feed_scope(ctx: Ctx, view: VW.View) -> tuple[list[str], list[str]]:
+    """The money accounts and cards whose feed rows this viewer sees (before the private cut)."""
+    money = [str(r["id"]) for r in SK.money_accounts(ctx.c, ctx.book.id) if sees_money_account(ctx, view, r)]
+    accounts = _card_accounts(ctx)
+    cards = [str(r["id"]) for r in SK.cards(ctx.c, most=5000)
+             if sees_card(ctx, view, r, accounts.get(str(r["budget_id"] or ""), ""))]
+    return money, cards
+
+
 # ------------------------------------------------------------------------------------------------ balance sheet
 def balance_sheet(c: sqlite3.Connection, viewer: str, as_of: str | None = None, at: str | None = None) -> Row:
     """Assets, liabilities and equity on a day (today by default), each line with what makes it up: the money accounts

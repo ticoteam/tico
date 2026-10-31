@@ -20,6 +20,11 @@ from .store import Problem
 STATUS = {"not_found": 404, "denied": 403, "invalid": 422, "conflict": 409, "not_available": 409,
           "period_closed": 409, "unbalanced": 422}
 Group = Literal["department", "team", "teammate", "bot", "person", "vendor", "account"]
+DAY = r"^\d{4}-\d{2}-\d{2}$"
+Aging = Literal["current", "1_30", "31_60", "61_90", "over_90"]
+Report = Literal["pnl", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by"]
+Metric = Literal["cash", "burn", "runway_months", "revenue", "spend", "budget_remaining", "budget_pct_used", "ap_due",
+                 "ar_overdue", "uncategorized_count", "unreconciled_days"]
 
 
 class FinanceConnectionRequest(Contract):
@@ -189,6 +194,125 @@ def install(app, store, auth, mutate):
         """Finance gate rules for teammates who may write them; `external_rule_id` lists those linked to one."""
         who = viewer(request)
         return read(lambda c: finance_reads.rules(c, who.actor, external_rule_id=external_rule_id))
+
+    @app.get("/api/v2/finance/bills")
+    def finance_bills(request: Request, status: str | None = Query(None, max_length=80),
+                      vendor_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
+                      start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
+                      aging: Aging | None = None,
+                      cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                      view_as: str | None = None):
+        """Bills the caller sees (payables), newest first, with the open total by aging bucket. `status` takes
+        draft|open|scheduled|paid|void|unpaid, comma-separated."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.bills(c, actor, status=status, vendor_id=vendor_id, q=q, start=start,
+                                                  end=end, aging=aging, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/bills/{bill_id}")
+    def finance_bill(request: Request, bill_id: ID, view_as: str | None = None):
+        """One bill with its lines, payments against it, attachments and the actions and approvals on it."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.bill(c, actor, bill_id))
+
+    @app.get("/api/v2/finance/invoices")
+    def finance_invoices(request: Request, status: str | None = Query(None, max_length=80),
+                         customer_id: str | None = Query(None, max_length=80), q: str = Query("", max_length=100),
+                         start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
+                      aging: Aging | None = None,
+                         cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                         view_as: str | None = None):
+        """Invoices the caller sees (receivables), newest first, with the open total by aging bucket. `status` takes
+        draft|sent|partial|paid|void|unpaid, comma-separated."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.invoices(c, actor, status=status, customer_id=customer_id, q=q,
+                                                     start=start, end=end, aging=aging, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/invoices/{invoice_id}")
+    def finance_invoice(request: Request, invoice_id: ID, view_as: str | None = None):
+        """One invoice with its lines, payments received, attachments and the actions and approvals on it."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.invoice(c, actor, invoice_id))
+
+    @app.get("/api/v2/finance/contacts")
+    def finance_contacts(request: Request, kind: Literal["vendor", "customer", "both"] | None = None,
+                         q: str = Query("", max_length=100), active: bool | None = True,
+                         cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                         view_as: str | None = None):
+        """Vendors and customers the caller sees, by name, with what their open bills and invoices owe."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.contacts(c, actor, kind=kind, q=q, active=active, cursor=cursor,
+                                                     limit=limit))
+
+    @app.get("/api/v2/finance/inbox")
+    def finance_inbox(request: Request, cursor: str | None = Query(None, max_length=100),
+                      limit: int = Query(50, ge=1, le=200), view_as: str | None = None):
+        """The caller's Finance work queue: uncategorized rows, bills to enter, receipts, bills due, overdue invoices,
+        budgets near their limit, failed syncs and months ready to close, with counts per kind."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.inbox(c, actor, cursor=cursor, limit=limit))
+
+    @app.get("/api/v2/finance/reports/{kind}")
+    def finance_report(request: Request, kind: Report, start: str | None = Query(None, pattern=DAY),
+                       end: str | None = Query(None, pattern=DAY),
+                       period: Literal["day", "week", "month", "quarter", "year"] = "month",
+                       basis: Literal["cash", "accrual"] | None = None, compare: Literal["prior"] | None = None,
+                       top_n: int = Query(20, ge=1, le=200), by: Group = "vendor", view_as: str | None = None):
+        """One report cut to the caller's view: pnl, balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging
+        or spend_by. `compare=prior` adds the window before; rows past `top_n` fold into "Other · n"."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.report(c, actor, kind, start=start, end=end, period=period, basis=basis,
+                                                   compare=compare, top_n=top_n, by=by))
+
+    @app.get("/api/v2/finance/search")
+    def finance_search(request: Request, kind: Literal["entry", "feed", "bill", "invoice", "contact", "rule"] | None
+                       = None, q: str = Query("", max_length=100), status: str | None = Query(None, max_length=80),
+                       contact_id: str | None = Query(None, max_length=80),
+                       account_id: str | None = Query(None, max_length=80),
+                       money_account_id: str | None = Query(None, max_length=80),
+                       start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
+                       aging: Aging | None = None,
+                       contact_kind: Literal["vendor", "customer", "both"] | None = None, active: bool | None = None,
+                       rule_kind: Literal["gate", "posting"] | None = None,
+                       cursor: str | None = Query(None, max_length=600), limit: int = Query(50, ge=1, le=200),
+                       view_as: str | None = None):
+        """Search entries, bank and card rows, bills, invoices, contacts and rules the caller sees. With `kind` it
+        pages by `cursor`; without, it returns the first few of each kind."""
+        actor = as_viewer(request, view_as)
+        named = {"status": status, "contact_id": contact_id, "account_id": account_id,
+                 "money_account_id": money_account_id, "start": start, "end": end, "aging": aging,
+                 "kind": contact_kind if kind == "contact" else rule_kind if kind == "rule" else None,
+                 "active": None if active is None else ("1" if active else "0")}
+        filters = {k: v for k, v in named.items() if v is not None}
+        return read(lambda c: finance_reads.search(c, actor, kind=kind, q=q, filters=filters, limit=limit,
+                                                   cursor=cursor))
+
+    @app.get("/api/v2/finance/metrics/{name}")
+    def finance_metric(request: Request, name: Metric, budget_id: str | None = Query(None, max_length=80),
+                       start: str | None = Query(None, pattern=DAY), end: str | None = Query(None, pattern=DAY),
+                       account_id: str | None = Query(None, max_length=80), team: str | None = None,
+                       teammate: str | None = None, days: int | None = Query(None, ge=0, le=3650),
+                       view_as: str | None = None):
+        """One number with when it was worked out (and how fresh the bank data behind it is): cash, burn, runway,
+        revenue, spend, a budget's remaining or percent used, bills due, invoices overdue, uncategorized rows,
+        days unreconciled."""
+        actor = as_viewer(request, view_as)
+        return read(lambda c: finance_reads.metric(c, actor, name, budget_id=budget_id, start=start, end=end,
+                                                   account_id=account_id, team=team, teammate=teammate, days=days))
+
+    @app.get("/api/v2/finance/close/{month}")
+    def finance_close(request: Request, month: str):
+        """A month's close checklist, for teammates who do the books."""
+        who = viewer(request)
+        return read(lambda c: finance_reads.close_checklist(c, who.actor, month))
+
+    @app.get("/api/v2/finance/action-kinds")
+    def finance_action_kinds(request: Request, kind: str | None = Query(None, max_length=80)):
+        """Every Finance action kind in a line, or one kind's payload fields, right and approval kind."""
+        viewer(request)
+        try:
+            return finance.help(kind)
+        except finance.FinanceError as e:
+            raise problem(e) from None
 
     @app.post("/api/v2/finance/connections")
     def finance_connect(request: Request, body: FinanceConnectionRequest):

@@ -1,5 +1,5 @@
 """Every Finance table (spec §4), created by the core migration chain (backend/store.py: cloud migration 64, and 65
-for phase 1's additions), including the ones later phases fill, so the schema has one starting point.
+for phase 1's additions, 66 for phase 2's), including the ones later phases fill, so the schema has one starting point.
 
 Every row has `id` (core's id format), `created_at` and `created_by` (a teammate, `system:finance` or `rule:<id>`).
 Money is BIGINT minor units beside its ISO currency. Booleans are 0/1 integers, times ISO text, JSON is text.
@@ -238,6 +238,18 @@ CREATE TABLE IF NOT EXISTS fin_view_versions (
   id INTEGER PRIMARY KEY CHECK (id = 1), version BIGINT NOT NULL DEFAULT 0, reason TEXT NOT NULL DEFAULT '',
   updated_at TEXT NOT NULL);
 
+CREATE TABLE IF NOT EXISTS fin_settlements (
+  id TEXT PRIMARY KEY, book_id TEXT NOT NULL REFERENCES fin_books(id),
+  from_kind TEXT NOT NULL CHECK (from_kind IN ('payment','feed','credit','account')), from_id TEXT NOT NULL DEFAULT '',
+  to_kind TEXT NOT NULL CHECK (to_kind IN ('bill','invoice')), to_id TEXT NOT NULL, amount BIGINT NOT NULL,
+  settled_on TEXT NOT NULL, entry_id TEXT, action_id TEXT, voided_at TEXT, voided_by TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL);
+
+CREATE TABLE IF NOT EXISTS fin_cash_rollups (
+  book_id TEXT NOT NULL, day TEXT NOT NULL, account_id TEXT NOT NULL, tagset TEXT NOT NULL,
+  team TEXT NOT NULL DEFAULT '', teammate TEXT NOT NULL DEFAULT '', vendor TEXT NOT NULL DEFAULT '',
+  amount BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (book_id, day, account_id, tagset));
+
 CREATE TABLE IF NOT EXISTS fin_view_grants (
   id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL CHECK (subject_kind IN ('teammate','team')), subject TEXT NOT NULL,
   new_members INTEGER NOT NULL DEFAULT 0, members_json TEXT NOT NULL DEFAULT '[]',
@@ -338,6 +350,18 @@ CREATE INDEX IF NOT EXISTS fin_inbox_status ON fin_inbox(status, created_at);
 CREATE INDEX IF NOT EXISTS fin_rule_runs_rule ON fin_rule_runs(rule_id, created_at);
 CREATE INDEX IF NOT EXISTS fin_rule_runs_action ON fin_rule_runs(action_id, created_at);
 CREATE INDEX IF NOT EXISTS fin_reconciliations_account ON fin_reconciliations(money_account_id, statement_end);
+CREATE INDEX IF NOT EXISTS fin_settlements_to ON fin_settlements(to_kind, to_id);
+CREATE INDEX IF NOT EXISTS fin_settlements_from ON fin_settlements(from_kind, from_id);
+CREATE INDEX IF NOT EXISTS fin_attachments_subject ON fin_attachments(subject_kind, subject_id);
+CREATE INDEX IF NOT EXISTS fin_bills_status ON fin_bills(status, due_date);
+CREATE INDEX IF NOT EXISTS fin_bills_pay_on ON fin_bills(status, pay_on);
+CREATE INDEX IF NOT EXISTS fin_bills_list ON fin_bills(book_id, bill_date, id);
+CREATE INDEX IF NOT EXISTS fin_bill_lines_bill ON fin_bill_lines(bill_id);
+CREATE INDEX IF NOT EXISTS fin_invoices_status ON fin_invoices(status, due_date);
+CREATE INDEX IF NOT EXISTS fin_invoices_list ON fin_invoices(book_id, invoice_date, id);
+CREATE INDEX IF NOT EXISTS fin_invoice_lines_invoice ON fin_invoice_lines(invoice_id);
+CREATE INDEX IF NOT EXISTS fin_contacts_name ON fin_contacts(book_id, name);
+CREATE INDEX IF NOT EXISTS fin_rules_kind ON fin_rules(kind, active, priority);
 """
 
 # Invariants 2 and 3 again in the database, so no statement (Finance's or anyone's) can break them. SQLite syntax: a
@@ -397,6 +421,18 @@ ADDED = (
     ("fin_inbox", "attempts", "INTEGER NOT NULL DEFAULT 0"), ("fin_inbox", "next_try_at", "TEXT"),
     ("fin_inbox", "tried_json", "TEXT NOT NULL DEFAULT '[]'"),
     ("fin_payments", "counted_json", "TEXT NOT NULL DEFAULT '[]'"),
+    # phase 2: bills, invoices, contacts, posting rules and the cash view (migration 66)
+    ("fin_entries", "basis", "TEXT NOT NULL DEFAULT 'both' CHECK (basis IN ('both','accrual'))"),
+    ("fin_bills", "terms_days", "INTEGER"), ("fin_bills", "memo", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_bills", "origin", "TEXT NOT NULL DEFAULT 'manual'"), ("fin_bills", "approved_by", "TEXT"),
+    ("fin_bills", "approved_at", "TEXT"), ("fin_bills", "schedule_json", "TEXT NOT NULL DEFAULT '{}'"),
+    ("fin_bills", "amount_paid", "BIGINT NOT NULL DEFAULT 0"), ("fin_bills", "voided_at", "TEXT"),
+    ("fin_bills", "pay_on", "TEXT"), ("fin_bill_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_invoice_lines", "line_no", "INTEGER NOT NULL DEFAULT 0"),
+    ("fin_invoices", "terms_days", "INTEGER"), ("fin_invoices", "memo", "TEXT NOT NULL DEFAULT ''"),
+    ("fin_invoices", "sent_at", "TEXT"), ("fin_invoices", "written_off", "BIGINT NOT NULL DEFAULT 0"),
+    ("fin_invoices", "voided_at", "TEXT"),
+    ("fin_contacts", "tax_id_last4", "TEXT"), ("fin_rules", "priority", "INTEGER NOT NULL DEFAULT 100"),
 )
 
 
@@ -445,4 +481,10 @@ def create(c: sqlite3.Connection) -> None:
 def phase1(c: sqlite3.Connection) -> None:
     """Cloud migration 65: phase 1's tables, columns, indexes and triggers on an install migration 64 made before
     them. The same statements as `create`, which skips whatever exists."""
+    create(c)
+
+
+def phase2(c: sqlite3.Connection) -> None:
+    """Cloud migration 66: phase 2's settlements, cash view and document columns on an install made before them. The
+    same statements as `create` again."""
     create(c)

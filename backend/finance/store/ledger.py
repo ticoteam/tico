@@ -74,6 +74,13 @@ def account_has_lines(c: sqlite3.Connection, account_id: str) -> bool:
 
 
 # ------------------------------------------------------------------------------------------------ periods
+def open_periods_before(c: sqlite3.Connection, book_id: str, day: str, most: int) -> list[Any]:
+    """Open periods that ended before `day`, oldest first (the latest `most`)."""
+    rows = c.execute("SELECT * FROM fin_periods WHERE book_id=? AND status='open' AND end_date<? "
+                     "ORDER BY end_date DESC LIMIT ?", (book_id, day, most)).fetchall()
+    return list(reversed(rows))
+
+
 def period(c: sqlite3.Connection, book_id: str, day: str) -> Any:
     return c.execute("SELECT * FROM fin_periods WHERE book_id=? AND start_date<=? AND end_date>=?",
                      (book_id, day, day)).fetchone()
