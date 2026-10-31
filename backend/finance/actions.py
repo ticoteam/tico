@@ -13,7 +13,6 @@ from dataclasses import dataclass, field, replace
 from typing import cast
 
 from . import banking, budgeting, cards, documents, gateway_sync, gating, handlers, jobs, payments, posting, runs
-from . import transfers
 from . import setup as setup_mod
 from . import rights, sync, usage
 from .context import Ctx, load
@@ -46,7 +45,7 @@ PLANNERS: dict[str, handlers.Planner] = {
     "reconcile_undo": banking.reconcile_undo,
     "connection_sync": banking.connection_sync, "connection_disconnect": banking.connection_disconnect,
     "connection_map": banking.connection_map, **cards.PLANNERS, **payments.PLANNERS, **gating.PLANNERS,
-    **documents.PLANNERS, **transfers.PLANNERS}
+    **documents.PLANNERS}
 assert set(PLANNERS) == set(K.LIVE)
 
 STATUSES = ("committed", "needs_approval", "denied", "failed", "expired", "withdrawn")
@@ -108,7 +107,8 @@ def _approval_payload(action_id: str, kind: str, payload: Mapping[str, object], 
     if kind in K.SPEND:
         # A Tico spend approval names the amount and the account it comes from (its rule 7 refuses one without).
         out["amount"] = payload.get("amount")
-        out["account"] = str(payload.get("money_account_id") or payload.get("account_id") or "bank")
+        out["account"] = str(payload.get("money_account_id") or payload.get("account_id")
+                             or payload.get("from_account") or "bank")
     return out
 
 

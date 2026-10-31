@@ -33,6 +33,7 @@ from .store import tico
 CASH_BELOW_KEY = "finance_cash_below"   # the owner's cash alert floor (minor units; 0 or unset: off)
 DIRECT_KEY = "finance_direct_send"     # the owner's company switch (§9 mode 2), off unless the owner turns it on
 METHODS = ("ach", "wire", "check")
+INTERNAL = "internal"                   # payment_create's method for a move between our own bank accounts (§5)
 MERCURY_METHOD = {"ach": "ach", "wire": "domesticWire", "check": "check"}
 SENT, FAILED = "finance.payment.sent", "finance.payment.failed"
 RETRY = (60, 300, 1800, 3600)
@@ -224,7 +225,7 @@ def known(ctx: Ctx, recipient_id: str) -> bool:
     return SK.recipient_paid(ctx.c, recipient_id)
 
 
-def _age(ctx: Ctx, stamp: object) -> int | None:
+def age_minutes(ctx: Ctx, stamp: object) -> int | None:
     if not stamp:
         return None
     then = datetime.fromisoformat(str(stamp).replace("Z", "+00:00"))
@@ -234,7 +235,11 @@ def _age(ctx: Ctx, stamp: object) -> int | None:
 
 def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """Pay a recipient from a bank account through Mercury's approval queue. `account_id` (and tags) is the line the
-    payment posts to when it settles; `obligation` (a bill or any key) allows one live payment at a time."""
+    payment posts to when it settles; `obligation` (a bill or any key) allows one live payment at a time. `method` internal is a move between two of the company's bank accounts instead
+    (transfers.plan_internal)."""
+    if V.opt_text(p, "method", 20) == INTERNAL:
+        from .transfers import plan_internal     # lazy: transfers imports this module
+        return plan_internal(ctx, who, p)
     V.only(p, ("recipient_id", "amount", "money_account_id", "memo", "obligation", "account_id", "tags", "mode",
                "purpose"))
     mode = V.choice(p, "mode", ("approval_queue", "direct"), "approval_queue")
@@ -306,7 +311,7 @@ def _facts(ctx: Ctx, rec: Any, amount: int, code: str, obligation: str, tags: Ma
             "recipient.name": str(rec["name"]), "counterparty": str(rec["name"]), "method": str(rec["method"]),
             "accounts": [code], "obligation": obligation, **{f"tags.{k}": v for k, v in tags.items()},
             "balance": bank["available_balance"] if bank["available_balance"] is not None else bank["balance"],
-            G.AGES: {"balance": _age(ctx, bank["balance_as_of"])}}
+            G.AGES: {"balance": age_minutes(ctx, bank["balance_as_of"])}}
 
 
 # Mercury's requestSendMoney purpose.simple.category values, and what each says about additionalInfo: required for a
@@ -732,7 +737,7 @@ def not_found(ctx: Ctx, pay: Any) -> None:
     there)."""
     fields: dict[str, object] = {"next_try_at": _later(ctx, 2), "updated_at": ctx.at}
     since = str(pay["unknown_since"] or ctx.at)
-    age = _age(ctx, since) or 0
+    age = age_minutes(ctx, since) or 0
     if age >= UNKNOWN_ASK_MINUTES and not pay["flagged_at"]:
         fields["flagged_at"] = ctx.at
         tico.needs_you(ctx.c, admin_person(ctx), f"Check Mercury for a {int(pay['amount']) / 100:.2f} payment",

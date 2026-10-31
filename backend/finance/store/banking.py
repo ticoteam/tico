@@ -426,6 +426,55 @@ def payment_by_key(c: sqlite3.Connection, key: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE idempotency_key=?", (key,)).fetchone()
 
 
+def settle_pair(c: sqlite3.Connection, out_feed: str, in_feed: str, at: str) -> str | None:
+    """Link the two posted legs of a move to the oldest Finance transfer between the same accounts for the same amount
+    that still waits on them (submitted, or unknown: its legs may be what made it real). Its id, or None when no
+    transfer fits: the move was made outside Finance."""
+    out = c.execute("SELECT money_account_id, amount FROM fin_feed_txns WHERE id=?", (out_feed,)).fetchone()
+    inn = c.execute("SELECT money_account_id, amount FROM fin_feed_txns WHERE id=?", (in_feed,)).fetchone()
+    if out is None or inn is None or int(out[1]) >= 0 or int(inn[1]) != -int(out[1]):
+        return None
+    row = c.execute("SELECT id FROM fin_transfers WHERE status IN ('submitted','unknown') AND from_money_account_id=? "
+                    "AND to_money_account_id=? AND amount=? ORDER BY created_at, id LIMIT 1",
+                    (str(out[0]), str(inn[0]), int(inn[1]))).fetchone()
+    if row is None:
+        return None
+    _settle_transfer(c, str(row[0]), out_feed, in_feed, at)
+    return str(row[0])
+
+
+def settle_legs(c: sqlite3.Connection, transfer_id: str, at: str, kinds: Sequence[str]) -> bool:
+    """Link a transfer to its legs when both are already posted and not yet linked (the feed came first)."""
+    t = c.execute("SELECT from_money_account_id, to_money_account_id, amount, status FROM fin_transfers WHERE id=?",
+                  (transfer_id,)).fetchone()
+    if t is None or str(t[3]) not in ("submitted", "unknown"):
+        return False
+
+    def leg(money: str, amount: int) -> str | None:
+        found = c.execute(
+            f"SELECT id FROM fin_feed_txns f WHERE money_account_id=? AND amount=? AND kind IN ({_marks(kinds)}) AND "
+            "status='posted' AND NOT EXISTS (SELECT 1 FROM fin_transfers x WHERE x.from_feed_id=f.id OR x.to_feed_id=f.id)"
+            " ORDER BY txn_date, id LIMIT 1", [money, amount, *kinds]).fetchone()
+        return str(found[0]) if found else None
+    amount = int(t[2])
+    out, inn = leg(str(t[0]), -amount), leg(str(t[1]), amount)
+    if out is None or inn is None:
+        return False
+    _settle_transfer(c, transfer_id, out, inn, at)
+    return True
+
+
+def unlink_transfers(c: sqlite3.Connection, feed_id: str, at: str) -> None:
+    """A leg went back to waiting (its entry was reversed): a transfer it settled waits for both legs again."""
+    c.execute("UPDATE fin_transfers SET status='submitted', from_feed_id=NULL, to_feed_id=NULL, settled_at=NULL, "
+              "updated_at=? WHERE status='posted' AND (from_feed_id=? OR to_feed_id=?)", (at, feed_id, feed_id))
+
+
+def _settle_transfer(c: sqlite3.Connection, transfer_id: str, out_feed: str, in_feed: str, at: str) -> None:
+    update(c, "fin_transfers", transfer_id, {"status": "posted", "from_feed_id": out_feed, "to_feed_id": in_feed,
+                                             "settled_at": at, "updated_at": at})
+
+
 def payment_by_request(c: sqlite3.Connection, request_id: str) -> Any:
     return c.execute("SELECT * FROM fin_payments WHERE provider_request_id=?", (request_id,)).fetchone()
 

@@ -30,7 +30,7 @@ would happen and changes nothing; it needs no key.
 
 A vendor takes `seats` (a whole number) and `renewal_on` (`YYYY-MM-DD`; empty clears it) on `contact_update`. Its renewal date raises `finance.vendor.renewal_due` 30 and 7 days before it, once per date and stage. Customers refuse both.
 
-`transfer_create` moves money between two of the company's own bank accounts on one Mercury connection: `from_account` and `to_account` (money account ids), `amount` (cents), `memo`. It needs finance.pay and payments on for that connection. It is not money out, so the default gates allow it; a company rule can ask for approval. Mercury gets it once, under its own key. An unknown or refused result is never sent again: a finance admin is asked to check Mercury. Both legs post as one transfer and move no P&L.
+An internal transfer is `payment_create` with `method: "internal"`, `from_account` and `to_account` (the company's own bank accounts on one Mercury connection) and `amount` (cents), with an optional `memo`. It takes the payment gates: over $1,000 asks the owner (§6.4 rule 2), and a company rule can ask for more. The new-recipient rule never applies, since an own account is never a new recipient. There is no budget hold: a move between our accounts is not an expense. Mercury gets it once, under its own key (POST /transfer). An unknown or refused result is never sent again, and a finance admin is asked to check Mercury. Both legs post as one transfer with no P&L effect; the transfer shows `posted` once both legs are in the feed.
 
 ```
 hub finance act categorize --payload '{"feed_id":"fd_1","account_id":"acc_6100"}' --operation-id categorize:fd_1

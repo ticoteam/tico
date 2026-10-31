@@ -335,8 +335,9 @@ CREATE TABLE IF NOT EXISTS fin_transfers (
   to_money_account_id TEXT NOT NULL REFERENCES fin_money_accounts(id),
   amount BIGINT NOT NULL CHECK (amount > 0), currency TEXT NOT NULL, memo TEXT NOT NULL DEFAULT '',
   idempotency_key TEXT NOT NULL UNIQUE,
-  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed')),
-  provider_txn_id TEXT, last_error TEXT, created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
+  status TEXT NOT NULL DEFAULT 'queued' CHECK (status IN ('queued','submitted','unknown','failed','posted')),
+  provider_txn_id TEXT, last_error TEXT, from_feed_id TEXT, to_feed_id TEXT, settled_at TEXT,
+  created_at TEXT NOT NULL, created_by TEXT NOT NULL, updated_at TEXT,
   CHECK (from_money_account_id <> to_money_account_id));
 """
 

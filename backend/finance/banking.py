@@ -602,6 +602,7 @@ def _unpost(ctx: Ctx, row: Any, memo: str) -> None:
             posting.reverse(ctx, str(e["id"]), day=open_day(ctx, str(e["entry_date"])), memo=memo, by=SYSTEM)
     for r in SK.rows_of_entry(ctx.c, entry_id):
         SK.update(ctx.c, "fin_feed_txns", str(r["id"]), {"status": "new", "entry_id": None, "updated_at": ctx.at})
+        SK.unlink_transfers(ctx.c, str(r["id"]), ctx.at)
     # A bill or invoice it paid is owed again.
     documents.feed_gone(ctx, str(row["id"]), [str(e["id"]) for e in [entry, *later] if e is not None])
 
@@ -646,6 +647,8 @@ def _transfer(ctx: Ctx, row: Any, money: Any, other: Any) -> None:
         "memo": f"Transfer: {money['name']} / {other_money['name']}"[:200],
         "lines": [feed_line(here.id, amount), feed_line(there.id, -amount)]}, at=ctx.at)
     mark_posted(ctx, [str(row["id"]), str(other["id"])], str(done["entry_id"]))
+    out_leg, in_leg = (row, other) if amount < 0 else (other, row)
+    SK.settle_pair(ctx.c, str(out_leg["id"]), str(in_leg["id"]), ctx.at)   # a Finance transfer, if one fits
 
 
 # ------------------------------------------------------------------------------------------------ categorize
