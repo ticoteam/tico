@@ -27,6 +27,8 @@ def run(*, host="127.0.0.1", port=8765, settings=None, log_level="info"):
         env={**os.environ, "TICO_SCREEN_RELAY_KEY": key, "TICO_SCREEN_RELAY_BIND": "127.0.0.1:0",
              "TICO_TRUSTED_PROXIES": ','.join(settings.trusted_proxies) if settings else
                  os.environ.get('TICO_TRUSTED_PROXIES') or '127.0.0.1/32,::1/128',
+             "TICO_CLIENT_IP_HEADER": settings.client_ip_header if settings else
+                 os.environ.get('TICO_CLIENT_IP_HEADER') or 'x-forwarded-for',
              "TICO_SCREEN_PUBLIC_BIND": bind, "TICO_SCREEN_PYTHON_URL": origin})
     lines = queue.Queue()
     def output():
