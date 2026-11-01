@@ -143,7 +143,6 @@ th .gr-track:empty{width:8px;height:8px;padding:0;border-radius:2px}
 .gr-grid thead th{font-size:var(--t-sm);font-weight:600;min-width:200px;background:var(--surface2)}
 .gr-grid thead th:first-child{min-width:180px}
 .gr-grid tbody th{font-size:var(--t-sm);font-weight:500;width:240px;min-width:200px;white-space:normal;text-transform:none;letter-spacing:normal;line-height:1.35;color:var(--text)}
-.gr-grid tbody th>span{display:-webkit-box;-webkit-line-clamp:4;-webkit-box-orient:vertical;overflow:hidden}
 .gr-grid td{min-width:200px}
 .gr-grid td .gr-ic+.gr-ic{margin-top:6px}
 
