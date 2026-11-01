@@ -311,7 +311,7 @@ fn parts(attempt: &Value, names: &Names, after: Option<&str>, resumed: bool, rep
             let at = if full.get("checkpoint_at").is_some() { py_str(&full["checkpoint_at"]) } else { "None".into() };
             put(&mut lines, Part::Turn, format!("Where this task stood after its last turn ({at}):\n{}", s(&full["checkpoint"])));
         }
-        put(&mut lines, Part::Task, "Check this task’s worktree links before code work. If detail_json has setup_pending=true, run `hub task worktree setup <repo>` in this turn; restored worktrees need setup.".into());
+        put(&mut lines, Part::Task, "Check this task’s worktree links before code work. If its detail has setup_pending=true, run `hub task worktree setup <repo>` in this turn; restored worktrees need setup.".into());
         let requester = s(&full["requester"]);
         if !requester.is_empty() {
             put(&mut lines, Part::Task, format!("This task was requested by {requester}."));

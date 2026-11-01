@@ -661,7 +661,7 @@ CREATE INDEX IF NOT EXISTS fin_feed_txns_stripe_source ON fin_feed_txns(money_ac
 def stripe(c: sqlite3.Connection) -> None:
     """Cloud migration 69: the indexes the Stripe lookups search by, the charge link and the source id each Stripe row
     carries in its raw json (a refund's charge total is one of them). Idempotent. They live here, not in `create`,
-    so an install from before 69 has no index on raw_json."""
+    so an install from before 69 has no index on raw."""
     for statement in statements(STRIPE_INDEXES):
         c.execute(statement)
 

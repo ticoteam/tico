@@ -1087,7 +1087,7 @@ def test_shared_room_membership_for_every_bot_is_one_pass_and_matches_each_bot(a
     with store.read() as c:
         conn = S.connect(store.settings.db_path, c, auth, who, trace=statements.append)
         try:
-            access_reads = sum("access_json FROM bot_config" in text for text in statements)
+            access_reads = sum("access FROM bot_config" in text for text in statements)
         finally:
             conn.close()
     assert access_reads <= 1, access_reads

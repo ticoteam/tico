@@ -70,7 +70,7 @@ def as_map(value: object) -> dict[str, object]:
 
 
 def _settings(c: sqlite3.Connection, cid: str) -> dict[str, object]:
-    """A connection's settings_json as a dict; missing or unreadable settings read as empty."""
+    """A connection's settings as a dict; missing or unreadable settings read as empty."""
     row = c.execute("SELECT settings FROM fin_connections WHERE id=?", (cid,)).fetchone()
     try:
         value: object = json.loads(row[0]) if row and row[0] else {}

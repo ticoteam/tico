@@ -144,7 +144,7 @@ class Sources:
             return set()
         if len(seen) >= 100:
             raise Problem("privacy", "Meeting provenance is too deep to authorize", 403)
-        refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
+        refs = H._json(message.get("refs"), {}) or {}
         if not isinstance(refs, dict):
             raise Problem("privacy", "Meeting provenance cannot be authorized", 403)
         cache_key = (mid, include_run, message.get("conversation_id"),

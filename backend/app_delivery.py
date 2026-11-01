@@ -1,7 +1,7 @@
 """A synced bot answered through its platform's desktop app on one of its person's computers.
 
 A Grok Bot lives in Grok and reaches Tico only through a daily sync (backend/external_sync.py). Its person may
-choose one of their own computers whose runner drives the Grok Mac app: `config_json.app_delivery =
+choose one of their own computers whose runner drives the Grok Mac app: `config.app_delivery =
 {"computer": <runner id>, "app": "grok"}`, set through the bot's definition (settings_admin.update_bot). While
 that computer is registered:
 

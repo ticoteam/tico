@@ -108,7 +108,7 @@ def local_name(name):
 class Provider:
     id: str             # the harness and the `provider` a sync names
     label: str          # what the pages call it
-    key: str            # where its record sits in config_json, and its message ids' prefix
+    key: str            # where its record sits in config, and its message ids' prefix
     maker: str          # whose model it runs on, for the presence line
     single: bool        # one bot per person: Dots is a single always-on agent
     local_name: object = None

@@ -387,7 +387,7 @@ def replan(c, bot):
 def classify(message):
     """Why a message woke its bot, for the run record: (class, words). The hold never reads this; it reads only the
     keeper's refs, so these labels are a description, not a permission."""
-    refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
+    refs = H._json(message.get("refs"), {}) or {}
     sender, body, kind = str(message.get("from_actor") or ""), str(message.get("body") or ""), message.get("kind")
     if sender.startswith("human:"):
         return ("question" if kind in ("ask", "question") else "person"), "A person's message"

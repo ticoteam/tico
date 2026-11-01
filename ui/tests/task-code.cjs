@@ -31,7 +31,7 @@ function fixtures() {
   const parent = task('t-checkout', {title: 'Ship the new checkout', pr_state: 'failing',
     // As backend/hubdb.py children_summaries sends it: total/done over the whole tree, direct_* over the children.
     children_summary: {total: 10, open: 6, done: 4, prs_total: 9, prs_merged: 7, direct_total: 4, direct_done: 1},
-    // Worktree rows as backend/worktrees.py writes them: url worktree:<hex>, the heartbeat's report in detail_json.
+    // Worktree rows as backend/worktrees.py writes them: url worktree:<hex>, the heartbeat's report in detail.
     links: [
       {id: 'w1', kind: 'worktree', url: 'worktree:9f2c1a', title: 'acme/web worktree', repo: 'acme/web', branch: 'tico/t-check-checkout',
        state: 'present', path: 'tasks/t-check/eng__web', computer_id: 'r1', number: null, checks: null,
@@ -136,10 +136,10 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (p === '/api/v2/tasks/labels') return json({labels: [], tags: []});
     if (p === '/api/v2/tasks' && method === 'GET') {
       const owner = url.searchParams.get('owner');
-      // List rows leave out the links' detail_json (and pr_sha), as backend/app.py lists do; the detail has them.
+      // List rows leave out the links' detail (and pr_sha), as backend/app.py lists do; the detail has them.
       const requester = url.searchParams.get('requester');
       const rows = (owner ? data.tasks.filter(t => t.owner === (owner.includes(':') ? owner : 'bot:' + owner)) : requester ? data.tasks.filter(t => t.requester === 'bot:' + requester) : data.tasks)
-        .map(t => ({...t, links: (t.links || []).map(({detail: detail_json, pr_sha, ...l}) => l)}));
+        .map(t => ({...t, links: (t.links || []).map(({detail, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
     }
     // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.

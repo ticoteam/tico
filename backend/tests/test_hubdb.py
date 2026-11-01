@@ -309,7 +309,7 @@ class Rule5Tasks(HubCase):
         [on_parent] = [m for m in H.messages(self.conn, parent["conversation_id"])
                        if m["to_actor"] == ANALYTICS and "Ana Rivera marked this subtask done: Pick the hero image" in m["body"]]
         self.assertIn("Use B.", on_parent["body"])
-        quiet = {m["to_actor"]: bool(json.loads(m["refs"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
+        quiet = {m["to_actor"]: bool(m["refs"].get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
                  if m["body"].startswith("Ana Rivera marked this done:")}
         self.assertEqual(quiet, {CMO: True, SEO: False, COO: False}, "tasks-only bots hear it quietly")
         # A private task tells only its parties: the parent's owner cannot read it.
@@ -322,13 +322,13 @@ class Rule5Tasks(HubCase):
         row = H.task_create(self.conn, ANA, "Ship the overview", "x", SEO)
         H.task_update(self.conn, ANA, row["id"], status="done")
         [told] = self.finished(row, SEO)
-        self.assertTrue(json.loads(told["refs"]).get("quiet"), "no run for a finished task with no note")
+        self.assertTrue(told["refs"].get("quiet"), "no run for a finished task with no note")
 
     def test_a_person_closing_work_not_started_with_nothing_said_does_not_wake_its_bot(self):
         quiet, noted = (H.task_create(self.conn, ANA, title, "x", SEO) for title in ("Old idea", "Other idea"))
         H.task_close(self.conn, ANA, quiet["id"])
         H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
-        refs = {row["id"]: [json.loads(m["refs"]) for m in H.messages(self.conn, row["conversation_id"])
+        refs = {row["id"]: [m["refs"] for m in H.messages(self.conn, row["conversation_id"])
                             if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
         self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
         self.assertFalse(refs[noted["id"]][0].get("quiet"), "a person's close note can change what the bot does next")
@@ -347,7 +347,7 @@ class Rule5Tasks(HubCase):
                                                      "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
         self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
         self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
-        self.assertFalse(json.loads(said["refs"]).get("quiet"), "it wakes the asker")
+        self.assertFalse(said["refs"].get("quiet"), "it wakes the asker")
 
 # ----------------------------------------------------------------------------- rule 6
 class Rule6Approvals(HubCase):
@@ -476,7 +476,7 @@ class Rule4Unsolicited(HubCase):
                                   (chat,)).fetchone()[0]
         self.assertEqual(first, H.KEEPER, "the task's notice opened the chat")
         reply = H.say(self.conn, CMO, ANA, "84.", conversation_id=chat)
-        self.assertNotIn("unsolicited", json.loads(reply["refs"]))
+        self.assertNotIn("unsolicited", reply["refs"])
 
     def test_a_bot_writing_in_a_chat_it_opened_is_unsolicited_even_after_a_new_task_notice(self):
         chat = H.open_conversation(self.conn, CMO, [CMO, ANA], kind="chat")["id"]
@@ -484,7 +484,7 @@ class Rule4Unsolicited(HubCase):
         senders = [r[0] for r in self.conn.execute("SELECT from_actor FROM messages WHERE conversation_id=?", (chat,))]
         self.assertEqual(senders, [H.KEEPER], "only the task's notice is in the chat")
         sent = H.say(self.conn, CMO, ANA, "Pick the launch date, or tell me to hold.", conversation_id=chat)
-        self.assertTrue(json.loads(sent["refs"]).get("unsolicited"), "the bot opened it, so the person asked nothing")
+        self.assertTrue(sent["refs"].get("unsolicited"), "the bot opened it, so the person asked nothing")
 
 # ----------------------------------------------------------------------------- rule 8
 class Rule8Counting(HubCase):

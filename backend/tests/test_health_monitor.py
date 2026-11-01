@@ -498,7 +498,7 @@ def test_a_bots_own_fallback_still_counts_with_company_fallback_off(environment)
 
 
 def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
-    """A finished turn on `runner_id` with the runner's result (backend/execution.py stores it as result_json)."""
+    """A finished turn on `runner_id` with the runner's result (backend/execution.py stores it as result)."""
     with api.app.state.store.transaction() as c:
         at = H.shift(H.now(), minutes=-minutes_ago)
         mid = "m-" + H.new_id()

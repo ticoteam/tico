@@ -541,7 +541,7 @@ def test_tag_list_reads_a_fixed_number_of_statements_and_hides_tags_only_on_priv
 
 def test_tag_attach_events_are_read_from_a_covering_partial_index(api):
     """The tag list reads every tag's attach events with one IN(...) over events. Those rows are a sliver of a table
-    that holds millions of events, so the statement must seek a small covering index (target, detail_json) for
+    that holds millions of events, so the statement must seek a small covering index (target, detail) for
     action='tag.attach', not the general target/action index that fetches each event row from the big table."""
     with api.app.state.store.read() as c:
         plan = " ".join(row[3] for row in c.execute(

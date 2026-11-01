@@ -50,7 +50,7 @@ def test_migration_65_adds_phase_1_to_an_install_from_64(store):
     with store.transaction() as c:
         c.execute("DELETE FROM cloud_migrations WHERE version=65")
         c.execute("DROP TABLE fin_payments")
-        # Migration 69 adds the Stripe indexes on raw_json, which an install from 64 does not have; SQLite will not
+        # Migration 69 adds the Stripe indexes on raw, which an install from 64 does not have; SQLite will not
         # drop a column an index names.
         c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_link")
         c.execute("DROP INDEX IF EXISTS fin_feed_txns_stripe_source")

@@ -554,7 +554,7 @@ def sweep_tokens(store, now=None, batch=5000, most=DELTA_SWEEP_MAX):
     transactions like `sweep_deltas`; returns the count.
 
     Money and usage never come from these rows: a run's totals are its turns row (input_tokens, cached_tokens,
-    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result_json. The rows go only
+    output_tokens, est_cost_usd, written by turn_finish), turn_usage_segments and attempts.result. The rows go only
     once that turn is finished with its totals written, and no job of the run is 'uncertain': auto_reconcile's hop_failed
     and review_jobs read them there. Attempts are walked in creation order from the mark 'tokens-sweep-mark', as
     sweep_deltas does; one still unfinished when the walk passes it keeps its rows."""

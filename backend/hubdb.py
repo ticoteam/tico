@@ -1050,6 +1050,10 @@ def is_human(actor):
 
 
 def _json(value, default=None):
+    """A stored JSON column as a value. A row a caller already decoded holds the value itself under the column's
+    name (row['refs'] is the dict), so a dict or list passes through."""
+    if isinstance(value, (dict, list)):
+        return value
     if value in (None, ""):
         return default
     try:
@@ -1359,7 +1363,7 @@ def migrate(conn, adopt_legacy=False):
             conn.execute("CREATE INDEX IF NOT EXISTS tasks_requester_status_cover ON tasks("
                          "requester, status, id, owner, private, guest, waiting_on)")
     # privacy_index.conversation_tasks is `SELECT id, task_id FROM conversations`, on every task list.
-    # The conversation row holds participants_json, and the primary key scan reads those pages.
+    # The conversation row holds participants, and the primary key scan reads those pages.
     conn.execute("CREATE INDEX IF NOT EXISTS conversations_id_task ON conversations(id, task_id)")
     # Status and provenance reads stay indexed as question and task history grows.
     conn.execute("CREATE INDEX IF NOT EXISTS messages_reply_kind ON messages(in_reply_to, kind)")
@@ -3054,7 +3058,7 @@ def _close_open_asks(conn, actor, target, kind, msg):
     A shared conversation alone does not identify which task a person is answering.
     A direct reply takes precedence over task context so it cannot close sibling asks.
     """
-    refs = _json(msg.get("refs"), {}) or msg.get("refs") or {}
+    refs = _json(msg.get("refs"), {}) or {}
     if (kind not in ("say", "answer") or not is_human(actor) or not is_bot(target)
             or refs.get("clarify") or refs.get("decision_open")):
         return      # asking for a clearer question (backend/clarify_asks.py) is not an answer
@@ -3165,7 +3169,7 @@ def _held_queue_drains(actor, target, refs_json):
     if actor == target:
         return False                       # store.QUEUE_TRIGGER queues no job for a bot's message to itself
     try:
-        refs = json.loads(refs_json or "{}")
+        refs = refs_json if isinstance(refs_json, dict) else json.loads(refs_json or "{}")
     except ValueError:
         return True
     if not isinstance(refs, dict):
@@ -3217,6 +3221,8 @@ def _held_queue_admit(conn, actor, target, body, refs_json, *, replacing=None):
     immediately before insertion. Permission/contact checks belong to the caller and still run first.
     System notices, people, active recipients and recovery controls retain their existing behavior.
     """
+    if not isinstance(refs_json, str):
+        refs_json = _dump(refs_json) or "{}"   # a message view holds refs decoded; charge its stored text
     if not (is_bot(actor) and is_bot(target)) or not _held_queue_drains(actor, target, refs_json):
         return
     state = (bot(conn, actor_id(target)) or {}).get("state")
@@ -3382,7 +3388,7 @@ def _ask_depth(conn, actor, refs, in_reply_to):
 
 def has_pick_options(msg):
     """Questions offering only free text keep the ordinary answer protocol."""
-    refs = msg.get("refs") or _json(msg.get("refs"), {}) or {}
+    refs = _json(msg.get("refs"), {}) or {}
     return any(q.get("options") for q in refs.get("questions", []))
 
 

@@ -248,7 +248,7 @@ class ReadIndex:
         if len(seen) >= 100:
             raise ValueError("Unsupported provenance depth")
         seen.add(mid)
-        refs = msg.get("refs") or H._json(msg.get("refs"), {}) or {}
+        refs = H._json(msg.get("refs"), {}) or {}
         if not isinstance(refs, dict):
             raise ValueError("Unsupported message provenance")
         ids = self.references(refs)
@@ -275,6 +275,8 @@ class ReadIndex:
         return self.sources({"id": mid, "conversation_id": cid, "refs": refs, "in_reply_to": reply})
 
     def message(self, mid, cid, refs, reply):
+        if isinstance(refs, (dict, list)):
+            refs = H._dump(refs)                # a message view holds refs decoded; the index reads stored text
         try:
             # Most history rows have no inherited provenance. Validate their
             # room once per request, retaining unknown/deleted task denial.
@@ -296,6 +298,8 @@ class ReadIndex:
             return False
 
     def possible_content(self, refs):
+        if isinstance(refs, (dict, list)):
+            refs = H._dump(refs)
         if "\\" in refs or "live_meeting" in refs:
             return True
         if self.uuid_denied:

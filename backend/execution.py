@@ -1590,7 +1590,7 @@ def _github_app(c):
 def bot_repository(c, settings, bot, rows=None, app=None):
     """`owner/name` of a bot's GitHub repository, resolved the way the token route resolves it, or "".
     The runner clones and publishes this one (runner-rs/src/fetchrepo.rs). `rows(slug)` (its
-    bot_config row with config_json and repo) and `app` ((the github_app row,)) when read already."""
+    bot_config row with config and repo) and `app` ((the github_app row,)) when read already."""
     from .github_app import repo_of
     from .shared_bots import _json, declared, source_of
     if rows is None:

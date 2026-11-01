@@ -77,7 +77,7 @@ def ensure(c):
     c.execute("CREATE INDEX IF NOT EXISTS task_trash_assets_blob ON task_trash_assets(blob_id)")
     # A task deleted before this table existed has its attachments only in its trash row. Only the rows that
     # mention attachments and have none listed are parsed: every delete runs this, and parsing all of the trash's
-    # rows_json grows with the trash.
+    # rows grows with the trash.
     c.execute("INSERT OR IGNORE INTO task_trash_assets(task_id, blob_id) "
               "SELECT t.task_id, json_extract(a.value, '$.blob_id') FROM task_trash t, "
               "json_each(t.rows, '$.rows.task_assets') a "
@@ -200,7 +200,7 @@ def _refusals(c, ids, conversations, messages):
         refusals["delegations of another task"] = len(pointing)
     # A bot not yet woken about the task (its notice waits in a shared room) would wake to a missing task.
     # CROSS JOIN keeps jobs the outer loop: each job reads its message by primary key, where the plain JOIN
-    # scanned every message to read its refs_json.
+    # scanned every message to read its refs.
     waking = _column(c, "SELECT j.id FROM jobs j CROSS JOIN messages m ON m.id=j.message_id "
                         "WHERE j.state NOT IN ('completed','canceled','failed') "
                         "AND json_extract(m.refs,'$.task') IN ({})", ids)

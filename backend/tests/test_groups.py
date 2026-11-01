@@ -136,7 +136,7 @@ def test_teams_org_groups_and_person_teams_become_groups_and_no_bot_changes_grou
         assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='coach'").fetchone()[0])["team"] == ""
         assert c.execute("SELECT team FROM bot_config WHERE bot='design'").fetchone()[0] == "product"
         assert P.by_team(Groups._roster(c))["success-team"] == ["ben"]
-        assert json.loads(H.human(c, "ben")["teams"]) == ["success-team"]
+        assert H.human(c, "ben")["teams"] == ["success-team"]
     # Idempotent: again changes nothing, even when the flag is cleared.
     with api.app.state.store.transaction() as c:
         assert Groups.migrate(c, api.app.state.store.settings) is False

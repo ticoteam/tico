@@ -1,4 +1,4 @@
-"""Runner capability flags share one parsed frozenset per capabilities_json."""
+"""Runner capability flags share one parsed frozenset per capabilities value."""
 
 from backend import execution
 

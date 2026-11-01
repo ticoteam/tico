@@ -104,7 +104,7 @@ def message_tasks(c, message, seen=None, include_run=True, current=False):
     row = dict(message)
     if row.get("id") and not current:
         row = H.message(c, row["id"], include_deleted=True) or row
-    refs = row.get("refs") or H._json(row.get("refs"), {}) or {}
+    refs = H._json(row.get("refs"), {}) or {}
     run = refs.get("run") if isinstance(refs, dict) else None
     has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
     key = ("message_tasks", row.get("id"), bool(include_run and has_run), row.get("conversation_id"),
@@ -131,7 +131,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
     # Only complete root traversals are reusable. A nested traversal can skip ancestors
     # already visited by its caller, so caching that partial result would lose provenance.
     values = read_cache.cache(c)
-    refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
+    refs = H._json(message.get("refs"), {}) or {}
     run = refs.get("run") if isinstance(refs, dict) else None
     has_run = isinstance(refs, dict) and (refs.get("turn_id") or (run.get("attempt_id") if isinstance(run, dict) else None))
     cache_key = ("message_tasks", mid, bool(include_run and has_run), message.get("conversation_id"),
@@ -145,7 +145,7 @@ def _message_tasks(c, message, seen=None, include_run=True, current=False):
         return set(cached[0])
     seen.add(mid)
     conv = H.conversation(c, message["conversation_id"]) if message.get("conversation_id") else None
-    refs = message.get("refs") or H._json(message.get("refs"), {}) or {}
+    refs = H._json(message.get("refs"), {}) or {}
     if not isinstance(refs, dict):
         raise Problem("privacy", "Message provenance cannot be authorized", 403)
     ids = references(c, refs)
@@ -212,7 +212,7 @@ def carried_tasks(c, aid):
         refs = H._json(row.get("refs"), {}) or {}
         if isinstance(refs, dict) and "reconcile" in refs:
             refs = {key: value for key, value in refs.items() if key != "reconcile"}
-            row = {**row, "refs": refs, "refs": json.dumps(refs)}
+            row = {**row, "refs": refs}
         ids.update(_message_tasks(c, row, include_run=False, current=True))
     ids.update(r[0] for r in c.execute("SELECT id FROM tasks WHERE carried_by=?", (aid,)))
     for row in c.execute("SELECT detail FROM events WHERE action IN (" + RUN_TASK_EVENTS_SQL + ") AND target=?",
@@ -317,7 +317,7 @@ def prime_messages(c, messages):
     and answer, their rooms and meeting provenance, and the runs behind them together, so a long task's comments are
     not a few queries per comment."""
     messages = [dict(m) for m in messages]
-    refs = [m.get("refs") or H._json(m.get("refs"), {}) or {} for m in messages]
+    refs = [H._json(m.get("refs"), {}) or {} for m in messages]
     # The walks read each message's parents by id, and on a long task those are mostly the page's own messages,
     # given here as views: they are read as stored with the rest of their ancestry.
     parents = set().union(*(_parent_ids(m, r) for m, r in zip(messages, refs))) if messages else set()

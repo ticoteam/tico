@@ -129,7 +129,7 @@ def drafts(c: sqlite3.Connection, book_id: str, most: int) -> list[Any]:
 
 def scheduled_due(c: sqlite3.Connection, book_id: str, day: str, most: int = 200) -> list[Any]:
     """Scheduled bills whose payment day has come and whose payment this schedule has not asked for yet (a request
-    is recorded in schedule_json as its action id; a new schedule starts without one)."""
+    is recorded in schedule as its action id; a new schedule starts without one)."""
     return c.execute("SELECT * FROM fin_bills WHERE book_id=? AND status='scheduled' AND pay_on<=? AND "
                      "json_extract(schedule, '$.action_id') IS NULL ORDER BY pay_on, id LIMIT ?",
                      (book_id, day, most)).fetchall()

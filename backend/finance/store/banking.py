@@ -928,7 +928,7 @@ def stripe_refunded(c: sqlite3.Connection, money_account_id: str, kinds: Sequenc
 
 def stripe_given(c: sqlite3.Connection, money_account_id: str, kinds: Sequence[str], link: str) -> dict[str, int]:
     """What the posted refunds, disputes and returned refunds of one charge gave back to each settlement (settlement id
-    to cents; a restore is negative). Each refund keeps its shares in raw_json.gave."""
+    to cents; a restore is negative). Each refund keeps its shares in raw.gave."""
     rows = c.execute("SELECT j.key, COALESCE(SUM(j.value), 0) FROM fin_feed_txns f, json_each(f.raw, '$.gave') j "
                      f"WHERE f.money_account_id=? AND f.kind IN ({_marks(kinds)}) AND "
                      "json_extract(f.raw, '$.link')=? AND f.status='posted' AND f.entry_id IS NOT NULL "

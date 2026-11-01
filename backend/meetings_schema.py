@@ -113,7 +113,7 @@ CREATE INDEX IF NOT EXISTS recording_transcripts_meeting ON recording_transcript
 """
 
 # Live, text-only meetings have their own append-only sequence and replay cursor. Their bot
-# membership is deliberately separate from bot_config.access_json: joining one meeting never
+# membership is deliberately separate from bot_config.access: joining one meeting never
 # changes a bot's standing company permissions.
 LIVE_MEETINGS_SCHEMA = """
 CREATE TABLE IF NOT EXISTS live_meetings (

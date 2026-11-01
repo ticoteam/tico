@@ -40,7 +40,7 @@ Assigned task:
 Where this task stood after its last turn (None):
 half done
 
-Check this task’s worktree links before code work. If detail_json has setup_pending=true, run `hub task worktree setup <repo>` in this turn; restored worktrees need setup.
+Check this task’s worktree links before code work. If its detail has setup_pending=true, run `hub task worktree setup <repo>` in this turn; restored worktrees need setup.
 
 This task was requested by human:ana@acme.test.
 

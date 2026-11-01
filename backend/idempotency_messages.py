@@ -67,7 +67,7 @@ def ensure(conn):
 
 
 def quoting(conn, message_id):
-    """(rowid, response_json) of every stored answer that quotes `message_id`, by index; None until the backfill has
+    """(rowid, response) of every stored answer that quotes `message_id`, by index; None until the backfill has
     finished, when only reading every answer finds them all."""
     if not _get(conn, READY):
         return None
