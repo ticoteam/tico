@@ -2,8 +2,8 @@
 
 Every change writes one row with who made it, the object it changed (`<kind>:<id>`, e.g. `task_cap:<id>`,
 `automation:<id>`) and the whole object before and after (null when created or deleted), in the same transaction as
-the change, so a change without its row cannot exist. Rows are never edited or pruned. The table is migration 0001
-(backend/migrations).
+the change, so a change without its row cannot exist. Rows are never edited or pruned: the table is migration 0001 and
+its append-only triggers are migration 0010 (backend/migrations).
 """
 import json
 

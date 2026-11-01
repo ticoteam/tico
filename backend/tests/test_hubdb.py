@@ -108,7 +108,7 @@ class Schema(HubCase):
         self.assertLessEqual({"messages_to_delivered", "messages_conversation",
                               "messages_reply_kind", "messages_from_kind", "tasks_carried_by",
                               "messages_pending_conversation", "bot_file_versions_blob_media",
-                              "tasks_owner_status", "tasks_requester_status", "events_ts"},
+                              "tasks_owner_status_cover", "tasks_requester_status_cover", "events_ts"},
                              indexes)
 
     def test_existing_database_gains_reply_and_carried_task_indexes(self):

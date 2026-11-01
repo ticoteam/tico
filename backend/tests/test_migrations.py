@@ -113,6 +113,25 @@ def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
         assert "google_connects_oauth_state" in indexes and "google_connects_state" not in indexes
 
 
+def test_an_existing_database_loses_the_redundant_task_indexes_once(tmp_path):
+    """Migration 0011 drops the three task indexes that no read uses; the covering ones it keeps stay, and booting again
+    leaves the database as it is."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("CREATE INDEX tasks_owner_status ON tasks(owner, status)")
+        c.execute("CREATE INDEX tasks_requester_status ON tasks(requester, status)")
+        c.execute("CREATE INDEX tasks_private ON tasks(id) WHERE private IS NOT 0")
+        c.execute("DELETE FROM schema_migrations WHERE version='0011_drop_redundant_task_indexes'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        indexes = {row[0] for row in c.execute("SELECT name FROM sqlite_master WHERE type='index'")}
+        assert not {"tasks_owner_status", "tasks_requester_status", "tasks_private"} & indexes
+        assert {"tasks_owner_status_cover", "tasks_requester_status_cover", "tasks_private_parties"} <= indexes
+    first = snapshot(path)
+    boot(path)
+    assert snapshot(path) == first
+
+
 FAMILY = ("CREATE TABLE parent(id TEXT PRIMARY KEY, name TEXT);\n"
           "CREATE TABLE child(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id) ON DELETE CASCADE);\n"
           "INSERT INTO parent VALUES('p1','one');\nINSERT INTO child VALUES('c1','p1');\n")

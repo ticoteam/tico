@@ -119,7 +119,6 @@ def test_cloud_upgrade_classifies_legacy_identity_and_keeps_files_intact(api):
         for (name,) in c.execute("SELECT name FROM sqlite_master WHERE type='trigger' AND "
                                  "(name LIKE 'changes_%' OR name LIKE 'row_clock_parties_%')").fetchall():
             c.execute('DROP TRIGGER ' + name)
-        c.execute('DROP INDEX IF EXISTS tasks_private')
         c.execute('DROP INDEX IF EXISTS tasks_private_parties')
         c.execute('DROP INDEX IF EXISTS tasks_private_status')
         c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
@@ -202,7 +201,6 @@ def test_native_hub_upgrade_from_23_is_atomic_and_preserves_tasks_messages(tmp_p
     orphan = H.task_create(c, 'human:ana', 'Review orphan work', 'Review it.', 'human:ben', lint=False)
     comment = H.task_comment(c, 'human:ana', orphan['id'], 'Preserved tracked comment.', wake=False)
     c.execute("UPDATE tasks SET requester='human:missing' WHERE id=?", (orphan['id'],))
-    c.execute('DROP INDEX IF EXISTS tasks_private')
     c.execute('DROP INDEX IF EXISTS tasks_private_parties')
     c.execute('DROP INDEX IF EXISTS tasks_private_status')
     c.execute('DROP INDEX IF EXISTS tasks_queue_cover')
