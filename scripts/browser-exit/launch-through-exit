@@ -1,0 +1,26 @@
+#!/bin/sh
+# Starts the real browser named in $1 through the bot's browser exit (runner-rs/src/browser_exit.rs). The runner
+# puts this directory first on PATH only for a bot with an exit, so the proxy flag is never left off by a bot that
+# starts Chrome by name. Without TICO_BROWSER_PROXY the browser does not start: a bot with an exit never browses
+# from this computer's own address.
+name="$1"
+shift
+if [ -z "$TICO_BROWSER_PROXY" ]; then
+  echo "$name: this bot's browser exit is not set up on this computer" >&2
+  exit 1
+fi
+here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+rest=""
+old_ifs=$IFS
+IFS=:
+for dir in $PATH; do
+  [ "$dir" = "$here" ] && continue
+  rest="${rest:+$rest:}$dir"
+done
+IFS=$old_ifs
+real=$(PATH="$rest" command -v "$name")
+if [ -z "$real" ]; then
+  echo "$name: not installed" >&2
+  exit 127
+fi
+exec "$real" --proxy-server="$TICO_BROWSER_PROXY" --force-webrtc-ip-handling-policy=disable_non_proxied_udp "$@"

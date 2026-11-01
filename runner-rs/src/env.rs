@@ -304,6 +304,19 @@ pub async fn environment_with(ctx: &EnvContext<'_>, attempt: &Value, vault: &mut
     if let Some(display) = crate::screen::display() {
         env.insert("DISPLAY".into(), display.into());
     }
+    // A bot with a browser exit browses from that computer's internet: Chrome started by name goes through the proxy,
+    // and nothing falls back to this computer's own address (crate::browser_exit).
+    if let Some(proxy) = crate::browser_exit::turn_proxy(bot, attempt).await {
+        let flags = format!("--proxy-server={proxy} --force-webrtc-ip-handling-policy=disable_non_proxied_udp");
+        let chromium = match env.get("CHROMIUM_FLAGS").filter(|f| !f.is_empty()) {
+            Some(f) => format!("{f} {flags}"),
+            None => flags,
+        };
+        env.insert("CHROMIUM_FLAGS".into(), chromium);
+        let path = env.get("PATH").cloned().unwrap_or_default();
+        env.insert("PATH".into(), format!("{}:{path}", root.join("scripts").join("browser-exit").display()));
+        env.insert("TICO_BROWSER_PROXY".into(), proxy);
+    }
     // A bot's commits carry the bot's name, never the person whose computer runs it.
     let name = attempt["config"]["display_name"].as_str().filter(|n| !n.is_empty()).unwrap_or(bot).to_string();
     for role in ["AUTHOR", "COMMITTER"] {

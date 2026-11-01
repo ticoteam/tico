@@ -1,4 +1,6 @@
-//! The computer-screen relay and same-origin HTTP gateway. Permission policy and audit writes remain in Python.
+//! The computer-screen relay, browser-exit tunnels (exit.rs) and same-origin HTTP gateway. Permission policy and audit
+//! writes remain in Python.
+mod exit;
 mod gateway;
 mod tls;
 use axum::{
@@ -92,6 +94,7 @@ struct Hub {
     modes: HashMap<String, (u64, String)>,
     screens: HashMap<String, Screen>,
     reports: BTreeMap<String, Report>,
+    exits: exit::Exits,
 }
 impl Hub {
     fn new() -> Self {
@@ -104,6 +107,7 @@ impl Hub {
             modes: HashMap::new(),
             screens: HashMap::new(),
             reports: BTreeMap::new(),
+            exits: exit::Exits::default(),
         }
     }
     fn valid(&self, lease: &str) -> bool {
@@ -132,6 +136,7 @@ impl Hub {
         for sid in self.screens.keys().cloned().collect::<Vec<_>>() {
             self.close(&sid, close.clone());
         }
+        self.exits.close_all(close);
     }
     fn sweep(&mut self) {
         if self
@@ -185,6 +190,19 @@ impl App {
             .await
             .is_ok_and(|r| r.status().is_success())
     }
+    /// The policy callback's answer when it allows the request (an exit link learns its runner id from it).
+    async fn policy_answer(&self, body: Value) -> Option<Value> {
+        let response = self
+            .http
+            .post(format!("{}/_tico/screen/v1/authorize", self.python))
+            .bearer_auth(self.key.as_str())
+            .json(&body)
+            .send()
+            .await
+            .ok()
+            .filter(|r| r.status().is_success())?;
+        response.json().await.ok()
+    }
 }
 async fn hello(State(app): State<App>, headers: HeaderMap) -> Result<Json<Value>> {
     app.check(&headers)?;
@@ -214,6 +232,7 @@ async fn start(
         return Err(error(StatusCode::CONFLICT, "stale start challenge"));
     }
     hub.close_all(Close::new(1012, "server restarted"));
+    hub.exits.restart(Close::new(1012, "server restarted"));
     hub.modes.clear();
     hub.sequence = 0;
     hub.reply = None;
@@ -234,6 +253,8 @@ enum Action {
     Heartbeat {
         #[serde(default)]
         ack: Vec<String>,
+        #[serde(default)]
+        exit_ack: Vec<String>,
     },
     Mode {
         runner_id: String,
@@ -259,6 +280,22 @@ enum Action {
     End {
         id: String,
         code: u16,
+        reason: String,
+    },
+    /// An exit computer's sharing, bots and daily cap changed (exit.rs).
+    ExitPolicy {
+        runner_id: String,
+        policy: exit::Policy,
+    },
+    ExitGrant {
+        grant: exit::Grant,
+    },
+    /// Close one bot's tunnels and/or one exit's.
+    ExitClose {
+        #[serde(default)]
+        bot: Option<String>,
+        #[serde(default)]
+        exit: Option<String>,
         reason: String,
     },
 }
@@ -291,15 +328,43 @@ async fn command(
             hub.lease = None;
             json!({})
         }
-        Action::Heartbeat { ack } => {
-            if ack.len() > 256 {
+        Action::Heartbeat { ack, exit_ack } => {
+            if ack.len() > 256 || exit_ack.len() > exit::REPORT_BATCH {
                 return Err(error(StatusCode::BAD_REQUEST, "too many acknowledgements"));
             }
             for sid in ack {
                 hub.reports.remove(&sid);
             }
+            hub.exits.acknowledge(&exit_ack);
             hub.lease.as_mut().unwrap().1 = Instant::now();
-            json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>()})
+            json!({"reports": hub.reports.values().take(256).collect::<Vec<_>>(),
+                   "tunnels": hub.exits.pending_reports()})
+        }
+        Action::ExitPolicy { runner_id, policy } => {
+            if runner_id.is_empty()
+                || runner_id.len() > 128
+                || policy.bots.len() > 1024
+                || policy.bots.iter().any(|b| b.len() > 128)
+            {
+                return Err(error(StatusCode::BAD_REQUEST, "invalid exit policy"));
+            }
+            let closed = hub
+                .exits
+                .set_policy(&runner_id, policy)
+                .map_err(|e| error(StatusCode::CONFLICT, e))?;
+            json!({"closed": closed})
+        }
+        Action::ExitGrant { grant } => {
+            if grant.policy.bots.len() > 1024 {
+                return Err(error(StatusCode::BAD_REQUEST, "invalid exit grant"));
+            }
+            exit::grant(&app, &mut hub.exits, grant)?
+        }
+        Action::ExitClose { bot, exit, reason } => {
+            if reason.len() > 100 || bot.is_none() && exit.is_none() {
+                return Err(error(StatusCode::BAD_REQUEST, "invalid exit close"));
+            }
+            json!({"closed": hub.exits.close_matching(bot.as_deref(), exit.as_deref(), &reason)})
         }
         Action::Mode {
             runner_id,
@@ -747,6 +812,15 @@ async fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
         .route("/control/v1/command", post(command))
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
+        .route("/api/v2/runners/me/browser-exit/ws", get(exit::link))
+        .route(
+            "/api/v2/runners/me/browser-exit/tunnels/{tid}/ws",
+            get(exit::client),
+        )
+        .route(
+            "/api/v2/runners/me/browser-exit/tunnels/{tid}/exit",
+            get(exit::exit_side),
+        )
         .layer(DefaultBodyLimit::max(131072))
         .with_state(app.clone());
     let listener = tokio::net::TcpListener::bind(&bind).await?;

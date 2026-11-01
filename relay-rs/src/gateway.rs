@@ -319,6 +319,15 @@ pub(super) fn routes(app: App) -> Router {
     Router::new()
         .route("/api/v2/runners/{rid}/screen/ws", get(browser))
         .route("/api/v2/runners/me/screen/{sid}/ws", get(runner))
+        .route("/api/v2/runners/me/browser-exit/ws", get(super::exit::link))
+        .route(
+            "/api/v2/runners/me/browser-exit/tunnels/{tid}/ws",
+            get(super::exit::client),
+        )
+        .route(
+            "/api/v2/runners/me/browser-exit/tunnels/{tid}/exit",
+            get(super::exit::exit_side),
+        )
         .route("/api/v2/recorder/stream", get(recorder_stream))
         .fallback(forward)
         .with_state(app)

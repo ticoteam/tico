@@ -57,6 +57,40 @@ Cancellation interrupts stalled pumps; close handshakes have a one-second deadli
 A failed revocation RPC stops lease renewal, so durable revocation still closes sockets within the
 six-second lease plus close deadline. HTTP control calls have two-second deadlines.
 
+## Browser exits
+
+The same relay carries browser-exit tunnels (`src/exit.rs`, `docs/computers.md`): a bot's browser
+reaching the web from another Tico computer whose owner shares its internet with that bot. Python
+decides who may use which exit; Rust moves opaque bytes (the browser's own TLS) and counts them.
+
+- `/api/v2/runners/me/browser-exit/ws` (exit computer's link, runner bearer; Python's policy callback
+  answers `{"kind": "exit_link"}` with the runner id). One link per exit; a newer one replaces it.
+- `/api/v2/runners/me/browser-exit/tunnels/{id}/ws?ticket=...` (bot computer's end)
+- `/api/v2/runners/me/browser-exit/tunnels/{id}/exit?ticket=...` (exit computer's end)
+
+Control operations, under the same lease and sequence rules:
+
+- `exit_policy` carries `runner_id` and `policy` (`generation`, `sharing`, `bots`, `cap` in bytes per
+  UTC day). Older generations are refused. Tunnels of bots no longer allowed close (`exit_not_shared`),
+  and turning sharing off drops the link.
+- `exit_grant` carries the tunnel `id`, the bot's `runner_id`, the `exit` runner id, `bot`, `host`,
+  `port` (80 or 443), the UTC `day`, the bytes Python has recorded for that exit today (`used`) and
+  the policy as Python read it (a stale generation fails `exit_stale`). Refusals: `exit_not_shared`
+  (403), `exit_offline` (409, no link), `exit_over_cap` (429), `exit_busy` (429). An admitted grant
+  sends `{"op": "open", "id", "host", "port", "ticket"}` down the exit's link and returns the bot
+  computer's ticket. Both tickets are one-use.
+- `exit_close` closes the tunnels of a `bot` and/or an `exit`, with a `reason`.
+- `heartbeat` also takes `exit_ack` and returns `tunnels`: closed-tunnel reports (`id`, `exit`,
+  `runner_id`, `bot`, `host`, `day`, `bytes`, `code`), at most 256, retried until acknowledged.
+
+Both ends must connect within 15 seconds or the tunnel closes (`exit_no_answer` when the exit did
+not). The exit's first message may be a short text status (`{"ok": true}` or `{"ok": false,
+"error"}`); everything else is binary and counted both ways. Crossing the day's cap closes every
+tunnel of that exit (4429 `exit_over_cap`), so the cap can be overshot only by bytes in flight. The
+per-exit day count survives a Python restart and starts from Python's recorded bytes after a relay
+restart. Bounds: 4,096 live tunnels, 256 per exit, 16,384 retained reports, 1 MiB messages, a
+one-hour tunnel deadline and 60-second stalled writes.
+
 ## Startup and rollback
 
 Native release binaries are checksummed and checked against the checkout's source fingerprint.
