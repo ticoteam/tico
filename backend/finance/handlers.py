@@ -6,7 +6,7 @@ from dataclasses import dataclass, field, replace
 from datetime import date
 from typing import Any
 
-from . import budgeting, posting
+from . import budgeting, posting, shared
 from . import closing as CL
 from .context import Ctx
 from .core import budgets as B
@@ -232,6 +232,8 @@ def journal(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("date", "memo", "source", "source_id", "lines", "basis"))
     e = L.entry(p, ctx.book)
     e = replace(e, lines=tuple(replace(x, tags=posting.with_team(ctx, x.tags)) for x in e.lines))
+    for x in e.lines:
+        shared.check_tags(ctx, x.tags)
     L.check(e, ctx.book, ctx.accounts, SL.closed_on(ctx.c, ctx.book.id, e.entry_date))
     for item in e.lines:
         _need_line(ctx, who, item.account_id, item.tags, new=True)

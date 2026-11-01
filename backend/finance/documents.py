@@ -21,7 +21,7 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 
-from . import budgeting, posting
+from . import budgeting, posting, shared
 from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
@@ -237,6 +237,15 @@ def contact_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 # ------------------------------------------------------------------------------------------------ document lines
+def _item_account(ctx: Ctx, kind: str, x: AP.DocLine) -> str | None:
+    """The account a line posts to when it names none: its item's expense account on a bill, its income account on
+    an invoice. The item must be live (an inactive one is refused), whether or not the line names an account."""
+    if not x.item_id:
+        return None
+    item = shared.live_item(ctx, x.item_id)
+    return str(item["expense_account_id" if kind == "bill" else "income_account_id"] or "") or None
+
+
 def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.DocLine]) -> tuple[list[AP.DocLine], int]:
     """Each line's account: the one given; for a bill line without one, the first posting rule that matches, else the
     vendor's default line, else Other expenses (counted as asked, for a person to fix before entering it). Every line
@@ -245,8 +254,9 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
     out: list[AP.DocLine] = []
     asked = 0
     for x in lines:
-        if x.account_id:
-            out.append(x)
+        item_account = _item_account(ctx, kind, x)
+        if x.account_id or item_account:
+            out.append(x if x.account_id else replace(x, account_id=item_account or ""))
             continue
         if kind != "bill":
             raise invalid("an invoice line names its income account")
@@ -273,6 +283,7 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
         if account is None or not account.active or account.id == ctl or not _line_type_ok(kind, account):
             raise FinanceError(NOT_FOUND, f"no such {'/'.join(LINE_TYPES[kind])} account for a {kind} line")
         tags = posting.with_team(ctx, x.tags)
+        shared.check_tags(ctx, tags)
         if not may_write(ctx, who, account.id, tags):
             raise denied("a line's account or tags are outside your view")
         checked.append(replace(x, tags=tags))
@@ -282,13 +293,13 @@ def _resolve(ctx: Ctx, who: str, kind: str, contact: Any, lines: Sequence[AP.Doc
 def _line_rows(lines: Sequence[AP.DocLine], who: str, at: str) -> list[dict[str, object]]:
     """The rows a document's lines are stored as. Only an invoice line says whether it is taxable."""
     return [{"account_id": x.account_id, "amount": x.amount, "description": x.description,
-             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who,
+             "tags_json": SK.dump(dict(x.tags)), "created_at": at, "created_by": who, "item_id": x.item_id or None,
              **({"taxable": int(x.taxable)} if x.taxable is not None else {})} for x in lines]
 
 
 def doc_lines_of(ctx: Ctx, kind: str, doc_id: str) -> list[AP.DocLine]:
     return [AP.DocLine(str(r["account_id"]), int(r["amount"]), str(r["description"]),
-                       cast(dict[str, str], SK.loads(r["tags_json"])))
+                       cast(dict[str, str], SK.loads(r["tags_json"])), None, str(r["item_id"] or ""))
             for r in SAP.lines(ctx.c, kind, [doc_id]).get(doc_id, [])]
 
 

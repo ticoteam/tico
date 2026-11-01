@@ -21,7 +21,9 @@ ALL = ("categorize", "journal", "reconcile", "close_period", "reopen_period",
        # linking a bank row to payments marked paid when the automatic match cannot tell which (feed_match)
        "view_defaults_set", "connection_sync", "connection_disconnect", "connection_map", "attach",
        "feed_match", "mirror_start", "mirror_stop", "mirror_tags", "tax_jurisdiction_add", "tax_remit",
-       "import_raw_totals")
+       "import_raw_totals",
+       # shared records (backend/records): items, places and projects
+       "item_create", "item_update", "place_create", "place_update", "project_create", "project_update")
 LIVE = ("journal", "categorize", "account_create", "account_update", "budget_create", "budget_update",
         "allocation_set", "projection_set", "view_grant", "view_revoke", "private_lines_set", "close_period",
         "reopen_period", "right_grant", "right_revoke",
@@ -42,7 +44,9 @@ LIVE = ("journal", "categorize", "account_create", "account_update", "budget_cre
         # phase 3: sales tax jurisdictions and remittances (finance/tax.py)
         "tax_jurisdiction_add", "tax_remit",
         # history imports: a spreadsheet's totals as raw totals (finance/raw_totals.py)
-        "import_raw_totals")
+        "import_raw_totals",
+        # shared records (backend/records): items, places and projects
+        "item_create", "item_update", "place_create", "place_update", "project_create", "project_update")
 NEEDS: dict[str, str | tuple[str, ...]] = {
          "journal": R.BOOK, "categorize": R.BOOK, "account_create": R.BOOK, "account_update": R.BOOK,
          "close_period": R.BOOK, "reopen_period": R.BOOK, "budget_create": R.BUDGETS, "budget_update": R.BUDGETS,
@@ -59,7 +63,9 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "bill_void": R.AP, "invoice_create": R.AR, "invoice_send": R.AR, "invoice_record_payment": R.AR,
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK,
-         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK}
+         "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
+         "item_create": R.BOOK, "item_update": R.BOOK, "place_create": R.BOOK, "place_update": R.BOOK,
+         "project_create": R.BOOK, "project_update": R.BOOK}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
@@ -141,8 +147,8 @@ def default_gate(org: Org, actor: str, kind: str) -> Gate:
 # (YYYY-MM-DD), month (YYYY-MM), int, minor (integer minor units), bool, list[...], obj, or a | b choices. What
 # `actions.help` and the hub tools show; the planners accept exactly these fields.
 Field = tuple[str, str, str]
-_LINE = "list[{account_id, amount: minor, description?, tags?: obj}]"
-_INVOICE_LINE = "list[{account_id, amount: minor, description?, tags?: obj, taxable?: bool}]"
+_LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj}]"
+_INVOICE_LINE = "list[{account_id?, item_id?, amount: minor, description?, tags?: obj, taxable?: bool}]"
 _RULE: tuple[Field, ...] = (
     ("kind?", "gate|posting", "gate (before an action) or posting (on a new feed row or bill draft); default gate"),
     ("name", "str", "short name"), ("words?", "str", "the rule in plain words"),
@@ -309,6 +315,23 @@ SHAPES: dict[str, tuple[Field, ...]] = {
         ("basis", "cash|accrual", "the basis the figures were reported on"),
         ("mapping", "obj", "each sheet line name to an account id or code"),
         ("source_name?", "str", "what the file was called, for the record")),
+    "item_create": (("name", "str", ""), ("kind", "service|inventory|non_inventory|bundle|category", ""),
+                    ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "in the book's currency"),
+                    ("income_account_id?", "str", "the account a sale of it posts to"),
+                    ("expense_account_id?", "str", "the account a purchase of it posts to"),
+                    ("asset_account_id?", "str", "inventory it holds")),
+    "item_update": (("item_id", "str", ""), ("name?", "str", ""), ("kind?", "service|inventory|non_inventory|bundle|category", ""),
+                    ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "a change asks for approval"),
+                    ("income_account_id?", "str", ""), ("expense_account_id?", "str", ""),
+                    ("asset_account_id?", "str", ""), ("active?", "bool", "")),
+    "place_create": (("name", "str", ""), ("kind?", "location", ""), ("parent_id?", "str", "the place it sits under"),
+                     ("address?", "obj", "up to 10 text fields")),
+    "place_update": (("place_id", "str", ""), ("name?", "str", ""), ("kind?", "location", ""),
+                     ("parent_id?", "str", "empty to clear"), ("address?", "obj", ""), ("active?", "bool", "")),
+    "project_create": (("name", "str", ""), ("customer_id?", "str", "a customer contact"),
+                       ("status?", "open|closed", "")),
+    "project_update": (("project_id", "str", ""), ("name?", "str", ""), ("customer_id?", "str", "empty to clear"),
+                       ("status?", "open|closed", ""), ("active?", "bool", "")),
 }
 WORDS: dict[str, str] = {
     "journal": "Post a balanced entry, or reverse one.",
@@ -354,6 +377,12 @@ WORDS: dict[str, str] = {
     "tax_jurisdiction_add": "Add a sales tax jurisdiction: its liability account and quarterly due date.",
     "tax_remit": "Remit a quarter's sales tax: a bill to the tax authority, tagged with the quarter.",
     "import_raw_totals": "Import a spreadsheet's history as raw totals: one balanced entry per month.",
+    "item_create": "Add a product or service that lines and documents name.",
+    "item_update": "Rename, re-account, deactivate, or change the price of an item (a price change asks first).",
+    "place_create": "Add a location that lines can be tagged with.",
+    "place_update": "Rename, move, or deactivate a location.",
+    "project_create": "Add a project that lines can be tagged with.",
+    "project_update": "Rename, re-status, or deactivate a project.",
 }
 
 

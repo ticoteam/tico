@@ -1,6 +1,7 @@
 {
   "include": [
     "backend/finance",
+    "backend/records",
     "backend/login_holds.py",
     "backend/login_waits.py",
     "backend/move_retry.py",
@@ -19,7 +20,8 @@
     ".remote-runs"
   ],
   "strict": [
-    "backend/finance"
+    "backend/finance",
+    "backend/records"
   ],
   "pythonVersion": "3.15",
   "typeCheckingMode": "basic",

@@ -53,13 +53,13 @@ CREATE TABLE IF NOT EXISTS fin_lines (
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, role TEXT NOT NULL DEFAULT '');
 
 CREATE TABLE IF NOT EXISTS fin_dimensions (
-  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom')), value TEXT NOT NULL,
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK (kind IN ('project','custom','class')), value TEXT NOT NULL,
   name TEXT NOT NULL, active INTEGER NOT NULL DEFAULT 1, created_at TEXT NOT NULL, created_by TEXT NOT NULL,
   UNIQUE (kind, value));
 
 CREATE TABLE IF NOT EXISTS fin_line_tags (
   line_id TEXT NOT NULL REFERENCES fin_lines(id),
-  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom')), value TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK (kind IN ('team','teammate','budget','project','custom','place','class')), value TEXT NOT NULL,
   created_at TEXT NOT NULL, created_by TEXT NOT NULL, PRIMARY KEY (line_id, kind));
 
 CREATE TABLE IF NOT EXISTS fin_rollups (
@@ -538,6 +538,8 @@ ADDED = (
     ("fin_transfers", "provider_credit_txn_id", "TEXT"), ("fin_transfers", "find_after", "TEXT"),
     # the journal line a bank row matched (migration 75), so a transfer's two legs on one account match one at a time
     ("fin_feed_txns", "entry_line_id", "TEXT"),
+    # the shared item a bill or invoice line names (migration 76, backend/records)
+    ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
 )
 
 
@@ -717,3 +719,41 @@ def tax(c: sqlite3.Connection) -> None:
     for statement in statements(TAX):
         c.execute(statement)
     _add_columns(c)
+
+
+def catalog(c: sqlite3.Connection, at: str) -> None:
+    """Cloud migration 76: the shared records (backend/records) and the place, class and item tags Finance's lines take.
+    SQLite cannot widen a CHECK in place, so fin_dimensions and fin_line_tags are rebuilt keeping their rows, and each
+    project dimension moves to rec_projects under its value. A project tag holds the project's id, which is the legacy
+    value, so no line's tags change and a closed month keeps its lines as they were. Idempotent."""
+    from ...records import store as RS
+    RS.create(c)
+    _widen(c, "fin_dimensions", "'class'")
+    _widen(c, "fin_line_tags", "'place'")
+    create(c)
+    _move_projects(c, at)
+
+
+def _widen(c: sqlite3.Connection, table: str, marker: str) -> None:
+    """Rebuild `table` from its TABLES definition when the table on disk predates `marker`. Rows are copied as they are."""
+    row = c.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?", (table,)).fetchone()
+    if row is None or marker in str(row[0]):
+        return
+    c.execute(f"ALTER TABLE {table} RENAME TO {table}_before")
+    definition = next(s for s in statements(TABLES) if s.startswith(f"CREATE TABLE IF NOT EXISTS {table} "))
+    c.execute(definition)
+    cols = ",".join(str(r[1]) for r in c.execute(f"PRAGMA table_info({table}_before)").fetchall())
+    c.execute(f"INSERT INTO {table}({cols}) SELECT {cols} FROM {table}_before")
+    c.execute(f"DROP TABLE {table}_before")
+
+
+def _move_projects(c: sqlite3.Connection, at: str) -> None:
+    """A project dimension becomes a rec_projects row under its value. A project tag value no record has yet becomes
+    one under its own text, so the tag still points at a record."""
+    c.execute("INSERT INTO rec_projects(id, name, status, active, created_at, created_by) "
+              "SELECT value, name, 'open', active, ?, ? FROM fin_dimensions WHERE kind='project' "
+              "AND value NOT IN (SELECT id FROM rec_projects)", (at, SYSTEM))
+    c.execute("DELETE FROM fin_dimensions WHERE kind='project'")
+    c.execute("INSERT INTO rec_projects(id, name, status, active, created_at, created_by) "
+              "SELECT DISTINCT value, value, 'open', 1, ?, ? FROM fin_line_tags WHERE kind='project' "
+              "AND value NOT IN (SELECT id FROM rec_projects)", (at, SYSTEM))
