@@ -9,6 +9,7 @@ function searchEntries() {
   const out = [];
   for (const a of document.querySelectorAll('#side .nav-link[data-nav]')) {
     if (a.hidden || a.closest('[hidden]:not(#account-menu)')) continue;   // a closed account menu still lists its pages
+    if (rdSectionOff(a.dataset.nav)) continue;   // the company hid this section (Settings > General > Sidebar)
     const label = [...a.childNodes].filter(n => n.nodeType === 3).map(n => n.textContent).join('').trim();
     out.push({kind: 'page', label, href: a.getAttribute('href'), icon: a.querySelector('.nav-icon')?.textContent || 'article'});
   }
