@@ -1,4 +1,4 @@
-// BotOps' Confirm cards in its chat (ui/assistant.js), fixtures only.
+// BotOps' Confirm cards in its DM thread (ui/assistant.js hydrates them, ui/app/thread-view.js draws the thread), fixtures only.
 //  - plain words: the card's title is the server's sentence, never the method and path; a card stored with no readable
 //    description gets a plain sentence too. The method, path and fields sit behind a closed Details.
 //  - no jump on Confirm: in a chat scrolled partway down with several cards, a click changes only that card. The thread
@@ -14,6 +14,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 
 const at = n => new Date(Date.UTC(2026, 9, 17, 9, n)).toISOString();
 const say = (id, from, body, n, refs = {}) => ({id, from_actor: from, body, refs, created: at(n), kind: 'say'});
@@ -65,9 +66,16 @@ function fixture() {
   return {actions, messages, n, gets: [], decided: []};
 }
 
+// A message arrives while the thread is on screen: the thread reads its first page again, as after a stream event.
+const arrive = async (page, state, m) => {
+  state.messages.push(m);
+  await page.evaluate(async () => { for (const v of THV_VIEWS) await thvRefresh(v); });
+};
+
 async function open(browser, state) {
   const page = await browser.newPage({viewport: {width: 1280, height: 800}, serviceWorkers: 'block'});
   const errors = [];
+  const threads = threadsFake({bot: 'botops', messages: () => state.messages});
   page.on('pageerror', error => errors.push(error.message));
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname, method = route.request().method();
@@ -81,9 +89,8 @@ async function open(browser, state) {
     if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-      ? [{id: 'c-botops', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
-    if (p === '/api/v2/conversations/c-botops/snapshot') return json({messages: state.messages, execution: null, next_before: null});
+    const answer = threads(p, url, method);
+    if (answer !== undefined) return json(answer);
     const one = p.match(/^\/api\/v2\/assistant\/actions\/([^/]+)$/);
     if (one && method === 'GET') {
       state.gets.push(one[1]);
@@ -112,8 +119,8 @@ async function open(browser, state) {
   try {
     const state = fixture();
     const {page, errors} = await open(browser, state);
-    await page.goto('https://tico-ui.test/#/bot/botops/chat');
-    await page.waitForFunction(() => V2C?.rendered && document.querySelectorAll('#conv-thread .asst-card').length === 6);
+    await page.goto('https://tico-ui.test/#/bot/botops/dm');
+    await page.waitForFunction(() => document.querySelectorAll('#bot-thread .asst-card').length === 6);
 
     // Plain words first; the raw request only behind Details, closed.
     const repo = page.locator('.asst-card[data-action="act1"]');
@@ -159,27 +166,26 @@ async function open(browser, state) {
     // mid-thread, then Confirm the second from the keyboard.
     await page.locator('.asst-card[data-action="act3"] details.asst-raw summary').click();
     await page.locator('.asst-card[data-action="actL"] .asst-said details.asst-long summary').click();
-    await page.evaluate(() => document.querySelectorAll('#conv-thread .asst-card').forEach(c => { c.mark_ = c.dataset.action; }));
+    await page.evaluate(() => document.querySelectorAll('#bot-thread .asst-card').forEach(c => { c.mark_ = c.dataset.action; }));
     await page.evaluate(() => {
-      const t = document.querySelector('#conv-thread'), c = document.querySelector('.asst-card[data-action="act2"]');
+      const t = document.querySelector('#bot-thread .thv-scroll'), c = document.querySelector('.asst-card[data-action="act2"]');
       t.scrollTop += c.getBoundingClientRect().top - t.getBoundingClientRect().top - 200;
-      V2C.stick.release();
     });
     await page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
-    const before = await page.evaluate(() => ({top: document.querySelector('#conv-thread').scrollTop,
+    const before = await page.evaluate(() => ({top: document.querySelector('#bot-thread .thv-scroll').scrollTop,
       side: document.querySelector('#side')?.scrollTop || 0,
       card: document.querySelector('.asst-card[data-action="act2"]').getBoundingClientRect().top,
       long: document.querySelector('.asst-card[data-action="actL"]').getBoundingClientRect().top}));
     assert.ok(before.top > 0 && before.card > 100 && before.card < 400, 'set up: the card is mid-thread, away from the top');
-    assert.equal(await page.evaluate(() => V2C.stick.atBottom), false, 'set up: not at the bottom');
+    assert.equal(await page.evaluate(() => { const b = document.querySelector('#bot-thread .thv-scroll'); return b.scrollHeight - b.scrollTop - b.clientHeight < 60; }), false, 'set up: not at the bottom');
 
     // Watch every frame from the click until the result message is in: what a person would see.
     await page.evaluate(() => {
       window.frames_ = [];
       const tick = () => {
-        const t = document.querySelector('#conv-thread'), c = document.querySelector('.asst-card[data-action="act2"]');
+        const t = document.querySelector('#bot-thread .thv-scroll'), c = document.querySelector('.asst-card[data-action="act2"]');
         window.frames_.push({top: t.scrollTop, side: document.querySelector('#side')?.scrollTop || 0, card: c ? c.getBoundingClientRect().top : null,
-          loading: [...t.querySelectorAll('[data-action-host]')].filter(h => !h.querySelector('.asst-card')).length,
+          loading: [...document.querySelector('#bot-thread').querySelectorAll('[data-action-host]')].filter(h => !h.querySelector('.asst-card')).length,
           open: !!document.querySelector('.asst-card[data-action="act3"] details.asst-raw')?.open,
           more: !!document.querySelector('.asst-card[data-action="actL"] .asst-said details.asst-long')?.open,
           long: document.querySelector('.asst-card[data-action="actL"]')?.getBoundingClientRect().top ?? null});
@@ -202,7 +208,7 @@ async function open(browser, state) {
     assert.ok(frames.every(f => f.open), 'an open Details on another card stays open');
     assert.ok(frames.every(f => f.more), 'a "Show more" opened on another card stays open');
     assert.ok(frames.every(f => f.long !== null && Math.abs(f.long - before.long) <= 1), 'the card above stayed where it was on screen');
-    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#conv-thread .asst-card')].filter(c => c.dataset.action !== 'act2')
+    assert.deepEqual(await page.evaluate(() => [...document.querySelectorAll('#bot-thread .asst-card')].filter(c => c.dataset.action !== 'act2')
       .map(c => c.mark_ || 'redrawn:' + c.dataset.action)), ['act0', 'act1', 'actL', 'act3', 'act4'], 'every other card is the same element');
     assert.equal(await page.evaluate(() => document.activeElement?.closest('.asst-card')?.dataset.action), 'act2',
       'focus stays on the card whose Confirm was pressed');
@@ -210,7 +216,7 @@ async function open(browser, state) {
     assert.equal(await page.locator('.asst-card[data-action="act3"] [data-confirm]').count(), 1);
     // A message arriving while a person reads a card: the thread rebuilds and their focus and "Show more" stay.
     await page.evaluate(() => document.querySelector('.asst-card[data-action="actL"] .asst-said details.asst-long summary').focus({preventScroll: true}));
-    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('read', 'bot:botops', 'While you read.', state.n++));
+    await arrive(page, state, say('read', 'bot:botops', 'While you read.', state.n++));
     assert.deepEqual(await page.evaluate(() => {
       const long = document.querySelector('.asst-card[data-action="actL"]');
       return [!!document.querySelector('[data-message="read"]'), long.mark_, long.querySelector('.asst-said details.asst-long').open,
@@ -219,10 +225,10 @@ async function open(browser, state) {
     // A refresh asked just before a click and answered while the Confirm is on its way is dropped: a rebuild after it
     // still draws the card as running, with no live button (a second click would be refused).
     Object.assign(state, {slowGet: 300, slowPost: 900});
-    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('late', 'bot:botops', 'One more thing.', state.n++));
+    await arrive(page, state, say('late', 'bot:botops', 'One more thing.', state.n++));
     await page.locator('.asst-card[data-action="act1"] [data-confirm]').click();
     await page.waitForTimeout(450);
-    await page.evaluate(m => { V2C.messages.push(m); v2ChatRender(V2C); }, say('later', 'bot:botops', 'And another.', state.n++));
+    await arrive(page, state, say('later', 'bot:botops', 'And another.', state.n++));
     assert.equal(await page.evaluate(() => [...document.querySelectorAll('.asst-card[data-action="act1"] button')].some(b => !b.disabled)), false,
       'no live button while the Confirm runs');
     await page.locator('.asst-card[data-action="act1"][data-status="done"]').waitFor();

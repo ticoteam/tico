@@ -5,6 +5,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const {html, uiFile} = require('./support/page.cjs');
 const {unrouted} = require('./support/routes.cjs');
+const {threadsFake} = require('./support/threads-fake.cjs');
 const VISUAL = 'https://visuals.acme-files.example', NEXT_VISUAL = 'https://next.acme-files.example';
 const TOKEN = 'YQ.' + 'a'.repeat(43);
 const bridge = fs.readFileSync(require('node:path').join(__dirname, '../../app/src/main.rs'), 'utf8')
@@ -40,6 +41,7 @@ async function visualHandshake(browser) {
   const task = {id:'t1', title:'Visual task', owner:'bot:ops', requester:'human:ana', status:'review', lane:'company',
     rank:1, version:1, created:'2026-01-01T00:00:00Z', updated:'2026-01-01T00:00:00Z', body:'Plan',
     parts:{total:0, done:0}, labels:[], links:[], attachments:[]};
+  const threads = threadsFake({bot:'ops', messages:() => [message()]});
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
@@ -64,8 +66,8 @@ async function visualHandshake(browser) {
     if (p === '/api/status') return json({cloud:true, keeper_alive:true, health_issues:[]});
     if (p === '/api/v2/status') return json({bots:[{bot:'ops', state:'idle', open_tasks:0}]});
     if (p === '/api/v2/needs-you') return json({items:[]});
-    if (p === '/api/v2/conversations') return json({conversations:[{id:'c-ops', kind:'chat', scope:'personal', participants:['human:ana','bot:ops']}]});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages:[message()], execution:null});
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
     if (p === '/api/v2/tasks/t1') return json({task, comments:[{...message(), kind:'say'}], events:[], children:[], parent:null, mover:true, can_comment:true});
     if (p === '/api/v2/tasks/t1/files') return json({files:[]});
     return json(unrouted(p));
@@ -78,7 +80,7 @@ async function visualHandshake(browser) {
     const call = window.__pending[index]; window.__nativeOrigin = accepted ? call.origin : ''; call.resolve(accepted);
   }, {index, accepted});
   const refresh = () => page.evaluate(() => { window.__refresh = refreshConfig(); });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat', {waitUntil:'domcontentloaded'});
+  await page.goto('https://tico-ui.test/#/bot/ops/dm', {waitUntil:'domcontentloaded'});
   await waitCall(0, '');
   await page.waitForFunction(() => typeof visualSrc === 'function');
   assert.equal(await page.evaluate(() => visualSrc({src:'/visuals/local'})), 'https://tico-ui.test/visuals/local',
@@ -99,7 +101,7 @@ async function visualHandshake(browser) {
   config = {company_name:'Acme revised', visual_origin:NEXT_VISUAL};
   await refresh(); await waitCall(2, NEXT_VISUAL);
   visual = NEXT_VISUAL; revision++;
-  await page.evaluate(() => Promise.all([v2ChatSnapshot(V2C), taskChatRead(TASK_CHAT)]));
+  await page.evaluate(() => Promise.all([...[...THV_VIEWS].map(v => thvRefresh(v)), taskChatRead(TASK_CHAT)]));
   assert.equal(await page.locator('iframe.vcard-frame').count(), 0, 'live snapshot stays file chips during config ACK');
   assert.equal(reads.includes(NEXT_VISUAL), false);
   const nextRead = page.waitForResponse(response => new URL(response.url()).origin === NEXT_VISUAL);
@@ -278,6 +280,7 @@ async function hostedHandshake(browser, current) {
   const message = {id:'m1', from_actor:'bot:ops', body:'Weekly', created:'2026-01-01T00:00:00Z',
     refs:{attachments:[{id:'f1', file_id:'f1', version:1, current_version:1, ref:'f1@1', title:'Weekly', kind:'page',
       name:'weekly.html', size:100, content_type:'text/html', url:'/api/v2/files/f1', src:'/visuals/'+TOKEN}]}};
+  const threads = threadsFake({bot:'ops', messages:[message]});
   await page.route('**/*', async route => {
     const url = new URL(route.request().url()), p = url.pathname;
     const json = body => route.fulfill({contentType:'application/json', body:JSON.stringify(body)});
@@ -294,17 +297,17 @@ async function hostedHandshake(browser, current) {
     if (p === '/api/status') return json({cloud:true, keeper_alive:true, health_issues:[]});
     if (p === '/api/v2/status') return json({bots:[{bot:'ops', state:'idle', open_tasks:0}]});
     if (p === '/api/v2/needs-you') return json({items:[]});
-    if (p === '/api/v2/conversations') return json({conversations:[{id:'c-ops', kind:'chat', scope:'personal', participants:['human:ana','bot:ops']}]});
-    if (p === '/api/v2/conversations/c-ops/snapshot') return json({messages:[message], execution:null});
+    const answer = threads(p, url, route.request().method());
+    if (answer !== undefined) return json(answer);
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/ops/chat', {waitUntil:'domcontentloaded'});
+  await page.goto('https://tico-ui.test/#/bot/ops/dm', {waitUntil:'domcontentloaded'});
   await page.waitForFunction(() => window.__calls.length > 0);
   await page.evaluate(() => window.__pending[0](false));
   await page.waitForFunction(() => window.__calls.length > 1);
   assert.deepEqual(await page.evaluate(() => window.__calls[1]), current ? {origin:'', files:FILES} : {origin:''},
     current ? 'the shell hears the files address' : 'an older shell never hears a field it would refuse');
-  // ACK inside the UI's bridge wait (NATIVE_VISUAL_WAIT_MS): the chat renders only after it, and a timed-out
+  // ACK inside the UI's bridge wait (NATIVE_VISUAL_WAIT_MS): the thread renders cards only after it, and a timed-out
   // wait queues a clear this fake shell would never answer. Before the ACK a same-origin page src is refused.
   assert.equal(await page.evaluate(() => visualPageSrc('/visuals/' + 'YQ.' + 'a'.repeat(43))), null,
     'no frame before the shell follows it');
