@@ -8068,6 +8068,22 @@
               ],
               "title": "Party"
             }
+          },
+          {
+            "name": "thread",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Thread"
+            }
           }
         ],
         "responses": {
@@ -60462,6 +60478,22 @@
         "type": "object",
         "title": "ThreadCreate"
       },
+      "ThreadCrumb": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "title"
+        ],
+        "additionalProperties": true
+      },
       "ThreadEarlier": {
         "type": "object",
         "properties": {
@@ -60612,6 +60644,37 @@
           },
           "deleted": {
             "type": "boolean"
+          },
+          "root_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "origin_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "parent_message_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "depth": {
+            "type": "integer"
+          },
+          "hidden": {
+            "type": "boolean"
+          },
+          "sub_thread": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "The sub-thread branching from this message: {id, count, last_seq, unread, more}"
           }
         },
         "required": [
@@ -60877,7 +60940,7 @@
           "breadcrumb": {
             "type": "array",
             "items": {
-              "type": "object"
+              "$ref": "#/components/schemas/ThreadCrumb"
             }
           },
           "messages": {
@@ -60925,7 +60988,17 @@
             "type": "string"
           },
           "audience": {
-            "type": "string"
+            "type": "string",
+            "enum": [
+              "company",
+              "team",
+              "members",
+              "task",
+              "home",
+              "personal",
+              "participants",
+              "meeting"
+            ]
           },
           "audience_group_id": {
             "type": [
@@ -60995,6 +61068,13 @@
           },
           "members": {
             "type": "object"
+          },
+          "home": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "description": "Only for audience home: {actor}"
           }
         },
         "required": [

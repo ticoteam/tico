@@ -1,4 +1,4 @@
-"""Thread events on the live stream (docs/dev/threads-contract.md §9; backend/thread_events.py, threads_scope in
+"""Thread events on the live stream (docs/dev/threads-contract.md §9; the views and threads_scope in
 backend/events.py): a message says which thread it is in, a `?thread=` follow sends that subtree and nothing else, the
 `threads` topic says what changed in a thread for the people who may read it, a read mark goes only to its reader, and
 an agent token gets only the topics it may read. In-process through events.read, so every answer is that viewer's."""
@@ -82,7 +82,6 @@ def test_a_thread_follow_sends_its_subtree_and_nothing_else(api):
 
 
 def test_a_read_mark_goes_only_to_the_reader_who_made_it(api):
-    store = api.app.state.store
     thread = new_thread(api, body="Kickoff")
     last = say(api, thread["id"], "Please review")["seq"]
     after = cursor(api)

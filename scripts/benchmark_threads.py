@@ -16,7 +16,6 @@ import os
 import platform
 import re
 import socket
-import statistics
 import sys
 import tempfile
 import threading

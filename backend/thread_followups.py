@@ -83,7 +83,7 @@ def sweep(c, at, limit=NUDGE_LIMIT):
                       "VALUES(?,?,?,?,?)",
                       (ask["id"], ask["conversation_id"], ask["to_actor"], posted["id"] if posted else None, at))
             c.execute("RELEASE thread_followup")
-        except Exception:
+        except Exception:  # noqa: BLE001 - a failed follow-up is rolled back and retired without a nudge
             c.execute("ROLLBACK TO thread_followup")
             c.execute("RELEASE thread_followup")
             LOG.warning("follow-up for an ask failed; it is retired without a nudge", exc_info=True)

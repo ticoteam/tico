@@ -35,7 +35,7 @@ def message_facts(message, thread):
 def _publish(c, type_, subject, data, actor):
     try:
         webhooks.publish(c, type_, subject, data, actor)
-    except Exception:
+    except Exception:  # noqa: BLE001 - a webhook must never fail the write that caused it
         log.warning("webhook event %s was not queued", type_, exc_info=True)
 
 

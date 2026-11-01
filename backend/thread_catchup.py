@@ -83,7 +83,7 @@ def summarize(writer, title, lines):
                   'JSON: {"summary": "..."}.')
         try:
             answer = writer(system, f"Thread: {title}\n\n" + "\n".join(lines))
-        except Exception as exc:   # a provider failure degrades to the excerpt; the catch-up still arrives
+        except Exception as exc:  # noqa: BLE001 - a provider failure degrades to the excerpt; the catch-up still arrives
             LOG.warning("catch-up summary failed: %s", type(exc).__name__)
             answer = None
         text = answer.get("summary") if isinstance(answer, dict) else None

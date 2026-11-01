@@ -351,7 +351,7 @@ class Calls:
         except call_media.MediaUnavailable:
             with self.store.transaction() as c:
                 self.finish(c, call_id, "meet_unavailable")
-            raise Problem("meet_unavailable", "Tico Meet's media server could not start this call", 503)
+            raise Problem("meet_unavailable", "Tico Meet's media server could not start this call", 503) from None
 
     def _audio_for(self, call_id):
         def on_audio(identity, pcm, start_ms):
@@ -401,7 +401,7 @@ class Calls:
     def _transcribe_clip(self, call_id, identity, buffer):
         try:
             self._transcribe(call_id, identity, buffer)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a failed transcription is reported, the call goes on
             from .batch_work import report
             report("calls_transcribe", call_id, exc, logger="tico.calls")
 
@@ -450,7 +450,7 @@ class Calls:
         self.drain(call_id)
         try:
             live_meetings._run_windows(self.app, row["live_meeting_id"], final=True)
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - a failed final window is reported; the transcript is still posted
             from .batch_work import report
             report("calls_final_windows", call_id, exc, logger="tico.calls")
         self.post_transcript(call_id)
@@ -546,7 +546,7 @@ class Calls:
                 self._sweep_call(call_id)
             except call_media.MediaUnavailable:
                 continue
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - one call's sweep failing must not stop the others
                 from .batch_work import report
                 report("calls_sweep", call_id, exc, logger="tico.calls")
 

@@ -6,7 +6,6 @@ The card is written as the author, in the update's own transaction. A bot's card
 the bot never wakes on it (a message never wakes its author). A person's card is their post in their own Home. The
 Home's audience decides who reads it (threads.post checks it on every read).
 """
-from . import hubdb as H
 
 
 def post_card(c, uid, author, kind, day):

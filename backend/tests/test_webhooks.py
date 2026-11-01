@@ -575,3 +575,40 @@ def test_a_held_message_reaches_only_the_people_who_can_read_its_thread(api):
             heard = {who: W.view_for(c, who, "message.held", "m-held", data, {}) is not None
                      for who in ("human:ana", "human:ben", "human:priya")}
             assert heard == {"human:ana": False, "human:ben": True, "human:priya": True}, thread["audience"]
+
+
+# ----------------------------------------------------------------------------- thread producers (backend/thread_webhooks.py)
+def test_a_committed_thread_write_queues_its_event_once_and_a_rolled_back_one_queues_none(api, net):
+    from backend import threads
+    ben = make(api, events=["thread.*", "message.*"], token="ben-test")
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Launch", audience="members", members=["human:priya"])
+        said = threads.post(c, "human:ben", room["id"], "Kickoff at noon")
+    kinds = [(s["type"], s["subject"]) for s in sends(api, ben["id"])]
+    assert kinds == [("thread.created", room["id"]), ("message.created", said["id"])]
+    with pytest.raises(RuntimeError):
+        with api.app.state.store.transaction() as c:
+            threads.post(c, "human:ben", room["id"], "Never sent")
+            threads.create(c, "human:ben", title="Gone", audience="members", members=[])
+            raise RuntimeError("rolled back")
+    assert len(sends(api, ben["id"])) == 2, "a rolled-back write queues nothing"
+
+
+def test_a_held_post_tells_only_the_people_who_can_read_its_thread(api, net, monkeypatch):
+    from backend import org_rule_check, threads
+    ben = make(api, events=["message.*"], token="ben-test")
+    owner = make(api, events=["message.*"])                        # Ana owns the company and is not in the thread
+    with api.app.state.store.transaction() as c:
+        room = threads.create(c, "human:ben", title="Pricing", audience="members", members=["human:priya"])
+    gate = {"held": {"id": "hold-1"}, "rule": {"id": "no-prices", "text": "No prices"}, "hold_id": "hold-1"}
+    monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: gate)
+    with api.app.state.store.transaction() as c:
+        threads.post(c, "human:ben", room["id"], "The price is $10", checked={"outcome": "broken"})
+        threads.post(c, "human:ben", None, "$10", checked={"outcome": "broken"},
+                     start={"title": "New", "audience": "members", "members": ["human:priya"]})
+    held = [s for s in sends(api, ben["id"]) if s["type"] == "message.held"]
+    assert [s["subject"] for s in held] == ["hold-1"], "a held first message has no thread readers to tell"
+    body = json.loads(held[0]["body"])
+    assert body["data"]["rule"] == "no-prices" and body["data"]["thread_id"] == room["id"]
+    assert "$10" not in held[0]["body"], "a held event never carries the words"
+    assert [s for s in sends(api, owner["id"]) if s["type"] == "message.held"] == []

@@ -4657,6 +4657,11 @@ export type ThreadCreate = {
   title?: string;
 };
 
+export type ThreadCrumb = {
+  id: string;
+  title: string;
+};
+
 export type ThreadEarlier = {
   home: string;
   messages: number;
@@ -4690,13 +4695,19 @@ export type ThreadMessage = {
   conversation_id?: string;
   created?: string;
   deleted?: boolean;
+  depth?: number;
   edited_at?: string | null;
   from_actor?: string;
+  hidden?: boolean;
   id: string;
   kind?: string;
+  origin_id?: string | null;
+  parent_message_id?: string | null;
   refs?: Record<string, unknown>;
   revision?: number;
+  root_id?: string | null;
   seq?: number;
+  sub_thread?: Record<string, unknown> | null;
   thread_id: string;
   to_actor?: string | null;
 };
@@ -4757,7 +4768,7 @@ export type ThreadSidebar = {
 };
 
 export type ThreadTimeline = {
-  breadcrumb?: Array<Record<string, unknown>>;
+  breadcrumb?: Array<ThreadCrumb>;
   messages: Array<Record<string, unknown>>;
   next_cursor?: string | null;
   thread: ThreadView;
@@ -4770,9 +4781,10 @@ export type ThreadUploaded = {
 
 export type ThreadView = {
   archived_at?: string | null;
-  audience: string;
+  audience: "company" | "team" | "members" | "task" | "home" | "personal" | "participants" | "meeting";
   audience_group_id?: string | null;
   created_at?: string;
+  home?: Record<string, unknown> | null;
   id: string;
   kind?: string | null;
   last_message_at?: string | null;
@@ -9001,6 +9013,7 @@ export type StreamEventsParams = {
   needs?: string | null;
   party?: string | null;
   task?: string | null;
+  thread?: string | null;
   topics?: string | null;
 };
 export type StreamEventsBody = never;

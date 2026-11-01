@@ -2407,10 +2407,14 @@ STABLE.extend([
 TAGS["Threads"] = ("Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
                    "in a thread. A thread the viewer may not read answers 404, never 403.")
 SCHEMAS.update({
-    "ThreadView": obj({"id": "s", "title": "s", "audience": "s", "audience_group_id": "n", "owner_actor": "n",
+    "ThreadView": obj({"id": "s", "title": "s",
+                       "audience": {"type": "string", "enum": ["company", "team", "members", "task", "home", "personal",
+                                                               "participants", "meeting"]},
+                       "audience_group_id": "n", "owner_actor": "n",
                        "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
                        "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
-                       "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o"},
+                       "last_seq": "i", "last_unread_seq": "i", "me": "o", "members": "o",
+                       "home": {"type": ["object", "null"], "description": "Only for audience home: {actor}"}},
                       required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
     "ThreadReactions": items(obj({"emoji": "s", "count": "i", "actors": "a"}, required=["emoji", "count", "actors"])),
     "ThreadEarlier": obj({"home": "s", "messages": "i"}, required=["home", "messages"]),
@@ -2425,8 +2429,13 @@ SCHEMAS.update({
                          "next_cursor": "n"}, required=["hits", "next_cursor"]),
     "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "from_actor": "s",
                           "to_actor": "n", "kind": "s", "body": "n", "created": "s", "edited_at": "n",
-                          "revision": "i", "refs": "o", "deleted": "b"}, required=["id", "thread_id"]),
-    "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items({"type": "object"}),
+                          "revision": "i", "refs": "o", "deleted": "b", "root_id": "n", "origin_id": "n",
+                          "parent_message_id": "n", "depth": "i", "hidden": "b",
+                          "sub_thread": {"type": ["object", "null"], "description": "The sub-thread branching from this "
+                                         "message: {id, count, last_seq, unread, more}"}},
+                         required=["id", "thread_id"]),
+    "ThreadCrumb": obj({"id": "s", "title": "s"}),
+    "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items(ref("ThreadCrumb")),
                            "messages": items({"type": "object"}), "next_cursor": "n"},
                           required=["thread", "messages"]),
     "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},

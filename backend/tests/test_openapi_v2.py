@@ -243,3 +243,33 @@ def test_the_thread_answers_match_the_live_ones(api):
     call("markThreadRead", "post", f"/api/v2/threads/{thread_id}/read", who="ben-test", json={"seq": 1})
     call("markThreadAndSubthreadsRead", "post", f"/api/v2/threads/{thread_id}/read-all", who="ben-test")
     call("deleteMessage", "delete", f"/api/v2/messages/{message['id']}")
+
+
+# Every thread route contract section 10 lists (docs/dev/threads-contract.md), as the server spells its paths.
+THREAD_CONTRACT = {
+    ("get", "/api/v2/threads"), ("post", "/api/v2/threads"), ("get", "/api/v2/threads/search"),
+    ("get", "/api/v2/threads/{thread_id}"), ("patch", "/api/v2/threads/{thread_id}"),
+    ("get", "/api/v2/threads/{thread_id}/timeline"), ("post", "/api/v2/threads/{thread_id}/read"),
+    ("post", "/api/v2/threads/{thread_id}/read-all"), ("get", "/api/v2/threads/{thread_id}/members"),
+    ("post", "/api/v2/threads/{thread_id}/members"), ("delete", "/api/v2/threads/{thread_id}/members/{actor}"),
+    ("put", "/api/v2/threads/{thread_id}/follow"), ("delete", "/api/v2/threads/{thread_id}/follow"),
+    ("post", "/api/v2/threads/{thread_id}/messages"), ("patch", "/api/v2/messages/{message_id}"),
+    ("delete", "/api/v2/messages/{message_id}"),
+}
+# The threads build's own route families: each one the server serves is in the document, and each documented one is
+# served (spec() raises on that half).
+THREAD_AREAS = ("/api/v2/threads", "/api/v2/calls", "/api/v2/federation", "/api/v2/slack/links",
+                "/api/v2/uploads/threads", "/api/v2/messages/{message_id}", "/api/v2/rule-holds")
+
+
+def test_every_thread_route_the_server_serves_is_documented(api):
+    stable = {(m, p) for p, m, *_ in openapi_v2.STABLE}
+    assert THREAD_CONTRACT <= stable
+    served = set()
+    for route in api.app.routes:
+        path = re.sub(r"\{(\w+):path\}", r"{\1}", getattr(route, "path", ""))
+        if path.startswith(THREAD_AREAS):
+            served |= {(m.lower(), path) for m in getattr(route, "methods", None) or () if m not in ("HEAD", "OPTIONS")}
+    documented = {(m, p) for m, p in stable if p.startswith(THREAD_AREAS)}
+    assert served == documented, {"served, not documented": sorted(served - documented),
+                                  "documented, not served": sorted(documented - served)}

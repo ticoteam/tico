@@ -386,7 +386,7 @@ def _audit(c, actor, obj, before, after, via=None):
     try:
         from . import audit_log
         audit_log.write(c, actor, obj, before, after, via)
-    except Exception:  # noqa: BLE001 - a bare hub database has no audit_log table; the event still records it
+    except Exception:  # noqa: BLE001, S110 - a bare hub database has no audit_log table; the event still records it
         pass
 
 
@@ -1286,7 +1286,7 @@ def _defer_note(c, message, bot):
         c.execute("INSERT INTO notes(id,from_actor,to_actor,body,created,message_id) VALUES(?,?,?,?,?,?)",
                   (_new_id(), message.get("from_actor") or H.KEEPER, bot,
                    str(message.get("body") or "")[:2000], _now(), message["id"]))
-    except Exception:  # noqa: BLE001 - a bare hub database has no notes table
+    except Exception:  # noqa: BLE001, S110 - a bare hub database has no notes table
         pass
 
 
@@ -1578,18 +1578,28 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     return message
 
 
-# Outgoing thread webhooks (backend/thread_webhooks.py, threads/surfaces) hook in here at integration: create, post
-# and a held post each call one. Inside the write transaction; they must only enqueue.
+# Outgoing thread webhooks (backend/thread_webhooks.py): create, post and a held post each call one. Inside the write
+# transaction, so a rolled-back write queues nothing; they only enqueue and never raise.
 def _emit_thread_created(c, thread):
-    return None
+    from . import thread_webhooks
+    starter = thread.get("owner_actor") or (thread.get("participants") or [None])[0]
+    thread_webhooks.thread_created(c, thread, starter)
 
 
 def _emit_message_created(c, thread, message):
-    return None
+    from . import thread_webhooks
+    thread_webhooks.message_created(c, message, thread, message.get("from_actor"))
 
 
 def _emit_message_held(c, thread, actor, verdict):
-    return None
+    """A held post writes no message, so the event names the hold. A held first message (no thread yet) has no
+    readers to tell, so it sends nothing; the hold reaches its reviewer through Needs you."""
+    if thread is None or not (verdict or {}).get("hold_id"):
+        return
+    from . import thread_webhooks
+    hold_id = verdict["hold_id"]
+    held = {"id": hold_id, "conversation_id": thread["id"], "from_actor": actor, "kind": "say"}
+    thread_webhooks.message_held(c, held, thread, hold_id, (verdict.get("rule") or {}).get("id"), actor)
 
 
 def _write_open(c, actor, text, thread, kind, refs, target, in_reply_to=None):
@@ -1700,7 +1710,7 @@ def _require_write(c, v, target):
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
     except (ValueError, KeyError):
-        raise Problem("not_found", "Unknown teammate", 404)
+        raise Problem("not_found", "Unknown teammate", 404) from None
     if not levels["see"]:
         raise Problem("not_found", "Unknown teammate", 404)
     if not levels["write"] and not teammate_access.may_reply(c, v.who, target):
@@ -2359,7 +2369,7 @@ def sidebar(c, v, *, cursor=None, limit=50):
     names = v.member_names(c)
     marks = ",".join("?" * len(names))
     activity = "(SELECT MAX(s.last_seq) FROM conversations s WHERE s.root_id=r.id)"
-    where = [f"r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
+    where = ["r.parent_id IS NULL", "r.archived_at IS NULL", "r.closed_at IS NULL",
              f"(r.audience IN ('company','team') OR r.owner_actor=? OR EXISTS (SELECT 1 FROM thread_members m WHERE "
              f"m.thread_id=r.id AND m.actor IN ({marks})) OR EXISTS (SELECT 1 FROM thread_followers f WHERE "
              f"f.thread_id=r.id AND f.actor=? AND f.following=1) OR EXISTS (SELECT 1 FROM {_PARTICIPANTS.format(r='r')} "
@@ -2371,13 +2381,12 @@ def sidebar(c, v, *, cursor=None, limit=50):
             where.append(f"({activity}<? OR ({activity}=? AND r.id<?))")
             args += [int(at), int(at), cid]
         except ValueError:
-            raise Problem("cursor", "Unknown cursor", 422)
+            raise Problem("cursor", "Unknown cursor", 422) from None
     sql = (f"SELECT r.*, {activity} AS activity FROM conversations r WHERE " + " AND ".join(where)
-           + " AND " + readable_sql(c, v, "r") + f" ORDER BY activity DESC, r.id DESC LIMIT ?")
-    found, last, budget = [], None, MAX_PAGE_BYTES
+           + " AND " + readable_sql(c, v, "r") + " ORDER BY activity DESC, r.id DESC LIMIT ?")
+    found, budget = [], MAX_PAGE_BYTES
     for r in c.execute(sql, (*args, limit * 3)):
         r = dict(r)
-        last = r
         if not thread_readable(c, v, r["id"]):
             continue
         item = view(c, v, r)

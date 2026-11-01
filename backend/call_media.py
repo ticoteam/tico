@@ -186,7 +186,7 @@ class Recorder:
                     base = int((time.monotonic() - self.joined_at) * 1000)
                 self.on_audio(identity, bytes(event.frame.data), base + heard * 1000 // SAMPLE_RATE)
                 heard += event.frame.samples_per_channel
-        except Exception:
+        except Exception:  # noqa: BLE001 - one speaker's stream failing must not end the recording
             log.warning("The call recorder stopped hearing one speaker", exc_info=True)
         finally:
             await stream.aclose()
@@ -200,7 +200,7 @@ class Recorder:
             return
         try:
             asyncio.run_coroutine_threadsafe(self.room.disconnect(), self.loop).result(CONNECT_TIMEOUT)
-        except Exception:
+        except Exception:  # noqa: BLE001 - leaving the room is best effort; the call is over either way
             log.warning("The call recorder did not leave its room cleanly", exc_info=True)
 
 

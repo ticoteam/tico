@@ -22,7 +22,6 @@ Don't edit these except where your brief says so; ask core in your report.
 | `backend/rooms.py` | all |
 | `clients/sessions.py` | all |
 | `runner-rs/src/execute.rs` | `session_key`, `clear_epoch` and the session lookup/adoption around them |
-| `backend/thread_events.py` (new) | core creates a stub; **T2 owns it** after that (the `threads` SSE topic view) |
 
 ## 1. Schema
 
@@ -466,8 +465,8 @@ audience `members|personal|participants|meeting`, a private task's thread, or a 
              "created": "...", "edited_at": null}}
 {"seq": 813, ..., "id": "<message id>", "thread_id": "...", "root_id": "...", "deleted": true, "revision": 2}
 ```
-`threads` topic (`changes.topic='threads'`, `subject_id` = thread id, `conversation_id` = thread id; T2 builds the
-view in `backend/thread_events.py`):
+`threads` topic (`changes.topic='threads'`, `subject_id` = thread id, `conversation_id` = thread id; its view is
+`_threads` in `backend/events.py`):
 ```json
 {"seq": 900, "thread_id": "...", "root_id": "...",
  "kind": "created|renamed|archived|unarchived|audience|members|read|sub_thread|counters|reactions",

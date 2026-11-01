@@ -118,7 +118,7 @@ def _read_or_404(c, v, target):
     try:
         levels = teammate_access.levels_for(c, v.who, target, auth=v.auth)
     except (ValueError, KeyError):
-        raise Problem("not_found", "Unknown teammate", 404)
+        raise Problem("not_found", "Unknown teammate", 404) from None
     if not levels["read"]:
         raise Problem("not_found", "Unknown teammate", 404)
 
@@ -144,7 +144,7 @@ def _shared(c, v, actor, *, cursor=None, limit=None):
             where.append(f"({activity}<? OR ({activity}=? AND r.id<?))")
             args += [int(at), int(at), cid]
         except ValueError:
-            raise Problem("cursor", "Unknown cursor", 422)
+            raise Problem("cursor", "Unknown cursor", 422) from None
     sql = (f"SELECT r.*, {activity} AS activity FROM conversations r WHERE " + " AND ".join(where)
            + " AND " + threads.readable_sql(c, v, "r") + " ORDER BY activity DESC, r.id DESC LIMIT ?")
     found, budget = [], threads.MAX_PAGE_BYTES

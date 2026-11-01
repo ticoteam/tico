@@ -259,7 +259,7 @@ def listening_rows(v):
     from . import listening as L
     try:
         dests = L.destination_list(v.c, v.settings)
-    except Exception:       # a broken question set leaves the row out, never the page
+    except Exception:  # noqa: BLE001 - a broken question set leaves the row out, never the page
         return []
     dests = dests["destinations"]
     if not dests:
