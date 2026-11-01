@@ -62,17 +62,17 @@ def test_declined_blocker_releases_waiter_with_one_wake_after_last_blocker(c):
         TR.add_blocker(c, "human:ana", waiter["id"], blocker["id"], mover=True)
     H.task_update(c, "bot:cmo", waiter["id"], status="waiting")
     def wakes():
-        return c.execute("SELECT count(*) FROM messages WHERE json_extract(refs_json,'$.blocker_done') IS NOT NULL "
-                         "AND json_extract(refs_json,'$.task')=?", (waiter["id"],)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM messages WHERE json_extract(refs,'$.blocker_done') IS NOT NULL "
+                         "AND json_extract(refs,'$.task')=?", (waiter["id"],)).fetchone()[0]
     H.task_update(c, "bot:cpo", blockers[0]["id"], status="declined")
     assert TR.blocker_ids(c, waiter["id"]) == [blockers[1]["id"]]
     assert wakes() == 0
     H.task_update(c, "bot:cpo", blockers[1]["id"], status="declined")
     assert not TR.blocker_ids(c, waiter["id"])
     assert wakes() == 1
-    notice = H._one(c, "SELECT refs_json FROM messages WHERE json_extract(refs_json,'$.blocker_done')=?",
+    notice = H._one(c, "SELECT refs FROM messages WHERE json_extract(refs,'$.blocker_done')=?",
                     (blockers[1]["id"],))
-    assert H._json(notice["refs_json"], {})["blocker_status"] == "declined"
+    assert H._json(notice["refs"], {})["blocker_status"] == "declined"
     H.task_update(c, "bot:cpo", blockers[1]["id"], status="declined")
     assert wakes() == 1
 

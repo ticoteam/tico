@@ -200,7 +200,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     assert (held["held"], held["hold_reason"], held["state"]) == (1, claim_holds.REASON, "queued")
     assert held["attempt_id"] == attempt["id"]
     with store.read() as c:
-        error = c.execute("SELECT detail_json FROM events WHERE action='job.claim_failed' AND target=?",
+        error = c.execute("SELECT detail FROM events WHERE action='job.claim_failed' AND target=?",
                           (attempt["job_id"],)).fetchone()
         assert error and json.loads(error[0])["error"] == "IntegrityError"
         # The held job's preparation was rolled back: it made no attempt of its own.

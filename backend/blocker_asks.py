@@ -129,9 +129,9 @@ def unjoined(c, actor, task_id, blocker_id):
     row = H.task(c, task_id)
     if not row or row["status"] not in H.ACTIVE_STATUSES or actor != row["owner"]:
         return
-    found = H._one(c, "SELECT detail_json FROM events WHERE action='blocker.joined' AND target=? "
+    found = H._one(c, "SELECT detail FROM events WHERE action='blocker.joined' AND target=? "
                       "ORDER BY rowid DESC LIMIT 1", (task_id,))
-    detail = H._json(found["detail_json"], {}) if found else {}
+    detail = H._json(found["detail"], {}) if found else {}
     if not detail or detail.get("ask") != blocker_id or not detail.get("owner") or detail["owner"] == row["owner"]:
         return
     if H._one(c, "SELECT 1 FROM events WHERE action='blocker.unjoined' AND target=? LIMIT 1", (task_id,)):

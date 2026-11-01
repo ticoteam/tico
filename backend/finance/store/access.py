@@ -55,8 +55,8 @@ def seed_defaults(c: sqlite3.Connection, by: str, at: str) -> None:
 # ------------------------------------------------------------------------------------------------ grants
 def _grant(r: Any) -> Grant:
     return Grant(id=r["id"], subject_kind=r["subject_kind"], subject=r["subject"], what=r["what"], whose=r["whose"],
-                 whose_team=r["whose_team"], account_ids=frozenset(json.loads(r["account_ids_json"] or "[]")),
-                 new_members=bool(r["new_members"]), members=frozenset(json.loads(r["members_json"] or "[]")),
+                 whose_team=r["whose_team"], account_ids=frozenset(json.loads(r["account_ids"] or "[]")),
+                 new_members=bool(r["new_members"]), members=frozenset(json.loads(r["members"] or "[]")),
                  granted_by=r["granted_by"], expires_at=r["expires_at"] or "", status=r["status"])
 
 
@@ -71,7 +71,7 @@ def grant(c: sqlite3.Connection, grant_id: str) -> Grant | None:
 
 
 def insert_grant(c: sqlite3.Connection, g: Grant, by: str, at: str) -> None:
-    c.execute("INSERT INTO fin_view_grants(id, subject_kind, subject, new_members, members_json, what, account_ids_json, "
+    c.execute("INSERT INTO fin_view_grants(id, subject_kind, subject, new_members, members, what, account_ids, "
               "whose, whose_team, granted_by, expires_at, status, created_at, created_by) "
               "VALUES(?,?,?,?,?,?,?,?,?,?,?,'active',?,?)",
               (g.id, g.subject_kind, g.subject, int(g.new_members), json.dumps(sorted(g.members)), g.what,
@@ -89,15 +89,15 @@ def set_grant_status(c: sqlite3.Connection, grant_id: str, status: str, by: str,
 # ------------------------------------------------------------------------------------------------ private lines
 def private_lines(c: sqlite3.Connection) -> dict[str, PrivateLine]:
     return {r["account_id"]: PrivateLine(account_id=r["account_id"], others_see=r["others_see"],
-                                         full_detail=frozenset(json.loads(r["full_detail_json"] or "[]")))
+                                         full_detail=frozenset(json.loads(r["full_detail"] or "[]")))
             for r in c.execute("SELECT * FROM fin_private_lines")}
 
 
 def set_private(c: sqlite3.Connection, account_id: str, others_see: str, full_detail: Iterable[str], by: str,
                 at: str) -> None:
-    c.execute("INSERT INTO fin_private_lines(account_id, others_see, full_detail_json, created_at, created_by, "
+    c.execute("INSERT INTO fin_private_lines(account_id, others_see, full_detail, created_at, created_by, "
               "updated_at) VALUES(?,?,?,?,?,?) ON CONFLICT(account_id) DO UPDATE SET others_see=excluded.others_see, "
-              "full_detail_json=excluded.full_detail_json, updated_at=excluded.updated_at",
+              "full_detail=excluded.full_detail, updated_at=excluded.updated_at",
               (account_id, others_see, json.dumps(sorted(set(full_detail))), at, by, at))
 
 
@@ -108,7 +108,7 @@ def clear_private(c: sqlite3.Connection, account_id: str) -> int:
 def mark_private(c: sqlite3.Connection, account_id: str, by: str, at: str) -> bool:
     """Make an account private with the default (totals only, no full detail) unless it already is. True when it
     was not private before, so the caller knows to move the view version."""
-    return c.execute("INSERT OR IGNORE INTO fin_private_lines(account_id, others_see, full_detail_json, created_at, "
+    return c.execute("INSERT OR IGNORE INTO fin_private_lines(account_id, others_see, full_detail, created_at, "
                      "created_by, updated_at) VALUES(?,?,?,?,?,?)", (account_id, "totals", "[]", at, by, at)).rowcount == 1
 
 

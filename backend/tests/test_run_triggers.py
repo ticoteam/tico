@@ -78,7 +78,7 @@ def test_each_trigger_kind_is_stamped_where_the_wake_is_made(api):
         quiet(c)
         c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.shift(H.now(), seconds=-600), task["id"]))
         assert task["id"] in H.wake_stalled(c)["woke"] + H.wake_stalled(c)["checked"]
-        stall = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs_json,'$.wake') "
+        stall = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs,'$.wake') "
                           "IN ('stalled','status_check') ORDER BY rowid DESC LIMIT 1").fetchone()
         assert RT.of_message(H.message(c, stall[0]))[0] == "stall_check"
         # other: a keeper message nothing stamped (a Slack digest).
@@ -116,7 +116,7 @@ def test_a_routines_new_task_is_woken_by_its_automation(api, fired_by):
     with store.read() as c:
         task = c.execute("SELECT id FROM tasks WHERE owner='bot:ops' AND title='Review the day'").fetchall()
         assert len(task) == 1
-        wake = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs_json,'$.task')=? "
+        wake = c.execute("SELECT id FROM messages WHERE to_actor='bot:ops' AND json_extract(refs,'$.task')=? "
                          "ORDER BY rowid LIMIT 1", (task[0]["id"],)).fetchone()
         assert RT.of_message(H.message(c, wake[0])) == ("other", "automation:" + aid)
 
@@ -548,7 +548,7 @@ def test_a_bots_result_accepted_edited_or_overridden_gives_its_run_one_outcome(a
         H.task_update(c, ana, runs["overridden"][0], status="open", note="Not yet: the March file is missing.")
         H.task_update(c, "bot:ops", runs["own"][0], status="doing")    # the bot moving its own result is no verdict
         got = {r[0]: (r[1], json.loads(r[2])) for r in c.execute(
-            "SELECT target, actor, detail_json FROM events WHERE action='turn.outcome'")}
+            "SELECT target, actor, detail FROM events WHERE action='turn.outcome'")}
         assert c.execute("SELECT count(*) FROM events WHERE action='turn.outcome'").fetchone()[0] == len(got) == 3
         for name, to in (("accepted", "closed"), ("edited", "done"), ("overridden", "open")):
             task_id, turn_id = runs[name]

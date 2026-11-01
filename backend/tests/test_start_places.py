@@ -190,7 +190,7 @@ def test_upgrade_preserves_legacy_waits_and_only_unstarted_places_expire(api, mo
         old = H.shift(H.now(), seconds=-7200)
         c.execute("UPDATE attempts SET created=?", (old,))
         # One legacy worker cleared its wait and really is preparing; the other still waits.
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) "
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) "
                   "VALUES('attempt-1',2,'status',?,?)", ('{"waiting":""}', H.now()))
         start_places.restore_waits(c)
         assert start_places.overdue(c) == []  # An older worker never agreed to a hard preparation deadline.

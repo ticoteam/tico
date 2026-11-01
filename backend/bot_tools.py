@@ -30,7 +30,7 @@ from .store import H, Problem, encode, readiness_document, repo_url
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_tool_requests(
  id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
- service TEXT NOT NULL, identity TEXT NOT NULL DEFAULT '', entry_json TEXT NOT NULL,
+ service TEXT NOT NULL, identity TEXT NOT NULL DEFAULT '', entry TEXT NOT NULL,
  task_id TEXT, requested_by TEXT NOT NULL, created TEXT NOT NULL, state TEXT NOT NULL DEFAULT 'pending');
 CREATE INDEX IF NOT EXISTS bot_tool_requests_bot ON bot_tool_requests(bot, state, kind);
 """
@@ -246,26 +246,26 @@ def agent_report(c, bot, tools):
             raise Problem(exc.code, str(exc), 422) from None
         raw.append({key: entry[key] for key in ("service", "identity", "can", "env", "note", "mcp") if key in entry}
                    | {"scope": access_entry.scope_of(entry), "credential": "not-declared"})
-    c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?) "
-              "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+              "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               ("agent-tools:" + bot, encode({"tools": raw, "reported_at": H.now()})))
     reconcile(c, {bot: raw}, complete=True)
 
 
 def _state(c, settings, bot):
-    row = c.execute("SELECT config_json,repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
-    config = H._json(row["config_json"], {}) if row else {}
+    row = c.execute("SELECT config,repo FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = H._json(row["config"], {}) if row else {}
     config = config if isinstance(config, dict) else {}
-    runner = c.execute("SELECT r.label,r.last_seen,r.revoked_at,r.readiness_json FROM assignments a "
+    runner = c.execute("SELECT r.label,r.last_seen,r.revoked_at,r.readiness FROM assignments a "
                        "JOIN runners r ON r.id=a.runner_id WHERE a.bot=?", (bot,)).fetchone()
-    readiness = readiness_document(runner["readiness_json"]) if runner else {}
+    readiness = readiness_document(runner["readiness"]) if runner else {}
     report = (readiness.get("bots") or {}).get(bot)
     report = report if isinstance(report, dict) else {}
     label = (runner["label"] if runner else "") or "its computer"
     external = resolve_harness(config) in EXTERNAL_HARNESSES
     agent = c.execute("SELECT profile,last_seen,revoked_at FROM agents WHERE bot=?", (bot,)).fetchone() if external else None
     if external:
-        stored = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", ("agent-tools:" + bot,)).fetchone()
+        stored = c.execute("SELECT value FROM registry_metadata WHERE key=?", ("agent-tools:" + bot,)).fetchone()
         report = H._json(stored[0], {}) if stored else {}
         label = (agent["profile"] if agent else "") or "its external profile"
     used = {"model", "repo"}
@@ -275,7 +275,7 @@ def _state(c, settings, bot):
 
 
 def _requests(c, bot):
-    return [dict(row, entry=H._json(row["entry_json"], {}) or {}) for row in c.execute(
+    return [dict(row, entry=H._json(row["entry"], {}) or {}) for row in c.execute(
         "SELECT * FROM bot_tool_requests WHERE bot=? AND state='pending' ORDER BY created,id", (bot,))]
 
 
@@ -404,7 +404,7 @@ def _task_text(verb, bot, name, entry, computer, repo=None):
 
 def _request_task(c, auth, who, verb, bot, name, entry, computer, taken, repo=None, title_prefix=""):
     from . import getting_started as G
-    external = resolve_harness(H._json(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
+    external = resolve_harness(H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0], {})) in EXTERNAL_HARNESSES
     if not external:
         G._botops(c)
     slug = (H.bot(c, bot) or {}).get("slug") or bot
@@ -446,7 +446,7 @@ def register(c, auth, settings_admin, settings, who, bot, body):
     task = _request_task(c, auth, who, "add", bot, name, entry, state["runner"] and state["label"], taken,
                          state["row"] and state["row"]["repo"], body.title_prefix)
     rid = H.new_id()
-    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry_json,task_id,requested_by,created) "
+    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry,task_id,requested_by,created) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (rid, bot, "add", entry["service"], entry.get("identity", ""), encode(entry),
                                             task["id"], who.actor, H.now()))
     H.event(c, who.actor, "bot.tool_requested", bot, {"service": entry["service"], "task": task["id"]})
@@ -494,7 +494,7 @@ def unregister(c, auth, settings_admin, settings, who, bot, tool_id):
     name = service_name(entry["service"])
     task = _request_task(c, auth, who, "remove", bot, name, flat, state["label"], taken,
                          state["row"] and state["row"]["repo"])
-    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry_json,task_id,requested_by,created) "
+    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry,task_id,requested_by,created) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (H.new_id(), bot, "remove", entry["service"], entry.get("identity", ""),
                                             encode(entry), task["id"], who.actor, H.now()))
     H.event(c, who.actor, "bot.tool_removal_requested", bot, {"service": entry["service"], "task": task["id"]})
@@ -567,7 +567,7 @@ def update(c, auth, settings_admin, settings, who, bot, tool_id, body):
                       (bot, entry["service"])).fetchone()[0]
     task = _request_task(c, auth, who, "update", bot, service_name(entry["service"]), entry, state["label"], taken,
                          state["row"] and state["row"]["repo"], body.title_prefix)
-    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry_json,task_id,requested_by,created) "
+    c.execute("INSERT INTO bot_tool_requests(id,bot,kind,service,identity,entry,task_id,requested_by,created) "
               "VALUES(?,?,?,?,?,?,?,?,?)", (H.new_id(), bot, "update", entry["service"], entry.get("identity", ""),
                                             encode(entry), task["id"], who.actor, H.now()))
     H.event(c, who.actor, "bot.tool_update_requested", bot, {"service": entry["service"], "task": task["id"]})

@@ -178,7 +178,7 @@ def edit_version(c, auth, who, task_id, fid, number, body):
             asked = H.message(c, existing)
             row = H.task(c, task_id)
             recipient = H.task_ask_recipient(c, who.actor, row, value)
-            c.execute("UPDATE messages SET refs_json=?,to_actor=? WHERE id=?",
+            c.execute("UPDATE messages SET refs=?,to_actor=? WHERE id=?",
                       (encode({**asked["refs"], **value}), recipient, existing))
             return version_review(c, fid, number, actor=privacy.actor(who))
         if value:

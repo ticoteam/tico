@@ -190,9 +190,9 @@ class Org(World):
             # The factory seeds one owner and one operator for every bot and its runner. Dana is the owner here: the
             # stored owner (backend/access.py OWNER, read once at seed time) and those operators move to her.
             from backend.access import OWNER
-            owner = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (OWNER,)).fetchone()[0])
+            owner = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key=?", (OWNER,)).fetchone()[0])
             owner.update(email="dana@acme.example", updated_by="environment")
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (json.dumps(owner, sort_keys=True), OWNER))
+            c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(owner, sort_keys=True), OWNER))
             # Dana admits her team to the sign-in list (backend/access.py ACCESS). The Slack gateway hears only an admitted
             # sender (backend/slack_gateway.py verify_sender), so a teammate's channel message is heard once they are on it.
             from backend.access import ACCESS, _load_json, _store

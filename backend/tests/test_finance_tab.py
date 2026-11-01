@@ -37,7 +37,7 @@ def _bank(c, at=AT):
             {"account_id": cards_gl, "amount": -amount}]}, at=at)
         SK.insert(c, "fin_feed_txns", {**feed, "money_account_id": program, "provider_id": pid, "txn_date": day,
                                        "amount": -amount, "counterparty": "Acme Supplies", "card_id": cid,
-                                       "entry_id": entry["entry_id"], "raw_json": '{"secret": "raw"}'})
+                                       "entry_id": entry["entry_id"], "raw": '{"secret": "raw"}'})
     SK.insert(c, "fin_feed_txns", {**feed, "status": "new", "money_account_id": bank, "provider_id": "t3",
                                    "txn_date": "2026-10-11", "amount": -500, "counterparty": "Bank fee"})
     return {"bank": bank, "program": program, "eve": eve, "gus": gus, "cards_gl": cards_gl}

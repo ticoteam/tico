@@ -64,12 +64,12 @@ def test_a_private_ticket_changes_nothing_a_warning_says(api):
         assert SB.sweep(c, later(0)) == [], "the private ticket does not push the step over"
         H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
         assert [(s, n, t) for s, _, n, t in SB.sweep(c, later(0))] == [("Inbox", 4, ["bot:coo"])]
-        [(room, body)] = c.execute("SELECT json_extract(refs_json,'$.task'), body FROM messages "
+        [(room, body)] = c.execute("SELECT json_extract(refs,'$.task'), body FROM messages "
                                    "WHERE body LIKE 'Backlog:%'").fetchall()
         assert body.startswith("Backlog: 4 tickets wait at Inbox (over 3; ops 4)")
         assert room != hidden["id"] and not H.task_private(c, H.task(c, room)), "never written into a private room"
         assert "cpo" not in body
-        [event] = c.execute("SELECT target, json_extract(detail_json,'$.count') FROM events WHERE action=?",
+        [event] = c.execute("SELECT target, json_extract(detail,'$.count') FROM events WHERE action=?",
                             (SB.EVENT,)).fetchall()
         assert tuple(event) == (room, 4)
 
@@ -84,7 +84,7 @@ def test_a_ticket_of_a_bot_not_every_member_reads_is_not_counted(api):
         assert told(c) == []
         H.task_create(c, "human:ana", "Ticket bot:ops 3", "x", "bot:ops", type=typ["id"], step="Inbox", lint=False)
         assert [n for _, _, n, _ in SB.sweep(c, later(0))] == [4]
-        [(room, body)] = c.execute("SELECT json_extract(refs_json,'$.task'), body FROM messages "
+        [(room, body)] = c.execute("SELECT json_extract(refs,'$.task'), body FROM messages "
                                    "WHERE body LIKE 'Backlog:%'").fetchall()
         assert room != hidden["id"], "the oldest ticket is the restricted bot's, and it never hosts the warning"
         assert "cpo" not in body

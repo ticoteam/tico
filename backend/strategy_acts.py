@@ -300,7 +300,7 @@ def _undone(c, change):
     leaves no mark on the task the Strategy Bot reads, so the server keeps the owner's Undo standing: the same change
     again is their proposal, not the bot's decision."""
     key = _same(change)
-    for (changes_json,) in c.execute("SELECT changes_json FROM strategy_actions WHERE "
+    for (changes_json,) in c.execute("SELECT changes FROM strategy_actions WHERE "
                                      "kind='decision' AND state='undone' "
                                      "ORDER BY undone_at DESC LIMIT ?", (UNDONE_SCAN,)):
         if any(_same(x.get("change") or {}) == key for x in (H._json(changes_json, None) or {}).get("done") or []):
@@ -454,10 +454,10 @@ def _log(c, *, kind, reason, state, done=(), left=(), goal_id=None, action_id=No
     row = {"id": action_id or H.new_id(), "created": H.now(), "actor": STRATEGY_BOT, "kind": kind,
            "reason": reason or "", "goal_id": goal_id or None, "state": state, "proposal_task": proposal,
            "note": note,
-           "changes_json": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]})}
+           "changes": H._dump({"done": [_logged(c, x) for x in done], "left": [_logged(c, x) for x in left]})}
     c.execute("INSERT INTO strategy_actions (id, created, actor, kind, reason, goal_id, state, proposal_task, note, "
-              "changes_json) VALUES (:id, :created, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
-              ":changes_json)", row)
+              "changes) VALUES (:id, :created, :actor, :kind, :reason, :goal_id, :state, :proposal_task, :note, "
+              ":changes)", row)
     H.event(c, STRATEGY_BOT, "strategy_bot." + ("decided" if kind == "decision" else "proposed"), row["id"],
             {"kind": kind, "done": len(done), "left": len(left)})
     return row["id"]
@@ -468,9 +468,9 @@ def _stored(c, action_id):
     row = H._one(c, "SELECT * FROM strategy_actions WHERE id=?", (action_id,))
     if not row:
         return None
-    changes = H._json(row.pop("changes_json"), None) or {}
+    changes = H._json(row.pop("changes"), None) or {}
     row["done"], row["left"] = changes.get("done") or [], changes.get("left") or []
-    row["undo"] = H._json(row.pop("undo_json", None), None) or None
+    row["undo"] = H._json(row.pop("undo", None), None) or None
     row["undoable"] = row["state"] == "done"
     return row
 
@@ -592,7 +592,7 @@ def undo(c, actor, action_id):
     finally:
         ACTION.reset(token)
     result = {"restored": restored, "kept": kept}
-    c.execute("UPDATE strategy_actions SET state='undone', undone_at=?, undone_by=?, undo_json=? WHERE id=?",
+    c.execute("UPDATE strategy_actions SET state='undone', undone_at=?, undone_by=?, undo=? WHERE id=?",
               (H.now(), actor, H._dump(result), action_id))
     H.event(c, actor, "strategy_bot.undone", action_id, {"restored": len(restored), "kept": len(kept)})
     return action_id

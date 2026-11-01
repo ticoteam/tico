@@ -25,7 +25,7 @@ log = logging.getLogger(__name__)
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS invariant_state(
  check_id TEXT PRIMARY KEY, firing INTEGER NOT NULL DEFAULT 0, count INTEGER NOT NULL DEFAULT 0,
- examples_json TEXT NOT NULL DEFAULT '[]', checked_at TEXT, since TEXT, task_id TEXT);
+ examples TEXT NOT NULL DEFAULT '[]', checked_at TEXT, since TEXT, task_id TEXT);
 CREATE INDEX IF NOT EXISTS invariants_lease ON attempts(lease_until) WHERE state IN ('leased','running');
 CREATE INDEX IF NOT EXISTS invariants_doing ON tasks(updated) WHERE status='doing';
 CREATE INDEX IF NOT EXISTS invariants_open_approvals ON approvals(created) WHERE decision IS NULL;
@@ -180,8 +180,8 @@ def long_holds(c, ctx):
     total = c.execute("SELECT count(*) FROM flight_events WHERE kind='long_hold' AND ts>=?", (since,)).fetchone()[0]
     if total <= LONG_HOLDS_PER_HOUR:
         return []
-    rows = c.execute("SELECT json_extract(detail_json,'$.route') AS route, json_extract(detail_json,'$.site') AS site, "
-                     "count(*) AS n, max(json_extract(detail_json,'$.hold_s')) AS worst FROM flight_events "
+    rows = c.execute("SELECT json_extract(detail,'$.route') AS route, json_extract(detail,'$.site') AS site, "
+                     "count(*) AS n, max(json_extract(detail,'$.hold_s')) AS worst FROM flight_events "
                      "WHERE kind='long_hold' AND ts>=? GROUP BY route, site ORDER BY n DESC LIMIT ?",
                      (since, LIMIT)).fetchall()
     return [f"{row['route'] or 'a background job'} at {row['site'] or 'an unknown site'}: {row['n']} holds, "
@@ -331,9 +331,9 @@ def _apply(c, auth, check, hits, now):
         if was:
             _close(c, task_id)
         firing, task_id, since = 0, None, None
-    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples_json,checked_at,since,task_id) "
+    c.execute("INSERT INTO invariant_state(check_id,firing,count,examples,checked_at,since,task_id) "
               "VALUES(?,?,?,?,?,?,?) ON CONFLICT(check_id) DO UPDATE SET firing=excluded.firing, count=excluded.count, "
-              "examples_json=excluded.examples_json, checked_at=excluded.checked_at, since=excluded.since, "
+              "examples=excluded.examples, checked_at=excluded.checked_at, since=excluded.since, "
               "task_id=excluded.task_id",
               (check.id, firing, len(hits), json.dumps(hits[:EXAMPLES]), now, since, task_id))
 
@@ -347,7 +347,7 @@ def _changed(row, hits):
         return was
     if not was or not row["task_id"]:
         return True
-    return row["count"] != len(hits) or row["examples_json"] != json.dumps(hits[:EXAMPLES])
+    return row["count"] != len(hits) or row["examples"] != json.dumps(hits[:EXAMPLES])
 
 
 def sweep(store, auth, settings, at, record=None):
@@ -379,7 +379,7 @@ def health_checks(c):
         check = BY_ID.get(row["check_id"])
         if not check:
             continue
-        examples = json.loads(row["examples_json"] or "[]")
+        examples = json.loads(row["examples"] or "[]")
         count = row["count"]
         shown = f"{count}{'+' if count >= LIMIT else ''}"
         more = f" and {count - len(examples)} more" if count > len(examples) else ""

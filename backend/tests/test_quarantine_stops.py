@@ -32,7 +32,7 @@ def review(api):
         task = c.execute("SELECT id,body FROM tasks WHERE title=? AND status='open'", (REVIEW,)).fetchone()
         if not task:
             return None
-        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=?",
+        said = [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=?",
                                         (task['id'],))]
         return "\n".join([task['body'] or '', *said])
 

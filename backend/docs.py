@@ -207,7 +207,7 @@ def migrate(c, settings=None):
     if c.execute("SELECT 1 FROM registry_metadata WHERE key=?", (MIGRATED,)).fetchone():
         return 0
     found = []
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='document_sources'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='document_sources'").fetchone()
     try:
         sources = json.loads(row[0]) if row else []
     except ValueError:

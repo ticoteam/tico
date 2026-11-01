@@ -24,7 +24,7 @@ PREFIX = '/public/roadmaps/'
 def migrate(c):
     c.execute('CREATE TABLE IF NOT EXISTS roadmap_actions('
               'day TEXT NOT NULL,ip_hash TEXT NOT NULL,actions INTEGER NOT NULL,PRIMARY KEY(day,ip_hash))')
-    c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmap_ip_secret',?)",
+    c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmap_ip_secret',?)",
               (json.dumps(secrets.token_hex(32)),))
 
 
@@ -120,7 +120,7 @@ def task(c, label, tid, public=True):
 def allowance(c, request):
     """(day, the visitor's address digest, whether today's action limit is already reached)."""
     day = H.now()[:10]
-    secret = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0])
+    secret = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0])
     from .client_ip import client_ip, ip_bucket
     ip = ip_bucket(client_ip(request, request.app.state.store.settings))
     digest = hmac.new(secret.encode(), ip.encode(), hashlib.sha256).hexdigest()
@@ -149,9 +149,9 @@ def suggestions_full(c, manager, mine=None):
     if waiting < limit:
         return False
     day = H.now()[:10]
-    if manager and c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmap_suggestions_full',?) "
-                             "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json "
-                             "WHERE value_json!=excluded.value_json", (json.dumps(day),)).rowcount:
+    if manager and c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmap_suggestions_full',?) "
+                             "ON CONFLICT(key) DO UPDATE SET value=excluded.value "
+                             "WHERE value!=excluded.value", (json.dumps(day),)).rowcount:
         H.notice(c, H.KEEPER, 'bot:' + manager,
                  f'The public roadmap is refusing new suggestions: {waiting} are waiting at Suggested, the limit is '
                  f'{limit}. Review or decline them to reopen the form, or raise suggestion_limit in roadmap settings.',
@@ -169,14 +169,14 @@ RESERVATIONS, RESERVATION_SECONDS = 'roadmap_suggest_reservations', 120
 
 
 def reservations(c):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (RESERVATIONS,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (RESERVATIONS,)).fetchone()
     stamp = H.now()
     return {rid: until for rid, until in (json.loads(row[0]) if row else {}).items() if until > stamp}
 
 
 def _keep(c, held):
-    c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?) '
-              'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (RESERVATIONS, json.dumps(held)))
+    c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?) '
+              'ON CONFLICT(key) DO UPDATE SET value=excluded.value', (RESERVATIONS, json.dumps(held)))
 
 
 def reserve(c, request, label):
@@ -233,7 +233,7 @@ def output(c, row):
 
 def comments(c, row, limit=100, offset=0):
     rows = c.execute('SELECT id,body,from_actor,created FROM messages WHERE conversation_id=? '
-                     "AND json_extract(refs_json,'$.task')=? AND json_extract(refs_json,'$.comment')=1 "
+                     "AND json_extract(refs,'$.task')=? AND json_extract(refs,'$.comment')=1 "
                      'AND public=1 AND hidden_at IS NULL AND deleted_at IS NULL ORDER BY created,id LIMIT ? OFFSET ?',
                      (row['conversation_id'], row['id'], limit + 1, offset))
     items = ({'id': r['id'], 'text': r['body'], 'author': 'Team' if H.is_human(r['from_actor']) or
@@ -286,8 +286,8 @@ def install(app, store, auth, mutate):
             except RuntimeError:
                 raise Problem('cors', 'Use exact HTTPS origins, or HTTP localhost origins', 422) from None
             value.update(labels=list(dict.fromkeys(value['labels'])), cors_origins=list(origins))
-            c.execute("INSERT INTO registry_metadata(key,value_json) VALUES('roadmaps',?) "
-                      'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json', (json.dumps(value),))
+            c.execute("INSERT INTO registry_metadata(key,value) VALUES('roadmaps',?) "
+                      'ON CONFLICT(key) DO UPDATE SET value=excluded.value', (json.dumps(value),))
             H.event(c, who.actor, 'roadmaps.settings', '', value)
             return R.settings_view(c)
         return mutate(request, body, work)

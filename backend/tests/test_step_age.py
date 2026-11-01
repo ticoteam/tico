@@ -37,8 +37,8 @@ def later(hours):
 
 def wakes(c, tid, to, kind):
     return [m for m in c.execute(
-        "SELECT * FROM messages WHERE to_actor=? AND json_extract(refs_json,'$.task')=? "
-        "AND json_extract(refs_json,'$.wake')=?", (to, tid, kind)).fetchall()]
+        "SELECT * FROM messages WHERE to_actor=? AND json_extract(refs,'$.task')=? "
+        "AND json_extract(refs,'$.wake')=?", (to, tid, kind)).fetchall()]
 
 
 def queued(c, message):
@@ -53,7 +53,7 @@ def test_a_quiet_ticket_at_its_checkpoint_wakes_its_owner_once_and_reaches_the_m
         assert SA.sweep(c, later(1)) == {"asked": [], "late": [], "untold": [], "failed": []}
         assert SA.sweep(c, later(2.5)) == {"asked": [row["id"]], "late": [], "untold": [], "failed": []}
         [asked] = wakes(c, row["id"], "bot:cpo", "step_status")
-        assert W.MARK not in H._json(asked["refs_json"], {}), "the status wake is not held as same_state"
+        assert W.MARK not in H._json(asked["refs"], {}), "the status wake is not held as same_state"
         assert queued(c, asked)
         # Once: later sweeps neither ask again nor tell the manager twice.
         assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [row["id"]], "untold": [], "failed": []}
@@ -257,7 +257,7 @@ def test_a_steps_own_hours_time_it_on_any_board_and_override_the_dev_default(api
     from backend import step_flow
     with api.app.state.store.transaction() as c:
         row = ticket(c)
-        c.execute("UPDATE task_steps SET flow_json=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
+        c.execute("UPDATE task_steps SET flow=? WHERE id=?", ('{"status_hours": 6, "late_hours": 8}', row["step_id"]))
         at_checkpoint(c, row)
         assert SA.sweep(c, later(4.5)) == {"asked": [], "late": [], "untold": [], "failed": []}, "6 h, not the default 2"
         assert SA.sweep(c, later(6.5))["asked"] == [row["id"]]

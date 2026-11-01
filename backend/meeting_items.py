@@ -116,7 +116,7 @@ def detail_of(section, value):
 # ----------------------------------------------------------------------------- reading
 def view(row):
     item = dict(row)
-    item["detail"] = json.loads(item.pop("detail_json") or "{}")
+    item["detail"] = json.loads(item.pop("detail") or "{}")
     return item
 
 
@@ -143,7 +143,7 @@ def add(c, record, author, body):
     section = body.section
     detail = detail_of(section, body.detail)
     ts, iid = H.now(), H.new_id()
-    c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail_json,quote,at_ms,status,"
+    c.execute("INSERT INTO meeting_items(id,meeting_id,section,text,detail,quote,at_ms,status,"
               "created_by,updated_by,pushed_at,result_ref,created,updated) "
               "VALUES(?,?,?,?,?,?,?,'proposed',?,NULL,NULL,NULL,?,?)",
               (iid, record["id"], section, body.text.strip(), json.dumps(detail, sort_keys=True),
@@ -162,7 +162,7 @@ def edit(c, rid, author, iid, body):
     if body.text is not None:
         sets.append("text=?"); args.append(body.text.strip())
     if body.detail is not None:
-        sets.append("detail_json=?"); args.append(json.dumps(detail_of(row["section"], body.detail), sort_keys=True))
+        sets.append("detail=?"); args.append(json.dumps(detail_of(row["section"], body.detail), sort_keys=True))
     if body.status is not None:
         sets.append("status=?"); args.append(body.status)
     c.execute(f"UPDATE meeting_items SET {','.join(sets)} WHERE id=? AND meeting_id=?", (*args, iid, rid))
@@ -370,7 +370,7 @@ def install_meeting_items(app, store, mutate, task_create):
             record, row = pushable(c, who, rid, iid)
             if row["status"] == "pushed":
                 return {"item": view(row), "pushed": False}
-            detail = json.loads(row["detail_json"] or "{}")
+            detail = json.loads(row["detail"] or "{}")
             if row["section"] == "task":
                 result = push_task(c, settings, task_create, who, record, row, detail)
             elif row["section"] == "doc":

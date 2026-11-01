@@ -19,7 +19,7 @@ def _fresh_store(tmp_path):
 
 
 # Columns whose CHECK wants a real value, not a placeholder.
-OVERRIDES = {("fin_payments", "method"): "ach", ("bot_config", "config_json"): "{}"}
+OVERRIDES = {("fin_payments", "method"): "ach", ("bot_config", "config"): "{}"}
 
 
 def _required(conn, table, skip):
@@ -162,7 +162,7 @@ def test_google_connects_state_is_renamed_to_oauth_state(tmp_path):
 def test_a_stale_needs_onboarding_row_maps_to_needs_setup_and_bot_status_keeps_its_states(tmp_path):
     conn = sqlite3.connect(tmp_path / "old.db", isolation_level=None)
     conn.executescript("""
-        CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config_json TEXT, onboarding_state TEXT);
+        CREATE TABLE bot_config(bot TEXT PRIMARY KEY, config TEXT, onboarding_state TEXT);
         CREATE TABLE bot_status(bot TEXT PRIMARY KEY, state TEXT, focus TEXT);
         INSERT INTO bot_config VALUES('starter','{}','needs_onboarding'), ('ready','{}','onboarded');
         INSERT INTO bot_status VALUES('starter','idle',''), ('stuck','limited','');

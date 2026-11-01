@@ -312,9 +312,9 @@ def default_placement(c, bot):
     """Where a bot's cloud machine is when nobody has chosen: its own for a template in OWN_TEMPLATES or a bot in an
     OWN_DEPARTMENTS department of the team chart (its group, or its manager's up the chain), the shared one for the
     rest. Read once, when its row is made: moving it on the chart later moves no machine."""
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     try:
-        config = json.loads(found["config_json"] or "{}") if found else {}
+        config = json.loads(found["config"] or "{}") if found else {}
     except ValueError:
         config = {}
     if isinstance(config, dict) and config.get("template") in OWN_TEMPLATES:
@@ -824,7 +824,7 @@ class Manager:
             learned = bool(listed["sizes"]) and (first or not sizes(c))
             if listed["sizes"]:
                 c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET "
-                          "value_json=excluded.value_json",
+                          "value=excluded.value",
                           (SIZES_KEY, json.dumps({"sizes": listed["sizes"], "caps": listed["caps"], "at": H.now()})))
             mine = rows(c)
             # Per key, a machine that is not dead wins, then the one this row already has. HQ renames a machine a new

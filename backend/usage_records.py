@@ -45,7 +45,7 @@ def ran_on(c, turn_ids):
             if row["id"] not in parts and (row["model"] or row["provider"]):
                 parts[row["id"]] = [{"model": row["model"], "provider": row["provider"], "runtime": None, "harness": None,
                                      "effort": None}]
-        for row in c.execute(f"SELECT id,json_extract(result_json,'$.fallback'),model_json FROM attempts "
+        for row in c.execute(f"SELECT id,json_extract(result,'$.fallback'),model FROM attempts "
                              f"WHERE id IN ({marks})", chunk):
             fallbacks[row[0]] = row[1]
             chosen[row[0]] = _record(row[2])

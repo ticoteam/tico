@@ -94,13 +94,13 @@ def _runs(c, row):
         return False, [], []
     lanes, _root = H._session_lanes(c, row)
     attempts = H._rows(c.execute(
-        "SELECT a.id, a.job_id, a.state, a.created, a.finished, a.result_json, a.stop_requested, d.end_reason "
+        "SELECT a.id, a.job_id, a.state, a.created, a.finished, a.result, a.stop_requested, d.end_reason "
         "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id WHERE a.bot=? AND a.lane IN (?,?) "
         "ORDER BY coalesce(a.finished,a.created) DESC, a.id DESC LIMIT 20", (slug, *lanes)))
     live = any(a["state"] in ("leased", "running") for a in attempts)
     jobs = [r[0] for r in c.execute(
         "SELECT j.state FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs_json,'$.task')=?)",
+        "AND j.state IN ('queued','held','uncertain') AND (m.conversation_id=? OR json_extract(m.refs,'$.task')=?)",
         (slug, row.get("conversation_id") or "", row["id"]))]
     return live, [a for a in attempts if a["state"] not in ("leased", "running")], jobs
 
@@ -314,8 +314,8 @@ def _refusals(c, out, rows, at):
                     ticket=_label(c, row))
     counted = {}
     since = H.shift(at, hours=-REFUSAL_HOURS)
-    for event in c.execute("SELECT ts, rule, detail_json FROM refusals WHERE ts>=? ORDER BY ts, id", (since,)):
-        task_id = (H._json(event["detail_json"], {}) or {}).get("task")
+    for event in c.execute("SELECT ts, rule, detail FROM refusals WHERE ts>=? ORDER BY ts, id", (since,)):
+        task_id = (H._json(event["detail"], {}) or {}).get("task")
         if task_id in tickets and task_id not in retried:
             counted.setdefault((task_id, str(event["rule"] or "a rule")), []).append(event["ts"])
     for (task_id, rule), times in counted.items():
@@ -327,10 +327,10 @@ def _refusals(c, out, rows, at):
 def _merges(c, out, rows):
     """Open pull requests GitHub reports as conflicting."""
     for row in rows:
-        for link in c.execute("SELECT number, pr_sha, detail_json, mergeable, updated, created FROM task_links "
+        for link in c.execute("SELECT number, pr_sha, detail, mergeable, updated, created FROM task_links "
                               "WHERE task_id=? AND kind='pr' AND state IN ('open','draft') AND mergeable='conflict' "
                               "ORDER BY created", (row["id"],)):
-            head = (H._json(link["detail_json"], {}) or {}).get("head_sha") or link["pr_sha"] or ""
+            head = (H._json(link["detail"], {}) or {}).get("head_sha") or link["pr_sha"] or ""
             if link["number"] and head:
                 out.add("ticket:" + row["id"], "merge", f"PR #{link['number']} cannot merge: it conflicts at {head[:12]}",
                         link["updated"] or link["created"], ticket=_label(c, row), pr=link["number"], head=head)
@@ -404,7 +404,7 @@ def deliver(c, at=None):
             continue
         entries = build(c, typ, at=at, reader=H.bot_actor(slug))
         keys = sorted(e["key"] for e in entries)
-        last = c.execute("SELECT detail_json FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
+        last = c.execute("SELECT detail FROM events WHERE action=? AND target=? ORDER BY rowid DESC LIMIT 1",
                          (EVENT, typ["id"])).fetchone()
         sent = set((H._json(last[0], {}) or {}).get("keys") or []) if last else set()
         new = [k for k in keys if k not in sent]

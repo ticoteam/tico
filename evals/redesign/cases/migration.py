@@ -585,7 +585,7 @@ def told_count(org, f):
     mid = setup_cut(f)["migration"]
     with org.store.read() as c:
         tasks = c.execute("SELECT count(*) FROM tasks WHERE title LIKE '%Automations%'").fetchone()[0]
-        notes = c.execute("SELECT count(*) FROM messages WHERE refs_json LIKE ?", (f"%{mid}%",)).fetchone()[0]
+        notes = c.execute("SELECT count(*) FROM messages WHERE refs LIKE ?", (f"%{mid}%",)).fetchone()[0]
     return tasks + notes
 
 

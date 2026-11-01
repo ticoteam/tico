@@ -62,7 +62,7 @@ def system_jobs(api, **on):
     config.update({key: {"on": True, "preset": preset, "at": at} for key, (preset, at) in on.items()})
     with api.app.state.store.transaction() as c:
         for key, value in ((SR.CONFIG_KEY, config), (release_flow.KEY, {"on": False})):
-            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (key, json.dumps(value)))
 
 
@@ -142,7 +142,7 @@ def test_a_quiet_hosted_server_asks_once_with_the_next_routine_as_wake_time(api,
 
     def before_the_call():                   # the history already says why, and no write transaction is open
         with api.app.state.store.read() as c:
-            seen["event"] = c.execute("SELECT detail_json FROM events WHERE action='server.sleep'").fetchone()
+            seen["event"] = c.execute("SELECT detail FROM events WHERE action='server.sleep'").fetchone()
     hq.on_sleep = before_the_call
 
     state = turn_on(api, 2, runners=False)

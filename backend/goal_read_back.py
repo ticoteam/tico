@@ -123,20 +123,20 @@ def not_agreed(detail):
 
 def stored(c, message_id):
     """The read-back stored with this message: {id, created, changes}, or None."""
-    row = c.execute("SELECT m.id, m.created, m.from_actor, m.conversation_id, e.detail_json FROM messages m "
+    row = c.execute("SELECT m.id, m.created, m.from_actor, m.conversation_id, e.detail FROM messages m "
                     "JOIN events e ON e.target=m.id AND e.action=? WHERE m.id=? AND m.deleted_at IS NULL",
                     (EVENT, message_id)).fetchone()
     if not row:
         return None
     return {"id": row["id"], "created": row["created"], "conversation_id": row["conversation_id"],
-            "changes": (H._json(row["detail_json"], {}) or {}).get("changes") or []}
+            "changes": (H._json(row["detail"], {}) or {}).get("changes") or []}
 
 
 def saves(c, back_id):
     """{(change, step): what that save recorded} for one read-back."""
     out = {}
-    for r in c.execute("SELECT detail_json FROM events WHERE target=? AND action=?", (back_id, SAVED)):
-        d = H._json(r["detail_json"], {}) or {}
+    for r in c.execute("SELECT detail FROM events WHERE target=? AND action=?", (back_id, SAVED)):
+        d = H._json(r["detail"], {}) or {}
         out[(d.get("change"), d.get("step"))] = d
     return out
 
@@ -210,7 +210,7 @@ def shown(step, path=None):
     """A save as an answer shows it: the body as the exact JSON to send, which the display names added to every stable
     answer (backend/names.py: `owner_name` beside `owner`) cannot change."""
     return {"method": step["method"], "path": path or step["path"],
-            "body_json": json.dumps(step["body"], ensure_ascii=False, separators=(",", ":"))}
+            "body": json.dumps(step["body"], ensure_ascii=False, separators=(",", ":"))}
 
 
 def step_path(step, change, done):

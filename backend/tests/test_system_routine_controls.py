@@ -221,12 +221,12 @@ def test_moved_switches_keep_their_values_and_write_the_same_team_rules(api, mon
 def test_every_row_reads_when_then_with_one_department_from_the_chart_and_search_finds_done_and_close(api):
     store = api.app.state.store
     with store.transaction() as c:
-        row = c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()
+        row = c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()
         roster = {**(json.loads(row[0]) if row else {}), "org_groups": {
             "engineering": {"name": "Engineering"}, "marketing": {"name": "Marketing"},
             "web": {"name": "Web", "parent": "engineering"}}}
         c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
-                  "value_json=excluded.value_json", (json.dumps(roster),))
+                  "value=excluded.value", (json.dumps(roster),))
     data = get(api, "system-routines")
     assert {"Engineering", "Marketing"} <= set(data["departments"])
     assert "Web" not in data["departments"], "only fixed departments, never arbitrary subgroups"

@@ -49,7 +49,7 @@ def world(api):
                   {"id": "ben", "email": "ben@acme.example", "primary_for": ["cpo", "product-design", "ops"]},
                   {"id": "cara", "email": "cara@acme.example", "team": "legal"},
                   {"id": "dee", "email": "dee@acme.example", "team": "sales"}]
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode({"people": people}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode({"people": people}),))
         H.sync_registry(c, {}, {"people": people})
     bot(api, "counsel", reports_to="human:ben")
     bot(api, "stranger")
@@ -297,7 +297,7 @@ def test_access_is_edited_by_managers_with_revisions_and_undo(world):
     assert get(api, "bots/counsel/access", "ana-test")["read"]["everyone"] is True
     counsel = bot_id(api, "counsel")
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT access_json FROM bot_config WHERE bot=?", (counsel,)).fetchone()[0] is None
+        assert c.execute("SELECT access FROM bot_config WHERE bot=?", (counsel,)).fetchone()[0] is None
         assert c.execute("SELECT count(*) FROM events WHERE action='bot.access_changed'").fetchone()[0] == 1
 
 
@@ -325,7 +325,7 @@ def test_the_old_private_and_routing_lists_are_retired_with_one_note_for_the_own
                 H.sync_registry(c, {"inbox": {"name": "inbox", "runtime": "fake", "status": "active"}},
                                 {"people": [{"id": "ana", "email": "ana@acme.example"},
                                             {"id": "ben", "email": "ben@acme.example"}]})
-                c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('inbox','{}','ana')")
+                c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('inbox','{}','ana')")
             # The bot the file called private is Open: Ben sees, reads and writes to it.
             row = next(b for b in get(client, "bots", "ben-test") if b["slug"] == "inbox")
             assert row["access"] == {"see": True, "read": True, "write": True}

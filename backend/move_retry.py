@@ -77,8 +77,8 @@ def fingerprint(c, row):
     """What the gate reads that a later change can clear: each linked PR's head and checks, the note, the ticket's
     newest message from anyone but Tico."""
     from . import review_gate
-    links = sorted((p["id"], p.get("checks") or "", str((H._json(p.get("detail_json"), {}) or {}).get("head_sha") or ""),
-                    json.dumps((H._json(p.get("detail_json"), {}) or {}).get("checks") or {}, sort_keys=True))
+    links = sorted((p["id"], p.get("checks") or "", str((H._json(p.get("detail"), {}) or {}).get("head_sha") or ""),
+                    json.dumps((H._json(p.get("detail"), {}) or {}).get("checks") or {}, sort_keys=True))
                    for p in review_gate.links(c, row))
     newest = c.execute("SELECT max(rowid) FROM messages WHERE conversation_id=? AND from_actor<>? AND deleted_at IS NULL",
                        (row.get("conversation_id") or "", H.KEEPER)).fetchone()[0]

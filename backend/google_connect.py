@@ -44,7 +44,7 @@ from .store import H, P, Problem
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS google_connects(
  person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, oauth_state TEXT, verifier TEXT, code TEXT,
- kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, holder TEXT, started REAL, created TEXT NOT NULL,
+ kind TEXT, message TEXT, hint TEXT, can TEXT, runner_id TEXT, holder TEXT, started REAL, created TEXT NOT NULL,
  updated TEXT NOT NULL);
 CREATE UNIQUE INDEX IF NOT EXISTS google_connects_oauth_state ON google_connects(oauth_state) WHERE oauth_state IS NOT NULL;
 CREATE TABLE IF NOT EXISTS google_mail_holders(runner_id TEXT PRIMARY KEY, holds INTEGER NOT NULL, seen REAL NOT NULL);
@@ -219,7 +219,7 @@ def view(row, settings, mailbox, syncing):
            "scopes": READ_SCOPES, "can": [], "updated": row["updated"] if row else None,
            "kind": None, "message": None, "hint": None}
     if row and status == "connected":
-        out["can"] = json.loads(row["can_json"] or "[]")
+        out["can"] = json.loads(row["can"] or "[]")
     if row and status == "failed":
         kind = row["kind"] or "error"
         message, hint = (policy_message(mailbox) if kind == "admin_policy" else MESSAGES.get(kind)
@@ -303,7 +303,7 @@ def install(app, store, publisher, mutate):
                       "runner_id,started,created,updated) VALUES(?,?,'signing_in',?,?,NULL,NULL,NULL,NULL,NULL,?,?,?) "
                       "ON CONFLICT(person_id) DO UPDATE SET mailbox=excluded.mailbox,status='signing_in',"
                       "oauth_state=excluded.oauth_state,verifier=excluded.verifier,code=NULL,kind=NULL,message=NULL,hint=NULL,"
-                      "can_json=NULL,"
+                      "can=NULL,"
                       "runner_id=NULL,started=excluded.started,updated=excluded.updated",
                       (pid, mailbox, state, verifier, time.time(), now, now))
             H.event(c, who.actor, "mail.google.connect.start", mailbox, {})
@@ -343,7 +343,7 @@ def install(app, store, publisher, mutate):
             c.execute("INSERT INTO google_connects(person_id,mailbox,status,started,created,updated) "
                       "VALUES(?,?,'disconnecting',?,?,?) ON CONFLICT(person_id) DO UPDATE SET "
                       "mailbox=excluded.mailbox,status='disconnecting',oauth_state=NULL,verifier=NULL,code=NULL,kind=NULL,"
-                      "message=NULL,hint=NULL,can_json=NULL,runner_id=NULL,started=excluded.started,updated=excluded.updated",
+                      "message=NULL,hint=NULL,can=NULL,runner_id=NULL,started=excluded.started,updated=excluded.updated",
                       (pid, mailbox, time.time(), now, now))
             H.event(c, who.actor, "mail.google.disconnect", mailbox, {})
             return person_view(c, who)
@@ -450,7 +450,7 @@ def install(app, store, publisher, mutate):
             holder = {"connected": runner["id"], "disconnected": None}.get(body.status, row["holder"])
             # Likewise the grant the server will refresh: the new one once connected, none once revoked.
             grant_hash = {"connected": row["pending_hash"], "disconnected": None}.get(body.status, row["grant_hash"])
-            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can_json=?,holder=?,grant_hash=?,"
+            c.execute("UPDATE google_connects SET status=?,kind=?,message=?,hint=?,can=?,holder=?,grant_hash=?,"
                       "pending_hash=NULL,oauth_state=NULL,verifier=NULL,code=NULL,updated=? WHERE person_id=?",
                       (body.status, kind if failed else None, body.message if failed else None,
                        body.hint if failed else None,

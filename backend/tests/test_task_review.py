@@ -83,7 +83,7 @@ def test_comments_answers_rights_validation_multiple_answers_and_needs_you(api):
 def test_a_file_answer_wakes_the_bot_with_the_structured_answer(api):
     tid = task(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE humans SET teams_json='[\"engineering\"]' WHERE id='ben'")
+        c.execute("UPDATE humans SET teams='[\"engineering\"]' WHERE id='ben'")
     made = attach(api, tid, ask=ask(), note="Read this version")
     fid = made["file_id"]
     body = {"target": {"file": fid, "version": 1}, "answers": {"verdict": ["Approve"]}}
@@ -205,7 +205,7 @@ def test_answer_uses_comment_wake_rule(api, role):
     token = "cara-test"
     with api.app.state.store.transaction() as c:
         if role == "mover":
-            c.execute("UPDATE humans SET teams_json='[\"engineering\"]' WHERE id='cara'")
+            c.execute("UPDATE humans SET teams='[\"engineering\"]' WHERE id='cara'")
         elif role in ("owner", "requester"):
             c.execute(f"UPDATE tasks SET {role}='human:cara' WHERE id=?", (tid,))
     if role == "bot":
@@ -271,5 +271,5 @@ def test_done_news_skips_a_bot_that_cannot_read_the_task(api):
     post(api, f"tasks/{child}", {"version": version, "status": "done", "note": "Sent the draft."})
     with api.app.state.store.read() as c:
         told = {r[0] for r in c.execute("SELECT to_actor FROM messages WHERE body LIKE '% marked this done:%' "
-                                        "AND json_extract(refs_json,'$.task')=?", (child,))}
+                                        "AND json_extract(refs,'$.task')=?", (child,))}
     assert "bot:inbox" in told and "bot:ops" not in told, told

@@ -229,8 +229,8 @@ def _task_model(c, slug):
     from clients import sessions
     from . import task_models
     from .shared_bots import follow
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-    config = follow(c, slug, H._json(row["config_json"], {}) or {}) if row else {}
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
     task = task_models.of(config) if sessions.session_key(config, slug, "check", None).startswith("task:") else None
     if not task:
         return config, None, False
@@ -323,8 +323,8 @@ def candidate_details(c, slugs):
         bot = c.execute("SELECT slug,display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
         if not bot:
             continue
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        config = follow(c, slug, H._json(row["config_json"], {}) or {}) if row else {}
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        config = follow(c, slug, H._json(row["config"], {}) or {}) if row else {}
         runtime, model = providers.bot_choice(c, None, config)
         configured = providers.MODEL_BY_ID.get(model or "") or {}
         configured_provider = configured.get("provider") or providers.author_provider(runtime)
@@ -447,7 +447,7 @@ def _heads(prs, snapshots):
     from . import test_receipts
     out = []
     for pr in prs:
-        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail_json"), {}) or {}
+        detail = (snapshots or {}).get(pr["id"]) or H._json(pr.get("detail"), {}) or {}
         head = str(detail.get("head_sha") or pr.get("pr_sha") or "").lower()
         if not detail.get("error") and test_receipts.SHA.fullmatch(head):
             out.append(head)

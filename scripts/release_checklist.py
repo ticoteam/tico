@@ -47,7 +47,7 @@ def history(task):
     for _ in range(MAX_PAGES):
         page = hub("conversation", "show", task["conversation_id"], *(["--before", before] if before else []))
         for message in page["messages"]:
-            refs = message.get("refs") or json.loads(message.get("refs_json") or "{}")
+            refs = message.get("refs") or json.loads(message.get("refs") or "{}")
             named = refs.get("task") or refs.get("task_id") or (page.get("conversation") or {}).get("task_id")
             if isinstance(named, list):
                 named = next((v for v in named if isinstance(v, str) and v.strip()), None)

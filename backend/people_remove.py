@@ -106,7 +106,7 @@ def remove(c, actor, roster, person):
     sent = invites.sent(c)
     if pid in sent:
         sent.pop(pid)
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (json.dumps(sent), invites.KEY))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (json.dumps(sent), invites.KEY))
     email = person.get("email") or ""
     stored = Access._load_json(c, Access.ACCESS)
     if email and stored and (email in Access.emails(stored.get("allowed")) or email in Access.emails(stored.get("admins"))):

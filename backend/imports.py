@@ -350,7 +350,7 @@ def install_imports(app, store, auth, execution, mutate):
             # Scope the URL fallback to this person's Granola source references, including deleted meetings.
             ref = c.execute("SELECT m.id FROM meetings m JOIN recording_source_refs r ON r.meeting_id=m.id "
                             "WHERE r.source=? AND r.resource_type='meeting' "
-                            "AND substr(r.external_id,1,?)=? AND json_extract(m.metadata_json,'$.media_url')=? LIMIT 1",
+                            "AND substr(r.external_id,1,?)=? AND json_extract(m.metadata,'$.media_url')=? LIMIT 1",
                             (body.source, len(who.actor) + 1, who.actor + ":", body.media_url)).fetchone()
         existing = bool(ref)
         if fill_empty and ref and key:
@@ -475,11 +475,11 @@ def install_imports(app, store, auth, execution, mutate):
                 # Only an exact event and owner, close in time, is safe to associate automatically.
                 from datetime import datetime
                 start = datetime.fromisoformat(body.started.replace("Z", "+00:00"))
-                for candidate in c.execute("SELECT m.id,m.metadata_json FROM meetings m "
+                for candidate in c.execute("SELECT m.id,m.metadata FROM meetings m "
                                            "LEFT JOIN media_control mc ON mc.meeting_id=m.id "
                                            "WHERE lower(m.owner)=? AND mc.deleted_at IS NULL",
                                            (body.owner_email,)):
-                    meta = json.loads(candidate["metadata_json"])
+                    meta = json.loads(candidate["metadata"])
                     cal = meta.get("calendar") or {}
                     if cal.get("event_id") != body.calendar_event_id or meta.get("status") == "recording":
                         continue
@@ -536,7 +536,7 @@ def install_imports(app, store, auth, execution, mutate):
                 return {"id": rid, "status": meta["status"], "existing": existing,
                         "review_state": meta.get("review_state", "live"), "changed": False, "transcript_id": latest["id"]}
             c.execute("INSERT INTO recording_transcripts(meeting_id,source,resource_type,external_id,"
-                      "transcript_index,content_hash,source_updated_at,turns_json,transcript_text,"
+                      "transcript_index,content_hash,source_updated_at,turns,transcript_text,"
                       "summary_text,imported_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                       (rid, *key, body.transcript_index, content_hash, body.source_updated_at,
                        encode(turns), transcript, body.summary_text, H.now()))
@@ -569,22 +569,22 @@ def install_imports(app, store, auth, execution, mutate):
     def close_status(request: Request, body: SourceHeartbeat):
         def work(c):
             importer(c, request.state.identity)
-            old = c.execute("SELECT detail_json FROM service_health WHERE service='recording:close'").fetchone()
+            old = c.execute("SELECT detail FROM service_health WHERE service='recording:close'").fetchone()
             detail = json.loads(old[0]) if old else {}
             detail.update(last_attempt=H.now(), pending=body.pending, imported=body.imported)
             if body.imported:
                 detail["last_import"] = H.now()
             if body.state == "ok":
                 detail["error_code"] = ""
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) "
+                c.execute("INSERT INTO service_health(service,last_success,last_error,detail) "
                           "VALUES('recording:close',?,NULL,?) ON CONFLICT(service) DO UPDATE SET "
-                          "last_success=excluded.last_success,last_error=NULL,detail_json=excluded.detail_json",
+                          "last_success=excluded.last_success,last_error=NULL,detail=excluded.detail",
                           (H.now(), encode(detail)))
             else:
                 detail["error_code"] = body.error_code or "sync_error"
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) "
+                c.execute("INSERT INTO service_health(service,last_success,last_error,detail) "
                           "VALUES('recording:close',NULL,?,?) ON CONFLICT(service) DO UPDATE SET "
-                          "last_error=excluded.last_error,detail_json=excluded.detail_json",
+                          "last_error=excluded.last_error,detail=excluded.detail",
                           (H.now(), encode(detail)))
             return {"ok": True}
         return mutate(request, body, work)

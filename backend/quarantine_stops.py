@@ -55,7 +55,7 @@ def restart(c, row, line):
 def _stop_detail(c, row):
     if not row["stop_requested"] or row["stop_requested"] != H.KEEPER:
         return {}
-    found = c.execute("SELECT detail_json FROM events WHERE action='attempt.stop' AND target=? "
+    found = c.execute("SELECT detail FROM events WHERE action='attempt.stop' AND target=? "
                       "ORDER BY ts DESC LIMIT 1", (row["id"],)).fetchone()
     return (json.loads(found[0] or "{}") or {}) if found else {}
 

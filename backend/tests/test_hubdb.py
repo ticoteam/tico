@@ -274,7 +274,7 @@ class Rule5Tasks(HubCase):
         """No App table, so no branch Tico could check: the hand-off is not held waiting for one."""
         row = H.task_create(self.conn, CMO, "Trim the overview", "x", SEO)
         self.conn.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,updated,"
-                          "detail_json) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
+                          "detail) VALUES('w1',?,'worktree','worktree:w1','acme/site','present','bot:seo',?,"
                           "'acme/site',?,?,'{}')", (row["id"], H.now(), f"tico/{row['id'][:8]}-trim", H.now()))
         self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="review")["status"], "review")
         self.assertEqual(H.task_update(self.conn, SEO, row["id"], status="done")["status"], "done")
@@ -288,9 +288,9 @@ class Rule5Tasks(HubCase):
         # Superseding its ask card exercises the server's versioned unblock path.
         self.conn.execute("ALTER TABLE tasks ADD COLUMN version INTEGER NOT NULL DEFAULT 1")
         self.conn.execute(re.search(r"CREATE TABLE IF NOT EXISTS bot_config\(.*?\);", SCHEMA, re.S).group(0))
-        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access_json TEXT")
+        self.conn.execute("ALTER TABLE bot_config ADD COLUMN access TEXT")
         self.conn.execute("ALTER TABLE bot_config ADD COLUMN onboarding_state TEXT")
-        self.conn.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('cmo',?, 'ana')",
+        self.conn.execute("INSERT INTO bot_config(bot,config,operator) VALUES('cmo',?, 'ana')",
                           (json.dumps({"bot_contact": "tasks"}),))
         parent = H.task_create(self.conn, CMO, "Plan the launch week", "All of it.", ANALYTICS)
         row = H.task_create(self.conn, CMO, "Pick the hero image", "Two drafts.", SEO, parent_id=parent["id"])
@@ -309,7 +309,7 @@ class Rule5Tasks(HubCase):
         [on_parent] = [m for m in H.messages(self.conn, parent["conversation_id"])
                        if m["to_actor"] == ANALYTICS and "Ana Rivera marked this subtask done: Pick the hero image" in m["body"]]
         self.assertIn("Use B.", on_parent["body"])
-        quiet = {m["to_actor"]: bool(json.loads(m["refs_json"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
+        quiet = {m["to_actor"]: bool(json.loads(m["refs"]).get("quiet")) for m in H.messages(self.conn, row["conversation_id"])
                  if m["body"].startswith("Ana Rivera marked this done:")}
         self.assertEqual(quiet, {CMO: True, SEO: False, COO: False}, "tasks-only bots hear it quietly")
         # A private task tells only its parties: the parent's owner cannot read it.
@@ -322,13 +322,13 @@ class Rule5Tasks(HubCase):
         row = H.task_create(self.conn, ANA, "Ship the overview", "x", SEO)
         H.task_update(self.conn, ANA, row["id"], status="done")
         [told] = self.finished(row, SEO)
-        self.assertTrue(json.loads(told["refs_json"]).get("quiet"), "no run for a finished task with no note")
+        self.assertTrue(json.loads(told["refs"]).get("quiet"), "no run for a finished task with no note")
 
     def test_a_person_closing_work_not_started_with_nothing_said_does_not_wake_its_bot(self):
         quiet, noted = (H.task_create(self.conn, ANA, title, "x", SEO) for title in ("Old idea", "Other idea"))
         H.task_close(self.conn, ANA, quiet["id"])
         H.task_close(self.conn, ANA, noted["id"], note="Do the other one instead.")
-        refs = {row["id"]: [json.loads(m["refs_json"]) for m in H.messages(self.conn, row["conversation_id"])
+        refs = {row["id"]: [json.loads(m["refs"]) for m in H.messages(self.conn, row["conversation_id"])
                             if m["to_actor"] == SEO and m["body"].startswith("Closed:")] for row in (quiet, noted)}
         self.assertTrue(refs[quiet["id"]][0].get("quiet"), "a close with nothing said is news, not work")
         self.assertFalse(refs[noted["id"]][0].get("quiet"), "a person's close note can change what the bot does next")
@@ -347,7 +347,7 @@ class Rule5Tasks(HubCase):
                                                      "answers": {"pick": ["B"]}, "by": ANA, "at": H.now()}})
         self.assertEqual((said["kind"], said["to_actor"]), ("answer", CMO))
         self.assertIsNone(H.task(self.conn, row["id"])["waiting_on"])
-        self.assertFalse(json.loads(said["refs_json"]).get("quiet"), "it wakes the asker")
+        self.assertFalse(json.loads(said["refs"]).get("quiet"), "it wakes the asker")
 
 # ----------------------------------------------------------------------------- rule 6
 class Rule6Approvals(HubCase):
@@ -476,7 +476,7 @@ class Rule4Unsolicited(HubCase):
                                   (chat,)).fetchone()[0]
         self.assertEqual(first, H.KEEPER, "the task's notice opened the chat")
         reply = H.say(self.conn, CMO, ANA, "84.", conversation_id=chat)
-        self.assertNotIn("unsolicited", json.loads(reply["refs_json"]))
+        self.assertNotIn("unsolicited", json.loads(reply["refs"]))
 
     def test_a_bot_writing_in_a_chat_it_opened_is_unsolicited_even_after_a_new_task_notice(self):
         chat = H.open_conversation(self.conn, CMO, [CMO, ANA], kind="chat")["id"]
@@ -484,7 +484,7 @@ class Rule4Unsolicited(HubCase):
         senders = [r[0] for r in self.conn.execute("SELECT from_actor FROM messages WHERE conversation_id=?", (chat,))]
         self.assertEqual(senders, [H.KEEPER], "only the task's notice is in the chat")
         sent = H.say(self.conn, CMO, ANA, "Pick the launch date, or tell me to hold.", conversation_id=chat)
-        self.assertTrue(json.loads(sent["refs_json"]).get("unsolicited"), "the bot opened it, so the person asked nothing")
+        self.assertTrue(json.loads(sent["refs"]).get("unsolicited"), "the bot opened it, so the person asked nothing")
 
 # ----------------------------------------------------------------------------- rule 8
 class Rule8Counting(HubCase):
@@ -630,9 +630,9 @@ class Rule8Counting(HubCase):
         self.assertEqual(H.bot(self.conn, "cmo")["state"], "active")
         H.quarantine(self.conn, "cmo", "escape: a secrets path")
         self.refused("quarantined", H.status_set, self.conn, botops, "cmo", state="active")
-        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine' AND detail_json NOT LIKE '%escape%'",
+        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine' AND detail NOT LIKE '%escape%'",
                           (H.shift(H.now(), seconds=-8000),))
-        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine' AND detail_json LIKE '%escape%'",
+        self.conn.execute("UPDATE events SET ts=? WHERE action='quarantine' AND detail LIKE '%escape%'",
                           (H.shift(H.now(), seconds=-7200),))
         self.assertEqual(H.lift_cooled_quarantines(self.conn), [], "an escape never cools off")
 
@@ -704,7 +704,7 @@ class APersonsReplyAnswersWhatWasAsked(HubCase):
     def test_older_untagged_questions_still_belong_to_their_dedicated_task(self):
         task = H.task_create(self.conn, ANA, "Draft a report", "Write it", CMO)
         ask = H.task_ask(self.conn, CMO, task["id"], "Which format?")
-        self.conn.execute("UPDATE messages SET refs_json='{}' WHERE id=?", (ask["id"],))
+        self.conn.execute("UPDATE messages SET refs='{}' WHERE id=?", (ask["id"],))
         self.assertEqual(H.unanswered_ask(self.conn, task)["id"], ask["id"])
         H.task_comment(self.conn, ANA, task["id"], "Markdown")
         self.assertIsNone(H.unanswered_ask(self.conn, task))
@@ -1345,9 +1345,9 @@ class MarketNotesMoved(HubCase):
     def install_as_before_it_moved(self):
         self.conn.execute("DROP TABLE IF EXISTS market_pages")
         self.conn.execute("CREATE TABLE documents(id TEXT PRIMARY KEY, visibility TEXT NOT NULL, collection TEXT NOT NULL, "
-                          "payload_json TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)")
+                          "payload TEXT NOT NULL, digest TEXT NOT NULL, updated TEXT NOT NULL)")
         self.conn.execute("CREATE TABLE document_versions(id TEXT NOT NULL, digest TEXT NOT NULL, "
-                          "payload_json TEXT NOT NULL, imported TEXT NOT NULL, PRIMARY KEY(id,digest))")
+                          "payload TEXT NOT NULL, imported TEXT NOT NULL, PRIMARY KEY(id,digest))")
         overview = {"id": "market/overview", "title": "Overview", "content": "The market is small.", "category": "Market",
                     "collection": "market", "search": "The market is small.", "format": "markdown",
                     "owner": MK.CURATOR, "fetched": "2026-10-01T00:00:00.000000Z", "seeded": True}

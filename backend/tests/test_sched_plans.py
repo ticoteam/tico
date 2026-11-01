@@ -114,7 +114,7 @@ def test_worktree_inventory_bot_state_matches_each_owner(api):
         'human': ('wt-e', json.dumps({'owner': 'human:ana'}), 'human:ana'),
     }
     for key, (link, detail, added) in cases.items():
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,computer_id,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,computer_id,detail) "
                   "VALUES(?,'wt-task','worktree','u','present',?,?,'wt-computer',?)", (link, added, now, detail))
     rows = {r['id']: (r['owner'], r['bot_state']) for r in worktrees.inventory(c, 'wt-computer')}
     assert rows == {'wt-a': ('bot:wt-archived', 'archived'), 'wt-b': ('bot:wt-archived', 'archived'),

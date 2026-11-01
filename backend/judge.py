@@ -202,9 +202,9 @@ def cost_usd(settings, model, usage):
 # month is summed again. The `+` keeps SQLite on the rowid range: without it the planner takes events_action_ts and
 # reads the whole month again.
 _SPEND, _SPEND_LOCK = {}, threading.Lock()
-MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
+MONTH_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
                    "WHERE ts>=? AND action=?")
-NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0), max(rowid) FROM events "
+NEW_SPEND_SQL = ("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0), max(rowid) FROM events "
                  "WHERE rowid>? AND +ts>=? AND +action=?")
 # A budget is the settings field holding its monthly cap and the event action its spend rows are written as. Decide's
 # own is the default; org rule checks keep a separate one (backend/org_rule_check.py), so neither can spend the other's.
@@ -521,7 +521,7 @@ def record_outcome(c, actor, body):
                      (body.ref, actor)).fetchone()
     if not call:
         raise Problem("not_found", f"no decision call {body.ref} of yours to record an outcome for", 404)
-    done = c.execute("SELECT id, detail_json FROM events WHERE target=? AND action='decision.outcome' LIMIT 1",
+    done = c.execute("SELECT id, detail FROM events WHERE target=? AND action='decision.outcome' LIMIT 1",
                      (body.ref,)).fetchone()
     if done:
         return {"id": done[0], "ref": body.ref, **json.loads(done[1] or "{}"), "recorded": False}

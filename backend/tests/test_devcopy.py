@@ -36,7 +36,7 @@ def source_db(tmp_path):
                                               ("gone", "ran-long-ago", "completed", OLD, OLD)):
             c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished) "
                       "VALUES(?,?,'sales','r1',1,?,?,?,?,?)", (aid, job, "hash-" + aid, state, now, at, finished))
-            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,1,'text','{}',?)",
+            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES(?,1,'text','{}',?)",
                       (aid, at))
             c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (aid, job))
         c.execute("INSERT INTO human_tokens(id,human,label,token_hash,created,created_by) VALUES('t1','morgan','cli','th',?,'morgan')", (now,))
@@ -138,18 +138,18 @@ def test_a_dev_copy_drops_deleted_tasks_requesters_and_gets_its_own_roadmap_secr
         task = H.task_create(c, "human:morgan", "Faster exports", "Customer asks", "human:morgan")
         roadmaps.add_requester(c, task["id"], {"email": "jane@customer.example", "phone": "555-0100", "source": "public_form"})
         assert delete_tasks(c, [task["id"]], apply=True)["applied"]
-        secret = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
-        assert "jane@customer.example" in c.execute("SELECT rows_json FROM task_trash").fetchone()[0]
+        secret = c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
+        assert "jane@customer.example" in c.execute("SELECT rows FROM task_trash").fetchone()[0]
     for c in store.pool:
         c.close()
     store.pool.clear()
     dest = tmp_path / "copy" / "hub.sqlite"
     devcopy.build(store.settings.db_path, dest, days=30)
     with closing(sqlite3.connect(dest)) as c:
-        rows = json.loads(c.execute("SELECT rows_json FROM task_trash").fetchone()[0])["rows"]
+        rows = json.loads(c.execute("SELECT rows FROM task_trash").fetchone()[0])["rows"]
         assert "task_requesters" not in rows and rows["tasks"][0]["title"] == "Faster exports"
         assert "jane@customer.example" not in json.dumps(rows) and "555-0100" not in json.dumps(rows)
-        copied = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
+        copied = c.execute("SELECT value FROM registry_metadata WHERE key='roadmap_ip_secret'").fetchone()[0]
         assert copied != secret and len(json.loads(copied)) == 64
 
 
@@ -167,7 +167,7 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
         c.execute("INSERT INTO webhooks(id,name,url,host,secret,secret_prev,created_by,created,updated) "
                   "VALUES('wh1','Acme CI','https://ci.acme.example/hook','ci.acme.example','whsec_live','whsec_old',"
                   "'human:morgan',?,?)", (now, now))
-        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow_json,version,created,created_by,"
+        c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created,created_by,"
                   "updated) VALUES('auto_1','Morning check','person:morgan','schedule',1,'{}',1,?,'human:morgan',?)",
                   (now, now))
         c.execute("INSERT INTO automation_runs(id,automation_id,version,started,status) VALUES('run1','auto_1',1,?,"
@@ -195,7 +195,7 @@ def test_keep_automations_keeps_definitions_and_empties_their_queues_and_secrets
 def test_a_dev_copy_cuts_old_audit_rows_and_keeps_the_audit_log_append_only(tmp_path):
     source = source_db(tmp_path)
     with closing(sqlite3.connect(source)) as c:
-        c.executemany("INSERT INTO audit_log(id,at,actor,object,before_json,after_json,via) VALUES(?,?,?,?,?,?,?)",
+        c.executemany("INSERT INTO audit_log(id,at,actor,object,before,after,via) VALUES(?,?,?,?,?,?,?)",
                       [("old", OLD, "human:morgan", "task_cap:1", None, "{}", None),
                        ("new", H.now(), "human:morgan", "task_cap:1", None, "{}", None)])
         c.commit()

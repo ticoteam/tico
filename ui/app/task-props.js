@@ -348,7 +348,7 @@ function taskPropsBind(d, task, change) {
     }});
     // The owning bot's session id, for resuming or restoring that session by hand.
     const primary = ((d.liveTask || task).links || []).filter(l => l.kind === 'session').map(l => {
-      try { return JSON.parse(l.detail_json || '{}'); } catch { return {}; }
+      try { return JSON.parse(l.detail || '{}'); } catch { return {}; }
     }).find(s => s.primary && s.thread_id);
     if (primary) items.push({text: 'Copy session ID', run: async () => {
       try { await navigator.clipboard.writeText(primary.thread_id); toast('Session ID copied'); } catch { toast('Could not copy the session ID', true); }

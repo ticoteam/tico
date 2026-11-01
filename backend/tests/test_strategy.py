@@ -215,7 +215,7 @@ def test_retiring_a_bet_with_goals_files_one_realign_card_for_the_owner(api):
                          "a.ref=?", (proposal["id"],))
     assert task and task["owner"] == "human:ana" and task["title"] == "Choose what happens to 1 goal after strategy v2"
     assert "Keep as it is, Retire goal, or Move to a bet" in task["body"] and "Confirm" not in task["body"]
-    payload = json.loads(proposal["payload_json"])
+    payload = json.loads(proposal["payload"])
     assert [g["goal_id"] for g in payload["goals"]] == [goal["id"]] and payload["bets"][0]["id"] == two["id"]
     post(api, f"goal-proposals/{proposal['id']}/decide", {"decision": "confirm", "moves": {goal["id"]: two["id"]}})
     assert get(api, f"goals/{goal['id']}")["goal"]["bet_id"] == two["id"]
@@ -418,7 +418,7 @@ def test_hub_sql_shows_strategy_proposals_only_to_the_owner_and_the_bot_that_pro
     publish(api, "Second")                                              # files a strategy_realign card
     post(api, "goal-proposals", {"kind": "strategy_draft", "reason": "r", "payload": {
         "sections": {"not": "Unannounced: no franchise deals."}}}, token=strategy_token)
-    query = {"sql": "SELECT kind, payload_json FROM goal_proposals WHERE kind LIKE 'strategy_%' ORDER BY kind"}
+    query = {"sql": "SELECT kind, payload FROM goal_proposals WHERE kind LIKE 'strategy_%' ORDER BY kind"}
     assert [r[0] for r in post(api, "sql", query)["rows"]] == ["strategy_draft", "strategy_realign"]
     for token in ("ben-test", "cara-test"):
         assert post(api, "sql", query, token=token)["rows"] == []

@@ -39,7 +39,7 @@ def test_same_key_same_result_and_dry_runs_write_nothing(books):
         assert (refused.status, refused.code) == ("failed", "invalid")
         assert act(c, OWNER, "bill_create", {"amount": 1}, "p1").action_id == refused.action_id
         assert act(c, OWNER, "teleport", {}, "t1").code == "invalid"
-        audit = c.execute("SELECT detail_json FROM events WHERE action='finance.account_create' AND target=?",
+        audit = c.execute("SELECT detail FROM events WHERE action='finance.account_create' AND target=?",
                           (first.action_id,)).fetchone()
         assert audit and '"committed"' in audit[0]
 
@@ -171,7 +171,7 @@ def test_defaults_are_fixed_when_asked_not_when_approved(books):
     with books.transaction() as c:
         parent = _software(c)
         asked = _coder_asks(c, parent)
-        stored = c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
+        stored = c.execute("SELECT payload FROM fin_actions WHERE id=?", (asked.action_id,)).fetchone()[0]
         assert '"effective_from": "2026-10-01"' in stored
         assert _coder_asks(c, parent).action_id == asked.action_id         # a retry without it is the same request
         H.approval_decide(c, "human:cara", asked.approval_id, "approved")

@@ -132,7 +132,7 @@ def begin(c, settings, who, query):
     register a client under any name, so the page also names the host it returns to."""
     client = c.execute("SELECT * FROM oauth_clients WHERE id=?", (query.get("client_id", ""),)).fetchone()
     redirect = query.get("redirect_uri", "")
-    if not client or redirect not in json.loads(client["redirect_uris_json"]):
+    if not client or redirect not in json.loads(client["redirect_uris"]):
         raise Problem("oauth_client", "This sign-in link is not from an agent Tico knows", 400)
     if query.get("response_type") != "code":
         raise OAuthError("unsupported_response_type", "Only response_type=code")

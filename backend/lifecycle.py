@@ -128,10 +128,10 @@ def refuse_send(c, who, to, conversation=None, what="a message"):
 
 
 def _manager_actor(c, slug):
-    row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
     if not row:
         return ""
-    reports = str(row["reports_to"] or (json.loads(row["config_json"] or "{}") or {}).get("reports_to") or "")
+    reports = str(row["reports_to"] or (json.loads(row["config"] or "{}") or {}).get("reports_to") or "")
     return reports if not reports or reports.startswith("human:") else H.bot_actor(reports)
 
 
@@ -156,10 +156,10 @@ def ready(c, who, slug, summary):
     if not is_onboarding(c, slug):
         raise Problem("onboarding", "This bot is not onboarding", 409)
     summary = str(summary or "").strip()[:SUMMARY_MAX]
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-    declared = json.loads(row["config_json"] or "{}") if row else {}
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+    declared = json.loads(row["config"] or "{}") if row else {}
     declared["onboarding_ready"] = {"at": H.now(), "summary": summary}
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(declared), slug))
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(declared), slug))
     H.event(c, who.actor, "bot.onboarding_ready", slug, {"summary": summary})
     return {"bot": slug, "stage": ONBOARDING, "ready": declared["onboarding_ready"]}
 

@@ -107,8 +107,8 @@ def test_actionable_notice_preserves_real_gates(api, gate):
                                                    'body_sha256': 'a' * 64, 'mailbox': 'ops@acme.example'},
                                task_id=task['id'])
         elif gate in ('off', 'cap'):
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                       (json.dumps({**config, 'keep_tasks_going': 0 if gate == 'off' else 1}),))
             if gate == 'cap':
                 other = H.task_create(c, 'human:ana', 'Check existing report', '', 'bot:ops', lint=False, next_run=True)
@@ -142,7 +142,7 @@ def test_health_groups_only_jobs_with_the_same_actual_reason(api, ready):
         task_notice(api, task, {'wake': 'due'})
     with api.app.state.store.transaction() as c:
         if not ready:
-            c.execute('UPDATE tasks SET resume_json=? WHERE id=?',
+            c.execute('UPDATE tasks SET resume=? WHERE id=?',
                       (json.dumps({'kind': 'time', 'until': H.shift(H.now(), days=1)}), tasks[0]['id']))
         for task in tasks[1:]:
             c.execute("UPDATE tasks SET next_run=0,waiting_on='human:ben' WHERE id=?", (task['id'],))

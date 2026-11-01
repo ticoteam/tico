@@ -55,7 +55,7 @@ def test_a_limit_whose_fallback_fails_at_start_waits_for_the_reset_not_for_a_per
     assert claim(api, machine, bot="ops") is None
     # A fallback the bot names now is another one: the next turn goes there.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.fallback',json(?)) WHERE bot='ops'",
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.fallback',json(?)) WHERE bot='ops'",
                   (json.dumps({"harness": "codex", "model": "gpt-5.5"}),))
     moved = claim(api, machine, bot="ops")
     assert moved["job_id"] == first["job_id"] and moved["config"]["primary_held"]
@@ -78,8 +78,8 @@ def held_the_old_way(api, machine, attempt):
     hop_fails(api, machine, attempt)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
-        c.execute("UPDATE attempts SET result_json=json_remove(result_json,'$.fallback_failed'),"
-                  "result_json=json_set(result_json,'$.limited',json('false')) WHERE id=?", (attempt["id"],))
+        c.execute("UPDATE attempts SET result=json_remove(result,'$.fallback_failed'),"
+                  "result=json_set(result,'$.limited',json('false')) WHERE id=?", (attempt["id"],))
         c.execute("DELETE FROM registry_metadata WHERE key LIKE 'login-hold:%'")
         c.execute("UPDATE bot_status SET state='idle',focus='One run stopped; saved for later' WHERE bot='ops'")
 
@@ -168,7 +168,7 @@ def test_a_run_held_after_a_limit_resumes_when_the_bot_moves_to_another_model(ap
     held_the_old_way(api, machine, first)
     at(monkeypatch, "2026-10-21T20:30:00.000000Z", api)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created,"
                   "updated,applied_at) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (H.new_id(), "ops", "model", "{}", "human:ana", 0, "applied", H.now(), H.now(), H.now()))
     assert [d["state"] for d in sweep(api)] == ["queued"]

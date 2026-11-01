@@ -28,7 +28,7 @@ from .views import human_only
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_memory_updates(
  bot TEXT NOT NULL, sha TEXT NOT NULL, subject TEXT NOT NULL, author TEXT NOT NULL, committed TEXT NOT NULL,
- files_json TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
+ files TEXT NOT NULL, diff TEXT NOT NULL DEFAULT '', truncated INTEGER NOT NULL DEFAULT 0,
  attempt_id TEXT NOT NULL DEFAULT '', shared INTEGER NOT NULL DEFAULT 0, runner_id TEXT NOT NULL,
  reported TEXT NOT NULL, PRIMARY KEY(bot, sha));
 CREATE INDEX IF NOT EXISTS bot_memory_updates_by_time ON bot_memory_updates(bot, committed);
@@ -101,7 +101,7 @@ def record(c, who, bot, report):
         if before and (before["attempt_id"] or not attempt) and (before["shared"] or not commit.shared):
             continue
         # A commit's content never changes; only what is known about it grows (its run, reaching the repository).
-        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files_json,diff,truncated,"
+        c.execute("INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files,diff,truncated,"
                   "attempt_id,shared,runner_id,reported) VALUES(?,?,?,?,?,?,?,?,?,?,?,?) "
                   "ON CONFLICT(bot,sha) DO UPDATE SET "
                   "attempt_id=CASE WHEN bot_memory_updates.attempt_id='' THEN excluded.attempt_id ELSE bot_memory_updates.attempt_id END,"
@@ -205,7 +205,7 @@ def install_memory_history(app, store, auth, mutate):
             base = commit_base(c, bot, store.settings.github_owner)
             # Only a commit that reached the shared repository has an address to open.
             updates = [{"sha": r["sha"], "subject": r["subject"], "author": r["author"], "when": r["committed"],
-                        "files": json.loads(r["files_json"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
+                        "files": json.loads(r["files"]), "diff": r["diff"], "truncated": bool(r["truncated"]),
                         "shared": bool(r["shared"]), "new": r[column] > seen,
                         "url": f"{base}/commit/{r['sha']}" if base and r["shared"] else None,
                         "source": source(c, auth, who, r["attempt_id"])} for r in rows[:limit]]

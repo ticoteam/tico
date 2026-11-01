@@ -28,7 +28,7 @@ def setup_sources(api, tmp_path):
              labels=["INBOX", "hub/triaged/inbox", "hub/needs-owner"],
              rule_hits=[{"id": "needs-human", "actions": {"label": "hub/needs-owner"}}])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'",
                   (encode({"access": [{"service": "gmail", "identity": "ana@acme.example"}]}),))
         c.execute("INSERT INTO registry_metadata VALUES('slack_workspace_url',?)",
                   (encode("https://acme.slack.com/"),))

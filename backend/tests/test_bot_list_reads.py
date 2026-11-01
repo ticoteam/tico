@@ -23,8 +23,8 @@ SEE_ONLY = ("slug", "display_name", "state", "description", "team", "operator", 
 def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registry_entries, who):
     """The bot list's row as it was read before backend/bot_rows.py: one bot at a time."""
     row = {k: v for k, v in bot.items() if k not in ("token_hash", "cwd", "thread_id")}
-    config = c.execute("SELECT team,operator,owner_ids_json,revision,description,reports_to,repo,"
-                       "thread_mode,config_json,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
+    config = c.execute("SELECT team,operator,owner_ids,revision,description,reports_to,repo,"
+                       "thread_mode,config,onboarding_state FROM bot_config WHERE bot=?", (bot["slug"],)).fetchone()
     assignment = c.execute("SELECT a.bot,a.runner_id,a.generation,r.label,r.operator,r.last_seen,"
                            "r.revoked_at FROM assignments a JOIN runners r ON r.id=a.runner_id "
                            "WHERE a.bot=?", (bot["slug"],)).fetchone() if level["read"] else None
@@ -36,11 +36,11 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
     row["stage"] = lifecycle.stage(row["onboarding_state"])
     if row["stage"] == lifecycle.ONBOARDING:
         row["can_complete_onboarding"] = lifecycle.may_complete(auth, c, who, bot["slug"])
-        row["onboarding_ready"] = lifecycle.ready_of(config["config_json"]) if config else None
+        row["onboarding_ready"] = lifecycle.ready_of(config["config"]) if config else None
     if config:
         repo = config["repo"] or ("emp-" + bot["slug"])
         from backend.shared_bots import follow
-        declared = follow(c, bot["slug"], json.loads(config["config_json"]) if config["config_json"] else {})
+        declared = follow(c, bot["slug"], json.loads(config["config"]) if config["config"] else {})
         if declared.get("shared_from"):
             repo = declared.get("repo") or repo
             row.update({"model": declared.get("model") or "", "runtime": declared.get("runtime") or "",
@@ -60,15 +60,15 @@ def per_bot_view(c, settings, auth, bot, level, access, registry_roster, registr
                     "temp": bool(declared.get("temp")),
                     "compact_at": compact_at_of(declared),
                     "task_model": task_models.of(declared),
-                    "keep_tasks_going": auto_tasks.of(json.loads(config["config_json"]) or {}),
-                    "turns_at_once": start_places.bot_limit(json.loads(config["config_json"]) or {}),
+                    "keep_tasks_going": auto_tasks.of(json.loads(config["config"]) or {}),
+                    "turns_at_once": start_places.bot_limit(json.loads(config["config"]) or {}),
                     "task_model_warning": task_models.warning(c, settings, bot["slug"], declared,
                                                               task_models.of(declared)),
                     "manages_reports": report_managers.switch_on(declared),
                     "wake": wake_presets.effective(declared),
                     "profile": profiles.effective(declared),
                     "thread_mode": config["thread_mode"] or rooms.thread_mode(c, bot["slug"])})
-    configured = json.loads(config["owner_ids_json"]) if config and config["owner_ids_json"] else None
+    configured = json.loads(config["owner_ids"]) if config and config["owner_ids"] else None
     owner_rows = ([H.human(c, owner) for owner in configured] if configured is not None
                   else P.primary_users(bot["slug"], registry_roster, registry_entries))
     row["owners"] = [P.brief(owner) for owner in owner_rows if owner]
@@ -121,7 +121,7 @@ def add_bots(api, extra):
         bots = {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in (*BASE, *extra)}
         H.sync_registry(c, bots, {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug, config in extra.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                       (slug, encode({**bots[slug], **config}), None, "ana"))
 
 
@@ -134,8 +134,8 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
     with store.transaction() as c:
         T.restrict(c, "cpo", see={"people": ["ana", "cara"]}, read={"people": ["ana"]}, write={"people": ["ana"]})
         c.execute("UPDATE bot_config SET reports_to='inbox' WHERE bot='doc-updater'")
-        c.execute("UPDATE bot_config SET owner_ids_json=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'",
+        c.execute("UPDATE bot_config SET owner_ids=? WHERE bot='finance'", (encode(["ben", "nobody"]),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'",
                   (encode({"name": "ops", "runtime": "fake", "private_tasks_default": True, "model": "m2"}),))
         c.execute("INSERT INTO bot_control(bot,draining) VALUES('finance',1)")
         c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by,last_seen) VALUES(?,?,?,?,?,?)",
@@ -160,7 +160,7 @@ def test_bot_list_answers_as_read_one_bot_at_a_time(api):
         cid = c.execute("SELECT conversation_id FROM messages WHERE to_actor='bot:ops' LIMIT 1").fetchone()[0]
         for kind, refs in (("ask", {"task": bens["id"], "questions": []}), ("notice", {"task": bens["id"]})):
             mid = H.new_id()
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                       "VALUES(?,?,?,?,?,?,?,?)", (mid, cid, "bot:finance", "human:ben", kind, "?", encode(refs), H.now()))
             if kind == "notice":
                 c.execute("INSERT INTO approvals(id,kind,task_id,message_id,requested_by,created) VALUES(?,?,?,?,?,?)",

@@ -158,7 +158,7 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     assert [r["reports_to"] for r in finance] == ["human:owner"]
     people = done.json()["company_import"]["people"]
     assert [(p["id"], p["seats"]) for p in people] == [("ana", [finance[0]["id"]]), ("ben", [])]
-    saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value_json"]
+    saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]["value"]
     assert '"person":"ana"' in saved and '"person":"ben"' in saved
     invited_from_setup(api, finance[0]["id"])
     # A coworker who holds no role still joins in Tico, not by import.
@@ -234,7 +234,7 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     assert done.json()["names"]["company_name"] == "Acme Finance"
     assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
     assert seat_lines(api) == {"Head of Finance": "human:owner", "Acme Payables": "Head of Finance"}
-    templates = rows(api, "SELECT json_extract(config_json,'$.template') AS template FROM bot_config")
+    templates = rows(api, "SELECT json_extract(config,'$.template') AS template FROM bot_config")
     assert sum(r["template"] == "assistant" for r in templates) == 1
     assert sum(r["template"] == "botops" for r in templates) == 1
     assert "model_choices" in done.json()["company_import"]["deferred"]
@@ -242,8 +242,8 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     # A seat's job description is its role's text from the template.
     description = rows(api, "SELECT description FROM seats WHERE title='Acme Payables'")[0]["description"]
     assert description and "Owns:" in description
-    saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]
-    assert '"finance":"mid"' in saved["value_json"]
+    saved = rows(api, "SELECT value FROM registry_metadata WHERE key='onboarding.company_file'")[0]
+    assert '"finance":"mid"' in saved["value"]
     before = (rows(api, "SELECT id FROM tasks ORDER BY id"), rows(api, "SELECT id FROM seats ORDER BY id"))
     again = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
     assert again.status_code == 200
@@ -282,13 +282,13 @@ def test_import_never_replaces_an_existing_paused_employee(environment):
     config = {"name": "accounts-payable", "status": "paused", "instructions": "Keep the existing employee unchanged"}
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {**SEED, "accounts-payable": config}, PEOPLE)
-        c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+        c.execute("INSERT INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
                   ("accounts-payable", encode(config), "owner", "emp-bookkeeping"))
-    original = rows(api, "SELECT config_json FROM bot_config WHERE bot='accounts-payable'")
+    original = rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'")
     body = {"company_yaml": company_text()}
     body["fingerprint"] = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in()).json()["fingerprint"]
     assert api.post("/api/v2/setup/company/import", json=body, headers=signed_in()).status_code == 409
-    assert rows(api, "SELECT config_json FROM bot_config WHERE bot='accounts-payable'") == original
+    assert rows(api, "SELECT config FROM bot_config WHERE bot='accounts-payable'") == original
 
 
 @pytest.mark.parametrize("through_new_parent", [False, True], ids=["reverse-builtins", "new-parent-chain"])
@@ -440,9 +440,9 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, seed, PEOPLE)
         for slug, config in seed.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
                       (slug, encode(config), "owner", "bot-" + slug))
-    before = rows(api, "SELECT bot,config_json FROM bot_config ORDER BY bot")
+    before = rows(api, "SELECT bot,config FROM bot_config ORDER BY bot")
     draft = C.from_yaml(company_text())
     draft["bots"] = [b for b in draft["bots"] if b["template"] != "coo"]
     employee = next(b for b in draft["bots"] if b["template"] == "accounts-payable")
@@ -454,8 +454,8 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
         assert preview.status_code == 422 and "conflicts" in preview.text
         result = api.post("/api/v2/setup/company/import", json={**body, "fingerprint": "0" * 64}, headers=signed_in())
         assert result.status_code == 422 and "conflicts" in result.text
-        assert rows(api, "SELECT bot,config_json FROM bot_config ORDER BY bot") == before
-    assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')='assistant'")) == 1
+        assert rows(api, "SELECT bot,config FROM bot_config ORDER BY bot") == before
+    assert len(rows(api, "SELECT bot FROM bot_config WHERE json_extract(config,'$.template')='assistant'")) == 1
 
 
 def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(environment):
@@ -593,7 +593,7 @@ def test_a_renamed_assistants_goals_import_as_company_goals_and_an_untitled_unme
         with api.app.state.store.transaction() as c:
             H.sync_registry(c, seed, PEOPLE)
             for slug, config in seed.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,operator,repo) VALUES(?,?,?,?)",
                           (slug, encode(config), "owner", "bot-" + slug))
         preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in()).json()
         assert [(g["title"], g["owner"]) for g in preview["goals"]] == owners

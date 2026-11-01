@@ -188,7 +188,7 @@ def _reviews(c):
         "SELECT t.* FROM tasks t JOIN task_relations r ON r.from_task=t.id AND r.kind='parent' "
         "JOIN tasks p ON p.id=r.to_task "
         "WHERE coalesce(t.private,1)=0 AND t.status IN ('open','doing','waiting','review','ready') "
-        "AND (EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=p.type_id AND s.flow_json LIKE '%\"check\":%') "
+        "AND (EXISTS(SELECT 1 FROM task_steps s WHERE s.type_id=p.type_id AND s.flow LIKE '%\"check\":%') "
         "OR t.title LIKE 'Review %' OR t.title LIKE 'QA%') ORDER BY t.created, t.id"))
     out, groups = [], {}
     for row in rows:
@@ -205,7 +205,7 @@ def _reviews(c):
                              f"hub task get {parent_id}; if its pull request is gone: hub task close {row['id']} "
                              f"--note \"No pull request to review\""))
             continue
-        heads = tuple(sorted(str(H._json(p.get("detail_json"), {}).get("head_sha") or p.get("pr_sha") or "")
+        heads = tuple(sorted(str(H._json(p.get("detail"), {}).get("head_sha") or p.get("pr_sha") or "")
                              for p in links if p.get("state") not in ("merged", "closed", "shipped")))
         groups.setdefault((parent_id, step["id"], heads), []).append((match[0], row))
     for (parent_id, _step, _heads), found in groups.items():

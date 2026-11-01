@@ -258,7 +258,7 @@ def test_a_layout_saved_before_filters_had_rows_keeps_working(api):
            {"name": "Waiting on bots", "types": [], "states": ["waiting"], "waiting_on": "bot"},
            {"name": "Product", "types": ["general"], "states": ["open", "doing"], "waiting_on": ""}]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,updated,updated_by) VALUES('ops','',?,?,?)",
+        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,updated,updated_by) VALUES('ops','',?,?,?)",
                   (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"))
     bot_wait(api, "Waits on cpo")
     bot_wait(api, "Asked of cpo, waiting", "bot:cpo", "bot:ops", prerequisite_owner="bot:finance")
@@ -312,7 +312,7 @@ def test_default_tab_edits_persist_and_empty_conditions_are_not_reset(api):
 def test_all_legacy_builtins_keep_order_names_counts_and_receive_default_conditions(api):
     old = [{"builtin": key, "name": "Old " + key, "show_count": False} for key in ("blocked", "needs", "active", "done")]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,updated,updated_by) VALUES('ops','',?,?,?)",
+        c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,updated,updated_by) VALUES('ops','',?,?,?)",
                   (json.dumps(old), "2026-10-20T00:00:00Z", "human:ana"))
     new = tabs(api, "ops")["tabs"]
     assert [(t["builtin"], t["name"], t["show_count"]) for t in new] == [(t["builtin"], t["name"], False) for t in old]

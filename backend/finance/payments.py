@@ -49,7 +49,7 @@ def _event(ctx: Ctx, name: str, pay: Any, why: str = "") -> None:
 
 def settings(c: Any, connection_id: str) -> dict[str, Any]:
     row = SK.get(c, "fin_connections", connection_id)
-    return SK.loads(row["settings_json"]) if row is not None else {}
+    return SK.loads(row["settings"]) if row is not None else {}
 
 
 # ------------------------------------------------------------------------------------------------ recipients
@@ -294,9 +294,9 @@ def payment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
             "recipient_id": str(rec["id"]), "recipient_version": int(rec["version"]),
             "money_account_id": str(bank["id"]), "amount": amount, "currency": ctx.book.base_currency,
             "method": method, "memo": memo, "obligation": obligation, "account_id": line.id,
-            "tags_json": SK.dump(tags), "mode": mode, "status": "queued",
+            "tags": SK.dump(tags), "mode": mode, "status": "queued",
             "hold_id": hold.hold_id if hold is not None else None,
-            "purpose_json": SK.dump(purpose),
+            "purpose": SK.dump(purpose),
             "next_try_at": ctx.at, "created_at": ctx.at, "created_by": who, "updated_at": ctx.at})
         tico.after_commit(ctx.c, ring)
         return {"payment_id": pid, "status": "queued"}
@@ -369,7 +369,7 @@ def payment_cancel(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("payment_id",))
     pay = SK.get(ctx.c, "fin_payments", V.text(p, "payment_id", 80))
     if pay is None or (str(pay["created_by"]) != who and not may_write(ctx, who, str(pay["account_id"]),
-                                                                       SK.loads(pay["tags_json"]))):
+                                                                       SK.loads(pay["tags"]))):
         raise FinanceError(NOT_FOUND, "no such payment")
     status = str(pay["status"])
     if status in ("awaiting_bank_approval", "submitted"):
@@ -477,7 +477,7 @@ def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[s
     run = SK.last_rule_run(ctx.c, str(action_id or ""))
     if run is None:
         return out
-    hits = cast(list[Any], SK.loads(run["outcome_json"]).get("hits") or [])
+    hits = cast(list[Any], SK.loads(run["outcome"]).get("hits") or [])
     for raw in hits:
         h = cast(dict[str, Any], raw) if isinstance(raw, dict) else {}
         if h.get("outcome") == "limit" and h.get("period_key"):
@@ -488,14 +488,14 @@ def own_counts(ctx: Ctx, counted_json: object, action_id: object) -> set[tuple[s
 def unreserve(ctx: Ctx, pay: Any) -> None:
     """A payment that failed or was cancelled gives back the counters it reserved when it was claimed to send (only
     those: its action's own count stays, as any refused action's does), once: the record empties."""
-    owned = SK.loads_list(pay["counted_json"])
+    owned = SK.loads_list(pay["counted"])
     if not owned:
         return
     for raw in owned:
         if isinstance(raw, list) and len(cast(list[Any], raw)) == 3:
             rule, key, subject = cast(list[Any], raw)
             SK.uncount(ctx.c, str(rule), str(key), str(subject), int(pay["amount"]), ctx.at)
-    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": "[]"})
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted": "[]"})
 
 
 def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
@@ -503,11 +503,11 @@ def reserve(ctx: Ctx, pay: Any, hits: Sequence[G.Hit]) -> None:
     since, a new period), in the transaction that claims it to send; the payment owns them, so they move once."""
     if not hits:
         return
-    owned = [list(x) for x in SK.loads_list(pay["counted_json"])]
+    owned = [list(x) for x in SK.loads_list(pay["counted"])]
     for h in hits:
         SK.count(ctx.c, h.rule, h.period_key, h.subject, int(pay["amount"]), ctx.at)
         owned.append([h.rule, h.period_key, h.subject])
-    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted_json": SK.dump(owned)})
+    SK.update(ctx.c, "fin_payments", str(pay["id"]), {"counted": SK.dump(owned)})
 
 
 def decided_by(ctx: Ctx, action: Any) -> str:
@@ -546,7 +546,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     money = SK.get(ctx.c, "fin_money_accounts", str(pay["money_account_id"]))
     action = SX.by_id(ctx.c, str(pay["action_id"] or ""))
     who = (str(action["on_behalf_of"] or "") or str(action["actor"])) if action is not None else str(pay["created_by"])
-    tags = cast(dict[str, str], SK.loads(pay["tags_json"]))
+    tags = cast(dict[str, str], SK.loads(pay["tags"]))
     line = ctx.accounts.get(str(pay["account_id"]))
     why = ""
     if str(pay["mode"]) == "direct" and SL.setting(ctx.c, DIRECT_KEY) is not True:
@@ -574,7 +574,7 @@ def recheck(ctx: Ctx, pay: Any, fresh: list[G.Hit] | None = None) -> str:
     found = gating.send_facts(ctx, who, "payment_create",
                               {**_facts(ctx, rec, amount, line.code, str(pay["obligation"] or ""), tags, money),
                                "mode": str(pay["mode"])})
-    mine = own_counts(ctx, pay["counted_json"], pay["action_id"])
+    mine = own_counts(ctx, pay["counted"], pay["action_id"])
 
     def used(rule: G.Rule, key: str, subject: str) -> int:
         have = SK.counter(ctx.c, rule.id, key, subject)[0]
@@ -632,7 +632,7 @@ def request_body(pay: Any, rec: Any) -> dict[str, object]:
         "recipientId": str(rec["provider_recipient_id"]), "amount": dollars(int(pay["amount"])),
         "paymentMethod": MERCURY_METHOD[str(pay["method"])], "idempotencyKey": str(pay["idempotency_key"]),
         "note": key, "externalMemo": f"{key} {memo}".strip()[:140]}
-    purpose = cast(dict[str, str], SK.loads(pay["purpose_json"]))
+    purpose = cast(dict[str, str], SK.loads(pay["purpose"]))
     if purpose.get("category"):
         body["purpose"] = {"simple": {"category": purpose["category"],
                                       **({"additionalInfo": purpose["additional_info"]}

@@ -24,7 +24,7 @@ but Tico does not dispatch webhook calls through this sync integration.
 - Any human may link their own bots. A new bot counts toward a member's bot limit, like any bot they add.
 - Name, description and source section follow the platform. The source section is retained as metadata; it does not
   create groups, reorder Bots or override reporting relationships on Tico's org chart. The full instructions are kept in the bot's
-  `config_json.grok.instructions` (Dots: `config_json.dots`), with when they last changed, so the bot can be rebuilt
+  `config.grok.instructions` (Dots: `config.dots`), with when they last changed, so the bot can be rebuilt
   on another runtime. Sending an explicit empty description or instructions clears it; leaving either field out
   preserves it.
 - The transcript is copied into the human's own chat with the bot, already read, with no job queued. Resending a
@@ -37,7 +37,7 @@ but Tico does not dispatch webhook calls through this sync integration.
   shown inline. One Tico cannot fetch stays in the message as a link, as do links past the first 50 in one sync.
   Nothing is fetched for a sync Tico would refuse (a bot, a malformed body, or new bots past the member's limit).
 - Grok Bots named "Tico …" in Grok read "Grok …" here: in Grok the word marks the Bot as one of ours; here it says
-  where the bot runs. The Grok name is kept in `config_json.grok.name`.
+  where the bot runs. The Grok name is kept in `config.grok.name`.
 - Presence is the last sync: synced in the last 26 hours shows as synced, older as not synced lately. Nothing is
   dispatched to these bots, except a Grok Bot [delivered through the Grok Mac app](#deliver-through-the-grok-mac-app).
 
@@ -125,7 +125,7 @@ Dots, a human has one Muse, and it needs no `id`.
 
 ## Recovering a bot
 
-The bot's Tico chat holds its history and `config_json.grok.instructions` (or `config_json.dots` / `config_json.muse`)
+The bot's Tico chat holds its history and `config.grok.instructions` (or `config.dots` / `config.muse`)
 holds its instructions. To bring a Grok Bot back, paste those instructions into a new Grok Bot (or share the old
 one to another account, which copies its instructions but not its history), or move the Tico bot to the `grok`
 runtime on a registered computer with the same instructions.

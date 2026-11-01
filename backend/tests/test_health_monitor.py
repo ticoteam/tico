@@ -88,7 +88,7 @@ def finding(api, key):
 
 def runner_errors(api, runner, lines):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET readiness=? WHERE id=?",
                   (json.dumps({"schema_version": 1, "bots": {}, "recent_errors": lines}), runner["runner_id"]))
 
 
@@ -173,9 +173,9 @@ def test_a_finding_seen_again_counts_and_starts_no_run(environment):
     assert scan(api) == [] and wakes(api) == before + 1                   # back: counted, no run for anyone
     assert finding(api, key)["occurrences"] == 3 and len(monitor_tasks(api)) == 1
     with api.app.state.store.read() as c:                                 # a quiet note the bot reads next turn
-        (note,) = c.execute("SELECT m.body,m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+        (note,) = c.execute("SELECT m.body,m.refs FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
                             "WHERE t.id=? AND m.body LIKE 'Seen again%'", (task["id"],)).fetchall()
-    assert note["body"].startswith("Seen again (3 times, last ") and json.loads(note["refs_json"])["quiet"]
+    assert note["body"].startswith("Seen again (3 times, last ") and json.loads(note["refs"])["quiet"]
     shown = api.get("/api/v2/health-monitor", headers=signed_in()).json()["findings"]
     assert [(f["key"], f["occurrences"], f["severity"]) for f in shown] == [(key, 3, "warn")]
     assert shown[0]["last_seen"] == finding(api, key)["last_seen"]
@@ -286,7 +286,7 @@ def test_event_stream_counts_drops_and_not_the_ones_a_server_restart_caused(envi
     api.post("/api/v2/health-monitor/turn-on", json={}, headers=signed_in())
     monkeypatch.setattr(diagnostics.RING, "started", "2026-01-10T23:00:00Z")      # this process: far from the lines
     with api.app.state.store.transaction() as c:                                     # an earlier start: the update
-        c.execute("INSERT INTO flight_events(ts,kind,detail_json) VALUES(?,?,'{}')",
+        c.execute("INSERT INTO flight_events(ts,kind,detail) VALUES(?,?,'{}')",
                   (calendar.timegm(time.strptime("2026-01-10T21:06:44Z", "%Y-%m-%dT%H:%M:%SZ")), "start"))
     lost = "%s Tico runner: event stream lost (TimeoutError: error decoding response body); polling until it is back"
     gone = "%s Tico runner: event stream unavailable (HTTP 502); polling"
@@ -464,7 +464,7 @@ def limited(api, bot=SECRET_BOT, config=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {bot: {"name": bot, "status": "active"}}, None)
         if config is not None:
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
                       (bot, json.dumps(config)))
         H.event(c, H.KEEPER, "attempt.limited", "a-" + bot, {"bot": bot})
 
@@ -509,7 +509,7 @@ def turn(api, runner_id, result, minutes_ago, bot="coo", state=None):
         job = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()["id"]
         aid = "a-" + mid
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created,finished,"
-                  "result_json) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
+                  "result) VALUES(?,?,?,?,1,?,?,?,?,?,?)",
                   (aid, job, bot, runner_id, "hash-" + aid, state or result["outcome"], at, at, at, json.dumps(result)))
 
 
@@ -589,7 +589,7 @@ def test_a_bots_own_key_is_not_the_computers_login(environment):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, {b: {"name": b, "status": "active"} for b in ("gem-a", "gem-b", "pi-a")}, None)
         for bot, harness in (("gem-a", "gemini-cli"), ("gem-b", "gemini-cli"), ("pi-a", "pi")):
-            c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT OR REPLACE INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
                       (bot, json.dumps({"harness": harness})))
     # The Gemini CLI and pi sign in with each bot's own key (`api_keys = "bot"`): gem-a out of quota on its key, as a
     # turn of its own, a check and a fallback, says nothing about the computer, and gem-b working there clears nothing.
@@ -614,7 +614,7 @@ def gateway_choice(api, monkeypatch, runner_id, isolated, enabled=("anthropic",)
         providers.save(c, "human:test", {"expected_revision": providers.load(c)["revision"], "enabled": list(enabled),
                                          "runtime": "claude", "auto_fallback": True, "preset": "subscriptions-gateway"},
                        H.now())
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET readiness=? WHERE id=?",
                   (json.dumps({"schema_version": 1, "isolated": isolated, "runtimes": {}, "bots": {}}), runner_id))
 
 

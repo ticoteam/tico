@@ -80,7 +80,7 @@ Tico's own app uses more of the API than the spec lists. The line:
   `/jobs`, `/attempts`, `/agents`), settings, access, credentials, tools, market, routines, `/mcp` and
   `/scim`. They change between releases without notice. A route you need that is not in the spec: open an issue to
   have it added to the stable set.
-- **Inside answers.** Fields ending in `_json` (`refs_json`, `participants_json`, `acceptance_json`) are storage
+- **Inside answers.** Fields ending in `_json` (`refs`, `participants`, `acceptance`) are storage
   leftovers; read the parsed field beside them (`refs`, `participants`, `acceptance_criteria`). Unlisted fields may
   come and go; a client ignores what it does not know and never fails on an extra field.
 
@@ -144,7 +144,7 @@ Tag reads are team-wide; the task list keeps the caller's task visibility.
 
 Task `labels` remain a list of keys. Task responses also include `tags` with their display label,
 metadata and notes. `GET /api/v2/tasks/labels` preserves `labels` and adds `tags` for those keys.
-`task_tags` is the source of truth; the old `labels_json` column is kept for one release but
+`task_tags` is the source of truth; the old `labels` column is kept for one release but
 is no longer read or written. All tag changes are audited in `events`, and task tag changes
 keep the `labels` entry in `task_events`. See [Tags and release checklists](using-tico.md#tags-and-release-checklists).
 

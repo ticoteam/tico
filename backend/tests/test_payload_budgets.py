@@ -57,7 +57,7 @@ def test_payloads_stay_under_their_budgets(api):
                        for slug in [f"bot-{i}" for i in range(53)] + ["coo", "ops", "cpo", "product-design", "finance",
                                                                        "inbox", "doc-updater"]])
         for seq in range(200):
-            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+            c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES(?,?,?,?,?)",
                       (attempt["id"], 1000 + seq, "tool" if seq % 2 else "message",
                        json.dumps({"name": "shell", "output": MARKER * 50, "text": f"Step {seq} done. " * 40}), H.now()))
 
@@ -108,7 +108,7 @@ def test_a_settings_history_page_is_byte_capped(api):
     # 200 changes each carrying a 38 KB description: the page stops at its byte budget and names the next page.
     text = {"display_name": "Ops", "description": "A long description. " * 2000}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
                         H.shift(H.now(), seconds=i), None) for i in range(200)])
@@ -123,7 +123,7 @@ def test_a_settings_history_page_counts_utf8_bytes_not_characters(api):
     # a page counted in characters would send four times its budget.
     text = {"display_name": "Ops", "description": "🙂" * 2000}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
                         H.shift(H.now(), seconds=i), None) for i in range(200)])
@@ -139,7 +139,7 @@ def test_a_settings_change_bigger_than_a_page_comes_without_its_values_and_pagin
     people = [f"human:person-{i:05d}" for i in range(40000)]
     values = [(["human:ana"], ["human:ana", "human:ben"]), ([], people), ([], ["human:ana"])]
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(ids[i], "ops", "owners", encode(before), encode(after), "human:ana", None,
                         H.shift(H.now(), seconds=-i), None) for i, (before, after) in enumerate(values)])
@@ -171,12 +171,12 @@ def prepared_transitions(api, cid, count, text):
             "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]
         for i, message in enumerate(messages):
             tid = H.new_id()
-            c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,"
+            c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,"
                       "created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
                       (tid, "ops", "model", encode({"model": "fake-model"}), "human:ana", 1, "prepared",
                        H.shift(stamp, seconds=-i), stamp))
             c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,"
-                      "checkpoint_json) VALUES(?,?,?,?,?)",
+                      "checkpoint) VALUES(?,?,?,?,?)",
                       (tid, cid, message, "prepared",
                        encode({"current_objective": text,
                                "next_recommended_action": "Ask Ana", "open_decisions": []})))
@@ -189,10 +189,10 @@ def test_a_settings_history_first_page_with_transitions_stays_within_its_bytes(a
     prepared_transitions(api, msg["conversation_id"], 3, "A checkpoint of the chat's objective. " * 550)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO humans(id,name,email,slack_id,teams_json) VALUES(?,?,?,?,?)",
+        c.executemany("INSERT INTO humans(id,name,email,slack_id,teams) VALUES(?,?,?,?,?)",
                       [(f"person-{i:03d}", f"Person {i:03d} " + "with a long name " * 6, None, None, None)
                        for i in range(120)])
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "ops", "definition", encode(text), encode(text), f"human:person-{i:03d}", None,
                         H.shift(H.now(), seconds=-i), None) for i in range(120)])
@@ -210,7 +210,7 @@ def test_a_settings_history_first_page_leaves_out_the_oldest_transitions_its_byt
     prepared_transitions(api, msg["conversation_id"], 12, "A checkpoint of the chat's objective. " * 1200)
     text = {"display_name": "Ops", "description": "A long description. " * 80}
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
                         H.shift(H.now(), seconds=-i), None) for i in range(5)])

@@ -53,8 +53,8 @@ def test_botops_and_the_mcp_tools_change_the_list_as_the_person_who_asked(api, b
     err, done = mcp(api, "hub_slack_channel_add", {"channel": "#customer_success", "readers": ["cpo"], "post": False}, token=ben["token"])
     assert not err and done["readers"] == ["ops", "cpo"] and done["post"] is False and "needs_confirm" not in done, done
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='slack.channel_changed' ORDER BY ts DESC").fetchone()
-    assert event["actor"] == "human:ben" and '"via": "botops"' in event["detail_json"]
+        event = c.execute("SELECT actor,detail FROM events WHERE action='slack.channel_changed' ORDER BY ts DESC").fetchone()
+    assert event["actor"] == "human:ben" and '"via": "botops"' in event["detail"]
     err, removed = mcp(api, "hub_slack_channel_remove", {"channel": "#customer_success", "reader": "cpo"}, token=ben["token"])
     assert not err and removed["readers"] == ["ops"]
     err, listing = mcp(api, "hub_slack_channel_list", {}, token=ben["token"])

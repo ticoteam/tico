@@ -52,7 +52,7 @@ def test_deleted_message_with_a_list_run_ref_does_not_abort_the_page(api):
         parent = H.task_create(c, "human:ana", "Bad run ref", "Checklist", "bot:ops", lint=False)
         kept = H.task_comment(c, "human:ana", parent["id"], "Keep", wake=False)
         dropped = H.task_comment(c, "human:ana", parent["id"], "Drop", wake=False)
-        c.execute("UPDATE messages SET deleted_at=?, refs_json=? WHERE id=?",
+        c.execute("UPDATE messages SET deleted_at=?, refs=? WHERE id=?",
                   (H.now(), json.dumps({"turn_id": ["not-a-run"], "task": parent["id"]}), dropped["id"]))
         cid = parent["conversation_id"]
     ids = [row["id"] for row in get(api, "conversations/" + cid + "/messages")]

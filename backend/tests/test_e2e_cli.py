@@ -111,7 +111,7 @@ def argument_value(action, command):
         return "https://acme.example/smoke"
     if dest in ("cron",):
         return "0 9 * * *"
-    if dest in ("json", "body_json", "payload", "value", "input", "data", "flow"):
+    if dest in ("json", "body", "payload", "value", "input", "data", "flow"):
         return "{}"
     if "file" in dest or "path" in dest or dest in ("source", "files"):
         return "FILE"

@@ -275,7 +275,7 @@ def inputs_moved(bot, texts):
     def check(run):
         w = run.w
         mids = [r["id"] for text in texts for r in w.sql(
-            "SELECT id FROM messages WHERE body=? AND json_extract(refs_json,'$.task')=?", (text, run.packet))]
+            "SELECT id FROM messages WHERE body=? AND json_extract(refs,'$.task')=?", (text, run.packet))]
         if len(mids) != len(texts):
             return False, f"{len(mids)} of {len(texts)} messages were found on the task"
         limited = [r for r in run.t.bot(bot).turns if r["kind"] == "limited"]

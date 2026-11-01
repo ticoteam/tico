@@ -62,10 +62,10 @@ def test_a_bot_with_no_setting_creates_a_private_repo_gets_write_and_the_owner_i
     assert view["mode"] == "chosen"
     assert {"full_name": "Acme/tico-services", "access": "write"} in view["effective"]
     with api.app_state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='github.product_repo_created'").fetchone()
+        event = c.execute("SELECT actor,detail FROM events WHERE action='github.product_repo_created'").fetchone()
         assert event["actor"] == "bot:cmo"
-        assert json.loads(event["detail_json"])["bot_access"] == "write"
-        assert json.loads(event["detail_json"])["owner_notified"] is True
+        assert json.loads(event["detail"])["bot_access"] == "write"
+        assert json.loads(event["detail"])["owner_notified"] is True
         notices = c.execute("SELECT from_actor,body FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchall()
         assert [n["body"] for n in notices] == [
             "cmo created private repo tico-services (Acme/tico-services). cmo has write access to it."]
@@ -130,8 +130,8 @@ def test_a_chosen_bot_keeps_its_grants_and_bots_on_every_ticked_repo_are_named(a
     gh.repositories.append({"full_name": "Acme/tico"})            # the installation sees the ticked repository
     with api.app_state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES('r-tico','Acme/tico',1,?)", (H.now(),))
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'",
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'",
                   (json.dumps({**config, "repo_access_mode": "all"}),))
     assert api.put(ACCESS, json={"mode": "chosen", "chosen": [{"full_name": "Acme/tico", "access": "read"}],
                                  "create_product_repositories": True}, headers=auth()).status_code == 200
@@ -161,7 +161,7 @@ def test_a_read_only_all_repos_creator_gets_write_to_the_new_repo_and_keeps_read
     assert view["mode"] == "chosen"
     assert effective == {"Acme/emp-cmo": "write", "Acme/tico": "read", "Acme/tico-services": "write"}
     with api.app_state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM events WHERE action='github.product_repo_created'").fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM events WHERE action='github.product_repo_created'").fetchone()[0])
         assert detail["bot_access"] == "write" and detail["moved_to_chosen"] is True
         notice = c.execute("SELECT body FROM messages WHERE to_actor='human:ana' AND kind='notice'").fetchone()[0]
     assert ("cmo has write access to it. It was on All ticked repos with read access, so it is now on Chosen repos: "

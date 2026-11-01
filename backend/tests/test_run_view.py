@@ -226,7 +226,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
          machine["token"])
     with api.app.state.store.transaction() as c:
         cid = H.task(c, tid)["conversation_id"]
-        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+        c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
         assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
     assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "a bot's message to a bot is not it"
@@ -295,7 +295,7 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
     [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
     assert run["waiting"] == "Waiting for this computer's ChatGPT login (held by another bot since 19:06Z; position 2)"
     with api.app.state.store.read() as c:
-        kept = " ".join(r[0] for r in c.execute("SELECT payload_json FROM attempt_events WHERE attempt_id=?", (aid,)))
+        kept = " ".join(r[0] for r in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (aid,)))
     assert "Close the books" not in kept and "held by" not in kept
     # Held by another turn of the same bot: a reader who may see that run still learns its task.
     events(api, machine, aid, [("status", {**place, "holder": "ops"})], first=3)

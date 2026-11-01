@@ -203,7 +203,7 @@ TRIGGERS = [
      + _needs("ask", "NEW.to_actor", "NEW.from_actor", where="NEW.kind IN ('ask','answer')")),
     # Delivery and read receipts move on every message a bot takes; they are not a change to show.
     ("changes_messages_update", "UPDATE", "messages",
-     _changed("body", "refs_json", "kind", "answered_by", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
+     _changed("body", "refs", "kind", "answered_by", "edited_at", "deleted_at", "conversation_id", "superseded_at"),
      _row("messages", "update", "NEW.id", conversation="NEW.conversation_id")
      + _needs("ask", "NEW.to_actor", where="NEW.kind='ask'")),
     ("changes_messages_delete", "DELETE", "messages", None,
@@ -220,7 +220,7 @@ TRIGGERS = [
      # bot changes, independent of which conversation the viewer currently follows.
      + _row("bots", "status", "(SELECT bot FROM attempts WHERE id=NEW.attempt_id)",
             bot="(SELECT bot FROM attempts WHERE id=NEW.attempt_id)",
-            where="NEW.kind='status' AND json_type(NEW.payload_json,'$.waiting') IS NOT NULL")),
+            where="NEW.kind='status' AND json_type(NEW.payload,'$.waiting') IS NOT NULL")),
     ("changes_attempts_insert", "INSERT", "attempts", None,
      _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")),
     # A lease renewed is not a change; a run starting, finishing or failing is.
@@ -228,7 +228,7 @@ TRIGGERS = [
      _row("runs", "attempt", "NEW.id", conversation=_RUN_CONVERSATION.format(aid="NEW.id"), bot="NEW.bot")
      + _row("bots", "status", "NEW.bot", bot="NEW.bot",
             where="EXISTS (SELECT 1 FROM attempt_events WHERE attempt_id=NEW.id AND kind='status' "
-                  "AND json_type(payload_json,'$.waiting') IS NOT NULL)")),
+                  "AND json_type(payload,'$.waiting') IS NOT NULL)")),
     ("changes_jobs_insert", "INSERT", "jobs", None,
      _row("runs", "job", "NEW.attempt_id", ref="NEW.message_id",
           conversation="(SELECT conversation_id FROM messages WHERE id=NEW.message_id)", bot="NEW.bot")),
@@ -307,7 +307,7 @@ RUNNER_TRIGGERS = [
      + _tell("work", "SELECT NEW.runner_id AS rid", "NEW.bot")),
     ("changes_runner_assignments_delete", "DELETE", "assignments", None,
      _tell("assignments", "SELECT OLD.runner_id AS rid", "OLD.bot")),
-    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config_json", "operator", "team", "onboarding_state"),
+    ("changes_runner_bot_config_update", "UPDATE", "bot_config", _changed("config", "operator", "team", "onboarding_state"),
      _bot_runner("assignments", "NEW.bot")),
     # A bot's selected connection changes its assignment and readiness even while its old login is signed out.
     ("changes_runner_subscription_insert", "INSERT", "subscription_assignments", "NEW.scope='bot'",
@@ -673,13 +673,13 @@ def prime_status_lines(c, slugs):
         prime(c, LIVE_SQL, {(s,): live.get(s) for s in part})
         keys = [LAST_STOP + s for s in part]
         found = {row["key"]: row for row in c.execute(
-            f"SELECT value_json,key FROM registry_metadata WHERE key IN ({marks})", keys)}     # metadata reads row[0]
-        prime_rows(c, "SELECT value_json FROM registry_metadata WHERE key=?",
+            f"SELECT value,key FROM registry_metadata WHERE key IN ({marks})", keys)}     # metadata reads row[0]
+        prime_rows(c, "SELECT value FROM registry_metadata WHERE key=?",
                    {(k,): [found[k]] if k in found else [] for k in keys})
         # The run each mark names, its job, and a crashed bot's newest held job and run (execution.last_stop).
         stops = {}
         for slug in part:
-            mark = H._json(found[LAST_STOP + slug]["value_json"], {}) if LAST_STOP + slug in found else {}
+            mark = H._json(found[LAST_STOP + slug]["value"], {}) if LAST_STOP + slug in found else {}
             if isinstance(mark, dict) and isinstance(mark.get("attempt_id"), str) and mark["attempt_id"]:
                 stops[slug] = mark["attempt_id"]
         runs = _rows_by_id(c, STOP_ATTEMPT_SQL, set(stops.values()))
@@ -862,7 +862,7 @@ def _messages(view, rows):
             continue
         if privacy.message_readable(c, view.principal, message):
             out.append((row, {"id": subject, "conversation_id": cid,
-                              "message": {**message, "refs": H._json(message["refs_json"], {}) or {}}}))
+                              "message": {**message, "refs": H._json(message["refs"], {}) or {}}}))
         elif message.get("deleted_at") and _readable_before_deletion(view, message):
             out.append((row, {"id": subject, "conversation_id": cid, "deleted": True}))
     return out
@@ -922,7 +922,7 @@ def _runs(view, rows):
                     watched[bot] = rules_watch(c, bot)
                 if watched[bot]:
                     continue
-            event["payload"] = H._json(event.pop("payload_json"), {})
+            event["payload"] = H._json(event.pop("payload"), {})
             entry["output"] = event
         elif row["kind"] == "job":
             job = c.execute("SELECT j.*, m.conversation_id FROM jobs j JOIN messages m ON m.id=j.message_id "

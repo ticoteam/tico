@@ -55,7 +55,7 @@ def zone():
 
 # ----------------------------------------------------------------------------- the setting
 def load(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -86,7 +86,7 @@ def save(c, actor, changes):
             if slug and not (H.bot(c, slug) or {}).get("state") == "active":
                 raise Problem("invalid", f"No active bot {slug}", 422)
             after[field] = slug
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(after, sort_keys=True)))
     if after != before:
         H.event(c, actor, "release.schedule", "team", {"before": before, "after": after})
@@ -96,7 +96,7 @@ def save(c, actor, changes):
 def _with_template(c, template):
     return [r[0] for r in c.execute(
         "SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
-        "AND json_extract(bc.config_json,'$.template')=? ORDER BY b.slug", (template,))]
+        "AND json_extract(bc.config,'$.template')=? ORDER BY b.slug", (template,))]
 
 
 def _named(c, slug, template):
@@ -233,7 +233,7 @@ def request(c, actor, *, source, note=""):
 
 # ----------------------------------------------------------------------------- the daily hour
 def _fired(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (FIRED,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (FIRED,)).fetchone()
     try:
         found = json.loads(row[0]) if row else {}
     except ValueError:
@@ -277,7 +277,7 @@ def tick(c, at):
                   "tickets": result["tickets"]}
     for old in sorted(fired)[:-KEEP_FIRED]:
         fired.pop(old)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (FIRED, json.dumps(fired, sort_keys=True)))
     return result
 

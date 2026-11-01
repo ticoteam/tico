@@ -81,8 +81,8 @@ def bot_row(api, slug="ops"):
 def subscribe(api, categories, slug="ops", template="pr-reviewer"):
     if template is not None:
         with api.app.state.store.transaction() as c:
-            config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
+            config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                       (json.dumps({**config, "template": template}), slug))
     return post(api, f"bots/{slug}/definition", {"update_subscriptions": categories,
                                                  "expected_revision": bot_row(api, slug)["revision"]})

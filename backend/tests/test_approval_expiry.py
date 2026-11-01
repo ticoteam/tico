@@ -17,10 +17,10 @@ class Withdrawn(HubCase):
         after = H.approval(self.conn, appr["id"])
         self.assertEqual((after["decision"], after["decided_by"]), ("withdrawn", H.KEEPER))
         self.assertEqual(self.pending(), [])
-        told = self.conn.execute("SELECT body, refs_json FROM messages WHERE to_actor=? AND body LIKE 'Withdrawn:%'",
+        told = self.conn.execute("SELECT body, refs FROM messages WHERE to_actor=? AND body LIKE 'Withdrawn:%'",
                                  (CMO,)).fetchall()
         self.assertEqual(len(told), 1)
-        self.assertIn('"quiet": true', told[0]["refs_json"])
+        self.assertIn('"quiet": true', told[0]["refs"])
         self.refused("duplicate", H.approval_decide, self.conn, ANA, appr["id"], "approved")
 
     def test_a_newer_request_for_the_same_target_or_one_naming_it_replaces_the_older(self):

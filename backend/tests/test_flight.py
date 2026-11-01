@@ -170,7 +170,7 @@ def test_table_sizes_are_reused_for_a_day_even_after_a_restart(store, monkeypatc
     with store.read() as c:
         refreshed = flight._db(c, MINUTE + 86400)
         assert [r[0] for r in c.execute("SELECT name FROM pragma_table_info('flight_db')")] == [
-            "ts", "bytes", "wal_bytes", "free_bytes", "detail_json"]
+            "ts", "bytes", "wal_bytes", "free_bytes", "detail"]
     assert len(sizing) == 2 * one_pass
     assert refreshed["objects_at"] == MINUTE + 86400
     assert refreshed["objects"]["size_fixture"] > first["objects"]["size_fixture"]
@@ -434,7 +434,7 @@ def test_a_minute_the_lock_kept_out_is_written_with_the_next_one_or_named_as_mis
     errors(MINUTE + 300)
     assert minutes()[-2:] == [MINUTE + 240, MINUTE + 300] and MINUTE + 180 not in minutes()
     with store.read() as c:
-        gap = c.execute("SELECT detail_json FROM flight_events WHERE kind='recorder_gap'").fetchall()
+        gap = c.execute("SELECT detail FROM flight_events WHERE kind='recorder_gap'").fetchall()
     assert [json.loads(g[0]) for g in gap] == [{"minutes": [MINUTE + 180], "count": 1}]
 
 
@@ -497,7 +497,7 @@ def test_a_retry_after_a_failing_write_keeps_order_drops_only_the_bad_batch_and_
     minute(MINUTE + 120)
     with store.read() as c:
         assert tables(c) == ([MINUTE, MINUTE + 60, MINUTE + 120], 3, 3)     # replayed in reverse, n would end at 1 or 2
-        gap = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM flight_events WHERE kind='recorder_gap'")]
+        gap = [json.loads(r[0]) for r in c.execute("SELECT detail FROM flight_events WHERE kind='recorder_gap'")]
     assert gap == [{"minutes": [MINUTE + 90], "count": 1}] and sampler.pending == [] and sampler.lost == []
 
 
@@ -549,7 +549,7 @@ def test_a_real_request_holding_the_lock_is_named_while_held_and_after(tmp_path,
     sampler.flush(MINUTE + 60)
     sampler.file.close()
     with store.read() as c:
-        holds = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM flight_events WHERE kind='long_hold'")]
+        holds = [json.loads(r[0]) for r in c.execute("SELECT detail FROM flight_events WHERE kind='long_hold'")]
     opened = [h for h in holds if h.get("open")]
     assert opened and opened[0]["route"] == "POST /api/v2/test-hold/{key}" and "hold_the_lock" in opened[0]["site"]
     assert any(not h.get("open") and h["route"] == "POST /api/v2/test-hold/{key}" for h in holds)   # and when it ended

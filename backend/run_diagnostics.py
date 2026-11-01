@@ -59,18 +59,18 @@ def reason(c, row: AttemptRow, outcome, summary=''):
         return 'Finished'
     if row['state'] == 'expired':
         return 'Computer lost or heartbeat stopped (attempt lease expired)'
-    result = json.loads(row['result_json'] or '{}')
+    result = json.loads(row['result'] or '{}')
     if result.get('text') == 'Runner restarted during execution':
         return 'Runner restarted during execution'
     # The newest terminal cause wins over a primary model that failed before a fallback succeeded.
-    events = c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? "
+    events = c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? "
                         "AND kind IN ('error','diagnostic') ORDER BY seq DESC LIMIT 50", (row['id'],)).fetchall()
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('end_reason'):
             return scrub(p['end_reason'])[:500]
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('runner_error'):
             continue
         if p.get('process_exit') and isinstance(p.get('exit_code'), int):
@@ -85,7 +85,7 @@ def reason(c, row: AttemptRow, outcome, summary=''):
             code = p.get('code') or ''
             return scrub('Model error' + (' (' + str(code) + ')' if code else '') + ': ' + str(err))[:500]
     for ev in events:
-        p = json.loads(ev['payload_json'])
+        p = json.loads(ev['payload'])
         if p.get('runner_error'):
             return scrub(str(p.get('error_type') or 'Runner error') + ': ' + str(p['runner_error']))[:500]
     return scrub(result.get('error') or result.get('reason') or

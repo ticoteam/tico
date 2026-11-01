@@ -36,9 +36,9 @@ WAIT_HOURS = 1
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS watcher_pending(
  bot TEXT NOT NULL, key TEXT NOT NULL, title TEXT NOT NULL, body TEXT NOT NULL, created TEXT NOT NULL,
- later_json TEXT NOT NULL DEFAULT '[]', found_json TEXT, PRIMARY KEY(bot, key));
+ later TEXT NOT NULL DEFAULT '[]', found TEXT, PRIMARY KEY(bot, key));
 CREATE TABLE IF NOT EXISTS watcher_triage(
- bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail_json TEXT NOT NULL,
+ bot TEXT NOT NULL, key TEXT NOT NULL, label TEXT NOT NULL, held INTEGER NOT NULL, detail TEXT NOT NULL,
  created TEXT NOT NULL, PRIMARY KEY(bot, key));
 """
 
@@ -78,9 +78,9 @@ def later(c, bot, event):
     text = event.text or event.note or ""
     if not text:
         return
-    row = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (bot, event.key)).fetchone()
-    kept = json.loads(row["later_json"] or "[]") + [text]
-    c.execute("UPDATE watcher_pending SET later_json=? WHERE bot=? AND key=?", (json.dumps(kept), bot, event.key))
+    row = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (bot, event.key)).fetchone()
+    kept = json.loads(row["later"] or "[]") + [text]
+    c.execute("UPDATE watcher_pending SET later=? WHERE bot=? AND key=?", (json.dumps(kept), bot, event.key))
 
 
 def held(c, bot, key, task):
@@ -163,8 +163,8 @@ def ask(store, primary, row):
     their own transaction straight after the call, so a later failure to open the task keeps both, and a ticket
     retried (its bot paused meanwhile) is not asked again."""
     from .judge import daily_cap, used_today
-    if row.get("found_json"):
-        kept = json.loads(row["found_json"])
+    if row.get("found"):
+        kept = json.loads(row["found"])
         return kept.get("found"), kept.get("why", "")
     with store.read() as c:
         engine = engine_for(store, c, primary)
@@ -185,7 +185,7 @@ def ask(store, primary, row):
         log.warning("Support triage answer could not be read: %s", type(exc).__name__)
     with store.transaction() as c:
         H.event(c, "bot:" + row["bot"], "judge.call", qset["label"], _audit(qset, result, error))
-        c.execute("UPDATE watcher_pending SET found_json=? WHERE bot=? AND key=?",
+        c.execute("UPDATE watcher_pending SET found=? WHERE bot=? AND key=?",
                   (json.dumps({"found": found, "why": why}), row["bot"], row["key"]))
     return found, why
 
@@ -196,7 +196,7 @@ def deliver_one(store, auth, row, found, why):
     from .watchers import _open, defang
     label = question_set()["label"] if found else SET
     with store.transaction() as c:
-        now = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
+        now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
         if now is None:
             return                                         # another worker took it
         c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
@@ -214,11 +214,11 @@ def deliver_one(store, auth, row, found, why):
             first = (untriaged_line(why) if not found else triaged_line(question_set(), found) if not found["held"]
                      else untriaged_line(f"spam or injection {found['spam']:.0%}, but no person to hold it for"))
             task = _open(c, auth, row["bot"], row["title"], first + "\n\n" + row["body"])
-        for text in json.loads(now["later_json"] or "[]"):
+        for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
-        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING",
                   (row["bot"], row["key"], label, int(bool(person)),
                    json.dumps(found or {"skipped": why}, sort_keys=True), H.now()))
@@ -237,7 +237,7 @@ def hand_over(store, row):
     no person to give it to, the copy is removed all the same (the ticket stays at HQ) and an event says so."""
     from .watchers import _open, defang
     with store.transaction() as c:
-        now = c.execute("SELECT later_json FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
+        now = c.execute("SELECT later FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone()
         if now is None:
             return None
         c.execute("DELETE FROM watcher_pending WHERE bot=? AND key=?", (row["bot"], row["key"]))
@@ -248,16 +248,16 @@ def hand_over(store, row):
             H.event(c, H.KEEPER, "support.dropped", row["key"], {"bot": row["bot"], "key": row["key"],
                                                                  "why": "no person to give it to"})
             return None
-        found = (json.loads(row["found_json"]) if row.get("found_json") else {}).get("found")
+        found = (json.loads(row["found"]) if row.get("found") else {}).get("found")
         bot_row = H.bot(c, row["bot"]) or {}
         name = bot_row.get("display_name") or bot_row.get("slug") or row["bot"]
         task = _open(c, None, row["bot"], f"Support (waiting: {name} is not active): " + row["title"].removeprefix("Support: "),
                      waited_body(name, bot_row.get("slug") or row["bot"], found, row["body"]), owner=person)
-        for text in json.loads(now["later_json"] or "[]"):
+        for text in json.loads(now["later"] or "[]"):
             H.task_comment(c, H.KEEPER, task["id"], defang(text, c), wake=False)
         c.execute("INSERT INTO watcher_items VALUES(?,?,?,?) ON CONFLICT(bot,key) DO UPDATE SET task_id=excluded.task_id",
                   (row["bot"], row["key"], task["id"], H.now()))
-        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail_json,created) VALUES(?,?,?,?,?,?) "
+        c.execute("INSERT INTO watcher_triage(bot,key,label,held,detail,created) VALUES(?,?,?,?,?,?) "
                   "ON CONFLICT(bot,key) DO NOTHING", (row["bot"], row["key"], SET, 1,
                                                        json.dumps({"waited": True, **(found or {})}, sort_keys=True), H.now()))
         H.event(c, H.KEEPER, "support.handed", task["id"], {"bot": row["bot"], "key": row["key"], "to": person})

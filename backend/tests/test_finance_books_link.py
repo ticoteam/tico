@@ -94,9 +94,9 @@ def test_the_return_claims_the_grant_once_and_keeps_its_tokens_in_the_vault(api,
     assert r.status_code == 302 and result_of(r.headers["location"]) == {"books": ["connected"]}
     assert claims(linked) == 1
     with store.read() as c:
-        row = c.execute("SELECT id, provider, purpose, status, settings_json FROM fin_connections").fetchone()
+        row = c.execute("SELECT id, provider, purpose, status, settings FROM fin_connections").fetchone()
         assert (row["provider"], row["purpose"], row["status"]) == ("quickbooks", "books", "active")
-        assert "ref-1" not in row["settings_json"] and "acc-1" not in row["settings_json"]
+        assert "ref-1" not in row["settings"] and "acc-1" not in row["settings"]
         refresh = str(SX.books_settings(c, row["id"])["refresh"])
         assert T.credential_secret(c, api.app.state.vault, refresh) == "ref-1"
     again = api.get(back + "?finance=connected&claim=clm_1", headers=headers(), follow_redirects=False)

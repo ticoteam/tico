@@ -121,7 +121,7 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     set_access(api, see={"teams": ["legal"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     with api.app.state.store.transaction() as c:
         counsel_id = H.resolve_bot(c, "counsel")["id"]
-        c.execute("UPDATE runners SET accepts_member_bots=0,readiness_json=? WHERE id=?",
+        c.execute("UPDATE runners SET accepts_member_bots=0,readiness=? WHERE id=?",
                   (json.dumps({"schema_version": 1, "recent_errors": ["private runner log"], "bots": {}}), rid))
         save_metadata(c, "computer-repositories:" + rid,
                       {"repositories": [{"full_name": "acme/private-repo", "error": "private clone error"}]})

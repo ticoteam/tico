@@ -54,7 +54,7 @@ def _after(at: str, seconds: float) -> str:
 
 
 def _settings(row: Any) -> dict[str, Any]:
-    return SK.loads(row["settings_json"])
+    return SK.loads(row["settings"])
 
 
 # ------------------------------------------------------------------------------------------------ connect probe
@@ -354,8 +354,8 @@ def backfill(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
         cursor = next_page(page) or (str(raws[-1].get("id")) if raws else cursor)
         done = not raws or not next_page(page) and len(raws) < 500
         with store.transaction() as c:
-            SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings_json": SK.dump(
-                {**conf, "backfilled": True}) if done else row["settings_json"]})
+            SK.update(c, "fin_connections", cid, {"cursor": cursor, "settings": SK.dump(
+                {**conf, "backfilled": True}) if done else row["settings"]})
             if done:
                 # The balances read at the start of this pass and the whole feed: each account's opening balance.
                 ctx = load(c, now)
@@ -402,10 +402,10 @@ def process_inbox(store: Any, provider: Provider, cid: str, now: str) -> list[st
         waiting = SK.inbox_waiting(c, INBOX_MOST, cid, now)
         others = [str(r["id"]) for r in SK.connections(c, "mercury") if str(r["status"]) in ("active", "error")]
     for r in waiting:
-        body = SK.loads(r["payload_json"])
+        body = SK.loads(r["payload"])
         kind = str(body.get("resourceType") or "")
         owned = str(r["connection_id"] or "") == cid
-        tried = [str(x) for x in SK.loads_list(r["tried_json"])]
+        tried = [str(x) for x in SK.loads_list(r["tried"])]
         if kind != "transaction":
             with store.transaction() as c:
                 SK.inbox_done(c, str(r["id"]), "ignored", now)
@@ -477,7 +477,7 @@ def outbox(store: Any, provider: Provider, now: str, cid: str) -> list[str]:
                 if transfers.recheck(ctx, o, fresh):
                     continue      # re-checked at use: cancelled or held, so nothing is sent
                 transfers.reserve(ctx, o, fresh)         # with the claim: newly applicable limits move once
-        body = SK.loads(o["payload_json"])
+        body = SK.loads(o["payload"])
         answer = _send(store, provider, str(o["op"]), body)
         with store.transaction() as c:
             problem = _record(c, o, body, answer, now)
@@ -494,7 +494,7 @@ def _cut_off(c: Any, o: Any, now: str) -> None:
     why = "the call was cut off; it may have gone through: check Mercury before trying again"
     SK.update(c, "fin_outbox", str(o["id"]), {"status": "failed", "claimed_at": None, "last_error": why,
                                               "updated_at": now})
-    body = SK.loads(o["payload_json"])
+    body = SK.loads(o["payload"])
     ctx = load(c, now)
     if op == "transfer_create":
         transfers.not_sent(ctx, body, why, unknown=True, started=o["claimed_at"])
@@ -602,7 +602,7 @@ def _record(c: Any, o: Any, body: Mapping[str, Any], answer: Answer, now: str) -
             SK.update(c, "fin_recipients", str(body["recipient_id"]), {
                 "provider_recipient_id": str(answer.body.get("id") or ""), "updated_at": now})
             kept = {"recipient_id": body["recipient_id"]}
-            SK.update(c, "fin_outbox", str(o["id"]), {"payload_json": SK.dump(kept)})
+            SK.update(c, "fin_outbox", str(o["id"]), {"payload": SK.dump(kept)})
             # A payment waiting on this recipient goes in this pass (pay runs after outbox); the ring covers one paid
             # from another connection's account, whose pass may already be done.
             tico.after_commit(c, ring)
@@ -814,7 +814,7 @@ def statements(store: Any, provider: Provider, cid: str, now: str) -> list[str]:
                     continue
     with store.transaction() as c:
         fresh = SK.get(c, "fin_connections", cid)
-        SK.update(c, "fin_connections", cid, {"settings_json": SK.dump({**_settings(fresh), "statements_at": now})})
+        SK.update(c, "fin_connections", cid, {"settings": SK.dump({**_settings(fresh), "statements_at": now})})
     return []
 
 

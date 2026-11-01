@@ -152,7 +152,7 @@ def view(row):
     state = row["state"]
     return {"id": row["id"], "kind": row["kind"], "runner_id": row["runner_id"], "runtime": row["runtime"],
             "profile": row["profile"], "state": state, "url": row["url"], "code": row["user_code"],
-            "lines": json.loads(row["lines_json"] or "[]"), "message": row["message"],
+            "lines": json.loads(row["lines"] or "[]"), "message": row["message"],
             "accepts_code": row["runtime"] in PASTE_RUNTIMES and state == "waiting",
             "code_sent": bool(row["code_sent"]), "created": row["created"], "updated": row["updated"],
             "expires_at": row["expires_at"]}
@@ -190,19 +190,19 @@ def _login(c, rid, lid):
 
 
 def _signs_out(runner):
-    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return SIGN_OUT_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _switches_type(runner):
-    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return SWITCH_TYPE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _switches_to_key(runner):
-    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return SWITCH_TO_KEY_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _handles_keys(runner):
-    return KEYS_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return KEYS_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _online(runner):
@@ -210,7 +210,7 @@ def _online(runner):
 
 
 def _removes(runner):
-    return REMOVE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+    return REMOVE_CAPABILITY in set(H._json(runner["capabilities"], []) or [])
 
 
 def _queue(c, who, runner, runtime, profile, kind, what):
@@ -504,8 +504,8 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     from . import providers
     from .shared_bots import follow
     from .subscriptions import computer_logins
-    runner = c.execute('SELECT readiness_json,capabilities_json FROM runners WHERE id=?', (rid,)).fetchone()
-    ready = H._json(runner['readiness_json'], {}) or {}
+    runner = c.execute('SELECT readiness,capabilities FROM runners WHERE id=?', (rid,)).fetchone()
+    ready = H._json(runner['readiness'], {}) or {}
     current = computer_logins(runner, ready)
     if profile and current:
         # A named default is the same login, so cleanup must still refuse it while bots use it.
@@ -514,11 +514,11 @@ def _bots_on(c, rid, runtime, profile, settings, every):
     record = providers.load(c, settings)
     out = []
     active = "" if every else "AND b.state='active' "
-    for row in c.execute("SELECT a.bot, b.display_name, bc.config_json FROM assignments a JOIN bots b ON b.id=a.bot "
+    for row in c.execute("SELECT a.bot, b.display_name, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
                          f"{active}LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE a.runner_id=? "
                          "ORDER BY a.bot", (rid,)):
         try:
-            config = providers.fill(record, follow(c, row["bot"], json.loads(row["config_json"] or "{}")))
+            config = providers.fill(record, follow(c, row["bot"], json.loads(row["config"] or "{}")))
         except ValueError:
             continue
         reported = ((ready.get('bots') or {}).get(row['bot']) or {}).get('profile') or ''
@@ -567,7 +567,7 @@ def remove(c, who, rid, runtime, profile, settings, auth=None):
     if runtime not in SIGN_OUT_RUNTIMES:
         raise Problem("kind", "Removing a subscription from here isn't available for " + runtime, 422)
     runner = _runner(c, rid)
-    row = c.execute("SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?", (rid, profile)).fetchone()
+    row = c.execute("SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?", (rid, profile)).fetchone()
     if not row or runtime not in json.loads(row[0] or "{}"):
         raise Problem("not_found", "That subscription is not on this computer", 404)
     bots = affected_bots(c, who, rid, runtime, profile, settings, auth=auth, every=True)["bots"]
@@ -670,9 +670,9 @@ def report(c, runner_id, lid, body, settings=None):
     done_with_page = terminal or state == "finishing"
     url = "" if done_with_page else clean_url(body.url) or row["url"]
     code = "" if done_with_page else clean_user_code(body.code) or row["user_code"]
-    lines = clean_lines(body.lines) or json.loads(row["lines_json"] or "[]")
+    lines = clean_lines(body.lines) or json.loads(row["lines"] or "[]")
     pending_code = None if terminal or body.code_taken else row["pending_code"]
-    c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines_json=?, message=?, pending_code=?, "
+    c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines=?, message=?, pending_code=?, "
               "updated=? WHERE id=?",
               (state, url, code, json.dumps(lines), redact(body.message), pending_code, H.now(), lid))
     if terminal:
@@ -722,7 +722,7 @@ def _key_runtime(runtime):
 
 def _key_source(runner, runtime):
     """What the computer said signs `runtime` in: {name, source} ("computer", "terminal" or "shared"), or {}."""
-    found = H._json(runner["readiness_json"], {}) or {}
+    found = H._json(runner["readiness"], {}) or {}
     key = ((found.get("runtimes") or {}).get(runtime) or {}).get("key")
     return key if isinstance(key, dict) else {}
 

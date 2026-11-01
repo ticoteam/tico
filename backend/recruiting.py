@@ -736,7 +736,7 @@ def onboard(c, who, onboarding, row, card, slug, *, name, description, instructi
     and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
     from . import message_bots
     if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.session','task') WHERE bot=?", (slug,))
     if row["team"]:
         c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
     declared = onboarding._declared(c, slug)

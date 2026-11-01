@@ -342,7 +342,7 @@ def zone():
 
 
 def _stored(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (CONFIG_KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -425,7 +425,7 @@ def save_config(c, actor, key, on=None, preset=None, at=None):
         mine["at"] = at
     if mine:
         stored[key] = mine
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (CONFIG_KEY, json.dumps(stored, sort_keys=True)))
     after = config(c)[key]
     if after != before:
@@ -686,8 +686,8 @@ def spent_this_month(c, labels, at=None):
         return None
     at = at or datetime.now(timezone.utc)
     month = at.astimezone(timezone.utc).strftime("%Y-%m-01T00:00:00")
-    where = " OR ".join("json_extract(detail_json,'$.label') LIKE ?" for _ in labels)
-    total = c.execute("SELECT coalesce(sum(json_extract(detail_json,'$.cost_usd')),0) FROM events "
+    where = " OR ".join("json_extract(detail,'$.label') LIKE ?" for _ in labels)
+    total = c.execute("SELECT coalesce(sum(json_extract(detail,'$.cost_usd')),0) FROM events "
                       f"WHERE action='judge.spend' AND ts>=? AND ({where})",
                       (month, *[f"{label}@%" for label in labels])).fetchone()[0]
     return round(float(total or 0), 4)

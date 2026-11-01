@@ -210,7 +210,7 @@ def test_operations_names_a_limited_bots_runtime_when_config_was_primed_slug_fir
 
 def readiness(api, machine, document):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id=?", (json.dumps(document), machine["runner_id"]))
+        c.execute("UPDATE runners SET readiness=? WHERE id=?", (json.dumps(document), machine["runner_id"]))
 
 
 def test_a_computer_that_has_not_said_whether_it_can_run_the_bot(api):

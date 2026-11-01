@@ -48,7 +48,7 @@ def test_checks_news_for_a_head_the_pull_request_moved_past_is_dropped(api):
     with api.app.state.store.transaction() as c:
         row = task(c)
         c.execute("UPDATE jobs SET state='canceled' WHERE bot='ops'")
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,state,added_by,created,detail) "
                   "VALUES('l1',?,'pr','https://github.example/acme/app/pull/7','open','bot:ops',?,?)",
                   (row["id"], H.now(), json.dumps({"head_sha": "b" * 40})))
         old = H._wake(c, row, "bot:ops", "Checks failed on aaaaaaa.",
@@ -113,8 +113,8 @@ def test_a_review_gate_refusal_is_dropped_once_the_ticket_has_moved(api):
             review_gate.notify(c, "human:ana", {"task": t["id"], "kind": "receipt", "head": "a" * 40,
                                                 "pr": "https://github.example/acme/app/pull/7",
                                                 "text": "Review refused: missing test receipt."})
-        old, kept = (c.execute("SELECT * FROM messages WHERE json_extract(refs_json,'$.task')=? "
-                               "AND json_extract(refs_json,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
+        old, kept = (c.execute("SELECT * FROM messages WHERE json_extract(refs,'$.task')=? "
+                               "AND json_extract(refs,'$.review_gate') IS NOT NULL", (t["id"],)).fetchone()
                      for t in (moved, still))
         # The refusal held both (the ticket keeps its step) before it told the Builder.
         c.execute("UPDATE task_events SET ts=? WHERE task_id IN (?,?)", (H.shift(H.now(), minutes=-10), moved["id"], still["id"]))

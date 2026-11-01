@@ -20,9 +20,9 @@ def choose(api, preset, enabled=("anthropic", "openai")):
 
 def on_claude(api, bot):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
         config = {k: v for k, v in config.items() if k != "fallback"}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps({**config, **CLAUDE}), bot))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps({**config, **CLAUDE}), bot))
 
 
 def heartbeat(api, machine, bot, signed_in, isolated):
@@ -77,7 +77,7 @@ def test_before_sign_in_a_bot_runs_on_the_gateway_only_where_bots_run_as_their_o
     heartbeat(api, machine, "ops", signed_in=True, isolated=True)
     post(api, "chat/ops", {"text": "Use only the synthetic fixture again"})
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])["model"] \
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])["model"] \
             == CLAUDE["model"]
         record = providers.load(c, api.app.state.store.settings)
     ready = {"isolated": True, "runtimes": {"claude": {"authenticated": "ready"}}}
@@ -419,7 +419,7 @@ def test_a_gateway_segment_records_the_key_its_runner_was_handed_and_the_install
          machine["token"])
     with api.app.state.store.read() as c:
         rows = {r["model"]: dict(r) for r in c.execute("SELECT * FROM turn_usage_segments")}
-        install = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
+        install = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='usage-count'").fetchone()[0])
     assert rows["tico-general-medium-1.0"]["gateway_key_id"] == paid
     assert rows["tico-general-medium-1.0"]["install_id"] == install["install_id"]
     assert rows[CLAUDE["model"]]["gateway_key_id"] is None and rows[CLAUDE["model"]]["install_id"] is None

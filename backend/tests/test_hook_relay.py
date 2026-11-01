@@ -416,9 +416,9 @@ def test_the_owner_sets_and_clears_the_wake_address_and_the_secret_is_shown_once
     assert shown["url"] == url and shown["set_by"] == "human:ana" and shown["set_at"] and "whsec" not in json.dumps(shown)
     with api.app.state.store.read() as c:           # HQ signs: the secret is nowhere here, and the audit names only the host
         assert "whsec_test" not in json.dumps([tuple(r) for r in c.execute("SELECT * FROM hook_relay_state")])
-        audit = [dict(r) for r in c.execute("SELECT action, detail_json FROM events WHERE action LIKE 'hooks.wake_url%'")]
-    assert [a["action"] for a in audit] == ["hooks.wake_url_set"] and "t0ken" not in audit[0]["detail_json"]
-    assert "wake.acme.example" in audit[0]["detail_json"]
+        audit = [dict(r) for r in c.execute("SELECT action, detail FROM events WHERE action LIKE 'hooks.wake_url%'")]
+    assert [a["action"] for a in audit] == ["hooks.wake_url_set"] and "t0ken" not in audit[0]["detail"]
+    assert "wake.acme.example" in audit[0]["detail"]
 
     assert put(api, "hooks/wake-url", {"url": None}) == {"url": None, "secret": None}
     assert hq.calls[-1][2] == {"url": None, "secret": None} and hq.wake is None

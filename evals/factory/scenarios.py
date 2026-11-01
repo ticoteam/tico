@@ -184,8 +184,8 @@ def late_told(run):
     a working step, backend/step_age.LATE_HOURS) and one scheduler pass more. Sooner, a quiet ticket is its owner's
     to hear of (a status check), and a check that runs long is its timeout's."""
     from backend.step_age import LATE_HOURS
-    rows = run.w.sql("SELECT body, refs_json FROM messages WHERE to_actor='bot:engineering-lead'")
-    told = " ".join((r["body"] or "") + (r["refs_json"] or "") for r in rows)
+    rows = run.w.sql("SELECT body, refs FROM messages WHERE to_actor='bot:engineering-lead'")
+    told = " ".join((r["body"] or "") + (r["refs"] or "") for r in rows)
     named = {tid for _, tid in run.w.stuck_told}
     slack = 2 * run.scenario.tick_minutes / 60
     late = []

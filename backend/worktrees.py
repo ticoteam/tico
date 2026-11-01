@@ -242,7 +242,7 @@ def cancel_pending(c, row, detail, reason):
     asked, nothing on disk is touched, its place frees at once. A reserved wait for it ends once with the reason."""
     detail = {**detail, 'removed_by': 'cancelled', 'release_reason': 'pending cancelled', 'cancelled': reason}
     # Guarded on the stored state: serving waits and the heartbeat's own pass can both reach one reservation.
-    if not c.execute("UPDATE task_links SET state='removed',detail_json=?,updated=? WHERE id=? AND state='pending'",
+    if not c.execute("UPDATE task_links SET state='removed',detail=?,updated=? WHERE id=? AND state='pending'",
                      (json.dumps(detail), H.now(), row['id'])).rowcount:
         return
     if wait := waits.preparing(c, row['id']):
@@ -279,10 +279,10 @@ def held_reason(c, row, detail, memo=None):
     carries the commits and finishes."""
     if live_turn(c, row['task_id'], row.get('owner'), memo):
         return 'held: live turn'
-    last = c.execute("SELECT number,detail_json,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
+    last = c.execute("SELECT number,detail,coalesce(pr_merged_at,updated) AS finished FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=lower(?) "
                      f"AND branch=? AND state IN {PR_FINISHED} ORDER BY coalesce(pr_merged_at,updated,created) DESC LIMIT 1",
                      (row['task_id'], row['repo'] or '', row['branch'] or '')).fetchone() if row['branch'] else None
-    pr_head = json.loads(last['detail_json'] or '{}').get('head_sha') if last else None
+    pr_head = json.loads(last['detail'] or '{}').get('head_sha') if last else None
     # The computer's committed head, once it has nothing unpushed, is the branch as it is now. A push webhook's head
     # that differs from the merged head holds too (a push from elsewhere), but only until the computer's first report
     # after that delivery: a clean tree with nothing unpushed at the merged head proves it stale (a delayed or
@@ -304,7 +304,7 @@ def held_reason(c, row, detail, memo=None):
 def inventory(c, computer):
     if not supported(c):
         return []
-    owner = "coalesce(json_extract(l.detail_json,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
+    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
     return [dict(r) for r in c.execute(f"SELECT l.*,{owner} AS owner,t.status AS task_status,"
             "coalesce(b.state,'active') AS bot_state FROM task_links l JOIN tasks t ON t.id=l.task_id "
             # 'bot:'||slug = owner exactly when owner starts with 'bot:' and slug = its rest. Written that way the
@@ -319,12 +319,12 @@ def attached(c, task_id, computer, bot):
     task turn carries them (backend/execution.py) so the runner adds each to the session with its repo's rules."""
     if not supported(c) or not task_id or not computer:
         return []
-    owner = "coalesce(json_extract(l.detail_json,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
-    rows = c.execute(f"SELECT l.repo,l.branch,l.path,l.detail_json FROM task_links l JOIN tasks t ON t.id=l.task_id "
+    owner = "coalesce(json_extract(l.detail,'$.owner'),CASE WHEN l.added_by LIKE 'bot:%' THEN l.added_by ELSE t.owner END)"
+    rows = c.execute(f"SELECT l.repo,l.branch,l.path,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
                      f"WHERE l.task_id=? AND l.kind='worktree' AND l.computer_id=? AND l.state='present' AND {owner}=? "
                      "ORDER BY l.created", (task_id, computer, "bot:" + bot)).fetchall()
     return [{"repo": r["repo"] or "", "branch": r["branch"] or "", "path": r["path"]} for r in rows
-            if r["path"] and not json.loads(r["detail_json"] or "{}").get("setup_pending")]
+            if r["path"] and not json.loads(r["detail"] or "{}").get("setup_pending")]
 
 
 def allocation_has_pr(row, detail, prs):
@@ -351,15 +351,15 @@ def holdings(c, owner):
     """The bot's live worktrees, each with what clears it: `merged` or `closed` (its pull requests are finished and the
     computer releases it once the bot is idle), `merge_ready` (an approved, passing pull request), `task_finished`,
     or `in_progress`. A worktree the computer kept says why in `kept`."""
-    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail_json,l.created,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
+    rows = c.execute("SELECT l.id,l.task_id,l.path,l.repo,l.branch,l.detail,l.created,coalesce(l.updated,l.created) AS updated,t.title,t.status FROM task_links l "
                      "JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(l.state,'unknown')<>'removed' "
-                     "AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
+                     "AND coalesce(json_extract(l.detail,'$.owner'),t.owner)=? ORDER BY l.created", (owner,)).fetchall()
     out = []
     for row in rows:
         prs = c.execute("SELECT url,state,review_state,checks,mergeable,created,pr_merged_at,repo,branch FROM task_links WHERE task_id=? AND kind='pr'",
                         (row['task_id'],)).fetchall()
         states = [p['state'] for p in prs]
-        detail = json.loads(row['detail_json'] or '{}')
+        detail = json.loads(row['detail'] or '{}')
         if row['status'] in CLOSED:
             clear, why = 'task_finished', 'task ' + row['status']
         elif (prs and all(s in PR_FINISHED for s in states)
@@ -405,8 +405,8 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             grants = R.access(c, H.actor_id(row['owner']), connection['org'] if connection else default_org)['effective']
             grant = next((r for r in grants if r['full_name'].lower() == report.repo.lower() and r['access'] == 'write'), None)
             if connection and not grant:
-                c.execute("UPDATE task_links SET state='unknown',detail_json=?,updated=? WHERE id=?",
-                          (json.dumps({**json.loads(row['detail_json'] or '{}'), 'error': 'This bot needs write access to the attached repository'}), H.now(), row['id']))
+                c.execute("UPDATE task_links SET state='unknown',detail=?,updated=? WHERE id=?",
+                          (json.dumps({**json.loads(row['detail'] or '{}'), 'error': 'This bot needs write access to the attached repository'}), H.now(), row['id']))
                 continue
             if not connection:
                 try:
@@ -415,7 +415,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                     continue
             row['repo'] = grant['full_name'] if connection else report.repo
             c.execute('UPDATE task_links SET repo=? WHERE id=?', (row['repo'], row['id']))
-        detail = json.loads(row['detail_json'] or '{}')
+        detail = json.loads(row['detail'] or '{}')
         before = (row['state'], row['branch'], dict(detail))
         # 0.2.x runners do not send checkout_state. Keep their established report semantics
         # for links that were already known to exist (including offline/unknown links), while
@@ -522,11 +522,11 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
                     and row['updated'] > H.shift(now, seconds=-READINGS_EVERY)
                     and all(detail.get(k) == before[2].get(k) for k in set(detail) | set(before[2]) if k not in READINGS))
         if (state, row['branch'] or branch, detail) != before and not readings:
-            c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail_json=?,updated=? WHERE id=?',
+            c.execute('UPDATE task_links SET state=?,branch=coalesce(branch,?),detail=?,updated=? WHERE id=?',
                       (state, branch, json.dumps(detail), H.now(), row['id']))
             row['updated'] = H.now()
         row['state'] = state
-        row['detail_json'] = json.dumps(detail)
+        row['detail'] = json.dumps(detail)
         if branch:
             row['branch'] = branch
     # What this computer reported may have freed a place, or finished preparing a reserved worktree.
@@ -549,7 +549,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
     # inside this transaction: fifty finished trees must not walk the same hundred runs fifty times.
     live_tasks = {} if live_tasks is None else live_tasks
     for row in rows.values():
-        detail = json.loads(row['detail_json'] or '{}')
+        detail = json.loads(row['detail'] or '{}')
         stored = dict(detail)
         pr_links = task_prs.get(row['task_id'], [])
         prs = [pr['state'] for pr in pr_links]
@@ -624,7 +624,7 @@ def heartbeat(c, who, reports, capable, default_org="", live_tasks=None):
             for key in ('cleanup_requested', 'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up', 'release_reason'):
                 detail.pop(key, None)
         if detail != stored:
-            c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), row['id']))
+            c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), row['id']))
         if action and (action == 'remove' or row['repo'] and row['branch']):
             actions.append({'link_id': row['id'], 'action': action, 'branch': row['branch'], 'path': row['path'],
                             'task_id': row['task_id'], 'repo': row['repo'], 'owner': H.actor_id(row['owner']),
@@ -654,8 +654,8 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             git_repository.address(repo)
         except ValueError as exc:
             raise Problem('worktree_repo', str(exc), 422) from None
-    assigned = c.execute('SELECT r.id,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
-    if not assigned or not readiness_document(assigned['readiness_json']).get('worktrees'):
+    assigned = c.execute('SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
+    if not assigned or not readiness_document(assigned['readiness']).get('worktrees'):
         raise Problem('computer_update', 'Update this computer to use task worktrees', 409)
     if (who.role == 'bot' and who.runner_id != assigned['id']
             and not (who.actor != task['owner'] and H.task_represents(c, who.actor, task['owner']))):
@@ -672,18 +672,18 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     suffix = ''
     if existing and not attaching and existing['task_id'] == task['id']:
-        owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
+        owner = json.loads(existing['detail'] or '{}').get('owner', task['owner'])
         if owner != task['owner'] and existing['state'] != 'removed':
             suffix = '-' + ((H.bot(c, bot) or {}).get('slug') or bot)   # a folder name people read: the slug now
             path = relative(path + suffix)
             canonical = unicodedata.normalize('NFC', path).casefold()
             existing = next((r for r in candidates if unicodedata.normalize('NFC', r['path'] or '').casefold() == canonical), None)
     if existing:
-        owner = json.loads(existing['detail_json'] or '{}').get('owner', task['owner'])
+        owner = json.loads(existing['detail'] or '{}').get('owner', task['owner'])
         if existing['task_id'] != task['id'] or existing['path'] != path or owner != task['owner'] and existing['state'] != 'removed':
             raise Problem('worktree_path', 'This worktree belongs to another task', 409)
         if existing['state'] != 'removed':
-            detail = json.loads(existing['detail_json'] or '{}')
+            detail = json.loads(existing['detail'] or '{}')
             if existing['state'] == 'pending' and detail.get('pending_expired'):
                 # A retry after the deadline starts the same worktree over: same link, path and branch.
                 if why := start_refusal(c, task):
@@ -700,7 +700,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
                         detail.pop(key, None)
                     detail.update(checkout_state='queued', setup_pending=True)
                 now = detail['record_changed'] = H.now()
-                c.execute('UPDATE task_links SET detail_json=?,updated=? WHERE id=?',
+                c.execute('UPDATE task_links SET detail=?,updated=? WHERE id=?',
                           (json.dumps(detail), now, existing['id']))
             return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
                     'state': existing['state'],
@@ -710,7 +710,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     # A new or restored tree only for work a coding step can run on now; an existing one is still answered above.
     if why := start_refusal(c, task):
         raise Problem('worktree_start', why, 409)
-    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail_json,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
+    count = c.execute("SELECT count(*) FROM task_links l JOIN tasks t ON t.id=l.task_id WHERE l.kind='worktree' AND coalesce(json_extract(l.detail,'$.owner'),t.owner)=? AND coalesce(l.state,'unknown')<>'removed'", (task['owner'],)).fetchone()[0]
     if count >= LIMIT and brief:
         raise Problem('worktree_limit', f'This bot already has {LIMIT} worktrees.', 409, extra={'limit': LIMIT})
     if count >= LIMIT:
@@ -733,7 +733,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
             detail += ' Clean one up before making another. Oldest idle: ' + '; '.join(idle) + '.'
         raise Problem('worktree_limit', detail, 409, extra={'worktrees': held, 'limit': LIMIT})
     if existing:
-        detail = json.loads(existing['detail_json'] or '{}')
+        detail = json.loads(existing['detail'] or '{}')
         # This is a new allocation on the same link, not another attempt to release the retired tree.
         for key in (*REMOVAL, 'release_reason', 'removed_by', 'restore_on_reopen', 'cancelled',
                     'cleanup_attempts', 'cleanup_retry_at', 'cleanup_gave_up', 'cleanup_retry_generation',
@@ -746,7 +746,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
         detail.pop('checkout_target', None)
         detail.pop('expected_base', None)
         now = detail['record_changed'] = H.now()
-        c.execute("UPDATE task_links SET state='pending',computer_id=?,detail_json=?,updated=? WHERE id=?",
+        c.execute("UPDATE task_links SET state='pending',computer_id=?,detail=?,updated=? WHERE id=?",
                   (assigned['id'], json.dumps(detail), now, existing['id']))
         return {'link_id': existing['id'], 'branch': existing['branch'], 'path': existing['path'],
                 'state': 'pending',
@@ -761,7 +761,7 @@ def provision(c, who, task, repo, path=None, branch=None, default_org='', brief=
     now = H.now()
     c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,computer_id,path,updated) VALUES(?,?,'worktree',?,?,'pending',?,?,?,?,?,?,?)",
               (link, task['id'], 'worktree:' + link, repo or 'Worktree', who.actor, now, repo, branch, assigned['id'], path, now))
-    c.execute('UPDATE task_links SET detail_json=? WHERE id=?',
+    c.execute('UPDATE task_links SET detail=? WHERE id=?',
               (json.dumps({'owner': task['owner'], 'checkout_state': 'attached_pending' if attaching else 'queued',
                            'setup_pending': not attaching, 'record_changed': now}), link))
     return {'link_id': link, 'branch': branch, 'path': path, 'state': 'pending',
@@ -830,7 +830,7 @@ def install(app, store, auth, mutate):
                     raise Problem('forbidden', 'The computer or owner bot confirms its worktree', 403)
             if body.computer_id and body.computer_id != who.runner_id:
                 raise Problem('forbidden', 'Cannot attach on another computer', 403)
-            detail = json.loads(link['detail_json'] or '{}')
+            detail = json.loads(link['detail'] or '{}')
             checkout_state = body.checkout_state if body.checkout_state is not None else detail.get('checkout_state')
             setup_pending = body.setup_pending if body.setup_pending is not None else detail.get('setup_pending', False)
             legacy_restore_report = (who.role == 'runner' and body.state == 'present'
@@ -896,7 +896,7 @@ def install(app, store, auth, mutate):
                 detail.pop('pending_expired', None)     # the retry is making progress again
             fields = body.model_dump(exclude_none=True, exclude={'cleanup', 'setup_pending', 'checkout_state', 'expected_head', 'checkout_target', 'expected_base', 'skipped_files', 'snapshot_skipped', 'restore_source'})
             now = detail['record_changed'] = H.now()
-            fields['detail_json'] = json.dumps(detail)
+            fields['detail'] = json.dumps(detail)
             if 'path' in fields:
                 fields['path'] = relative(fields['path'])
                 if fields['path'] != link['path']:
@@ -924,7 +924,7 @@ def install(app, store, auth, mutate):
             if not link['repo']:
                 raise Problem('worktree_repo', 'Repository not identified yet', 409)
             assigned = c.execute('SELECT 1 FROM assignments WHERE bot=? AND runner_id=?', (H.actor_id(link['owner']), who.runner_id)).fetchone()
-            detail = json.loads(link['detail_json'] or '{}')
+            detail = json.loads(link['detail'] or '{}')
             closed = link['task_status'] in CLOSED or link['bot_state'] == 'archived' or detail.get('delete_requested')
             prs = [r[0] for r in c.execute("SELECT state FROM task_links WHERE task_id=? AND kind='pr'", (link['task_id'],))]
             removing = link['state'] != 'removed' and (closed and (all(state in PR_FINISHED for state in prs) or detail.get('delete_requested'))

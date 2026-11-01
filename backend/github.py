@@ -125,7 +125,7 @@ def _preset_owner(c, task):
     owner = str(task.get("owner") or "")
     if not owner.startswith("bot:"):
         return False
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (owner[4:],)).fetchone()
     return wake_presets.preset_of(H._json(row[0], {}) if row else {}) != wake_presets.CURRENT
 
 
@@ -232,7 +232,7 @@ def register_worktree_pr(c, pr):
     if not app or str(app["org"] or "").lower() != match.group(1).lower():
         return set()
     made = set()
-    for row in H._rows(c.execute("SELECT id,task_id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+    for row in H._rows(c.execute("SELECT id,task_id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? "
                                  "AND branch=?", (repo.lower(), branch))):
         if not c.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND lower(repo)=? AND number=?",
                          (row["task_id"], repo.lower(), int(match.group(3)))).fetchone():
@@ -240,9 +240,9 @@ def register_worktree_pr(c, pr):
             made.add(link["id"])
             H.event(c, H.KEEPER, "worktree.pr_registered", row["task_id"], {"url": url, "branch": branch})
         # The branch has its pull request now, however it was found, so an earlier failure to open one is over.
-        detail = H._json(row["detail_json"], {}) or {}
+        detail = H._json(row["detail"], {}) or {}
         if detail.pop("pr_error", None):
-            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), row["id"]))
+            c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), row["id"]))
     return made
 
 
@@ -285,7 +285,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
                 else "draft" if pr.get("draft") or action == "converted_to_draft" else "open")
         if link["state"] == "shipped" and state == "merged":
             state = "shipped"
-        detail = H._json(link.get("detail_json"), {}) or {}
+        detail = H._json(link.get("detail"), {}) or {}
         if not engineering(c, task):
             detail.pop("qa_default_pending", None)
         elif action == "opened" or link["id"] in registered:
@@ -342,7 +342,7 @@ def pull_request(c, payload, review_role="", release_repo="", *, read_refresh=Fa
             detail.pop("conflict_head", None)
         record_health_wait({**link, "state": state, "mergeable": mergeable,
                             **({"checks": "pending"} if new_head else {})}, detail)
-        c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+        c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
         if state == "merged" and link["state"] not in ("merged", "shipped") and not read_refresh:
             # The merge the builder was woken for: a ticket whose last check passed goes to Pending Release.
             from . import verdict_moves
@@ -408,7 +408,7 @@ def _own_comment(c, task, payload, key, detail):
     author = author or str(detail.get("author_login") or "").lower()
     head_login = str(detail.get("head_login") or "").lower()
     app = c.execute("SELECT slug FROM github_app LIMIT 1").fetchone()
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (H.actor_id(task["owner"]),)).fetchone()
     bot_login = (H._json(config[0], {}) or {}).get("github_login", "") if config else ""
     via_app = (payload.get(key) or {}).get("performed_via_github_app") or {}
     return (app and str(via_app.get("slug") or "").lower() == str(app[0]).lower()
@@ -423,7 +423,7 @@ def by_person(c, payload, key):
     login = str((obj.get("user") or {}).get("login") or "").lower()
     if not login or login.endswith("[bot]") or obj.get("performed_via_github_app"):
         return False
-    return not c.execute("SELECT 1 FROM bot_config WHERE lower(json_extract(config_json,'$.github_login'))=? LIMIT 1",
+    return not c.execute("SELECT 1 FROM bot_config WHERE lower(json_extract(config,'$.github_login'))=? LIMIT 1",
                          (login,)).fetchone()
 
 
@@ -528,7 +528,7 @@ def refresh_pending_checks(service):
             return []
         marks = ",".join("?" * len(H.ACTIVE_STATUSES))
         rows = H._rows(c.execute(
-            "SELECT l.id,l.repo,l.number,l.updated,json_extract(l.detail_json,'$.head_sha') AS head FROM task_links l "
+            "SELECT l.id,l.repo,l.number,l.updated,json_extract(l.detail,'$.head_sha') AS head FROM task_links l "
             "JOIN tasks t ON t.id=l.task_id JOIN repositories r ON lower(r.full_name)=lower(l.repo) "
             f"WHERE l.kind='pr' AND l.state='open' AND l.checks='pending' AND l.number IS NOT NULL AND r.reachable=1 "
             f"AND lower(l.repo) LIKE ? AND t.status IN ({marks}) AND coalesce(l.updated,l.created)<? "
@@ -564,7 +564,7 @@ def apply_checks(c, link_id, head, checks, since=None):
     applies (another head, a closed PR, a write since)."""
     row = c.execute("SELECT * FROM task_links WHERE id=?", (link_id,)).fetchone()
     link = dict(row) if row else None
-    detail = H._json(link.get("detail_json"), {}) or {} if link else {}
+    detail = H._json(link.get("detail"), {}) or {} if link else {}
     task = link and H.task(c, link["task_id"])
     if not checks or not task or link.get("state") != "open" or detail.get("head_sha") != head:
         return None
@@ -578,7 +578,7 @@ def apply_checks(c, link_id, head, checks, since=None):
     finished = state != "pending" and state != link.get("checks")
     finished_head = _finish(c, task, link, detail, head, checks) if finished else None
     record_health_wait({**link, "checks": state}, detail)
-    c.execute("UPDATE task_links SET checks=?,detail_json=?,updated=? WHERE id=?",
+    c.execute("UPDATE task_links SET checks=?,detail=?,updated=? WHERE id=?",
               (state, json.dumps(detail), H.now(), link_id))
     if state != link.get("checks"):
         c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
@@ -607,12 +607,12 @@ def pr_signal(c, event, payload):
         # Fork checks and commit statuses can omit the PR list.
         sha = payload.get("sha") if event == "status" else signal.get("head_sha")
         links = H._rows(c.execute("SELECT * FROM task_links WHERE kind='pr' AND lower(repo)=? "
-                                  "AND json_extract(detail_json,'$.head_sha')=?", (repo.lower(), sha)))
+                                  "AND json_extract(detail,'$.head_sha')=?", (repo.lower(), sha)))
     for link in links:
         task = H.task(c, link["task_id"])
         if not task:
             continue
-        detail = H._json(link.get("detail_json"), {}) or {}
+        detail = H._json(link.get("detail"), {}) or {}
         fields = {}
         label = link["title"]
         wake, batch, who_key = False, None, ""
@@ -694,7 +694,7 @@ def pr_signal(c, event, payload):
             fields["activity_at"] = H.now()      # the stale-PR find's clock (automation_actions FIND)
         changed = any(value != link.get(field) for field, value in fields.items())
         record_health_wait({**link, **fields}, detail)
-        fields.update(detail_json=json.dumps(detail), updated=H.now())
+        fields.update(detail=json.dumps(detail), updated=H.now())
         if changed:
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), task["id"]))
         c.execute("UPDATE task_links SET " + ",".join(k + "=?" for k in fields) + " WHERE id=?",
@@ -717,7 +717,7 @@ def creation_paths(service, pr, headers):
         from .review_gate import engineering
         if links:
             needed = any(engineering(c, H.task(c, l["task_id"])) and
-                         (H._json(l.get("detail_json"), {}) or {}).get("qa_default_pending") for l in links)
+                         (H._json(l.get("detail"), {}) or {}).get("qa_default_pending") for l in links)
         else:
             head = pr.get("head") or {}
             repo = (head.get("repo") or {}).get("full_name")
@@ -755,9 +755,9 @@ def apply_creation_qa(c, pr, paths):
     from . import qa_defaults
     qa_defaults.pr_created(c, pr, paths)
     for link in _links_for(c, pr["html_url"]):
-        detail = H._json(link.get("detail_json"), {}) or {}
+        detail = H._json(link.get("detail"), {}) or {}
         detail.pop("qa_default_pending", None)
-        c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+        c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
 
 
 def refresh_task_prs(service, task_id):
@@ -852,11 +852,11 @@ def refresh_task_prs(service, task_id):
 def _worktree_detail(service, repo, branch, change):
     """Apply `change(detail)` to every worktree link on this repository branch, in its own write."""
     with service.store.transaction() as c:
-        for row in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+        for row in H._rows(c.execute("SELECT id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? "
                                      "AND branch=?", (repo.lower(), branch))):
-            detail = H._json(row["detail_json"], {}) or {}
+            detail = H._json(row["detail"], {}) or {}
             change(detail)
-            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), row["id"]))
+            c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), row["id"]))
 
 
 def _pr_error(service, repo, branch, text):
@@ -929,12 +929,12 @@ def reconcile_worktree_prs(service):
             links = H._rows(c.execute(
                 "SELECT p.* FROM task_links p WHERE p.kind='pr' AND p.number IS NOT NULL "
                 "AND coalesce(p.state,'open') NOT IN ('merged','closed','shipped') AND " + held.format("p") +
-                " AND (json_extract(p.detail_json,'$.qa_default_pending')=1 OR EXISTS "
+                " AND (json_extract(p.detail,'$.qa_default_pending')=1 OR EXISTS "
                 "(SELECT 1 FROM task_links w WHERE w.task_id=p.task_id AND w.kind='worktree' "
                 "AND coalesce(w.state,'unknown')<>'removed'))", (org,)))
             branches = {}
             for w in H._rows(c.execute(
-                "SELECT w.repo,w.branch,w.detail_json,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
+                "SELECT w.repo,w.branch,w.detail,CASE WHEN coalesce(t.private,0)=0 THEN t.title END AS title,"
                 "(SELECT r.default_branch FROM repositories r WHERE lower(r.full_name)=lower(w.repo)) AS base "
                 "FROM task_links w JOIN tasks t ON t.id=w.task_id WHERE w.kind='worktree' "
                 "AND coalesce(w.state,'unknown')<>'removed' AND w.branch LIKE 'tico/%' AND " + held.format("w") +
@@ -942,7 +942,7 @@ def reconcile_worktree_prs(service):
                 "AND lower(p.repo)=lower(w.repo) AND p.branch=w.branch)", (org,))):
                 b = branches.setdefault((w["repo"], w["branch"]), {**w, "title": None, "heads": set()})
                 b["title"] = min(filter(None, (b["title"], w["title"])), default=None)
-                b["heads"].update(H.worktree_heads(H._json(w["detail_json"], {}) or {}))
+                b["heads"].update(H.worktree_heads(H._json(w["detail"], {}) or {}))
             branches = list(branches.values())
         def ready(kind, repo, key, heads=None):
             seen = cache.get((kind, repo, key))
@@ -1041,24 +1041,24 @@ def push(c, payload):
                 (head_commit.get("committer") or {}).get("username") or
                 (head_commit.get("author") or {}).get("username") or "").lower()
     if head_sha and login:
-        for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='pr' AND lower(repo)=? "
-                                       "AND json_extract(detail_json,'$.head_sha')=?", (repo.lower(), head_sha))):
-            detail = H._json(link["detail_json"], {}) or {}
+        for link in H._rows(c.execute("SELECT id,detail FROM task_links WHERE kind='pr' AND lower(repo)=? "
+                                       "AND json_extract(detail,'$.head_sha')=?", (repo.lower(), head_sha))):
+            detail = H._json(link["detail"], {}) or {}
             if login == detail.get("author_login"):
                 detail["head_login"] = login
             else:
                 detail.pop("head_login", None)
-            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+            c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
     branch = ref[len("refs/heads/"):] if ref.startswith("refs/heads/") else ""
     if WORKTREE_BRANCH.match(branch) and not payload.get("deleted") and head_sha:
         # A worktree branch's first push asks for its draft pull request; the background pass opens or reuses it
         # (reconcile_worktree_prs), so nothing here calls GitHub inside the write and the push's checks run as usual.
-        for link in H._rows(c.execute("SELECT id,detail_json FROM task_links WHERE kind='worktree' AND lower(repo)=? "
+        for link in H._rows(c.execute("SELECT id,detail FROM task_links WHERE kind='worktree' AND lower(repo)=? "
                                        "AND branch=?", (repo.lower(), branch))):
-            detail = H._json(link["detail_json"], {}) or {}
+            detail = H._json(link["detail"], {}) or {}
             detail.update(pushed=head_sha, pushed_at=detail.get("pushed_at") or H.now(), pushed_last_at=H.now())
             detail.pop("stale_push_cleared", None)     # a release names only a stale push the newest push left behind
-            c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+            c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
     if ref != "refs/heads/" + default:
         return {"ref": ref, "commits": 0}
     shas = [str(x.get("id") or "") for x in (payload.get("commits") or [])]
@@ -1284,10 +1284,10 @@ def ship_deployed(c, settings, *, ancestry=None):
                 continue
             c.execute("UPDATE task_links SET state='shipped',updated=? WHERE id=?", (H.now(), link["id"]))
             c.execute("UPDATE tasks SET updated=? WHERE id=?", (H.now(), link["task_id"]))
-            detail = H._json(link.get("detail_json"), {}) or {}
+            detail = H._json(link.get("detail"), {}) or {}
             item = f"Shipped: {link['title']} is in the running release {commit[:12]} {link['url']}"
             if fire_once(detail, item):
-                c.execute("UPDATE task_links SET detail_json=? WHERE id=?", (json.dumps(detail), link["id"]))
+                c.execute("UPDATE task_links SET detail=? WHERE id=?", (json.dumps(detail), link["id"]))
                 queue_wake(c, H.task(c, link["task_id"]), item)
             evidence = {"release": commit, "url": link["url"]}
             if (repo.lower(), link["pr_sha"], commit) in (ancestry or ()):

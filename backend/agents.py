@@ -44,7 +44,7 @@ PAIRABLE = ("hermes", "openclaw")
 
 # One bot's config and agent record, read through read_cache so a page that primes them for every bot
 # (views.prime_machines) reads neither again per bot.
-CONFIG_SQL = "SELECT config_json FROM bot_config WHERE bot=?"
+CONFIG_SQL = "SELECT config FROM bot_config WHERE bot=?"
 ROW_SQL = "SELECT * FROM agents WHERE bot=?"
 
 
@@ -54,7 +54,7 @@ def external_harness(c, bot):
     row = one(c, CONFIG_SQL, (bot,))
     if not row:
         return None
-    config = H._json(row["config_json"], {}) or {}
+    config = H._json(row["config"], {}) or {}
     return resolve_harness(config) if is_external(config) else None
 
 
@@ -73,7 +73,7 @@ def presence(c, bot, harness=None, now=None):
     if harness in external_sync.HARNESSES:
         from .read_cache import one
         config = one(c, CONFIG_SQL, (bot,))
-        return external_sync.presence(c, bot, harness, H._json(config["config_json"], {}) or {}, now)
+        return external_sync.presence(c, bot, harness, H._json(config["config"], {}) or {}, now)
     now = now or H.now()
     record = row(c, bot)
     credential = bool(record and not record["revoked_at"])
@@ -288,7 +288,7 @@ def approve_pairing(c, who, manager, code, bot):
         raise Problem("bot_state", "This bot is " + state + "; make it planned or active first", 409)
     if state == "planned":
         c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
         H.event(c, who.actor, "bot.activated", bot)
     issued = issue_credential(c, who, bot)
     c.execute("UPDATE agent_pairings SET state='approved',bot=?,token=?,decided_by=?,decided_at=? WHERE id=?",

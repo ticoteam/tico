@@ -79,8 +79,8 @@ def test_a_quarantined_bots_manager_bot_writes_to_it_and_it_waits_but_no_other_b
 def test_a_manager_declared_only_in_the_bots_definition_counts_too(api):
     import json
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cpo'").fetchone()[0])
-        c.execute("UPDATE bot_config SET reports_to=NULL, config_json=? WHERE bot='cpo'",
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cpo'").fetchone()[0])
+        c.execute("UPDATE bot_config SET reports_to=NULL, config=? WHERE bot='cpo'",
                   (json.dumps({**config, "reports_to": "ops"}),))
         H.quarantine(c, "cpo", "10 repeated refusals today")
     with api.app.state.store.transaction() as c:

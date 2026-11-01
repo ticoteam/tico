@@ -118,9 +118,9 @@ def groups(api, ops_team):
     """Engineering with Product nested under it; ops in `ops_team`."""
     import json
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = {"eng": {"name": "Engineering"}, "product": {"name": "Product", "parent": "eng"}}
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         c.execute("UPDATE bot_config SET team=? WHERE bot='ops'", (ops_team,))
 
 

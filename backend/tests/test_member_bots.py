@@ -27,7 +27,7 @@ def close_computer(api, machine):
 def botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
-        c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
+        c.execute("INSERT INTO bot_config(bot,config,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     machine = runner(api)
     assign(api, machine, "botops")
@@ -62,9 +62,9 @@ def test_a_member_registers_a_bot_through_botops_and_owns_it(api, botops):
         row = c.execute("SELECT created_by,operator,reports_to FROM bot_config WHERE bot=?", (jira_id,)).fetchone()
         assert (row["created_by"], row["operator"], row["reports_to"]) == ("human:cara", "cara", "human:cara")
         # Recorded as hers, via BotOps.
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.definition_created' "
+        event = c.execute("SELECT actor,detail FROM events WHERE action='bot.definition_created' "
                           "AND target=?", (jira_id,)).fetchone()
-        assert event["actor"] == "human:cara" and '"via": "botops"' in event["detail_json"]
+        assert event["actor"] == "human:cara" and '"via": "botops"' in event["detail"]
     # Idempotent for its own owner; the same slug held by someone else is a conflict.
     assert register(api, attempt, "jira-manager").json()["created"] is False
     assert register(api, attempt, "ops").status_code == 409

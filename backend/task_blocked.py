@@ -14,7 +14,7 @@ def ensure(c):
     from . import hubdb as H
     for name, kind in (
         ('blocked_since', 'TEXT'), ('blocked_reason', 'TEXT'), ('blocked_kind', 'TEXT'),
-        ('blocked_from_step', 'TEXT'), ('blocked_from_status', 'TEXT'), ('blocked_gate_json', 'TEXT'),
+        ('blocked_from_step', 'TEXT'), ('blocked_from_status', 'TEXT'), ('blocked_gate', 'TEXT'),
         ('building_started_at', 'TEXT'), ('building_seconds', 'REAL NOT NULL DEFAULT 0'),
         # When its last tracked hold cleared, for a task still waiting: the stranded sweep's clock (task_holds.py).
         ('holds_cleared_at', 'TEXT'),
@@ -156,7 +156,7 @@ def transition(c, row, effective, step_id, note, at, manual=False, stepped=False
                 c.execute('UPDATE tasks SET blocked_from_step=?,blocked_from_status=? WHERE id=?',
                           (step_id, landed[0], row['id']))
     elif row.get('blocked_since'):
-        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate_json=NULL'
+        c.execute('UPDATE tasks SET blocked_since=NULL,blocked_reason=NULL,blocked_kind=NULL,blocked_from_step=NULL,blocked_from_status=NULL,blocked_gate=NULL'
                   + (',holds_cleared_at=NULL' if 'holds_cleared_at' in row else '') + ' WHERE id=?', (row['id'],))
         H._task_event(c, row['id'], H.KEEPER, 'blocked_since', row['blocked_since'], None, 'Hold cleared')
 
@@ -218,7 +218,7 @@ def reconciliation(c, row, snapshots=None):
         # step here would undo it and drop the retry.
         if move_retry.remembered(c, row):
             return None
-        gate = H._json(row.get('blocked_gate_json'), {}) or {}
+        gate = H._json(row.get('blocked_gate'), {}) or {}
         # A fresh refusal can describe a newer head/check result than the cached link.
         # Only a subsequent GitHub observation may clear that uncertainty.
         for pr in review_gate.links(c, row):
@@ -228,7 +228,7 @@ def reconciliation(c, row, snapshots=None):
                 detail = snapshots.get(pr['id']) or {}
                 seen = detail.get('at') or ''
             else:
-                detail = H._json(pr.get('detail_json'), {}) or {}
+                detail = H._json(pr.get('detail'), {}) or {}
                 seen = pr.get('updated') or ''
             if ((gate.get('kind') == 'ci' or detail.get('head_sha') != gate.get('head'))
                     and seen <= gate.get('at', '')):
@@ -340,7 +340,7 @@ def alert_target(c, row, at):
         return None
     if H.is_bot(target) and (H.bot(c, H.actor_id(target)) or {}).get('state') != 'active':
         return None
-    if c.execute("SELECT 1 FROM events WHERE action='task.blocked_age' AND target=? AND json_extract(detail_json,'$.since')=?", (row['id'], row['blocked_since'])).fetchone():
+    if c.execute("SELECT 1 FROM events WHERE action='task.blocked_age' AND target=? AND json_extract(detail,'$.since')=?", (row['id'], row['blocked_since'])).fetchone():
         return None
     return target
 

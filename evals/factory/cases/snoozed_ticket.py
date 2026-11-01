@@ -62,7 +62,7 @@ def owner_turns(run, tid, since, until=None):
 def notices(run, tid, prefix):
     """Tico's notices to the ticket's owner starting `prefix`, with whether each queued a job (woke it)."""
     return run.w.sql("SELECT m.created, m.to_actor, EXISTS(SELECT 1 FROM jobs j WHERE j.message_id=m.id) woke "
-                     "FROM messages m JOIN tasks t ON t.id=json_extract(m.refs_json,'$.task') "
+                     "FROM messages m JOIN tasks t ON t.id=json_extract(m.refs,'$.task') "
                      "WHERE t.id=? AND m.to_actor=t.owner AND m.from_actor='keeper' AND m.body LIKE ? "
                      "ORDER BY m.created", (tid, prefix + "%"))
 

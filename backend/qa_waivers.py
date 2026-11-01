@@ -140,7 +140,7 @@ def waive(c, actor, task_id, head, reason, step=None, snapshots=None, manager=Fa
                                    f"({detail.get('why') or 'GitHub read failed'}); retry.")
         # The read ran outside the write lock: a push recorded since then makes it stale, as for a review move
         # (review_gate.check). An older cache never overrides a newer read.
-        cached = str((H._json(pr.get("detail_json"), {}) or {}).get("head_sha") or "").lower()
+        cached = str((H._json(pr.get("detail"), {}) or {}).get("head_sha") or "").lower()
         if (pr.get("updated") or "") > (detail.get("at") or "") and cached != str(detail.get("head_sha") or "").lower():
             _refuse(c, actor, row, f"{pr['url']} changed while GitHub was read (now {cached[:12] or 'unknown'}); "
                                    "retry the waiver.")
@@ -182,7 +182,7 @@ def waivers(c, row, links=None):
     heads = {}
     for link in H.task_links(c, row["id"]) if links is None else links:
         if link["kind"] == "pr":
-            heads[link["url"]] = str((H._json(link.get("detail_json"), {}) or {}).get("head_sha") or "").lower()
+            heads[link["url"]] = str((H._json(link.get("detail"), {}) or {}).get("head_sha") or "").lower()
     out = []
     for e in c.execute("SELECT * FROM task_events WHERE task_id=? AND field=? ORDER BY ts, rowid", (row["id"], FIELD)):
         record = H._json(e["new"], {}) or {}

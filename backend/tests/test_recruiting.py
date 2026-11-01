@@ -15,7 +15,7 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot,config_json,operator) VALUES('goal-manager','{}','ana')")
+        c.execute("INSERT OR IGNORE INTO bot_config(bot,config,operator) VALUES('goal-manager','{}','ana')")
     return as_bot(api, "goal-manager")
 
 
@@ -514,7 +514,7 @@ def test_picking_a_candidate_creates_the_bot_in_onboarding_in_the_seat_and_only_
         "onboarding", "coo", "Support Desk", "Support Desk")
     with api.app.state.store.read() as c:
         hired_id = H.resolve_bot(c, slug)["id"]          # config and events are keyed by the bot's id, not its slug
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (hired_id,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (hired_id,)).fetchone()[0])
         assert H.bot(c, hired_id)["model"] == other
         # The repository is built from this definition once the bot exists (the computer's `materialize`).
         assert config["materialize"] is True and config["template"] == pick["template"]

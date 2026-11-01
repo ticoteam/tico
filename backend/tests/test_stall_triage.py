@@ -51,8 +51,8 @@ def sweep(api, tid, at=None):
 def stalls(api, tid):
     with api.app.state.store.read() as c:
         """Runs started by a stall wake on the task."""
-        return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.refs_json LIKE ? "
-                         "AND m.refs_json LIKE '%stalled%'", (f'%{tid}%',)).fetchone()[0]
+        return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE m.refs LIKE ? "
+                         "AND m.refs LIKE '%stalled%'", (f'%{tid}%',)).fetchone()[0]
 
 
 def test_a_held_quiet_task_decide_calls_stuck_gets_one_wake_and_none_after(api):

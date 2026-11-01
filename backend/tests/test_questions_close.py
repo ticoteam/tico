@@ -157,7 +157,7 @@ def test_a_dated_question_closes_on_its_date_after_a_clarify_without_going_ahead
                                                                         "closed": []}
         answer = c.execute("SELECT * FROM messages WHERE in_reply_to=? AND kind='answer'", (asked["id"],)).fetchall()
         assert len(answer) == 1 and "does not happen on its own" in answer[0]["body"]
-        assert "answer" not in H._json(answer[0]["refs_json"], {})              # no option picked for her
+        assert "answer" not in H._json(answer[0]["refs"], {})              # no option picked for her
         assert wakes(c, answer[0]["id"]) == 1 and not listed(c, work["id"])
 
 

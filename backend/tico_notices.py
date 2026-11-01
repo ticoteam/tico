@@ -55,7 +55,7 @@ def ensure(c, owner=None):
     if not owner:
         return False
     for row in RULES:
-        c.execute("INSERT OR IGNORE INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,"
+        c.execute("INSERT OR IGNORE INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,"
                   "position,note,created_by,created,updated,revision) VALUES(?,?,?,?,?,?,?,1,?,?,?,?,?,1)",
                   (row["id"], "team", "", EVENT, json.dumps(row["when"], sort_keys=True), row["then"],
                    json.dumps(row["params"], sort_keys=True), RULE_POSITION + row["order"], row["note"], owner, now, now))

@@ -267,7 +267,7 @@ def test_a_claim_stops_inside_the_byte_budget_and_the_rest_wait_for_the_next(api
     body = json.dumps({"body": "x" * 100_000})                   # 100 KB each: a claim takes two or three at most
     with api.app.state.store.transaction() as c:
         for i in range(5):
-            c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args_json,"
+            c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,"
                       "state,created,attempts) VALUES(?,?,?,?,?,?,?,?,?,0)",
                       (f"act{i}", "auto_x", "run_x", BOX, "m1", "draft_reply", body, "queued",
                        f"2026-10-28T00:00:0{i}Z"))
@@ -326,10 +326,10 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
     slack_msg = {"message": {"source": "slack", "inbox": "slack:#general", "channel": "C1", "ts": "1.1", "text": "Help?"}}
     auto = {"id": automate(api, NOTE), "flow": {"owner": "person:ana"}, "assistant_bot": "coo"}
     with store.transaction() as c:
-        c.execute("INSERT INTO automation_runs(id,automation_id,version,started,status,state_json) "
+        c.execute("INSERT INTO automation_runs(id,automation_id,version,started,status,state) "
                   "VALUES('run_s',?,1,?,'ok',?)", (auto["id"], "2026-10-28T09:00:00Z", json.dumps({"status": "ok", "steps": []})))
         done = A.run(c, auto, "run_s", "send_reply", {"body": "On it", "bot": "ops"}, slack_msg)
-        c.execute("UPDATE automation_runs SET state_json=? WHERE id='run_s'", (json.dumps(
+        c.execute("UPDATE automation_runs SET state=? WHERE id='run_s'", (json.dumps(
             {"status": "ok", "threads": [], "steps": [{"id": "reply", "type": "action", "status": "ok",
                                                          "outputs": {"do": "send_reply", **done}, "cost": 0}]}),))
         c.execute("INSERT INTO automation_inboxes VALUES('slack:#general',0,?,'human:ana')", ("2026-10-28T09:01:00Z",))
@@ -339,7 +339,7 @@ def test_a_slack_reply_delivered_after_the_switch_went_off_is_held_as_a_draft_ta
     with store.read() as c:
         held = dict(c.execute("SELECT state, error FROM slack_posts").fetchone())
         task = c.execute("SELECT owner, title FROM tasks WHERE title LIKE 'Draft reply:%'").fetchone()
-        state = json.loads(c.execute("SELECT state_json FROM automation_runs WHERE id='run_s'").fetchone()[0])
+        state = json.loads(c.execute("SELECT state FROM automation_runs WHERE id='run_s'").fetchone()[0])
     assert held == {"state": "cancelled", "error": "send_off"} and dict(task) == {"owner": "human:ana",
                                                                                    "title": "Draft reply: On it"}
     assert state["steps"][0]["outputs"]["detail"] == "send_off"
@@ -401,7 +401,7 @@ def test_a_lease_that_runs_out_after_its_run_failed_is_cancelled_not_queued(api,
 def test_no_computer_claims_or_reports_for_a_mailbox_not_published_yet(api, computer):
     claim(api, computer.token, expected=403)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO automation_mail_actions(id,automation_id,mailbox,msg_id,action,args_json,state,created) "
+        c.execute("INSERT INTO automation_mail_actions(id,automation_id,mailbox,msg_id,action,args,state,created) "
                   "VALUES('ma_1','auto_1',?,'m1','send','{}','queued',?)", (BOX, "2026-10-28T09:00:00Z"))
     post(api, "automations/mail-actions/ma_1/result", {"ok": True, "detail": "sent"}, computer.token, expected=403)
     computer.sync()                                          # published: now it is this computer's

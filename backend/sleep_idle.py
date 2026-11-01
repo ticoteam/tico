@@ -142,7 +142,7 @@ def routine_times(c, at):
     when = datetime.fromtimestamp(at, timezone.utc)
     out = []
     if table(c, "automations"):
-        for row in c.execute("SELECT trigger_type, next_due, flow_json FROM automations WHERE enabled=1 "
+        for row in c.execute("SELECT trigger_type, next_due, flow FROM automations WHERE enabled=1 "
                              "AND deleted_at IS NULL AND next_due IS NOT NULL").fetchall():
             if row[0] == "due":
                 # A due day wakes the server when its run starts (the lead time before it), not on the day.

@@ -529,7 +529,7 @@ def test_shutdown_does_not_wait_for_in_flight_write_probe(tmp_path, blocked):
         release.set()
         assert finished.wait(2)
     with app.state.store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='blob-s3'").fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM service_health WHERE service='blob-s3'").fetchone()[0])
     if blocked == 'create':
         assert detail['upload_id'] == 'upload'  # retained for cleanup on next startup
         assert not hasattr(s3, 'aborted')

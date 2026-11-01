@@ -15,8 +15,8 @@ def test_general_backfill_is_idempotent_and_does_not_reassign_custom_tasks(tmp_p
     for status in H.TASK_STATUSES:
         c.execute('INSERT INTO tasks(id,title,status,body,note) VALUES(?,?,?,?,?)',
                   (status, 'Keep this task', status, 'Keep these details', 'Keep this note'))
-    H._apply(c, "ALTER TABLE tasks ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]';")
-    c.execute('UPDATE tasks SET labels_json=?', ('["release","bug"]',))
+    H._apply(c, "ALTER TABLE tasks ADD COLUMN labels TEXT NOT NULL DEFAULT '[]';")
+    c.execute('UPDATE tasks SET labels=?', ('["release","bug"]',))
     H.migrate(c)
     assert c.execute('PRAGMA user_version').fetchone()[0] == len(H.MIGRATIONS)
     for row in c.execute('SELECT * FROM tasks'):
@@ -38,7 +38,7 @@ def test_general_backfill_is_idempotent_and_does_not_reassign_custom_tasks(tmp_p
     assert dict(c.execute('SELECT id, step_rank FROM tasks').fetchall()) == ranks
     assert H.task(c, 'open')['type_id'] == custom['id']
     assert H.task_labels(H.task(c, 'open')) == ['bug']
-    assert H.task(c, 'open')['labels_json'] == '["release","bug"]'
+    assert H.task(c, 'open')['labels'] == '["release","bug"]'
     assert c.execute('SELECT count(*) FROM task_steps WHERE type_id=?', (H.GENERAL_TYPE,)).fetchone()[0] == 6
     assert c.execute('PRAGMA foreign_key_check').fetchall() == []
     c.close()

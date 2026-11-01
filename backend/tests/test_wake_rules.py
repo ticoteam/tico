@@ -33,7 +33,7 @@ def jobs(c, bot):
 
 
 def skips(c):
-    return [{**dict(row), "detail": json.loads(row["detail_json"])} for row in c.execute(
+    return [{**dict(row), "detail": json.loads(row["detail"])} for row in c.execute(
         "SELECT * FROM events WHERE action=? ORDER BY ts, rowid", (W.SKIPPED,))]
 
 
@@ -83,7 +83,7 @@ def test_a_task_parked_on_wake_once_sleeps_too(api):
     setup(api)
     with api.app.state.store.transaction() as c:
         task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail) "
                   "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
                   (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})))
         c.execute("DELETE FROM jobs")
@@ -120,9 +120,9 @@ def test_the_blocker_finishing_wakes_the_parked_task_and_that_run_carries_what_w
         assert jobs(c, "cpo") == 0
         H.task_update(c, "bot:ops", blocker["id"], status="done")
         woke = [dict(row) for row in c.execute(
-            "SELECT m.body, m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='cpo'")]
+            "SELECT m.body, m.refs FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='cpo'")]
     assert len(woke) == 1 and woke[0]["body"].startswith("Unblocked:")
-    assert json.loads(woke[0]["refs_json"])["blocker_done"] == blocker["id"]
+    assert json.loads(woke[0]["refs"])["blocker_done"] == blocker["id"]
     attempt = claim(api, r, "cpo")
     assert attempt["task"]["id"] == task["id"]
     assert [n["message"] for n in attempt["notes"] if n.get("message")] == [first["id"], second["id"]]
@@ -315,7 +315,7 @@ def test_a_reply_the_parked_bot_waits_on_wakes_it(api, parked_on):
             task, _ = parked_task(c)
         else:
             task = H.task_create(c, "bot:ops", "Ship the export", "Build it", "bot:cpo")
-            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail_json) "
+            c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,detail) "
                       "VALUES('l1',?,'pr','https://github.com/o/r/pull/1','PR','open','bot:cpo',?,?)",
                       (task["id"], H.now(), json.dumps({"wake_once": {"by": "bot:cpo", "at": H.now()}})))
             task = H.task(c, task["id"])
@@ -376,8 +376,8 @@ def test_the_weekly_audit_samples_skips_in_hub_sql(api):
         task, _ = parked_task(c)
         with as_cause("bot:ops"):
             news(c, task)
-    out = post(api, "sql", {"sql": "SELECT json_extract(detail_json,'$.bot') AS bot, json_extract(detail_json,'$.rule') "
-                                   "AS rule, json_extract(detail_json,'$.task') AS task FROM events "
+    out = post(api, "sql", {"sql": "SELECT json_extract(detail,'$.bot') AS bot, json_extract(detail,'$.rule') "
+                                   "AS rule, json_extract(detail,'$.task') AS task FROM events "
                                    "WHERE action='wake.skipped' ORDER BY random() LIMIT 50"})
     assert [dict(zip(out["columns"], row)) if isinstance(row, list) else row for row in out["rows"]] == [
         {"bot": "cpo", "rule": "parked", "task": task["id"]}]

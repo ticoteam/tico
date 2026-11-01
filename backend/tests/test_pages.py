@@ -288,7 +288,7 @@ def share_team_icon(api, attempt, data):
 
 def share_retired_icon(api, attempt, data):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value_json) VALUES('team_icon',?)",
+        c.execute("INSERT OR REPLACE INTO registry_metadata(key,value) VALUES('team_icon',?)",
                   (json.dumps({"id": "gone", "digest": "0" * 64, "retired_digest": hashlib.sha256(data).hexdigest()}),))
     return lambda: on_disk(api, data)
 

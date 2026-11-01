@@ -161,10 +161,10 @@ def age_limit(api, seconds):
         for table, column in (("attempts", "finished"), ("messages", "created")):
             for rowid, at in c.execute(f"SELECT rowid,{column} FROM {table} WHERE {column} IS NOT NULL").fetchall():
                 c.execute(f"UPDATE {table} SET {column}=? WHERE rowid=?", (H.shift(at, seconds=-seconds), rowid))
-        for key, value in c.execute("SELECT key,value_json FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchall():
+        for key, value in c.execute("SELECT key,value FROM registry_metadata WHERE key LIKE 'login-hold:%'").fetchall():
             hold = _json.loads(value)
             hold.update(since=H.shift(hold['since'], seconds=-seconds), until=H.shift(hold['until'], seconds=-seconds))
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key=?", (_json.dumps(hold), key))
+            c.execute("UPDATE registry_metadata SET value=? WHERE key=?", (_json.dumps(hold), key))
 
 
 def test_usage_limited_turn_requeues_and_cools_off_longer_after_a_third_strike(api):
@@ -296,9 +296,9 @@ def tool_reporting(api, bot='ops'):
     import json
     from backend.store import encode
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
         config['runtime'] = 'gemini'
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), bot))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), bot))
 
 
 def sweep(api):
@@ -621,7 +621,7 @@ def test_a_run_live_as_the_owner_updates_is_flagged_and_resumes_naming_its_outsi
     machine, message, attempt = live_shell_run(api, 'gh pr merge 12')
     owner_update(api, monkeypatch)
     with api.app.state.store.read() as c:
-        [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+        [flag] = c.execute("SELECT detail FROM events WHERE action='attempt.update_cut' AND target=?",
                            (attempt['id'],)).fetchall()
     assert json.loads(flag[0])['cause'] == 'update' and json.loads(flag[0])['update'] == '0.4.17'
     lapse(api, machine, attempt)
@@ -935,7 +935,7 @@ def test_rejected_signin_cannot_replay_a_run_that_acted(api, activity):
         status = c.execute("SELECT state,focus FROM bot_status WHERE bot='ops'").fetchone()
         assert status['state'] == ('crashed' if acted else 'idle')
         assert 'sign-in' in status['focus']
-        report = json.loads(c.execute('SELECT readiness_json FROM runners WHERE id=?', (machine['runner_id'],)).fetchone()[0])
+        report = json.loads(c.execute('SELECT readiness FROM runners WHERE id=?', (machine['runner_id'],)).fetchone()[0])
         assert report['runtimes']['codex']['authenticated'] == 'rejected'
     assert claim(api, machine) is None
 
@@ -1055,7 +1055,7 @@ def test_a_capacity_stop_without_a_kept_thread_is_held_and_a_continuation_never_
     monkeypatch.setattr(execution, 'fallback_choice', lambda *a, **k: ('', 'claude'))
     with api.app.state.store.transaction() as c:
         assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) is None
-        c.execute("UPDATE attempts SET thread_id='kept',result_json=json_set(result_json,'$.capacity_continue',json('true')) "
+        c.execute("UPDATE attempts SET thread_id='kept',result=json_set(result,'$.capacity_continue',json('true')) "
                   "WHERE id=?", (attempt['id'],))
         assert execution.capacity_continuation(c, attempt['job_id']) == 'kept'
         assert execution.login_refusal(c, None, machine['runner_id'], 'ops', {}, attempt['job_id']) == 'held'
@@ -1670,7 +1670,7 @@ def test_a_stops_cause_comes_from_what_the_run_recorded_not_from_its_text():
     """A Billing task's answer that says "quota" is not a usage limit; only the run's own fields say why it stopped."""
     from backend.execution import ROUTINE_STOPS, stop_cause
     def attempt(state='failed', stop=None, **result):
-        return {'state': state, 'stop_requested': stop, 'result_json': json.dumps(result)}
+        return {'state': state, 'stop_requested': stop, 'result': json.dumps(result)}
     assert stop_cause(attempt(text='Billing: the quota page and the usage limit table are done')) == 'partway'
     assert stop_cause(attempt(limited=True)) == 'quota'
     assert stop_cause(attempt(primary_limited=True)) == 'partway'  # fell back to another model, then failed
@@ -2020,8 +2020,8 @@ def test_restart_with_named_merge_is_held_immediately_and_review_names_it(api):
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.transaction() as c:
         # The command is recorded at tool start, so a lost result cannot hide an outside effect.
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
                   ('gh pr merge 42 --squash --body private-marker-42', attempt['id']))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]
@@ -2090,11 +2090,11 @@ def test_restart_uses_start_evidence_and_does_not_hold_internal_shell_writes(api
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
                   ('hub task create --title report', attempt['id']))
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='completed'",
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='completed'",
                   ('The instructions mention npm publish and hub mail send', attempt['id']))
     assert [d['state'] for d in sweep(api)] == ['queued']
 
@@ -2152,12 +2152,12 @@ def test_restart_legacy_program_only_event_does_not_hide_possible_action(api, pr
     add_recovery_reviewer(api)
     machine, message, attempt = restarted_mid_turn(api, [('Bash', None)])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary',?) "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary',?) "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
                   (program, attempt['id']))
         if labels is not None:
-            c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.outside_actions',json(?)) "
-                      "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.status')='started'",
+            c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.outside_actions',json(?)) "
+                      "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.status')='started'",
                       (json.dumps(labels), attempt['id']))
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     review = get(api, 'bots/ops/execution-review')['jobs'][0]

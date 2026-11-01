@@ -61,7 +61,7 @@ def outage_refused_moves(run):
 
 def no_task_for_temporary_failure(run):
     """A timeout, 5xx or 429 never files a task (for DevOps, or the board's manager when there is none)."""
-    rows = run.w.sql("SELECT e.target, t.owner FROM events e LEFT JOIN tasks t ON t.id=json_extract(e.detail_json,'$.task') "
+    rows = run.w.sql("SELECT e.target, t.owner FROM events e LEFT JOIN tasks t ON t.id=json_extract(e.detail,'$.task') "
                      "WHERE e.action='blocker.routed'")
     return not rows, ", ".join(f"{r['owner']}: {r['target']}" for r in rows[:4])
 
@@ -91,9 +91,9 @@ def told_once_per_move(run):
     Blocked by another wait says nothing (it once said "Tico moved this ticket" every minute for three days)."""
     w, hold = run.w, run.w.board.hold_step
     bad = []
-    notices = w.sql("SELECT json_extract(refs_json,'$.task') task, json_extract(refs_json,'$.review_gate') gate, "
-                    "json_extract(refs_json,'$.move_retry') moved, created FROM messages WHERE from_actor='keeper' AND "
-                    "(json_extract(refs_json,'$.review_gate') IS NOT NULL OR json_extract(refs_json,'$.move_retry'))")
+    notices = w.sql("SELECT json_extract(refs,'$.task') task, json_extract(refs,'$.review_gate') gate, "
+                    "json_extract(refs,'$.move_retry') moved, created FROM messages WHERE from_actor='keeper' AND "
+                    "(json_extract(refs,'$.review_gate') IS NOT NULL OR json_extract(refs,'$.move_retry'))")
     gates = [(n["task"], n["gate"]) for n in notices if n["gate"]]
     bad += [f"{w.title(t)} refusal told {gates.count((t, g))}x" for t, g in sorted(set(gates)) if gates.count((t, g)) > 1]
     for n in (n for n in notices if n["moved"]):

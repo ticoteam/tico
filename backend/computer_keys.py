@@ -223,7 +223,7 @@ def _readiness(runner, runtime):
     """What `runner` last reported for `runtime`: its readiness row, or {}."""
     import json
     try:
-        row = (json.loads(runner["readiness_json"] or "{}").get("runtimes") or {}).get(runtime)
+        row = (json.loads(runner["readiness"] or "{}").get("runtimes") or {}).get(runtime)
     except (ValueError, AttributeError):
         return {}
     return row if isinstance(row, dict) else {}

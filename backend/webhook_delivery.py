@@ -209,7 +209,7 @@ def deliver(store, vault, send_id, *, transport=None):
     """Post one claimed send and record what came back."""
     with store.read() as c:
         send = c.execute("SELECT s.*, w.url, w.allow_http, w.secret, w.secret_prev, w.secret_prev_until, w.deleted_at, "
-                         "w.headers_json "
+                         "w.headers "
                          "FROM webhook_sends s JOIN webhooks w ON w.id=s.webhook_id WHERE s.id=?", (send_id,)).fetchone()
         if not send:
             return

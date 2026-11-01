@@ -50,7 +50,7 @@ def test_asked_again_on_the_same_task_it_updates_the_open_question(api):
         assert TR.parent_of(c, first["task"]["id"]) == work["id"]
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:ops' AND title LIKE 'Run the vendor trial%'"
                          ).fetchone()[0] == 1
-        folded = c.execute("SELECT detail_json FROM events WHERE action=? AND target=?",
+        folded = c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                            (H.QUESTION_FOLDED, first["task"]["id"])).fetchall()
         assert len(folded) == 1 and H._json(folded[0][0], {})["asks"] == 2
     # A third ask keeps every earlier wording, newest first in the body.

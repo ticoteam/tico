@@ -31,19 +31,19 @@ def migrate(c):
     H.add_column(c, 'task_types', 'default_visibility', "TEXT NOT NULL DEFAULT 'private'")
     H.add_column(c, 'messages', 'public', 'INTEGER NOT NULL DEFAULT 0')
     H.add_column(c, 'messages', 'hidden_at', 'TEXT')
-    c.execute("CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs_json,'$.task'),created,id) "
-              "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs_json,'$.comment')=1")
+    c.execute("CREATE INDEX IF NOT EXISTS messages_public_task ON messages(conversation_id,json_extract(refs,'$.task'),created,id) "
+              "WHERE public=1 AND hidden_at IS NULL AND deleted_at IS NULL AND json_extract(refs,'$.comment')=1")
     # Once per database: an install that ran the first version of roadmaps had its Product roadmap type public by
     # default and every task's internal title and body copied into its public text. The type becomes private, and
     # those copies go from tasks that are not public, so publishing one later needs public text written for it.
-    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)')
-    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_explicit_public_text','true')").rowcount:
+    c.execute('CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)')
+    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_explicit_public_text','true')").rowcount:
         c.execute("UPDATE task_types SET default_visibility='private' WHERE role='product-roadmap'")
         c.execute("UPDATE tasks SET public_title='',public_summary='' WHERE visibility='private' "
                   "AND public_title=substr(coalesce(title,''),1,300) AND public_summary=substr(coalesce(body,''),1,8000)")
     # Marked on every database, so a fresh one does not take its own second start for a first-version one. The marker
     # is new with the per-field decision: 'roadmaps_copies_cleared' marked databases that ran the per-task one.
-    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value_json) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
+    if c.execute("INSERT OR IGNORE INTO registry_metadata(key,value) VALUES('roadmaps_copies_cleared_by_field','true')").rowcount \
             and ran_before and H._has_table(c, 'task_events'):
         clear_copies(c)
     c.execute('CREATE TABLE IF NOT EXISTS task_requesters('
@@ -89,7 +89,7 @@ def clear_copies(c):
 
 
 def settings(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='roadmaps'").fetchone() if H._has_table(c, 'registry_metadata') else None
     return {'labels': [], 'cors_origins': [], 'action_limit': 10, 'suggestion_limit': SUGGESTIONS_WAITING_MAX,
             'bot_public_approval': True, 'suggestions_bot': None,
             **(json.loads(row[0]) if row else {})}
@@ -110,7 +110,7 @@ def suggestions_receiver(c):
         source = 'chosen_archived' if state == 'archived' else 'chosen_inactive'
     for template, states in (('product-manager', ('active', 'planned')), ('product-lead', ('active',))):
         row = c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                        "WHERE json_extract(bc.config_json,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
+                        "WHERE json_extract(bc.config,'$.template')=? AND b.state IN (" + ','.join('?' * len(states)) + ") "
                         "ORDER BY bc.bot LIMIT 1", (template, *states)).fetchone()
         if row:
             return row[0], source
@@ -244,7 +244,7 @@ def withdraw(c, task_id, token):
     digest = hashlib.sha256(token.encode()).hexdigest()
     if c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND token_hash=?', (task_id, digest)).fetchone():
         return remove_requester(c, task_id, token=token)
-    trash = c.execute('SELECT rows_json FROM task_trash WHERE task_id=? AND purged_at IS NULL',
+    trash = c.execute('SELECT rows FROM task_trash WHERE task_id=? AND purged_at IS NULL',
                       (task_id,)).fetchone() if H._has_table(c, 'task_trash') else None
     snapshot = json.loads(trash[0]) if trash else {}
     rows = snapshot.get('rows', {}).get('task_requesters') or []
@@ -252,7 +252,7 @@ def withdraw(c, task_id, token):
     if len(kept) == len(rows):
         raise Problem('not_found', 'Requester not found', 404)
     snapshot['rows']['task_requesters'] = kept
-    c.execute('UPDATE task_trash SET rows_json=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
+    c.execute('UPDATE task_trash SET rows=? WHERE task_id=?', (json.dumps(snapshot, default=str), task_id))
     H.event(c, H.KEEPER, 'task.requester.remove', task_id, {'trashed': True})
     return {'removed': True}
 

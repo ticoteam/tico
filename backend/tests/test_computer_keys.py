@@ -319,7 +319,7 @@ def test_botops_never_clears_or_replaces_a_key_and_all_of_them_waits_for_every_c
         assert c.execute("SELECT count(*) FROM model_login_cleared").fetchone()[0] == 0
     # Updated, an offline computer is marked to clear its copy when it is back.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET capabilities_json=? WHERE id IN (?,?)",
+        c.execute("UPDATE runners SET capabilities=? WHERE id IN (?,?)",
                   (json.dumps(CAPABLE), old["runner_id"], older["runner_id"]))
     out = call(api, "POST", f"runners/{rid}/keys/clear", {"runtime": "codex", "scope": "all"})["computers"]
     assert [(c["label"], c["waiting"]) for c in out] == [("Alpha", False), ("Old box", True), ("Older box", True)]

@@ -115,10 +115,10 @@ CREATE TABLE IF NOT EXISTS github_product_repo_operations(
  actor TEXT NOT NULL, operation TEXT NOT NULL, key TEXT NOT NULL,
  request_hash TEXT NOT NULL, target_org TEXT NOT NULL, target_name TEXT NOT NULL,
  state TEXT NOT NULL CHECK(state IN ('pending','completed','rejected')),
- response_json TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
+ response TEXT, error_code TEXT, error_detail TEXT, error_status INTEGER,
  created TEXT NOT NULL, updated TEXT NOT NULL,
  PRIMARY KEY(actor,operation,key),
- CHECK(state!='completed' OR response_json IS NOT NULL),
+ CHECK(state!='completed' OR response IS NOT NULL),
  CHECK(state!='rejected' OR (error_code IS NOT NULL AND error_detail IS NOT NULL AND error_status IS NOT NULL)));
 """
 
@@ -899,7 +899,7 @@ def manifest(settings, name, administration):
 
 
 def extra_repos(c, bot):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
     try:
         value = json.loads(row[0]).get(bot, []) if row else []
     except (ValueError, AttributeError):
@@ -908,13 +908,13 @@ def extra_repos(c, bot):
 
 
 def save_extra_repos(c, bot, repos):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (EXTRA_KEY,)).fetchone()
     every = json.loads(row[0]) if row else {}
     if repos:
         every[bot] = repos
     else:
         every.pop(bot, None)
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (EXTRA_KEY, json.dumps(every, sort_keys=True)))
 
 
@@ -1498,9 +1498,9 @@ def install_github_app(app, settings, store):
             access, moved = "none", None
         others = []
         if access != "none":
-            for r in c.execute("SELECT bc.bot,bc.config_json,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+            for r in c.execute("SELECT bc.bot,bc.config,b.slug FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                                "WHERE b.state<>'archived' AND bc.bot<>? ORDER BY bc.bot", (bot,)).fetchall():
-                if json.loads(r["config_json"] or "{}").get("repo_access_mode") == "all":
+                if json.loads(r["config"] or "{}").get("repo_access_mode") == "all":
                     others.append((H.bot(c, r["bot"]) or {}).get("display_name") or r["slug"])
         said = {"write": f"{name} has write access to it.",
                 "none": f"{name} could not be given access to it; an Owner or admin can give it in Settings > "
@@ -1563,19 +1563,19 @@ def install_github_app(app, settings, store):
                                   f"The result for {previous['target_org']}/{previous['target_name']} is unresolved. Tico will not repeat this operation automatically; check GitHub before taking another action.", 409)
                 if previous["state"] == "rejected":
                     raise Problem(previous["error_code"], previous["error_detail"], previous["error_status"])
-                return json.loads(previous["response_json"])
+                return json.loads(previous["response"])
 
             # Migrate an unexpired receipt from the earlier implementation. It was written only
             # after the external create returned, so it is complete proof and can be retained here.
-            legacy = c.execute("SELECT request_hash,response_json FROM idempotency "
+            legacy = c.execute("SELECT request_hash,response FROM idempotency "
                                "WHERE actor=? AND operation=? AND key=?",
                                (who.actor, operation, key)).fetchone()
             if legacy:
                 if legacy["request_hash"] != request_hash:
                     raise Problem("idempotency_conflict", "This key was used for different content", 409)
-                result = json.loads(legacy["response_json"])
+                result = json.loads(legacy["response"])
                 c.execute("INSERT INTO github_product_repo_operations "
-                          "(actor,operation,key,request_hash,target_org,target_name,state,response_json,created,updated) "
+                          "(actor,operation,key,request_hash,target_org,target_name,state,response,created,updated) "
                           "VALUES(?,?,?,?,?,?,'completed',?,?,?)",
                           (who.actor, operation, key, request_hash, body.org, name,
                            encode(result), H.now(), H.now()))
@@ -1635,13 +1635,13 @@ def install_github_app(app, settings, store):
             try:
                 with store.transaction() as c:
                     validate_identity(c, who)
-                    current = c.execute("SELECT state,request_hash,response_json FROM github_product_repo_operations "
+                    current = c.execute("SELECT state,request_hash,response FROM github_product_repo_operations "
                                         "WHERE actor=? AND operation=? AND key=?",
                                         (who.actor, operation, key)).fetchone()
                     if not current or current["request_hash"] != request_hash:
                         raise Problem("idempotency_conflict", "The product-repository operation binding changed", 409)
                     if current["state"] == "completed":
-                        return json.loads(current["response_json"])
+                        return json.loads(current["response"])
                     if current["state"] != "pending":
                         raise Problem("github_create_outcome_unknown", "The product-repository operation is no longer pending; no second create was attempted", 409)
                     previous = c.execute("SELECT request_hash FROM idempotency WHERE actor=? AND operation=? AND key=?",
@@ -1659,7 +1659,7 @@ def install_github_app(app, settings, store):
                         c.execute("INSERT INTO idempotency VALUES(?,?,?,?,?,?)",
                                   (who.actor, operation, key, request_hash, encode(result), H.now()))
                     c.execute("UPDATE github_product_repo_operations "
-                              "SET state='completed',response_json=?,updated=? "
+                              "SET state='completed',response=?,updated=? "
                               "WHERE actor=? AND operation=? AND key=? AND state='pending'",
                               (encode(result), H.now(), who.actor, operation, key))
             except Problem:

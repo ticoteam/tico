@@ -25,7 +25,7 @@ from .store import Problem
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS slack_channels(
  key TEXT PRIMARY KEY, channel_id TEXT NOT NULL DEFAULT '', name TEXT NOT NULL DEFAULT '',
- readers_json TEXT NOT NULL DEFAULT '[]', post INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
+ readers TEXT NOT NULL DEFAULT '[]', post INTEGER NOT NULL DEFAULT 1, note TEXT NOT NULL DEFAULT '',
  digest_hours REAL NOT NULL DEFAULT 0, created TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL DEFAULT '');
 """
 FILE = "slack-channels.yaml"
@@ -116,7 +116,7 @@ def file_channels(registry_dir):
 def _stored(c):
     out = []
     for r in c.execute("SELECT * FROM slack_channels ORDER BY name, channel_id"):
-        out.append({"key": r["key"], "id": r["channel_id"], "name": r["name"], "readers": H._json(r["readers_json"], []),
+        out.append({"key": r["key"], "id": r["channel_id"], "name": r["name"], "readers": H._json(r["readers"], []),
                     "post": bool(r["post"]), "note": r["note"], "digest_hours": r["digest_hours"],
                     "updated": r["updated"], "updated_by": r["updated_by"]})
     return out
@@ -183,11 +183,11 @@ def _find(rows, cid, name):
 def _save(c, who, entry, created):
     now = H.now()
     if created:
-        c.execute("INSERT INTO slack_channels(key,channel_id,name,readers_json,post,note,digest_hours,created,updated,updated_by) "
+        c.execute("INSERT INTO slack_channels(key,channel_id,name,readers,post,note,digest_hours,created,updated,updated_by) "
                   "VALUES(?,?,?,?,?,?,?,?,?,?)", (entry["key"], entry["id"], entry["name"], _dump(entry["readers"]),
                                                    int(entry["post"]), entry["note"], entry["digest_hours"], now, now, who.actor))
     else:
-        c.execute("UPDATE slack_channels SET channel_id=?,name=?,readers_json=?,post=?,note=?,digest_hours=?,updated=?,updated_by=? WHERE key=?",
+        c.execute("UPDATE slack_channels SET channel_id=?,name=?,readers=?,post=?,note=?,digest_hours=?,updated=?,updated_by=? WHERE key=?",
                   (entry["id"], entry["name"], _dump(entry["readers"]), int(entry["post"]), entry["note"], entry["digest_hours"],
                    now, who.actor, entry["key"]))
 
@@ -278,7 +278,7 @@ def import_file(c, settings, who):
         _save(c, who, raw, True)
         stored.append(raw)
         added += 1
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (IMPORTED, _dump({"at": H.now(), "by": who.actor, "added": added})))
     H.event(c, who.actor, "slack.channels_imported", "", {"added": added, "skipped": skipped})
     return {"imported": added, "skipped": skipped}

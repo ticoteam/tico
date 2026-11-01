@@ -31,7 +31,7 @@ _MAY_QUOTE = "(instr({src}, '\"from_actor\"')>0 OR NOT json_valid({src}))"
 def _quoted(row, where=""):
     """SELECT (message_id, actor, operation, key) for the answers `row` names: `NEW` in a trigger, or `i` with `where`
     choosing rows of `idempotency i`. One query for both, so the backfill indexes exactly what the triggers do."""
-    text, source = f"{row}.response_json", f"idempotency {row} WHERE {where} AND" if where else "WHERE"
+    text, source = f"{row}.response", f"idempotency {row} WHERE {where} AND" if where else "WHERE"
     return (f"SELECT id, actor, operation, key FROM (SELECT {row}.actor AS actor, {row}.operation AS operation, "
             f"{row}.key AS key, max(CASE WHEN t.key='id' AND t.type='text' THEN t.value END) AS id, "
             f"max(t.key='from_actor') AS sender FROM {f'idempotency {row}, ' if where else ''}"
@@ -47,7 +47,7 @@ SCHEMA = (
     "operation TEXT NOT NULL, key TEXT NOT NULL, PRIMARY KEY(message_id, actor, operation, key)) WITHOUT ROWID",
     "CREATE INDEX IF NOT EXISTS idempotency_messages_answer ON idempotency_messages(actor, operation, key)",
     "CREATE TRIGGER IF NOT EXISTS idempotency_messages_insert AFTER INSERT ON idempotency "
-    f"WHEN {_MAY_QUOTE.format(src='NEW.response_json')} BEGIN "
+    f"WHEN {_MAY_QUOTE.format(src='NEW.response')} BEGIN "
     f"INSERT OR IGNORE INTO idempotency_messages {_quoted('NEW')}; END",
     "CREATE TRIGGER IF NOT EXISTS idempotency_messages_update AFTER UPDATE ON idempotency BEGIN "
     "DELETE FROM idempotency_messages WHERE actor=OLD.actor AND operation=OLD.operation AND key=OLD.key; "
@@ -71,9 +71,9 @@ def quoting(conn, message_id):
     finished, when only reading every answer finds them all."""
     if not _get(conn, READY):
         return None
-    return conn.execute("SELECT i.rowid, i.response_json FROM idempotency_messages m JOIN idempotency i "
+    return conn.execute("SELECT i.rowid, i.response FROM idempotency_messages m JOIN idempotency i "
                         "ON i.actor=m.actor AND i.operation=m.operation AND i.key=m.key WHERE m.message_id=? "
-                        "OR (m.message_id=? AND instr(i.response_json, ?)>0)",
+                        "OR (m.message_id=? AND instr(i.response, ?)>0)",
                         (message_id, UNREAD, message_id)).fetchall()
 
 
@@ -103,7 +103,7 @@ def backfill(conn, batch=BATCH, span=SPAN, stop=None):
         if stopped():
             return done
         rowids = [r[0] for r in conn.execute(
-            f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND {_MAY_QUOTE.format(src='response_json')}",
+            f"SELECT rowid FROM idempotency WHERE rowid>? AND rowid<=? AND {_MAY_QUOTE.format(src='response')}",
             (after, after + span))]
         after += span
         for start in range(0, len(rowids), batch):
@@ -135,13 +135,13 @@ def _write(conn, work):
 
 def _get(conn, key):
     try:
-        row = conn.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+        row = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     except sqlite3.OperationalError:
         return None
     return json.loads(row[0]) if row else None
 
 
 def _set(conn, key, value):
-    conn.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL)")
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    conn.execute("CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (key, json.dumps(value)))

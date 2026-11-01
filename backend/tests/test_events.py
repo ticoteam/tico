@@ -279,7 +279,7 @@ def test_every_source_writes_its_topic(api):
     assert logged(lambda c: c.execute("UPDATE tags SET label='Covered' WHERE id='tg1'")) == {("tasks", "tags")}
     assert ("messages", "update") in logged(lambda c: c.execute("UPDATE messages SET body='edited' WHERE id=?", (msg["id"],)))
     assert logged(lambda c: c.execute("UPDATE messages SET read_at=? WHERE id=?", (H.now(), msg["id"]))) == set()
-    assert logged(lambda c: c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) "
+    assert logged(lambda c: c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) "
                                       "VALUES(?,99,'delta','{}',?)", (aid, H.now()))) == {("runs", "output")}
     assert logged(lambda c: c.execute("UPDATE attempts SET lease_until=? WHERE id=?", (H.now(), aid))) == set()
     assert logged(lambda c: c.execute("UPDATE attempts SET state='running' WHERE id=?", (aid,))) == {("runs", "attempt")}
@@ -342,7 +342,7 @@ def test_a_task_link_rewritten_with_the_same_values_logs_nothing_and_a_change_to
             return {(row["topic"], row["kind"]) for row in c.execute("SELECT * FROM changes WHERE seq>?", (before,))}
     with store.read() as c:
         columns = [row[1] for row in c.execute("PRAGMA table_info(task_links)")]
-    assert {"repo", "detail_json", "computer_id", "pr_merged_at"} <= set(columns)
+    assert {"repo", "detail", "computer_id", "pr_merged_at"} <= set(columns)
     for column in columns:
         assert logged(f"UPDATE task_links SET {column}={column} WHERE id='wt1'") == set(), column
     assert logged("UPDATE task_links SET state='unknown' WHERE id='wt1'") == {("tasks", "link"), ("runner", "worktrees")}

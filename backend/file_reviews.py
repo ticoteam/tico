@@ -69,10 +69,10 @@ def same_versions(entries):
     mine = {(e["file"], e["version"]) for e in entries}
 
     def same(c, task_id):
-        row = c.execute("SELECT m.refs_json FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
-                        "WHERE t.id=? AND json_extract(m.refs_json,'$.review') IS NOT NULL "
+        row = c.execute("SELECT m.refs FROM messages m JOIN tasks t ON t.conversation_id=m.conversation_id "
+                        "WHERE t.id=? AND json_extract(m.refs,'$.review') IS NOT NULL "
                         "ORDER BY m.created DESC, m.id DESC LIMIT 1", (task_id,)).fetchone()
-        files = ((H._json(row["refs_json"], {}) or {}).get("review") or {}).get("files") or [] if row else []
+        files = ((H._json(row["refs"], {}) or {}).get("review") or {}).get("files") or [] if row else []
         return {(f.get("file"), f.get("version")) for f in files} == mine
     return same
 
@@ -141,7 +141,7 @@ def record(c, who, task_id, question_id, answer_id, reviewed):
     at = H.now()
     for entry in reviewed:
         c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
-                  "detail_json) VALUES(?,?,'reviewed',NULL,?,?,?,?,?)",
+                  "detail) VALUES(?,?,'reviewed',NULL,?,?,?,?,?)",
                   (entry["file"], who.actor, task_id, entry["version"], entry["digest"], at,
                    H._dump({"verdict": entry["verdict"], "question": question_id, "answer": answer_id})))
 
@@ -196,7 +196,7 @@ def review(c, auth, who, fid=None, version=None, path=None, digest=None, task=No
         raise Problem("forbidden", "A bot never reviews its own file: ask a person or another bot", 403)
     entry = {"file": row["id"], "version": v["version"], "digest": v["source_digest"] or v["digest"]}
     c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,"
-              "detail_json) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
+              "detail) VALUES(?,?,'reviewed',?,?,?,?,?,?)",
               (entry["file"], who.actor, getattr(who, "attempt_id", "") or None, task_id, entry["version"], entry["digest"],
                H.now(), H._dump({"verdict": verdict, "question": None, "task": task_id, "note": note or ""})))
     return _verdict(c, who, [(row["id"], v["version"], entry["digest"])], by=who.actor)
@@ -261,7 +261,7 @@ def _verdict(c, who, versions, by="human"):
         task = H.task(c, r["task_id"]) if r["task_id"] else None
         if not _counts(r["actor"], by) or not task or not privacy.task_readable(c, who, task):
             continue
-        detail = H._json(r["detail_json"], {}) or {}
+        detail = H._json(r["detail"], {}) or {}
         verdict = detail.get("verdict")
         digest = digests[(r["file_id"], r["version"])]
         return {"approved": verdict == "approve" and r["digest"] == digest, "by": r["actor"], "at": r["created"],

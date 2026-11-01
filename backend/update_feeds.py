@@ -426,9 +426,9 @@ def save_walk(c, feed, items, walk):
 def _subscribers(c):
     """{(bot, category): feed} for every bot that is not archived and subscribes to the category."""
     out = {}
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                         "WHERE COALESCE(b.state,'active')<>'archived' AND bc.config_json LIKE '%update_subscriptions%'"):
-        config = H._json(row["config_json"], {}) or {}
+    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+                         "WHERE COALESCE(b.state,'active')<>'archived' AND bc.config LIKE '%update_subscriptions%'"):
+        config = H._json(row["config"], {}) or {}
         for category in chosen(config):
             out[(row["bot"], category)] = feed_of(category, str(config.get("template") or ""))
     return out

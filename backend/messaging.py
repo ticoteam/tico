@@ -54,7 +54,7 @@ def _catalog(c, who, auth, settings):
         marks = ",".join("?" * len(mailboxes))
         for row in c.execute(
                 "SELECT m.mailbox,count(*) AS n FROM mail_messages m WHERE m.deleted_at IS NULL "
-                f"AND m.mailbox IN ({marks}) AND EXISTS (SELECT 1 FROM json_each(m.labels_json) "
+                f"AND m.mailbox IN ({marks}) AND EXISTS (SELECT 1 FROM json_each(m.labels) "
                 "WHERE value LIKE 'hub/needs-%' OR value='hub/drafted') GROUP BY m.mailbox",
                 tuple(mailboxes)):
             mailboxes[row["mailbox"]]["needs_review"] = row["n"]
@@ -74,9 +74,9 @@ def _catalog(c, who, auth, settings):
         bot = row["id"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
-        config_row = c.execute("SELECT config_json,description,operator,revision FROM bot_config WHERE bot=?",
+        config_row = c.execute("SELECT config,description,operator,revision FROM bot_config WHERE bot=?",
                                (bot,)).fetchone()
-        config = _json(config_row["config_json"], {}) if config_row else {}
+        config = _json(config_row["config"], {}) if config_row else {}
         sources = _sources(c, who, settings, bot, config, people, allowed, channels, mailboxes, reads)
         if not sources:
             continue
@@ -115,8 +115,8 @@ def _catalog(c, who, auth, settings):
 
 
 def _workspace_url(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='slack_workspace_url'").fetchone()
-    return _json(row["value_json"], "") if row else ""
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='slack_workspace_url'").fetchone()
+    return _json(row["value"], "") if row else ""
 
 
 def _slack_link(team_url, channel, ts, thread_ts=None):
@@ -173,7 +173,7 @@ def install_messaging(app, store, auth):
                 for row in c.execute(f"SELECT * FROM mail_messages WHERE deleted_at IS NULL AND mailbox IN ({marks}) "
                                      "ORDER BY epoch DESC LIMIT 40", tuple(mailboxes)):
                     item = message_public(row)
-                    item["rule_hits"] = _json(row["rule_hits_json"], [])
+                    item["rule_hits"] = _json(row["rule_hits"], [])
                     mail.append(item)
             slack = []
             digests = []
@@ -186,7 +186,7 @@ def install_messaging(app, store, auth):
                     "ORDER BY ts DESC LIMIT 40", tuple(slack_ids))]
                 for row in c.execute("SELECT * FROM slack_digests WHERE reader=? ORDER BY created DESC LIMIT 15",
                                      (bot,)):
-                    event_ids = _json(row["event_ids_json"], [])
+                    event_ids = _json(row["event_ids"], [])
                     if source and event_ids:
                         marks = ",".join("?" * len(event_ids))
                         matching = c.execute(f"SELECT count(*) FROM slack_events WHERE event_id IN ({marks}) "
@@ -198,7 +198,7 @@ def install_messaging(app, store, auth):
                                         "LEFT JOIN attempts a ON a.job_id=j.id WHERE j.message_id=? "
                                         "ORDER BY a.created DESC LIMIT 1", (row["message_id"],)).fetchone()
                     digests.append({"id": row["id"], "created": row["created"], "count": row["count"],
-                                    "skipped": row["skipped"], "channels": _json(row["channels_json"], []),
+                                    "skipped": row["skipped"], "channels": _json(row["channels"], []),
                                     "event_ids": event_ids, "attempt": dict(attempt) if attempt else None})
                 posts = [{"channel": row["channel"], "thread_ts": row["thread_ts"],
                           "text": row["text"], "state": row["state"], "created": row["created"],
@@ -252,7 +252,7 @@ def install_messaging(app, store, auth):
                                (digest_id, bot)).fetchone()
             if not digest:
                 raise Problem("not_found", "Slack pass not found", 404)
-            ids = _json(digest["event_ids_json"], [])[:500]
+            ids = _json(digest["event_ids"], [])[:500]
             messages = []
             if ids:
                 marks = ",".join("?" * len(ids))

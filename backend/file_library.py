@@ -503,7 +503,7 @@ def still_used(c, digest):
     team icon, which keeps a digest of its own."""
     if c.execute("SELECT 1 FROM blobs WHERE digest=? LIMIT 1", (digest,)).fetchone():
         return True
-    icon = c.execute("SELECT value_json FROM registry_metadata WHERE key='team_icon'").fetchone()
+    icon = c.execute("SELECT value FROM registry_metadata WHERE key='team_icon'").fetchone()
     if icon:
         try:
             value = json.loads(icon[0])
@@ -554,7 +554,7 @@ def purge_rows(c, actor, row):
     c.execute("DELETE FROM pages WHERE file_id=?", (fid,))
     if has_pins(c):
         c.execute("DELETE FROM pins WHERE item=?", ("page:" + fid,))
-    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created,detail_json) VALUES(?,?,?,?,?,?)",
+    c.execute("INSERT INTO bot_file_activity(file_id,actor,action,task_id,created,detail) VALUES(?,?,?,?,?,?)",
               (fid, actor, "deleted", row["task_id"], now, json.dumps({"versions": len(versions)})))
     H.event(c, actor, "file.delete", fid, {"versions": len(versions)})
     return {"deleted": fid, "versions": len(versions)}

@@ -35,24 +35,24 @@ function fixtures() {
     links: [
       {id: 'w1', kind: 'worktree', url: 'worktree:9f2c1a', title: 'acme/web worktree', repo: 'acme/web', branch: 'tico/t-check-checkout',
        state: 'present', path: 'tasks/t-check/eng__web', computer_id: 'r1', number: null, checks: null,
-       detail_json: JSON.stringify({link_id: 'w1', state: 'present', branch: 'tico/t-check-checkout', ahead: 2, behind: 1, dirty_files: 3, last_commit: 'Add the summary step', size_mb: 41})},
+       detail: JSON.stringify({link_id: 'w1', state: 'present', branch: 'tico/t-check-checkout', ahead: 2, behind: 1, dirty_files: 3, last_commit: 'Add the summary step', size_mb: 41})},
       // No repo on the row: the folder (<bot>__<repo>) still names it.
       {id: 'w2', kind: 'worktree', url: 'worktree:77ab03', title: 'worktree', repo: null, branch: 'tico/t-check-api', state: 'unknown', path: 'tasks/t-check/api__payments-api',
-       detail_json: JSON.stringify({error: worktreeError})},
+       detail: JSON.stringify({error: worktreeError})},
       {id: 'w3', kind: 'worktree', url: 'worktree:0c11de', title: 'acme/docs worktree', repo: 'acme/docs', branch: 'tico/t-check-docs', state: 'removed',
-       detail_json: JSON.stringify({state: 'removed', ahead: 0, behind: 0, dirty_files: 0})},
+       detail: JSON.stringify({state: 'removed', ahead: 0, behind: 0, dirty_files: 0})},
       // Cleanup refused until it stopped retrying (backend/worktrees.py heartbeat): still present, Retry cleanup offered.
       {id: 'w4', kind: 'worktree', url: 'worktree:5e09aa', title: 'acme/web worktree', repo: 'acme/web', branch: 'tico/t-check-old', state: 'present',
-       detail_json: JSON.stringify({delete_requested: true, cleanup_requested: true, cleanup_attempts: 6, cleanup_gave_up: true,
+       detail: JSON.stringify({delete_requested: true, cleanup_requested: true, cleanup_attempts: 6, cleanup_gave_up: true,
          error: 'Worktree action failed; history kept. kept: ignored files'})},
       pr('p1', 212, 'Checkout summary step', {checks: 'failing', pending_comments: 2, review_state: 'changes_requested'}),
       pr('p2', 214, 'Price rounding', {checks: 'pending', mergeable: 'conflict'}),
       pr('p3', 198, 'Cart badge', {state: 'merged'}),
       {id: 'd1', kind: 'doc', url: 'https://docs.example.com/checkout', title: 'Checkout spec', state: 'open'},
       // Session rows as backend/hubdb.py writes them: a linked one (url session:<value>), then the owning bot's primary.
-      {id: 's2', kind: 'session', url: 'session:codex resume 019a2b', title: 'codex 019a2b', detail_json: JSON.stringify({primary: false, harness: 'codex', thread_id: '019a2b'})},
-      {id: 's0', kind: 'session', url: 'session:api/thread-old', title: 'api', detail_json: JSON.stringify({primary: false, harness: 'codex', thread_id: 'thread-old', bot: 'api'})},
-      {id: 's1', kind: 'session', url: 'session:eng/thread-abc', title: 'eng', detail_json: JSON.stringify({primary: true, harness: 'claude', thread_id: 'thread-abc', bot: 'eng'})},
+      {id: 's2', kind: 'session', url: 'session:codex resume 019a2b', title: 'codex 019a2b', detail: JSON.stringify({primary: false, harness: 'codex', thread_id: '019a2b'})},
+      {id: 's0', kind: 'session', url: 'session:api/thread-old', title: 'api', detail: JSON.stringify({primary: false, harness: 'codex', thread_id: 'thread-old', bot: 'api'})},
+      {id: 's1', kind: 'session', url: 'session:eng/thread-abc', title: 'eng', detail: JSON.stringify({primary: true, harness: 'claude', thread_id: 'thread-abc', bot: 'eng'})},
     ]});
   const kid = (id, title, status, owner, pr_state = null, children = []) => ({id, title, status, owner, pr_state, children});
   const tree = [kid('k1', 'Summary step on web', 'review', 'bot:eng', 'failing', [kid('k1a', 'Copy for the summary', 'done', 'human:sam', 'merged')]),
@@ -139,7 +139,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
       // List rows leave out the links' detail_json (and pr_sha), as backend/app.py lists do; the detail has them.
       const requester = url.searchParams.get('requester');
       const rows = (owner ? data.tasks.filter(t => t.owner === (owner.includes(':') ? owner : 'bot:' + owner)) : requester ? data.tasks.filter(t => t.requester === 'bot:' + requester) : data.tasks)
-        .map(t => ({...t, links: (t.links || []).map(({detail_json, pr_sha, ...l}) => l)}));
+        .map(t => ({...t, links: (t.links || []).map(({detail: detail_json, pr_sha, ...l}) => l)}));
       return json({tasks: rows, next_offset: null});
     }
     // The default sidebar (backend/bot_task_tabs.py): Assigned to Others is a filter tab the server counts.
@@ -165,7 +165,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (links && method === 'POST') {
       const body = req.postDataJSON(); writes.push({method, p, body});
       const t = data.tasks.find(x => x.id === links[1]);
-      t.links.push({id: 's' + t.links.length, kind: body.kind || 'url', url: 'session:' + body.url, title: body.url, detail_json: '{"primary":false}'});
+      t.links.push({id: 's' + t.links.length, kind: body.kind || 'url', url: 'session:' + body.url, title: body.url, detail: '{"primary":false}'});
       return json({links: t.links});
     }
     const link = p.match(/^\/api\/v2\/tasks\/([^/]+)\/links\/([^/]+)$/);
@@ -265,10 +265,10 @@ async function desktop(browser) {
   // Not offered on a removed worktree, nor on a released one of an open task (its cleanup resumes once work is saved),
   // nor when the flag is only truthy.
   const offered = await page.evaluate(() => [
-    {state: 'removed', detail_json: JSON.stringify({cleanup_gave_up: true})},
-    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true, release_requested: true})},
-    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: 'true'})},
-    {state: 'present', detail_json: JSON.stringify({cleanup_gave_up: true})},
+    {state: 'removed', detail: JSON.stringify({cleanup_gave_up: true})},
+    {state: 'present', detail: JSON.stringify({cleanup_gave_up: true, release_requested: true})},
+    {state: 'present', detail: JSON.stringify({cleanup_gave_up: 'true'})},
+    {state: 'present', detail: JSON.stringify({cleanup_gave_up: true})},
   ].map(l => taskCodeLineHTML({id: 'w9', kind: 'worktree', url: 'worktree:9', repo: 'acme/web', branch: 'tico/x', ...l}, true).includes('data-code-retry')));
   assert.deepEqual(offered, [false, false, false, true]);
   assert.equal(await rail.locator('.code-line[data-code-link="p1"] .code-chip[aria-label="Checks failing"]').count(), 1, 'a glyph chip has words');

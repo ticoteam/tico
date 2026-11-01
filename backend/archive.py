@@ -96,4 +96,4 @@ def install_archives(app, store):
             if not row or not authorized(request.state.identity, row):
                 raise Problem("not_found", "Archive not found or unavailable to this account", 404)
             return {**{k: row[k] for k in ("source", "digest", "imported", "owner", "kind")},
-                    "content": json.loads(row["payload_json"])}
+                    "content": json.loads(row["payload"])}

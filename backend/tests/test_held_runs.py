@@ -24,9 +24,9 @@ def held(api):
     botops(api)
     machine, message, attempt = restarted_mid_turn(api, [('Read', None), ('Bash', None)])
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempt_events SET payload_json=json_set(payload_json,'$.summary','gh pr merge 42 --squash') "
-                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload_json,'$.tool')='Bash' "
-                  "AND json_extract(payload_json,'$.status')='started'", (attempt['id'],))
+        c.execute("UPDATE attempt_events SET payload=json_set(payload,'$.summary','gh pr merge 42 --squash') "
+                  "WHERE attempt_id=? AND kind='tool' AND json_extract(payload,'$.tool')='Bash' "
+                  "AND json_extract(payload,'$.status')='started'", (attempt['id'],))
     aged(api, attempt['id'])
     assert sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     return machine, message, attempt
@@ -147,7 +147,7 @@ def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(a
         capped(c, H.task(c, review['id']))
         assert review['id'] in H.wake_stalled(c)['escalated']
         assert H.task(c, review['id'])['status'] == 'open'
-        kept = c.execute("SELECT json_extract(detail_json,'$.kept_open') FROM events "
+        kept = c.execute("SELECT json_extract(detail,'$.kept_open') FROM events "
                          "WHERE action='task.stall_escalated' AND target=?", (review['id'],)).fetchall()
         assert [k[0] for k in kept] == ['runs still held']
     # Its positive twin: once the run is decided, the review is finished at save time, and the stall check leaves

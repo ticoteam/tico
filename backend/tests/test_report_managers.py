@@ -183,9 +183,9 @@ def test_a_manager_bot_follows_its_reports_model_change_without_reading_its_chec
     with store.transaction() as c:
         room = H.task(c, task["id"])["conversation_id"]
         message = c.execute("SELECT id FROM messages WHERE conversation_id=? LIMIT 1", (room,)).fetchone()[0]
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created,"
                   "updated) VALUES('tr-1',?,'model','{}','human:ana',1,'checkpointing',?,?)", (counsel, H.now(), H.now()))
-        c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,checkpoint_json)"
+        c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,checkpoint)"
                   " VALUES('tr-1',?,?,'prepared',?)", (room, message, encode({"decisions": ["Drop the break clause"]})))
     [seen] = get(api, "settings/transitions/tr-1", token=lead)["checkpoints"]
     assert seen == {"conversation_id": None, "state": "prepared", "checkpoint": None, "error": None}
@@ -197,7 +197,7 @@ def newer_changes(api, bot_slug, n, created):
     """`n` task-model changes a manager bot made to `bot_slug`, written as the app writes them; `created(i)` is when."""
     bid = bot_id(api, bot_slug)
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), bid, "task_model", encode(None), encode(HAIKU), "bot:lead", None, created(i),
                         report_managers.VIA) for i in range(n)])
@@ -300,7 +300,7 @@ def test_a_persons_view_of_a_bots_changes_is_an_index_seek_whatever_the_bots_his
     # Counsel's history is 3,000 people's changes and no manager's: Ben's reads of it find nothing, and seek past it.
     counsel = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), counsel, "owners", encode([]), encode(["human:ana"]), "human:ana", None,
                         H.shift(H.now(), seconds=-i), None) for i in range(3000)])
@@ -322,7 +322,7 @@ def test_a_tie_of_changes_at_one_time_pages_in_id_order_and_no_read_sorts_it(api
     bot(api, "counsel", reports_to="lead")
     cid = bot_id(api, "counsel")
     with api.app.state.store.transaction() as c:
-        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before,after,actor,transition_id,created,"
                       "via) VALUES(?,?,?,?,?,?,?,?,?)",
                       [(H.new_id(), cid, "task_model", encode(None), encode(HAIKU), "bot:lead", None,
                         "2026-10-28T12:00:00.000000Z", report_managers.VIA if i % 2 else None) for i in range(600)])
@@ -412,8 +412,8 @@ def test_botops_adds_a_report_for_the_manager_as_a_members_bot_under_the_person_
     with api.app.state.store.read() as c:
         config = c.execute("SELECT created_by,operator FROM bot_config WHERE bot=?", (jid,)).fetchone()
         assert (config["created_by"], config["operator"]) == ("human:cara", "cara")    # a member's bot, made by the person above
-        events = c.execute("SELECT actor,detail_json FROM events WHERE action='bot.report_lifecycle' AND target=?", (jid,)).fetchall()
-    assert [(e["actor"], '"op": "create"' in e["detail_json"]) for e in events] == [("bot:" + lid, True)]
+        events = c.execute("SELECT actor,detail FROM events WHERE action='bot.report_lifecycle' AND target=?", (jid,)).fetchall()
+    assert [(e["actor"], '"op": "create"' in e["detail"]) for e in events] == [("bot:" + lid, True)]
     [change] = lifecycle_changes(api, "junior")
     assert change["via"] == "report_manager" and change["actor"] == "bot:" + lid and change["before"] is None
     assert change["after"] == {"state": "planned"}

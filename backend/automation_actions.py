@@ -90,8 +90,8 @@ def _message(values):
 def _queue_mail(c, auto, run_id, action, message, args, result=None):
     """`result` starts the action's result: a send the switch turned into a draft keeps `send_off` once reported."""
     aid = H.new_id()
-    c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args_json,state,created,"
-              "result_json) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
+    c.execute("INSERT INTO automation_mail_actions(id,automation_id,run_id,mailbox,msg_id,action,args,state,created,"
+              "result) VALUES(?,?,?,?,?,?,?,'queued',?,?)",
               (aid, auto["id"], run_id, str(message.get("mailbox") or "").strip().lower(), str(message.get("id") or ""),
                action, json.dumps(args, default=str), H.now(), json.dumps(result) if result else None))
     return {"ok": True, "detail": f"{action} queued", "mail_action": aid, "queued": True}
@@ -162,9 +162,9 @@ def slack_held(c, post):
         return False
     c.execute("UPDATE slack_posts SET state='cancelled',error='send_off',updated=? WHERE message_id=?",
               (H.now(), post["message_id"]))
-    row = c.execute("SELECT id, flow_json FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
+    row = c.execute("SELECT id, flow FROM automations WHERE id=?", (refs.get("automation"),)).fetchone()
     if row:
-        auto, run_id = {"id": row["id"], "flow": json.loads(row["flow_json"])}, refs.get("automation_run")
+        auto, run_id = {"id": row["id"], "flow": json.loads(row["flow"])}, refs.get("automation_run")
         H.event(c, actor_of(auto["flow"]["owner"]), "automation.send_off", auto["id"], {"run": run_id})
         made = _create_task(c, auto, run_id, {"title": f"Draft reply: {post['text'][:80]}", "body": post["text"]}, {})
         from . import automations

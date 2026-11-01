@@ -70,7 +70,7 @@ def drain(c: sqlite3.Connection, at: str | None = None, most: int = DRAIN_MOST) 
             data: dict[str, object] = {"budget_id": subject, "event_id": eid,
                                        "period": event_period(str(row["period_key"]))}
         else:
-            data = {**cast(dict[str, object], json.loads(str(row["payload_json"] or "{}"))), "event_id": eid}
+            data = {**cast(dict[str, object], json.loads(str(row["payload"] or "{}"))), "event_id": eid}
         tico.emit(c, name, subject, data)
         if ctx is not None and b is not None and name == LIMIT_EVENT and b.at_limit == "decline":
             _freeze_cards(c, b.id, eid, ctx.at)

@@ -51,7 +51,7 @@ def _timed_steps(c):
     if not step_flow._ready(c):
         return {}
     return {s["id"]: step_flow.of(s) for s in H._rows(c.execute(
-        "SELECT id, flow_json FROM task_steps WHERE flow_json LIKE '%status_hours%' OR flow_json LIKE '%late_hours%'"))}
+        "SELECT id, flow FROM task_steps WHERE flow LIKE '%status_hours%' OR flow LIKE '%late_hours%'"))}
 
 
 def limits(c, row, timed=None):
@@ -104,7 +104,7 @@ def _seen_by(c, row, who, at):
 
 
 def _done(c, action, row, since):
-    return bool(c.execute(f"SELECT 1 FROM events WHERE action=? AND target=? AND json_extract(detail_json,'$.since')=? "
+    return bool(c.execute(f"SELECT 1 FROM events WHERE action=? AND target=? AND json_extract(detail,'$.since')=? "
                           "LIMIT 1", (action, row["id"], since)).fetchone())
 
 

@@ -426,7 +426,7 @@ def test_defaults_are_seeded_once_stay_as_edited_and_guard_bots(books):
                    ).status == "committed"
         FA.setup(c, OWNER, LATER)
         assert c.execute("SELECT count(*) FROM fin_rules WHERE id LIKE 'rule:bot-%'").fetchone()[0] == 4
-        assert "1000000" in c.execute("SELECT when_json FROM fin_rules WHERE id='rule:bot-books-over-5000'"
+        assert "1000000" in c.execute("SELECT condition FROM fin_rules WHERE id='rule:bot-books-over-5000'"
                                       ).fetchone()[0]
         assert FA.grant_defaults(c, "bot:coder", at=AT) == ["finance.book", "finance.ap", "finance.ar", "finance.pay",
                                                             "finance.cards"]
@@ -943,7 +943,7 @@ def test_padded_ids_are_stored_trimmed_so_a_reschedule_still_withdraws_the_ask(b
         assert FA.action(c, ask.action_id).status == "withdrawn"
 
         def stored(aid):
-            return json.loads(c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (aid,)).fetchone()[0])
+            return json.loads(c.execute("SELECT payload FROM fin_actions WHERE id=?", (aid,)).fetchone()[0])
         assert (stored(ask.action_id)["obligation"], stored(ask.action_id)["recipient_id"]) == (f"bill:{bid}", rid)
         assert stored(moved.action_id)["bill_id"] == bid
         assert FR.bill(c, OWNER, bid)["status"] == "scheduled"
@@ -957,8 +957,8 @@ def test_a_request_stored_with_padded_ids_before_trimming_still_replays(books):
         first = act(c, OWNER, "bill_create", {"vendor_id": vendor, "bill_date": "2026-10-10",
                                               "lines": [{"account_id": account(c, "6100"), "amount": 1_000}]}, key="old")
         assert first.status == "committed", first
-        row = json.loads(c.execute("SELECT payload_json FROM fin_actions WHERE id=?", (first.action_id,)).fetchone()[0])
-        c.execute("UPDATE fin_actions SET payload_json=? WHERE id=?",
+        row = json.loads(c.execute("SELECT payload FROM fin_actions WHERE id=?", (first.action_id,)).fetchone()[0])
+        c.execute("UPDATE fin_actions SET payload=? WHERE id=?",
                   (json.dumps({**row, "vendor_id": f" {vendor} "}, sort_keys=True), first.action_id))
         for sent in (f" {vendor} ", vendor):
             again = act(c, OWNER, "bill_create", {"vendor_id": sent, "bill_date": "2026-10-10",

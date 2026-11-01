@@ -77,7 +77,7 @@ def census(database=Path("/data/hub.sqlite")):
     # a database and census helpers may allocate an identity.
     with closing(sqlite3.connect(database.as_uri() + "?mode=ro", uri=True, timeout=1)) as conn:
         conn.execute("PRAGMA query_only=ON")
-        row = conn.execute("SELECT substr(value_json,1,8193) FROM registry_metadata WHERE key='usage-count' LIMIT 1").fetchone()
+        row = conn.execute("SELECT substr(value,1,8193) FROM registry_metadata WHERE key='usage-count' LIMIT 1").fetchone()
         value = wire.decode(row[0].encode(), 8192) if row and isinstance(row[0], str) else {}
     identity = value.get("install_id")
     if not wire.uuid4(identity):

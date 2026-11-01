@@ -10,9 +10,9 @@ from backend.tests.test_gateway_connection import KEY, fake_gateway, finish, han
 
 def set_fallback(api, bot, fallback):
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
         config = {k: v for k, v in config.items() if k != "fallback"}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                   (json.dumps({**config, **({"fallback": fallback} if fallback else {})}), bot))
 
 

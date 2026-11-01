@@ -34,7 +34,7 @@ def mcp(api, name, arguments=None, token="ana-test"):
 
 def hide_quote(api, rule_id):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE org_rules SET cite_json=? WHERE id=?",
+        c.execute("UPDATE org_rules SET cite=? WHERE id=?",
                   (json.dumps({"file_id": "no-such-file", "quote": "SECRET-QUOTE-MARKER"}), rule_id))
 
 

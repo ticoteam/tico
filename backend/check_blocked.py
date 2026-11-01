@@ -94,7 +94,7 @@ def notify(c, row):
     if not since or row.get("blocked_kind") != "check" or not H.is_bot(row["owner"]):
         return None
     if c.execute("SELECT 1 FROM events WHERE action='task.check_blocked' AND target=? "
-                 "AND json_extract(detail_json,'$.since')=?", (row["id"], since)).fetchone():
+                 "AND json_extract(detail,'$.since')=?", (row["id"], since)).fetchone():
         return None
     sent = H._wake(c, row, row["owner"], f"Blocked: {row['title']}\n{row['blocked_reason']}\n"
                    "It goes back to its step by itself when the check works again.",

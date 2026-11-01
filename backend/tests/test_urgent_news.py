@@ -24,10 +24,10 @@ def test_incident_move_is_unheld_and_claimable_within_five_minutes(api):
         incident = H.task_create(c, 'bot:cpo', 'Restore sign-in', 'Repair the outage', 'bot:ops', labels=['incident'])
         c.execute('DELETE FROM jobs')
         H.task_update(c, 'bot:ops', incident['id'], status='doing')
-        job = c.execute("SELECT j.*,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+        job = c.execute("SELECT j.*,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                         "WHERE j.bot='cpo' ORDER BY j.rowid DESC LIMIT 1").fetchone()
         assert job is not None and job['held'] == 0 and job['state'] == 'queued'
-        assert json.loads(job['refs_json'])['rule'] == 'incident_news'
+        assert json.loads(job['refs'])['rule'] == 'incident_news'
         created = job['created']
     attempt = claim(api, r, 'cpo')
     assert attempt
@@ -45,9 +45,9 @@ def test_stale_suggestion_and_refused_move_need_action_but_routine_review_stays_
         c.execute('DELETE FROM jobs')
         H.task_comment(c, H.KEEPER, mine['id'], 'Stale check: parent is done. Suggest: mark done.',
                        extra_refs={'stale_check': 'suggestion-1', 'wake': 'stall', 'wake_batch': 'rule'})
-        raw = c.execute("SELECT m.refs_json,j.held FROM messages m JOIN jobs j ON j.message_id=m.id "
+        raw = c.execute("SELECT m.refs,j.held FROM messages m JOIN jobs j ON j.message_id=m.id "
                         "WHERE j.bot='cpo' ORDER BY j.rowid DESC LIMIT 1").fetchone()
-        msg, job = {'refs': json.loads(raw['refs_json'])}, raw
+        msg, job = {'refs': json.loads(raw['refs'])}, raw
         assert msg['refs']['rule'] == 'task_action' and job['held'] == 0
         assert 'wake_batch' not in msg['refs']
         # Even a sweep-shaped notice cannot be held again by the enqueue trigger.

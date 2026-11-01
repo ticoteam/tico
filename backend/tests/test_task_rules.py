@@ -11,10 +11,10 @@ AT = datetime(2026, 10, 24, 12, tzinfo=timezone.utc)
 
 def department(api):
     with api.app.state.store.transaction() as c:
-        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         roster['org_groups'] = {'engineering': {'name': 'Engineering'}, 'web': {'name': 'Web', 'parent': 'engineering'}, 'marketing': {'name': 'Marketing'}}
         next(p for p in roster['people'] if p['id'] == 'cara')['team'] = 'web'
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(roster),))
 
 
 def done(api, monkeypatch, title='Prepare export', hours=25):
@@ -98,7 +98,7 @@ def test_activity_and_all_holds_protect_done_tasks(api, monkeypatch):
                     H.task_update(c, 'human:ana', t['id'], status='done')
                 elif label == 'waiting': c.execute("UPDATE tasks SET waiting_on='human:ana' WHERE id=?", (t['id'],))
                 elif label == 'snoozed': c.execute("UPDATE tasks SET snoozed_until=? WHERE id=?", ((AT + timedelta(days=1)).isoformat(), t['id']))
-                elif label == 'pin': c.execute("UPDATE tasks SET labels_json='[\"pinned\"]' WHERE id=?", (t['id'],))
+                elif label == 'pin': c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (t['id'],))
                 elif label == 'question': H.task_comment(c, 'human:ana', t['id'], 'Should this stay open?', wake=False, ask={'to': 'human:ana'})
                 else:
                     c.execute("UPDATE tasks SET status='open' WHERE id=?", (t['id'],))
@@ -153,14 +153,14 @@ def test_bot_department_rights_and_aged_holds_do_not_starve_eligible_tasks(api, 
     _, _, attempt = setup_attempt(api)
     token = attempt['token']
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='engineering',config_json=json_set(config_json,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='engineering',config=json_set(config,'$.team','engineering') WHERE bot='ops'")
     rule = post(api, 'task-rules', {'name': 'Close exports'}, token=token)['job']
     assert rule['department']['id'] == 'engineering' and rule['can_change']
     put(api, 'task-rules/' + rule['key'], {'on': False}, token=token)
     for n in range(51):
         held = done(api, monkeypatch, f'Pinned export {n}', hours=48)
         with api.app.state.store.transaction() as c:
-            c.execute("UPDATE tasks SET labels_json='[\"pinned\"]' WHERE id=?", (held['id'],))
+            c.execute("UPDATE tasks SET labels='[\"pinned\"]' WHERE id=?", (held['id'],))
     eligible = done(api, monkeypatch, 'Eligible after holds')
     assert not run(api)
     assert task(api, eligible['id'])['status'] == 'closed'
@@ -182,7 +182,7 @@ def test_history_and_scoped_message_activity_with_old_task_timestamps(api, monke
                   "VALUES(?,?,?,'human:ana','step','before','after','')", (H.new_id(), history['id'], recent))
         for t, field in zip(scoped, ('created', 'edited_at', 'deleted_at')):
             times = {'created': old, 'edited_at': None, 'deleted_at': None, field: recent}
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created,edited_at,deleted_at) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created,edited_at,deleted_at) "
                       "VALUES(?,?,'human:ana','human:ana','say','Fixture',?,?,?,?)",
                       (H.new_id(), shared, json.dumps({'task': t['id']}), times['created'], times['edited_at'], times['deleted_at']))
         # None of the message fixtures gets a recent history row; all task timestamps stay aged.

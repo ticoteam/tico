@@ -807,10 +807,10 @@ def test_placement_defaults_by_role_and_a_person_switches_it(cloud):
     execution = cloud.api.app.state.execution
     with cloud.store.transaction() as c:
         # coo is in Engineering on the team chart; finance was made from the video producer's template.
-        c.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.org_groups',json(?)) WHERE key='people'",
+        c.execute("UPDATE registry_metadata SET value=json_set(value,'$.org_groups',json(?)) WHERE key='people'",
                   (json.dumps({"engineering": {"name": "Engineering", "parent": ""}}),))
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','engineering') WHERE bot='coo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.template','video-producer') "
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','engineering') WHERE bot='coo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.template','video-producer') "
                   "WHERE bot='finance'")
         for bot in ("ops", "coo", "finance"):
             assert placement.auto_place(c, execution, bot) is None
@@ -979,7 +979,7 @@ def test_a_setup_finished_before_hq_listed_sizes_goes_on_cloud_machines_when_it_
     monkeypatch.setattr(manager, "client", fake)
     with store.transaction() as c:                              # a bootstrap bot setup left planned, with no computer
         c.execute("UPDATE bots SET state='planned' WHERE slug='coo'")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',json('true')) "
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.materialize',json('true')) "
                   "WHERE bot='coo'")
         c.execute("UPDATE bots SET state='archived' WHERE slug='doc-updater'")
     manager.tick()

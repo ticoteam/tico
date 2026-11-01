@@ -112,7 +112,7 @@ def test_only_the_inboxs_person_or_the_top_sets_its_switch(api):
 def listed(api, name, readers=()):
     """A channel on the team's Slack list (Settings > Tools > Slack)."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO slack_channels(key,name,readers_json,created,updated) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO slack_channels(key,name,readers,created,updated) VALUES(?,?,?,?,?)",
                   ("#" + name, name, json.dumps(list(readers)), "2026-10-28T00:00:00Z", "2026-10-28T00:00:00Z"))
 
 

@@ -71,7 +71,7 @@ def chat(api):
 def checks(api):
     T.settle()                                # each row is written once the send has its answer
     with api.app.state.store.read() as c:
-        rows = c.execute("SELECT actor,detail_json FROM events WHERE action='judge.call' AND target='topic-change@1' "
+        rows = c.execute("SELECT actor,detail FROM events WHERE action='judge.call' AND target='topic-change@1' "
                          "ORDER BY rowid").fetchall()
     assert all(r[0] == "human:ana" for r in rows), "a check counts against the sender's own daily calls"
     return [json.loads(r[1]) for r in rows]
@@ -272,9 +272,9 @@ def test_a_new_topic_clears_the_session_like_the_manual_clear_and_marks_the_mess
 
     with api.app.state.store.read() as c:
         clears = [(r[0], json.loads(r[1] or "null")) for r in c.execute(
-            "SELECT target,detail_json FROM events WHERE action='session.clear'")]
+            "SELECT target,detail FROM events WHERE action='session.clear'")]
         measures = [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='chat.topic_changed' AND target=?", (conversation,))]
+            "SELECT detail FROM events WHERE action='chat.topic_changed' AND target=?", (conversation,))]
     assert clears == [(conversation, {"reason": "topic_change"})]
     assert measures == [{"message_id": message["id"], "tokens_before": 150_000, "delay_ms": measures[0]["delay_ms"]}]
     assert 0 <= measures[0]["delay_ms"] < 1500
@@ -408,7 +408,7 @@ def test_a_decision_about_a_chat_that_changed_meanwhile_clears_nothing(chat, cha
     expected = {**before, "epoch": 1, "bot_epoch": 1, "thread": False} if change == "cleared" else before
     assert session_state(api, conversation) == expected, "no clear beyond what happened meanwhile"
     with api.app.state.store.read() as c:
-        kept = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='chat.topic_kept'")]
+        kept = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='chat.topic_kept'")]
         changed = c.execute("SELECT count(*) FROM events WHERE action='chat.topic_changed'").fetchone()[0]
     assert kept == [{"why": {"cleared": "changed", "message": "changed"}.get(change, change)}] and changed == 0
     assert [r["clear"] for r in checks(api)] == [True], "the audit keeps the decision; topic_kept says it was refused"
@@ -455,7 +455,7 @@ def test_a_clear_between_admission_and_history_is_not_cleared_again(chat, monkey
     assert "topic_changed" not in (message.get("refs") or {}), "no divider"
     assert session_state(api, conversation) == {"epoch": 1, "bot_epoch": 1, "thread": False}, "cleared once"
     with store.read() as c:
-        kept = [json.loads(r[0]) for r in c.execute("SELECT detail_json FROM events WHERE action='chat.topic_kept'")]
+        kept = [json.loads(r[0]) for r in c.execute("SELECT detail FROM events WHERE action='chat.topic_kept'")]
     assert kept == [{"why": "changed"}]
     turn = claim(api, machine)
     assert [m["body"] for m in turn["history"]] == [UNRELATED], "the message is after the first clear"

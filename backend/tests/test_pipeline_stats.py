@@ -85,7 +85,7 @@ def test_a_queued_job_behind_an_unreviewed_interrupted_run_is_dead_not_queued(ap
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
         # The computer restarted mid-run: the run may have acted, so its task waits for a person's review.
-        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+        c.execute("UPDATE attempts SET state='interrupted', finished=?, result=? WHERE id=?",
                   (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
@@ -120,7 +120,7 @@ def test_health_and_pipeline_count_a_bots_queue_the_same_way(api):
     task = post(api, "tasks", {"owner": "ops", "title": "Ship the fix", "body": "Please ship it."})
     attempt = claim(api, r)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE attempts SET state='interrupted', finished=?, result_json=? WHERE id=?",
+        c.execute("UPDATE attempts SET state='interrupted', finished=?, result=? WHERE id=?",
                   (H.now(), '{"text": "Runner restarted during execution"}', attempt["id"]))
         c.execute("UPDATE jobs SET state='uncertain' WHERE id=?", (attempt["job_id"],))
     post(api, f"tasks/{task['id']}/comments", {"text": "Any news?", "needs_action": True})
@@ -164,7 +164,7 @@ def test_unreadable_newer_failures_never_hide_older_readable_ones(api, monkeypat
 
 def test_failure_causes():
     row = lambda state="failed", result="{}", reason=None, stop=None: {  # noqa: E731
-        "state": state, "result_json": result, "end_reason": reason, "stop_requested": stop}
+        "state": state, "result": result, "end_reason": reason, "stop_requested": stop}
     assert cause_of(row(result='{"limit_source": {"runtime": "codex", "billing": true}}')) == "quota"
     assert cause_of(row(reason="Model error (429): You exceeded your current quota")) == "quota"
     assert cause_of(row(result='{"limit_source": {"runtime": "claude", "kind": "capacity"}}')) == "capacity"

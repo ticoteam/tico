@@ -72,10 +72,10 @@ def test_responses_are_recorded_not_applied_and_commit_applies_them_with_the_per
     with api.app.state.store.read() as c:
         reply = c.execute("SELECT body,from_actor FROM messages WHERE in_reply_to=?", (ask["id"],)).fetchone()
         coo = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' OR from_actor='bot:coo'").fetchone()[0]
-        event = c.execute("SELECT detail_json FROM events WHERE action='batch.committed'").fetchone()
+        event = c.execute("SELECT detail FROM events WHERE action='batch.committed'").fetchone()
     assert reply["body"] == "Close. Keep the trial seats." and reply["from_actor"] == "human:ana"
     assert coo == 0, "nothing is written to the assistant's room"
-    assert "Rule for finance: Always archive postcard complaints." in json.loads(event["detail_json"])["applied"]
+    assert "Rule for finance: Always archive postcard complaints." in json.loads(event["detail"])["applied"]
     assert get(api, "batch")["batch"] is None
     post(api, f"batch/{bid}/commit", {}, expected=409)
     post(api, f"batch/{bid}/respond", {"kind": "skip"}, expected=409)

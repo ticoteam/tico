@@ -25,7 +25,7 @@ def report(api, machine, present, published=None, problems=(), ready=None, repos
 def stored(api, machine):
     with api.app.state.store.read() as c:
         import json
-        return json.loads(c.execute("SELECT readiness_json FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()[0])
+        return json.loads(c.execute("SELECT readiness FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()[0])
 
 
 def two_computers(api):

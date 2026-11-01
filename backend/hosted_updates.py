@@ -61,7 +61,7 @@ def on(settings):
 
 
 def load(c):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
     except ValueError:
@@ -70,7 +70,7 @@ def load(c):
 
 
 def save(c, record):
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(record, sort_keys=True)))
 
 
@@ -107,7 +107,7 @@ def record_outcome(c, result):
     """The updater's final state for the update the `update-pending` marker names: its system.update.finished event,
     once (the GET route, the updater's restart and this module may each see it first). A state for another release
     leaves the marker. True when it wrote the event."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='update-pending'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='update-pending'").fetchone()
     if not row:
         return False
     pending = json.loads(row[0])
@@ -237,7 +237,7 @@ def advance(store, now):
             record.update(state="updating", started_s=now)
             save(c, record)
             c.execute("INSERT INTO registry_metadata VALUES('update-pending',?) "
-                      "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+                      "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (json.dumps({"actor": ACTOR, "from": current, "to": target}),))
             H.event(c, ACTOR, "system.update.started", target, {"from": current, "to": target})
             from .execution import flag_cut

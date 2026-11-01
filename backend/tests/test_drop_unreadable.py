@@ -38,7 +38,7 @@ def refusal(api, machine, job):
     store = api.app.state.store
     with store.read() as c:
         runner = c.execute("SELECT * FROM runners WHERE id=?", (machine["runner_id"],)).fetchone()
-        ready = execution.readiness_document(runner["readiness_json"])
+        ready = execution.readiness_document(runner["readiness"])
         return execution.job_refusal(c, job, {}, ready, set(), execution.lanes_on(runner), execution.roots_on(runner))
 
 
@@ -49,7 +49,7 @@ def sweep(api):
 
 def suppressed(c, job_id):
     return [H._json(r[0], {}) for r in c.execute(
-        "SELECT detail_json FROM events WHERE action='job.suppress' AND target=?", (job_id,))]
+        "SELECT detail FROM events WHERE action='job.suppress' AND target=?", (job_id,))]
 
 
 def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api):

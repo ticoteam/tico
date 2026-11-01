@@ -34,7 +34,7 @@ def queued(api, aid, payload=None):
 def run_row(api, rid):
     with api.app.state.store.read() as c:
         row = dict(c.execute("SELECT * FROM automation_runs WHERE id=?", (rid,)).fetchone())
-    return {**row, "state": json.loads(row["state_json"] or "{}")}
+    return {**row, "state": json.loads(row["state"] or "{}")}
 
 
 def sql(api, query, args=()):
@@ -124,7 +124,7 @@ def backdate(api, aid, count, *, seconds_ago):
     with api.app.state.store.transaction() as c:
         version = c.execute("SELECT version FROM automations WHERE id=?", (aid,)).fetchone()[0]
         for _ in range(count):
-            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state_json,chain_json) "
+            c.execute("INSERT INTO automation_runs(id,automation_id,version,trigger_ref,started,status,state,chain) "
                       "VALUES(?,?,?,?,?,'ok','{}','[]')", ("run_" + H.new_id(), aid, version, "", started))
 
 
@@ -177,8 +177,8 @@ def test_a_slow_drain_is_held_not_lost_and_release_queues_every_run(api):
     assert statuses(api, aid) == {"held": 128}   # every delivery has a run; the queued ones were held at the trip
     shown = get(api, f"automations/{aid}")
     assert shown["enabled"] is True and shown["hold"]["held"] == 128 and shown["hold"]["rule"] == "sustained"
-    trip = sql(api, "SELECT detail_json FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
-    assert len(trip) == 1 and '"rule": "sustained"' in trip[0]["detail_json"]
+    trip = sql(api, "SELECT detail FROM events WHERE action='automation.run_guard' AND target=?", (aid,))
+    assert len(trip) == 1 and '"rule": "sustained"' in trip[0]["detail"]
     assert [t["owner"] for t in hold_tasks(api)] == ["human:ana"]   # one task a hold, not one a run
     assert hub(api).claim() is None                                  # the drain never takes a held run
     out = post(api, f"automations/{aid}/held", {"action": "release"})
@@ -186,8 +186,8 @@ def test_a_slow_drain_is_held_not_lost_and_release_queues_every_run(api):
     assert sum(statuses(api, aid).get(s, 0) for s in ("queued", "running", "ok", "failed")) == 128
     assert [t["status"] for t in hold_tasks(api)] == ["closed"]
     assert sql(api, "SELECT id FROM events WHERE action='automation.hold_released' AND target=?", (aid,))
-    audit = sql(api, "SELECT after_json FROM audit_log WHERE object=? ORDER BY at DESC LIMIT 1", ("automation:" + aid,))
-    assert json.loads(audit[0]["after_json"]) == {"hold": None, "release": 128}
+    audit = sql(api, "SELECT after FROM audit_log WHERE object=? ORDER BY at DESC LIMIT 1", ("automation:" + aid,))
+    assert json.loads(audit[0]["after"]) == {"hold": None, "release": 128}
 
 
 def test_a_second_hold_after_a_release_is_a_new_hold_with_its_own_task(api):
@@ -682,7 +682,7 @@ def test_a_hold_counts_until_its_turn_is_priced_and_a_lost_one_is_swept_after_a_
     assert post(api, f"automations/{aid}/run", {})["run"]["steps"][0]["status"] == "spend_cap"
     automations.tick(api.app.state.store, datetime.now(timezone.utc) + timedelta(hours=25))
     assert sql(api, "SELECT ref FROM automation_holds WHERE ref='t_old'") == []
-    swept = sql(api, "SELECT detail_json AS detail FROM events WHERE action='automation.hold_swept' AND target=?", (aid,))
+    swept = sql(api, "SELECT detail AS detail FROM events WHERE action='automation.hold_swept' AND target=?", (aid,))
     assert len(swept) == 1 and json.loads(swept[0]["detail"])["turn"] == "t_old"
 
 
@@ -741,12 +741,12 @@ def test_a_turn_has_a_day_to_answer_from_when_its_run_began_waiting(api):
     rid = queued(api, make(api, []))
     old, recent = H.shift(H.now(), days=-3), H.shift(H.now(), hours=-1)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automation_runs SET status='waiting',wake_at=NULL,started=?,state_json=? WHERE id=?",
+        c.execute("UPDATE automation_runs SET status='waiting',wake_at=NULL,started=?,state=? WHERE id=?",
                   (old, json.dumps({"threads": [], "waiting_since": recent}), rid))
     automations.tick(api.app.state.store)
     assert run_row(api, rid)["status"] == "waiting"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE automation_runs SET state_json=? WHERE id=?",
+        c.execute("UPDATE automation_runs SET state=? WHERE id=?",
                   (json.dumps({"threads": [], "waiting_since": old}), rid))
     automations.tick(api.app.state.store)
     assert run_row(api, rid)["status"] == "failed"

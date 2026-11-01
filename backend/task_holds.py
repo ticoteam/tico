@@ -240,7 +240,7 @@ def withdrawn(conn, task_id, ask_ids, why, *, by=None, told=True):
     for ask in asks:
         person = name(conn, ask["to_actor"])
         status = f"Withdrawn {'after' if ask.get('read_at') else 'before'} {person} saw it: {why}"
-        conn.execute("UPDATE messages SET refs_json=json_set(coalesce(refs_json,'{}'),'$.withdrawn',?) WHERE id=?",
+        conn.execute("UPDATE messages SET refs=json_set(coalesce(refs,'{}'),'$.withdrawn',?) WHERE id=?",
                      (status, ask["id"]))
         asker = ask["from_actor"]
         if (not told or asker == by or not H.is_bot(asker) or (asker, ask["to_actor"]) in noticed

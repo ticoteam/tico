@@ -131,8 +131,8 @@ def proposals(conn, status="pending", goal_id=None, kpi_id=None):
 
 def _proposal_view(row, conn=None):
     if row:
-        row["payload"] = H._json(row.pop("payload_json"), {}) or {}
-        row["result"] = H._json(row.pop("result_json"), None)
+        row["payload"] = H._json(row.pop("payload"), {}) or {}
+        row["result"] = H._json(row.pop("result"), None)
         if conn is not None and row["kind"] in ("strategy_draft", "strategy_realign"):
             from . import strategy
             strategy.card_view(conn, row)
@@ -880,7 +880,7 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
         H.refuse(conn, actor, "lint", error)
     body = H._dump(payload)
     same = H._one(conn, "SELECT id FROM goal_proposals WHERE status='pending' AND kind=? AND coalesce(goal_id,'')=? "
-                        "AND coalesce(kpi_id,'')=? AND payload_json=?", (kind, goal_id or "", kpi_id or "", body))
+                        "AND coalesce(kpi_id,'')=? AND payload=?", (kind, goal_id or "", kpi_id or "", body))
     if same:
         return proposal(conn, same["id"])
     if kind == "goal_why":
@@ -889,10 +889,10 @@ def propose(conn, actor, kind, goal_id=None, kpi_id=None, payload=None, reason="
         # words they did not (decide refuses the replaced one).
         conn.execute("UPDATE goal_proposals SET status='rejected', decided_by=?, decided_at=?, decision_note=? "
                      "WHERE status='pending' AND kind='goal_why' AND goal_id=?", (actor, H.now(), WHY_REPLACED, goal_id))
-    row = {"id": H.new_id(), "kind": kind, "goal_id": goal_id or None, "kpi_id": kpi_id or None, "payload_json": body,
+    row = {"id": H.new_id(), "kind": kind, "goal_id": goal_id or None, "kpi_id": kpi_id or None, "payload": body,
            "reason": str(reason or "").strip()[:1000], "proposed_by": actor, "proposed_at": H.now()}
-    conn.execute("INSERT INTO goal_proposals (id, kind, goal_id, kpi_id, payload_json, reason, proposed_by, proposed_at) "
-                 "VALUES (:id, :kind, :goal_id, :kpi_id, :payload_json, :reason, :proposed_by, :proposed_at)", row)
+    conn.execute("INSERT INTO goal_proposals (id, kind, goal_id, kpi_id, payload, reason, proposed_by, proposed_at) "
+                 "VALUES (:id, :kind, :goal_id, :kpi_id, :payload, :reason, :proposed_by, :proposed_at)", row)
     if goal_id:
         _event(conn, goal_id, actor, "proposal", None, kind, row["reason"])
     H.event(conn, actor, "goal.propose", row["id"], {"kind": kind, "goal_id": goal_id, "kpi_id": kpi_id})
@@ -989,7 +989,7 @@ def decide(conn, actor, proposal_id, decision, note="", why=None, option=None, m
             # Merged into the draft as the admin who confirmed it. Never published.
             from . import brand_gtm
             result = brand_gtm.apply_proposal(conn, brand_gtm.kind_of_proposal(row["kind"]), actor, payload)
-    conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result_json=? "
+    conn.execute("UPDATE goal_proposals SET status=?, decided_by=?, decided_at=?, decision_note=?, result=? "
                  "WHERE id=?", ("confirmed" if decision == "confirm" else "rejected", actor, H.now(),
                                 str(note or "").strip()[:1000], H._dump(result) if result else None, proposal_id))
     if row["goal_id"]:

@@ -26,7 +26,7 @@ from .store import H, Problem
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bot_task_tabs (
-  bot TEXT NOT NULL, viewer TEXT NOT NULL DEFAULT '', tabs_json TEXT NOT NULL,
+  bot TEXT NOT NULL, viewer TEXT NOT NULL DEFAULT '', tabs TEXT NOT NULL,
   updated TEXT NOT NULL, updated_by TEXT NOT NULL, PRIMARY KEY (bot, viewer));
 """
 
@@ -112,15 +112,15 @@ def widgets_of(stored):
 
 
 def stored(c, settings, who, bot):
-    return c.execute("SELECT tabs_json,widgets_json,updated,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
+    return c.execute("SELECT tabs,widgets,updated,updated_by FROM bot_task_tabs WHERE bot=? AND viewer=?",
                      (bot, viewer_key(settings, who, bot))).fetchone()
 
 
 def read(c, settings, who, bot, ctx=None):
     """`ctx` (backend/cards.py Ctx) leaves out the pages its reader may not read, so a widget never names one."""
     row = stored(c, settings, who, bot)
-    tabs = [legacy(t) for t in json.loads(row["tabs_json"])] if row else [legacy(t) for t in DEFAULT]
-    widgets = widgets_of(json.loads(row["widgets_json"]) if row and row["widgets_json"] else None)
+    tabs = [legacy(t) for t in json.loads(row["tabs"])] if row else [legacy(t) for t in DEFAULT]
+    widgets = widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
     if ctx is not None:
         from . import cards
         widgets = [w for w in widgets if cards.readable_item(ctx, w["id"])]
@@ -243,9 +243,9 @@ def write_widgets(ctx, bot, widgets):
     if any(ITEM.fullmatch(w["id"]) for w in widgets) and personal(settings, bot):
         raise bad("The Assistant's sidebar holds its own widgets; pin pages to a bot or a team page")
     was = stored(c, settings, who, bot)
-    tabs = was["tabs_json"] if was else json.dumps([legacy(t) for t in DEFAULT])
-    c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,widgets_json,updated,updated_by) VALUES(?,?,?,?,?,?) "
-              "ON CONFLICT(bot,viewer) DO UPDATE SET widgets_json=excluded.widgets_json,updated=excluded.updated,"
+    tabs = was["tabs"] if was else json.dumps([legacy(t) for t in DEFAULT])
+    c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated,updated_by) VALUES(?,?,?,?,?,?) "
+              "ON CONFLICT(bot,viewer) DO UPDATE SET widgets=excluded.widgets,updated=excluded.updated,"
               "updated_by=excluded.updated_by", (bot, viewer_key(settings, who, bot), tabs, json.dumps(widgets),
                                                  H.now(), who.actor))
     if not personal(settings, bot):
@@ -254,7 +254,7 @@ def write_widgets(ctx, bot, widgets):
 
 def saved_widgets(ctx, bot):
     row = stored(ctx.c, ctx.settings, ctx.who, bot)
-    return widgets_of(json.loads(row["widgets_json"]) if row and row["widgets_json"] else None)
+    return widgets_of(json.loads(row["widgets"]) if row and row["widgets"] else None)
 
 
 def add_widget(ctx, bot, item, position=None):
@@ -369,7 +369,7 @@ def tab_sql(tab, bot, viewer, visible_sql="1"):
     return " AND ".join(where), args
 
 
-BRIEF = ("body", "acceptance_criteria", "acceptance_json", "public_title", "public_summary", "requester_count",
+BRIEF = ("body", "acceptance_criteria", "acceptance", "public_title", "public_summary", "requester_count",
          "external_requesters", "internal_requesters", "important_requesters", "organization", "size")
 
 
@@ -464,15 +464,15 @@ def install(app, store, auth, mutate, settings, task_views=None):
                     raise bad("Keep at least one tab")
                 was = stored(c, settings, who, bot)
                 tabs = json.dumps(clean(c, body.tabs))
-                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs_json,widgets_json,updated,updated_by) "
-                          "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs_json=excluded.tabs_json,"
+                c.execute("INSERT INTO bot_task_tabs(bot,viewer,tabs,widgets,updated,updated_by) "
+                          "VALUES(?,?,?,?,?,?) ON CONFLICT(bot,viewer) DO UPDATE SET tabs=excluded.tabs,"
                           "updated=excluded.updated,updated_by=excluded.updated_by",
-                          (bot, viewer, tabs, was["widgets_json"] if was else None, H.now(), who.actor))
+                          (bot, viewer, tabs, was["widgets"] if was else None, H.now(), who.actor))
                 if "widgets" in body.model_fields_set:
                     if body.widgets is None:
                         write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), list(DEFAULT_WIDGETS)))
                         if not any(ITEM.fullmatch(w["id"]) for w in saved_widgets(ctx, bot)):
-                            c.execute("UPDATE bot_task_tabs SET widgets_json=NULL WHERE bot=? AND viewer=?", (bot, viewer))
+                            c.execute("UPDATE bot_task_tabs SET widgets=NULL WHERE bot=? AND viewer=?", (bot, viewer))
                     else:
                         write_widgets(ctx, bot, keep_unread(ctx, saved_widgets(ctx, bot), clean_widgets(body.widgets)))
             if not viewer:

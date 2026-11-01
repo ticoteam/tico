@@ -13,7 +13,7 @@ REASON = "Your company is at its limit; Tico is fixing what's stuck."
 
 def people(api, rows):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps({'people': rows}),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps({'people': rows}),))
 
 
 def one_person(api):

@@ -112,7 +112,7 @@ def snapshot(c: sqlite3.Connection, payload: Mapping[str, object], *, fetched_at
 
 def video_models(snap: Mapping[str, object]) -> list[str]:
     """The models a snapshot's meter puts in category `image`."""
-    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows_json"] or "[]")))
+    rows = cast(list[Mapping[str, object]], json.loads(str(snap["rows"] or "[]")))
     return sorted({str(r.get("model") or "") for r in rows if r.get("line") == "video" and r.get("model")})
 
 

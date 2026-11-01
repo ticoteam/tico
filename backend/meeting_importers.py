@@ -87,9 +87,9 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             saved, now, rows = configured(c), H.now(), []
             for source, spec in IMPORTERS.items():
                 cfg = saved.get(source) or {}
-                health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?",
+                health = c.execute("SELECT last_success,last_error,detail FROM service_health WHERE service=?",
                                    ("recording:" + source,)).fetchone()
-                detail = json.loads(health["detail_json"] or "{}") if health else {}
+                detail = json.loads(health["detail"] or "{}") if health else {}
                 code = detail.get("error_code") or ""
                 enabled = bool(cfg.get("enabled"))
                 machine = labels.get(cfg.get("runner_id") or "")
@@ -149,20 +149,20 @@ def install_meeting_importers(app, store, auth, execution, mutate, importer):
             if source in RETIRED_IMPORTERS:
                 # Old runners may finish an in-flight pass; authorize before acknowledging it.
                 return {"ok": True}
-            old = c.execute("SELECT detail_json FROM service_health WHERE service=?", ("recording:" + source,)).fetchone()
+            old = c.execute("SELECT detail FROM service_health WHERE service=?", ("recording:" + source,)).fetchone()
             detail = json.loads(old[0]) if old else {}
             detail.update(last_attempt=H.now())
             if body.imported:
                 detail.update(last_import=H.now(), imported_total=detail.get("imported_total", 0) + body.imported)
             if body.state == "ok":
                 detail.update(error_code="", message="")
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
+                c.execute("INSERT INTO service_health(service,last_success,last_error,detail) VALUES(?,?,NULL,?) "
                           "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
-                          "detail_json=excluded.detail_json", ("recording:" + source, H.now(), encode(detail)))
+                          "detail=excluded.detail", ("recording:" + source, H.now(), encode(detail)))
             else:
                 detail.update(error_code=body.error_code or "sync_error", message=body.message)
-                c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
+                c.execute("INSERT INTO service_health(service,last_success,last_error,detail) VALUES(?,NULL,?,?) "
                           "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,"
-                          "detail_json=excluded.detail_json", ("recording:" + source, H.now(), encode(detail)))
+                          "detail=excluded.detail", ("recording:" + source, H.now(), encode(detail)))
             return {"ok": True}
         return mutate(request, body, work)

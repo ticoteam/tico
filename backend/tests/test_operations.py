@@ -101,7 +101,7 @@ def test_the_scheduled_backup_carries_the_key_files_and_the_restore_check_reads_
     assert sorted(manifest["key_files"]) == ["credential.key", "github-app.key"]
     assert s3.objects[("bucket", report["key"] + ".keys/github-app.key")] == b"\x02" * 32
     with store.read() as c:
-        detail = json.loads(c.execute("SELECT detail_json FROM service_health WHERE service='backup'").fetchone()[0])
+        detail = json.loads(c.execute("SELECT detail FROM service_health WHERE service='backup'").fetchone()[0])
     assert detail["key_files"] == ["credential.key", "github-app.key"] and "\x02" not in json.dumps(detail)
     with (patch("backend.operations.RESTORE_ROOT", tmp_path / "checks"),
           patch("backend.operations.shutil.disk_usage", return_value=Mock(free=10 * 1024 ** 3))):

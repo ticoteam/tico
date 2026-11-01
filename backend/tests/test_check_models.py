@@ -31,10 +31,10 @@ def parent_turn(api):
     """ops on Claude, working a person's task: its claimed turn."""
     company(api, "anthropic", "xai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0])
         config.update(runtime="claude", harness="claude", model="claude-sonnet-5-5",
                       fallback={"harness": "codex", "model": "gpt-6.1-sol"})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (json.dumps(config),))
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (json.dumps(config),))
     machine = runner(api)
     assign(api, machine, "ops")
     heartbeat(api, machine)
@@ -457,7 +457,7 @@ def test_a_held_check_that_leaves_the_board_lets_its_queued_turn_go(api, monkeyp
         c.execute("UPDATE tasks SET status=? WHERE id=?", (status, sub["id"]))
         assert check["job_id"] in execution.hold_unrunnable(c)
         assert c.execute("SELECT state FROM jobs WHERE id=?", (check["job_id"],)).fetchone()[0] == "canceled"
-        event = c.execute("SELECT detail_json FROM events WHERE action='job.suppress' AND target=?",
+        event = c.execute("SELECT detail FROM events WHERE action='job.suppress' AND target=?",
                           (check["job_id"],)).fetchone()
         assert json.loads(event[0])["task_id"] == sub["id"]
         assert check["job_id"] not in execution.hold_unrunnable(c), "once"

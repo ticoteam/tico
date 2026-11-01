@@ -86,4 +86,4 @@ version bump when it changes what a bot does with the answer.
 
 Adding a set is a pull request here: the file, a line in this table, and the change in the
 caller that reads it. Read a month of one set's calls back with
-`hub sql "SELECT target, detail_json FROM events WHERE action='judge.call' AND target='mail-triage@1'"`.
+`hub sql "SELECT target, detail FROM events WHERE action='judge.call' AND target='mail-triage@1'"`.

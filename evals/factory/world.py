@@ -101,7 +101,7 @@ class World:
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "engineering", "ana"))
             if "release-manager" in bots:   # signed in as an agent, as an external Release Manager is
                 c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) "
@@ -303,9 +303,9 @@ class World:
         """An org group in the roster, which a group limit names; the bots of the team of that name are in it."""
         from backend.store import encode
         with self.store.transaction() as c:
-            doc = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+            doc = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
             doc.setdefault("org_groups", {})[gid] = {"name": name}
-            c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(doc),))
+            c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(doc),))
 
     def enable_providers(self, enabled):
         """The company's AI providers, in the order their runtimes fall back to, as the owner saves them."""
@@ -512,10 +512,10 @@ class World:
     def tickets(self):
         """The Dev tickets: tasks of the Dev type, with their step names."""
         rows = self.sql("SELECT t.id,t.title,t.owner,t.status,t.step_id,s.name step,t.blocked_since,t.updated,"
-                        "t.labels_json,t.created FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
+                        "t.labels,t.created FROM tasks t LEFT JOIN task_steps s ON s.id=t.step_id WHERE t.type_id=?",
                         (self.dev["id"],))
         for r in rows:
-            r["labels"] = json.loads(r.pop("labels_json") or "[]")
+            r["labels"] = json.loads(r.pop("labels") or "[]")
         return rows
 
     def title(self, task_id):

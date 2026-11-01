@@ -237,7 +237,7 @@ the same rows to a local file that can be read without the server (below).
 Times are Unix seconds. A `modified` or `mismatch` start shows as **Release image** on the Health page. The integrity of the
 database is checked by the daily verified backup (`PRAGMA integrity_check`), not here.
 
-The `flight_db` columns remain `ts`, `bytes`, `wal_bytes`, `free_bytes` and `detail_json`. Within the detail,
+The `flight_db` columns remain `ts`, `bytes`, `wal_bytes`, `free_bytes` and `detail`. Within the detail,
 `objects_at` dates the table/index sizes, while `seconds` measures the current hourly sampling pass.
 Metrics expose `db.objects_at` beside `db.objects`; these sizes can be older than the hourly `db.at`.
 Older records without `objects_at` use their snapshot timestamp. The sizes are estimates: a table is its row count
@@ -266,7 +266,7 @@ FROM flight_requests WHERE ts > strftime('%s','now') - 3600 GROUP BY route ORDER
 SELECT datetime(ts,'unixepoch') AS minute, cpu, lag_max, wait_max, hold_max, locked FROM flight_process
 WHERE ts > strftime('%s','now') - 3 * 3600 ORDER BY ts;
 -- Stalls and what the event loop was doing
-SELECT datetime(ts,'unixepoch'), detail_json FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
+SELECT datetime(ts,'unixepoch'), detail FROM flight_events WHERE kind='stall' ORDER BY id DESC LIMIT 5;
 ```
 
 Runner polls and writer admission use the same lock accounting: `wait_ms` includes the FIFO queue for

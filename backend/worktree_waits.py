@@ -50,7 +50,7 @@ def _exists(c):
 
 
 def _computer(c, bot):
-    return c.execute("SELECT r.id,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
+    return c.execute("SELECT r.id,r.readiness FROM assignments a JOIN runners r ON r.id=a.runner_id "
                      "WHERE a.bot=? AND r.revoked_at IS NULL", (bot,)).fetchone()
 
 
@@ -58,7 +58,7 @@ def computer_waits(c, bot):
     """The bot's computer prepares a reserved worktree on its own; an older one only makes worktrees inside a turn,
     so for it the refusal stays as it was and nothing waits."""
     row = _computer(c, bot)
-    return bool(row and readiness_document(row['readiness_json']).get('worktree_waits'))
+    return bool(row and readiness_document(row['readiness']).get('worktree_waits'))
 
 
 def _current_task(c, who, task):
@@ -196,9 +196,9 @@ def _serve_one(c, wait, full, default_org):
         _finish(c, wait, 'cancelled', ended)
         link = c.execute("SELECT * FROM task_links WHERE id=? AND kind='worktree' AND state='pending'",
                          (wait['link_id'] or '',)).fetchone()
-        if link and json.loads(link['detail_json'] or '{}').get('checkout_state') == 'queued':
+        if link and json.loads(link['detail'] or '{}').get('checkout_state') == 'queued':
             from .worktrees import cancel_pending
-            cancel_pending(c, dict(link), json.loads(link['detail_json'] or '{}'), ended)
+            cancel_pending(c, dict(link), json.loads(link['detail'] or '{}'), ended)
         return False
     if wait['state'] == 'waiting':
         # The oldest wait that does not fit holds the bot's younger ones back: a freed place goes to it first.
@@ -226,11 +226,11 @@ def _serve_one(c, wait, full, default_org):
                                                 f"worktree: {problem.detail}", refs={'worktree_wait': wait['id'], 'quiet': True},
                         trigger='other', source=wait['id'])
             return False
-        row = c.execute('SELECT detail_json FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
-        detail = json.loads(row['detail_json'] or '{}')
+        row = c.execute('SELECT detail FROM task_links WHERE id=?', (link['link_id'],)).fetchone()
+        detail = json.loads(row['detail'] or '{}')
         detail['wait_id'] = wait['id']
         detail.pop('error', None)
-        c.execute('UPDATE task_links SET detail_json=? WHERE id=?', (json.dumps(detail), link['link_id']))
+        c.execute('UPDATE task_links SET detail=? WHERE id=?', (json.dumps(detail), link['link_id']))
         c.execute("UPDATE worktree_waits SET state='reserved',link_id=?,updated=? WHERE id=?",
                   (link['link_id'], H.now(), wait['id']))
         H.event(c, H.KEEPER, 'worktree.wait.reserved', wait['task_id'],
@@ -241,7 +241,7 @@ def _serve_one(c, wait, full, default_org):
         # The reserved worktree went away before it was ready: wait for a place again.
         c.execute("UPDATE worktree_waits SET state='waiting',link_id=NULL,updated=? WHERE id=?", (H.now(), wait['id']))
         return False
-    detail = json.loads(link['detail_json'] or '{}')
+    detail = json.loads(link['detail'] or '{}')
     ready = (link['state'] == 'present' and not detail.get('setup_pending')
              and detail.get('checkout_state') in ('ready', 'legacy_present'))
     if ready:

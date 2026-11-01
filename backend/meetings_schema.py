@@ -2,21 +2,21 @@
 MEETING_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meetings (
  id TEXT PRIMARY KEY, title TEXT NOT NULL, owner TEXT NOT NULL,
- recorded_by TEXT, uploaded_by TEXT, metadata_json TEXT NOT NULL,
+ recorded_by TEXT, uploaded_by TEXT, metadata TEXT NOT NULL,
  transcript_original TEXT NOT NULL DEFAULT '', transcript_readable TEXT NOT NULL DEFAULT '',
  notes TEXT NOT NULL DEFAULT '', content_hash TEXT NOT NULL DEFAULT '',
  created TEXT NOT NULL, updated TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS meeting_versions (
  id INTEGER PRIMARY KEY AUTOINCREMENT, meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
- content_hash TEXT NOT NULL, metadata_json TEXT NOT NULL, transcript_original TEXT NOT NULL,
+ content_hash TEXT NOT NULL, metadata TEXT NOT NULL, transcript_original TEXT NOT NULL,
  transcript_readable TEXT NOT NULL, notes TEXT NOT NULL, created TEXT NOT NULL,
  UNIQUE(meeting_id, content_hash)
 );
 CREATE TABLE IF NOT EXISTS meeting_deliveries (
  meeting_id TEXT PRIMARY KEY REFERENCES meetings(id) ON DELETE CASCADE,
  requested_by TEXT NOT NULL, sender_name TEXT NOT NULL, destination TEXT NOT NULL,
- instructions TEXT NOT NULL, attachments_json TEXT NOT NULL DEFAULT '[]',
+ instructions TEXT NOT NULL, attachments TEXT NOT NULL DEFAULT '[]',
  status TEXT NOT NULL DEFAULT 'pending', task_id TEXT, error TEXT, attempts INTEGER NOT NULL DEFAULT 0,
  requested_at TEXT NOT NULL, delivered_at TEXT
 );
@@ -29,7 +29,7 @@ CREATE TABLE IF NOT EXISTS task_delegations (
 MEETING_REVIEW_SCHEMA = """
 ALTER TABLE meetings ADD COLUMN review_state TEXT NOT NULL DEFAULT 'live'
  CHECK (review_state IN ('pending','live','dismissed'));
-UPDATE meetings SET metadata_json=json_set(metadata_json,'$.review_state','live','$.ready_announced',json('true'))
+UPDATE meetings SET metadata=json_set(metadata,'$.review_state','live','$.ready_announced',json('true'))
  WHERE review_state='live';
 CREATE INDEX IF NOT EXISTS meetings_review_owner ON meetings(review_state,owner COLLATE NOCASE);
 """
@@ -44,7 +44,7 @@ CREATE TABLE IF NOT EXISTS meeting_items (
  meeting_id TEXT NOT NULL REFERENCES meetings(id) ON DELETE CASCADE,
  section TEXT NOT NULL CHECK (section IN ('doc','task','feature','decision','question')),  -- the last two: legacy rows, never listed
  text TEXT NOT NULL,
- detail_json TEXT NOT NULL DEFAULT '{}',
+ detail TEXT NOT NULL DEFAULT '{}',
  quote TEXT NOT NULL DEFAULT '',
  at_ms INTEGER,
  status TEXT NOT NULL DEFAULT 'proposed' CHECK (status IN ('proposed','pushed','dismissed')),
@@ -106,7 +106,7 @@ CREATE TABLE IF NOT EXISTS recording_transcripts (
  source TEXT NOT NULL, resource_type TEXT NOT NULL, external_id TEXT NOT NULL,
  transcript_index INTEGER NOT NULL DEFAULT 0,
  content_hash TEXT NOT NULL, source_updated_at TEXT NOT NULL,
- turns_json TEXT NOT NULL, transcript_text TEXT NOT NULL, summary_text TEXT NOT NULL DEFAULT '',
+ turns TEXT NOT NULL, transcript_text TEXT NOT NULL, summary_text TEXT NOT NULL DEFAULT '',
  imported_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS recording_transcripts_meeting ON recording_transcripts(meeting_id,id DESC);
@@ -190,7 +190,7 @@ CREATE TABLE IF NOT EXISTS live_meeting_events (
  meeting_id TEXT NOT NULL REFERENCES live_meetings(id) ON DELETE CASCADE,
  event_id INTEGER NOT NULL,
  type TEXT NOT NULL,
- payload_json TEXT NOT NULL,
+ payload TEXT NOT NULL,
  created TEXT NOT NULL,
  PRIMARY KEY(meeting_id,event_id)
 );
@@ -201,7 +201,7 @@ CREATE TABLE IF NOT EXISTS live_meeting_windows (
  end_ms INTEGER NOT NULL,
  status TEXT NOT NULL CHECK (status IN ('deciding','complete','interrupted')),
  outcome TEXT NOT NULL DEFAULT '',
- trace_json TEXT NOT NULL DEFAULT '{}',
+ trace TEXT NOT NULL DEFAULT '{}',
  started TEXT NOT NULL,
  finished TEXT,
  PRIMARY KEY(meeting_id,window_index)
@@ -249,7 +249,7 @@ CREATE TABLE IF NOT EXISTS live_meeting_chat_routes (
  chat_id TEXT NOT NULL REFERENCES live_meeting_chat(id) ON DELETE CASCADE,
  status TEXT NOT NULL CHECK (status IN ('deciding','complete')),
  outcome TEXT NOT NULL DEFAULT '',
- trace_json TEXT NOT NULL DEFAULT '{}',
+ trace TEXT NOT NULL DEFAULT '{}',
  started TEXT NOT NULL,
  finished TEXT,
  PRIMARY KEY(meeting_id,chat_id)

@@ -168,9 +168,9 @@ def pages(world):
     # Written as the harness writes the bots' other fields: the definition route refuses the reports_to it set by hand.
     with world.store.transaction() as c:
         c.execute("UPDATE bots SET display_name='Engineering Lead' WHERE slug='engineering-lead'")
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot='engineering-lead'").fetchone()[0]
                             or "{}")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='engineering-lead'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='engineering-lead'",
                   (json.dumps({**config, "display_name": "Engineering Lead"}),))
     made = _ok(world.api("post", "/api/v2/tasks", {"title": "Q3 launch", "body": "Plan the Q3 launch.",
                                                     "owner": "engineering-lead"}, who=DANA), "task")
@@ -209,7 +209,7 @@ def counsel(world):
     from .harness import DANA, DANA_ID
     with world.store.transaction() as c:
         c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')", (H.COUNSEL, H.COUNSEL))
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES(?, '{}', '', ?)",
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, operator) VALUES(?, '{}', '', ?)",
                   (H.COUNSEL, DANA_ID))
         c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",
                   (H.COUNSEL, "test", "x-counsel", H.now(), "human:" + DANA_ID))
@@ -241,7 +241,7 @@ def roster(world):
     gina = {"id": "gina", "name": "Gina", "email": "gina@acme.example", "reports_to": DANA_ID, "primary_for": []}
     world.app.state.auth.settings.test_identities["gina-test"] = Identity("human:gina", "human", email="gina@acme.example")
     with world.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])["people"]
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])["people"]
         people = [*people, gina]
         H.sync_registry(c, {}, {"people": people})
         c.execute("DELETE FROM registry_metadata WHERE key='people'")

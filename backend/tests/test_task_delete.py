@@ -131,7 +131,7 @@ def test_purging_a_deleted_task_reports_the_files_it_leaves_behind(api):
         assert listed["files_left"] == {"files": 1, "versions": 1, "bytes": len(b"# Wrong one"),
                                         "ids": [attached["file_id"]], "attachments": []}
         assert purge_trash(c, 30, apply=True)["files_left"] == listed["files_left"]
-        detail = c.execute("SELECT detail_json FROM events WHERE action='task.purged' AND target=?",
+        detail = c.execute("SELECT detail FROM events WHERE action='task.purged' AND target=?",
                            (wrong["id"],)).fetchone()[0]
         assert json.loads(detail)["files_left"] == [attached["file_id"]]
     assert api.get(f"/api/v2/files/{attached['file_id']}", headers=headers("ben-test")).status_code == 404
@@ -318,7 +318,7 @@ def test_a_task_whose_type_was_deleted_while_it_was_in_the_trash_comes_back_on_g
     assert (after["type_id"], after["step_id"], after["status"]) == ("general", None, "open")
     with store.read() as c:
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
-        detail = c.execute("SELECT detail_json FROM events WHERE action='task.restored' AND target=?",
+        detail = c.execute("SELECT detail FROM events WHERE action='task.restored' AND target=?",
                            (ticket["id"],)).fetchone()[0]
     assert "type" in detail
 

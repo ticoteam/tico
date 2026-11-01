@@ -16,7 +16,7 @@ CLOSE_LIMIT = 50
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS task_rules(
  id TEXT PRIMARY KEY, name TEXT NOT NULL, department TEXT NOT NULL,
- triggers_json TEXT NOT NULL, actions_json TEXT NOT NULL, enabled INTEGER NOT NULL,
+ triggers TEXT NOT NULL, actions TEXT NOT NULL, enabled INTEGER NOT NULL,
  preset TEXT NOT NULL, at TEXT, created_by TEXT NOT NULL, created TEXT NOT NULL, updated TEXT NOT NULL);
 DROP INDEX IF EXISTS tasks_rule_due;
 CREATE INDEX IF NOT EXISTS tasks_rule_done_due ON tasks(updated,id) WHERE status='done' AND closed_at IS NULL;
@@ -92,8 +92,8 @@ def save(c, settings, auth, who, body, key=None):
     require_change(c, settings, auth, who, department)
     if not before and c.execute("SELECT count(*) FROM task_rules").fetchone()[0] >= MAX_RULES:
         raise Problem("conflict", "Edit an existing rule; the task rule list is full", 409)
-    triggers = body.triggers if body.triggers is not None else json.loads(before["triggers_json"]) if before else [{"key": "done_untouched", "hours": 24}]
-    actions = body.actions if body.actions is not None else json.loads(before["actions_json"]) if before else ["close"]
+    triggers = body.triggers if body.triggers is not None else json.loads(before["triggers"]) if before else [{"key": "done_untouched", "hours": 24}]
+    actions = body.actions if body.actions is not None else json.loads(before["actions"]) if before else ["close"]
     validate(triggers, actions)
     name = body.name if body.name is not None else before["name"] if before else "Close after done"
     if not name:
@@ -105,8 +105,8 @@ def save(c, settings, auth, who, body, key=None):
         raise Problem("invalid", "Choose a daily time", 422)
     key, now = key or "task-rule-" + H.new_id(), H.now()
     c.execute("INSERT INTO task_rules VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT(id) DO UPDATE SET "
-              "name=excluded.name,department=excluded.department,triggers_json=excluded.triggers_json,"
-              "actions_json=excluded.actions_json,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated=excluded.updated",
+              "name=excluded.name,department=excluded.department,triggers=excluded.triggers,"
+              "actions=excluded.actions,enabled=excluded.enabled,preset=excluded.preset,at=excluded.at,updated=excluded.updated",
               (key, name, department, encode(triggers), encode(actions), int(on), preset, at,
                before["created_by"] if before else who.actor, before["created"] if before else now, now))
     H.event(c, who.actor, "task_rule.updated" if before else "task_rule.created", key,
@@ -120,7 +120,7 @@ def config(rule):
 
 def row(c, settings, rule, who=None, auth=None, now=None, last=None):
     now = now or datetime.now(timezone.utc)
-    triggers, actions = json.loads(rule["triggers_json"]), json.loads(rule["actions_json"])
+    triggers, actions = json.loads(rule["triggers"]), json.loads(rule["actions"])
     validate(triggers, actions)
     chart = {d["id"]: d["name"] for d in departments(settings)}
     department = rule["department"]
@@ -171,7 +171,7 @@ def safe(c, task):
     if task.get("waiting_on") or task.get("snoozed_until") or task.get("pinned"):
         return False
     # Pin tags are a durable task-level pin; the rail's pinned filtered views are only bookmarks.
-    if {str(x).lower() for x in json.loads(task.get("labels_json") or "[]")} & {"pin", "pinned"}:
+    if {str(x).lower() for x in json.loads(task.get("labels") or "[]")} & {"pin", "pinned"}:
         return False
     if c.execute("SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id WHERE tt.task_id=? AND lower(g.key) IN ('pin','pinned') LIMIT 1", (task["id"],)).fetchone():
         return False
@@ -201,7 +201,7 @@ DUE_SQL = (
     "AND t.waiting_on IS NULL AND t.snoozed_until IS NULL "
     "AND NOT EXISTS (SELECT 1 FROM task_tags tt JOIN tags g ON g.id=tt.tag_id "
     "WHERE tt.task_id=t.id AND lower(g.key) IN ('pin','pinned')) "
-    "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels_json) WHERE lower(value) IN ('pin','pinned')) "
+    "AND NOT EXISTS (SELECT 1 FROM json_each(t.labels) WHERE lower(value) IN ('pin','pinned')) "
     "AND NOT EXISTS (SELECT 1 FROM approvals a WHERE a.task_id=t.id AND a.decision IS NULL) "
     f"AND NOT EXISTS (SELECT 1 FROM task_events WHERE task_id=t.id AND {HISTORY_ACTIVITY_SQL} AND ts>?) "
     "AND NOT EXISTS (SELECT 1 FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
@@ -229,7 +229,7 @@ def tick(store, now, failures):
                 last = c.execute("SELECT max(started) FROM system_runs WHERE job=?", (key,)).fetchone()[0]
                 if not rule["enabled"] or not SR.due(config(rule), now, H.parse_ts(last)):
                     continue
-                triggers, actions = json.loads(rule["triggers_json"]), json.loads(rule["actions_json"])
+                triggers, actions = json.loads(rule["triggers"]), json.loads(rule["actions"])
                 validate(triggers, actions)
                 hours = max(t["hours"] for t in triggers)
                 cutoff = SR._stamp(now - timedelta(hours=hours))

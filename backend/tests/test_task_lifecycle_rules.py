@@ -40,7 +40,7 @@ class Case(unittest.TestCase):
 
     def wakes(self, target, task_id, text):
         return [r for r in self.conn.execute(
-            "SELECT body, refs_json FROM messages WHERE to_actor=? AND json_extract(refs_json,'$.task')=? "
+            "SELECT body, refs FROM messages WHERE to_actor=? AND json_extract(refs,'$.task')=? "
             "AND body LIKE ?", (target, task_id, f"%{text}%"))]
 
 

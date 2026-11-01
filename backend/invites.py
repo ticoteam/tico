@@ -51,16 +51,16 @@ REASONS = {
 
 def sent(c):
     """{person id: {at, by}} for every invite sent."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
-    value = json.loads(row["value_json"]) if row else {}
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (KEY,)).fetchone()
+    value = json.loads(row["value"]) if row else {}
     return value if isinstance(value, dict) else {}
 
 
 def record(c, actor, pid):
     at = H.now()
     invites = {**sent(c), pid: {"at": at, "by": actor}}
-    c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?) "
-              "ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json", (KEY, encode(invites)))
+    c.execute("INSERT INTO registry_metadata(key,value) VALUES(?,?) "
+              "ON CONFLICT(key) DO UPDATE SET value=excluded.value", (KEY, encode(invites)))
     H.event(c, actor, "person.invited", pid, {})
     return at
 

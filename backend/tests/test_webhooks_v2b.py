@@ -99,7 +99,7 @@ def test_recover_runs_refused_calls_again_once_and_the_senders_retry_is_a_duplic
     assert len(runs(api, aid)) == 1
     again = post(api, "triggers/shop/recover", {"since_hours": 24})["recover"]
     assert (again["found"], again["recovered"], again["still_refused"]) == (1, 0, 1)      # only w2 is left, and still bad
-    assert stored_rows(api, "SELECT detail_json FROM events WHERE action='trigger.recovered' ORDER BY ts")[0][0].count("recovered") == 1
+    assert stored_rows(api, "SELECT detail FROM events WHERE action='trigger.recovered' ORDER BY ts")[0][0].count("recovered") == 1
     post(api, "triggers/_tico/recover", {}, expected=422)                                   # the built-in trigger takes no edits
 
 
@@ -160,7 +160,7 @@ def test_create_task_files_a_templated_task_once_in_the_rule_makers_name(api):
 def test_an_endpoint_filter_keeps_other_departments_and_bots_out_and_leaves_company_events_alone(api, net):
     department(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET team='engineering',config_json=json_set(config_json,'$.team','engineering') WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET team='engineering',config=json_set(config,'$.team','engineering') WHERE bot='ops'")
     everyone = make(api, events=["task.created", "custom.*"])
     eng = make(api, events=["task.created", "custom.*"], filter={"departments": ["engineering"]})
     cpo = make(api, events=["task.created"], filter={"bots": ["cpo"]})
@@ -278,8 +278,8 @@ def test_custom_headers_go_out_and_a_secret_one_is_never_shown_again(api, net):
         assert shown["headers"][0] == {"name": "x-api-key", "secret": True, "set": True}
     assert "s3cret-value-123" not in json.dumps(get(api, "webhooks/" + made["id"])) + json.dumps(get(api, "webhooks"))
     with api.app.state.store.read() as c:
-        assert "s3cret-value-123" not in c.execute("SELECT headers_json FROM webhooks").fetchone()[0]
-        assert "s3cret-value-123" not in " ".join(r["detail_json"] for r in c.execute("SELECT detail_json FROM events"))
+        assert "s3cret-value-123" not in c.execute("SELECT headers FROM webhooks").fetchone()[0]
+        assert "s3cret-value-123" not in " ".join(r["detail"] for r in c.execute("SELECT detail FROM events"))
     post_w(api, "webhooks/" + made["id"] + "/example", {"type": "custom.example"})
     assert run(api, net) == 1
     wire = {k.lower(): v for k, v in net.seen[0].headers.items()}

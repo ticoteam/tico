@@ -59,7 +59,7 @@ class MarketSetup(M.Contract):
 
 
 def _load(c, actor, key):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?", (actor, key)).fetchone()
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?", (actor, key)).fetchone()
     try:
         value = json.loads(row[0]) if row else {}
     except ValueError:
@@ -68,8 +68,8 @@ def _load(c, actor, key):
 
 
 def _save(c, actor, key, value):
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
               (actor, key, encode(value), H.now()))
 
 

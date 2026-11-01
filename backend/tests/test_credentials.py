@@ -175,7 +175,7 @@ def test_admin_deletes_the_value_and_all_grants_with_metadata_only_history(api):
     with api.app.state.store.read() as c:
         assert not c.execute('SELECT 1 FROM credentials WHERE id=?',(row['id'],)).fetchone()
         assert not c.execute('SELECT 1 FROM credential_grants WHERE credential_id=?',(row['id'],)).fetchone()
-        event=c.execute("SELECT detail_json FROM events WHERE action='credential.deleted' AND target=?",(row['id'],)).fetchone()[0]
+        event=c.execute("SELECT detail FROM events WHERE action='credential.deleted' AND target=?",(row['id'],)).fetchone()[0]
         assert 'PostHog' in event and 'synthetic-private' not in event and 'ciphertext' not in event
 
 
@@ -184,7 +184,7 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
     from backend.credentials import FILE_MIGRATION
     machine=runner(api);assign(api,machine,'ops');ready(api,machine,['ops'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(json.dumps(['ops']),FILE_MIGRATION))
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(json.dumps(['ops']),FILE_MIGRATION))
     assert get(api,'runner-credential-migration',machine['token'])['bots']==['ops']
     values={'bot':'ops','credentials':[{'env':'QA_MIGRATED_KEY','value':'fixture-private-migration'}]}
     post(api,'runner-credential-migration',values,'cara-test',expected=403)
@@ -203,13 +203,13 @@ def test_upgrade_migration_is_assigned_once_and_never_resurrects_revoked_grants(
     assert get(api,'credential-runtime',attempt['token'])['credentials']==[]
     # A retry across an upgrade cannot overwrite an explicitly revoked variable either.
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(json.dumps(['ops']),FILE_MIGRATION))
+        c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(json.dumps(['ops']),FILE_MIGRATION))
     post(api,'runner-credential-migration',values,machine['token'])
     assert get(api,'runner-credential-grants',machine['token'])['bots']=={'ops':[]}
     # The first pass on an unreported runner preserves a later HUB_ pass for the upgraded runner.
     from backend.credentials import HUB_MIGRATION
     with api.app.state.store.read() as c:
-        assert 'ops' in json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()[0])
+        assert 'ops' in json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()[0])
     post(api,'runners/heartbeat',{'version':'test','platform':'test','release':'0.2.32'},machine['token'])
     assert get(api,'runner-credential-migration',machine['token'])['bots']==['ops']
     post(api,'runner-credential-migration',{'bot':'ops','credentials':[]},machine['token'])
@@ -335,7 +335,7 @@ def test_the_backfill_copies_each_actor_and_bots_newest_use_once(api):
                                        ('2026-10-21T10:00:00Z','runner:r1','credential.sent_to_computer','{"bot": "ops", "use": "watcher"}'),
                                        ('2026-10-22T10:00:00Z','runner:r1','credential.sent_to_computer','{"bot": "ops", "use": "watcher"}'),
                                        ('2026-10-23T10:00:00Z','human:ana','credential.revealed','{"attempt": null}')]:
-            c.execute('INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)',
+            c.execute('INSERT INTO events(id,ts,actor,action,target,detail) VALUES(?,?,?,?,?,?)',
                       (H.new_id(),ts,actor,action,cid,detail))
         H.backfill_credential_uses(c)
     with store.read() as c:

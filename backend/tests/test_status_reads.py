@@ -103,7 +103,7 @@ def busy(api, machine, first, count, live=1):
         H.sync_registry(c, {**bots, **{s: {"name": s, "runtime": "fake", "status": "active"} for s in slugs}},
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for slug in slugs:
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,?)",
                       (slug, encode({"name": slug, "runtime": "fake"}), "ana"))
     for slug in slugs:
         assign(api, machine, slug)

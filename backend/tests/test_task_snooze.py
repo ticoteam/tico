@@ -18,7 +18,7 @@ def listed(api, token="ana-test", query=""):
 
 
 def notices(c, task_id, words):
-    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND json_extract(refs_json,'$.task')=? "
+    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND json_extract(refs,'$.task')=? "
                      "AND body LIKE ?", (task_id, words + "%")).fetchone()[0]
 
 
@@ -102,8 +102,8 @@ def test_the_requester_is_told_and_review_hands_it_back_awake(api):
         H.task_update(c, "bot:ops", row["id"], status="doing")
         c.execute("UPDATE jobs SET state='completed'")
         H.TS.snooze(c, "bot:ops", row["id"], ahead(30))
-        told = c.execute("SELECT refs_json FROM messages WHERE to_actor='bot:finance' AND body LIKE 'Snoozed until%'"
-                         " AND json_extract(refs_json,'$.task')=?", (row["id"],)).fetchall()
+        told = c.execute("SELECT refs FROM messages WHERE to_actor='bot:finance' AND body LIKE 'Snoozed until%'"
+                         " AND json_extract(refs,'$.task')=?", (row["id"],)).fetchall()
         assert len(told) == 1 and c.execute("SELECT count(*) FROM jobs WHERE state='queued'").fetchone()[0] == 0
         # Only its owner's news waits: a notice to the requester bot about it wakes that bot.
         H._wake(c, H.task(c, row["id"]), "bot:finance", "Question for you: which card?", {"wake": "update"})
@@ -116,8 +116,8 @@ def test_the_requester_is_told_and_review_hands_it_back_awake(api):
 
 
 def snooze_wakes(c, task_id, prefix):
-    return c.execute("SELECT body, refs_json FROM messages WHERE to_actor='bot:ops' AND body LIKE ? "
-                     "AND json_extract(refs_json,'$.task')=?", (prefix + "%", task_id)).fetchall()
+    return c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:ops' AND body LIKE ? "
+                     "AND json_extract(refs,'$.task')=?", (prefix + "%", task_id)).fetchall()
 
 
 def test_a_bot_snoozes_its_own_task_with_a_note_and_the_note_comes_back_when_it_ends(api):
@@ -160,7 +160,7 @@ def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(
 
 def snooze_comments(c, task_id):
     """The notes the keeper left on the task when a snooze ended without a wake."""
-    return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=? "
+    return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=? "
                                     "AND body LIKE 'Snooze over. Note:%' ORDER BY created", (task_id,))]
 
 
@@ -194,7 +194,7 @@ def test_a_note_for_a_person_or_a_paused_bot_is_left_on_the_task_when_the_snooze
         assert snooze_comments(c, paused["id"]) == ["Snooze over. Note: Check the reply"]
         assert snooze_comments(c, active["id"]) == [], "an active bot is woken with the note, not told twice"
         woken = c.execute("SELECT body FROM messages WHERE to_actor='bot:finance' AND body LIKE 'Snooze over%' "
-                          "AND json_extract(refs_json,'$.task')=?", (active["id"],)).fetchall()
+                          "AND json_extract(refs,'$.task')=?", (active["id"],)).fetchall()
         assert len(woken) == 1 and woken[0][0].endswith("\nYour note: Check the reply")
         assert snooze_wakes(c, paused["id"], "Snooze over:") == [], "no wake for a paused bot"
         assert H.task(c, person["id"])["snoozed_note"] is None

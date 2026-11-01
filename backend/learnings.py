@@ -39,13 +39,13 @@ LOG = logging.getLogger("tico.learnings")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS learning_runs(
  id TEXT PRIMARY KEY, night TEXT NOT NULL UNIQUE, status TEXT NOT NULL, started TEXT NOT NULL, finished TEXT,
- read_count INTEGER NOT NULL DEFAULT 0, routed_count INTEGER NOT NULL DEFAULT 0, detail_json TEXT NOT NULL DEFAULT '{}');
+ read_count INTEGER NOT NULL DEFAULT 0, routed_count INTEGER NOT NULL DEFAULT 0, detail TEXT NOT NULL DEFAULT '{}');
 CREATE TABLE IF NOT EXISTS learning_items(
- run_id TEXT NOT NULL, item_key TEXT NOT NULL, source TEXT NOT NULL, ref_json TEXT NOT NULL,
+ run_id TEXT NOT NULL, item_key TEXT NOT NULL, source TEXT NOT NULL, ref TEXT NOT NULL,
  author TEXT NOT NULL DEFAULT '', label TEXT NOT NULL, text TEXT NOT NULL, created TEXT NOT NULL,
- learnable REAL, scores_json TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(run_id, item_key));
+ learnable REAL, scores TEXT NOT NULL DEFAULT '{}', PRIMARY KEY(run_id, item_key));
 CREATE TABLE IF NOT EXISTS learning_deliveries(
- run_id TEXT NOT NULL, recipient TEXT NOT NULL, task_id TEXT NOT NULL, item_keys_json TEXT NOT NULL,
+ run_id TEXT NOT NULL, recipient TEXT NOT NULL, task_id TEXT NOT NULL, item_keys TEXT NOT NULL,
  created TEXT NOT NULL, PRIMARY KEY(run_id, recipient));
 CREATE TABLE IF NOT EXISTS learning_cursors(source TEXT PRIMARY KEY, last_ts TEXT NOT NULL);
 """
@@ -131,11 +131,11 @@ def roster(c, settings, now=None):
     ran = {r[0] for r in c.execute("SELECT DISTINCT bot FROM attempts WHERE started>=?", (since,))}
     out = {}
     for row in c.execute("SELECT b.id,b.slug,b.display_name,coalesce(bc.description,'') AS description,"
-                         "coalesce(bc.config_json,'{}') AS config_json FROM bots b "
+                         "coalesce(bc.config,'{}') AS config FROM bots b "
                          "LEFT JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
-                         "AND coalesce(json_extract(bc.config_json,'$.shared_from'),'')='' "
+                         "AND coalesce(json_extract(bc.config,'$.shared_from'),'')='' "
                          "AND coalesce(bc.onboarding_state,'') NOT IN " + PARKED_SQL + " ORDER BY b.slug"):
-        config = H._json(row["config_json"], {}) or {}
+        config = H._json(row["config"], {}) or {}
         if row["id"] in skip or row["id"] not in ran or is_external(config) or H.stateless(config):
             continue
         name = row["display_name"] or row["slug"]
@@ -180,15 +180,15 @@ def collect(c, settings, now, team):
 
     delivered = {r[0] for r in c.execute("SELECT task_id FROM learning_deliveries")}
     for m in c.execute(
-            "SELECT m.id,m.conversation_id,m.from_actor,m.body,m.created,m.refs_json,cv.task_id AS conv_task,"
-            "cv.participants_json,cv.subject FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
+            "SELECT m.id,m.conversation_id,m.from_actor,m.body,m.created,m.refs,cv.task_id AS conv_task,"
+            "cv.participants,cv.subject FROM messages m JOIN conversations cv ON cv.id=m.conversation_id "
             "WHERE m.from_actor LIKE 'human:%' AND m.deleted_at IS NULL AND coalesce(m.kind,'')<>'notice' "
             "AND coalesce(cv.scope,'direct')<>'personal' AND m.created>? AND m.created<=? ORDER BY m.created",
             (min(since["chat"], since["task"]), now)).fetchall():
         text = clip(m["body"])
         if not text:
             continue
-        refs = H._json(m["refs_json"], {}) or {}
+        refs = H._json(m["refs"], {}) or {}
         tid = H.message_task_id({"refs": refs if isinstance(refs, dict) else {}}, {"task_id": m["conv_task"]})
         author = who.get(m["from_actor"], m["from_actor"])
         if tid:
@@ -202,7 +202,7 @@ def collect(c, settings, now, team):
             continue
         if m["created"] <= since["chat"]:
             continue
-        bots = _bots_in(H._json(m["participants_json"], []) or [], team)
+        bots = _bots_in(H._json(m["participants"], []) or [], team)
         place = ("Chat with " + ", ".join(team[b]["name"] for b in sorted(bots))) if bots else (m["subject"] or "Chat")
         items.append({"key": "chat:" + m["id"], "source": "chat", "author": m["from_actor"], "created": m["created"],
                       "ref": {"message": m["id"], "conversation": m["conversation_id"],
@@ -236,9 +236,9 @@ def collect(c, settings, now, team):
     if people:
         low, high = int(H.parse_ts(since["mail"]).timestamp()), int(H.parse_ts(now).timestamp())
         marks = ",".join("?" * len(people))
-        for m in c.execute("SELECT mailbox,msg_id,thread_id,epoch,from_addr,subject,body,to_json FROM mail_messages "
+        for m in c.execute("SELECT mailbox,msg_id,thread_id,epoch,from_addr,subject,body,to_addresses FROM mail_messages "
                            f"WHERE deleted_at IS NULL AND lower(from_addr) IN ({marks}) AND lower(mailbox)=lower(from_addr) "
-                           "AND labels_json LIKE '%\"SENT\"%' AND epoch>? AND epoch<=? ORDER BY epoch",
+                           "AND labels LIKE '%\"SENT\"%' AND epoch>? AND epoch<=? ORDER BY epoch",
                            (*people, low, high)).fetchall():
             person = people[m["from_addr"].strip().lower()]
             body = unquoted(m["body"])
@@ -250,11 +250,11 @@ def collect(c, settings, now, team):
                           "ref": {"mailbox": m["mailbox"].lower(), "msg_id": m["msg_id"], "thread": m["thread_id"]},
                           "label": f"{m['subject'] or 'Email'} · {person['name'] or person['id']}",
                           "text": text, "audience": None})
-    for r in c.execute("SELECT m.id,m.title,m.notes,m.metadata_json,m.created FROM meetings m "
+    for r in c.execute("SELECT m.id,m.title,m.notes,m.metadata,m.created FROM meetings m "
                        "LEFT JOIN media_control mc ON mc.meeting_id=m.id WHERE m.review_state='live' "
                        "AND mc.deleted_at IS NULL AND m.created>? AND m.created<=? ORDER BY m.created",
                        (since["meeting"], now)).fetchall():
-        meta = H._json(r["metadata_json"], {}) or {}
+        meta = H._json(r["metadata"], {}) or {}
         if meta.get("kind") != "meeting" or meta.get("private"):
             continue
         summary = meta.get("source_summary") or r["notes"] or ""
@@ -427,13 +427,13 @@ def dispatch(c, run_id, night, items, chosen, team, detail):
                 item["sent_to"].discard(slug)
             continue
         c.execute("RELEASE learning_delivery")
-        c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys_json,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO learning_deliveries(run_id,recipient,task_id,item_keys,created) VALUES(?,?,?,?,?)",
                   (run_id, slug, task["id"], json.dumps([i["key"] for i in rows]), H.now()))
         delivered += 1
     routed = [i for i in items if i["sent_to"]]
     for item in routed:
-        c.execute("INSERT OR REPLACE INTO learning_items(run_id,item_key,source,ref_json,author,label,text,created,"
-                  "learnable,scores_json) VALUES(?,?,?,?,?,?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO learning_items(run_id,item_key,source,ref,author,label,text,created,"
+                  "learnable,scores) VALUES(?,?,?,?,?,?,?,?,?,?)",
                   (run_id, item["key"], item["source"], json.dumps(item["ref"]), item["author"], item["label"],
                    item["text"], item["created"], item["learnable"], json.dumps(item["scores"])))
     if refused:
@@ -452,7 +452,7 @@ def advance(c, items, now):
 
 def finish(store, run_id, status, detail, read=0, routed=0):
     with store.transaction() as c:
-        c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail_json=? WHERE id=?",
+        c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail=? WHERE id=?",
                   (status, H.now(), read, routed, json.dumps(detail), run_id))
 
 
@@ -506,7 +506,7 @@ def run(store, run_id):
                     **(engine.detail() if isinstance(engine, Tally) else {})})
             detail["deliveries"] = delivered
             detail["ms"] = round((time.monotonic() - started) * 1000)
-            c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail_json=? WHERE id=?",
+            c.execute("UPDATE learning_runs SET status=?,finished=?,read_count=?,routed_count=?,detail=? WHERE id=?",
                       ("capped" if capped else "done" if delivered else "quiet", H.now(), len(items), routed,
                        json.dumps(detail), run_id))
     except Exception as exc:
@@ -523,11 +523,11 @@ def recorded(store, run_id):
     record = SR.Run("learnings")
     run(store, run_id)
     with store.read() as c:
-        row = c.execute("SELECT status,started,read_count,routed_count,detail_json FROM learning_runs WHERE id=?",
+        row = c.execute("SELECT status,started,read_count,routed_count,detail FROM learning_runs WHERE id=?",
                         (run_id,)).fetchone()
     if not row:
         return
-    detail = json.loads(row["detail_json"] or "{}")
+    detail = json.loads(row["detail"] or "{}")
     record.started = row["started"]
     if row["status"] == "failed":
         record.error = "Failed: " + SR.FAILURE_WORDS.get(detail.get("error") or "", "unexpected error")
@@ -577,7 +577,7 @@ def claim_tonight(c):
     if found and found["status"] not in ("unconfigured", "capped", "failed"):
         raise Problem("conflict", "Tonight's learning run already ran", 409)
     if found:
-        c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail_json='{}' WHERE id=?",
+        c.execute("UPDATE learning_runs SET status='running',started=?,finished=NULL,detail='{}' WHERE id=?",
                   (H.now(), found["id"]))
         return found["id"]
     return claim(c, night)
@@ -661,7 +661,7 @@ def bot_entries(c, slug, task_id):
     rows = c.execute(f"SELECT * FROM bot_memory_updates WHERE attempt_id IN ({','.join('?' * len(ids))}) "
                      "ORDER BY committed", ids).fetchall()
     return [{"title": r["subject"], "sources": sources_of(r["diff"]),
-             "change": {"where": ", ".join(json.loads(r["files_json"])), "diff": r["diff"]}} for r in rows]
+             "change": {"where": ", ".join(json.loads(r["files"])), "diff": r["diff"]}} for r in rows]
 
 
 def doc_subjects(c, delivery, saw_text):
@@ -700,7 +700,7 @@ def market_subjects(c, delivery, saw_text):
 def night_view(c, auth, who, run, team_names):
     sections = {"bots": [], "docs": [], "market": []}
     for d in c.execute("SELECT * FROM learning_deliveries WHERE run_id=? ORDER BY recipient", (run["id"],)).fetchall():
-        keys = json.loads(d["item_keys_json"])
+        keys = json.loads(d["item_keys"])
         saw_text = saw(c, run["id"], keys)
         if d["recipient"] == LIBRARIAN:
             sections["docs"] += doc_subjects(c, d, saw_text)
@@ -717,7 +717,7 @@ def night_view(c, auth, who, run, team_names):
 def readable(c, auth, who, item, mailboxes):
     """Whether this reader may read the item's source today; the packet shows its text only then."""
     from . import media
-    ref = json.loads(item["ref_json"])
+    ref = json.loads(item["ref"])
     try:
         if item["source"] in ("chat", "task") and ref.get("message"):
             message = H.message(c, ref["message"])
@@ -809,11 +809,11 @@ def install(app, store, auth, mutate):
                                  (run_id, slug)).fetchone()
             if not delivery:
                 raise Problem("not_found", "No packet for that bot that night", 404)
-            keys = json.loads(delivery["item_keys_json"])
+            keys = json.loads(delivery["item_keys"])
             team_names = names(c)
             sent = {}
-            for d in c.execute("SELECT recipient,item_keys_json FROM learning_deliveries WHERE run_id=?", (run_id,)):
-                for k in json.loads(d["item_keys_json"]):
+            for d in c.execute("SELECT recipient,item_keys FROM learning_deliveries WHERE run_id=?", (run_id,)):
+                for k in json.loads(d["item_keys"]):
                     sent.setdefault(k, []).append(d["recipient"])
             ids = run_attempts(c, delivery["task_id"])
             commits = c.execute("SELECT subject,diff FROM bot_memory_updates WHERE attempt_id IN (" +
@@ -832,12 +832,12 @@ def install(app, store, auth, mutate):
                 if not readable(c, auth, who, item, mailboxes):
                     hidden += 1
                     continue
-                data = {"key": item["item_key"], "source": item["source"], "ref": json.loads(item["ref_json"]),
+                data = {"key": item["item_key"], "source": item["source"], "ref": json.loads(item["ref"]),
                         "label": item["label"], "created": item["created"]}
                 url = link(data)
                 used = next((m["subject"] for m in commits if url and url in m["diff"]), None)
                 items.append({"source": item["source"], "label": item["label"], "when": item["created"], "link": url,
-                              "text": item["text"], "score": json.loads(item["scores_json"]).get(slug, 0),
+                              "text": item["text"], "score": json.loads(item["scores"]).get(slug, 0),
                               "also_sent_to": [team_names.get("bot:" + s, s) for s in sent.get(item["item_key"], []) if s != slug],
                               "used": used})
             items.sort(key=lambda i: -i["score"])

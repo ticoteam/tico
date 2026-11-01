@@ -203,9 +203,9 @@ def test_the_hub_stores_the_audit_as_an_event_for_a_bot_and_refuses_a_bad_shape(
             "query": None, "params": ["since"], "error": None}
     post(api, "databases/audit", body, token=attempt["token"])
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor, target, detail_json FROM events WHERE action = 'db.query'").fetchone()
+        row = c.execute("SELECT actor, target, detail FROM events WHERE action = 'db.query'").fetchone()
     assert (row["actor"], row["target"]) == ("bot:ops", "acme")
-    detail = json.loads(row["detail_json"])
+    detail = json.loads(row["detail"])
     assert detail["rows"] == 1 and detail["statement"] == "SELECT 1" and detail["params"] == ["since"]
     assert set(detail) == {"kind", "statement", "rows", "truncated", "ms", "query", "params", "error", "operation", "collection"}
     post(api, "databases/audit", {**body, "extra": 1}, token=attempt["token"], expected=422)

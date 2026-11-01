@@ -33,11 +33,11 @@ def test_a_new_bot_runs_in_its_named_folder_and_keeps_it_after_a_rename(api, mac
     bot = get(api, "bots/sales-helper")["id"]
     assert uuid.UUID(bot).version == 7
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()[0])
         assert config["folder"] == "bot-sales-helper"           # named once, from the slug it was made with
         config.update({"runtime": machine.runtime, "harness": "claude", "model": MODELS["claude"],
                        "model_managed_by": None, "status": "active"})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), bot))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), bot))
         placed = c.execute("SELECT generation FROM assignments WHERE bot=?", (bot,)).fetchone()
     # placed on this computer by its slug (it may already be placed by its creation); stored by its id
     assign(api, machine.registration, "sales-helper", generation=placed[0] if placed else 0)

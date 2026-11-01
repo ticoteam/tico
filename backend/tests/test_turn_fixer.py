@@ -42,7 +42,7 @@ def state(api, aid):
 
 def notes(api, task_id):
     with api.app.state.store.read() as c:
-        return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs_json,'$.task')=? "
+        return [r[0] for r in c.execute("SELECT body FROM messages WHERE json_extract(refs,'$.task')=? "
                                         "AND from_actor=?", (task_id, H.KEEPER))]
 
 
@@ -58,7 +58,7 @@ def test_frees_only_proven_dead_starts_and_never_blindly_retries_a_turn_that_act
         c.execute("UPDATE tasks SET private=0 WHERE id='task-4'")      # a company task BotOps may read
         # attempt-3 runs with a live lease but has made no progress for an hour: slow, not dead.
         c.execute("UPDATE attempts SET started=? WHERE id IN ('attempt-3','attempt-4')", (H.shift(H.now(), hours=-1),))
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES('attempt-4',1,'tool',?,?)",
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES('attempt-4',1,'tool',?,?)",
                   (json.dumps({'tool': 'Bash', 'item_id': 'x'}), H.now()))
     busy(machine, {'ops'})                      # the computer still runs the bot: a lost lease alone proves nothing
     assert fix(api)[0] == 1                     # only the stopped start
@@ -86,7 +86,7 @@ def test_dead_turn_on_a_private_task_botops_cannot_read_is_held_without_a_botops
         c.execute("UPDATE tasks SET private=1,visibility='private' WHERE id='task-0'")
         c.execute("UPDATE attempts SET lease_until=?,started=? WHERE id='attempt-0'",
                   (H.shift(H.now(), seconds=-5), H.shift(H.now(), hours=-1)))
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES('attempt-0',1,'tool',?,?)",
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES('attempt-0',1,'tool',?,?)",
                   (json.dumps({'tool': 'Bash', 'item_id': 'z'}), H.now()))
     busy(machine)
     assert fix(api)[0] == 1
@@ -100,7 +100,7 @@ def test_leased_start_that_reported_a_tool_call_is_held_not_requeued(api):
     """A start whose lease lapsed after it reported a tool call did run something: no blind retry."""
     waiters(api, n=1, running=0)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES('attempt-0',9,'tool',?,?)",
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES('attempt-0',9,'tool',?,?)",
                   (json.dumps({'tool': 'Bash', 'item_id': 'y'}), H.now()))
         c.execute("UPDATE attempts SET lease_until=? WHERE id='attempt-0'", (H.shift(H.now(), seconds=-5),))
         api.app.state.execution.expire(c, attempt_ids=['attempt-0'])

@@ -1,0 +1,24 @@
+# Files and names scripts/cleanup/rename.py leaves alone; --check ignores them too.
+# files: globs of files that are not about the hub database (their own SQLite files, other systems' fields).
+# names: {glob: [old names]} where a name only looks like a renamed column.
+# keys: {glob: [old names]} kept as Python keys and values (another system's field); SQL in the file is renamed.
+files:
+  - connectors/mail/*            # the mail connector's own mail.db (connectors/mail/db.py), not hub tables
+  - connectors/mail/**
+  - backend/schema_renames.py     # the rename machinery itself names the old columns
+  - backend/schema_renames_data.py
+  - backend/tests/test_schema_renames.py
+  - backend/tests/fixtures/*
+  - backend/tests/fixtures/**
+  - docs/history/*               # how the schema looked then
+  - contracts/runner/*            # the runner wire does not change: the server maps old wire names at the boundary
+  - contracts/runner/**
+  - runner-rs/*                   # the Rust runner reads and sends the wire names (contracts/runner)
+  - runner-rs/**
+  - backend/migrations/0*         # applied migration files are history: they ran on the shape of their day
+  - CHANGELOG.md
+names:
+  clients/*.py: [body_json]       # hub_goal_save's exact method/path/body_json step, not a column
+  clients/tests/*.py: [body_json]
+keys:
+  backend/finance/core/feeds.py: [created]   # a Stripe balance transaction's own `created` (epoch seconds)

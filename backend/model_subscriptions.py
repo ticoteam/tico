@@ -195,7 +195,7 @@ def row(c, sid):
 
 
 def runner_takes(runner):
-    caps = H._json(runner["capabilities_json"], []) if runner else []
+    caps = H._json(runner["capabilities"], []) if runner else []
     return CAPABILITY in (caps or [])
 
 
@@ -242,7 +242,7 @@ def in_effect(c, runner_id, runtime):
     if login_holds.holding(c, "", login_holds.subscription_login(sub["id"]), runtime) == "held":
         return None
     from .read_cache import one
-    runner = one(c, "SELECT capabilities_json FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,))
+    runner = one(c, "SELECT capabilities FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,))
     return sub if runner_takes(runner) else None
 
 
@@ -341,7 +341,7 @@ def assignments(c):
     given = [{"runner_id": r["runner_id"], "runtime": r["runtime"], "subscription_id": r["subscription_id"]}
              for r in c.execute("SELECT g.* FROM computer_subscriptions g JOIN runners r ON r.id=g.runner_id "
                                 "WHERE r.revoked_at IS NULL ORDER BY g.runner_id, g.runtime")] if _present(c) else []
-    capable = [r["id"] for r in c.execute("SELECT id,capabilities_json FROM runners WHERE revoked_at IS NULL "
+    capable = [r["id"] for r in c.execute("SELECT id,capabilities FROM runners WHERE revoked_at IS NULL "
                                           "ORDER BY id") if runner_takes(r)]
     return {"assignments": given, "capable": capable}
 
@@ -387,9 +387,9 @@ def _bots(c, settings, runner_id, runtime):
     from .shared_bots import follow
     record = providers.load(c, settings)
     out = []
-    for r in c.execute("SELECT a.bot,b.config_json FROM assignments a JOIN bot_config b ON b.bot=a.bot "
+    for r in c.execute("SELECT a.bot,b.config FROM assignments a JOIN bot_config b ON b.bot=a.bot "
                        "WHERE a.runner_id=? ORDER BY a.bot", (runner_id,)).fetchall():
-        config = providers.fill(record, follow(c, r["bot"], json.loads(r["config_json"] or "{}")))
+        config = providers.fill(record, follow(c, r["bot"], json.loads(r["config"] or "{}")))
         if runtime in turn_runtimes(config):
             out.append(r["bot"])
     return out
@@ -397,7 +397,7 @@ def _bots(c, settings, runner_id, runtime):
 
 def _sessions(c, bot):
     """How many sessions app.reset_bot_sessions starts fresh for `bot`: each of its conversations."""
-    return sum(1 for (p,) in c.execute("SELECT participants_json FROM conversations WHERE participants_json LIKE ?",
+    return sum(1 for (p,) in c.execute("SELECT participants FROM conversations WHERE participants LIKE ?",
                                        (f'%"bot:{bot}"%',)) if "bot:" + bot in json.loads(p or "[]"))
 
 
@@ -432,7 +432,7 @@ def _signed_in_with(c, sid):
     An older runner never did (its turns use its own login, `in_effect`), so a change of the subscription leaves its
     runs and sessions alone."""
     return [(g["runner_id"], g["runtime"]) for g in c.execute(
-        "SELECT g.runner_id,g.runtime,r.capabilities_json FROM computer_subscriptions g "
+        "SELECT g.runner_id,g.runtime,r.capabilities FROM computer_subscriptions g "
         "JOIN runners r ON r.id=g.runner_id WHERE g.subscription_id=? ORDER BY g.runner_id, g.runtime",
         (sid,)).fetchall() if runner_takes(g)]
 

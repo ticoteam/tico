@@ -102,14 +102,14 @@ def truthy(value):
 
 
 def message_public(row, body=False):
-    attachments = json.loads(row["attachments_json"] or "[]")
+    attachments = json.loads(row["attachments"] or "[]")
     out = {
         "mailbox": row["mailbox"], "msg_id": row["msg_id"], "thread_id": row["thread_id"],
         "epoch": row["epoch"], "date": row["date"],
         "from_addr": row["from_addr"], "from_header": row["from_header"],
-        "to": json.loads(row["to_json"] or "[]"), "cc": json.loads(row["cc_json"] or "[]"),
+        "to": json.loads(row["to_addresses"] or "[]"), "cc": json.loads(row["cc"] or "[]"),
         "subject": row["subject"], "snippet": row["snippet"],
-        "labels": json.loads(row["labels_json"] or "[]"),
+        "labels": json.loads(row["labels"] or "[]"),
         "has_attachment": bool(attachments), "attachment_count": len(attachments),
         "body_truncated": bool(row["body_truncated"]),
         "is_internal": bool(row["is_internal"]),
@@ -118,7 +118,7 @@ def message_public(row, body=False):
     if body:
         out["body"] = row["body"]
         out["attachments"] = attachments
-        out["rule_hits"] = json.loads(row["rule_hits_json"] or "[]")
+        out["rule_hits"] = json.loads(row["rule_hits"] or "[]")
         out["list_id"] = row["list_id"]
     return out
 
@@ -197,7 +197,7 @@ def install_mail(app, store, auth):
             if not boxes:
                 return {"messages": [], "next_cursor": None, "q": match}
             sql = ("SELECT m.mailbox,m.msg_id,m.thread_id,m.epoch,m.date,m.from_addr,m.from_header,"
-                   "m.to_json,m.cc_json,m.subject,m.snippet,m.labels_json,m.attachments_json,"
+                   "m.to_addresses,m.cc,m.subject,m.snippet,m.labels,m.attachments,"
                    "m.body_truncated,m.is_internal,m.has_unsubscribe "
                    "FROM mail_messages m WHERE m.deleted_at IS NULL AND m.mailbox IN ({})"
                    .format(",".join("?" * len(boxes))))
@@ -207,7 +207,7 @@ def install_mail(app, store, auth):
                         "(SELECT mailbox, msg_id FROM mail_fts WHERE mail_fts MATCH ?)")
                 args.append(match)
             if label:
-                sql += " AND EXISTS (SELECT 1 FROM json_each(m.labels_json) WHERE value=?)"
+                sql += " AND EXISTS (SELECT 1 FROM json_each(m.labels) WHERE value=?)"
                 args.append(label)
             if since_epoch is not None:
                 sql += " AND m.epoch>=?"
@@ -216,7 +216,7 @@ def install_mail(app, store, auth):
                 sql += " AND m.epoch<=?"
                 args.append(until_epoch)
             if truthy(has_attachment):
-                sql += " AND json_array_length(m.attachments_json)>0"
+                sql += " AND json_array_length(m.attachments)>0"
             if after:
                 sql += " AND (m.epoch, m.mailbox, m.msg_id) < (?, ?, ?)"
                 args.extend(after)

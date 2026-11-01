@@ -71,12 +71,12 @@ CREATE TABLE IF NOT EXISTS bookkeeper_watch_listed(
 
 def built(c):
     """Whether bot:bookkeeper is the built-in one: made from the bookkeeper template and not archived."""
-    row = c.execute("SELECT bc.config_json, b.state FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE bc.bot=?",
+    row = c.execute("SELECT bc.config, b.state FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE bc.bot=?",
                     (SLUG,)).fetchone()
     if not row or row["state"] == "archived":
         return False
     try:
-        return (json.loads(row["config_json"] or "{}") or {}).get("template") == SLUG
+        return (json.loads(row["config"] or "{}") or {}).get("template") == SLUG
     except ValueError:
         return False
 

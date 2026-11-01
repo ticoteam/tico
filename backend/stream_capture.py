@@ -81,7 +81,7 @@ def scrub_value(c, value, label, attempt_id="", conversation_id=""):
 def keep(c, row, body):
     """A runner hands in its attempt's stream (`row` is the attempt, already checked as that runner's)."""
     sweep(c)
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
     if not wanted(json.loads(found[0] or "{}") if found else {}):
         # Turned off since the turn began, or never on: nothing is kept.
         raise Problem("capture_off", "This bot does not capture its provider stream", 409)
@@ -89,7 +89,7 @@ def keep(c, row, body):
         # A secret was taken out while this run was going; the stream may still carry it.
         c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (row["id"],))
         return {"kept": False, "reason": "a secret was removed during this run"}
-    if json.loads(row["result_json"] or "{}").get("held_reply"):
+    if json.loads(row["result"] or "{}").get("held_reply"):
         # The org rule check held this run's reply (backend/org_rule_check.py): its stream would carry it again.
         c.execute("DELETE FROM attempt_captures WHERE attempt_id=?", (row["id"],))
         return {"kept": False, "reason": "this run's reply was held by an org rule"}
@@ -163,12 +163,12 @@ def export(c, who, auth, aid, full=True):
     # A deleted message's text is not served again; the stream may still hold it until the week is out.
     message = ({"kind": msg["kind"], "from": msg["from_actor"], "body": mask(msg["body"] or "")} if msg
                else {"deleted": True})
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (attempt["bot"],)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt["bot"],)).fetchone()
     declared = json.loads(config[0] or "{}") if config else {}
-    events = [{"seq": e["seq"], "kind": e["kind"], "payload": json.loads(e["payload_json"])}
-              for e in c.execute("SELECT seq,kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq "
+    events = [{"seq": e["seq"], "kind": e["kind"], "payload": json.loads(e["payload"])}
+              for e in c.execute("SELECT seq,kind,payload FROM attempt_events WHERE attempt_id=? ORDER BY seq "
                                  "LIMIT ?", (aid, MAX_EVENTS + 1))]
-    result = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
+    result = json.loads(attempt["result"]) if attempt["result"] else {}
     return {
         "attempt": {"id": aid, "bot": attempt["bot"], "state": attempt["state"], "created": attempt["created"],
                     "started": attempt["started"], "finished": attempt["finished"], **diagnostics},

@@ -376,7 +376,7 @@ def _judgment_row(row):
     if not row:
         return None
     out = dict(row)
-    out["scores"] = _loads(out.pop("scores_json"), {})
+    out["scores"] = _loads(out.pop("scores"), {})
     return out
 
 
@@ -510,7 +510,7 @@ def add_judgment(conn, actor, item_id, question_set, scores, dests, judged_at=No
         raise Problem("invalid", "name the question set and version, like listening-item@1", 422)
     scores = check_scores(scores)
     jid = H.new_id()
-    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores_json, judged_at) VALUES (?,?,?,?,?)",
+    conn.execute("INSERT INTO listen_judgments (id, item_id, question_set, scores, judged_at) VALUES (?,?,?,?,?)",
                  (jid, item_id, question_set, json.dumps(scores, sort_keys=True), judged_at or H.now()))
     scored = judgment(conn, jid)
     opened = route(conn, row, scored, dests)

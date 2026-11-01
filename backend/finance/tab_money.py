@@ -143,7 +143,7 @@ def reconciliations(c: sqlite3.Connection, viewer: str, *, money_account_id: str
         "id": str(r["id"]), "money_account_id": str(r["money_account_id"]), "statement_end": str(r["statement_end"]),
         "statement_balance": int(r["statement_balance"]), "difference": int(r["difference"]),
         "status": "undone" if r["undone_at"] else str(r["status"]), "cleared_total": int(r["cleared_total"]),
-        "cleared": len(SK.loads_list(r["cleared_json"])),
+        "cleared": len(SK.loads_list(r["cleared"])),
         "statement_id": r["statement_id"], "created_by": str(r["created_by"]), "created_at": str(r["created_at"]),
         "undone_at": r["undone_at"]} for r in rows],
         "locked_through": {m: SK.locked_through(c, m) or None for m in seen}}
@@ -175,10 +175,10 @@ def rules(c: sqlite3.Connection, viewer: str, *, external_rule_id: str | None = 
          "fixed": True, "runs": []} for fid, name, words, where in G.FLOORS]
     return {"rules": floors + [{"id": str(r["id"]), "kind": str(r["kind"]), "priority": int(r["priority"]),
                        "name": str(r["name"]), "words": str(r["words"]),
-                       "when": SK.loads(r["when_json"]), "outcome": SK.loads(r["outcome_json"]),
-                       "examples": SK.loads_list(r["examples_json"]),
+                       "when": SK.loads(r["condition"]), "outcome": SK.loads(r["outcome"]),
+                       "examples": SK.loads_list(r["examples"]),
                        "external_rule_id": r["external_rule_id"], "owner": str(r["owner"]), "active": bool(r["active"]),
                        "created_at": str(r["created_at"]), "fixed": str(r["id"]) in G.FIXED,
-                       "runs": [{"action_id": x["action_id"], "outcome": SK.loads(x["outcome_json"]).get("outcome"),
+                       "runs": [{"action_id": x["action_id"], "outcome": SK.loads(x["outcome"]).get("outcome"),
                                  "at": str(x["created_at"])} for x in SK.rule_runs(c, str(r["id"]), 5)]}
                       for r in rows]}

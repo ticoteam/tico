@@ -228,7 +228,7 @@ def ready_step(c):
             c.execute('INSERT INTO task_steps(id,type_id,name,position,status,public_name) VALUES(?,?,?,?,?,?)',
                       (ident, type_id, READY_STEP, building[2] + 1, 'doing', public or 'In progress'))
             c.execute('UPDATE task_types SET updated=? WHERE id=?', (H.now(), type_id))
-        c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?)', (READY_MARKER, '{"done": true}'))
+        c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?)', (READY_MARKER, '{"done": true}'))
     except BaseException:
         c.execute('ROLLBACK TO roadmap_ready_step')
         raise

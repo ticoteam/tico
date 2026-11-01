@@ -96,7 +96,7 @@ def turn_limit(runner):
     setting = runner["turns_at_once"]
     if setting is None:
         return reported
-    if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities_json"], []) or []):
+    if TURNS_AT_ONCE in frozenset(H._json(runner["capabilities"], []) or []):
         return setting
     return min(setting, reported)
 
@@ -109,7 +109,7 @@ def bot_limit(config):
 
 def at_turn_limit(c, bot):
     """Whether the bot already holds as many turns as its "Turns at once" allows, on every computer together."""
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     limit = bot_limit(H._json(row[0], {}) if row else {})
     return limit is not None and bot_held(c, bot) >= limit
 
@@ -192,7 +192,7 @@ def reserve(c, attempt, settings=None):
     # The bot's own limit is checked before the computer's: a turn held by its bot waits for the bot's turns, not for
     # a place, so it is not "computer busy" and does not hold the computer's other starts. This turn is already one of
     # the bot's turns (bot_held counts it), so the grant checks the others.
-    bot_config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (attempt['bot'],)).fetchone()
+    bot_config = c.execute("SELECT config FROM bot_config WHERE bot=?", (attempt['bot'],)).fetchone()
     bot_cap = bot_limit(H._json(bot_config[0], {}) if bot_config else {})
     if bot_cap is not None and bot_held(c, attempt['bot'], exclude=aid) >= bot_cap:
         waiting(c, aid, BOT_WAIT)
@@ -269,16 +269,16 @@ def _summaries(c, runner_ids, settings, default=None, classify=True):
                'readiness_unknown': 'computer readiness', 'sign_in_rejected': 'sign-in',
                'draining': 'bot paused', 'run_hold': 'stopped runs', 'backoff': 'a failed run', 'budget': 'run budget',
                'bot_limit': 'at its turn limit'}
-    for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created) oldest,bc.config_json,b.state bot_state "
+    for row in c.execute("SELECT a.runner_id,j.bot,count(*) n,min(j.created) oldest,bc.config,b.state bot_state "
                          "FROM jobs j JOIN assignments a ON a.bot=j.bot JOIN bots b ON b.id=j.bot "
                          "JOIN bot_config bc ON bc.bot=j.bot WHERE a.runner_id IN (" + marks + ") AND j.state='queued' "
                          "GROUP BY a.runner_id,j.bot", runner_ids):
         rid = row['runner_id']
         runner = runners.get(rid)
-        ready = readiness_document(runner['readiness_json']) if runner else {}
+        ready = readiness_document(runner['readiness']) if runner else {}
         why = 'bot paused' if row['bot_state'] != 'active' else ''
         if not why and runner and classify:
-            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config_json'], False, ready,
+            refused, _ = claim_refusal(c, settings, runner, row['bot'], row['config'], False, ready,
                                        default=default)
             why = reasons.get(refused, 'pre-start requirements') if refused else ''
         if not why and overloaded[rid]:

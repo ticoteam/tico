@@ -306,7 +306,7 @@ def test_adding_a_supported_agent_hires_a_bot_on_its_harness_and_fills_the_seat(
     assert added["harness"] == "claude" and added["seat"] == seat["id"] and added["bot"]
     with api.app.state.store.read() as c:
         bot = H.bot(c, added["bot"])
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
         closed = c.execute("SELECT closed_at, filled_by FROM seats WHERE id=?", (seat["id"],)).fetchone()
     assert bot["display_name"] == "Support lead" and config["harness"] == "claude" and config["runtime"] == "claude"
     assert config["model"] == added["model"] and config["reports_to"] == seat["reports_to"]
@@ -319,7 +319,7 @@ def onboarding_artifacts(api, bot):
     repository, and the BotOps setup task that builds it when the template is not a starter."""
     with api.app.state.store.read() as c:
         bot = H.resolve_bot(c, bot)["id"]                # the bot's id or its slug: config is keyed by the id
-        state, config_json = c.execute("SELECT onboarding_state, config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        state, config_json = c.execute("SELECT onboarding_state, config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         config = json.loads(config_json)
         task = H.task(c, config["setup_task_id"]) if config.get("setup_task_id") else None
     return {"state": state, "template": config.get("template"), "materialize": bool(config.get("materialize")),
@@ -347,7 +347,7 @@ def test_adding_without_a_seat_opens_a_seat_in_the_team_and_fills_it(environment
     with api.app.state.store.read() as c:
         assert H.bot(c, added["bot"])["display_name"] == "Codex"
         assert c.execute("SELECT team FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0] == team
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (added["bot"],)).fetchone()[0])
         assert config["team"] == team                # group membership reads the bot's own config
         assert c.execute("SELECT filled_by FROM seats WHERE id=?", (added["seat"],)).fetchone()[0] == added["bot"]
     assert onboarding_artifacts(api, added["bot"])["state"] == lifecycle.statuses.NEEDS_SETUP
@@ -613,7 +613,7 @@ def test_a_seat_with_no_team_under_a_bot_in_a_team_asks_that_teams_rule(environm
     assert bot_count(api) == before
     added = ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]})
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?",
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?",
                                     (added["bot"],)).fetchone()[0])["team"] == team
 
 

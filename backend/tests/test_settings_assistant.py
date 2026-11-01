@@ -60,8 +60,8 @@ def test_a_person_asks_their_assistant_for_a_direct_setting_and_it_changes(api):
     assert not err and done["value"] == ["09:30"], done
     assert release_times(api) == ["09:30"]
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE detail_json LIKE '%\"via\": \"assistant\"%' "
-                        "AND detail_json LIKE '%\"cited\"%' ORDER BY rowid DESC LIMIT 1").fetchone()
+        row = c.execute("SELECT actor,detail FROM events WHERE detail LIKE '%\"via\": \"assistant\"%' "
+                        "AND detail LIKE '%\"cited\"%' ORDER BY rowid DESC LIMIT 1").fetchone()
     assert row and row["actor"] == "human:ana", row
 
 

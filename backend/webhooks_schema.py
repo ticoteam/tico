@@ -2,7 +2,7 @@
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS webhooks (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL, host TEXT NOT NULL,
-  enabled INTEGER NOT NULL DEFAULT 1, events_json TEXT NOT NULL DEFAULT '[]',
+  enabled INTEGER NOT NULL DEFAULT 1, events TEXT NOT NULL DEFAULT '[]',
   secret TEXT NOT NULL DEFAULT '', secret_prev TEXT NOT NULL DEFAULT '', secret_prev_until TEXT,
   rate_per_hour INTEGER NOT NULL DEFAULT 600, allow_http INTEGER NOT NULL DEFAULT 0,
   created_by TEXT NOT NULL, requested_by TEXT NOT NULL DEFAULT '', paused_reason TEXT NOT NULL DEFAULT '',

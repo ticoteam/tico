@@ -412,7 +412,7 @@ class Auth:
         row = c.execute(
             "SELECT v.owner_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
             "JOIN conversations v ON v.id=m.conversation_id WHERE j.id=? AND v.scope='personal' "
-            "AND v.room_key=? AND m.from_actor=v.owner_actor AND json_extract(m.refs_json,'$.assistant')=1",
+            "AND v.room_key=? AND m.from_actor=v.owner_actor AND json_extract(m.refs,'$.assistant')=1",
             (attempt["job_id"], room_key)).fetchone()
         if not row:
             return None
@@ -517,7 +517,7 @@ class Auth:
                 # two minutes of the click.
                 aid, _, secret = action.partition(".")
                 from .assistant import covers
-                row = c.execute("SELECT method,path,body_json,confirm_hash,running_since,proposer FROM assistant_actions "
+                row = c.execute("SELECT method,path,body,confirm_hash,running_since,proposer FROM assistant_actions "
                                 "WHERE id=? AND owner=? AND status='running'", (aid, who.actor)).fetchone()
                 if (who.role not in ("owner", "human") or who.via or who.via_token or not secret or not row
                         or not row["confirm_hash"] or not hmac.compare_digest(row["confirm_hash"], digest(secret))
@@ -574,9 +574,9 @@ class Auth:
             return False
         if self.bot_admin(who):
             return True
-        row = c.execute("SELECT operator,bot_owners_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT operator,bot_owners FROM bot_config WHERE bot=?", (slug,)).fetchone()
         pid = H.actor_id(who.actor)
-        if row and (row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])):
+        if row and (row["operator"] == pid or pid in A.owner_ids(row["bot_owners"])):
             return True
         return self.manages(c, who, "bot", slug)
 
@@ -617,10 +617,10 @@ class Auth:
                 or not str(who.actor).startswith("bot:") or self.system_bot(slug)):
             return False
         me = H.actor_id(who.actor)
-        row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if not row or me == slug:
             return False
-        declared = json.loads(row["config_json"]) if row["config_json"] else {}
+        declared = json.loads(row["config"]) if row["config"] else {}
         parent = row["reports_to"] or (declared or {}).get("reports_to") or ""
         return parent == me and report_managers.manages(c, me)
 
@@ -638,10 +638,10 @@ class Auth:
             if H.actor_id(parent) != me:
                 return False
         else:
-            row = c.execute("SELECT reports_to,config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+            row = c.execute("SELECT reports_to,config FROM bot_config WHERE bot=?", (slug,)).fetchone()
             if not row:
                 return False
-            declared = json.loads(row["config_json"]) if row["config_json"] else {}
+            declared = json.loads(row["config"]) if row["config"] else {}
             if H.actor_id(row["reports_to"] or declared.get("reports_to") or "") != me:
                 return False
         return report_managers.manages(c, me)
@@ -711,7 +711,7 @@ class Auth:
 
         for slug in (wanted if wanted is not None else rows):
             row = rows.get(slug)
-            doc = A.document(row["access_json"]) if row else None
+            doc = A.document(row["access"]) if row else None
             if doc is None or A.is_open(doc):
                 out[slug] = dict(self.FULL)
                 continue
@@ -732,7 +732,7 @@ class Auth:
             else:
                 ctx = context()
                 pid = ctx["person"]
-                managed = (self.bot_admin(who) or row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"])
+                managed = (self.bot_admin(who) or row["operator"] == pid or pid in A.owner_ids(row["bot_owners"])
                            or P.manages(pid, "bot", slug, ctx["roster"], ctx["entries"], ctx["archived"], ctx["bare"]))
                 if managed:
                     out[slug] = dict(self.FULL)
@@ -883,7 +883,7 @@ class Auth:
         all (`hubdb.answer` checks only that the ask was addressed to you), so refusing contact
         cannot strand a bot that is blocking on a reply.
         """
-        row = c.execute("SELECT config_json,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        row = c.execute("SELECT config,reports_to FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if who.role != "bot":
             return True
         sender = who.actor
@@ -891,7 +891,7 @@ class Auth:
             return True
         if not row:
             return True
-        declared = json.loads(row["config_json"]) if row["config_json"] else {}
+        declared = json.loads(row["config"]) if row["config"] else {}
         mode = declared.get("bot_contact", "open")
         manager = H.bot_actor(row["reports_to"] or declared.get("reports_to") or "")
         # Task comments/questions inherit a party's authority through the whole chart;
@@ -929,8 +929,8 @@ class Auth:
         slug = H.actor_id(actor)
         if self.bot_contact(c, who, slug, conversation_id, task_id, kind):
             return
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        declared = json.loads(row["config_json"]) if row and row["config_json"] else {}
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        declared = json.loads(row["config"]) if row and row["config"] else {}
         if declared.get("bot_contact") == "tasks":
             raise Problem("bot_contact", f"{slug} takes work as a task and nothing else (notes only from its manager "
                                          "and BotOps). File one "

@@ -291,7 +291,7 @@ def bot_label(c, slug):
     return "bot-%d" % (ids.index(slug) + 1) if slug in ids else None
 
 
-RUNNERS_SQL = "SELECT id,label,last_seen,version,platform,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id"
+RUNNERS_SQL = "SELECT id,label,last_seen,version,platform,readiness FROM runners WHERE revoked_at IS NULL ORDER BY id"
 
 
 def runner_label(c, runner_id):
@@ -305,7 +305,7 @@ def _runner_rows(c, fleet, online_ids):
     from . import runner_versions
     rows = []
     for index, row in enumerate(c.execute(RUNNERS_SQL), 1):
-        doc = readiness_document(row["readiness_json"])
+        doc = readiness_document(row["readiness"])
         bots = doc.get("bots") or {}
         problems = []
         for slug, b in bots.items():

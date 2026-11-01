@@ -160,9 +160,9 @@ def test_a_bot_limited_to_one_task_starts_only_it_and_queues_no_other_start(api)
 
     def starts():
         with api.app.state.store.read() as c:
-            return {r[0] for r in c.execute("SELECT json_extract(m.refs_json,'$.task') FROM jobs j "
+            return {r[0] for r in c.execute("SELECT json_extract(m.refs,'$.task') FROM jobs j "
                                             "JOIN messages m ON m.id=j.message_id WHERE j.bot='ops' "
-                                            "AND j.state='queued' AND json_extract(m.refs_json,'$.auto_start')")}
+                                            "AND j.state='queued' AND json_extract(m.refs,'$.auto_start')")}
 
     control(action='scope', task_id=tasks[0]['id'])           # ranked last: the higher ranked two stay queued
     assert take(api, machine)['task']['id'] == tasks[0]['id']

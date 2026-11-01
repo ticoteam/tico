@@ -58,8 +58,8 @@ def test_a_note_with_no_task_or_bot_stays_in_the_run_log(api):
 
 def test_wake_bot_wakes_it_with_the_run_on_the_notice(api):
     assert act(api, "wake_bot", {"bot": "ops", "text": "Look"})["ok"]
-    woke = sql(api, "SELECT body, refs_json FROM messages WHERE to_actor='bot:ops' ORDER BY created DESC")[0]
-    assert woke["body"] == "Look" and json.loads(woke["refs_json"])["automation_run"] == "run_1"
+    woke = sql(api, "SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created DESC")[0]
+    assert woke["body"] == "Look" and json.loads(woke["refs"])["automation_run"] == "run_1"
     assert not act(api, "wake_bot", {"bot": "nobody"})["ok"]
 
 
@@ -94,8 +94,8 @@ def test_post_update_to_market_and_updates_posts_the_turns_briefing(api):
     latest = api.get("/api/v2/market/briefings/latest", headers={"Authorization": "Bearer ana-test"}).json()["briefing"]
     assert (latest["title"], latest["body"], latest["source"]) == (
         "Acme market, Tuesday", "- Northwind cut its price.\n- No bet is touched.", source)
-    row = sql(api, "SELECT body, source_json FROM updates WHERE bot='librarian' AND kind='daily'")
-    assert len(row) == 1 and json.loads(row[0]["source_json"]) == source
+    row = sql(api, "SELECT body, source FROM updates WHERE bot='librarian' AND kind='daily'")
+    assert len(row) == 1 and json.loads(row[0]["source"]) == source
     assert row[0]["body"] == ("- Mapped three new competitors.\n"
                               "- Market briefing: Acme market, Tuesday ([read](#/strategy/market/briefing))")
     listed = api.get("/api/v2/updates", headers={"Authorization": "Bearer ana-test"}).json()["updates"]
@@ -111,11 +111,11 @@ def test_post_update_to_market_is_the_librarians_or_the_top_of_the_orgs(api):
         "ok": False, "detail": "to lists where to post: updates, market"}
     # A post by hand clears the run's mark.
     assert act(api, "post_update", {"text": "- Curated the map."}, owner="bot:librarian")["ok"]
-    assert sql(api, "SELECT source_json FROM updates WHERE bot='librarian'")[0]["source_json"]
+    assert sql(api, "SELECT source FROM updates WHERE bot='librarian'")[0]["source"]
     with api.app.state.store.transaction() as c:
         from backend import updates
         updates.post(c, "librarian", "- Hand-written.", kind="daily")
-    assert sql(api, "SELECT source_json FROM updates WHERE bot='librarian'") == [{"source_json": None}]
+    assert sql(api, "SELECT source FROM updates WHERE bot='librarian'") == [{"source": None}]
 
 
 def test_call_webhook_queues_a_delivery_to_a_saved_hook_only(api):

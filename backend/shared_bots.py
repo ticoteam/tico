@@ -31,7 +31,7 @@ def _json(value):
 def declared(c, bot):
     if not H._has_table(c, "bot_config"):
         return {}
-    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     return _json(row[0]) if row else {}
 
 
@@ -50,7 +50,7 @@ def follow(c, bot, config, rows=None):
         return config
     if rows is not None:
         found = rows(source)
-        original = _json(found["config_json"]) if found else {}
+        original = _json(found["config"]) if found else {}
     else:
         original = declared(c, source)
     if not original:
@@ -73,10 +73,10 @@ def copies(c, source):
     """Ids of every copy of `source`, archived ones included."""
     if not H._has_table(c, "bot_config"):
         return []
-    return [row["bot"] for row in c.execute("SELECT bot,config_json FROM bot_config ORDER BY bot")
-            if source_of(_json(row["config_json"])) == source
+    return [row["bot"] for row in c.execute("SELECT bot,config FROM bot_config ORDER BY bot")
+            if source_of(_json(row["config"])) == source
             # A retired temporary assignment (#420) also names its role in shared_from; it is no branch.
-            and not _json(row["config_json"]).get("assignment_branch")]
+            and not _json(row["config"]).get("assignment_branch")]
 
 
 def refuse_copy(c, bot):
@@ -113,7 +113,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
     original_bot = H.bot(c, source)
     if not original_row or not original_bot or original_bot["state"] == "archived":
         raise Problem("not_found", "Bot not found", 404)
-    original = _json(original_row["config_json"])
+    original = _json(original_row["config"])
     if source_of(original):
         parent = H.bot(c, source_of(original)) or {}
         raise Problem("shared_copy", f"{original_bot['slug']} is itself a branch; add {parent.get('slug', source_of(original))}", 422)
@@ -133,7 +133,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
     slug = copy_slug(original_bot["slug"], person)
     existing = c.execute("SELECT bc.* FROM bot_config bc JOIN bots b ON b.id=bc.bot WHERE b.slug=?", (slug,)).fetchone()
     bot_id = existing["bot"] if existing else H.new_bot_id(slug)
-    if existing and (existing["operator"] != person or source_of(_json(existing["config_json"])) != source):
+    if existing and (existing["operator"] != person or source_of(_json(existing["config"])) != source):
         raise Problem("duplicate", f"The name {slug} is taken by another bot", 409)
     created = not existing
     if existing and H.bot(c, bot_id)["state"] == "archived":
@@ -157,13 +157,13 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
                   (bot_id, slug, original_bot["display_name"], original_bot["runtime"], original_bot["model"],
                    original_bot["effort"], status, now))
         c.execute(
-            "INSERT INTO bot_config(bot,config_json,team,operator,owner_ids_json,description,reports_to,"
+            "INSERT INTO bot_config(bot,config,team,operator,owner_ids,description,reports_to,"
             "repo,thread_mode,definition_updated,definition_updated_by) VALUES(?,?,?,?,?,?,?,?,?,?,?)",
             (bot_id, encode(config), team, person, encode([person]), config["description"],
              config["reports_to"], repo, "personal", now, who.actor))
         from .report_order import arrive
         arrive(c, "bot:" + bot_id, config["reports_to"])     # a new bot goes last among its manager's reports
-        c.execute("UPDATE bot_config SET bot_owners_json=? WHERE bot=?", (encode([person]), bot_id))
+        c.execute("UPDATE bot_config SET bot_owners=? WHERE bot=?", (encode([person]), bot_id))
         H.event(c, who.actor, "bot.shared_copy_added", bot_id, {"source": source, "runner": runner_id})
     assignment = c.execute("SELECT * FROM assignments WHERE bot=?", (bot_id,)).fetchone()
     if runner and (not assignment or assignment["runner_id"] != runner["id"]):
@@ -171,7 +171,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
             runner_id=runner["id"], expected_generation=assignment["generation"] if assignment else 0))
         if H.bot(c, bot_id)["state"] == "planned":
             c.execute("UPDATE bots SET state='active' WHERE id=?", (bot_id,))
-            c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.status','active') WHERE bot=?", (bot_id,))
+            c.execute("UPDATE bot_config SET config=json_set(config,'$.status','active') WHERE bot=?", (bot_id,))
     return {**settings_admin.definition(c, bot_id), "created": created,
             "assignment": dict(c.execute("SELECT * FROM assignments WHERE bot=?", (bot_id,)).fetchone() or {})
             or None}
@@ -182,9 +182,9 @@ def check_runner(c, bot, runner_id, source=None):
     config = declared(c, bot)
     original = source_of(config)
     source = source or original or bot
-    for row in c.execute("SELECT a.bot,bc.config_json FROM assignments a JOIN bot_config bc ON bc.bot=a.bot "
+    for row in c.execute("SELECT a.bot,bc.config FROM assignments a JOIN bot_config bc ON bc.bot=a.bot "
                          "WHERE a.runner_id=? AND a.bot<>?", (runner_id, bot)):
-        other_config = _json(row["config_json"])
+        other_config = _json(row["config"])
         if row["bot"] == source or source_of(other_config) == source:
             raise Problem("shared_runner", "That computer already runs the original or a branch of it. Choose another computer.", 409)
 
@@ -201,11 +201,11 @@ def place_pending(c, operator, runner_id, settings_admin, execution, github_owne
     who = (settings_admin.auth.owner_identity(c) if operator == settings_admin.auth.owner_id(c)
            else Identity("human:" + operator, "human"))
     placed = []
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    for row in c.execute("SELECT bc.bot,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                          "LEFT JOIN assignments a ON a.bot=bc.bot "
                          "WHERE bc.operator=? AND b.state='planned' AND a.bot IS NULL ORDER BY bc.bot",
                          (operator,)).fetchall():
-        source = source_of(_json(row["config_json"]))
+        source = source_of(_json(row["config"]))
         if not source:
             continue
         try:
@@ -241,7 +241,7 @@ def cascade_archive(c, actor, source):
         config["branch_previous_status"] = state
         config["status"] = "archived"
         c.execute("UPDATE bots SET state='archived' WHERE id=?", (slug,))
-        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(config), slug))
+        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), slug))
         H.event(c, actor, "bot.branch_archived", slug, {"source": source, "previous": state})
         H.setup_finished(c, slug, archived=True)
 
@@ -254,7 +254,7 @@ def cascade_restore(c, actor, source):
             continue
         config["status"] = previous
         c.execute("UPDATE bots SET state=? WHERE id=?", (previous, slug))
-        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(config), slug))
+        c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), slug))
         H.event(c, actor, "bot.branch_restored", slug, {"source": source, "status": previous})
 
 
@@ -290,9 +290,9 @@ def retire_assignments(c):
     archived and taken off their computers, queued turns cancelled, and open tasks go back to the role
     they came from. The rows and the assignment_branch* tables stay as history. Idempotent."""
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
-    for row in c.execute("SELECT bc.bot,bc.config_json,b.state FROM bot_config bc JOIN bots b ON b.id=bc.bot "
-                         "WHERE bc.config_json LIKE '%assignment_branch%'").fetchall():
-        config = _json(row["config_json"])
+    for row in c.execute("SELECT bc.bot,bc.config,b.state FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+                         "WHERE bc.config LIKE '%assignment_branch%'").fetchall():
+        config = _json(row["config"])
         if not config.get("assignment_branch"):
             continue
         bot = row["bot"]
@@ -304,7 +304,7 @@ def retire_assignments(c):
         if row["state"] != "archived" or config.get("status") != "archived":
             config["status"] = "archived"
             c.execute("UPDATE bots SET state='archived' WHERE id=?", (bot,))
-            c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
+            c.execute("UPDATE bot_config SET config=?,revision=revision+1 WHERE bot=?", (encode(config), bot))
         H.setup_finished(c, bot, archived=True)
         c.execute("DELETE FROM assignments WHERE bot=?", (bot,))
         c.execute("UPDATE jobs SET state='canceled' WHERE bot=? AND state='queued'", (bot,))

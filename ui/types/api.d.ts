@@ -327,6 +327,7 @@ export type Bot = {
   can_complete_onboarding?: boolean;
   description?: string;
   display_name: string;
+  id: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
@@ -404,6 +405,7 @@ export type BotDetail = {
   description?: string;
   display_name: string;
   goals?: string;
+  id?: string;
   keep_tasks_going?: number | null;
   onboarding_ready?: Record<string, unknown> | null;
   onboarding_state?: string;
@@ -2730,6 +2732,7 @@ export type Me = {
   actor: string;
   email: string;
   role: string;
+  slug?: string;
 };
 
 export type MeetingReviewList = {

@@ -32,7 +32,7 @@ def page_ledger(c, rows):
                 "ORDER BY task_id,ts DESC,rowid DESC", part):
             owners.setdefault(task_id, (event_id, ts))
         for target, detail in c.execute(
-                f"SELECT target,detail_json FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,ts DESC",
+                f"SELECT target,detail FROM events WHERE action=? AND target IN ({marks}) ORDER BY target,ts DESC",
                 (EVENT, *part)):
             ledger.setdefault(target, []).append(H._json(detail, {}))
     return owners, ledger
@@ -60,11 +60,11 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # Select the current assignment's ledger entry before reading task bodies or provenance.
     assignment_key = "coalesce((SELECT id FROM task_events WHERE task_id=t.id AND field='owner' ORDER BY ts DESC,rowid DESC LIMIT 1),t.owner||':'||t.created)"
     ledger = ("SELECT 1 FROM events e WHERE e.target=t.id AND e.action='task.assignment-rewake' "
-              f"AND json_extract(e.detail_json,'$.assignment')={assignment_key}")
+              f"AND json_extract(e.detail,'$.assignment')={assignment_key}")
     if recorded is not None:
         scope += " AND " + ("EXISTS" if recorded else "NOT EXISTS") + "(" + ledger
         if recorded:
-            scope += " AND json_extract(e.detail_json,'$.rewoken_at')<=?"
+            scope += " AND json_extract(e.detail,'$.rewoken_at')<=?"
             params.append(H.shift(at, hours=-ESCALATE_HOURS))
         scope += ")"
     if after:
@@ -230,7 +230,7 @@ def _bot_state(c, bot, settings):
     owner = H.bot(c, bot)
     if owner and owner['state'] != 'active':
         return owner['state'], None
-    config = c.execute(f"SELECT bc.config_json,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
+    config = c.execute(f"SELECT bc.config,{E.DRAINING_SQL.replace('a.bot', 'bc.bot')} draining "
                        "FROM bot_config bc WHERE bc.bot=?", (bot,)).fetchone()
     runner = c.execute('SELECT r.* FROM assignments a JOIN runners r ON r.id=a.runner_id '
                        'WHERE a.bot=? AND r.revoked_at IS NULL', (bot,)).fetchone()
@@ -240,9 +240,9 @@ def _bot_state(c, bot, settings):
         return 'config', None
     if not runner['last_seen'] or runner['last_seen'] < H.shift(H.now(), minutes=-10):
         return 'computer_offline', None
-    ready = readiness_document(runner['readiness_json'])
+    ready = readiness_document(runner['readiness'])
     held_bots, held_lanes = E.claimed_busy(runner['id'])
-    why, declared = E.claim_refusal(c, settings, runner, bot, config['config_json'], config['draining'], ready, held_bots)
+    why, declared = E.claim_refusal(c, settings, runner, bot, config['config'], config['draining'], ready, held_bots)
     if why:
         return why, None
     return None, {'runner': runner, 'ready': ready, 'followed': follow(c, bot, declared),

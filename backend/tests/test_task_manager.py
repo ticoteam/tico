@@ -128,7 +128,7 @@ def test_it_reassigns_only_within_the_owners_department(environment):
     api = built(environment)
     task = quiet_task(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.team','sales') WHERE bot='botops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.team','sales') WHERE bot='botops'")
         groups = {"sales": {"name": "Sales", "parent": ""}, "support": {"name": "Support", "parent": ""}}
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people', ?)",
                   (json.dumps({"people": [], "org_groups": groups}),))

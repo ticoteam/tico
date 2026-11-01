@@ -20,9 +20,9 @@ def add_dee(api):
     """A second member, so one member's computer and bots can be another's to reach for."""
     api.app.state.store.settings.test_identities["dee-test"] = Identity("human:dee", "human", "dee@acme.example")
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["people"].append({"id": "dee", "email": "dee@acme.example"})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
         H.sync_registry(c, {}, people)
 
 
@@ -72,7 +72,7 @@ def test_a_cited_message_must_be_the_requesters_own_recent_one_in_their_own_room
     assert cite(theirs, "borrowed").status_code == 403                  # another person's message
     _, shared, said = held(api, botops)                                  # (queued behind this turn: only the rows matter)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE conversations SET participants_json=? WHERE id=?",
+        c.execute("UPDATE conversations SET participants=? WHERE id=?",
                   (json.dumps(["human:cara", "human:dee", "bot:botops"]), shared["id"]))
     assert cite(said["id"], "from-a-room").status_code == 403           # not a room another person spoke in
     with api.app.state.store.transaction() as c:
@@ -85,10 +85,10 @@ def test_a_cited_message_must_be_the_requesters_own_recent_one_in_their_own_room
 def test_someone_who_has_left_lends_no_authority(api, botops):
     attempt = turn(api, botops)
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for person in people["people"]:
             person["hidden"] = person["id"] == "cara"
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
     assert register(api, attempt, "after-leaving").status_code == 403
 
 

@@ -86,12 +86,12 @@ def install_meeting_review(app, store, auth, mutate):
                 if body.auto_share is None:
                     c.execute("DELETE FROM preferences WHERE actor=? AND key='meetings.auto_share'", (who.actor,))
                 else:
-                    c.execute('INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) '
-                              'ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json,updated=excluded.updated',
+                    c.execute('INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) '
+                              'ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value,updated=excluded.updated',
                               (who.actor, 'meetings.auto_share', encode(body.auto_share), H.now()))
             if body.review_default is not None:
-                c.execute('INSERT INTO registry_metadata(key,value_json) VALUES(?,?) '
-                          'ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+                c.execute('INSERT INTO registry_metadata(key,value) VALUES(?,?) '
+                          'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
                           ('meetings.review_default', encode(body.review_default)))
             return meetings.review_settings(c, who)
         return mutate(request, body, work)

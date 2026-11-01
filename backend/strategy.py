@@ -258,7 +258,7 @@ def vision(c, editor=False):
 
 def website(c):
     """The team's website as setup recorded it (backend/onboarding.py `names.website`), or None."""
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key='onboarding'").fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key='onboarding'").fetchone()
     names = (loads(row[0], {}) if row else {}).get("names") or {}
     return str(names.get("website") or "").strip() or None
 

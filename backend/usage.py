@@ -81,8 +81,8 @@ def own_bots(c, auth, who):
         return slugs
     pid = H.actor_id(who.actor)
     mine = set()
-    for row in c.execute("SELECT bot, operator, bot_owners_json FROM bot_config"):
-        if row["operator"] == pid or pid in A.owner_ids(row["bot_owners_json"]):
+    for row in c.execute("SELECT bot, operator, bot_owners FROM bot_config"):
+        if row["operator"] == pid or pid in A.owner_ids(row["bot_owners"]):
             mine.add(row["bot"])
     return mine & slugs
 
@@ -298,7 +298,7 @@ def install(app, store, auth, mutate, settings):
             counted = body.count_subscription if "count_subscription" in body.model_fields_set else stored["count_subscription"]
             value = {**{key: stored[key] for key in usage_limits.KEYS}, **amounts(c, body),
                      "count_subscription": bool(counted)}
-            c.execute("INSERT INTO registry_metadata(key, value_json) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+            c.execute("INSERT INTO registry_metadata(key, value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                       (usage_limits.KEY, json.dumps(value)))
             H.event(c, who.actor, "usage.default", "company", value)
             return {"default": usage_limits.company(c)}

@@ -33,10 +33,10 @@ BOTS = {"coder": ("web", "human:cara"), "seller": ("sales", "human:dan")}
 def _seed(c: sqlite3.Connection) -> None:
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"} for slug in BOTS},
                     {"people": PEOPLE})
-    c.execute("INSERT OR REPLACE INTO registry_metadata(key, value_json) VALUES('people', ?)",
+    c.execute("INSERT OR REPLACE INTO registry_metadata(key, value) VALUES('people', ?)",
               (json.dumps({"people": PEOPLE, "org_groups": GROUPS, "default_user": "ana"}),))
     for slug, (team, boss) in BOTS.items():
-        c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator, reports_to) VALUES(?,?,?,?,?)",
+        c.execute("INSERT OR REPLACE INTO bot_config(bot, config, team, operator, reports_to) VALUES(?,?,?,?,?)",
                   (slug, json.dumps({"team": team}), team, "human:ana", boss))
 
 
@@ -102,14 +102,14 @@ def set_lead(c: sqlite3.Connection, team: str, lead: str) -> None:
         groups[team]["lead"] = lead
     else:
         groups[team].pop("lead", None)
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
               (json.dumps({"people": PEOPLE, "org_groups": groups, "default_user": "ana"}),))
 
 
 def set_manager(c: sqlite3.Connection, person: str, manager: str) -> None:
     """Change who a person reports to on the org chart ("" for nobody)."""
     people = [{**p, "reports_to": manager} if p["id"] == person else p for p in PEOPLE]
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
               (json.dumps({"people": people, "org_groups": GROUPS, "default_user": "ana"}),))
 
 

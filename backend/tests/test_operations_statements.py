@@ -24,7 +24,7 @@ def seed(api, computers, first, last):
                         {"people": [{"id": p, "email": p + "@acme.example"} for p in ("ana", "ben", "cara")]})
         for i, s in enumerate(slugs, first):
             harness = HARNESSES[i % len(HARNESSES)]
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                       (s, encode({"name": s, "runtime": harness, "harness": harness}), None, "ana"))
     for k, r in enumerate(computers):
         mine = slugs[k::len(computers)]

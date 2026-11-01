@@ -62,7 +62,7 @@ def request_refresh(c, auth, who, body):
     if not runner or who.role not in ('human', 'owner') or not (
             auth.bot_admin(who) or runner['operator'] == H.actor_id(who.actor)):
         raise Problem('forbidden', 'Only a computer operator or administrator can refresh weekly usage', 403)
-    row = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
+    row = c.execute('SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?',
                     (body.runner_id, body.profile)).fetchone()
     state = json.loads(row[0] or '{}').get(body.runtime) if row else None
     if state is None:
@@ -98,7 +98,7 @@ def request_refresh(c, auth, who, body):
 def pending(c, runner):
     prefix = f'subscription-refresh:{runner}:'
     # LIKE is unnecessary: runner IDs may contain wildcard characters.
-    rows = c.execute('SELECT value_json FROM registry_metadata WHERE substr(key,1,?)=? ORDER BY key',
+    rows = c.execute('SELECT value FROM registry_metadata WHERE substr(key,1,?)=? ORDER BY key',
                      (len(prefix), prefix))
     return [view(value) for row in rows if (value := json.loads(row[0])).get('state') == 'requested'
             and value['expires_at'] > H.now()][:5]
@@ -114,7 +114,7 @@ def report(c, runner, rid, body):
         raise Problem('changed', 'Sign-in changed after this refresh was requested', 409)
     if value['state'] != 'requested' or value['expires_at'] <= H.now():
         return view(value)
-    row = c.execute('SELECT runtimes_json FROM computer_profiles WHERE runner_id=? AND profile=?',
+    row = c.execute('SELECT runtimes FROM computer_profiles WHERE runner_id=? AND profile=?',
                     (runner, body.profile)).fetchone()
     state = json.loads(row[0] or '{}').get(body.runtime) if row else None
     weekly = weekly_snapshot(body.weekly.model_dump()) if body.weekly else None

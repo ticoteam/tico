@@ -51,14 +51,14 @@ def big_org(api, first, last, groups_=8):
         org[f"g{g}-n"] = {"name": f"Group {g} nested", "parent": f"g{g}"}
     teams = sorted(org)
     with store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["org_groups"] = org
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(people),))
         for n in range(first, last):
             slug = f"acme-bot-{n:03d}"
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
                       "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator,team) VALUES(?,?,?,?)",
+            c.execute("INSERT INTO bot_config(bot,config,operator,team) VALUES(?,?,?,?)",
                       (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
             c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), slug, H.now(), H.now(), 0.25, "api"))

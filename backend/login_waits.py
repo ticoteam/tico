@@ -26,8 +26,8 @@ PAUSED = "Paused so another turn could use the ChatGPT login; continues right af
 
 
 def _payload(c, aid, kind, field):
-    row = c.execute("SELECT payload_json FROM attempt_events WHERE attempt_id=? AND kind=? "
-                    f"AND json_extract(payload_json,'$.{field}') IS NOT NULL ORDER BY seq DESC LIMIT 1",
+    row = c.execute("SELECT payload FROM attempt_events WHERE attempt_id=? AND kind=? "
+                    f"AND json_extract(payload,'$.{field}') IS NOT NULL ORDER BY seq DESC LIMIT 1",
                     (aid, kind)).fetchone()
     try:
         payload = json.loads(row[0]) if row else {}

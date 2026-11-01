@@ -95,7 +95,7 @@ def last_turn(c, settings, bot):
     just cleared)."""
     from .shared_bots import follow
     from . import providers
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     cfg = follow(c, bot, H._json(config[0], {}) or {}) if config else {}
     runtime, model = providers.bot_choice(c, settings, cfg)
     session = c.execute("SELECT thread_id FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
@@ -181,7 +181,7 @@ def gate(c, settings, bot, conv):
 def _refs(message):
     refs = message.get("refs")
     if refs is None:
-        refs = H._json(message.get("refs_json"), {})
+        refs = H._json(message.get("refs"), {})
     return refs if isinstance(refs, dict) else {}
 
 
@@ -401,7 +401,7 @@ def apply(c, settings, who, bot, outcome):
 def record(c, who, message, outcome):
     """Mark the message that opened the new session (the chat's quiet "Topic changed" line) and write the measures."""
     refs = {**_refs(message), "topic_changed": True}
-    c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+    c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
     H.event(c, who.actor, "chat.topic_changed", message["conversation_id"],
             {"message_id": message["id"], "tokens_before": outcome.get("context_tokens"),
              "delay_ms": outcome.get("delay_ms", 0)})

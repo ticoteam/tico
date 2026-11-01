@@ -262,7 +262,7 @@ def decisions_report(c, auth, who, bots, since):
 def cause_of(row):
     """Why one failed, interrupted or expired attempt ended, as one of CAUSES."""
     try:
-        result = json.loads(row["result_json"] or "{}")
+        result = json.loads(row["result"] or "{}")
     except (TypeError, ValueError):
         result = {}
     result = result if isinstance(result, dict) else {}
@@ -293,7 +293,7 @@ def failures_report(c, who, bots, since):
         before = None
         while True:
             page = c.execute(
-                f"SELECT a.id, a.bot, a.state, a.result_json, a.stop_requested, {at} AS at, d.end_reason "
+                f"SELECT a.id, a.bot, a.state, a.result, a.stop_requested, {at} AS at, d.end_reason "
                 "FROM attempts a LEFT JOIN attempt_diagnostics d ON d.attempt_id=a.id "
                 f"WHERE a.state IN ('failed','interrupted','expired') AND a.bot IN ({marks}) AND {at}>=? "
                 + (f"AND ({at}<? OR ({at}=? AND a.id<?)) " if before else "")

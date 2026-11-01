@@ -320,8 +320,8 @@ class Run:
         it, with the reasons its queued work gets on this round."""
         from backend.execution import readiness_document
         with w.store.read() as c:
-            row = c.execute("SELECT readiness_json FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
-        doc = readiness_document(row["readiness_json"]) if row else {}
+            row = c.execute("SELECT readiness FROM runners WHERE id=?", (w.runner["runner_id"],)).fetchone()
+        doc = readiness_document(row["readiness"]) if row else {}
         ready = ((doc.get("bots") or {}).get(slug) or {}).get("ready")
         return {"at": w.now(), "bot": slug, "server_ready": ready, "reasons": self.reasons(w, [slug])}
 
@@ -440,8 +440,8 @@ class Run:
             pr = self.w.pr_of(t["id"])
             if pr:
                 out.append(f"  PR #{pr} head={self.w.prs[pr]['head'][:7]} ci={self.w.ci_state(pr)} merged={self.w.prs[pr]['merged']}")
-            for j in self.w.sql("SELECT j.bot, j.state, j.held, j.wake_class, m.refs_json FROM jobs j "
-                                "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs_json,'$.task') IN "
+            for j in self.w.sql("SELECT j.bot, j.state, j.held, j.wake_class, m.refs FROM jobs j "
+                                "JOIN messages m ON m.id=j.message_id WHERE json_extract(m.refs,'$.task') IN "
                                 "(SELECT ? UNION SELECT from_task FROM task_relations WHERE to_task=? AND kind='parent') "
                                 "AND j.state NOT IN ('done','cancelled')", (t["id"], t["id"])):
                 out.append(f"  job {j['bot']} {j['state']} held={j['held']} {j['wake_class'] or ''}")

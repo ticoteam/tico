@@ -34,7 +34,7 @@ def _owner(who, what):
 
 
 def load_state(c, who):
-    row = c.execute("SELECT value_json FROM preferences WHERE actor=? AND key=?",
+    row = c.execute("SELECT value FROM preferences WHERE actor=? AND key=?",
                     (who.actor, PREFERENCE)).fetchone()
     try:
         stored = json.loads(row[0]) if row else {}
@@ -46,8 +46,8 @@ def load_state(c, who):
 
 
 def save_state(c, who, state):
-    c.execute("INSERT INTO preferences(actor,key,value_json,updated) VALUES(?,?,?,?) "
-              "ON CONFLICT(actor,key) DO UPDATE SET value_json=excluded.value_json, updated=excluded.updated",
+    c.execute("INSERT INTO preferences(actor,key,value,updated) VALUES(?,?,?,?) "
+              "ON CONFLICT(actor,key) DO UPDATE SET value=excluded.value, updated=excluded.updated",
               (who.actor, PREFERENCE, encode(state), H.now()))
 
 
@@ -69,7 +69,7 @@ def change_state(c, who, body):
 # ------------------------------------------------------------------ live checks
 def _online_runners(c):
     since = H.shift(H.now(), seconds=-ONLINE_SECONDS)
-    return c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL "
+    return c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL "
                      "AND last_seen>? ORDER BY last_seen DESC", (since,)).fetchall()
 
 
@@ -78,7 +78,7 @@ _wanted_runtimes = providers.wanted_runtimes
 
 def _signed_in_runtime(runners, wanted):
     for runner in runners:
-        for name, row in (readiness_document(runner["readiness_json"]).get("runtimes") or {}).items():
+        for name, row in (readiness_document(runner["readiness"]).get("runtimes") or {}).items():
             if name in wanted and row.get("installed") and row.get("authenticated") == "ready":
                 return name
     return ""
@@ -88,7 +88,7 @@ def _login_target(runners, wanted):
     """A computer that has a wanted runtime installed but not signed in, and that the browser
     can sign in (backend/model_login.py): where the checklist's Sign in button goes."""
     for runner in runners:
-        for name, row in sorted((readiness_document(runner["readiness_json"]).get("runtimes") or {}).items()):
+        for name, row in sorted((readiness_document(runner["readiness"]).get("runtimes") or {}).items()):
             if name in wanted and name in model_login.RUNTIMES and row.get("installed") \
                     and row.get("authenticated") != "ready":
                 return {"runner_id": runner["id"], "runtime": name, "machine": runner["label"]}
@@ -111,11 +111,11 @@ def own_bots(c, settings):
 def _next_bot(c, settings):
     """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
     puts the team's first bot first. Returns (id, name, why), or None when nothing is waiting."""
-    rows = c.execute("SELECT bc.bot,b.display_name,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
+    rows = c.execute("SELECT bc.bot,b.display_name,bc.config FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
     if not rows:
         return None
-    ranked = sorted(((json.loads(row["config_json"] or "{}"), row) for row in rows),
+    ranked = sorted(((json.loads(row["config"] or "{}"), row) for row in rows),
                     key=lambda pair: (pair[0].get("setup_rank", 999), pair[1]["bot"]))
     row = ranked[0][1]
     why = "Press Start onboarding on its page and answer its questions; it drafts a first result for you to approve."

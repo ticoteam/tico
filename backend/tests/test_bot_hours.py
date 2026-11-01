@@ -32,12 +32,12 @@ def run(c, rid, start, end, events=()):
     c.execute("INSERT INTO turns(id,bot,started,finished,trigger,exit) VALUES(?,?,?,?,?,?)",
               (rid, "ops", B.stamp(start), B.stamp(end) if end else None, "task", "completed"))
     for seq, (at, kind) in enumerate(events, 1):
-        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload_json,created) VALUES(?,?,?,?,?)",
+        c.execute("INSERT INTO attempt_events(attempt_id,seq,kind,payload,created) VALUES(?,?,?,?,?)",
                   (rid, seq, kind, "{}", B.stamp(at)))
 
 
 def people(c, ids):
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
               (encode({"people": [{"id": p, "email": p + "@acme.example"} for p in ids]}),))
 
 
@@ -74,7 +74,7 @@ def test_eighty_bot_hours_and_one_person_read_two_to_one(api):
     with store.read_transaction() as c:
         assert week(B.Counter().count(c, now=NOW), MONDAY)["human_hours"] == 120
     with store.transaction() as c:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
                   (encode({"people": [{"id": "ana", "email": "ana@acme.example", "hidden": True}],
                            "default_user": "ana"}),))
     with store.read_transaction() as c:

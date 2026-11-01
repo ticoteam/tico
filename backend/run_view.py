@@ -190,7 +190,7 @@ def run_view(c, auth, who, tid):
     # The page limit counts only runs this reader can open: hidden newer runs must not push theirs off the page.
     turns = []
     for row in c.execute(
-            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result_json,a.wake_json,"
+            "SELECT t.id,t.bot,t.exit,a.job_id,a.state,a.created,a.started,a.finished,a.lease_until,a.result,a.wake,"
             "m.conversation_id FROM turns t JOIN attempts a ON a.id=t.id JOIN jobs j ON j.id=a.job_id "
             "JOIN messages m ON m.id=j.message_id WHERE t.task_id=? ORDER BY a.created DESC LIMIT ?",
             (tid, SCAN_LIMIT)):
@@ -215,9 +215,9 @@ def run_view(c, auth, who, tid):
                                jobs)):
         tries.setdefault(r["job_id"], []).append(r)
     decisions, retries, lease = {}, {}, {}
-    for e in c.execute(f"SELECT ts,actor,action,target,detail_json FROM events WHERE {RECOVERY_SQL} AND target IN "
+    for e in c.execute(f"SELECT ts,actor,action,target,detail FROM events WHERE {RECOVERY_SQL} AND target IN "
                        f"({job_marks},{marks}) ORDER BY ts", (*jobs, *ids)):
-        detail = json.loads(e["detail_json"] or "{}") or {}
+        detail = json.loads(e["detail"] or "{}") or {}
         if e["action"] in DECISIONS and detail.get("attempt_id"):
             decisions[detail["attempt_id"]] = {
                 "kind": "resumed" if detail.get("decision") == "resume" else "dismissed",
@@ -227,12 +227,12 @@ def run_view(c, auth, who, tid):
         elif e["action"] in LEASE:
             lease.setdefault(e["target"], []).append({"kind": LEASE[e["action"]], "at": e["ts"]})
     events = {aid: [] for aid in ids}
-    for r in c.execute(f"SELECT attempt_id,kind,payload_json,created FROM attempt_events WHERE attempt_id IN ({marks}) "
-                       "AND kind='tool' AND (json_extract(payload_json,'$.subagent') IS NOT NULL OR "
-                       "json_extract(payload_json,'$.background') IS NOT NULL OR "
-                       "json_extract(payload_json,'$.status')=?) ORDER BY attempt_id,seq", (*ids, TOOL_BACKGROUNDED)):
+    for r in c.execute(f"SELECT attempt_id,kind,payload,created FROM attempt_events WHERE attempt_id IN ({marks}) "
+                       "AND kind='tool' AND (json_extract(payload,'$.subagent') IS NOT NULL OR "
+                       "json_extract(payload,'$.background') IS NOT NULL OR "
+                       "json_extract(payload,'$.status')=?) ORDER BY attempt_id,seq", (*ids, TOOL_BACKGROUNDED)):
         if privacy.content_readable(c, actor, dict(r)):
-            events[r["attempt_id"]].append((json.loads(r["payload_json"]), r["created"]))
+            events[r["attempt_id"]].append((json.loads(r["payload"]), r["created"]))
     from .usage_records import ran_on
     made = ran_on(c, ids)
     saved = recovery(c, jobs)
@@ -248,12 +248,12 @@ def run_view(c, auth, who, tid):
             "state": r["state"], "outcome": r["exit"], "created": r["created"], "started": r["started"],
             "finished": r["finished"], "took_s": seconds(r["started"], r["finished"]), "ran_on": made.get(r["id"]),
             "lease_until": r["lease_until"] if live else None, "lease": lease.get(r["id"], []),
-            "reason": failure_reason(r["state"], r["result_json"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
+            "reason": failure_reason(r["state"], r["result"], run_diagnostics.metadata(c, r["id"])["end_reason"]),
             # Waiting for its ChatGPT login, or where it ran instead of its own harness and why (backend/login_waits.py).
             "waiting": login_waits.waiting(c, r["id"], r["bot"], who, auth) if live else None,
             "moved": login_waits.moved(c, r["id"], r["bot"], who, auth),
             # Stopped to let another turn have the shared login; its job continues next.
-            "paused": login_waits.paused(c, r["id"], r["state"], r["result_json"]),
+            "paused": login_waits.paused(c, r["id"], r["state"], r["result"]),
             "next": next_step(r, job_tries, job_rows.get(r["job_id"]) or {"state": None}, decisions,
                               retries.get(r["job_id"], [])),
             # The job's state now and its recovery decision when that decision was about this try (job_recovery); the
@@ -262,7 +262,7 @@ def run_view(c, auth, who, tid):
             "decision": decision if (decision := saved.get(r["job_id"])) and decision["attempt_id"] == r["id"] else None,
             "subagents": subagents, "background": background,
             # What woke the turn and the wake preset in force (backend/wake_presets.py record); None before presets.
-            "wake": H._json(r["wake_json"])})
+            "wake": H._json(r["wake"])})
     return {"task_id": tid, "checkpoint": checkpoint, "attempts": out}
 
 

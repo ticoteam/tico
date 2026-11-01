@@ -112,8 +112,8 @@ def classify(c, aid, body, now=None):
     candidates = texts(c, aid, body)
     if body.fallback:
         rows = []
-        for event in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
-            payload = json.loads(event['payload_json'])
+        for event in c.execute("SELECT kind,payload FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
+            payload = json.loads(event['payload'])
             text = payload.get('error') or payload.get('text') or ''
             if event['kind'] == 'diagnostic' and login_holds.HOP_RE.search(text):
                 rows = []
@@ -131,14 +131,14 @@ def classify(c, aid, body, now=None):
                 if reset:
                     body.limit_resets_at = login_holds._iso(reset)
                     break
-        for event in c.execute("SELECT id,payload_json FROM attempt_events WHERE attempt_id=? AND kind='error'",
+        for event in c.execute("SELECT id,payload FROM attempt_events WHERE attempt_id=? AND kind='error'",
                                (aid,)).fetchall():
             try:
-                payload = json.loads(event["payload_json"])
+                payload = json.loads(event["payload"])
             except ValueError:
                 continue
             if isinstance(payload, dict) and not payload.get("limit") and is_limit(payload.get("error"), now):
-                c.execute("UPDATE attempt_events SET payload_json=? WHERE id=?",
+                c.execute("UPDATE attempt_events SET payload=? WHERE id=?",
                           (json.dumps({**payload, "limit": True}), event["id"]))
         return USAGE_LIMIT
     if any(TOO_LONG_RE.search(t) for t in texts(c, aid, body)):

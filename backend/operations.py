@@ -26,7 +26,7 @@ def report_health(store, service, *, success=None, error=None, detail=None):
     with store.transaction() as c:
         c.execute("INSERT INTO service_health VALUES(?,?,?,?) ON CONFLICT(service) DO UPDATE SET "
                   "last_success=coalesce(excluded.last_success,service_health.last_success),"
-                  "last_error=excluded.last_error,detail_json=excluded.detail_json",
+                  "last_error=excluded.last_error,detail=excluded.detail",
                   (service, success, error, encode(detail or {})))
 
 
@@ -80,7 +80,7 @@ def retention_tier(store, bucket, now):
         rows = {r["service"]: dict(r) for r in c.execute("SELECT * FROM service_health WHERE service IN ('backup-daily','backup-monthly')")}
     for tier, length in (("monthly", 7), ("daily", 10)):
         row = rows.get("backup-" + tier, {})
-        detail = json.loads(row.get("detail_json") or "{}")
+        detail = json.loads(row.get("detail") or "{}")
         if detail.get("bucket") != bucket or (row.get("last_success") or "")[:length] != now[:length]:
             return tier
     return "hourly"
@@ -137,11 +137,11 @@ def restore_check_due(store, now=None):
 
 def restore_check(store, s3, cloudwatch, bucket):
     with store.read() as c:
-        row = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service='backup'").fetchone()
+        row = c.execute("SELECT last_success,last_error,detail FROM service_health WHERE service='backup'").fetchone()
     try:
         if not row or not row["last_success"] or row["last_error"]:
             raise RuntimeError("No successful current backup is available for an isolated restore check")
-        detail = json.loads(row["detail_json"] or "{}")
+        detail = json.loads(row["detail"] or "{}")
         if detail.get("bucket") != bucket:
             raise RuntimeError("Latest backup belongs to a different storage bucket")
         database_bytes = detail.get("database_bytes", store.settings.db_path.stat().st_size)

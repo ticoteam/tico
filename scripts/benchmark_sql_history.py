@@ -40,7 +40,7 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         c.executemany('INSERT INTO tasks(id,title,owner,requester,private,status,created,updated) '
                       "VALUES(?,'Hidden synthetic task','bot:finance','human:ben',1,'done',?,?)",
                       [(str(uuid.uuid5(uuid.NAMESPACE_URL, f'synthetic-hidden-task-{i}')), now, now) for i in range(500)])
-        c.executemany('INSERT INTO conversations(id,kind,task_id,participants_json,created) '
+        c.executemany('INSERT INTO conversations(id,kind,task_id,participants,created) '
                       "VALUES(?,'task',?,'[]',?)",
                       [(f'fixture-room-{i}', public_tasks[i], now) for i in range(rooms)])
 
@@ -58,7 +58,7 @@ def test_bot_history_queries_finish_within_the_existing_timeout(api, provenance)
         mid = c.execute('SELECT message_id FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0]
         copies('messages', mid, count * 5, lambda i: {
             'conversation_id': f'fixture-room-{i % rooms}',
-            'refs_json': '{}' if provenance == 'plain' else json.dumps({
+            'refs': '{}' if provenance == 'plain' else json.dumps({
                 'task': public_tasks[i % rooms], 'progress': {'sequence': i, 'note': 'Synthetic progress receipt'},
                 **({'turn_id': f'fixture-attempts-{i % count}'} if i % 10 == 0 else {})}),
             'in_reply_to': f'fixture-messages-{i % rooms}' if provenance == 'mixed' and i >= rooms and i % 10 == 1 else None})

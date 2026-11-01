@@ -65,8 +65,8 @@ def test_the_migration_can_run_again_and_a_file_that_has_the_columns_catches_up(
 def seed(api):
     """Runs on 20 and 21 September: ops (Ana's, no department) and cpo (Ben's, product), one routine."""
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'",
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'",
                   (json.dumps({**people, "teams": {"product": {"root": "cpo"}}}),))
     t = post_task(api, "ops")
     with api.app.state.store.transaction() as c:

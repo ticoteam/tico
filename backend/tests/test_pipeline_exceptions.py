@@ -16,7 +16,7 @@ def board(c, profile="manager"):
     found = c.execute("SELECT id FROM task_types WHERE name='Dev tickets'").fetchone()
     typ = H.type_get(c, found[0]) if found else dev_type(c)
     c.execute("UPDATE task_types SET manager='coo' WHERE id=?", (typ["id"],))
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot='coo'",
+    c.execute("UPDATE bot_config SET config=? WHERE bot='coo'",
               (encode({"name": "coo", "runtime": "fake", "status": "active", "profile": profile}),))
     if not c.execute("SELECT 1 FROM runners WHERE id='r1'").fetchone():
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r1','box','ana','h',?,?)",
@@ -25,7 +25,7 @@ def board(c, profile="manager"):
 
 
 def profile(c, slug, name):
-    c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.profile',?) WHERE bot=?", (name, slug))
+    c.execute("UPDATE bot_config SET config=json_set(config,'$.profile',?) WHERE bot=?", (name, slug))
 
 
 def settled(c):
@@ -77,8 +77,8 @@ def listed(c, typ, kind=None):
 
 
 def late_notices(c, row):
-    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' AND json_extract(refs_json,'$.task')=? "
-                     "AND json_extract(refs_json,'$.step_late')", (row["id"],)).fetchone()[0]
+    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:coo' AND json_extract(refs,'$.task')=? "
+                     "AND json_extract(refs,'$.step_late')", (row["id"],)).fetchone()[0]
 
 
 def unheld_jobs(c, slug):
@@ -137,7 +137,7 @@ def test_a_refusal_repeated_twice_on_one_ticket_is_one_entry(api):
         row, other = ticket(c, typ, "Fix Cursor"), ticket(c, typ, "Fix Muse")
 
         def refuse(task_id):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,?,?)",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,?,?)",
                       (H.new_id(), H.now(), "bot:cpo", "review_gate", json.dumps({"task": task_id}), "warn"))
 
         refuse(row["id"])
@@ -183,8 +183,8 @@ def test_the_hourly_list_wakes_a_manager_only_for_a_new_entry(api):
         before = unheld_jobs(c, "coo")
         assert PE.deliver(c) == ["coo"]
         assert unheld_jobs(c, "coo") == before + 1
-        [wake] = c.execute("SELECT body, refs_json FROM messages WHERE to_actor='bot:coo' AND "
-                           "json_extract(refs_json,'$.wake')='exceptions'").fetchall()
+        [wake] = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:coo' AND "
+                           "json_extract(refs,'$.wake')='exceptions'").fetchall()
         assert "Fix Cursor" in wake[0] and "no run for 45 minutes" in wake[0]
         assert PE.deliver(c) == [], "the same entry an hour later: no second turn"
         ticket(c, typ, "Fix Muse", minutes=50)
@@ -293,7 +293,7 @@ def test_a_verdict_a_handoff_and_a_child_or_blocker_result_are_a_note_for_a_mana
             H.task_update(c, "bot:ops", child["id"], status="done", note="Three bots, one free")
             H.task_update(c, "bot:ops", upstream["id"], status="done", note="Shipped")
             return c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot='coo' "
-                             "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs_json,'$.task') "
+                             "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task') "
                              "IN (?,?)", (mine["id"], waits["id"])).fetchone()[0]
 
         assert results("doer") >= 2, "control: a doer is woken for its child's result and its blocker finishing"
@@ -406,7 +406,7 @@ def outside_the_chart(c, typ):
 
 
 def flow(c, typ, step, **value):
-    c.execute("UPDATE task_steps SET flow_json=? WHERE type_id=? AND name=?", (json.dumps(value), typ["id"], step))
+    c.execute("UPDATE task_steps SET flow=? WHERE type_id=? AND name=?", (json.dumps(value), typ["id"], step))
 
 
 def both_reads(api, c, typ, kind):
@@ -416,7 +416,7 @@ def both_reads(api, c, typ, kind):
     before = c.execute("SELECT coalesce(max(rowid),0) FROM messages").fetchone()[0]
     PE.deliver(c)
     body = (c.execute("SELECT body FROM messages WHERE rowid>? AND to_actor='bot:coo' AND "
-                      "json_extract(refs_json,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
+                      "json_extract(refs,'$.wake')='exceptions'", (before,)).fetchone() or [""])[0]
     return [e for e in shown if e["kind"] == kind], body
 
 

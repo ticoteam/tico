@@ -57,8 +57,8 @@ def test_self_filed_release_qa_keeps_the_filing_turn_hold(api, child):
         fields = {"title": "Verify shipped behavior", "relations": [{"kind": "parent", "task": parent["id"]}]}
     mine = post(api, "tasks", {"owner": "ops", "body": "Check the release.", **fields}, token=active["token"])
     with api.app.state.store.read() as c:
-        notice = c.execute("SELECT refs_json FROM messages WHERE to_actor='bot:ops' "
-                           "AND json_extract(refs_json,'$.task')=? ORDER BY rowid DESC", (mine["id"],)).fetchone()
+        notice = c.execute("SELECT refs FROM messages WHERE to_actor='bot:ops' "
+                           "AND json_extract(refs,'$.task')=? ORDER BY rowid DESC", (mine["id"],)).fetchone()
         refs = H._json(notice[0], {})
         assert refs["wake"] == "review_request" and refs["filed_in"] == active["id"]
     assert claim(api, machine) is None
@@ -79,7 +79,7 @@ def test_a_task_the_filing_turn_finished_starts_no_turn(api):
     assert claim(api, machine) is None
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM turns WHERE task_id=?", (order["id"],)).fetchone()[0] == 0
-        assert c.execute("SELECT count(*) FROM events WHERE action='job.suppress' AND json_extract(detail_json,"
+        assert c.execute("SELECT count(*) FROM events WHERE action='job.suppress' AND json_extract(detail,"
                          "'$.task_id')=?", (order["id"],)).fetchone()[0] == 1
 
 

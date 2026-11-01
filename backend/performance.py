@@ -23,7 +23,7 @@ CREATE TABLE IF NOT EXISTS runner_load_samples(runner_id TEXT NOT NULL, ts INTEG
   sampled_at INTEGER NOT NULL, cpu_pct REAL, mem_used INTEGER, mem_total INTEGER, swap_used INTEGER,
   swap_total INTEGER, running_turns INTEGER NOT NULL, PRIMARY KEY(runner_id,ts)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS attempt_load_snapshots(attempt_id TEXT PRIMARY KEY REFERENCES attempts(id) ON DELETE CASCADE,
-  start_json TEXT, end_json TEXT) WITHOUT ROWID;
+  at_start TEXT, at_end TEXT) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS perf_points(runner_id TEXT NOT NULL, span INTEGER NOT NULL, ts INTEGER NOT NULL,
   n INTEGER NOT NULL, scope TEXT NOT NULL DEFAULT 'host', cpu REAL NOT NULL, cpu_max REAL NOT NULL, load1 REAL,
   mem_used INTEGER, mem_max INTEGER, mem_total INTEGER, swap_used INTEGER, swap_total INTEGER, disk_free INTEGER,
@@ -34,7 +34,7 @@ CREATE TABLE IF NOT EXISTS perf_usage(runner_id TEXT NOT NULL, span INTEGER NOT 
   PRIMARY KEY(runner_id, span, ts, kind, key)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS perf_overloads(id INTEGER PRIMARY KEY, runner_id TEXT NOT NULL, started INTEGER NOT NULL,
   last INTEGER NOT NULL, ended INTEGER, reasons TEXT NOT NULL, cpu_max REAL NOT NULL, mem_max REAL NOT NULL,
-  runs_max INTEGER NOT NULL DEFAULT 0, bots_json TEXT NOT NULL DEFAULT '[]', procs_json TEXT NOT NULL DEFAULT '[]');
+  runs_max INTEGER NOT NULL DEFAULT 0, bots TEXT NOT NULL DEFAULT '[]', procs TEXT NOT NULL DEFAULT '[]');
 CREATE INDEX IF NOT EXISTS perf_overloads_runner ON perf_overloads(runner_id, started);
 """
 MODES = ("on", "off")
@@ -202,7 +202,7 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
         latest = load_status(c, runner_id)["latest_sample"] if on(c, runner_id) else None
         value = ({k: latest[k] for k in ("at", "cpu_pct", "mem_pct", "running_turns")}
                  if latest and not latest["stale"] else None)
-    column = {"start": "start_json", "end": "end_json"}[phase]
+    column = {"start": "at_start", "end": "at_end"}[phase]
     if value is None:
         c.execute(f"UPDATE attempt_load_snapshots SET {column}=NULL WHERE attempt_id=?", (attempt_id,))
         return
@@ -213,9 +213,9 @@ def stamp_attempt(c, attempt_id, runner_id, phase, snapshot=None):
 
 def attempt_snapshots(c, attempt_id):
     from .read_cache import one
-    row = one(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
-    return {"load_start": json.loads(row["start_json"]) if row and row["start_json"] else None,
-            "load_end": json.loads(row["end_json"]) if row and row["end_json"] else None}
+    row = one(c, "SELECT at_start,at_end FROM attempt_load_snapshots WHERE attempt_id=?", (attempt_id,))
+    return {"load_start": json.loads(row["at_start"]) if row and row["at_start"] else None,
+            "load_end": json.loads(row["at_end"]) if row and row["at_end"] else None}
 
 
 # ------------------------------------------------------------------------------------------------ overloads
@@ -285,7 +285,7 @@ def _update(c, oid, runner_id, started, last, why):
     procs = c.execute("SELECT key name,sum(cpu*n)/sum(n) cpu,max(mem_max) mem FROM perf_usage WHERE runner_id=? AND "
                       "span=? AND ts>=? AND ts<=? AND kind='proc' GROUP BY key ORDER BY cpu DESC LIMIT 6",
                       (runner_id, MINUTE, started, last)).fetchall()
-    c.execute("UPDATE perf_overloads SET last=?,reasons=?,cpu_max=?,mem_max=?,runs_max=?,bots_json=?,procs_json=? "
+    c.execute("UPDATE perf_overloads SET last=?,reasons=?,cpu_max=?,mem_max=?,runs_max=?,bots=?,procs=? "
               "WHERE id=?",
               (last, json.dumps(why), round(peak[0] or 0, 1), round(peak[1] or 0, 1), peak[2] or 0,
                json.dumps(bots),
@@ -323,7 +323,7 @@ def overload_view(row):
     return {"started": row["started"], "ended": row["ended"], "last": row["last"],
             "minutes": (( row["ended"] or row["last"] + MINUTE) - row["started"]) // MINUTE,
             "reasons": json.loads(row["reasons"]), "cpu_max": row["cpu_max"], "mem_max": row["mem_max"],
-            "runs_max": row["runs_max"], "bots": json.loads(row["bots_json"]), "procs": json.loads(row["procs_json"])}
+            "runs_max": row["runs_max"], "bots": json.loads(row["bots"]), "procs": json.loads(row["procs"])}
 
 
 def recent_overload(c, runner_id, within=RECENT_S, now=None):

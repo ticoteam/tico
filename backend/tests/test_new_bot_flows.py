@@ -25,9 +25,9 @@ def create_bot(api, slug, token="ana-test", **fields):
     with api.app.state.store.transaction() as c:
         bot_id = H.resolve_bot(c, slug)["id"]
         # It runs on the test runtime the fixture's bots run on, so the test computer can claim its work.
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot_id,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (bot_id,)).fetchone()[0])
         config.update({"runtime": "fake", "harness": None, "model": "", "model_managed_by": None})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (json.dumps(config), bot_id))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (json.dumps(config), bot_id))
     return bot_id
 
 
@@ -271,5 +271,5 @@ def test_mcp_and_the_hub_cli_rename_a_bot_by_id_or_slug(api, sales, monkeypatch)
     monkeypatch.setattr(remotecli, "Client", lambda *a, **k: Client(api, "ana-test"))
     remotecli.run(hubcli.parser().parse_args(["bot", "update", "revenue-helper", "--new-slug", "pipeline-helper"]))
     assert get(api, "bots/" + sales)["slug"] == "pipeline-helper"
-    config = json.loads(column(api, "SELECT config_json FROM bot_config WHERE bot=?", sales)[0])
+    config = json.loads(column(api, "SELECT config FROM bot_config WHERE bot=?", sales)[0])
     assert config["folder"] == "bot-sales-helper"                  # its folder keeps the name it was made with

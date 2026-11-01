@@ -176,7 +176,7 @@ def install(app, store, auth):
                 auth.conversation(c, who, conv["id"])
             except Problem:
                 continue
-            conv["participants"] = H._json(conv.get("participants_json"), []) or []
+            conv["participants"] = H._json(conv.get("participants"), []) or []
             rooms.append(conv)
         marks = ",".join("?" * len(MESSAGE_KINDS))
 
@@ -195,7 +195,7 @@ def install(app, store, auth):
                 continue
             if not privacy.message_readable(c, reader, row, current=True):
                 continue
-            message = {**dict(row), "refs": H._json(row["refs_json"], {}) or {}}
+            message = {**dict(row), "refs": H._json(row["refs"], {}) or {}}
             tid = H.message_task_id(message, conv)
             comment = bool(conv.get("task_id")) or H.is_comment(message)
             item = {"at": row["created"], "kind": "task.comment" if comment and tid else "chat.message",

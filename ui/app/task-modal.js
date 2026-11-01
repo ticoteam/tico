@@ -303,7 +303,7 @@ function taskModalBind(d, task, full = false) {
 const SESSION_COPY = '<svg viewBox="0 0 12 12" width="11" height="11" aria-hidden="true" focusable="false"><rect x="4" y="4" width="6.5" height="6.5" rx="1" fill="none" stroke="currentColor" stroke-width="1.2"/><path d="M8 4V2.5a1 1 0 0 0-1-1H2.5a1 1 0 0 0-1 1V7a1 1 0 0 0 1 1H4" fill="none" stroke="currentColor" stroke-width="1.2"/></svg>';
 function taskSessions(t) {
   return (t.links || []).filter(l => l.kind === 'session').map(l => {
-    let d = {}; try { d = JSON.parse(l.detail_json || '{}'); } catch {}
+    let d = {}; try { d = JSON.parse(l.detail || '{}'); } catch {}
     return {...l, d, value: String(l.url || '').replace(/^session:/, '')};
   }).sort((a, b) => (b.d.primary ? 1 : 0) - (a.d.primary ? 1 : 0));
 }

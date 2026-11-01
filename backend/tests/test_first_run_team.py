@@ -59,7 +59,7 @@ def test_a_starter_is_created_onboarding_and_leaves_it_only_when_a_person_above_
     assert api.get("/api/v2/tasks", params={"owner": "botops"}, headers=who).json()["tasks"] == []   # no BotOps task
     assert support_routine(api)["automation"] and enabled(api) == 0
     with api.app.state.store.read() as c:
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='support'").fetchone()[0])["materialize"] is True
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='support'").fetchone()[0])["materialize"] is True
 
     # Nothing wakes it but a person: a task notice waits, the person's own message is claimed.
     ready(api, computer, ["support"])
@@ -192,7 +192,7 @@ def test_created_groups_keep_the_finished_wizard_chart_order_after_json_storage(
     assert [group["id"] for group in groups] == expected
     assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
     with api.app.state.store.read() as c:
-        saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        saved = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     assert list(saved["org_groups"]) == sorted(expected)
     assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(6)))
 
@@ -205,10 +205,10 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
         assert api.post("/api/v2/groups", json={"name": name}, headers=signed_in()).status_code == 200
     # Model a roster stored before group creation persisted positions.
     with api.app.state.store.transaction() as c:
-        legacy = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        legacy = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         for group in legacy["org_groups"].values():
             group.pop("order", None)
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (json.dumps(legacy, sort_keys=True),))
     assert all("order" not in group for group in legacy["org_groups"].values())
     selected = {"finance-lead": {"template": "finance-lead", "display_name": "Finance", "instructions": ""}}
     assert api.put("/api/v2/setup", json={"answers": {"departments": ["finance"]},
@@ -222,6 +222,6 @@ def test_created_groups_append_after_legacy_positions_across_reload_and_repeated
         assert [group["id"] for group in groups] == expected
         assert [group["id"] for group in sorted(chart, key=lambda group: group["order"])] == expected
         with api.app.state.store.read() as c:
-            saved = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+            saved = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         assert list(saved["org_groups"]) == sorted(expected)
         assert {gid: group["order"] for gid, group in saved["org_groups"].items()} == dict(zip(expected, range(3)))

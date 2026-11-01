@@ -49,10 +49,10 @@ def trees(tmp_path, monkeypatch):
                                 'checkout_state': 'queued', 'setup_pending': True}
     def patch_link(_route, fields):
         row.update({key: value for key, value in fields.items() if key in ('state', 'path', 'checkout_state', 'setup_pending')})
-        detail = json.loads(row.get('detail_json') or '{}')
+        detail = json.loads(row.get('detail') or '{}')
         detail.update({key: value for key, value in fields.items() if key in
                        ('checkout_state', 'setup_pending', 'expected_head', 'checkout_target', 'expected_base')})
-        row['detail_json'] = json.dumps(detail)
+        row['detail'] = json.dumps(detail)
         client.post.return_value.update(fields)
         return row
     client.patch.side_effect = patch_link
@@ -1138,7 +1138,7 @@ def test_setup_and_heartbeat_keep_legacy_partial_checkout_unverified(trees, setu
     path.parent.mkdir(parents=True)
     git(base, 'worktree', 'add', '--no-track', '-b', row['branch'], str(path), 'origin/main')
     (path / 'file').unlink()
-    row.update(state='present', detail_json='{}', setup_command=setup_command)
+    row.update(state='present', detail='{}', setup_command=setup_command)
     report = W.inspect(workspace, row)
     assert report['state'] == 'pending' and report['checkout_state'] == 'unverified'
     client.get.side_effect = lambda route: {'links': [row]} if route.endswith('/links') else {
@@ -1160,7 +1160,7 @@ def test_legacy_present_checkout_remains_usable_without_new_marker(trees):
     git(base, 'worktree', 'add', '--no-track', '-b', row['branch'], str(path), 'origin/main')
     (path / 'file').write_text('legacy user edit')
     (path / 'notes.txt').write_text('legacy untracked note')
-    row.update(state='present', detail_json='{}')
+    row.update(state='present', detail='{}')
 
     report = W.inspect(workspace, row)
     assert report['state'] == 'present' and report['checkout_state'] == 'legacy_present'
@@ -1192,12 +1192,12 @@ def test_a_detached_legacy_checkout_is_inspected_as_present_but_not_adopted_for_
     (path / 'file').write_text('legacy user edit')
     for state, detail in (('present', '{}'), ('present', '{"checkout_state": "legacy_present"}'),
                           ('unknown', '{"checkout_state": "legacy_present"}')):
-        row.update(state=state, detail_json=detail)
+        row.update(state=state, detail=detail)
         report = W.inspect(workspace, row)
         assert report['state'] == 'present' and report['checkout_state'] == 'legacy_present', (state, detail, report)
         assert report.get('branch') is None and 'error' not in report
     git(path, 'checkout', '-q', '-b', 'someone-else')
-    row.update(state='present', detail_json='{}')
+    row.update(state='present', detail='{}')
     assert W.inspect(workspace, row)['state'] != 'present'
     git(path, 'checkout', '-q', '--detach')
     link = client.post.return_value
@@ -1311,7 +1311,7 @@ def test_interrupted_add_refuses_a_worktree_on_a_different_branch(trees):
 def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_reported(trees):
     workspace, base, remote, row, client = trees
     saved = {**row, 'state': 'pending', 'task_status': 'open', 'bot_state': 'active',
-             'detail_json': json.dumps({'checkout_state': 'queued', 'setup_pending': True, 'wait_id': 'w1'})}
+             'detail': json.dumps({'checkout_state': 'queued', 'setup_pending': True, 'wait_id': 'w1'})}
     repo = {**row, 'access': 'write'}
     client.get.side_effect = lambda route: {'worktrees': [saved]} if route.endswith('/worktrees') else {'repositories': [repo]}
     client.post.return_value = {'token': 'synthetic-worktree-token'}
@@ -1319,9 +1319,9 @@ def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_r
 
     def patch(route, body):
         patches.append(body)
-        detail = json.loads(saved['detail_json'])
+        detail = json.loads(saved['detail'])
         detail.update({k: v for k, v in body.items() if k != 'state'})
-        saved.update(state=body.get('state', saved['state']), detail_json=json.dumps(detail))
+        saved.update(state=body.get('state', saved['state']), detail=json.dumps(detail))
         return saved
     client.patch.side_effect = patch
     idle = [False]
@@ -1341,7 +1341,7 @@ def test_a_reserved_worktree_is_prepared_only_while_idle_and_a_failed_setup_is_r
         assert 'error' not in manager.reports[0]
         # A setup that fails is recorded on the worktree and reported, for the server to tell the task once.
         other = {**saved, 'id': 'link2', 'path': 'tasks/12345678/org__product-2', 'branch': 'tico/12345678-other',
-                 'state': 'pending', 'detail_json': json.dumps({'checkout_state': 'queued', 'setup_pending': True})}
+                 'state': 'pending', 'detail': json.dumps({'checkout_state': 'queued', 'setup_pending': True})}
         saved.clear()
         saved.update(other)
         repo['setup_command'] = 'exit 7'
@@ -1365,9 +1365,9 @@ def test_the_advertised_retry_resumes_an_expired_setup_in_place(trees, phase):
     marker = W._read_marker(workspace, row['id'])
     W._write_marker(workspace, {**marker, 'phase': phase})
     row.update(state='pending', checkout_state=phase, setup_pending=True)
-    detail = json.loads(row['detail_json'])
+    detail = json.loads(row['detail'])
     detail.update(checkout_state=phase, setup_pending=True)
-    row['detail_json'] = json.dumps(detail)
+    row['detail'] = json.dumps(detail)
     repo = client.get.return_value['repositories'][0]
     client.get.side_effect = lambda route: ({'links': [{**row, 'kind': 'worktree'}]} if route.endswith('/links')
                                             else {'repositories': [repo]})

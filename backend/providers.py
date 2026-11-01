@@ -557,7 +557,7 @@ def save(c, actor, body, now, settings=None):
              "meeting_model": before["meeting_model"] if body.get("meeting_model") is None else meeting}
     # The Gateway's provider is never stored: it follows the connection (`with_gateway`).
     stored = {**after, "enabled": [name for name in enabled if name not in gateway], "meeting_model": meeting}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (KEY, json.dumps(stored, sort_keys=True)))
     return before, after
 
@@ -772,10 +772,10 @@ def runtimes_run_on(c, settings):
     from .shared_bots import follow
     from .task_models import of as task_model_of
     record, found = load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id, a.bot, bc.config_json FROM assignments a "
+    for row in c.execute("SELECT a.runner_id, a.bot, bc.config FROM assignments a "
                          "LEFT JOIN bot_config bc ON bc.bot=a.bot"):
         try:
-            config = follow(c, row["bot"], json.loads(row["config_json"] or "{}"))
+            config = follow(c, row["bot"], json.loads(row["config"] or "{}"))
         except ValueError:
             config = {}
         try:
@@ -795,10 +795,10 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config_json FROM assignments a JOIN bots b ON b.id=a.bot "
+    for row in c.execute("SELECT a.runner_id, bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
                          "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
         try:
-            config = json.loads(row["config_json"] or "{}")
+            config = json.loads(row["config"] or "{}")
         except ValueError:
             config = {}
         runtime = bot_choice(c, settings, config)[0]

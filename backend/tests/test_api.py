@@ -51,7 +51,7 @@ def api(tmp_path, api_database):
                 {"id": "cara", "email": "cara@acme.example"}]}),))
             for slug, config in bots.items():
                 product = slug in ("cpo", "product-design")
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "product" if product else None, "ben" if product else "ana"))
             # The company's mail bot is Ana's alone: nobody else sees it, reads it or writes to it.
             restrict(c, "inbox", people=["ana"])
@@ -66,12 +66,12 @@ def api(tmp_path, api_database):
 def unrelated_task_managers(c, *slugs):
     """Keep privacy negatives outside the parties' org chains, without changing bot access grants."""
     import json
-    roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+    roster = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
     if not any(p['id'] == 'privacy-lead' for p in roster['people']):
         roster['people'].append({'id': 'privacy-lead', 'email': 'privacy-lead@acme.example'})
     c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
               ('privacy-lead', 'Privacy Lead', 'privacy-lead@acme.example'))
-    c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(roster),))
+    c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(roster),))
     targets = slugs or tuple(row[0] for row in c.execute('SELECT bot FROM bot_config'))
     for slug in targets:
         c.execute("UPDATE bot_config SET reports_to='human:privacy-lead' WHERE bot=?", (slug,))
@@ -85,7 +85,7 @@ def restrict(c, bot, **audience):
     levels = {level: audience.pop(level) for level in BA.LEVELS if level in audience}
     every = {level: levels.get(level, audience) for level in BA.LEVELS}
     bot = (H.resolve_bot(c, bot) or {}).get("id", bot)              # a bot by its id or its slug
-    c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+    c.execute("UPDATE bot_config SET access=? WHERE bot=?",
               (BA.stored(BA.document({level: BA.audience(value) for level, value in every.items()})), bot))
 
 

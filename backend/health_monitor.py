@@ -241,8 +241,8 @@ def _runner_checks(c, settings):
                             f"Ask the person who runs {x['label']} to wake it and check Tico there "
                             "(`tico status`; `tico restart` starts it again), or move its bots to an online computer."))
     starts = None
-    for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL").fetchall():
-        lines = [str(x) for x in (readiness_document(r["readiness_json"]).get("recent_errors") or [])]
+    for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL").fetchall():
+        lines = [str(x) for x in (readiness_document(r["readiness"]).get("recent_errors") or [])]
         for check_id, kind, pattern, least, title, fix in LOG_PATTERNS:
             hits = [line for line in lines if pattern.search(line)]
             if check_id == "event_stream" and hits:
@@ -270,7 +270,7 @@ def _login(c, settings, bot, result, configs):
     if usage.get("runtime"):
         return str(usage["runtime"]), str(usage.get("harness") or "")
     if bot not in configs:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         configs[bot] = json.loads(row[0] or "{}") if row else {}
     return providers.bot_choice(c, settings, configs[bot])[0], resolve_harness(configs[bot])
 
@@ -289,11 +289,11 @@ def out_of_quota_logins(c, settings=None):
     that failed for another reason says nothing either way. [{runner_id, runtime, limits, since, resets_at}]"""
     now = H.now()
     seen, configs, out = {}, {}, []
-    for r in c.execute("SELECT bot,runner_id,state,finished,result_json FROM attempts WHERE finished>? "
-                       "AND state IN ('completed','failed','interrupted') AND result_json IS NOT NULL "
-                       "AND json_extract(result_json,'$.profile_used') IS NULL ORDER BY finished DESC",
+    for r in c.execute("SELECT bot,runner_id,state,finished,result FROM attempts WHERE finished>? "
+                       "AND state IN ('completed','failed','interrupted') AND result IS NOT NULL "
+                       "AND json_extract(result,'$.profile_used') IS NULL ORDER BY finished DESC",
                        (H.shift(now, hours=-24),)):
-        result = json.loads(r["result_json"])
+        result = json.loads(r["result"])
         runtime, harness = _login(c, settings, r["bot"], result, configs)
         if not _computer_login(runtime, harness):
             continue
@@ -321,7 +321,7 @@ def out_of_quota_logins(c, settings=None):
 
 def _login_checks(c, settings):
     from .store import readiness_document
-    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness_json FROM runners WHERE revoked_at IS NULL")}
+    runners = {r["id"]: r for r in c.execute("SELECT id,label,readiness FROM runners WHERE revoked_at IS NULL")}
     labels = {rid: r["label"] for rid, r in runners.items()}
     record = providers.load(c, settings)
     out = []
@@ -331,7 +331,7 @@ def _login_checks(c, settings):
             continue                                  # a removed computer runs nothing more
         login = models_preset.LOGIN_NAMES.get(x["runtime"])
         if (login and models_preset.fallback_row(record) and record.get("auto_fallback")
-                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness_json"]))):
+                and models_preset.runs_gateway(readiness_document(runners[x["runner_id"]]["readiness"]))):
             # Under the two Gateway choices the bots there finish on Tico Gateway, last: one plain line.
             out.append(_finding(f"default_login_limited:{x['runner_id']}:{x['runtime']}", "default_login_limited", SETUP,
                                 f"{label}'s {login} login is used up",
@@ -361,7 +361,7 @@ def _check_hold_checks(c):
     from . import check_models
     now = H.now()
     out = []
-    limited = "(coalesce(json_extract(result_json,'$.limited'),0) AND state<>'completed')"
+    limited = "(coalesce(json_extract(result,'$.limited'),0) AND state<>'completed')"
     for t in c.execute("SELECT t.id,t.title,t.private,t.owner FROM registry_metadata r "
                        "JOIN tasks t ON t.id=substr(r.key,15) WHERE r.key>='check-limited:' AND r.key<'check-limited;' "
                        f"AND t.status IN ({','.join('?' * len(H.ACTIVE_STATUSES))}) AND t.owner LIKE 'bot:%'",
@@ -409,7 +409,7 @@ def _release_approval_checks(c, settings):
     for row in H._rows(c.execute("SELECT * FROM approvals WHERE decision IS NULL AND kind='publish' "
                                  "AND coalesce(ready_since,created)<? ORDER BY created",
                                  (H.shift(at, minutes=-minutes),))):
-        row["payload"] = H._json(row.get("payload_json"), {}) or {}
+        row["payload"] = H._json(row.get("payload"), {}) or {}
         if not H.is_release_approval(row["kind"], row["payload"]):
             continue
         H.approval_wait(c, row, at)
@@ -476,8 +476,8 @@ def _bot_checks(c, settings=None):
     out = []
     since = H.shift(H.now(), hours=-24)
     limited = {}
-    for r in c.execute("SELECT detail_json FROM events WHERE action='attempt.limited' AND ts>?", (since,)):
-        detail = json.loads(r["detail_json"] or "{}")
+    for r in c.execute("SELECT detail FROM events WHERE action='attempt.limited' AND ts>?", (since,)):
+        detail = json.loads(r["detail"] or "{}")
         if (detail.get("source") or {}).get("kind") == login_holds.CAPACITY_KIND:
             continue                    # a busy model for two minutes, not a spent subscription or spend limit
         if detail.get("bot"):
@@ -486,8 +486,8 @@ def _bot_checks(c, settings=None):
     company = providers.default_fallbacks(record)
     for bot, n in sorted(limited.items()):
         label = (H.bot(c, bot) or {}).get("slug", bot)
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        declared = json.loads(config["config_json"] or "{}") if config and config["config_json"] else {}
+        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        declared = json.loads(config["config"] or "{}") if config and config["config"] else {}
         # The Gateway row counts only where the bot's computer can run it (a Mac skips it: runner-rs/src/fallback.rs).
         computer = models_preset.computer_of(c, bot)
         here = models_preset.runnable_fallbacks(record, computer, company)
@@ -531,9 +531,9 @@ def _bot_checks(c, settings=None):
                                 BUG_FIX["queue_idle"]))
     from .worktrees import current_error, supported
     if supported(c):
-        for r in c.execute("SELECT t.owner,l.state,l.detail_json FROM task_links l JOIN tasks t ON t.id=l.task_id "
+        for r in c.execute("SELECT t.owner,l.state,l.detail FROM task_links l JOIN tasks t ON t.id=l.task_id "
                            "WHERE l.kind='worktree' AND l.state<>'removed'"):
-            error = current_error(r["state"], json.loads(r["detail_json"] or "{}"))
+            error = current_error(r["state"], json.loads(r["detail"] or "{}"))
             if error:
                 bot = H.actor_id(r["owner"])
                 label = (H.bot(c, bot) or {}).get("slug", bot)

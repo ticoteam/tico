@@ -15,8 +15,8 @@ def aged(c, task_id, minutes):
 
 
 def wakes(c, task_id):
-    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:finance' AND refs_json LIKE ? "
-                     "AND refs_json LIKE '%stalled%'", (f'%{task_id}%',)).fetchone()[0]
+    return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:finance' AND refs LIKE ? "
+                     "AND refs LIKE '%stalled%'", (f'%{task_id}%',)).fetchone()[0]
 
 
 def test_a_task_nothing_will_move_wakes_its_bot_within_minutes_and_botops_takes_the_stubborn_ones(api):
@@ -49,7 +49,7 @@ def test_a_task_nothing_will_move_wakes_its_bot_within_minutes_and_botops_takes_
         c.execute("UPDATE events SET ts=? WHERE action='task.stall_wake' AND target=?",
                   (H.shift(H.now(), seconds=-3600), stuck["id"]))
         for _ in range(2):
-            c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(lower(hex(randomblob(8))),?,?,?,?,'{}')",
+            c.execute("INSERT INTO events(id,ts,actor,action,target,detail) VALUES(lower(hex(randomblob(8))),?,?,?,?,'{}')",
                       (H.shift(H.now(), seconds=-3600), H.KEEPER, "task.stall_wake", stuck["id"]))
         c.execute("UPDATE jobs SET state='completed' WHERE bot='finance'")
         aged(c, stuck["id"], 120)                # it has not moved since before those wakes
@@ -114,7 +114,7 @@ def test_a_task_with_a_recorded_wait_or_a_profile_without_sweeps_is_never_swept_
         task = lambda: H.task(c, row["id"])
         assert H.stall_skip(c, task()) is None
         # A pending approval, a milestone wait and an open subtask are each a wait the sweep respects.
-        c.execute("INSERT INTO approvals(id,kind,task_id,payload_json,requested_by,created) VALUES('ap1','send',?,'{}','bot:finance',?)",
+        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by,created) VALUES('ap1','send',?,'{}','bot:finance',?)",
                   (row["id"], H.now()))
         assert H.stall_skip(c, task()) == "approval"
         c.execute("DELETE FROM approvals")
@@ -139,7 +139,7 @@ def test_a_chat_task_gets_its_own_room_reports_once_and_a_quiet_session_is_check
     with api.app.state.store.transaction() as c:
         c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         lines = lambda: [(r[0], json.loads(r[1])) for r in c.execute(
-            "SELECT body,refs_json FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created", (room, H.KEEPER))]
+            "SELECT body,refs FROM messages WHERE conversation_id=? AND from_actor=? ORDER BY created", (room, H.KEEPER))]
         task = H.task_create(c, H.human_actor("ana"), "Recheck the cash warning", "Before the deadline.", "bot:finance",
                              conversation_id=room)
         assert task["conversation_id"] != room and H.conversation(c, task["conversation_id"])["kind"] == "task"
@@ -182,7 +182,7 @@ def test_closing_what_the_bot_already_finished_does_not_wake_it_unless_the_note_
     with api.app.state.store.transaction() as c:
         def closed_wakes(task_id):
             rows = c.execute("SELECT m.id,(SELECT count(*) FROM jobs j WHERE j.message_id=m.id) FROM messages m "
-                             "WHERE m.to_actor='bot:finance' AND m.body LIKE 'Closed:%' AND m.refs_json LIKE ?",
+                             "WHERE m.to_actor='bot:finance' AND m.body LIKE 'Closed:%' AND m.refs LIKE ?",
                              (f'%{task_id}%',)).fetchall()
             return [r[1] for r in rows]
         ana = H.human_actor("ana")
@@ -223,7 +223,7 @@ def test_a_bot_still_in_setup_holds_work_from_bots_in_sight_and_is_not_busy_for_
         assert H.wake_stalled(c)["held"] == [task["id"]]
         assert wakes(c, task["id"]) == 0
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='finance' AND state='queued'").fetchone()[0] == 2
-        told = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE '%setup_held%'").fetchone()[0]
+        told = c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs LIKE '%setup_held%'").fetchone()[0]
         assert told == 1, "the bot that asked is told why"
         reminder = [t for t in H.needs_you(c, "ana")["tasks"] if t["title"].startswith("Finish onboarding finance")]
         assert len(reminder) == 1 and task["id"] in reminder[0]["body"]
@@ -258,8 +258,8 @@ def test_a_task_held_only_by_its_own_quiet_subtask_is_flagged_woken_and_shown_st
             aged(c, t["id"], 6)
         woken = H.wake_stalled(c)["woke"]
         assert window["id"] in woken and asked["id"] not in woken
-        woke = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE ? "
-                         "AND refs_json LIKE '%stalled%'", (f'%{window["id"]}%',)).fetchall()
+        woke = c.execute("SELECT body FROM messages WHERE to_actor='bot:ops' AND refs LIKE ? "
+                         "AND refs LIKE '%stalled%'", (f'%{window["id"]}%',)).fetchall()
         assert len(woke) == 1 and "blocked only by its own subtask" in woke[0][0] and hold["id"] in woke[0][0]
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='ops' AND state='queued'").fetchone()[0] >= 1
         # The question for a person is not a stuck block: its task is left alone.
@@ -293,7 +293,7 @@ def test_todays_hold_with_no_date_snooze_or_resume_still_wakes_its_parent_and_is
         window, hold = held_window(c)
         H.task_comment(c, "bot:finance", hold["id"], "Checkpoint: holding services merges until RELEASED.", wake=False)
         row = H.task(c, hold["id"])
-        assert not row["due"] and not row["snoozed_until"] and not row["resume_json"]
+        assert not row["due"] and not row["snoozed_until"] and not row["resume"]
         assert flagged(c, window, hold) == (True, True)
 
 
@@ -307,7 +307,7 @@ def test_a_hold_with_its_own_timed_wait_does_not_stall_its_parent_until_that_tim
     with api.app.state.store.transaction() as c:
         window, hold = held_window(c)
         if wait == "resume":
-            c.execute("UPDATE tasks SET resume_json=? WHERE id=?", (json.dumps({"after": "ci"}), hold["id"]))
+            c.execute("UPDATE tasks SET resume=? WHERE id=?", (json.dumps({"after": "ci"}), hold["id"]))
         elif wait == "milestone":    # Oct 22: a hold waiting for a release (or a PR merge) is woken by it
             MW.add(c, "bot:finance", hold, "release:ticoteam/tico@v9.9.9")
         else:
@@ -384,7 +384,7 @@ def test_a_queued_child_job_held_by_the_claim_fence_does_not_silence_its_parent(
         window, hold = held_window(c)
         if reason == "uncertain":
             c.execute("UPDATE jobs SET state='uncertain' WHERE bot='finance'")
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                       "VALUES(?,?,'bot:ops','bot:finance','notice','Continue the hold',?,?)",
                       (H.new_id(), hold["conversation_id"], json.dumps({"task": hold["id"]}), H.now()))
         else:
@@ -464,12 +464,12 @@ def test_between_the_retry_and_the_stuck_report_no_stall_wake_and_the_report_cou
         out = H.wake_stalled(c)
         assert out["woke"] == [] and out["checked"] == [] and out["stuck"] == []
         # An earlier stall wake today counts in the report with the status check and the retry.
-        c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(?,?,?,?,?,?)",
+        c.execute("INSERT INTO events(id,ts,actor,action,target,detail) VALUES(?,?,?,?,?,?)",
                   (H.new_id(), H.shift(H.now(), seconds=-7200), H.KEEPER, "task.stall_wake", task["id"], "{}"))
         c.execute("UPDATE events SET ts=? WHERE action='task.stuck_retry' AND target=?",
                   (H.shift(H.now(), seconds=-1900), task["id"]))
         assert H.wake_stalled(c)["stuck"] == [task["id"]]
-        escalated = c.execute("SELECT detail_json FROM events WHERE action='task.stall_escalated' AND target=?",
+        escalated = c.execute("SELECT detail FROM events WHERE action='task.stall_escalated' AND target=?",
                               (task["id"],)).fetchone()[0]
         assert json.loads(escalated)["wakes"] == 3
 
@@ -483,12 +483,12 @@ def test_stall_checks_back_off_while_a_task_stands_unchanged_and_start_over_when
         aged(c, tid, 6)
         assert H.wake_stalled(c)["woke"] == [tid]
         stand = H._stall_stand(c, H.task(c, tid))
-        assert [e for (e,) in c.execute("SELECT json_extract(detail_json,'$.stand') FROM events "
+        assert [e for (e,) in c.execute("SELECT json_extract(detail,'$.stand') FROM events "
                                         "WHERE action='task.stall_wake' AND target=?", (tid,))] == [stand]
 
         def add_wakes(n):
             for _ in range(n):
-                c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(lower(hex(randomblob(8))),?,?,"
+                c.execute("INSERT INTO events(id,ts,actor,action,target,detail) VALUES(lower(hex(randomblob(8))),?,?,"
                           "'task.stall_wake',?,?)", (H.now(), H.KEEPER, tid, json.dumps({"stand": stand})))
 
         def gap():
@@ -523,7 +523,7 @@ def test_a_task_unchanged_through_three_spread_out_checks_still_goes_to_botops(a
         stand = H._stall_stand(c, H.task(c, tid))
         # Three checks 9 hours apart: only two fall in the last day, yet nothing moved through all three.
         for hours in (27, 18, 9):
-            c.execute("INSERT INTO events(id,ts,actor,action,target,detail_json) VALUES(lower(hex(randomblob(8))),?,?,"
+            c.execute("INSERT INTO events(id,ts,actor,action,target,detail) VALUES(lower(hex(randomblob(8))),?,?,"
                       "'task.stall_wake',?,?)", (H.shift(H.now(), hours=-hours), H.KEEPER, tid, json.dumps({"stand": stand})))
         aged(c, tid, 30 * 60)
         assert H.wake_stalled(c)["escalated"] == [tid]

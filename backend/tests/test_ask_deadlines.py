@@ -33,7 +33,7 @@ def test_a_reversible_default_goes_ahead_after_the_teams_days_and_a_send_waits(a
     with api.app.state.store.read() as c:
         answer = _answer(c, safe_ask)
         assert answer["from_actor"] == H.KEEPER and answer["to_actor"] == "bot:ops"
-        assert "goes ahead" in answer["body"] and H._json(answer["refs_json"], {})["answer"]["answers"] == {"decision": ["Yes"]}
+        assert "goes ahead" in answer["body"] and H._json(answer["refs"], {})["answer"]["answers"] == {"decision": ["Yes"]}
         assert H.task(c, safe["id"])["waiting_on"] is None
         assert c.execute("SELECT 1 FROM jobs WHERE message_id=?", (answer["id"],)).fetchone()   # Ops wakes on it
         assert _answer(c, send_ask) is None and _answer(c, fresh_ask) is None

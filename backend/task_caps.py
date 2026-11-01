@@ -275,8 +275,8 @@ def forget(c, teammate):
                          (teammate, teammate)).fetchall():
         apply(c, H.KEEPER, row["sender"], row["receiver"], None, via="group move")
     named = ref(teammate)
-    for row in c.execute("SELECT id, payload_json FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
-        change = json.loads(row["payload_json"] or "{}")
+    for row in c.execute("SELECT id, payload FROM approvals WHERE kind='task_cap' AND decision IS NULL").fetchall():
+        change = json.loads(row["payload"] or "{}")
         if named in (change.get("sender"), change.get("receiver")):
             H.approval_withdraw(c, row["id"], "A teammate in it moved group.")
 
@@ -295,9 +295,9 @@ def may_set(c, auth, who, sender):
 def _proposals(c):
     """The bots' cap changes a person has yet to decide: undecided approvals of kind task_cap."""
     out = []
-    for row in c.execute("SELECT id, requested_by, created, payload_json FROM approvals "
+    for row in c.execute("SELECT id, requested_by, created, payload FROM approvals "
                          "WHERE kind='task_cap' AND decision IS NULL ORDER BY created"):
-        change = json.loads(row["payload_json"] or "{}")
+        change = json.loads(row["payload"] or "{}")
         out.append({"id": row["id"], "sender": change.get("sender"), "receiver": change.get("receiver"),
                     "per_day": change.get("per_day"), "status": "pending", "proposed_by": ref(row["requested_by"]),
                     "created": row["created"]})

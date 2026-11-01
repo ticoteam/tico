@@ -28,7 +28,7 @@ class TaskRow(TypedDict):
     closed_by: str | None
     note: str | None
     goal_id: str | None
-    labels_json: str
+    labels: str
     type_id: str | None
     step_id: str | None
     number: int | None
@@ -40,7 +40,7 @@ class TaskRow(TypedDict):
     rank: float | None
     next_run: int
     carried_by: str | None
-    resume_json: str | None
+    resume: str | None
     occurrence: str | None
     occurrence_step: str | None
     rule_due_id: str | None
@@ -60,7 +60,7 @@ class TaskRow(TypedDict):
     blocked_kind: str | None
     blocked_from_step: str | None
     blocked_from_status: str | None
-    blocked_gate_json: str | None
+    blocked_gate: str | None
     building_started_at: str | None
     building_seconds: float
     holds_cleared_at: str | None
@@ -71,7 +71,7 @@ class TaskRow(TypedDict):
     size: float | None
     request_id: str | None
     version: int
-    acceptance_json: str
+    acceptance: str
 
 
 class AttemptRow(TypedDict):
@@ -88,7 +88,7 @@ class AttemptRow(TypedDict):
     started: str | None
     finished: str | None
     thread_id: str | None
-    result_json: str | None
+    result: str | None
     final_text: str | None
     last_seq: int
     stop_requested: str | None
@@ -96,8 +96,8 @@ class AttemptRow(TypedDict):
     handed_runtime: str | None
     handed_model: str | None
     lane: str
-    wake_json: str | None
-    model_json: str | None
+    wake: str | None
+    model: str | None
 
 
 class RunnerRow(TypedDict):
@@ -112,10 +112,10 @@ class RunnerRow(TypedDict):
     platform: str | None
     version: str | None
     capacity: int
-    readiness_json: str
-    capabilities_json: str
+    readiness: str
+    capabilities: str
     awake_since: str | None
-    checkout_json: str | None
+    checkout: str | None
     restart_requested: str | None
     readiness_at: str | None
     accepts_member_bots: int
@@ -132,7 +132,7 @@ class ApprovalRow(TypedDict):
     kind: str | None
     task_id: str | None
     message_id: str | None
-    payload_json: str | None
+    payload: str | None
     payload_hash: str | None
     requested_by: str | None
     decided_by: str | None
@@ -141,7 +141,7 @@ class ApprovalRow(TypedDict):
     consumed_at: str | None
     created: str | None
     decided_via: str | None
-    decided_for_json: str | None
+    decided_for: str | None
     ready_since: str | None
     decision_owner: str | None
 
@@ -152,7 +152,7 @@ class AttemptEventRow(TypedDict):
     attempt_id: str
     seq: int
     kind: str
-    payload_json: str
+    payload: str
     created: str
 
 

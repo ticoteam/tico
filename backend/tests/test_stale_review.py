@@ -54,13 +54,13 @@ def stale(api):
 def calls(store, label="stale-review@1"):
     with store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='judge.call' AND target=? ORDER BY rowid", (label,))]
+            "SELECT detail FROM events WHERE action='judge.call' AND target=? ORDER BY rowid", (label,))]
 
 
 def passes(store):
     with store.read() as c:
         return [json.loads(r[0]) for r in c.execute(
-            "SELECT detail_json FROM events WHERE action='stale_review.pass' ORDER BY rowid")]
+            "SELECT detail FROM events WHERE action='stale_review.pass' ORDER BY rowid")]
 
 
 def comments(store, task_id):

@@ -460,9 +460,9 @@ def slack_diag(org, gateway):
     with org.store.read() as c:
         rows = [dict(r) for r in c.execute("SELECT * FROM slack_events ORDER BY received, ts")]
         since = c.execute("SELECT MIN(created) FROM automations WHERE trigger_type='message' AND enabled=1 "
-                          "AND deleted_at IS NULL AND flow_json LIKE '%slack:#%'").fetchone()[0]
+                          "AND deleted_at IS NULL AND flow LIKE '%slack:#%'").fetchone()[0]
         autos = [dict(r) for r in c.execute("SELECT name,trigger_type,enabled,created,deleted_at,owner FROM automations "
-                                            "WHERE flow_json LIKE '%slack:#%'")]
+                                            "WHERE flow LIKE '%slack:#%'")]
         senders = {}
         for r in rows:
             if r["state"] == "stored" and r["channel_kind"] == "channel":
@@ -1309,7 +1309,7 @@ def wf7_notices(f):
     """A run-guard trip sends one held notice to BotOps and one to the Health monitor: hub notices from the keeper, kind
     notice, refs.held naming the bot (CONTRACT section 1)."""
     setup(f, "budget", "seed", "notices")   # "loop" is a list of turns, read by wf9_loop; it is not a reply
-    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs_json"])]
+    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
     to_botops = [r for r in held if "botops" in str(r["to_actor"])]
     to_health = [r for r in held if "health-monitor" in str(r["to_actor"])]
     return len(to_botops) == 1 and len(to_health) == 1 and len(held) == 2, \
@@ -1507,7 +1507,7 @@ def wf9_still(f):
 
 def hub_holds(org):
     """The hub's held notices (kind notice, refs.held), as a reply."""
-    return Reply(200, sql(org, "SELECT to_actor, refs_json FROM messages WHERE kind='notice' AND refs_json LIKE ?",
+    return Reply(200, sql(org, "SELECT to_actor, refs FROM messages WHERE kind='notice' AND refs LIKE ?",
                           ("%held%",)), W2)
 
 
@@ -1515,7 +1515,7 @@ def wf9_notices(f):
     """One held notice each to BotOps and to the Health monitor: hub notices from the keeper, kind notice, refs.held
     naming the bot (CONTRACT section 1). They are hub messages, not Tico Team notices, so they are read from the hub."""
     setup(f, "budget", "auto", "notices")
-    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs_json"])]
+    held = [r for r in body(f, "notices") if OPENAI_ID in str(r["refs"])]
     to_botops = [r for r in held if "botops" in str(r["to_actor"])]
     to_health = [r for r in held if "health-monitor" in str(r["to_actor"])]
     return len(to_botops) == 1 and len(to_health) == 1 and len(held) == 2, \

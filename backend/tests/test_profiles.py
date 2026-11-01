@@ -17,18 +17,18 @@ from backend.tests.test_wake_rules import jobs, news
 
 def add_bot(c, slug, **config):
     H.sync_registry(c, {slug: {"name": slug, "runtime": "fake", "status": "active"}}, {"people": []})
-    c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+    c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
               (slug, encode({"name": slug, "runtime": "fake", "status": "active", **config}), None, "ana"))
 
 
 def profile_of(c, slug):
-    return json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+    return json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
 
 
 def put(c, slug, name, **options):
     """Give an existing bot a profile the way the API does (without the Strategy Bot gate or audit)."""
     declared = profile_of(c, slug)
-    c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(P.apply(declared, name, options)), slug))
+    c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(P.apply(declared, name, options)), slug))
 
 
 def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api):
@@ -47,7 +47,7 @@ def test_migration_gives_each_bot_a_profile_by_name_once_and_tells_its_owner(api
         if kind is None:
             c.execute("INSERT INTO task_types(id,name,created,updated) VALUES('dev','Dev tickets',?,?)", (H.now(), H.now()))
         H.task_create(c, "human:ana", "Fix login", "x", "bot:pr-reviewer", type="Dev tickets")
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.profile','doer') WHERE bot='cpo'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.profile','doer') WHERE bot='cpo'")
         told = P.migrate(c)
         got = {slug: profile_of(c, slug) for slug in (*slugs, "saver", "grok-designer", "pr-reviewer", "cpo")}
         assert {slug: got[slug]["profile"] for slug in slugs} == slugs
@@ -159,7 +159,7 @@ def test_release_qa_uses_one_classification_for_creation_pull_wake_and_health(ap
             # Synthetic step: no production task, factory gate or PR is involved.
             kind = {"Post Release QA": "release_qa", "In QA": "qa", "Review 1": "review", "Review 2": "review",
                     "Second opinion": "review"}.get(parent_step)
-            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow_json) "
+            c.execute("INSERT INTO task_steps(id,type_id,name,position,status,flow) "
                       "VALUES('qa-stage','general',?,99,'review',?)",
                       (parent_step, json.dumps({"check": kind}) if kind else None))
             c.execute("UPDATE tasks SET step_id='qa-stage' WHERE id=?", (parent["id"],))
@@ -338,7 +338,7 @@ def test_the_profiles_catch_all_never_beats_a_team_or_type_rule_and_a_leads_own_
         put(c, "checker", P.REVIEWER)
         add_bot(c, "boss")
         put(c, "boss", P.LEAD)
-        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,when_json,then_outcome,params_json,enabled,position,"
+        c.execute("INSERT INTO rules(id,scope_kind,scope_id,event,condition,then_outcome,params,enabled,position,"
                   "created_by,created,updated,revision) VALUES('team-wake','team','','status_or_relation','{}','wake','{}',"
                   "1,1,'human:ana',?,?,1)", (H.now(), H.now()))
         parent = H.task_create(c, "bot:ops", "Build 1/9", "x", "bot:cpo")
@@ -445,7 +445,7 @@ def test_undoing_a_profile_change_restores_it_but_not_rules_that_were_dropped(ap
 
 
 def last_to(c, slug):
-    row = c.execute("SELECT refs_json FROM messages WHERE to_actor=? ORDER BY rowid DESC LIMIT 1", ("bot:" + slug,)).fetchone()
+    row = c.execute("SELECT refs FROM messages WHERE to_actor=? ORDER BY rowid DESC LIMIT 1", ("bot:" + slug,)).fetchone()
     return json.loads(row[0])
 
 

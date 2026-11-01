@@ -85,7 +85,7 @@ there and it goes to the assistant the same way. Each call's cost is written dow
 its retries and the final failure lose none and add none; each `judge.call` the gateway audits repeats the message's
 `cost_usd` for reading.
 
-Every score and answer is stored: on the event (`slack_events.routing_json`) and on the message
+Every score and answer is stored: on the event (`slack_events.routing`) and on the message
 (`refs.routing`), where the conversation view shows it as a chip (`routed by decisions to Legal 92%`).
 A misroute is fixed by a better description in the bot's registry entry, not by a rule.
 

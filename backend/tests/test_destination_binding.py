@@ -55,7 +55,7 @@ def test_the_safe_identity_shows_scheme_host_and_port_and_nothing_else():
 
 def events(api, action=destinations.EVENT):
     with api.app.state.store.read() as c:
-        return [dict(r, detail=json.loads(r["detail_json"])) for r in
+        return [dict(r, detail=json.loads(r["detail"])) for r in
                 c.execute("SELECT * FROM events WHERE action=? ORDER BY ts, id", (action,))]
 
 
@@ -602,8 +602,8 @@ def test_a_card_for_a_same_service_gateway_path_shows_only_scheme_host_and_port(
         assert {"field": "destination", "old": address, "new": address} in action["diff"]
         assert {"field": "path", "new": destinations.PATH_CHANGED} in action["diff"]
         with api.app.state.store.read() as c:
-            row = c.execute("SELECT description, diff_json FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
-        for text in (json.dumps(action["diff"]), action["description"], row["description"], row["diff_json"],
+            row = c.execute("SELECT description, diff FROM assistant_actions WHERE id=?", (action["id"],)).fetchone()
+        for text in (json.dumps(action["diff"]), action["description"], row["description"], row["diff"],
                      everything(api, receipts=False).replace(json.dumps(private)[1:-1], "")):
             assert "private-tenant" not in text and "/v1/gateway" not in text, text
         assert gateway(api)["url"] == fake.url

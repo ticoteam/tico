@@ -73,7 +73,7 @@ def hosted(api, monkeypatch):  # noqa: F811
 
 def events(store, action):
     with store.read() as c:
-        return [(r["actor"], json.loads(r["detail_json"] or "{}"))
+        return [(r["actor"], json.loads(r["detail"] or "{}"))
                 for r in c.execute("SELECT * FROM events WHERE action=? ORDER BY rowid", (action,))]
 
 

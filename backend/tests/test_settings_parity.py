@@ -140,7 +140,7 @@ def _objects(api, machine):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO repositories(id,full_name,enabled,updated) VALUES(?,?,1,?)",
                   (H.new_id(), "Acme/product", now))
-        c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,created,"
+        c.execute("INSERT INTO bot_transitions(id,bot,kind,target,requested_by,expected_revision,state,created,"
                   "updated) VALUES('tr-parity','finance','model',?,'human:ana',1,'prepared',?,?)",
                   ('{"model": "fake-model", "runtime": "fake", "effort": ""}', now, now))
         system = c.execute("SELECT id FROM system_routines LIMIT 1").fetchone() if c.execute(

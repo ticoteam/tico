@@ -34,7 +34,7 @@ def test_busy_install_routes(api, monkeypatch):
         for i in range(100):
             for j in range(20):
                 mid = f'input-{i}-{j}'
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json,in_reply_to) "
+                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs,in_reply_to) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Synthetic input',?,?,?)",
                           (mid, f'room-{i}', now, encode({'task': f'task-{i}', 'answers': [f'message-{k}' for k in range(10)]}),
                            f'input-{i}-{j-1}' if j else None))
@@ -43,10 +43,10 @@ def test_busy_install_routes(api, monkeypatch):
                 c.execute("UPDATE jobs SET state='input',attempt_id=? WHERE id=?", (f'attempt-{i}', mid))
         # Distinct task lanes leave real work for concurrent claims. The heartbeat
         # reports every checkout, as a busy runner does, rather than an empty inventory.
-        c.execute('UPDATE runners SET capacity=200,capabilities_json=? WHERE id=?',
+        c.execute('UPDATE runners SET capacity=200,capabilities=? WHERE id=?',
                   (encode([execution.LANES, execution.ROOTS]), computer['runner_id']))
         for i in range(197, 200):
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs) "
                       "VALUES(?,?,'human:ana','bot:ops','say','Synthetic queued work',?,?)",
                       (f'queued-{i}', f'room-{i}', now, encode({'task': f'task-{i}'})))
         c.execute("UPDATE tasks SET updated=?,owner='bot:finance',private=0 WHERE id IN (" + ','.join('?' * 10) + ")",

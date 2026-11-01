@@ -100,7 +100,7 @@ def test_a_run_the_last_process_held_is_flagged_at_start_and_resumes_if_it_lapse
     with TestClient(create_app(api.app.state.store.settings)) as restarted:
         store = restarted.app.state.store
         with store.read() as c:
-            [flag] = c.execute("SELECT detail_json FROM events WHERE action='attempt.update_cut' AND target=?",
+            [flag] = c.execute("SELECT detail FROM events WHERE action='attempt.update_cut' AND target=?",
                                (a["id"],)).fetchall()
         assert json.loads(flag[0])["cause"] == "restart"
         expire(restarted, a["id"])

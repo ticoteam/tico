@@ -47,7 +47,7 @@ def read_back(api, attempt, *changes, expected=200):
 
 
 def save(api, attempt, step, expected=200, ref="turn"):
-    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body_json"]), attempt["token"], ref,
+    return asked(api, step["path"].removeprefix("/api/v2/"), json.loads(step["body"]), attempt["token"], ref,
                  expected=expected)
 
 
@@ -74,7 +74,7 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     # Before the yes, nothing saves, cited or not.
     first, measure = back["changes"][0]["steps"]
     assert save(api, attempt, first, expected=403)["error"]["code"] == "not_agreed"
-    assert post(api, "goals", json.loads(first["body_json"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
+    assert post(api, "goals", json.loads(first["body"]), token=attempt["token"], expected=403)["error"]["code"] == "not_agreed"
     attempt = reply(api, r, attempt, "yes")
     assert room_messages(api)[-2]["id"] == back["message_id"]
     made = save(api, attempt, first)
@@ -93,8 +93,8 @@ def test_a_new_goal_is_read_back_by_tico_and_a_plain_yes_saves_exactly_it_as_the
     assert save(api, attempt, first, expected=409)["error"]["code"] == "conflict"
     # Recorded as the owner, via their Assistant, citing their yes and the read-back.
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor, detail_json FROM events WHERE action='goal.create' AND target=?", (gid,)).fetchone()
-    detail = H._json(row["detail_json"], {})
+        row = c.execute("SELECT actor, detail FROM events WHERE action='goal.create' AND target=?", (gid,)).fetchone()
+    detail = H._json(row["detail"], {})
     assert row["actor"] == "human:ana" and detail["via"] == "assistant"
     assert {k: detail["delegation"][k] for k in ("for", "cited", "assistant", "goal_read_back", "change", "words")} == \
         {"for": "human:ana", "cited": turn_message(api, attempt), "assistant": "bot:coo",
@@ -198,10 +198,10 @@ def test_a_save_that_differs_from_the_read_back_is_refused_and_saves_nothing(api
     back = read_back(api, attempt, {"kind": "goal_update", "goal_id": target["id"], "title": "Ship the docs"})
     step = back["changes"][0]["steps"][0]
     attempt = reply(api, r, attempt, "yes")
-    for changed in ({**step, "body_json": '{"title": "Ship the docs v2"}'},                       # another value
-                    {**step, "body_json": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
+    for changed in ({**step, "body": '{"title": "Ship the docs v2"}'},                       # another value
+                    {**step, "body": '{"title": "Ship the docs", "owner": "coo"}'},          # another field
                     {**step, "path": f"/api/v2/goals/{other['id']}"},                             # another goal
-                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body_json": '{"why": "Ship the docs"}'}):
+                    {**step, "path": f"/api/v2/goals/{target['id']}/why", "body": '{"why": "Ship the docs"}'}):
         assert save(api, attempt, changed, expected=403)["error"]["code"] == "not_agreed"
     assert [get(api, "goals/" + g["id"])["goal"]["title"] for g in (target, other)] == ["Launch the docs",
                                                                                           "Keep the bots running"]
@@ -422,7 +422,7 @@ def test_cli_read_back_and_cited_save_use_the_server_agreement(api, monkeypatch,
     assert hubcli.main(['goal', 'create', '--owner', 'company', '--title', 'First', '--on-behalf-of', 'turn']) == 0
     gid = json.loads(capsys.readouterr().out)['id']
     step = back['changes'][0]['steps'][1]
-    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body_json'],
+    assert hubcli.main(['goal', 'save', step['method'], step['path'], step['body'],
                        '--created-goal', gid, '--on-behalf-of', 'turn']) == 0
     capsys.readouterr()
     with api.app.state.store.read() as c:

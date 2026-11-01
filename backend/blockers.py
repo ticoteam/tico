@@ -16,7 +16,7 @@ GONE = ("paused", "planned", "archived", "quarantined")
 
 def devops(c):
     """The id of the active DevOps bot, or None."""
-    built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')=? "
+    built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config,'$.template')=? "
                                      "ORDER BY bot", (TEMPLATE,))] if H._has_table(c, "bot_config") else []
     for ident in (*built, *SLUGS):
         row = H.resolve_bot(c, ident)
@@ -46,9 +46,9 @@ def route(c, key, title, body, about=None):
     hidden = bool(about) and H.task_private(c, about)
     if hidden:
         key = "private:" + hashlib.sha256(key.encode()).hexdigest()[:24]
-    previous = H._one(c, "SELECT detail_json FROM events WHERE action='blocker.routed' AND target=? "
+    previous = H._one(c, "SELECT detail FROM events WHERE action='blocker.routed' AND target=? "
                          "ORDER BY rowid DESC LIMIT 1", (key,))
-    open_task = H.task(c, (H._json(previous["detail_json"], {}) or {}).get("task")) if previous else None
+    open_task = H.task(c, (H._json(previous["detail"], {}) or {}).get("task")) if previous else None
     if open_task and open_task["status"] in H.ACTIVE_STATUSES:
         return open_task
     devops_id = devops(c)

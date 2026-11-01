@@ -10,7 +10,7 @@ def setup(api, supported=True, runtime='codex'):
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (encode({'runtime': runtime}), 'ops'))
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': runtime}), 'ops'))
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test', 'readiness': {
         'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': runtime, 'goals': supported,
             'commands': [{'name': 'compact', 'help': 'Compact this conversation', 'kind': 'harness'},
@@ -84,7 +84,7 @@ def test_read_access_is_not_chat_access_and_other_rooms_stay_private(api):
     # A reader can inspect the goal in a conversation they joined but cannot change it.
     with api.app.state.store.transaction() as c:
         conv = H.conversation(c, cid)
-        c.execute("UPDATE conversations SET scope='direct',owner_actor=NULL,participants_json=? WHERE id=?",
+        c.execute("UPDATE conversations SET scope='direct',owner_actor=NULL,participants=? WHERE id=?",
                   (encode(conv['participants'] + ['human:cara']), cid))
         restrict(c, 'ops', see={'people': ['ana', 'cara']}, read={'people': ['ana', 'cara']}, write={'people': ['ana']})
     assert get(api, f'conversations/{cid}/goal', 'cara-test')['goal'] is None
@@ -133,7 +133,7 @@ def test_a_task_goal_is_set_by_the_keeper_and_meeting_it_marks_the_task_done(api
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (encode({'runtime': 'codex', 'task_goal': 'on'}), 'ops'))
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex', 'task_goal': 'on'}), 'ops'))
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
@@ -154,7 +154,7 @@ def task_goal_world(api):
     machine = runner(api)
     assign(api, machine, 'ops')
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (encode({'runtime': 'codex', 'task_goal': 'on'}), 'ops'))
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex', 'task_goal': 'on'}), 'ops'))
     post(api, 'runners/heartbeat', {'version': 'test', 'platform': 'test',
          'capabilities': ['task_lanes_v2', 'session_roots_v1', 'task_goals_v1'], 'readiness': {
          'schema_version': 1, 'bots': {'ops': {'ready': True, 'runtime': 'codex', 'goals': True}}}}, machine['token'])
@@ -169,12 +169,12 @@ def test_turning_a_task_goal_off_clears_it_natively_and_a_persons_goal_never_com
     goal_event(api, machine, first, 'paused', 'Waiting on: Ana')      # Codex blocked on a person: the goal pauses
     post(api, f"attempts/{first['id']}/complete", {'outcome': 'completed', 'last_seq': 1}, machine['token'])
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (encode({'runtime': 'codex'}), 'ops'))
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex'}), 'ops'))
         H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.')
     second = claim(api, machine)
     assert second['chat_goal']['status'] == 'cleared' and 'goal' not in second['task']
     with api.app.state.store.read() as c:
-        clear = c.execute("SELECT m.body,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
+        clear = c.execute("SELECT m.body,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
                           "WHERE j.state='queued' AND m.conversation_id=?", (task['conversation_id'],)).fetchall()
     assert [(b, '"goal_action": "clear"' in r) for b, r in clear] == [('/goal clear', True)]
     # A goal a person set in the task's room being met leaves the task as it is.
@@ -207,7 +207,7 @@ def test_another_bots_turn_in_the_task_room_leaves_the_owners_task_goal_alone(ap
     assert goal['id'] == first['chat_goal']['id'] and goal['status'] == 'active'
     with api.app.state.store.read() as c:
         queued = c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued' "
-                           "AND json_extract(m.refs_json,'$.goal_action') IS NOT NULL").fetchone()[0]
+                           "AND json_extract(m.refs,'$.goal_action') IS NOT NULL").fetchone()[0]
     assert queued == 0
 
 
@@ -256,7 +256,7 @@ def test_a_persons_edit_of_a_task_goal_survives_task_goals_turning_off(api):
     assert edited['set_by'] == 'human:ana'
     finish(api, machine, claim(api, machine))           # the edit's control
     with api.app.state.store.transaction() as c:
-        c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (encode({'runtime': 'codex'}), 'ops'))
+        c.execute('UPDATE bot_config SET config=? WHERE bot=?', (encode({'runtime': 'codex'}), 'ops'))
         H.task_comment(c, 'human:ana', task['id'], 'Use the new numbers.')
     claim(api, machine)
     goal = get(api, f"conversations/{task['conversation_id']}/goal")['goal']

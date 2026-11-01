@@ -87,8 +87,8 @@ def cadence(c, source):
     aid = (source or {}).get("automation") if isinstance(source, dict) else None
     if not aid:
         return "weekly"
-    row = c.execute("SELECT flow_json FROM automations WHERE id=?", (aid,)).fetchone()
-    trigger = (MK.loads(row["flow_json"], {}) if row else {}).get("trigger")
+    row = c.execute("SELECT flow FROM automations WHERE id=?", (aid,)).fetchone()
+    trigger = (MK.loads(row["flow"], {}) if row else {}).get("trigger")
     trigger = trigger if isinstance(trigger, dict) else {}
     return "weekly" if trigger.get("type") == "schedule" and _once_a_week(trigger.get("cron")) else "daily"
 

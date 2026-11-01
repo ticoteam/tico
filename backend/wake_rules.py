@@ -140,14 +140,14 @@ def _awaited_reply(conn, target, in_reply_to):
     """Whether a reply answers something `target` waits on: its own ask, a message it flagged needs-action, or one
     it sent with wait_s. True when the parent cannot be read."""
     try:
-        parent = conn.execute("SELECT from_actor,kind,refs_json,wait_s FROM messages WHERE id=?",
+        parent = conn.execute("SELECT from_actor,kind,refs,wait_s FROM messages WHERE id=?",
                               (in_reply_to,)).fetchone()
     except Exception:  # noqa: BLE001 - fail open
         return True
     if not parent:
         return True
     return parent["from_actor"] == target and bool(parent["kind"] == "ask" or parent["wait_s"]
-                                                   or '"' + FLAG + '": true' in str(parent["refs_json"] or ""))
+                                                   or '"' + FLAG + '": true' in str(parent["refs"] or ""))
 
 
 def awaited(refs):
@@ -182,7 +182,7 @@ def parked(conn, task_row):
                     (task_row["id"], *UNFINISHED)).fetchone():
         return "blocked_by"
     if conn.execute("SELECT 1 FROM task_links WHERE task_id=? AND kind='pr' AND state IN ('open','draft','merged') "
-                    "AND json_extract(detail_json,'$.wake_once') IS NOT NULL LIMIT 1",
+                    "AND json_extract(detail,'$.wake_once') IS NOT NULL LIMIT 1",
                     (task_row["id"],)).fetchone():
         return "wake_once"
     from .milestone_waits import pending
@@ -240,7 +240,7 @@ def _would_queue(conn, actor, target, refs):
     live = refs.get("live")
     if isinstance(live, dict) and live.get("kind") in ("transcript", "decision", "tool"):
         return False
-    row = conn.execute("SELECT json_extract(config_json,'$.harness') FROM bot_config WHERE bot=?",
+    row = conn.execute("SELECT json_extract(config,'$.harness') FROM bot_config WHERE bot=?",
                        (str(target)[4:],)).fetchone()
     return not (row and row[0] in EXTERNAL_HARNESSES)
 
@@ -266,7 +266,7 @@ def state_of(conn, task_row):
                 "SELECT id, edited_at FROM messages WHERE conversation_id=? AND from_actor<>? AND deleted_at IS NULL "
                 "ORDER BY rowid", (row["conversation_id"], H.KEEPER))],
             "links": [list(r) for r in conn.execute(
-                "SELECT kind, url, state, pr_sha, json_extract(detail_json,'$.head_sha'), "
+                "SELECT kind, url, state, pr_sha, json_extract(detail,'$.head_sha'), "
                 "checks, mergeable, review_state, pending_comments FROM task_links "
                 "WHERE task_id=? ORDER BY created, id", (tid,))],
         }

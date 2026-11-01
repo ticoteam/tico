@@ -195,12 +195,12 @@ def _loads(value, default):
 
 
 def definition(conn):
-    row = conn.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DEFINITION_KEY,)).fetchone()
+    row = conn.execute("SELECT value FROM registry_metadata WHERE key=?", (DEFINITION_KEY,)).fetchone()
     return (_loads(row[0], {}) or None) if row else None
 
 
 def _save_definition(conn, value):
-    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    conn.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
                  (DEFINITION_KEY, MK.dumps(value)))
 
 

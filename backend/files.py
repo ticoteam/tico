@@ -64,7 +64,7 @@ CREATE TABLE IF NOT EXISTS bot_file_versions(
 CREATE TABLE IF NOT EXISTS bot_file_activity(
  id INTEGER PRIMARY KEY AUTOINCREMENT, file_id TEXT NOT NULL REFERENCES bot_files(id),
  actor TEXT NOT NULL, action TEXT NOT NULL, attempt_id TEXT, task_id TEXT, version INTEGER,
- digest TEXT, created TEXT NOT NULL, detail_json TEXT);
+ digest TEXT, created TEXT NOT NULL, detail TEXT);
 CREATE INDEX IF NOT EXISTS bot_file_activity_file ON bot_file_activity(file_id, id);
 CREATE TRIGGER IF NOT EXISTS bot_file_activity_append_only BEFORE UPDATE ON bot_file_activity
  BEGIN SELECT RAISE(ABORT, 'bot_file_activity is append-only'); END;
@@ -276,7 +276,7 @@ class Files:
                          (bot, scope, identity)).fetchone()
 
     def activity(self, c, fid, actor, action, *, attempt="", task=None, version=None, digest=None, detail=None, now=None):
-        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,detail_json) "
+        c.execute("INSERT INTO bot_file_activity(file_id,actor,action,attempt_id,task_id,version,digest,created,detail) "
                   "VALUES(?,?,?,?,?,?,?,?,?)", (fid, actor, action, attempt or None, task, version, digest,
                                                 now or H.now(), encode(detail or {})))
         if task:

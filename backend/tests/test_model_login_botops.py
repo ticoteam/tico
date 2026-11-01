@@ -57,9 +57,9 @@ def signs_in_for_her(api, attempt, rid, how, alias):
         assert done.json()["kind"] == "sign_in"
         assert effects(api, rid)["logins"] == [("sign_in", "human:ana")]
         with api.app.state.store.read() as c:
-            event = c.execute("SELECT actor, detail_json FROM events WHERE target=? AND action='runner.login.start'",
+            event = c.execute("SELECT actor, detail FROM events WHERE target=? AND action='runner.login.start'",
                               (rid,)).fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]
         reset(api, rid)
 
 

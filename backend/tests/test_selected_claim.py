@@ -16,7 +16,7 @@ def queued_fleet(api, machine, start, stop):
         for i in range(start, stop):
             bot = f"queued-{i}"
             c.execute("INSERT INTO bots(id,slug,runtime,state,created) VALUES(?,?,'fake','active',?)", (bot, bot, H.now()))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')",
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')",
                       (bot, encode({'name': bot, 'runtime': 'fake'})))
             c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (bot, machine['runner_id'], H.now()))
             H.say(c, 'human:ana', 'bot:' + bot, 'Synthetic unrelated work')
@@ -86,9 +86,9 @@ def test_selected_claim_rechecks_changes_after_read_and_takes_the_next_job(api, 
                 elif change == 'assignment':
                     writer.execute("DELETE FROM assignments WHERE bot='ops'")
                 elif change == 'readiness':
-                    readiness = json.loads(target['readiness_json'])
+                    readiness = json.loads(target['readiness'])
                     readiness['bots']['ops']['ready'] = False
-                    writer.execute('UPDATE runners SET readiness_json=? WHERE id=?',
+                    writer.execute('UPDATE runners SET readiness=? WHERE id=?',
                                    (encode(readiness), machine['runner_id']))
                 else:
                     # A currently active turn fences the bot even when it was

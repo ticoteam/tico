@@ -101,7 +101,7 @@ def test_the_assistant_acts_as_the_person_and_never_more(api):
     assert made["requester"] == "human:ben"
     with api.app.state.store.read() as c:
         assert c.execute("SELECT via FROM task_events WHERE task_id=? ORDER BY ts LIMIT 1", (made["id"],)).fetchone()[0] == "assistant"
-        assert c.execute("SELECT count(*) FROM events WHERE detail_json LIKE '%\"via\": \"assistant\"%'").fetchone()[0] > 0
+        assert c.execute("SELECT count(*) FROM events WHERE detail LIKE '%\"via\": \"assistant\"%'").fetchone()[0] > 0
     # The runner's own lease calls are still the runner's.
     post(api, f"attempts/{attempt['id']}/renew", {}, token=r["token"], expected=200)
 
@@ -135,7 +135,7 @@ def test_a_side_effect_runs_only_after_the_person_confirms(api):
     post(api, f"assistant/actions/{action['id']}/confirm", {}, token="ana-test", expected=409)   # once
     with api.app.state.store.read() as c:
         assert c.execute("SELECT count(*) FROM events WHERE action='assistant.action.confirmed'").fetchone()[0] == 1
-        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'bot.%' AND detail_json LIKE '%\"via\": \"assistant\"%'"
+        assert c.execute("SELECT count(*) FROM events WHERE action LIKE 'bot.%' AND detail LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 1
     # A cancelled proposal never runs.
     other = post(api, "assistant/actions", {"summary": "Archive Finance", "path": "/api/v2/bots/finance/archive",
@@ -174,7 +174,7 @@ def test_an_assistant_message_never_lends_the_persons_authority_to_botops(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES('botops','botops','BotOps','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('botops','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('botops','{}',NULL,'ana')")
         H.VIA.set("assistant")
         via = H.say(c, "human:ana", "bot:botops", "Rename the Ops bot to Operations", kind="say")
         H.VIA.set("")
@@ -222,7 +222,7 @@ def test_direct_writes_stay_inside_the_team(api):
     post(api, "updates/read", {"all": True}, token=token)
     with api.app.state.store.read() as c:
         # What it wrote is marked, so BotOps ignores it.
-        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs_json LIKE '%\"via\": \"assistant\"%'"
+        assert c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND refs LIKE '%\"via\": \"assistant\"%'"
                          ).fetchone()[0] >= 2
 
 
@@ -327,9 +327,9 @@ def test_the_assistant_does_the_task_actions_the_person_asked_for_in_their_chat(
         row = c.execute("SELECT actor,via FROM task_events WHERE task_id=? AND field='status' ORDER BY ts DESC LIMIT 1",
                         (launch["id"],)).fetchone()
         assert (row["actor"], row["via"]) == ("human:ben", "assistant")
-        close = c.execute("SELECT actor,detail_json FROM events WHERE action='task.close' AND target=?",
+        close = c.execute("SELECT actor,detail FROM events WHERE action='task.close' AND target=?",
                           (launch["id"],)).fetchone()
-        detail = H._json(close["detail_json"], {})
+        detail = H._json(close["detail"], {})
         assert close["actor"] == "human:ben" and detail["via"] == "assistant"
         assert detail["delegation"] == {"for": "human:ben", "cited": said, "run": "asked"}
 
@@ -539,9 +539,9 @@ def test_clear_my_queue_declines_and_answers_in_bulk_and_never_approves(api):
     asked(api, "approvals/" + q["spend"], {"decision": "declined", "note": "Not this month"}, token, "turn")
     assert decision(api, q["spend"]) == "declined"
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT actor,detail_json FROM events WHERE action='approval.decide' AND target=?",
+        row = c.execute("SELECT actor,detail FROM events WHERE action='approval.decide' AND target=?",
                         (q["spend"],)).fetchone()
-        assert row["actor"] == "human:ben" and H._json(row["detail_json"], {})["via"] == "assistant"
+        assert row["actor"] == "human:ben" and H._json(row["detail"], {})["via"] == "assistant"
         answers = dict(c.execute("SELECT in_reply_to,from_actor FROM messages WHERE kind='answer'").fetchall())
         assert answers.get(q["ask"]) == "human:ben" and q["her_ask"] not in answers
     # Others' items stay as they were, whatever is cited.
@@ -782,7 +782,7 @@ def test_a_close_card_written_as_status_closed_runs_as_a_close(api):
     stale = post(api, "assistant/actions", {"summary": "Close old task 0", "path": f"/api/v2/tasks/{tasks[0]['id']}",
                                             "body": {"version": 1}})["action"]
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE assistant_actions SET body_json=? WHERE id=?", (json.dumps({"status": "closed"}), stale["id"]))
+        c.execute("UPDATE assistant_actions SET body=? WHERE id=?", (json.dumps({"status": "closed"}), stale["id"]))
     done = post(api, f"assistant/actions/{stale['id']}/confirm", {})["action"]
     assert done["status"] == "done", done["result"]
     # A new one is stored as the close it is, and so is each step of a bulk card.

@@ -56,7 +56,7 @@ CREATE TABLE IF NOT EXISTS external_sections(
 CREATE TABLE IF NOT EXISTS doc_source_jobs(
  source_id TEXT PRIMARY KEY REFERENCES doc_sources(source_id), generation INTEGER NOT NULL,
  lease TEXT NOT NULL DEFAULT '', lease_until REAL NOT NULL DEFAULT 0, next_try REAL NOT NULL DEFAULT 0,
- snapshot_id TEXT, commit_sha TEXT NOT NULL DEFAULT '', inventory_json TEXT, skipped INTEGER NOT NULL DEFAULT 0,
+ snapshot_id TEXT, commit_sha TEXT NOT NULL DEFAULT '', inventory TEXT, skipped INTEGER NOT NULL DEFAULT 0,
  checked_at TEXT, resolved_at REAL NOT NULL DEFAULT 0);
 """
 FTS = """
@@ -512,14 +512,14 @@ class Sources:
             if source['path'] and not source['active_snapshot'] and not any(
                     r['path'] == source['path'] or r['path'].startswith(source['path'] + '/') for r in tree):
                 raise FetchFailure('scope_not_found', INTERVAL)
-            job.update(snapshot_id=secrets.token_hex(16), inventory_json=encode(inventory), skipped=skipped)
+            job.update(snapshot_id=secrets.token_hex(16), inventory=encode(inventory), skipped=skipped)
             with self.store.transaction() as c:
                 self.guard(c, job)
                 c.execute('INSERT INTO external_snapshots VALUES(?,?,?,?,?)',
                           (job['snapshot_id'], job['source_id'], job['commit_sha'], job['generation'], time.time()))
-                c.execute('UPDATE doc_source_jobs SET snapshot_id=?,commit_sha=?,inventory_json=?,skipped=?,checked_at=?,resolved_at=? WHERE source_id=?',
-                          (job['snapshot_id'], job['commit_sha'], job['inventory_json'], skipped, job['checked_at'], job['resolved_at'], job['source_id']))
-        for file in json.loads(job['inventory_json']):
+                c.execute('UPDATE doc_source_jobs SET snapshot_id=?,commit_sha=?,inventory=?,skipped=?,checked_at=?,resolved_at=? WHERE source_id=?',
+                          (job['snapshot_id'], job['commit_sha'], job['inventory'], skipped, job['checked_at'], job['resolved_at'], job['source_id']))
+        for file in json.loads(job['inventory']):
             doc_id = identifier(job['source_id'], file['path'])
             with self.store.transaction() as c:
                 self.guard(c, job)

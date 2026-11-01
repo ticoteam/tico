@@ -213,7 +213,7 @@ def test_synchronizing_an_existing_pr_head_with_unchanged_checks_runs_the_next_c
         G.pull_request(c, {"action": "synchronize", "pull_request": {
             "html_url": url, "head": {"sha": "b" * 40}, "mergeable": None}})
         after = dict(c.execute("SELECT * FROM task_links WHERE task_id=?", (tid,)).fetchone())
-        assert json.loads(after["detail_json"])["head_sha"] == "b" * 40
+        assert json.loads(after["detail"])["head_sha"] == "b" * 40
         assert [after[k] for k in ("pr_sha", "checks", "mergeable")] == [
             before[k] for k in ("pr_sha", "checks", "mergeable")]
         assert jobs(c, "cpo") == 0       # synchronize itself is quiet

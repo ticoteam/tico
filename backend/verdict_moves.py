@@ -37,7 +37,7 @@ NO_VERDICT = "comments"     # a check finished with no verdict: what it said is 
 HANDOFF = "handoff"
 HANDOFFS = ("verdict", "failed_check", "merge_conflict", "merge")
 # The claim's order key: a keeper hand-off before the bot's other queued jobs (backend/execution.py).
-HANDOFF_FIRST_SQL = (f"CASE WHEN m.from_actor='{H.KEEPER}' AND json_extract(m.refs_json,'$.{HANDOFF}') "
+HANDOFF_FIRST_SQL = (f"CASE WHEN m.from_actor='{H.KEEPER}' AND json_extract(m.refs,'$.{HANDOFF}') "
                      "IS NOT NULL THEN 0 ELSE 1 END")
 
 
@@ -65,7 +65,7 @@ def _prs(c, row):
 
 
 def _head(pr):
-    return str((H._json(pr.get("detail_json"), {}) or {}).get("head_sha") or "").lower()
+    return str((H._json(pr.get("detail"), {}) or {}).get("head_sha") or "").lower()
 
 
 def at_head(c, row, head):
@@ -447,7 +447,7 @@ def timeouts(c, at=None):
     the same way. Returns the tickets moved on."""
     at = H.parse_ts(at or H.now())
     skipped = []
-    timed = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%timeout_hours%'")]
+    timed = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%timeout_hours%'")]
     for step in timed:
         hours = F.of(step).get("timeout_hours")
         if not hours or not F.is_check(step):

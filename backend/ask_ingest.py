@@ -73,7 +73,7 @@ REPLAY = "replay"
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ask_ingest_settings(
  person TEXT PRIMARY KEY, mode TEXT NOT NULL, budget INTEGER NOT NULL, chores_budget INTEGER NOT NULL,
- criteria_json TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
+ criteria TEXT NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS ask_ingest_items(
  id TEXT PRIMARY KEY, person TEXT NOT NULL, asker TEXT NOT NULL, kind TEXT NOT NULL, ref TEXT NOT NULL,
  message_id TEXT, mode TEXT NOT NULL, outcome TEXT NOT NULL, would TEXT NOT NULL, reason TEXT NOT NULL, load INTEGER NOT NULL,
@@ -88,7 +88,7 @@ CREATE INDEX IF NOT EXISTS ask_ingest_items_merged ON ask_ingest_items(merged_in
 
 def _row_settings(row):
     try:
-        criteria = [str(x) for x in json.loads(row["criteria_json"] or "[]")][:MAX_CRITERIA]
+        criteria = [str(x) for x in json.loads(row["criteria"] or "[]")][:MAX_CRITERIA]
     except (TypeError, ValueError):
         criteria = list(DEFAULTS["criteria"])
     return {"mode": row["mode"] if row["mode"] in MODES else DEFAULTS["mode"], "budget": int(row["budget"]),
@@ -129,9 +129,9 @@ def clean(body):
 def save(c, actor, person, body):
     """Save a person's own settings (person = their actor) or the team default (person = TEAM)."""
     value = clean(body)
-    c.execute("INSERT INTO ask_ingest_settings(person,mode,budget,chores_budget,criteria_json,updated,updated_by) "
+    c.execute("INSERT INTO ask_ingest_settings(person,mode,budget,chores_budget,criteria,updated,updated_by) "
               "VALUES(?,?,?,?,?,?,?) ON CONFLICT(person) DO UPDATE SET mode=excluded.mode, budget=excluded.budget, "
-              "chores_budget=excluded.chores_budget, criteria_json=excluded.criteria_json, updated=excluded.updated, "
+              "chores_budget=excluded.chores_budget, criteria=excluded.criteria, updated=excluded.updated, "
               "updated_by=excluded.updated_by",
               (person, value["mode"], value["budget"], value["chores_budget"], json.dumps(value["criteria"]), H.now(),
                actor))
@@ -521,19 +521,19 @@ def reconcile(c, start, end):
     a named reason (`replay`, or the `ask_ingest.unrecorded` reason on it), or `unexplained` (neither: a gap to find).
     `no_call` counts item rows the gate wrote with no call (busy, breaker, no decision model). By construction
     calls == landed + sum(reasons) + unexplained."""
-    found = H._rows(c.execute("SELECT id, detail_json FROM events WHERE action='judge.call' AND target LIKE ? "
+    found = H._rows(c.execute("SELECT id, detail FROM events WHERE action='judge.call' AND target LIKE ? "
                               "AND ts>=? AND ts<?", (f"{QUESTION_SET}@%", start, end)))
     modes = {}
     for row in found:
         try:
-            modes[row["id"]] = (json.loads(row["detail_json"] or "{}") or {}).get("mode")
+            modes[row["id"]] = (json.loads(row["detail"] or "{}") or {}).get("mode")
         except (TypeError, ValueError, AttributeError):
             modes[row["id"]] = None
     rows, why = set(), {}
     for chunk in _in_chunks(modes):
         marks = ",".join("?" * len(chunk))
         rows |= {r[0] for r in c.execute(f"SELECT call_id FROM ask_ingest_items WHERE call_id IN ({marks})", chunk)}
-        for r in c.execute(f"SELECT target, detail_json FROM events WHERE action=? AND target IN ({marks})",
+        for r in c.execute(f"SELECT target, detail FROM events WHERE action=? AND target IN ({marks})",
                            (UNRECORDED, *chunk)):
             try:
                 why.setdefault(r[0], (json.loads(r[1] or "{}") or {}).get("why") or "unknown")

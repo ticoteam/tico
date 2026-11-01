@@ -210,7 +210,7 @@ def test_refresh_paces_tickets_by_activity_and_asks_about_the_one_in_view(enviro
         for name, (status, created, checked, said) in rows.items():
             hq.tickets[hq_of[name]]["status"] = status
             hq.tickets[hq_of[name]]["messages"] = [{"id": 1, "created": said, "from": "person", "body": "hi"}]
-            c.execute("UPDATE support_tickets SET status=?, created=?, checked=?, messages_json=? WHERE id=?",
+            c.execute("UPDATE support_tickets SET status=?, created=?, checked=?, messages=? WHERE id=?",
                       (status, created, checked, json.dumps([{"id": 1, "created": said, "from": "person", "body": "hi",
                                                               "has_diagnostics": False}]), ids[name]))
 
@@ -466,8 +466,8 @@ def test_a_report_is_refused_when_declined_sent_by_another_or_not_what_was_appro
     assert send(api, bot, "nope").status_code == 404
     # The stored message changed after the person read it: its hash no longer matches.
     with api.app.state.store.transaction() as c:
-        row = c.execute("SELECT payload_json FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
-        c.execute("UPDATE approvals SET payload_json=? WHERE id=?",
+        row = c.execute("SELECT payload FROM approvals WHERE id=?", (approval["id"],)).fetchone()[0]
+        c.execute("UPDATE approvals SET payload=? WHERE id=?",
                   (row.replace("hub task update", "hub task delete"), approval["id"]))
     r = send(api, bot, approval["id"])
     assert r.status_code == 409 and "hash" in r.json()["error"]["detail"]
@@ -610,7 +610,7 @@ def test_a_setup_request_starts_from_a_snapshot_and_keeps_its_kind_even_at_an_ol
     api = environment()
     with api.app.state.store.transaction() as c:                   # a parked bot whose name must not go
         H.sync_registry(c, {"payroll": {"name": "Payroll for Acme Corp", "status": "active"}}, None)
-        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,operator,onboarding_state) "
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config,operator,onboarding_state) "
                   "VALUES('payroll','{}','human:test','needs_setup')")
         c.execute("UPDATE bots SET display_name='Payroll for Acme Corp' WHERE slug='payroll'")
     owner_items = api.get("/api/v2/getting-started", headers=signed_in()).json()["items"]
@@ -656,11 +656,11 @@ def test_the_feedback_question_waits_for_a_first_result_and_an_answer_arrives_as
     with store.transaction() as c:
         c.execute("UPDATE attempts SET finished=? WHERE bot='payroll'", (H.shift(H.now(), days=-8),))
         c.execute("UPDATE events SET ts=?", (H.shift(H.now(), days=-9),))
-        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+        c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-1), "support.feedback"))
     assert question() is None
     with store.transaction() as c:
-        c.execute("UPDATE preferences SET value_json=json_set(value_json,'$.first_result.at',?) WHERE key=?",
+        c.execute("UPDATE preferences SET value=json_set(value,'$.first_result.at',?) WHERE key=?",
                   (H.shift(H.now(), days=-7), "support.feedback"))
     assert question()["moment"] == "day_7"
     before = len(hq.seen)

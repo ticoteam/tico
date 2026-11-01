@@ -301,11 +301,11 @@ def streak(c):
     """How many of its recovery suggestions in a row the owner approved with the Strategy Bot's pick unchanged, newest
     first. A rejection or another option ends it; a withdrawn one is no decision and is passed over."""
     n = 0
-    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result_json FROM goal_proposals "
+    for row in H._rows(c.execute("SELECT status, decided_by, decision_note, result FROM goal_proposals "
                                  "WHERE kind=? AND status!='pending' ORDER BY decided_at DESC", (KIND,))):
         if row["decision_note"] == WITHDRAWN or not H.is_human(row["decided_by"] or ""):
             continue
-        result = H._json(row["result_json"], None) or {}
+        result = H._json(row["result"], None) or {}
         if row["status"] != "confirmed" or not result.get("unchanged"):
             break
         n += 1

@@ -30,7 +30,7 @@ def test_schedule_survives_restart_without_duplicate_work(api):
         assert len(fired) == 1
         # The day's update request (backend/updates.py) is a job of its own, not the routine's.
         assert c.execute("SELECT count(*) FROM jobs j JOIN messages m ON m.id=j.message_id "
-                         "WHERE json_extract(m.refs_json,'$.update_request') IS NULL").fetchone()[0] == 1
+                         "WHERE json_extract(m.refs,'$.update_request') IS NULL").fetchone()[0] == 1
         assert c.execute("SELECT next_due FROM automations WHERE id=?", (aid,)).fetchone()[0] == '2026-09-11T16:00:00.000000Z'
     # A finished occurrence keeps its status; the next occurrence gets its own task and is deduplicated after restart.
     with store.transaction() as c:
@@ -213,7 +213,7 @@ def test_claim_query_matches_old_python_oracle_on_200_rows(api):
                       refs={'task': refs[(i // 12) % len(refs)]})
             c.execute("UPDATE jobs SET created=?,state=? WHERE message_id=?", ('2026-09-01T00:00:00Z' if i % 5 == 0 else '2026-09-02T00:00:00Z', 'uncertain' if i % 17 == 0 else 'queued', m['id']))
         c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='finance'")
-        readiness = readiness_document(c.execute('SELECT readiness_json FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
+        readiness = readiness_document(c.execute('SELECT readiness FROM runners WHERE id=?', (r['runner_id'],)).fetchone()[0])
         # The old candidate's Python predicate, with readiness and onboarding gates.
         def old_claimable(job):
             check = bot_readiness(readiness, job['bot'])
@@ -264,7 +264,7 @@ def test_a_duplicate_refusal_is_done_not_a_health_error(tmp_path):
     from backend.batch_work import isolated
     c = sqlite3.connect(tmp_path / 'dup.db', isolation_level=None)
     c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_success TEXT, last_error TEXT, "
-              "detail_json TEXT NOT NULL DEFAULT '{}')")
+              "detail TEXT NOT NULL DEFAULT '{}')")
     c.execute("INSERT INTO service_health VALUES('background:wake_stalled:t1',NULL,'wake_stalled: duplicate: x','{}')")
     c.execute('BEGIN IMMEDIATE')
     failures = []
@@ -280,7 +280,7 @@ def test_rows_from_retired_health_mechanisms_are_removed_on_start(tmp_path, monk
     from backend.store import retire_health_rows
     c = sqlite3.connect(tmp_path / 'h.db')
     c.execute("CREATE TABLE service_health(service TEXT PRIMARY KEY, last_success TEXT, last_error TEXT, "
-              "detail_json TEXT NOT NULL DEFAULT '{}')")
+              "detail TEXT NOT NULL DEFAULT '{}')")
     for service in ('backup', 'backup-daily', 'backup-monthly', 'restore-check', 'processing:r1', 'scheduler'):
         c.execute("INSERT INTO service_health VALUES(?,'2026-09-30',NULL,'{}')", (service,))
     monkeypatch.delenv('TICO_BACKUP_MODE', raising=False)

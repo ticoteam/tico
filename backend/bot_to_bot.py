@@ -103,7 +103,7 @@ def continue_backlog(conn, bot):
     if not left:
         return None
     pending = conn.execute("SELECT 1 FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                           "AND j.state IN ('queued','leased') AND json_extract(m.refs_json,'$.wake')=?",
+                           "AND j.state IN ('queued','leased') AND json_extract(m.refs,'$.wake')=?",
                            (bot, BACKLOG)).fetchone()
     if pending:
         return None

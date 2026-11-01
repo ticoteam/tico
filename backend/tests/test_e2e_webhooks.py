@@ -62,7 +62,7 @@ def receiver():
 
 def messages_to(api, actor):
     with api.app.state.store.read() as c:
-        return [dict(r) for r in c.execute("SELECT body, refs_json FROM messages WHERE to_actor=? ORDER BY created", (actor,))]
+        return [dict(r) for r in c.execute("SELECT body, refs FROM messages WHERE to_actor=? ORDER BY created", (actor,))]
 
 
 @pytest.mark.slow
@@ -84,7 +84,7 @@ def test_a_zapier_shaped_post_over_http_starts_the_automation_its_recipe_names(a
     for field, value in (("webhook.data.id", "ord_1001"), ("webhook.data.total", "42"),
                          ("webhook.data.customer", "ada@acme.example")):
         assert f'field="{field}">\n{value}\n' in woke[0]["body"], woke[0]["body"][:300]
-    assert json.loads(woke[0]["refs_json"])["automation"] == aid
+    assert json.loads(woke[0]["refs"])["automation"] == aid
     assert len(get(api, f"automations/{aid}/runs")["runs"]) == 1, "the refund's type does not match the filter"
 
 

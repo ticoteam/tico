@@ -42,8 +42,8 @@ log = logging.getLogger("tico.support")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS support_tickets(
  id TEXT PRIMARY KEY, actor TEXT NOT NULL, created TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'open',
- message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent_json TEXT NOT NULL DEFAULT '{}',
- hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages_json TEXT NOT NULL DEFAULT '[]',
+ message TEXT NOT NULL, email TEXT NOT NULL DEFAULT '', sent TEXT NOT NULL DEFAULT '{}',
+ hq_id TEXT NOT NULL, hq_secret TEXT NOT NULL, messages TEXT NOT NULL DEFAULT '[]',
  seen_id INTEGER NOT NULL DEFAULT 0, checked TEXT, request_key TEXT);
 CREATE INDEX IF NOT EXISTS support_tickets_actor ON support_tickets(actor, created);
 """
@@ -241,15 +241,15 @@ def _messages(value):
 
 def _last_activity(row):
     """When the ticket was last written on, by either side, or filed: an aware datetime (the epoch when none reads)."""
-    times = [H.parse_ts(m.get("created")) for m in json.loads(row["messages_json"] or "[]")] + [H.parse_ts(row["created"])]
+    times = [H.parse_ts(m.get("created")) for m in json.loads(row["messages"] or "[]")] + [H.parse_ts(row["created"])]
     return max((t for t in times if t and t.tzinfo), default=EPOCH)
 
 
 def view(row):
     """A ticket as the page sees it. The HQ secret and id are not in it."""
-    messages = json.loads(row["messages_json"] or "[]")
+    messages = json.loads(row["messages"] or "[]")
     return {"id": row["id"], "created": row["created"], "status": row["status"], "message": row["message"],
-            "email": row["email"], "sent": json.loads(row["sent_json"] or "{}"), "messages": messages,
+            "email": row["email"], "sent": json.loads(row["sent"] or "{}"), "messages": messages,
             "unread": sum(1 for m in messages if m["from"] == "staff" and m["id"] > row["seen_id"])}
 
 
@@ -401,7 +401,7 @@ class Support:
             raise Problem("support_unreachable", "Could not reach Tico support. Try again in a moment.", 502, retryable=True)
         ticket_id = "sup_" + secrets.token_hex(6)
         with self.store.transaction() as c:
-            c.execute("INSERT INTO support_tickets(id,actor,created,status,message,email,sent_json,hq_id,hq_secret,"
+            c.execute("INSERT INTO support_tickets(id,actor,created,status,message,email,sent,hq_id,hq_secret,"
                       "request_key) VALUES(?,?,?,?,?,?,?,?,?,?)",
                       (ticket_id, who.actor, H.now(), "open", message, email, encode(sent), hq_id,
                        self.vault.cipher.seal(c, _context(ticket_id), hq_secret), key or None))
@@ -526,7 +526,7 @@ class Support:
         else:
             return False
         with self.store.transaction() as c:
-            c.execute("UPDATE support_tickets SET status=?, messages_json=COALESCE(?,messages_json), checked=? WHERE id=?",
+            c.execute("UPDATE support_tickets SET status=?, messages=COALESCE(?,messages), checked=? WHERE id=?",
                       (status, encode(messages) if messages is not None else None, H.now(), row["id"]))
         return True
 
@@ -560,7 +560,7 @@ class Support:
 
     def read(self, who, ticket_id):
         row = self._own(who, ticket_id)
-        newest = max([m["id"] for m in json.loads(row["messages_json"] or "[]")] or [0])
+        newest = max([m["id"] for m in json.loads(row["messages"] or "[]")] or [0])
         with self.store.transaction() as c:
             c.execute("UPDATE support_tickets SET seen_id=MAX(seen_id,?) WHERE id=?", (newest, ticket_id))
         return self.one(who, ticket_id)

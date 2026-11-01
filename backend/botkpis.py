@@ -69,7 +69,7 @@ def private_history(conn, slug):
                     "OR t.id IN (SELECT " + H.MESSAGE_TASK_SQL + " FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "JOIN conversations cv ON cv.id=m.conversation_id WHERE j.bot=?) "
                     "OR t.id IN (SELECT v.value FROM events e JOIN attempts a ON a.id=e.target "
-                    "JOIN json_each(e.detail_json,'$.tasks') v WHERE a.bot=? AND e.action='task.next-run.carried')) LIMIT 1",
+                    "JOIN json_each(e.detail,'$.tasks') v WHERE a.bot=? AND e.action='task.next-run.carried')) LIMIT 1",
                     (actor, actor, slug, slug, slug)).fetchone())
 
 

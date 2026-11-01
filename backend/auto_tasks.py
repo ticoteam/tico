@@ -40,8 +40,8 @@ def put_back_held(c, row):
                  "LIMIT 1", (row['id'], move['rowid'])).fetchone():
         return False
     if c.execute("SELECT 1 FROM messages m WHERE m.conversation_id=? AND m.created>=? "
-                 "AND json_extract(m.refs_json,'$.task')=? "
-                 "AND m.from_actor<>? AND m.deleted_at IS NULL AND json_extract(m.refs_json,'$.comment')=1 "
+                 "AND json_extract(m.refs,'$.task')=? "
+                 "AND m.from_actor<>? AND m.deleted_at IS NULL AND json_extract(m.refs,'$.comment')=1 "
                  "LIMIT 1", (row['conversation_id'], move['ts'], row['id'], H.KEEPER)).fetchone():
         return False
     if c.execute("SELECT 1 FROM task_events e WHERE e.task_id=? AND e.rowid>? AND e.field='blocked_by' "
@@ -237,7 +237,7 @@ def maybe_waiting(c, rows):
     found("SELECT DISTINCT r.to_task FROM task_relations r JOIN tasks t ON t.id=r.from_task "
           "WHERE r.kind='parent' AND r.to_task IN ({m}) AND t.status NOT IN ('done','closed','declined')", ids)
     found("SELECT DISTINCT task_id FROM task_links WHERE task_id IN ({m}) AND kind='pr' "
-          "AND state IN ('open','draft','merged') AND json_extract(detail_json,'$.wake_once') IS NOT NULL", ids)
+          "AND state IN ('open','draft','merged') AND json_extract(detail,'$.wake_once') IS NOT NULL", ids)
     # an unanswered question the owner asked about the task: owner and task are matched in Python
     pairs = {(r['owner'], r['id']) for r in rows if r['id'] not in suspect}
     for part in H.chunks(sorted({actor for actor, _ in pairs})):
@@ -281,7 +281,7 @@ def carrier_held(c, row):
 
 def notice_releases(c, row, message):
     """An actionable notice starts its own work only after the previous carrier has let go."""
-    if not row.get('next_run') or row['status'] != 'open' or row.get('resume_json'):
+    if not row.get('next_run') or row['status'] != 'open' or row.get('resume'):
         return False
     if not actionable_notice(row, message):
         return False
@@ -303,7 +303,7 @@ def next_run_held(c, row, *, message=None):
     """
     if not row.get('next_run'):
         return False
-    if row.get('resume_json') or row['status'] != 'open' or carrier_held(c, row):
+    if row.get('resume') or row['status'] != 'open' or carrier_held(c, row):
         return True
     if actionable_notice(row, message):
         return not notice_releases(c, row, message)
@@ -410,7 +410,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
     from .batch_work import report, shared_check, shared_scope, storage_error
     from .shared_bots import follow
     from .store import readiness_document
-    ready = readiness_document(runner['readiness_json'])
+    ready = readiness_document(runner['readiness'])
     busy = set(E.live_lanes(c))
     busy |= {((H.resolve_bot(c, b) or {}).get("id", b), lane) for b, lane in
              (v.split('|', 1) for v in body.busy_lanes or () if '|' in v)}
@@ -418,7 +418,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
     held_bots = {(H.resolve_bot(c, b) or {}).get("id", b) for b in body.busy_bots or ()} | (
         {b for b, _ in busy} if not E.lanes_on(runner) else set())
     want = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot) if body.bot is not None else None
-    bots = c.execute(f"SELECT a.bot,bc.config_json,bc.onboarding_state,{E.DRAINING_SQL} draining "
+    bots = c.execute(f"SELECT a.bot,bc.config,bc.onboarding_state,{E.DRAINING_SQL} draining "
                      "FROM assignments a JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                      "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?)",
                      (runner['id'], want, want)).fetchall()
@@ -434,7 +434,7 @@ def missing(c, settings, runner, body, failed=None, waiting=None):
             continue
         try:
             with shared_check():
-                why, config = E.claim_refusal(c, settings, runner, slug, bot['config_json'], bot['draining'], ready,
+                why, config = E.claim_refusal(c, settings, runner, slug, bot['config'], bot['draining'], ready,
                                               held_bots)
                 if not why:
                     config = follow(c, slug, config)

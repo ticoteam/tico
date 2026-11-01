@@ -59,7 +59,7 @@ def since_time(value):
     return (at if at.tzinfo else at.replace(tzinfo=timezone.utc)).astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f") + "Z"
 
 
-ATTEMPT_DETAIL_SQL = "SELECT state,result_json,finished FROM attempts WHERE id=?"
+ATTEMPT_DETAIL_SQL = "SELECT state,result,finished FROM attempts WHERE id=?"
 
 
 def prime_attempt_details(c, ids):
@@ -71,7 +71,7 @@ def prime_attempt_details(c, ids):
         chunk = wanted[start:start + 250]
         marks = ",".join("?" * len(chunk))
         attempts = {row["id"]: row for row in c.execute(
-            f"SELECT id,state,result_json,finished FROM attempts WHERE id IN ({marks})", chunk)}
+            f"SELECT id,state,result,finished FROM attempts WHERE id IN ({marks})", chunk)}
         read_cache.prime(c, ATTEMPT_DETAIL_SQL, {(aid,): attempts.get(aid) for aid in chunk})
         diags = {row["attempt_id"]: row for row in c.execute(
             "SELECT attempt_id,end_reason,ended_at,last_event,last_event_at,heartbeat_at,stalled_at "
@@ -80,9 +80,9 @@ def prime_attempt_details(c, ids):
                          "FROM attempt_diagnostics WHERE attempt_id=?",
                          {(aid,): diags.get(aid) for aid in chunk})
         snaps = {row["attempt_id"]: row for row in c.execute(
-            f"SELECT attempt_id,start_json,end_json FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
+            f"SELECT attempt_id,at_start,at_end FROM attempt_load_snapshots WHERE attempt_id IN ({marks})",
             chunk)}
-        read_cache.prime(c, "SELECT start_json,end_json FROM attempt_load_snapshots WHERE attempt_id=?",
+        read_cache.prime(c, "SELECT at_start,at_end FROM attempt_load_snapshots WHERE attempt_id=?",
                          {(aid,): snaps.get(aid) for aid in chunk})
 
 
@@ -94,7 +94,7 @@ def attempt_details(c, turn):
     details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
-            result = json.loads(attempt["result_json"] or "{}")
+            result = json.loads(attempt["result"] or "{}")
         except (ValueError, TypeError):
             result = {}
         reason = login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message") or (
@@ -109,7 +109,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
     rows = []
     # One bot's runs as their own query text: `? IS NULL OR a.bot=?` would hide attempts_bot_state.
     found = list(c.execute(
-            "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result_json,j.message_id FROM attempts a "
+            "SELECT a.id,a.bot,a.started,a.created,a.finished,a.state,a.result,j.message_id FROM attempts a "
             "JOIN jobs j ON j.id=a.job_id WHERE a.state IN ('failed','expired') " + ("AND a.bot=? " if bot is not None else "") +
             "AND (? IS NULL OR coalesce(a.finished,a.created)>=?) AND NOT EXISTS "
             "(SELECT 1 FROM turns t WHERE t.id=a.id) ORDER BY coalesce(a.finished,a.created) DESC LIMIT ?",
@@ -131,7 +131,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
         except Problem:
             continue
         try:
-            result = json.loads(row["result_json"] or "{}")
+            result = json.loads(row["result"] or "{}")
         except (ValueError, TypeError):
             result = {}
         reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
@@ -146,7 +146,7 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
 
 def computer_details(c, row, who, auth):
     value = dict(row)
-    readiness = readiness_document(value.get("readiness_json"))
+    readiness = readiness_document(value.get("readiness"))
     access = auth.bot_accesses(c, who)
     assigned = assignments_by_runner(c)[1].get(row["id"]) or set()
     shared = shared_logins(c, row["id"], readiness, assigned, access)
@@ -285,7 +285,7 @@ def _entries(c, github_owner=""):
     result = {}
     for row in read_cache.configs(c):
         from .shared_bots import follow
-        config = follow(c, row["bot"], json.loads(row["config_json"]))
+        config = follow(c, row["bot"], json.loads(row["config"]))
         if row["onboarding_state"]:
             config["onboarding_state"] = row["onboarding_state"]
         repo = config.get("repo") or row["repo"] or ("emp-" + (config.get("name") or row["bot"]))
@@ -293,8 +293,8 @@ def _entries(c, github_owner=""):
                        "repo": repo, "repo_url": repo_url(repo, github_owner)})
         if row["thread_mode"]:
             config["thread_mode"] = row["thread_mode"]
-        if row["owner_ids_json"] is not None:
-            config["owner_ids"] = json.loads(row["owner_ids_json"])
+        if row["owner_ids"] is not None:
+            config["owner_ids"] = json.loads(row["owner_ids"])
         result[row["bot"]] = config
     return result
 
@@ -354,7 +354,7 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
               "epoch=epoch+1,updated=excluded.updated", (conversation_id, H.now()))
     # Drop the provider pointer so the next turn tries a fresh thread and loads the
     # recovery pack from Hub history instead of resuming the cleared session.
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     cfg = json.loads(config[0] or "{}") if config else {}
     if config:
         c.execute("DELETE FROM bot_sessions WHERE bot=? AND runtime=? AND model=?",
@@ -396,14 +396,14 @@ def docs_room(conv, who):
 def bot_owner_rows(c, registry, slug, people, configs, archived):
     """The people listed as a bot's owners: the creator and co-owners, and its operator. Whoever it reports
     up to and the Admins own it too, without being listed."""
-    ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners_json"] if registry else None),
+    ids = list(dict.fromkeys([*A.owner_ids(registry["bot_owners"] if registry else None),
                               *([registry["operator"]] if registry and registry["operator"] else [])]))
     return [{"id": i, "name": (P.person(i, people) or {}).get("name") or i} for i in ids]
 
 
 # A bot's computer, as machine() reads it; prime_machines reads it for many bots at once.
-ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen,r.revoked_at,r.readiness_json,"
-                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities_json")
+ASSIGNED_COLUMNS = ("SELECT a.runner_id,a.generation,r.label,r.operator,r.last_seen,r.revoked_at,r.readiness,"
+                    "r.platform,r.version,r.awake_since,r.screen,r.capabilities")
 ASSIGNED_SQL = ASSIGNED_COLUMNS + " FROM assignments a JOIN runners r ON r.id=a.runner_id WHERE a.bot=?"
 
 
@@ -415,7 +415,7 @@ def prime_machines(c, slugs):
         return
     for part in H.chunks(sorted(set(slugs))):
         marks = ",".join("?" * len(part))
-        for statement, query in ((CONFIG_SQL, f"SELECT config_json,bot FROM bot_config WHERE bot IN ({marks})"),
+        for statement, query in ((CONFIG_SQL, f"SELECT config,bot FROM bot_config WHERE bot IN ({marks})"),
                                  (ROW_SQL, f"SELECT * FROM agents WHERE bot IN ({marks})"),
                                  (ASSIGNED_SQL, ASSIGNED_COLUMNS + ",a.bot FROM assignments a "
                                                 f"JOIN runners r ON r.id=a.runner_id WHERE a.bot IN ({marks})"),
@@ -442,7 +442,7 @@ def machine(c, bot):
     # subscription sign-in the Gateway covers meanwhile is no problem (backend/models_preset.py as_served).
     from .models_preset import as_served
     # One parse of the computer's report: /api/employees and Health call this once per bot.
-    document = readiness_document(row["readiness_json"])
+    document = readiness_document(row["readiness"])
     detail = {k: v for k, v in bot_readiness(document, bot).items() if k != "tools"}
     detail = as_served(c, bot, document, detail)
     return {"online": online, "awake": awake, "ready": online and detail.get("ready") is True,
@@ -536,7 +536,7 @@ def operation_issues(c, who, auth):
                 from .agents import CONFIG_SQL
                 config = read_cache.one(c, CONFIG_SQL, (slug,))        # prime_machines read it with every bot's
                 runtime = providers.bot_choice(c, auth.settings,
-                                               H._json(config["config_json"], {}) or {} if config else {})[0] or "your"
+                                               H._json(config["config"], {}) or {} if config else {})[0] or "your"
                 # The login the limit held (backend/login_holds.py) says whose limit it was: a fallback's quota text
                 # is not the bot's own provider's billing.
                 from . import login_holds
@@ -550,7 +550,7 @@ def operation_issues(c, who, auth):
                 if last:
                     # Named from what the turn kept when it finished, not the bot's runtime or the login's hold now:
                     # a fallback's quota must not read as the primary's, nor a past limit as a newly chosen provider's.
-                    result = json.loads((c.execute("SELECT result_json FROM attempts WHERE id=?", (last["id"],))
+                    result = json.loads((c.execute("SELECT result FROM attempts WHERE id=?", (last["id"],))
                                          .fetchone() or ["{}"])[0] or "{}")
                     src = login_holds.recorded(c, last["id"], result, own)
                     runtime, billing = login_holds.label(src), src["billing"]
@@ -745,7 +745,7 @@ def operation_issues(c, who, auth):
     if who.role == "owner":
         # Container backups report through replication; imported VM timer history stays historical.
         managed_backups = bool(os.environ.get("TICO_BACKUP_MODE"))
-        for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,version,checkout_json,restart_requested "
+        for row in c.execute("SELECT id,label,operator,last_seen,revoked_at,version,checkout,restart_requested "
                              "FROM runners WHERE revoked_at IS NULL"):
             online = row["last_seen"] and row["last_seen"] > H.shift(H.now(), seconds=-60)
             if online and not runner_version_supported(row["version"]):
@@ -754,10 +754,10 @@ def operation_issues(c, who, auth):
                     machine=row["id"], action="Update this runner in Settings → Computers.")
             if online:
                 checkout_issue(add, row, runner_busy(c, row["id"]))
-        for row in c.execute("SELECT service,last_error,detail_json FROM service_health WHERE last_error IS NOT NULL"):
+        for row in c.execute("SELECT service,last_error,detail FROM service_health WHERE last_error IS NOT NULL"):
             if managed_backups and row["service"] in SNAPSHOT_BACKUP_ROWS:
                 continue
-            detail = json.loads(row["detail_json"] or "{}")
+            detail = json.loads(row["detail"] or "{}")
             if row["service"] == "github:token":
                 # Only the App itself failing is a system problem, and only while it is recent and unrecovered.
                 from . import health
@@ -814,7 +814,7 @@ def own_sign_in(c, bot, settings=None):
     """Why this bot's model is not signed in on its own computer (backend/readiness.py, the rule Health's stuck
     check and the model picker use), or '' when its computer is signed in or it waits on something else."""
     from .readiness import can_run, own_harness
-    config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
     runtime = providers.bot_choice(c, settings, json.loads(config[0] or "{}") if config else {})[0]
     verdict = can_run(c, bot, runtime, harness=own_harness(c, bot, runtime)) if runtime else {}
     return (verdict.get("problem") or "its model is not signed in") if verdict.get("sign_in") else ""
@@ -885,7 +885,7 @@ def queued_label(c, bot, location, settings=None, human=False, behind=False, que
     elif behind:
         # Whether the running turn takes it (`steer`) or it waits for the next one; chat offers Stop and redirect.
         from .harnesses import steers
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
         config = json.loads(config[0]) if config else {}
         label = ("Saved — steering this turn" if not queued and steers(config, config.get("runtime"))
                  else "Saved — queued for the next turn")
@@ -958,7 +958,7 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
     job = c.execute("SELECT j.*,m.from_actor AS sender,a.state AS attempt_state,a.lease_until,a.stop_requested "
                     "FROM jobs j JOIN messages m ON m.id=j.message_id "
                     "LEFT JOIN attempts a ON a.id=j.attempt_id WHERE m.conversation_id=? "
-                    "AND coalesce(json_extract(m.refs_json,'$.maintenance'),'')!='checkpoint' "
+                    "AND coalesce(json_extract(m.refs,'$.maintenance'),'')!='checkpoint' "
                     + which + "ORDER BY m.rowid DESC LIMIT 1", (cid, bot) if bot else (cid,)).fetchone()
     execution = None
     if job and who and (not privacy.message_readable(c, privacy.actor(who), H.message(c, job["message_id"]))
@@ -1000,8 +1000,8 @@ def conversation_execution(c, cid, who=None, settings=None, bot=None, auth=None,
                 label = 'Saved — ' + reason
         parts = []
         if state in ("leased", "running"):
-            parts = turns.reply_parts([(e["kind"], json.loads(e["payload_json"]), e["created"]) for e in c.execute(
-                "SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
+            parts = turns.reply_parts([(e["kind"], json.loads(e["payload"]), e["created"]) for e in c.execute(
+                "SELECT kind,payload,created FROM attempt_events WHERE attempt_id=? ORDER BY seq", (job["attempt_id"],))])
         if parts:
             # A bot that org rules apply to shows that it works and its tool steps, never its reply before the reply
             # is checked and delivered (backend/org_rule_check.py).
@@ -1133,7 +1133,7 @@ def checkout_issue(add, row, busy=0):
     """A runner whose checkout is not what main says (#492): the production runner ran 28 commits
     behind for a day because a bot committed in it. Local commits never fast-forward, so they are
     said at once; being behind is said once it has lasted an hour (a pull is on its way before)."""
-    checkout = H._json(row["checkout_json"], {}) or {}
+    checkout = H._json(row["checkout"], {}) or {}
     if not checkout:
         return
     ahead, behind = int(checkout.get("ahead") or 0), int(checkout.get("behind") or 0)
@@ -1414,7 +1414,7 @@ def went_away(c, me, days=7):
     answered for them."""
     since = H.shift(H.now(), days=-days)
     expired = c.execute("SELECT count(*) FROM events WHERE ts>=? AND action IN ('ask.expired','ask.went_ahead') "
-                        "AND json_extract(detail_json,'$.to')=?", (since, me)).fetchone()[0]
+                        "AND json_extract(detail,'$.to')=?", (since, me)).fetchone()[0]
     # A question a newer one from the same bot replaced, still open in the same thread, did not go away: it is asked
     # again, so only one with no open successor counts.
     withdrawn = (c.execute(WITHDRAWN_ASKS_SQL, (me, since)).fetchone()[0]
@@ -1423,7 +1423,7 @@ def went_away(c, me, days=7):
     assistant = (c.execute("SELECT count(*) FROM approvals a JOIN messages m ON m.id=a.message_id WHERE m.to_actor=? "
                            "AND a.decided_via='assistant' AND a.decided_at>=?", (me, since)).fetchone()[0]
                  + c.execute("SELECT count(*) FROM messages WHERE from_actor=? AND kind='answer' AND created>=? "
-                             "AND json_extract(refs_json,'$.via')='assistant'", (me, since)).fetchone()[0])
+                             "AND json_extract(refs,'$.via')='assistant'", (me, since)).fetchone()[0])
     return {"expired": expired, "withdrawn": withdrawn, "assistant": assistant,
             "total": expired + withdrawn + assistant, "days": days}
 
@@ -1728,7 +1728,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
                 ask["stale"] = True      # its one-click Clarify (backend/clarify_asks.py) shows on the card
             items.append(item)
     for msg in privacy.readable_messages(c, privacy.actor(who), H.loose_asks_to(c, who.actor)):
-        msg["refs"] = H._json(msg.get("refs_json"), {}) or {}
+        msg["refs"] = H._json(msg.get("refs"), {}) or {}
         ask = {k: msg[k] for k in ("id", "from_actor", "to_actor", "body", "created", "conversation_id", "refs")}
         item = {"kind": "ask", "id": msg["id"], "message_id": msg["id"], "title": _clip(msg["body"], 160),
                 "first_line": (msg["body"] or "").split("\n")[0], "body": msg["body"], "requester": msg["from_actor"],
@@ -1916,7 +1916,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     index = ReadIndex(c, principal)
     for m in c.execute("SELECT m.*,j.bot,j.attempt_id FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.state='queued'"):
         if (not dict(m).get("deleted_at") and not dict(m).get("deleted") and
-                index.message(m["id"], m["conversation_id"], m["refs_json"], m["in_reply_to"]) and
+                index.message(m["id"], m["conversation_id"], m["refs"], m["in_reply_to"]) and
                 (not m["attempt_id"] or index.attempt(m["attempt_id"]))):
             queued[m["bot"]] = queued.get(m["bot"], 0) + 1
     # One pass for every live attempt: the per-bot SELECT below used to pay once per writable bot.
@@ -2062,7 +2062,7 @@ def install_views(app, store, auth, mutate, task_view):
 
         def declared(slug):
             row = registries.get(slug)
-            return config_of(row["config_json"]) if row else {}
+            return config_of(row["config"]) if row else {}
         from .report_order import positions
         places = positions(c)              # its place among its manager's reports on the chart, when someone set one
         # The Material Symbol a bot's avatar wears: its own, else its template's. A bot made from a `kind: helper` card
@@ -2096,11 +2096,11 @@ def install_views(app, store, auth, mutate, task_view):
             pid = H.actor_id(who.actor)
             manager = (who.role == "owner" or (who.role == "human" and (
                 auth.bot_admin(who) or (registry and (registry["operator"] == pid
-                                                      or pid in A.owner_ids(registry["bot_owners_json"])))
+                                                      or pid in A.owner_ids(registry["bot_owners"])))
                 or P.manages(pid, "bot", slug, people, configs, archived, bare))))
             policy = {"can_manage": manager, "bot_owners": bot_owner_rows(c, registry, slug, people, configs, archived)}
             if manager:
-                policy["access_policy"] = A.document(registry["access_json"] if registry else None)
+                policy["access_policy"] = A.document(registry["access"] if registry else None)
             if not level["read"]:
                 # Seen, not read: the name, role, who runs it, who it reports to. Its
                 # configuration, routines, machine and goals are its activity.
@@ -2347,8 +2347,8 @@ def install_views(app, store, auth, mutate, task_view):
             from . import browser_exit
             # One pass each for every computer's internet sharing and today's bytes through it.
             exit_policies, exit_used = browser_exit.policies(c), browser_exit.used_today_all(c)
-            runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness_json,"
-                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities_json,"
+            runners = list(c.execute("SELECT id,label,operator,last_seen,revoked_at,platform,version,capacity,readiness,"
+                                      "accepts_member_bots,turns_at_once,screen,performance,capabilities,"
                                       "restart_since,"
                                       "readiness_at FROM runners ORDER BY created"))
             from . import usage_limits
@@ -2380,8 +2380,8 @@ def install_views(app, store, auth, mutate, task_view):
                 from .performance import listing as performance_listing
                 value.update(screen_listing(value))
                 value.update(performance_listing(value))
-                value.pop("capabilities_json")
-                value["readiness"] = readiness_document(value.pop("readiness_json"))
+                value.pop("capabilities")
+                value["readiness"] = readiness_document(value.pop("readiness"))
                 value["repositories"] = repo_status.get(row["id"], "unknown")
                 assigned_here = active_placed.get(row["id"]) or set()
                 value["readiness"]["bots"] = {bot: report for bot, report in value["readiness"].get("bots", {}).items()
@@ -2522,7 +2522,7 @@ def install_views(app, store, auth, mutate, task_view):
             if not message:
                 raise Problem("not_found", "Run not found or unavailable to this account", 404)
             attempt = c.execute("SELECT * FROM attempts WHERE id=?", (run_id,)).fetchone()
-            events = c.execute("SELECT seq,kind,payload_json,created FROM attempt_events "
+            events = c.execute("SELECT seq,kind,payload,created FROM attempt_events "
                                "WHERE attempt_id=? ORDER BY seq", (run_id,)).fetchall()
             # A live run of a bot org rules apply to keeps its reply out until it is checked and delivered.
             from .org_rule_check import hides_run
@@ -2531,7 +2531,7 @@ def install_views(app, store, auth, mutate, task_view):
             lines = [store.settings.app_name + " cloud run " + run_id, "Bot: " + turn["bot"],
                      "Started: " + str(turn["started"]), "Finished: " + str(turn["finished"]),
                      "Outcome: " + str(turn["exit"])]
-            result = json.loads(attempt["result_json"]) if attempt and attempt["result_json"] else {}
+            result = json.loads(attempt["result"]) if attempt and attempt["result"] else {}
             if result.get("fallback"):
                 lines.append("Fallback: " + str(result["fallback"]) + " (primary harness unavailable; the turn ran on the fallback)")
             if result.get("limited"):
@@ -2641,7 +2641,7 @@ def install_views(app, store, auth, mutate, task_view):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
             config = json.loads(row[0]) if row else {}
             safe = {k: v for k, v in config.items() if k not in ("cwd", "env", "token", "secrets", "secrets_file")}
             status = H.status(c, bot) or {}
@@ -2677,7 +2677,7 @@ def install_views(app, store, auth, mutate, task_view):
                 if attempt and attempt[0]:
                     turns.append({"role": "assistant", "text": attempt[0],
                                   "ts": turn["finished"] or turn["started"]})
-            config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+            config = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
             cfg = json.loads(config[0]) if config else {}
             runtime, model = providers.bot_choice(c, auth.settings, cfg)
             runtime = runtime or "local"
@@ -2871,7 +2871,7 @@ def runnable_choices(c, who, auth, settings):
     # computer, shared by its bots) and each bot's config are read once here, not once per check.
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
-    rows = c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.id=a.bot "
+    rows = c.execute("SELECT a.bot,b.runtime,bc.config FROM assignments a JOIN bots b ON b.id=a.bot "
                      "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
     for row in rows:
@@ -2879,7 +2879,7 @@ def runnable_choices(c, who, auth, settings):
         if not auth.bot_manager(c, who, bot):
             continue
         # The bot's own harness too: the picker keeps it shown when its provider is no longer offered.
-        own = resolve_harness(H._json(row["config_json"], {}) or {}, row["runtime"])
+        own = resolve_harness(H._json(row["config"], {}) or {}, row["runtime"])
         for harness in sorted(set(harnesses) | ({own} if own in HARNESS_BY_ID and not HARNESS_BY_ID[own].get("external") else set())):
             runtime = HARNESS_BY_ID[harness]["runtime"]
             answer = runtime_choice(c, bot, runtime, who, computers, harness=harness)

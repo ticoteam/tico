@@ -18,7 +18,7 @@ def strategy_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES('goal-manager','goal-manager','Strategy Bot','fake','','','','keeper','active',?)", (H.now(),))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES('goal-manager','{}',NULL,'ana')")
 
 
 def personal(api, pid):
@@ -44,7 +44,7 @@ def helper(api, slug, name):
     with api.app.state.store.transaction() as c:
         c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
                   "VALUES(?,?,?,'fake','','','','keeper','active',?)", (slug, slug, name, H.now()))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,'{}',NULL,'ana')", (slug,))
 
 
 def earlier_chat(api, owner="human:ana", said=("Grow revenue 20% this year", "Here is a plan for that.")):
@@ -147,7 +147,7 @@ def test_cards_waiting_in_the_earlier_chat_move_to_the_assistant_room_once(api):
     mine = get(api, "assistant")
     with api.app.state.store.read() as c:
         rows = {r["id"]: r["conversation_id"] for r in c.execute("SELECT id, conversation_id FROM assistant_actions")}
-        cards = c.execute("SELECT from_actor FROM messages WHERE conversation_id=? AND json_extract(refs_json,"
+        cards = c.execute("SELECT from_actor FROM messages WHERE conversation_id=? AND json_extract(refs,"
                           "'$.action')=?", (mine["room_id"], waiting["id"])).fetchall()
     assert rows == {waiting["id"]: mine["room_id"], done["id"]: old}
     assert [r["from_actor"] for r in cards] == ["bot:coo"]
@@ -180,8 +180,8 @@ def test_the_assistant_hands_the_strategy_bot_and_the_librarian_cited_work(api):
         task = task.get("task", task)
         assert (task["owner"], task["requester"]) == ("bot:" + slug, "human:ana")
         with api.app.state.store.read() as c:
-            asked = H._json(c.execute("SELECT detail_json FROM events WHERE action='assistant.asked_helper' AND target=?",
-                                      (task["id"],)).fetchone()["detail_json"], {})
+            asked = H._json(c.execute("SELECT detail FROM events WHERE action='assistant.asked_helper' AND target=?",
+                                      (task["id"],)).fetchone()["detail"], {})
             quoted = c.execute("SELECT body FROM messages WHERE conversation_id=? AND body LIKE '%in their words%'",
                                (task["conversation_id"],)).fetchone()["body"]
             botops = c.execute("SELECT 1 FROM events WHERE action='botops.asked_via_assistant' AND target=?",
@@ -360,13 +360,13 @@ def test_a_file_in_an_assistant_chat_lands_on_the_persons_own_message_only(api):
     assert ana["conversation_id"] == rooms["ana-test"] != rooms["ben-test"]
     assert sent["ana-test"]["reply"] is None and sent["ana-test"]["fast"] is False
     with api.app.state.store.read() as c:
-        refs = json.loads(c.execute("SELECT refs_json FROM messages WHERE id=?", (ana["id"],)).fetchone()[0])
+        refs = json.loads(c.execute("SELECT refs FROM messages WHERE id=?", (ana["id"],)).fetchone()[0])
     assert refs["page"] == {"path": "#/tasks", "title": "Tasks"} and refs["assistant"] is True
     [picture] = refs["attachments"]
     assert picture["kind"] == "image" and picture["name"] == "image.png"
     # Each reads their own and not the other's, by the file or by its blob, the owner included.
     with api.app.state.store.read() as c:
-        bens = json.loads(c.execute("SELECT refs_json FROM messages WHERE id=?",
+        bens = json.loads(c.execute("SELECT refs FROM messages WHERE id=?",
                                     (sent["ben-test"]["message"]["id"],)).fetchone()[0])["attachments"][0]
     for mine, theirs, token in ((picture, bens, "ana-test"), (bens, picture, "ben-test")):
         for url in (f"/api/v2/files/{mine['file_id']}", mine["url"]):

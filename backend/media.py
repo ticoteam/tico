@@ -138,13 +138,13 @@ def replay_upload(store, request, payload):
     key = upload_key(request)
     with store.read() as c:
         validate_identity(c, who)
-        row = c.execute("SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?",
+        row = c.execute("SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?",
                         (principal, request.url.path, key)).fetchone()
     if row is None:
         return None
     if row["request_hash"] != request_digest(encode(payload)):
         raise Problem("idempotency_conflict", "This key was used for different content", 409)
-    result = json.loads(row["response_json"])
+    result = json.loads(row["response"])
     if isinstance(result, dict) and "_refusal" in result:
         refusal = result["_refusal"]
         raise Problem(refusal["code"], refusal["detail"], refusal["status"])
@@ -221,9 +221,9 @@ def save(c, meta, *, transcript=None, notes=None, readable=None):
                 notes if notes is not None else (old or {}).get("notes", ""), conn=c, readable=readable)
     control(c, meta["id"])
     # Typed notes need version history too, including intentionally empty edits.
-    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata_json,"
+    c.execute("INSERT OR IGNORE INTO meeting_versions(meeting_id,content_hash,metadata,"
               "transcript_original,transcript_readable,notes,created) "
-              "SELECT id,content_hash,metadata_json,transcript_original,transcript_readable,notes,updated "
+              "SELECT id,content_hash,metadata,transcript_original,transcript_readable,notes,updated "
               "FROM meetings WHERE id=?", (meta["id"],))
 
 
@@ -288,7 +288,7 @@ def view(c, who, rid, *, include_transcripts=False):
         result["transcript_sources"] = [{"id": row["id"], "source": row["source"],
             "resource_type": row["resource_type"], "transcript_index": row["transcript_index"],
             "source_updated_at": row["source_updated_at"], "text": row["transcript_text"],
-            "turns": json.loads(row["turns_json"]),
+            "turns": json.loads(row["turns"]),
             "summary": row["summary_text"],
             "primary": row["content_hash"] == meta.get("transcript_import_hash")}
             for row in c.execute("SELECT t.* FROM recording_transcripts t WHERE t.meeting_id=? "
@@ -368,7 +368,7 @@ def deliver(c, auth, who, rid, body, uploads):
     meta["attachments"] = meta.get("attachments", []) + extra
     save(c, meta)
     c.execute("INSERT INTO meeting_deliveries(meeting_id,requested_by,sender_name,destination,instructions,"
-              "attachments_json,requested_at) VALUES(?,?,?,?,?,?,?)",
+              "attachments,requested_at) VALUES(?,?,?,?,?,?,?)",
               (rid, who.email, person.get("name") or who.email, slug, body.instructions,
                encode(meta["attachments"]), H.now()))
     return finish_delivery(c, auth, who, rid)
@@ -485,7 +485,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
                         kind=visuals.kind_of(item["content_type"], item["size"], visuals._head(blobs, upload["digest"])))
         if items:
             refs = {**message["refs"], "attachments": items}
-            c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode(refs), message["id"]))
+            c.execute("UPDATE messages SET refs=? WHERE id=?", (encode(refs), message["id"]))
         return visuals.for_reader(app, store.settings, c, who, [H.message(c, message["id"])])[0]
 
     # POST /api/v2/uploads/assistant/messages uses this too (a person's own Assistant chat).
@@ -991,9 +991,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def sources(request: Request):
         human_only(request.state.identity)
         with store.read() as c:
-            row = c.execute("SELECT last_success,last_error,detail_json FROM service_health "
+            row = c.execute("SELECT last_success,last_error,detail FROM service_health "
                             "WHERE service='recording:close'").fetchone()
-            detail = json.loads(row["detail_json"] or "{}") if row else {}
+            detail = json.loads(row["detail"] or "{}") if row else {}
             if not row:
                 status = "needs_setup"
             elif row["last_error"] and (not row["last_success"] or row["last_error"] >= row["last_success"]):
@@ -1007,9 +1007,9 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
             for r in c.execute("SELECT source FROM meeting_importers WHERE enabled=1"):
                 if r["source"] not in IMPORTERS:
                     continue
-                health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?",
+                health = c.execute("SELECT last_success,last_error,detail FROM service_health WHERE service=?",
                                    ("recording:" + r["source"],)).fetchone()
-                detail = json.loads(health["detail_json"] or "{}") if health else {}
+                detail = json.loads(health["detail"] or "{}") if health else {}
                 state = status_of(True, health, IMPORTERS[r["source"]]["interval"], H.now())
                 extra.append({"id": r["source"], "name": IMPORTERS[r["source"]]["name"],
                               "status": "needs_setup" if state == "waiting" else state,
@@ -1055,7 +1055,7 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     def versions(request: Request, rid: str):
         with store.read() as c:
             authorized(c, request.state.identity, rid)
-            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata_json"])}
+            return {"versions": [{**dict(row), "metadata": json.loads(row["metadata"])}
                                  for row in c.execute("SELECT * FROM meeting_versions WHERE meeting_id=? ORDER BY id DESC", (rid,))]}
 
     @app.post("/api/notes")

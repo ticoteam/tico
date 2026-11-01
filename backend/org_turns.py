@@ -15,12 +15,12 @@ CREATE TABLE IF NOT EXISTS org_turn_waits(
 
 
 def saved(c, key):
-    row = c.execute('SELECT value_json FROM registry_metadata WHERE key=?', (key,)).fetchone()
+    row = c.execute('SELECT value FROM registry_metadata WHERE key=?', (key,)).fetchone()
     return json.loads(row[0]) if row else {}
 
 
 def save(c, key, value):
-    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json',
+    c.execute('INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
               (key, json.dumps(value)))
 
 

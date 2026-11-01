@@ -373,7 +373,7 @@ def add_bots(api, slugs, runner_id=None):
     with api.app.state.store.transaction() as c:
         H.sync_registry(c, bots, [])
         for slug, config in bots.items():
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (slug, encode(config)))
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,?,'ana')", (slug, encode(config)))
             if runner_id:
                 c.execute("INSERT INTO assignments VALUES(?,?,1,?,'human:ana')", (slug, runner_id, H.now()))
 

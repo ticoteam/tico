@@ -208,7 +208,7 @@ def test_archive_schema_is_created_for_fresh_and_existing_databases():
     c.executescript(updates.SCHEMA)
     updates.ensure_schema(c)
     assert c.execute("SELECT id,body FROM updates").fetchone()[:] == ("existing", "- Old content")
-    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides_json"}
+    assert {r["name"] for r in c.execute("PRAGMA table_info(updates)")} >= {"slides"}
     assert {r["name"] for r in c.execute("PRAGMA table_info(update_queue)")} >= {"tries", "redo"}
     assert c.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='update_archive_overrides'").fetchone()
     c.close()

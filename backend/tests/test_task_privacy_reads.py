@@ -34,7 +34,7 @@ def legacy_message(api, tid, *, body="Private legacy comment"):
     with api.app.state.store.transaction() as c:
         conv = H.open_conversation(c, "human:ben", ["human:ana", "bot:ops"], kind="chat", subject="General")
         msg = H.say(c, "human:ben", "bot:ops", body, conversation_id=conv["id"])
-        c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode({"task": tid}), msg["id"]))
+        c.execute("UPDATE messages SET refs=? WHERE id=?", (encode({"task": tid}), msg["id"]))
         return conv, H.message(c, msg["id"])
 
 
@@ -55,7 +55,7 @@ def test_private_relations_tags_and_events_do_not_leak_to_owner(api):
     assert hidden["id"] not in json.dumps(listed)
     assert "sensitive-only" not in json.dumps(get(api, "tags"))
     assert not sql(api, "SELECT id FROM tags WHERE key='sensitive-only'")
-    assert not sql(api, "SELECT detail_json FROM events WHERE action='task.inspect'")
+    assert not sql(api, "SELECT detail FROM events WHERE action='task.inspect'")
     assert sql(api, "SELECT from_task FROM task_relations") == []
     assert len(sql(api, "SELECT from_task FROM task_relations", "ben-test")) == 3
     assert any(t[0] == hidden["id"] for t in sql(api, "SELECT id FROM tasks", "ben-test"))
@@ -115,7 +115,7 @@ def test_private_execution_output_context_and_grants_revoke_on_reassignment(api)
     assert api.get(f"/api/v2/conversations/{row['conversation_id']}/messages", headers=headers(attempt["token"])).status_code in (403, 404)
     assert api.post("/api/v2/jobs/claim", json={"bot": "ops", "start_places": True}, headers=headers(machine["token"], key)).status_code in (403, 404)
     assert api.post(f"/api/v2/attempts/{attempt['id']}/inputs", json={}, headers=headers(machine["token"])).status_code in (403, 409)
-    assert not sql(api, "SELECT payload_json FROM attempt_events WHERE attempt_id='" + attempt["id"] + "'")
+    assert not sql(api, "SELECT payload FROM attempt_events WHERE attempt_id='" + attempt["id"] + "'")
     assert "Private runtime output" not in json.dumps(get(api, "bots/ops/execution-review"))
 
 
@@ -177,8 +177,8 @@ def test_context_search_and_cached_fleet_do_not_disclose_revoked_sources(api):
 @pytest.mark.parametrize("requester", ["bot:ops"])
 def test_verified_legal_requester_is_kept_without_forged_human_grants(api, requester):
     with api.app.state.store.transaction() as c:
-        config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot='ops'").fetchone()[0], {})
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='ops'", (encode({**config, "template": "general-counsel"}),))
+        config = H._json(c.execute("SELECT config FROM bot_config WHERE bot='ops'").fetchone()[0], {})
+        c.execute("UPDATE bot_config SET config=? WHERE bot='ops'", (encode({**config, "template": "general-counsel"}),))
     source = task(api, requester=requester, owner="bot:ops")
     machine = runner(api)
     with api.app.state.store.read() as c:
@@ -247,8 +247,8 @@ def test_delegated_creation_keeps_defaults_and_requires_actual_bot_audience(api,
     api.app.state.store.settings.test_identities["acted-test"] = acted
     with api.app.state.store.transaction() as c:
         if sensitive:
-            config = H._json(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (sensitive,)).fetchone()[0], {})
-            c.execute("UPDATE bot_config SET config_json=? WHERE bot=?",
+            config = H._json(c.execute("SELECT config FROM bot_config WHERE bot=?", (sensitive,)).fetchone()[0], {})
+            c.execute("UPDATE bot_config SET config=? WHERE bot=?",
                       (encode({**config, "private_tasks_default": True}), sensitive))
         before = c.execute("SELECT count(*) FROM tasks").fetchone()[0]
         rooms_before = c.execute("SELECT count(*) FROM conversations").fetchone()[0]
@@ -305,7 +305,7 @@ def test_sql_audit_keeps_no_literals_and_provenance_uses_the_result_snapshot(api
     assert sql(api, f"SELECT '{marker}' FROM tasks WHERE id='{row['id']}'", "ben-test") == [[marker]]
     api.post("/api/v2/sql", json={"sql": f"SELECT '{marker}' FROM missing_table"}, headers=headers("ben-test"))
     with api.app.state.store.read() as c:
-        logs = list(c.execute("SELECT detail_json FROM events WHERE action='sql.query'"))
+        logs = list(c.execute("SELECT detail FROM events WHERE action='sql.query'"))
         assert logs and all(marker not in r[0] and row["id"] not in r[0] for r in logs)
         conn = SQL.connect(api.app.state.store.settings.db_path, c, api.app.state.auth,
                            Identity("human:ben", "human", email="ben@acme.example"))
@@ -340,7 +340,7 @@ def test_sql_event_privacy_scales_with_matching_attempts_not_their_cross_product
                 started = H.shift("2026-01-01T00:00:00Z", minutes=n * 2)
                 finished = H.shift(started, minutes=1)
                 mid, jid, aid = (f"synthetic-{kind}-{n}" for kind in ("message", "job", "attempt"))
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                           "VALUES(?,?,'human:ana','bot:ops','say','Public request','{}',?)", (mid, conv["id"], started))
                 jid = c.execute("SELECT id FROM jobs WHERE message_id=?", (mid,)).fetchone()[0]
                 c.execute("UPDATE jobs SET state='completed',attempt_id=? WHERE id=?", (aid, jid))
@@ -612,7 +612,7 @@ def running_turn(api):
 
 def queue(c, mid, cid, refs, *, sender="human:ana", in_reply_to=None):
     """A message to bot:ops as stored; the jobs trigger queues it."""
-    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs_json,in_reply_to) "
+    c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created,refs,in_reply_to) "
               "VALUES(?,?,?,'bot:ops','say','More',?,?,?)", (mid, cid, sender, H.now(), encode(refs), in_reply_to))
 
 

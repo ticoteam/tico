@@ -176,9 +176,9 @@ def task_days(c, rows):
     out = {}
     for start in range(0, len(ids), 500):
         part = ids[start:start + 500]
-        for r in c.execute("SELECT id, flow_json FROM automations WHERE deleted_at IS NULL AND id IN (%s)"
+        for r in c.execute("SELECT id, flow FROM automations WHERE deleted_at IS NULL AND id IN (%s)"
                            % ",".join("?" * len(part)), part):
-            trigger = json.loads(r["flow_json"]).get("trigger") or {}
+            trigger = json.loads(r["flow"]).get("trigger") or {}
             if trigger.get("type") == "due":
                 out[r["id"]] = int(trigger.get("open_days", ROUTINE_DAYS))
     return out
@@ -369,7 +369,7 @@ def linked(c, row, routine_id):
         return False
     if row["routine_id"] == routine_id:
         return True
-    for found in c.execute("SELECT before_json, after_json FROM audit_log WHERE object=?", ("org_rule:" + row["rule_id"],)):
+    for found in c.execute("SELECT before, after FROM audit_log WHERE object=?", ("org_rule:" + row["rule_id"],)):
         for raw in found:
             due = (json.loads(raw) or {}).get("due") if raw else None
             if isinstance(due, dict) and due.get("id") == row["id"] and due.get("routine_id") == routine_id:

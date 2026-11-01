@@ -31,7 +31,7 @@ def sweep(api, at=NOW):
 
 def examples(api, check):
     with api.app.state.store.read() as c:
-        return c.execute("SELECT examples_json FROM invariant_state WHERE check_id=?", (check,)).fetchone()[0]
+        return c.execute("SELECT examples FROM invariant_state WHERE check_id=?", (check,)).fetchone()[0]
 
 
 def alerts(api, check):
@@ -44,7 +44,7 @@ def alerts(api, check):
 
 
 def flight_event(c, at, site="backend/app.py:4100 in mutate", route="PATCH /api/v2/tasks/{tid}", hold_s=6.5):
-    c.execute("INSERT INTO flight_events(ts,kind,detail_json) VALUES(?,?,?)",
+    c.execute("INSERT INTO flight_events(ts,kind,detail) VALUES(?,?,?)",
               (at, "long_hold", json.dumps({"route": route, "site": site, "hold_s": hold_s, "wait_ms": 10.0})))
 
 
@@ -114,13 +114,13 @@ def test_the_same_rule_refusing_one_bot_more_than_twenty_times_in_a_day_fires(ap
     store = api.app.state.store
     with store.transaction() as c:
         for n in range(I.REFUSALS_PER_DAY + 1):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-ops-{n}", ago(minutes=n + 1), "bot:ops", "lint"))
         for n in range(I.REFUSALS_PER_DAY):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-cpo-{n}", ago(minutes=n + 1), "bot:cpo", "lint"))
         for n in range(50):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-old-{n}", ago(days=2), "bot:finance", "lint"))
     assert sweep(api)["refused_again"] == 1, "twenty-one refusals fire; twenty and old refusals do not"
 
@@ -152,7 +152,7 @@ def test_a_scheduled_automation_thirty_minutes_past_due_fires_and_a_paused_one_d
     with store.transaction() as c:
         for aid, enabled, due in (("au_late", 1, ago(hours=1)), ("au_paused", 0, ago(hours=1)),
                                   ("au_next", 1, stamp(NOW + timedelta(hours=1)))):
-            c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow_json,version,created,created_by,"
+            c.execute("INSERT INTO automations(id,name,owner,trigger_type,enabled,flow,version,created,created_by,"
                       "updated,next_due) VALUES(?,?,?,?,?,?,1,?,?,?,?)",
                       (aid, aid, "human:ana", "schedule", enabled, flow, ago(days=2), "human:ana", ago(days=2), due))
     assert sweep(api)["automation_overdue"] == 1
@@ -230,7 +230,7 @@ def test_a_rehearsal_or_demo_copy_checks_nothing_and_raises_nothing(api):
     store = api.app.state.store
     with store.transaction() as c:
         for n in range(I.REFUSALS_PER_DAY + 1):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-copy-{n}", ago(minutes=1), "bot:ops", "lint"))
     auth = api.app.state.execution.auth
     assert I.sweep(store, auth, SimpleNamespace(rehearsal=True, demo=False), NOW) == {}
@@ -328,7 +328,7 @@ def test_the_scheduler_runs_the_checks_every_fifteen_minutes_and_records_a_chang
     store = api.app.state.store
     with store.transaction() as c:
         for n in range(I.REFUSALS_PER_DAY + 1):
-            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail_json,severity) VALUES(?,?,?,?,'{}','warn')",
+            c.execute("INSERT INTO refusals(id,ts,actor,rule,detail,severity) VALUES(?,?,?,?,'{}','warn')",
                       (f"ref-tick-{n}", ago(minutes=1), "bot:ops", "lint"))
     scheduler = Scheduler(store, api.app.state.execution)
     scheduler.tick(NOW)

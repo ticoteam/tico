@@ -24,8 +24,8 @@ def rule_row(api, params, event="webhook.received", by="human:ana", scope_kind="
         position = (c.execute("SELECT max(position) FROM rules WHERE scope_kind=? AND scope_id=? AND position<?",
                               (scope_kind, scope_id, tico_notices.RULE_POSITION)).fetchone()[0] or 0) + 1
         row = {"id": "rule-" + H.new_id(), "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
-               "when_json": json.dumps(when or {}, sort_keys=True), "then_outcome": then,
-               "params_json": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
+               "condition": json.dumps(when or {}, sort_keys=True), "then_outcome": then,
+               "params": json.dumps(params, sort_keys=True), "enabled": 1, "position": position, "note": "",
                "created_by": by, "action_by": by, "created": H.now(), "updated": H.now(), "revision": 1}
         c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
     return row
@@ -87,7 +87,7 @@ def test_a_signed_trigger_takes_a_github_delivery_and_refuses_and_logs_a_bad_sig
     assert replay["signed"] is True and replay["replayed"] is True and "signing_secret" not in replay
     with api.app.state.store.read() as c:                                    # sealed, and in no receipt
         assert key not in c.execute("SELECT signing_secret FROM triggers WHERE id='repo'").fetchone()[0]
-        receipts = " ".join(r[0] + r[1] for r in c.execute("SELECT request_hash,response_json FROM idempotency"))
+        receipts = " ".join(r[0] + r[1] for r in c.execute("SELECT request_hash,response FROM idempotency"))
         assert key not in receipts and made["url"].rsplit("/", 1)[1] not in receipts
 
     body = b'{"ref": "refs/heads/main"}'

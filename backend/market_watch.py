@@ -305,10 +305,10 @@ def start(store):
 
 def claim(c, day):
     """Take today's check: True once per UTC day, however many ticks or servers ask."""
-    found = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DAY_KEY,)).fetchone()
+    found = c.execute("SELECT value FROM registry_metadata WHERE key=?", (DAY_KEY,)).fetchone()
     if found and (json.loads(found[0]) or {}).get("day") == day:
         return False
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (DAY_KEY, json.dumps({"day": day, "at": H.now()})))
     return True
 

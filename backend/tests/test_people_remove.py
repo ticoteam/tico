@@ -41,9 +41,9 @@ def test_a_left_person_with_no_history_is_removed_with_what_goes_with_them(envir
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM humans WHERE id=?", (pid,)).fetchone()
         assert not c.execute("SELECT 1 FROM human_tokens WHERE human=?", (pid,)).fetchone()
-        event = c.execute("SELECT actor,target,detail_json FROM events WHERE action='person.removed'").fetchone()
+        event = c.execute("SELECT actor,target,detail FROM events WHERE action='person.removed'").fetchone()
     assert event["actor"] == "human:morgan" and event["target"] == pid
-    assert json.loads(event["detail_json"]) == {"name": "E2E Tester", "email": "e2e-tester@acme.example"}
+    assert json.loads(event["detail"]) == {"name": "E2E Tester", "email": "e2e-tester@acme.example"}
     remove(api, pid, expected=404)
     # The same address can be added again as a new person.
     assert call(api, "POST", "/people", {"email": "e2e-tester@acme.example"})["person"] == pid
@@ -61,7 +61,7 @@ def test_a_person_with_history_stays_as_left(environment):
     # A message they wrote: only the full read on the click finds it.
     wrote = added_and_left(api, "wrote@acme.example")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO conversations(id,kind,subject,participants_json,created) VALUES('cv1','dm','',?,?)",
+        c.execute("INSERT INTO conversations(id,kind,subject,participants,created) VALUES('cv1','dm','',?,?)",
                   (json.dumps(["human:" + wrote, "bot:coo"]), H.now()))
         c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,created) "
                   "VALUES('m1','cv1',?,'bot:coo','message','hi',?)", ("human:" + wrote, H.now()))

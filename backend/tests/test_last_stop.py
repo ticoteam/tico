@@ -55,7 +55,7 @@ def test_covering_a_queued_notice_clears_its_status_and_notifies_open_headers(ap
     task = post(api, "tasks", {"owner": "human:ana", "title": "Already handled", "body": "Handled elsewhere."})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='done' WHERE id=?", (task["id"],))
-        c.execute("UPDATE messages SET from_actor=?,kind='notice',refs_json=? WHERE id=?",
+        c.execute("UPDATE messages SET from_actor=?,kind='notice',refs=? WHERE id=?",
                   (H.KEEPER, json.dumps({"task": task["id"]}), message["id"]))
         cursor = c.execute("SELECT coalesce(max(seq),0) FROM changes").fetchone()[0]
     assert claim(api, machine) is None

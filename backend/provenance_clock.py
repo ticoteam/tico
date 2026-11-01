@@ -11,11 +11,11 @@ SOURCES = {
     'attempts': ('id', 'bot', 'job_id', 'state'),
     'attempt_inputs': ('attempt_id', 'message_id'),
     'jobs': ('id', 'message_id'),
-    'messages': ('id', 'conversation_id', 'refs_json', 'in_reply_to', 'from_actor', 'to_actor'),
+    'messages': ('id', 'conversation_id', 'refs', 'in_reply_to', 'from_actor', 'to_actor'),
     'conversations': ('id', 'task_id', 'room_key'),
     'live_meeting_turns': ('id', 'meeting_id', 'bot'),
     'tasks': ('id', 'carried_by'),
-    'events': ('action', 'target', 'detail_json'),
+    'events': ('action', 'target', 'detail'),
 }
 
 

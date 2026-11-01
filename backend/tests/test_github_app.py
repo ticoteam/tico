@@ -152,7 +152,7 @@ def api(tmp_path, gh):
             H.sync_registry(c, bots, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}, {"id": "ben", "email": "ben@acme.example", "team": "leadership"}, {"id": "riley", "email": "riley@acme.example", "team": "leadership"}]})
             repos = {"botops": "emp-botops", "newbie": "emp-newbie", "oldie": "emp-oldie", "cpo": "emp-cpo", "cmo": "https://github.com/Acme/emp-cmo.git", "cfo": "elsewhere/emp-cfo"}
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator,repo) VALUES(?,?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator,repo) VALUES(?,?,?,?,?)",
                           (slug, encode(config), "t", "ana", repos[slug]))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         client.app_state = app.state
@@ -208,9 +208,9 @@ def test_repository_delete_is_owner_only_scoped_audited_and_never_treats_404_as_
                            "X-Tico-On-Behalf-Of": "turn", "Idempotency-Key": str(uuid.uuid4())})
     assert delegated.status_code == 200 and delegated.json()["deleted"] and "needs_confirm" not in delegated.json(), delegated.text
     with api.app.state.store.read() as c:
-        event = c.execute("SELECT actor,detail_json FROM events WHERE action='github.repo_deleted' "
+        event = c.execute("SELECT actor,detail FROM events WHERE action='github.repo_deleted' "
                           "AND target='Acme/bot-qa-delegated'").fetchone()
-        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail_json"]
+        assert event["actor"] == "human:ana" and '"via": "botops"' in event["detail"]
     gh.delete_status = 404
     response = api.delete(path, headers={**auth(), "Idempotency-Key": str(uuid.uuid4())})
     assert response.status_code == 409 and "did not delete" in response.json()["error"]["detail"]
@@ -654,7 +654,7 @@ def test_owner_product_creation_uses_exact_name_private_empty_and_idempotent_rec
     assert duplicate.status_code == 409 and duplicate.json()["error"]["code"] == "github_repo_exists"
     assert gh.created_repositories == {"Acme/tico-recorder"}, "a retry never replaces or duplicates existing history"
     with api.app_state.store.read() as c:
-        event = c.execute("SELECT action,target,detail_json FROM events WHERE action='github.product_repo_created'").fetchone()
+        event = c.execute("SELECT action,target,detail FROM events WHERE action='github.product_repo_created'").fetchone()
         assert event and event["target"] == "Acme/tico-recorder"
         assert c.execute("SELECT COUNT(*) FROM bot_repo_access").fetchone()[0] == 0
         assert c.execute("SELECT COUNT(*) FROM idempotency WHERE operation='/api/v2/github/product-repos' AND key='product-create-same'").fetchone()[0] == 1
@@ -737,7 +737,7 @@ def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries
     assert len(create_calls) == 1
     assert gh.created_repositories == {"Acme/tico-recorder"}
     with api.app_state.store.read() as c:
-        operation = c.execute("SELECT actor,operation,key,request_hash,target_org,target_name,state,response_json "
+        operation = c.execute("SELECT actor,operation,key,request_hash,target_org,target_name,state,response "
                               "FROM github_product_repo_operations WHERE actor='human:ana' AND key=?",
                               ("lost-create-response",)).fetchone()
         assert operation["actor"] == "human:ana"
@@ -745,7 +745,7 @@ def test_lost_github_create_response_keeps_durable_key_binding_and_never_retries
         assert operation["key"] == "lost-create-response"
         assert operation["request_hash"] == G.digest(encode(body))
         assert operation["target_org"] == "Acme" and operation["target_name"] == "tico-recorder"
-        assert operation["state"] == "pending" and operation["response_json"] is None
+        assert operation["state"] == "pending" and operation["response"] is None
 
 
 def test_product_create_does_not_expose_github_error_bodies(api, gh):
@@ -795,7 +795,7 @@ def test_selected_bot_repository_creation_grant_and_revocation(api, gh):
     assert gh.created_repositories == {"Acme/bot-newbie"}, "the existing bot creator keeps its bot- name contract"
     with api.app_state.store.read() as c:
         assert c.execute("SELECT actor FROM events WHERE action='github.repo_created'").fetchone()[0] == 'bot:cmo'
-        assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='cmo'").fetchone()[0]).get('create_repositories') is None
+        assert json.loads(c.execute("SELECT config FROM bot_config WHERE bot='cmo'").fetchone()[0]).get('create_repositories') is None
     # A local grant never replaces GitHub's own Administration permission.
     gh.permissions = {'administration': 'read', 'contents': 'write'}
     missing = create({'slug': 'newbie', 'empty': True})
@@ -812,12 +812,12 @@ def test_botops_token_writes_every_bot_in_its_own_run_the_persons_bots_for_them_
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE jobs SET message_id='m-botops' WHERE bot='botops'")
         # The daily update: BotOps' own schedule.
-        c.execute("UPDATE messages SET kind='notice',refs_json='{\"wake\": \"update\"}' WHERE id='m-botops'")
+        c.execute("UPDATE messages SET kind='notice',refs='{\"wake\": \"update\"}' WHERE id='m-botops'")
     wide = ["Acme/emp-botops", "Acme/emp-cmo", "Acme/emp-cpo", "Acme/emp-newbie"]
     assert sorted(turn_token(api, "botops").json()["repositories"]) == wide
     with api.app_state.store.read() as c:
         # The computer's git helper asked: the run in progress on it decided the scope.
-        audit = json.loads(c.execute("SELECT detail_json FROM events WHERE action='github.token' AND target='botops' "
+        audit = json.loads(c.execute("SELECT detail FROM events WHERE action='github.token' AND target='botops' "
                                      "ORDER BY ts DESC,rowid DESC LIMIT 1").fetchone()[0])
     assert audit["runs"] == [{"attempt": "a2", "rights": "bot:botops", "own_run": True}]
     assert sorted(api.post("/api/v2/github/token", json={"bot": "botops"},
@@ -875,7 +875,7 @@ def test_a_lost_github_app_key_is_replaced_only_when_the_owner_confirms(api, gh)
     with state.store.read() as c:
         assert c.execute("SELECT count(*) FROM directory_credentials").fetchone()[0] == 0   # to be entered again
         assert state.github_app.private_key(c, state.github_app.row(c))
-        (event,) = c.execute("SELECT detail_json FROM events WHERE action='github.lost_key_replaced'").fetchall()
+        (event,) = c.execute("SELECT detail FROM events WHERE action='github.lost_key_replaced'").fetchall()
     assert json.loads(event[0]) == {"github_app": False, "directory_sources": ["entra"]}
 
 
@@ -993,7 +993,7 @@ def _built_by_botops(api, gh):
     made = api.post("/api/v2/github/repos", json={"slug": "newbie", "empty": True}, headers=auth("botops-test"))
     assert made.status_code == 200, made.text
     with api.app_state.store.read() as c:
-        assert c.execute("SELECT value_json FROM registry_metadata WHERE key='bot-built-on:newbie'").fetchone()
+        assert c.execute("SELECT value FROM registry_metadata WHERE key='bot-built-on:newbie'").fetchone()
 
 
 def _go_live(api, **body):
@@ -1035,7 +1035,7 @@ def test_a_new_bot_whose_history_is_on_github_goes_anywhere(api, gh):
 
 def _built_on(api, bot="newbie"):
     with api.app_state.store.read() as c:
-        row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", ("bot-built-on:" + bot,)).fetchone()
+        row = c.execute("SELECT value FROM registry_metadata WHERE key=?", ("bot-built-on:" + bot,)).fetchone()
         return row and json.loads(row[0])["runner_id"]
 
 

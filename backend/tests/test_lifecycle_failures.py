@@ -170,8 +170,8 @@ def db_attempts(api):
 
 def db_events(api, aid):
     with api.app.state.store.read() as c:
-        return {r["seq"]: json.loads(r["payload_json"])["text"] for r in
-                c.execute("SELECT seq,payload_json FROM attempt_events WHERE attempt_id=?", (aid,))}
+        return {r["seq"]: json.loads(r["payload"])["text"] for r in
+                c.execute("SELECT seq,payload FROM attempt_events WHERE attempt_id=?", (aid,))}
 
 
 def check(api, model, log):

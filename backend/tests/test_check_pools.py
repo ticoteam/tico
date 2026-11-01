@@ -20,8 +20,8 @@ def team(api, seen=None):
         for slug, model in MODELS.items():
             config = {"name": slug, "runtime": "claude" if model.startswith("claude") else "codex", "model": model,
                       "status": "active", **({"profile": "reviewer"} if slug.startswith("rev-") else {})}
-            c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE "
-                      "SET config_json=excluded.config_json", (slug, encode(config), "engineering", "ana"))
+            c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?) ON CONFLICT(bot) DO UPDATE "
+                      "SET config=excluded.config", (slug, encode(config), "engineering", "ana"))
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen) VALUES('r1','box','ana','h',?,?)",
                   (H.now(), seen or H.now()))
         for slug in ("rev-a", "rev-b", "rev-c"):
@@ -66,7 +66,7 @@ def woken(api, slug, task_id):
     """The queued, unheld job that wakes `slug` on a task, with its age in seconds."""
     with api.app.state.store.read() as c:
         row = c.execute("SELECT j.created FROM jobs j JOIN messages m ON m.id=j.message_id WHERE j.bot=? "
-                        "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs_json,'$.task')=?",
+                        "AND j.state='queued' AND coalesce(j.held,0)=0 AND json_extract(m.refs,'$.task')=?",
                         (slug, task_id)).fetchone()
     return (H.parse_ts(H.now()) - H.parse_ts(row[0])).total_seconds() if row else None
 
@@ -99,9 +99,9 @@ def test_pool_candidate_model_details_show_configured_and_actual_families(api):
             "reviewer-xai": {"name": "Reviewer xAI", "runtime": "fake", "status": "active"},
             "pr-reviewer-sol": {"name": "Reviewer GPT", "runtime": "fake", "status": "active"},
         }, {"people": [{"id": "ana", "email": "ana@acme.example", "team": "leadership"}]})
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)", (
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)", (
             "reviewer-xai", encode({"runtime": "claude", "model": "claude-haiku-5-5"}), "engineering", "ana"))
-        c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)", (
+        c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)", (
             "pr-reviewer-sol", encode({"runtime": "codex", "model": "gpt-6-sol"}), "engineering", "ana"))
         c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('fallback-turn','pr-reviewer-sol',?,?)",
                   (H.now(), H.now()))
@@ -409,7 +409,7 @@ def test_dev_types_get_the_proposed_pools_once_with_the_bots_the_company_has(api
         c.execute("UPDATE task_steps SET check_pool=NULL WHERE id=?", (steps["Review 1"]["id"],))
         check_pools.seed(c)
         assert H.type_get(c, kind["id"])["steps"][1]["check_pool"] == []
-        assert json.loads(c.execute("SELECT detail_json FROM events WHERE action=? AND target=?",
+        assert json.loads(c.execute("SELECT detail FROM events WHERE action=? AND target=?",
                                     (check_pools.SEEDED, kind["id"])).fetchone()[0])["pools"]["In QA"] == ["qa-muse"]
 
 
@@ -628,9 +628,9 @@ def task_model(api, slug, model, harness):
     from backend.tests.test_check_models import company
     company(api, "anthropic", "openai")
     with api.app.state.store.transaction() as c:
-        config = json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
+        config = json.loads(c.execute("SELECT config FROM bot_config WHERE bot=?", (slug,)).fetchone()[0])
         config["task_model"] = {"model": model, "harness": harness}
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(config), slug))
+        c.execute("UPDATE bot_config SET config=? WHERE bot=?", (encode(config), slug))
 
 
 def test_require_goes_by_the_task_model_a_check_runs_on_not_the_bots_own_model(api):
@@ -663,7 +663,7 @@ def test_a_task_model_that_cannot_run_counts_the_bots_own_model_for_require(api)
     task = qa_ticket(api)
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'",
+        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"codex": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-c", "rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -706,7 +706,7 @@ def test_a_task_model_held_at_its_usage_limit_counts_the_bots_own_model_for_requ
     task_model(api, "rev-c", "gpt-6.1-sol", "codex")
     task_model(api, "rev-a", "claude-haiku-5-5", "claude")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'", (json.dumps({"schema_version": 1, "bots": {},
+        c.execute("UPDATE runners SET readiness=? WHERE id='r1'", (json.dumps({"schema_version": 1, "bots": {},
                   "runtimes": {"codex": {"installed": True}, "claude": {"installed": False}}}),))
         login_holds.record(c, "r1", login_holds.canonical(c, "r1", "", "codex"), "codex", H.now(),
                            reset=H.shift(H.now(), hours=2))
@@ -733,7 +733,7 @@ def test_a_task_model_that_cannot_run_counts_only_the_turns_on_the_bots_own_mode
                   (H.now(), H.now(), own["id"]))
         c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
                   "VALUES('earlier',0,'claude-haiku-5-5','anthropic')")
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'",
+        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -754,7 +754,7 @@ def test_a_task_that_fell_back_to_the_builders_company_keeps_a_require_check_off
                   (H.now(), H.now(), own["id"]))
         c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
                   "VALUES('fell',0,'claude-sonnet-5-5','anthropic')")
-        c.execute("UPDATE runners SET readiness_json=? WHERE id='r1'",
+        c.execute("UPDATE runners SET readiness=? WHERE id='r1'",
                   (json.dumps({"schema_version": 1, "bots": {}, "runtimes": {"claude": {"installed": False}}}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -768,7 +768,7 @@ def test_require_never_gives_the_check_to_a_bot_on_a_model_a_reseller_picks(api)
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-a'", (encode(
+        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'", (encode(
             {"name": "rev-a", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -782,7 +782,7 @@ def test_prefer_ranks_a_bot_of_another_company_ahead_of_one_whose_company_is_unk
     team(api)
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-b'", (encode(
+        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-b'", (encode(
             {"name": "rev-b", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
     set_pool(api, task, "In QA", ["rev-b", "rev-a"], limit=2)
     busy(api, "rev-a")
@@ -802,7 +802,7 @@ def test_a_bot_now_on_a_model_a_reseller_picks_is_not_independent_whatever_it_ra
         c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('before','rev-c',?,?)", (H.now(), H.now()))
         c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
                   "VALUES('before',0,'claude-haiku-5-5','anthropic')")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-c'", (encode(
+        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-c'", (encode(
             {"name": "rev-c", "runtime": "cursor", "model": "cursor-auto", "status": "active", "profile": "reviewer"}),))
         decision = assess(c, task, "rev-c")
     assert decision["eligible"] is False and decision["reason"] == "checker model-family provenance is unknown"
@@ -814,7 +814,7 @@ def test_require_never_gives_the_check_to_a_bot_whose_model_company_is_unknown(a
     team(api)
     task = qa_ticket(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-a'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'",
                   (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -830,7 +830,7 @@ def test_require_waits_while_the_builders_model_company_is_unknown(api):
     team(api)
     task = qa_ticket(api, built=False)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='cpo'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='cpo'",
                   (encode({"name": "cpo", "runtime": "fake", "status": "active"}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")
@@ -883,7 +883,7 @@ def test_require_never_gives_the_check_to_a_bot_now_on_a_model_of_unknown_compan
         c.execute("INSERT INTO turns(id,bot,started,finished) VALUES('before','rev-a',?,?)", (H.now(), H.now()))
         c.execute("INSERT INTO turn_usage_segments(turn_id,position,model,provider) "
                   "VALUES('before',0,'gpt-6.1-sol','openai')")
-        c.execute("UPDATE bot_config SET config_json=? WHERE bot='rev-a'",
+        c.execute("UPDATE bot_config SET config=? WHERE bot='rev-a'",
                   (encode({"name": "rev-a", "runtime": "fake", "status": "active", "profile": "reviewer"}),))
     set_pool(api, task, "In QA", ["rev-a"], limit=1)
     set_other_company(api, task, "In QA", "require")

@@ -47,7 +47,7 @@ def request(c, who, rid, harness, action):
     runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not runner:
         raise Problem("not_found", "That computer is not registered", 404)
-    known = readiness_document(runner["readiness_json"]).get("harnesses") or {}
+    known = readiness_document(runner["readiness"]).get("harnesses") or {}
     if harness not in known:
         raise Problem("not_found", "That computer has not reported this harness", 404)
     if not runner["last_seen"] or runner["last_seen"] < H.shift(H.now(), seconds=-ONLINE_SECONDS):
@@ -76,7 +76,7 @@ def choose(c, who, rid, harness, enabled, settings=None):
     runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (rid,)).fetchone()
     if not runner:
         raise Problem("not_found", "That computer is not registered", 404)
-    report = (readiness_document(runner["readiness_json"]).get("harnesses") or {}).get(harness)
+    report = (readiness_document(runner["readiness"]).get("harnesses") or {}).get(harness)
     if report is None:
         raise Problem("not_found", "That computer has not reported this harness", 404)
     # The runner keeps what a bot there runs on, its fallback included, so an "off" for it would only wait to apply.

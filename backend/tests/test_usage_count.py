@@ -73,7 +73,7 @@ def test_the_payload_is_exactly_the_allowed_fields(environment):
     old = H.shift(H.now(), days=-8)
     with sqlite3.connect(str(api.app.state.store.settings.db_path)) as raw:
         raw.execute("UPDATE attempts SET finished=?", (old,))
-        raw.execute("UPDATE registry_metadata SET value_json=json_set(value_json,'$.last_person',?) WHERE key=?",
+        raw.execute("UPDATE registry_metadata SET value=json_set(value,'$.last_person',?) WHERE key=?",
                     (old, census.KEY))
     with api.app.state.store.read() as read:
         assert not c.payload(read, "0.2.13")["active_bots"] and not c.payload(read, "0.2.13")["active_people"]

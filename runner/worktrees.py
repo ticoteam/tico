@@ -125,7 +125,7 @@ def metadata(client, name):
 
 
 def _detail(link):
-    value = link.get('detail_json') or '{}'
+    value = link.get('detail') or '{}'
     return json.loads(value) if isinstance(value, str) else dict(value)
 
 
@@ -1142,7 +1142,7 @@ class Worktrees:
             row = next((r for r in rows if r['id'] == action['link_id']), None)
             if not row or time.monotonic() < self.retry.get(row['id'], (0, 0))[0]:
                 continue
-            detail = json.loads(row.get('detail_json') or '{}')
+            detail = json.loads(row.get('detail') or '{}')
             closed = row['task_status'] in ('done', 'closed', 'declined') or row['bot_state'] == 'archived' or detail.get('delete_requested')
             released = bool(action.get('release') and detail.get('release_requested'))
             if action['action'] == 'remove' and not (closed or released) or action['action'] in ('restore', 'prepare') and closed:
@@ -1184,7 +1184,7 @@ class Worktrees:
                         pass  # worktree_base reports the cached mirror's age if refresh is unavailable
                 def still_closed():
                     fresh = next((r for r in self.client.get('runners/me/worktrees')['worktrees'] if r['id'] == row['id']), None)
-                    fresh_detail = json.loads(fresh.get('detail_json') or '{}') if fresh else {}
+                    fresh_detail = json.loads(fresh.get('detail') or '{}') if fresh else {}
                     return fresh is not None and self.bot_idle(row['owner'], row['task_id']) and (fresh['task_status'] in ('done', 'closed', 'declined') or fresh['bot_state'] == 'archived' or fresh_detail.get('delete_requested')
                                                                                or released and fresh_detail.get('release_requested'))
                 if action['action'] == 'prepare':
@@ -1220,7 +1220,7 @@ class Worktrees:
                     detail.update(checkout_state='checkout_ready', setup_pending=True,
                                   expected_head=expected_head, checkout_target=checkout_target,
                                   expected_base=expected_base)
-                    row['detail_json'] = json.dumps(detail)
+                    row['detail'] = json.dumps(detail)
                 errors.pop(row['id'], None)
                 self.retry.pop(row['id'], None)
             except Deferred:

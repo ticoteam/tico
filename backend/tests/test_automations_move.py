@@ -35,7 +35,7 @@ def old_install(tmp_path, *, routines=True):
                         {"people": [{"id": "ana", "email": "ana@acme.example"}]})
         c.execute("INSERT OR REPLACE INTO registry_metadata VALUES('people',?)", (json.dumps({"people": [
             {"id": "ana", "email": "ana@acme.example", "primary_for": ["*"]}]}),))
-        c.execute("INSERT OR IGNORE INTO bot_config(bot, config_json) VALUES('coo', '{}')")
+        c.execute("INSERT OR IGNORE INTO bot_config(bot, config) VALUES('coo', '{}')")
         if routines:
             c.execute("INSERT INTO schedules(id, bot, cron, title, playbook, next_due) VALUES(?,?,?,?,?,?)",
                       ("sch_notes", "coo", "0 9 * * *", "Morning notes", "Post yesterday's work.",
@@ -159,7 +159,7 @@ def test_pending_reads_a_database_an_older_release_wrote(tmp_path):
     """Plain SQL over the tables as they were: no automations table, no cutover columns."""
     path = tmp_path / "old.db"
     c = sqlite3.connect(path)
-    c.executescript("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT);"
+    c.executescript("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value TEXT);"
                     "CREATE TABLE schedules(id TEXT PRIMARY KEY, bot TEXT, cron TEXT, title TEXT, playbook TEXT, "
                     "last_fired TEXT, next_due TEXT);"
                     "INSERT INTO schedules(id, bot) VALUES('s1', 'coo'), ('s2', 'coo');")

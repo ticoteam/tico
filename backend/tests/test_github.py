@@ -33,7 +33,7 @@ def api(tmp_path):
             c.execute("INSERT INTO registry_metadata VALUES('people',?)", (encode({"people": [
                 {"id": "ana", "email": "ana@acme.example", "team": "leadership", "primary_for": ["*"]}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "product" if slug == "cpo" else "marketing", "ana"))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)", (encode({"completed": "2026-01-01T00:00:00Z"}),))
         yield client
@@ -224,7 +224,7 @@ def test_reviewer_who_pushes_is_not_the_bot_and_changes_requests_always_wake(api
     payload['sender'] = {'login': 'sam'}
     hook(api, 'pull_request', payload)
     with api.app.state.store.read() as c:
-        assert 'head_login' not in H._json(H.task_links(c, task['id'])[0]['detail_json'], {})
+        assert 'head_login' not in H._json(H.task_links(c, task['id'])[0]['detail'], {})
     hook(api, 'pull_request_review_comment', {'action': 'created', 'pull_request': {'html_url': PR},
         'comment': {'id': 2, 'user': {'login': 'sam'}}})
     with api.app.state.store.transaction() as c:
@@ -306,7 +306,7 @@ def test_new_head_clears_stale_conflict_and_deduplicates_per_head(api):
     assert not clear_wake()
     with api.app.state.store.transaction() as c:
         G.pull_request(c, pr_event('refresh', mergeable=True, head={'sha': 'b'}))
-        assert 'conflict_head' not in H._json(H.task_links(c, task['id'])[0]['detail_json'], {})
+        assert 'conflict_head' not in H._json(H.task_links(c, task['id'])[0]['detail'], {})
     assert get(api, 'tasks/' + task['id'])['task']['pr_state'] == 'open'
     hook(api, 'pull_request', pr_event('synchronize', mergeable=False, head={'sha': 'b'}))
     assert clear_wake()
@@ -376,14 +376,14 @@ def test_a_review_request_puts_the_person_in_the_configured_role(api):
     assert roles() == {"reviewer": ["human:ana"]}
     # Two people never share a login; one a roster already shares (written before the check) names nobody.
     with api.app.state.store.transaction() as c:
-        people = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        people = json.loads(c.execute("SELECT value FROM registry_metadata WHERE key='people'").fetchone()[0])
         people["people"].append({"id": "bo", "email": "bo@acme.example"})
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
         H.sync_registry(c, {}, people)
     post(api, "people/bo", {"github": "ANA-dev"}, expected=409)
     with api.app.state.store.transaction() as c:
         people["people"][-1]["github"] = "ana-dev"
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (encode(people),))
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='people'", (encode(people),))
     hook(api, "pull_request", asked)
     assert roles() == {"reviewer": ["human:ana"]}
 
@@ -422,7 +422,7 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
     # Unarmed, the head's one result is queued all the same; backend/rules.py decides whether it wakes or is a note.
     assert _burst(api, task['id']) == [f"Checks finished on tico#412: passed {PR}/checks at {'a' * 12}"]
     links = _arm(api, task['id'])
-    assert json.loads(links[0]['detail_json'])['wake_once']['by'] == 'human:ana'
+    assert json.loads(links[0]['detail'])['wake_once']['by'] == 'human:ana'
     assert _arm(api, task['id']) == links                     # arming twice changes nothing
     # A single run, or one suite while another still runs, is not the end of the checks.
     hook(api, 'check_run', {'repository': {'full_name': 'ticoteam/tico'}, 'check_run': {
@@ -441,7 +441,7 @@ def test_wake_once_fires_once_when_every_suite_finishes_and_never_moves_the_task
     _suite(api, 'github-actions', 'completed', 'failure')     # a redelivery
     # The result that was still waiting to be sent is replaced, so one head gives one wake.
     assert _burst(api, task['id']) == [f"Checks finished on tico#412: failed (github-actions) {PR}/checks at {'a' * 12}"]
-    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
+    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail'])
     assert 'wake_once' not in detail and detail['wake_once_fired']['item'].startswith('Checks finished')
     assert get(api, 'tasks/' + task['id'])['task']['status'] == task['status']
 
@@ -462,7 +462,7 @@ def test_wake_once_on_a_commit_status_that_finishes_last_names_it_when_it_fails(
     _status(api, 'ci/legacy', 'failure')
     _status(api, 'ci/legacy', 'failure')                      # a redelivery
     assert _burst(api, task['id']) == [f"Checks finished on tico#412: failed (ci/legacy) {PR}/checks at {'a' * 12}"]
-    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
+    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail'])
     assert 'wake_once' not in detail
 
 
@@ -485,7 +485,7 @@ def test_wake_once_holds_while_a_finished_runs_own_suite_still_runs(api):
     assert _burst(api, task['id']) == [
         f"Checks finished on tico#412: failed (github-actions, deploy) {PR}/checks at {'a' * 12}"]
     run('deploy', 'completed', 'failure')                     # delivered late: does not reopen its suite
-    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail_json'])
+    detail = json.loads(get(api, 'tasks/' + task['id'] + '/links')['links'][0]['detail'])
     assert detail['checks']['suite:github-actions#2'] == 'failing'
     # A re-run on the same commit keeps its suite id; its runs reopen the suite until it completes again.
     _arm(api, task['id'])
@@ -511,14 +511,14 @@ def test_wake_once_on_a_review_a_ship_or_a_merge_that_cannot_ship(api):
     hook(api, 'pull_request_review', {**review, 'review': {**review['review'], 'id': 8}})   # disarmed: quiet
     assert _burst(api, task['id']) == [f'Review approved on tico#412 by ana {PR}#pullrequestreview-7']
     # Armed again: a merge in the release repository waits for the release that ships it.
-    assert 'wake_once' not in json.loads(_arm(api, task['id'], armed=False)[0]['detail_json'])
+    assert 'wake_once' not in json.loads(_arm(api, task['id'], armed=False)[0]['detail'])
     shipping = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release', 'body': 'x', 'links': [PR]})
     late = post(api, 'tasks', {'owner': 'cpo', 'title': 'Wait on the release too', 'body': 'x', 'links': [PR]})
     _arm(api, shipping['id'])
     hook(api, 'pull_request', pr_event('closed', merged=True, merge_commit_sha='b' * 40))
     assert _burst(api, shipping['id']) == []
     # Merged in the release repository and waiting to ship: arming it now is still allowed.
-    assert json.loads(_arm(api, late['id'])[0]['detail_json'])['wake_once']['by'] == 'human:ana'
+    assert json.loads(_arm(api, late['id'])[0]['detail'])['wake_once']['by'] == 'human:ana'
     api.app.state.store.settings.release_commit = 'b' * 40
     with api.app.state.store.transaction() as c:
         assert shipping['id'] in G.ship_deployed(c, api.app.state.store.settings)
@@ -546,21 +546,21 @@ def test_a_pr_linked_again_in_another_case_is_the_same_link(api):
     for url in ('https://github.com/TicoTeam/Tico/pull/412', PR + '/'):
         links = _arm(api, task['id'], url=url)
         assert [link['url'] for link in links] == [PR]
-        assert json.loads(links[0]['detail_json'])['wake_once']['by'] == 'human:ana'
+        assert json.loads(links[0]['detail'])['wake_once']['by'] == 'human:ana'
         links = _arm(api, task['id'], armed=False, url=url)
-        assert len(links) == 1 and 'wake_once' not in json.loads(links[0]['detail_json'])
+        assert len(links) == 1 and 'wake_once' not in json.loads(links[0]['detail'])
     mixed = 'https://github.com/TICOTEAM/TICO/pull/412'
     other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Another task on it', 'body': 'x', 'links': [mixed]})
     assert [link['url'] for link in _arm(api, other['id'])] == [mixed]     # stored mixed case, linked lowercase
     # A duplicate left by an older install is still disarmed through its own URL.
     with api.app.state.store.transaction() as c:
         H.task_link(c, 'human:ana', task['id'], PR, wake_once=True)
-        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,number,detail_json) "
+        c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,number,detail) "
                   "VALUES('dup',?,'pr',?,'tico#412','open','human:ana',?,'TicoTeam/Tico',412,?)",
                   (task['id'], 'https://github.com/TicoTeam/Tico/pull/412', H.now(), json.dumps({'wake_once': {'by': 'human:ana'}})))
     links = {link['id']: link for link in _arm(api, task['id'], armed=False, url='https://github.com/TicoTeam/Tico/pull/412')}
-    assert 'wake_once' not in json.loads(links['dup']['detail_json'])
-    assert 'wake_once' in json.loads(next(v for k, v in links.items() if k != 'dup')['detail_json'])
+    assert 'wake_once' not in json.loads(links['dup']['detail'])
+    assert 'wake_once' in json.loads(next(v for k, v in links.items() if k != 'dup')['detail'])
 
 
 def test_wake_once_needs_the_app_and_waits_only_on_a_pr_github_reports(api):
@@ -768,7 +768,7 @@ def _worktree(api, task_id, repo, branch, state='present', **detail):
     with api.app.state.store.transaction() as c:
         link = uuid.uuid4().hex
         c.execute("INSERT INTO task_links(id,task_id,kind,url,title,state,added_by,created,repo,branch,path,updated,"
-                  "detail_json) VALUES(?,?,'worktree',?,?,?,'bot:cpo',?,?,?,?,?,?)",
+                  "detail) VALUES(?,?,'worktree',?,?,?,'bot:cpo',?,?,?,?,?,?)",
                   (link, task_id, 'worktree:' + link, repo, state, H.now(), repo, branch,
                    f'tasks/{task_id[:8]}/{repo.replace("/", "__")}', H.now(), json.dumps({'owner': 'bot:cpo', **detail})))
     return link
@@ -783,13 +783,13 @@ def _branch_pr(number, branch, repo='ticoteam/tico', head_repo=None, **over):
 def _prs(api, task_id):
     """The task's PR links as stored; a task GET would start its own GitHub refresh."""
     with api.app.state.store.read() as c:
-        return {l['number']: {**l, 'detail': json.loads(l['detail_json'] or '{}')} for l in H._rows(c.execute(
+        return {l['number']: {**l, 'detail': json.loads(l['detail'] or '{}')} for l in H._rows(c.execute(
             "SELECT * FROM task_links WHERE task_id=? AND kind='pr'", (task_id,)))}
 
 
 def _worktree_detail(api, link):
     with api.app.state.store.read() as c:
-        return json.loads(c.execute("SELECT detail_json FROM task_links WHERE id=?", (link,)).fetchone()[0])
+        return json.loads(c.execute("SELECT detail FROM task_links WHERE id=?", (link,)).fetchone()[0])
 
 
 def _reconciler(api, monkeypatch, fetch, mint=None):
@@ -825,7 +825,7 @@ def test_stale_non_engineering_qa_marker_settles_without_repeated_github_reads(a
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Planning notes', 'body': 'x', 'links': [PR]})
     # Existing links can carry the marker written by the old opened-webhook path.
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE task_links SET detail_json=? WHERE task_id=? AND kind='pr'",
+        c.execute("UPDATE task_links SET detail=? WHERE task_id=? AND kind='pr'",
                   (json.dumps({'qa_default_pending': True, 'kept': 'metadata'}), task['id']))
     calls = []
 
@@ -1052,7 +1052,7 @@ def test_a_hand_off_refuses_a_pushed_worktree_branch_no_pr_carries_until_it_is_l
     with api.app.state.store.transaction() as c:
         for repo in repos:
             c.execute("INSERT INTO main_pushes(sha,repo,pushed_at) VALUES(?,?,?)", (repo[-1] * 40, repo, H.now()))
-            c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.last_commit',?,'$.ahead',0) "
+            c.execute("UPDATE task_links SET detail=json_set(detail,'$.last_commit',?,'$.ahead',0) "
                       "WHERE task_id=? AND kind='worktree' AND repo=?", (repo[-1] * 40, task['id'], repo))
     assert move(step='Review 1') == 'review'
     # A push counts the moment its webhook lands, before any computer reports it, in both repositories.
@@ -1107,5 +1107,5 @@ def test_a_hand_off_waits_for_a_branch_check_when_a_push_left_no_webhook_and_no_
     assert _worktree_detail(api, local)['remote']['absent'] and review(quiet) == 'review'
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET status='doing' WHERE id=?", (quiet['id'],))
-        c.execute("UPDATE task_links SET detail_json=json_set(detail_json,'$.ahead',0) WHERE id=?", (local,))
+        c.execute("UPDATE task_links SET detail=json_set(detail,'$.ahead',0) WHERE id=?", (local,))
     assert 'has commits with no pull request linked' in review(quiet)

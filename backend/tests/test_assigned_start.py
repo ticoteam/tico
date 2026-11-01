@@ -627,7 +627,7 @@ def test_overdue_reads_its_page_in_fixed_statements_not_per_task(api, clock, n):
     assert sorted(row['id'] for row in found) == sorted(t['id'] for t in tasks)
     # The page's assignment and ledger rows come in one statement each, not one per task.
     assert [s for s in seen if s.startswith('SELECT id,ts FROM task_events WHERE task_id=')] == []
-    assert [s for s in seen if s.startswith('SELECT detail_json FROM events WHERE target=')] == []
+    assert [s for s in seen if s.startswith('SELECT detail FROM events WHERE target=')] == []
     # A short page is the last one: no second, empty page query.
     assert sum(s.startswith('SELECT t.* FROM tasks t JOIN bots b') for s in seen) == 1
 
@@ -641,12 +641,12 @@ def fleet(store, bots, tasks, attempts, *, days=30):
     with store.transaction() as c:
         c.execute("INSERT INTO conversations(id,kind,subject,created,last_message_at) VALUES('fleet-conv','task','',?,?)",
                   (now, now))
-        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen,readiness_json) "
+        c.execute("INSERT INTO runners(id,label,operator,token_hash,created,last_seen,readiness) "
                   "VALUES('fleet-runner','fleet','ana','fleet-token',?,?,'{}')", (now, now))
         for slug in slugs:
             c.execute("INSERT INTO bots(id,slug,display_name,runtime,state,created) VALUES(?,?,?,'fake','active',?)",
                       (slug, slug, slug, now))
-            c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,'{}','ana')", (slug,))
+            c.execute("INSERT INTO bot_config(bot,config,operator) VALUES(?,'{}','ana')", (slug,))
         for k in range(tasks):
             c.execute("INSERT INTO tasks(id,title,body,requester,owner,status,rank,created,updated,conversation_id) "
                       "VALUES(?,?,'','human:ana',?,'open',?,?,?,'fleet-conv')",
@@ -657,7 +657,7 @@ def fleet(store, bots, tasks, attempts, *, days=30):
             b = i % bots
             at = back(24 * days - 24 * days * i / attempts)
             task = ids_by_bot[b][i // bots % len(ids_by_bot[b])] if ids_by_bot[b] else None
-            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+            c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                       "VALUES(?, 'fleet-conv','human:ana',?,'task','',?,?)",
                       (f'fleet-m-{i}', 'bot:' + slugs[b], json.dumps({'task': task}) if task and i % 3 == 0 else '{}', at))
             # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
@@ -666,7 +666,7 @@ def fleet(store, bots, tasks, attempts, *, days=30):
                       "VALUES(?,?,?,'fleet-runner',1,?,'completed',?,?)",
                       (f'fleet-a-{i}', f'fleet-m-{i}', slugs[b], f'fleet-h-{i}', now, at))
             if i % 5 == 0 and task:
-                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
+                c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                           "VALUES(?, 'fleet-conv','bot:' || ?,'human:ana','chat','',?,?)",
                           (f'fleet-in-{i}', slugs[b], json.dumps({'task': task}), at))
                 c.execute("INSERT INTO attempt_inputs(attempt_id,message_id) VALUES(?,?)", (f'fleet-a-{i}', f'fleet-in-{i}'))
@@ -694,7 +694,7 @@ def test_recovery_selection_primes_each_bots_attempt_provenance_in_fixed_stateme
         finally:
             c.set_trace_callback(None)
     per_run = ('SELECT m.* FROM attempts a JOIN jobs', 'SELECT id FROM tasks WHERE carried_by=?',
-               'SELECT detail_json FROM events WHERE action IN')
+               'SELECT detail FROM events WHERE action IN')
     assert [s for s in seen if s.startswith(per_run)] == []
     assert any(s.startswith('SELECT a.id AS primed_attempt') for s in seen)
 

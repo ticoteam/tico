@@ -38,7 +38,7 @@ def api(tmp_path, monkeypatch):
                 {"id": "ben", "email": "ben@acme.example", "team": "product"},
                 {"id": "priya", "email": "priya@acme.example", "team": "sales"}]}),))
             for slug, config in bots.items():
-                c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES(?,?,?,?)",
+                c.execute("INSERT INTO bot_config(bot,config,team,operator) VALUES(?,?,?,?)",
                           (slug, encode(config), "product" if slug == "cpo" else "marketing" if slug == "cmo" else None, "ana"))
             c.execute("INSERT INTO registry_metadata VALUES('onboarding',?)",
                       (encode({"completed": "2026-01-01T00:00:00Z"}),))
@@ -278,7 +278,7 @@ def test_the_author_edits_a_comment_and_nobody_wakes(api):
     assert after["task"]["updated"] > before["task"]["updated"]
     assert any(e["field"] == "comment" and e["new"] == said["comment"]["id"] for e in after["events"])
     with api.app.state.store.read() as c:
-        audit = c.execute("SELECT detail_json FROM events WHERE action='message.edited' AND target=?",
+        audit = c.execute("SELECT detail FROM events WHERE action='message.edited' AND target=?",
                           (said["comment"]["id"],)).fetchone()[0]
     assert "Agust" not in audit, "the audit keeps metadata without withdrawn words"
 
@@ -381,7 +381,7 @@ def test_tag_migration_backfills_once_and_preserves_legacy_column(api):
                               "type": typ["id"], "step": "Copy review"})
     store = api.app.state.store
     with store.transaction() as c:
-        c.execute("UPDATE tasks SET labels_json=? WHERE id=?", ('["release","bug","bug"]', task["id"]))
+        c.execute("UPDATE tasks SET labels=? WHERE id=?", ('["release","bug","bug"]', task["id"]))
         c.execute("DROP TABLE task_tags")
         c.execute("DROP TABLE tags")
         c.execute("PRAGMA user_version=13")
@@ -405,7 +405,7 @@ def test_tag_migration_backfills_once_and_preserves_legacy_column(api):
     store.initialize(seed_market=False)
     with store.read() as c:
         assert H.task_labels(H.task(c, task["id"])) == ["bug"]
-        assert c.execute("SELECT labels_json FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == '["release","bug","bug"]'
+        assert c.execute("SELECT labels FROM tasks WHERE id=?", (task["id"],)).fetchone()[0] == '["release","bug","bug"]'
 
 
 def test_tag_owner_movers_and_stale_versions(api):
@@ -619,14 +619,14 @@ def test_a_list_carries_a_links_set_columns_not_its_record_or_write_time(api):
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Trim list links', 'body': 'x'})
     with api.app.state.store.transaction() as c:
         tree = H.task_link(c, 'human:ana', task['id'], 'https://example.com/tree', kind='worktree')
-        c.execute("UPDATE task_links SET repo='acme/app', path='tasks/t1/acme__app', detail_json=? WHERE id=?",
+        c.execute("UPDATE task_links SET repo='acme/app', path='tasks/t1/acme__app', detail=? WHERE id=?",
                   (json.dumps({'size_mb': 40, 'activity_at': '2026-10-24T00:00:00Z'}), tree['id']))
     listed = {l['kind']: l for l in next(t for t in get(api, 'tasks')['tasks'] if t['id'] == task['id'])['links']}
     assert listed['worktree']['repo'] == 'acme/app' and listed['worktree']['path'] == 'tasks/t1/acme__app'
-    assert not {'detail_json', 'updated', 'pr_sha', 'number', 'checks'} & set(listed['worktree'])
+    assert not {'detail', 'updated', 'pr_sha', 'number', 'checks'} & set(listed['worktree'])
     # The task's own read keeps the whole record.
     full = {l['kind']: l for l in get(api, 'tasks/' + task['id'])['task']['links']}
-    assert json.loads(full['worktree']['detail_json'])['size_mb'] == 40 and 'updated' in full['worktree']
+    assert json.loads(full['worktree']['detail'])['size_mb'] == 40 and 'updated' in full['worktree']
 
 
 def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
@@ -649,7 +649,7 @@ def test_people_can_change_visible_task_links_but_bots_need_task_rights(api):
     post(api, path, {'url': 'codex resume abc123', 'kind': 'session'}, token=token, expected=403)
     session = post(api, path, {'url': 'codex resume abc123', 'kind': 'session'}, token='priya-test')['links'][-1]
     assert (session['kind'], session['url']) == ('session', 'session:codex resume abc123')
-    assert json.loads(session['detail_json']) == {'primary': False, 'harness': 'codex', 'thread_id': 'abc123'}
+    assert json.loads(session['detail']) == {'primary': False, 'harness': 'codex', 'thread_id': 'abc123'}
     # The owning bot and an ancestor party retain their task rights.
     parent = post(api, 'tasks', {'owner': 'ops', 'title': 'Track linked work', 'body': 'x'})
     child = post(api, 'tasks', {'owner': 'cpo', 'title': 'Build linked work', 'body': 'x', 'relations': [{'task': parent['id'], 'kind': 'parent'}]})

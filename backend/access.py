@@ -43,7 +43,7 @@ def domains(values):
 
 
 def _load_json(c, key):
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     try:
         value = json.loads(row[0]) if row else None
     except ValueError:
@@ -160,8 +160,8 @@ def raise_bot_limit(c, now):
     stored = _load_json(c, ACCESS)
     before = stored.get("member_bot_limit") if stored else None
     chosen = c.execute(
-        "SELECT 1 FROM events WHERE action='access.limits_updated' AND json_extract(detail_json,'$.after')=? "
-        "AND coalesce(json_extract(detail_json,'$.before'),-1)<>? LIMIT 1", (OLD_BOT_LIMIT, OLD_BOT_LIMIT)).fetchone()
+        "SELECT 1 FROM events WHERE action='access.limits_updated' AND json_extract(detail,'$.after')=? "
+        "AND coalesce(json_extract(detail,'$.before'),-1)<>? LIMIT 1", (OLD_BOT_LIMIT, OLD_BOT_LIMIT)).fetchone()
     raised = stored is not None and before == OLD_BOT_LIMIT and not chosen
     if raised:
         _store(c, ACCESS, {**stored, "member_bot_limit": MEMBER_BOT_LIMIT})
@@ -183,7 +183,7 @@ def _store(c, key, record):
         # The Admins list is kept under both names so a rollback to the previous release still finds it.
         admins = emails(record["admins"] if "admins" in record else record.get("bot_admins"))
         record = {**record, "admins": admins, "bot_admins": admins}
-    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value_json=excluded.value_json",
+    c.execute("INSERT INTO registry_metadata VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
               (key, json.dumps(record, sort_keys=True)))
     if key in (ACCESS, OWNER):
         from . import people_mirror
@@ -211,7 +211,7 @@ def _save_roster(c, roster):
     from .report_order import roster_saved
     roster_saved(c, roster)                        # a person who joins a manager goes last among its reports
     c.execute("INSERT INTO registry_metadata VALUES('people',?) ON CONFLICT(key) DO UPDATE SET "
-              "value_json=excluded.value_json", (json.dumps(roster, sort_keys=True),))
+              "value=excluded.value", (json.dumps(roster, sort_keys=True),))
     from . import people_mirror
     people_mirror.changed()                        # the Tico account gets the sign-in list again (backend/people_mirror.py)
 
@@ -222,12 +222,12 @@ save_roster = _save_roster
 def _sync_human(c, row):
     teams = sorted({t for t in [row.get("team"), *(row.get("primary_for") or [])] if t})
     values = {"id": row["id"], "name": row["name"], "email": row["email"],
-              "slack_id": row.get("slack_id") or None, "teams_json": json.dumps(teams)}
+              "slack_id": row.get("slack_id") or None, "teams": json.dumps(teams)}
     if H.human(c, row["id"]) is None:
-        c.execute("INSERT INTO humans (id, name, email, slack_id, teams_json) "
-                  "VALUES (:id, :name, :email, :slack_id, :teams_json)", values)
+        c.execute("INSERT INTO humans (id, name, email, slack_id, teams) "
+                  "VALUES (:id, :name, :email, :slack_id, :teams)", values)
     else:
-        c.execute("UPDATE humans SET name=:name, email=:email, teams_json=:teams_json WHERE id=:id", values)
+        c.execute("UPDATE humans SET name=:name, email=:email, teams=:teams WHERE id=:id", values)
 
 
 def _email_taken(c, email, except_id=""):
@@ -571,16 +571,16 @@ def _keep_mailbox(c, person, address):
     sign-in change is not a mail change, so the address it reads now is written down before the email moves."""
     from . import routines
     bot = person.get("inbox_bot")
-    found = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
-    if found and not routines.declared_mailbox(json.loads(found["config_json"] or "{}")):
+    found = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone() if bot else None
+    if found and not routines.declared_mailbox(json.loads(found["config"] or "{}")):
         routines.set_declared_mailbox(c, bot, address)
 
 
 def _follow_address(c, pid, old, new):
     """Meetings filed for a person by address (backend/meetings.py filed_for), a meeting delivery they asked for and a
     Granola sync, which acts as the address it was connected with: all follow the person when the address changes."""
-    c.execute("UPDATE meetings SET owner=?, metadata_json=CASE WHEN lower(json_extract(metadata_json,'$.owner'))=? "
-              "THEN json_set(metadata_json,'$.owner',?) ELSE metadata_json END WHERE lower(owner)=?", (new, old, new, old))
+    c.execute("UPDATE meetings SET owner=?, metadata=CASE WHEN lower(json_extract(metadata,'$.owner'))=? "
+              "THEN json_set(metadata,'$.owner',?) ELSE metadata END WHERE lower(owner)=?", (new, old, new, old))
     c.execute("UPDATE meeting_deliveries SET requested_by=? WHERE lower(requested_by)=?", (new, old))
     c.execute("UPDATE granola_connections SET email=? WHERE actor=?", (new, "human:" + pid))
 

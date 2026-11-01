@@ -278,7 +278,7 @@ def revoke_automation_secrets(c):
     if "webhooks" in present:
         columns = {r[1] for r in c.execute("PRAGMA table_info(webhooks)")}
         c.execute("UPDATE webhooks SET secret='', secret_prev='', secret_prev_until=NULL"
-                  + (", headers_json='[]'" if "headers_json" in columns else ""))
+                  + (", headers='[]'" if "headers" in columns else ""))
 
 
 def prune(c, days, keep_automations=False):
@@ -298,15 +298,15 @@ def prune(c, days, keep_automations=False):
     # A deleted task's snapshot holds copies of its own rows; an emptied table's copies (requesters' contacts and
     # token hashes, delivery bookkeeping) go too, so neither a read of the trash nor a restore brings them back.
     if "task_trash" in present:
-        for task_id, raw in c.execute("SELECT task_id,rows_json FROM task_trash").fetchall():
+        for task_id, raw in c.execute("SELECT task_id,rows FROM task_trash").fetchall():
             snapshot = json.loads(raw or "{}")
             rows = snapshot.get("rows") if isinstance(snapshot, dict) else None
             if isinstance(rows, dict) and set(rows) & set(gone):
                 snapshot["rows"] = {t: r for t, r in rows.items() if t not in gone}
-                c.execute("UPDATE task_trash SET rows_json=? WHERE task_id=?", (json.dumps(snapshot), task_id))
+                c.execute("UPDATE task_trash SET rows=? WHERE task_id=?", (json.dumps(snapshot), task_id))
     # The secret that keys visitors' hashed addresses is the live install's; the copy gets its own.
     if "registry_metadata" in present:
-        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='roadmap_ip_secret'",
+        c.execute("UPDATE registry_metadata SET value=? WHERE key='roadmap_ip_secret'",
                   (json.dumps(secrets.token_hex(32)),))
     # Finance makes its kept tables inert itself: pending actions, undrained events, links to emptied holds.
     if "fin_actions" in present:
@@ -415,7 +415,7 @@ def build(source, dest, days=30, force=False, keep_automations=False):
 def owner_email(path):
     import json
     with closing(sqlite3.connect(Path(path).as_uri() + "?mode=ro", uri=True)) as c:
-        row = c.execute("SELECT value_json FROM registry_metadata WHERE key='owner'").fetchone() \
+        row = c.execute("SELECT value FROM registry_metadata WHERE key='owner'").fetchone() \
             if "registry_metadata" in tables(c) else None
         if row:
             email = str((json.loads(row[0]) or {}).get("email") or "")

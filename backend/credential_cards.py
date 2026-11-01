@@ -217,9 +217,9 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
             c.execute("UPDATE messages SET body=? WHERE id=?", ((row["body"] or "").replace(value, label), mid))
             count += 1
     if attempt_id:
-        for row in c.execute("SELECT id,payload_json FROM attempt_events WHERE attempt_id=?", (attempt_id,)).fetchall():
-            if any(f in row["payload_json"] for f in forms):
-                c.execute("UPDATE attempt_events SET payload_json=? WHERE id=?", (scrub(row["payload_json"], [value], label), row["id"]))
+        for row in c.execute("SELECT id,payload FROM attempt_events WHERE attempt_id=?", (attempt_id,)).fetchall():
+            if any(f in row["payload"] for f in forms):
+                c.execute("UPDATE attempt_events SET payload=? WHERE id=?", (scrub(row["payload"], [value], label), row["id"]))
         row = c.execute("SELECT final_text FROM attempts WHERE id=?", (attempt_id,)).fetchone()
         if row and row["final_text"] and value in row["final_text"]:
             c.execute("UPDATE attempts SET final_text=? WHERE id=?", (row["final_text"].replace(value, label), attempt_id))
@@ -228,9 +228,9 @@ def redact_value(c, person, value, env, conversation_id="", attempt_id="", messa
     scrub_value(c, value, label, attempt_id, conversation_id)
     # The answers kept for retries (the chat send that carried it, the claim that delivered it to the run).
     for form in forms:
-        for row in c.execute("SELECT actor,operation,key,response_json FROM idempotency WHERE instr(response_json, ?) > 0", (form,)).fetchall():
-            c.execute("UPDATE idempotency SET response_json=? WHERE actor=? AND operation=? AND key=?",
-                      (row["response_json"].replace(form, label), row["actor"], row["operation"], row["key"]))
+        for row in c.execute("SELECT actor,operation,key,response FROM idempotency WHERE instr(response, ?) > 0", (form,)).fetchall():
+            c.execute("UPDATE idempotency SET response=? WHERE actor=? AND operation=? AND key=?",
+                      (row["response"].replace(form, label), row["actor"], row["operation"], row["key"]))
     if count:
         H.event(c, person.actor, "message.redacted", conversation_id or message_id, {"messages": count, "env": env})
     return count

@@ -121,12 +121,12 @@ def report(store, state, message="", team=""):
     detail = json.dumps({"state": state, "message": message, "team": team})
     with store.transaction() as c:
         if state == "connected":
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,?,NULL,?) "
+            c.execute("INSERT INTO service_health(service,last_success,last_error,detail) VALUES(?,?,NULL,?) "
                       "ON CONFLICT(service) DO UPDATE SET last_success=excluded.last_success,last_error=NULL,"
-                      "detail_json=excluded.detail_json", (HEALTH, now, detail))
+                      "detail=excluded.detail", (HEALTH, now, detail))
         else:
-            c.execute("INSERT INTO service_health(service,last_success,last_error,detail_json) VALUES(?,NULL,?,?) "
-                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail_json=excluded.detail_json",
+            c.execute("INSERT INTO service_health(service,last_success,last_error,detail) VALUES(?,NULL,?,?) "
+                      "ON CONFLICT(service) DO UPDATE SET last_error=excluded.last_error,detail=excluded.detail",
                       (HEALTH, now, detail))
 
 
@@ -134,11 +134,11 @@ def status(c):
     """The state the Settings card and the Health page read; never a token."""
     exists = c.execute("SELECT 1 FROM sqlite_master WHERE name='slack_credentials'").fetchone()
     row = c.execute("SELECT team_id,app_id,created FROM slack_credentials WHERE id='app'").fetchone() if exists else None
-    health = c.execute("SELECT last_success,last_error,detail_json FROM service_health WHERE service=?", (HEALTH,)).fetchone()
+    health = c.execute("SELECT last_success,last_error,detail FROM service_health WHERE service=?", (HEALTH,)).fetchone()
     detail = {}
     if health:
         try:
-            detail = json.loads(health["detail_json"] or "{}")
+            detail = json.loads(health["detail"] or "{}")
         except ValueError:
             detail = {}
     return {"configured": bool(row), "team_id": row["team_id"] if row else "", "app_id": row["app_id"] if row else "",

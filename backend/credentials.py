@@ -366,12 +366,12 @@ class Vault:
             if isinstance(payload.get('secret'), SecretStr):
                 payload['secret'] = payload['secret'].get_secret_value()
             fingerprint = hmac.new(self.cipher.key(c), b'tico-request:v1:' + encode(payload).encode(), hashlib.sha256).hexdigest()
-            old = c.execute('SELECT request_hash,response_json FROM idempotency WHERE actor=? AND operation=? AND key=?',
+            old = c.execute('SELECT request_hash,response FROM idempotency WHERE actor=? AND operation=? AND key=?',
                             (who.actor, operation, key)).fetchone()
             if old:
                 if not hmac.compare_digest(old['request_hash'], fingerprint):
                     raise Problem('idempotency_conflict', 'This request key was already used for different content', 409)
-                return json.loads(old['response_json'])
+                return json.loads(old['response'])
             result = fn(c)
             c.execute('INSERT INTO idempotency VALUES(?,?,?,?,?,?)',
                       (who.actor, operation, key, fingerprint, encode(result), H.now()))
@@ -454,10 +454,10 @@ class Vault:
             raise Problem('forbidden', 'You can share a credential you added only with bots you own or manage. '
                           + ask_admin_detail(c, self.admins, f'give it to {(H.bot(c, H.actor_id(subject)) or {}).get("slug") or H.actor_id(subject)}'), 403)
         parent = effective_grant(c,cid,who.actor) if who.role in ('human','owner') else None
-        bot = c.execute('SELECT operator,bot_owners_json FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
+        bot = c.execute('SELECT operator,bot_owners FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
         # A bot's owners (its creator and co-owners, and its operator) attach credentials they hold themselves.
         if not parent or not bot or (bot['operator'] != H.actor_id(who.actor)
-                                     and H.actor_id(who.actor) not in owner_ids(bot['bot_owners_json'])):
+                                     and H.actor_id(who.actor) not in owner_ids(bot['bot_owners'])):
             raise Problem('forbidden', ask_admin_detail(c, self.admins, 'give a bot a credential')
                           + (', or give a bot you manage a credential you added or were granted' if not parent else ''), 403)
         return parent['id']
@@ -586,8 +586,8 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         with store.read() as c:
             migration_runner(c,who)
-            pending=set(json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0]))
-            row=c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
+            pending=set(json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0]))
+            row=c.execute('SELECT value FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
             if runner_versions.at_least(c,who.runner_id,'0.2.31'):
                 pending|=set(json.loads(row[0])) if row else set()
             return {'bots':[r[0] for r in c.execute('SELECT bot FROM assignments WHERE runner_id=?',(who.runner_id,)) if r[0] in pending]}
@@ -613,8 +613,8 @@ def install_credentials(app,store,delegate=None,propose=None):
             bot=(H.resolve_bot(c,body.bot) or {}).get('id',body.bot)
             if not c.execute('SELECT 1 FROM assignments WHERE runner_id=? AND bot=?',(who.runner_id,bot)).fetchone():
                 raise Problem('forbidden','That bot is not on this Computer',403)
-            pending=json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0])
-            row=c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
+            pending=json.loads(c.execute('SELECT value FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0])
+            row=c.execute('SELECT value FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
             hub_pending=json.loads(row[0]) if row else []
             if bot not in pending and bot not in hub_pending:
                 return {'migrated':True}
@@ -624,7 +624,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                 return {'migrated':False,'min_runner':'0.2.31'}
             if first and not supports_hub and bot not in hub_pending:
                 hub_pending.append(bot)
-                c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
+                c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
             subject='bot:'+bot
             label=(H.bot(c,bot) or {}).get('slug') or bot
             for item in body.credentials:
@@ -648,10 +648,10 @@ def install_credentials(app,store,delegate=None,propose=None):
                 H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
             if first:
                 pending.remove(bot)
-                c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(pending),FILE_MIGRATION))
+                c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(pending),FILE_MIGRATION))
             if bot in hub_pending and supports_hub:
                 hub_pending.remove(bot)
-                c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
+                c.execute('UPDATE registry_metadata SET value=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
             return {'migrated':True}
 
     def acting(request, body, message_id=None):

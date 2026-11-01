@@ -51,9 +51,9 @@ CREATE TABLE IF NOT EXISTS flight_process(ts INTEGER PRIMARY KEY, cpu REAL, rss 
 CREATE TABLE IF NOT EXISTS flight_sql(ts INTEGER NOT NULL, fingerprint TEXT NOT NULL, n INTEGER NOT NULL,
   total_ms REAL NOT NULL, p95 REAL, max_ms REAL, hist TEXT, PRIMARY KEY(ts, fingerprint)) WITHOUT ROWID;
 CREATE TABLE IF NOT EXISTS flight_db(ts INTEGER PRIMARY KEY, bytes INTEGER, wal_bytes INTEGER, free_bytes INTEGER,
-  detail_json TEXT);
+  detail TEXT);
 CREATE TABLE IF NOT EXISTS flight_events(id INTEGER PRIMARY KEY, ts INTEGER NOT NULL, kind TEXT NOT NULL,
-  detail_json TEXT NOT NULL);
+  detail TEXT NOT NULL);
 CREATE INDEX IF NOT EXISTS flight_events_kind ON flight_events(kind, ts);
 """
 
@@ -708,7 +708,7 @@ def start_event(settings, check=True):
 
 
 def _event(c, kind, detail, now=None):
-    c.execute("INSERT INTO flight_events(ts,kind,detail_json) VALUES(?,?,?)",
+    c.execute("INSERT INTO flight_events(ts,kind,detail) VALUES(?,?,?)",
               (int(now or time.time()), kind, json.dumps(detail, separators=(",", ":"))))
 
 
@@ -718,7 +718,7 @@ def record_event(store, kind, detail, now=None):
 
 
 def last_start(c):
-    row = c.execute("SELECT ts,detail_json FROM flight_events WHERE kind='start' ORDER BY ts DESC,id DESC LIMIT 1"
+    row = c.execute("SELECT ts,detail FROM flight_events WHERE kind='start' ORDER BY ts DESC,id DESC LIMIT 1"
                     ).fetchone()
     return {"at": row[0], **json.loads(row[1])} if row else None
 
@@ -1024,8 +1024,8 @@ class Flight(threading.Thread):
         started = time.monotonic()
         self.db_next = now + self.db_every
         with self.store.read() as c:
-            latest = c.execute("SELECT ts,detail_json FROM flight_db ORDER BY ts DESC LIMIT 1").fetchone()
-        previous = json.loads(latest["detail_json"] or "{}") if latest else {}
+            latest = c.execute("SELECT ts,detail FROM flight_db ORDER BY ts DESC LIMIT 1").fetchone()
+        previous = json.loads(latest["detail"] or "{}") if latest else {}
         # The original scan timestamp travels with each hourly sample, including across recorder restarts.
         objects_at = previous.get("objects_at", latest["ts"] if latest else None)
         scan = objects_at is None or now - objects_at >= SIZES_EVERY
@@ -1105,8 +1105,8 @@ def _db(c, now):
         return {}
     day = c.execute("SELECT * FROM flight_db WHERE ts<=? ORDER BY ts DESC LIMIT 1", (latest["ts"] - 86400 + 1800,)
                     ).fetchone()
-    detail = json.loads(latest["detail_json"] or "{}")
-    before = json.loads(day["detail_json"] or "{}") if day else {}
+    detail = json.loads(latest["detail"] or "{}")
+    before = json.loads(day["detail"] or "{}") if day else {}
     return {"at": latest["ts"], "bytes": latest["bytes"], "wal_bytes": latest["wal_bytes"],
             "free_bytes": latest["free_bytes"], "growth_24h": latest["bytes"] - day["bytes"] if day else None,
             "objects": detail.get("objects"), "objects_at": detail.get("objects_at", latest["ts"]),
@@ -1134,7 +1134,7 @@ def view(c, minutes=60, sections=SECTIONS, now=None):
     if "events" in sections:
         out["events"] = {"start": last_start(c), "recent": [
             {"id": r[0], "at": r[1], "kind": r[2], **json.loads(r[3])} for r in c.execute(
-                "SELECT id,ts,kind,detail_json FROM flight_events WHERE ts>=? ORDER BY id DESC LIMIT 20", (since,))]}
+                "SELECT id,ts,kind,detail FROM flight_events WHERE ts>=? ORDER BY id DESC LIMIT 20", (since,))]}
     return out
 
 

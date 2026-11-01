@@ -22,7 +22,7 @@ TOOL_START = {"started", "start", "running", "pending", "in_progress", "tool_exe
 TOOL_QUIET = {"", "completed", "done", "success", "succeeded", "tool_execution_end"}
 # Text deltas are the reply being typed and tokens/status are bookkeeping: none is a step.
 STEP_EVENTS = ("(kind IN ('tool','message','error') OR "
-               "(kind='delta' AND json_extract(payload_json,'$.delta_kind')='thought'))")
+               "(kind='delta' AND json_extract(payload,'$.delta_kind')='thought'))")
 
 
 # A tool event that reports a call's end (or its failure) is the same call the start already listed.
@@ -218,7 +218,7 @@ def mark_delivery(c, messages):
     for i in range(0, len(ids), 500):
         chunk = ids[i:i + 500]
         for row in c.execute(
-                "SELECT j.message_id,j.bot,j.redirect,json_extract(m.refs_json,'$.delivery') AS way,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
+                "SELECT j.message_id,j.bot,j.redirect,json_extract(m.refs,'$.delivery') AS way,(SELECT a.id FROM attempts a JOIN jobs aj ON aj.id=a.job_id"
                 " JOIN messages am ON am.id=aj.message_id WHERE a.bot=j.bot AND a.state IN ('leased','running')"
                 " AND (am.conversation_id=m.conversation_id OR EXISTS(SELECT 1 FROM attempt_conversations ac"
                 " WHERE ac.attempt_id=a.id AND ac.conversation_id=m.conversation_id)) ORDER BY a.created LIMIT 1) AS live"
@@ -227,7 +227,7 @@ def mark_delivery(c, messages):
             if not row["live"]:
                 continue
             if row["bot"] not in configs:
-                config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
+                config = c.execute("SELECT config FROM bot_config WHERE bot=?", (row["bot"],)).fetchone()
                 configs[row["bot"]] = json.loads(config[0]) if config else {}
             config = configs[row["bot"]]
             mode = ("redirect" if row["redirect"] else "steer" if row["way"] != "queue"
@@ -335,18 +335,18 @@ def annotate(c, auth, who, messages):
             continue
         if readable(lambda: auth.conversation(c, who, row["conversation_id"])) and privacy.message_readable(c, privacy.actor(who), row):
             did[aid].append({"kind": row["kind"], "to": row["to_actor"], "text": clip(row["body"], 160), "at": row["created"]})
-    for row in c.execute(f"SELECT ts,actor,rule,detail_json FROM refusals WHERE actor IN ({who_marks}) AND ts BETWEEN ? AND ?",
+    for row in c.execute(f"SELECT ts,actor,rule,detail FROM refusals WHERE actor IN ({who_marks}) AND ts BETWEEN ? AND ?",
                          (*actors, lo, hi)):
         aid = owner_of(row["actor"], row["ts"])
         if aid:
-            detail = (json.loads(row["detail_json"] or "{}") or {}).get("detail") or ""
+            detail = (json.loads(row["detail"] or "{}") or {}).get("detail") or ""
             did[aid].append({"kind": "refused", "rule": row["rule"], "text": clip(detail, 200), "at": row["ts"]})
     events = {aid: [] for aid in turns}
-    for row in c.execute(f"SELECT attempt_id,kind,payload_json,created FROM attempt_events WHERE attempt_id IN "
+    for row in c.execute(f"SELECT attempt_id,kind,payload,created FROM attempt_events WHERE attempt_id IN "
                          f"({','.join('?' * len(turns))}) AND {STEP_EVENTS} ORDER BY attempt_id,seq", tuple(turns)):
         if not privacy.content_readable(c, privacy.actor(who), dict(row)):
             continue
-        events[row["attempt_id"]].append((row["kind"], json.loads(row["payload_json"]), row["created"]))
+        events[row["attempt_id"]].append((row["kind"], json.loads(row["payload"]), row["created"]))
     for aid, t in turns.items():
         steps = build_steps(events[aid])
         replies[aid].setdefault("run", {}).update(
@@ -370,8 +370,8 @@ def install(app, store, auth):
             auth.run_conversation(c, who, row["bot"], message)
             privacy.require_attempt(c, who, aid)
             auth.require_read(c, who, row["bot"])
-            events = [(r["kind"], json.loads(r["payload_json"]), r["created"]) for r in c.execute(
-                f"SELECT kind,payload_json,created FROM attempt_events WHERE attempt_id=? AND {STEP_EVENTS} ORDER BY seq",
+            events = [(r["kind"], json.loads(r["payload"]), r["created"]) for r in c.execute(
+                f"SELECT kind,payload,created FROM attempt_events WHERE attempt_id=? AND {STEP_EVENTS} ORDER BY seq",
                 (aid,)) if privacy.content_readable(c, privacy.actor(who), dict(r))]
             # A live run of a bot org rules apply to keeps what it says out until its reply is checked and delivered
             # (backend/org_rule_check.py): its tool steps only, as the room's live view shows it.

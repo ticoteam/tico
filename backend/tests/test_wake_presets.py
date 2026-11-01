@@ -85,10 +85,10 @@ def test_existing_bots_use_performance_and_new_bots_start_as_doers(api):
 
 def test_legacy_wake_migration_is_idempotent_and_preserves_other_settings(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.wake_preset','current','$.compact_at',400000) WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.wake_preset','current','$.compact_at',400000) WHERE bot='ops'")
         before = c.execute("SELECT revision FROM bot_config WHERE bot='ops'").fetchone()[0]
         W.ensure(c)
-        row = c.execute("SELECT config_json,revision FROM bot_config WHERE bot='ops'").fetchone()
+        row = c.execute("SELECT config,revision FROM bot_config WHERE bot='ops'").fetchone()
         assert json.loads(row[0])["wake_preset"] == "performance"
         assert json.loads(row[0])["compact_at"] == 400000 and row[1] == before + 1
         W.ensure(c)
@@ -147,10 +147,10 @@ def test_a_subordinates_ordinary_edits_do_not_wake_its_manager(api, name):
         H.task_update(c, "bot:ops", task["id"], note="Half way")
         assert c.execute("SELECT count(*) FROM jobs WHERE bot='coo'").fetchone()[0] == before
         H.task_update(c, "bot:ops", task["id"], status="done", note="Drafted")
-        [done] = c.execute("SELECT j.held,m.refs_json FROM jobs j JOIN messages m ON m.id=j.message_id "
-                           "WHERE j.bot='coo' AND json_extract(m.refs_json,'$.subtask')=?", (task["id"],))
+        [done] = c.execute("SELECT j.held,m.refs FROM jobs j JOIN messages m ON m.id=j.message_id "
+                           "WHERE j.bot='coo' AND json_extract(m.refs,'$.subtask')=?", (task["id"],))
         assert done["held"] == 0                       # a delegated result continues the parent's work immediately
-        assert json.loads(done["refs_json"])["task"] == parent["id"]
+        assert json.loads(done["refs"])["task"] == parent["id"]
 
 
 def test_token_saver_gives_three_notices_in_its_window_one_wake(api):
@@ -215,11 +215,11 @@ def test_an_enabled_sweep_runs_at_most_once_per_cap_from_its_actual_start(api, n
 
 def test_switching_presets_changes_only_the_preset(api):
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.compact_at',400000) WHERE bot='ops'")
+        c.execute("UPDATE bot_config SET config=json_set(config,'$.compact_at',400000) WHERE bot='ops'")
         tables = [t for t in ("schedules", "triggers", "credential_grants", "subscriptions")
                   if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (t,)).fetchone()]
         def state():
-            row = c.execute("SELECT config_json,access_json FROM bot_config WHERE bot='ops'").fetchone()
+            row = c.execute("SELECT config,access FROM bot_config WHERE bot='ops'").fetchone()
             config = json.loads(row[0])
             config.pop("wake_preset", None)
             return config, row[1], [c.execute(f"SELECT count(*) FROM {t}").fetchone()[0] for t in tables]
@@ -230,7 +230,7 @@ def test_switching_presets_changes_only_the_preset(api):
             assert state() == before
     assert get(api, "bots/ops")["compact_at"] == 400000
     with api.app.state.store.read() as c:
-        assert [r[0] for r in c.execute("SELECT after_json FROM settings_changes WHERE bot='ops' AND field='wake_preset' "
+        assert [r[0] for r in c.execute("SELECT after FROM settings_changes WHERE bot='ops' AND field='wake_preset' "
                                         "ORDER BY created")] == ['"token_saver"', '"performance"']
 
 
@@ -482,7 +482,7 @@ def test_a_resumed_task_wakes_while_a_notice_on_it_is_held(api):
     settled(api)
     held_notice(api, task)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE tasks SET next_run=1, resume_json=? WHERE id=?", (json.dumps({"until": H.now()}), task["id"]))
+        c.execute("UPDATE tasks SET next_run=1, resume=? WHERE id=?", (json.dumps({"until": H.now()}), task["id"]))
         quiet_work.resume(c, H.task(c, task["id"]), "Its date came.", "schedule")
     [resumed] = [j for j in jobs(api) if j["body"].startswith("Resume:")]
     assert (resumed["state"], resumed["held"]) == ("queued", 0)

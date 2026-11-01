@@ -39,7 +39,7 @@ def test_the_queue_asks_one_bot_at_a_time_and_moves_on_when_it_posts(api):
     assert first and queued == active, "every active bot is queued, and the first one asked"
     with store.transaction() as c:
         assert updates.dispatch(c, MORNING) is None, "one at a time: nothing more while it is out"
-        request = c.execute("SELECT m.body, m.refs_json FROM update_queue q JOIN messages m ON m.id=q.message_id "
+        request = c.execute("SELECT m.body, m.refs FROM update_queue q JOIN messages m ON m.id=q.message_id "
                             "WHERE q.state='sent'").fetchone()
         assert "hub_update_create" in request["body"] and "Finished since your last update" in request["body"]
         assert c.execute("SELECT 1 FROM jobs WHERE bot=?", (first,)).fetchone(), "the request wakes the bot"
@@ -286,7 +286,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         post(api, f"tasks/{task['id']}/comments", {"text": "Comment on " + task["title"]})
         post(api, f"tasks/{task['id']}", {"version": get(api, f"tasks/{task['id']}")["task"]["version"], "status": "done"})
     meeting = lambda mid, notes, review="live", **meta: c.execute(
-        "INSERT INTO meetings(id,title,owner,metadata_json,notes,created,updated,review_state) VALUES(?,?,?,?,?,?,?,?)",
+        "INSERT INTO meetings(id,title,owner,metadata,notes,created,updated,review_state) VALUES(?,?,?,?,?,?,?,?)",
         (mid, mid, "ben@acme.example", json.dumps({"kind": "meeting", **meta}), notes, H.now(), H.now(), review))
     with store.transaction() as c:
         c.execute("UPDATE tasks SET status='done', updated=? WHERE id=?", (H.now(), done["id"]))
@@ -299,7 +299,7 @@ def test_a_persons_draft_is_written_from_only_what_everyone_can_see_and_never_ov
         meeting("Old sync", "Deleted meeting notes", **attended)
         c.execute("INSERT INTO media_control(meeting_id,deleted_at) VALUES('Old sync',?)", (H.now(),))
         meeting("Ben's one-to-one", "Not her meeting notes", participants=[{"email": "cara@acme.example"}])
-        c.execute("INSERT INTO approvals(id,kind,task_id,payload_json,requested_by,decided_by,decision,decided_at,created) "
+        c.execute("INSERT INTO approvals(id,kind,task_id,payload,requested_by,decided_by,decision,decided_at,created) "
                   "VALUES('ap1','send',?,?,'bot:ops','human:ana','approved',?,?)",
                   (budget["id"], json.dumps({"text": "Approval payload to the vendor"}), H.now(), H.now()))
         c.execute("UPDATE bot_config SET reports_to='human:ana' WHERE bot IN ('finance','ops')")

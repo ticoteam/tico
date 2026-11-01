@@ -69,7 +69,7 @@ def allocate(c, at=None):
     if not F._ready(c):
         return []
     given = []
-    steps = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow_json LIKE '%\"assign\"%'")]
+    steps = [dict(r) for r in c.execute("SELECT * FROM task_steps WHERE flow LIKE '%\"assign\"%'")]
     for step in steps:
         rule = F.of(step).get("assign")
         if not rule:

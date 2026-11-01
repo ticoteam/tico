@@ -92,7 +92,7 @@ def test_a_wait_with_no_plain_ask_goes_last_and_its_bot_is_asked_once_to_restate
     def restate_requests():
         with store.read() as c:
             return c.execute("SELECT count(*) FROM messages WHERE to_actor='bot:ops' AND from_actor=? "
-                             "AND refs_json LIKE '%restate_ask%'", (H.KEEPER,)).fetchone()[0]
+                             "AND refs LIKE '%restate_ask%'", (H.KEEPER,)).fetchone()[0]
 
     items = needs()
     assert list(items)[-1] == legacy and items[legacy]["ask_missing"] and not items[legacy]["person_ask"]

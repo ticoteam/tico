@@ -187,8 +187,8 @@ def test_run_now_runs_the_flow_and_records_each_step(api):
     assert run["status"] == "ok" and run["version"] == 1 and run["finished"]
     assert [(s["id"], s["status"]) for s in run["steps"]] == [("tell", "ok"), ("off", "skipped")]
     with api.app.state.store.read() as c:
-        woke = c.execute("SELECT body, refs_json FROM messages WHERE to_actor='bot:ops' ORDER BY created DESC").fetchone()
-    assert woke["body"] == "Look" and json.loads(woke["refs_json"])["automation"] == aid
+        woke = c.execute("SELECT body, refs FROM messages WHERE to_actor='bot:ops' ORDER BY created DESC").fetchone()
+    assert woke["body"] == "Look" and json.loads(woke["refs"])["automation"] == aid
     runs = get(api, f"automations/{aid}/runs")
     assert runs["runs"][0]["id"] == run["id"] and runs["daily"][0]["runs"] == 1 and runs["next"] is None
     assert get(api, "automations")["automations"][0]["last_run"]["id"] == run["id"]

@@ -28,7 +28,7 @@ def shift(at: str, days: int) -> str:
 
 
 def _metadata(c: sqlite3.Connection, key: str) -> Any:
-    row = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (key,)).fetchone()
+    row = c.execute("SELECT value FROM registry_metadata WHERE key=?", (key,)).fetchone()
     try:
         return json.loads(row[0]) if row else None
     except (TypeError, ValueError):
@@ -71,7 +71,7 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
     archived = {str(r[0]) for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
-    for row in c.execute("SELECT bot, config_json, reports_to FROM bot_config"):
+    for row in c.execute("SELECT bot, config, reports_to FROM bot_config"):
         if str(row[0]) in archived:
             continue
         try:
@@ -229,9 +229,9 @@ def live_expired_run_holds(c: sqlite3.Connection, at: str) -> list[str]:
 def gateway_decision_costs(c: sqlite3.Connection, after: str, through: str) -> dict[str, str]:
     """{caller actor: USD as decimal text} for decision calls on the Gateway's model in (after, through], from the
     judge audit (`judge.call` rows name who asked)."""
-    rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail_json, '$.cost_usd'), 0))) "
+    rows = c.execute("SELECT actor, printf('%.9f', sum(coalesce(json_extract(detail, '$.cost_usd'), 0))) "
                      "FROM events WHERE action='judge.call' AND ts > ? AND ts <= ? "
-                     "AND json_extract(detail_json, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
+                     "AND json_extract(detail, '$.model') LIKE 'tico-%' GROUP BY actor", (after, through)).fetchall()
     return {str(r[0] or ""): str(r[1]) for r in rows}
 
 
@@ -390,17 +390,17 @@ def finance_hook_calls(c: sqlite3.Connection, at: str, most: int) -> list[Row]:
 # joining, leaving or being archived. A roster edit that changes none of these moves it too; that only costs a cache.
 _BUMP = ("UPDATE fin_view_versions SET version=version+1, reason='{why}', "
          "updated_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id=1")
-_TEAM = ("CASE WHEN json_valid(OLD.config_json) AND json_valid(NEW.config_json) "
-         "THEN json_extract(OLD.config_json, '$.team') IS NOT json_extract(NEW.config_json, '$.team') "
-         "OR json_extract(OLD.config_json, '$.reports_to') IS NOT json_extract(NEW.config_json, '$.reports_to') "
-         "ELSE OLD.config_json IS NOT NEW.config_json END")
+_TEAM = ("CASE WHEN json_valid(OLD.config) AND json_valid(NEW.config) "
+         "THEN json_extract(OLD.config, '$.team') IS NOT json_extract(NEW.config, '$.team') "
+         "OR json_extract(OLD.config, '$.reports_to') IS NOT json_extract(NEW.config, '$.reports_to') "
+         "ELSE OLD.config IS NOT NEW.config END")
 ORG_TRIGGERS = (
     ("fin_view_roster_insert", "AFTER INSERT ON registry_metadata WHEN NEW.key = 'people'", "roster"),
-    ("fin_view_roster_update", "AFTER UPDATE OF value_json ON registry_metadata WHEN NEW.key = 'people' "
-     "AND OLD.value_json IS NOT NEW.value_json", "roster"),
+    ("fin_view_roster_update", "AFTER UPDATE OF value ON registry_metadata WHEN NEW.key = 'people' "
+     "AND OLD.value IS NOT NEW.value", "roster"),
     ("fin_view_bot_insert", "AFTER INSERT ON bot_config", "bot added"),
     ("fin_view_bot_delete", "AFTER DELETE ON bot_config", "bot removed"),
-    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config_json ON bot_config WHEN "
+    ("fin_view_bot_update", f"AFTER UPDATE OF reports_to, config ON bot_config WHEN "
      f"OLD.reports_to IS NOT NEW.reports_to OR {_TEAM}", "reports to"),
     ("fin_view_bot_archive", "AFTER UPDATE OF state ON bots WHEN (OLD.state = 'archived') IS NOT "
      "(NEW.state = 'archived')", "bot archived"),
