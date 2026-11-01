@@ -620,7 +620,7 @@ def test_a_clear_made_after_an_upgrade_before_the_chats_next_turn_still_starts_a
 
 
 @pytest.mark.parametrize("harness", ["claude", "codex"])
-def test_after_one_persons_clear_another_persons_chat_on_the_shared_thread_starts_a_new_one_too(api, computer):
+def test_one_persons_clear_starts_their_chat_anew_and_leaves_another_persons_chat_on_its_own_thread(api, computer):
     computer.start()
     done = lambda n: len([a for a in computer.attempts() if a["result"]]) == n  # noqa: E731
     ana = post(api, "chat/ops", {"text": "Remember the Acme code word"})["conversation_id"]
@@ -628,19 +628,18 @@ def test_after_one_persons_clear_another_persons_chat_on_the_shared_thread_start
     ben = post(api, "chat/ops", {"text": "Ben's question"}, token="ben-test")["conversation_id"]
     until(lambda: done(2), "Ben's reply")
     assert computer.api.post("/api/employees/ops/session/clear", json={}, headers=headers()).status_code == 200
-    # Ben's chat runs first after Ana's Clear: the thread they shared is not resumed, and his own history stays.
     post(api, "chat/ops", {"text": "Ben again"}, token="ben-test")
     until(lambda: done(3), "Ben's reply after Ana's clear")
-    # Ana's next turn continues that new thread, not a third.
     post(api, "chat/ops", {"text": "Ana starts over"})
     until(lambda: done(4), "Ana's reply after her clear")
     assert [a["result"]["outcome"] for a in computer.attempts()] == ["completed"] * 4
     first, second, third, fourth = started_threads(api, computer)
-    assert second == first and third and third != first and fourth == third, (first, second, third, fourth)
+    # Each person's DM is its own session (contract section 8): Ana's Clear reaches only hers.
+    assert first and second != first and third == second and fourth not in (first, second), (first, second, third, fourth)
     assert ana != ben
     if computer.harness == "codex":
         starts = [c for c in computer.calls() if c.get("harness") == "codex" and c.get("method") in ("thread/start", "thread/resume")]
-        assert [c["method"] for c in starts] == ["thread/start", "thread/resume", "thread/start", "thread/resume"]
+        assert [c["method"] for c in starts] == ["thread/start", "thread/start", "thread/resume", "thread/start"]
 
 
 @pytest.mark.parametrize("harness", ["gemini", "antigravity"])
