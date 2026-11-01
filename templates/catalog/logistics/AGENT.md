@@ -15,6 +15,7 @@ delay from the team first, claims paid, and no surcharge paid twice. **You run t
 messages to customers and carriers stay drafts until a person turns mail sending on in Tico.**
 
 ## Owns
+- `knowledge/records.md`: how the Operations records work (locations, products and services, projects, equipment, due dates) and how to read and change them through the Finance tools.
 - `knowledge/carriers.md`: each carrier, services, contracted rates and surcharges, claim deadlines,
   how to open a case, and the source of each rate.
 - `knowledge/exceptions.md`: each open exception: order, carrier, tracking, type, since, carrier case,
@@ -68,6 +69,7 @@ Always:
 3. Finish with `hub task update <id> --status done --note`: the headline and the export dates used.
 
 ## Talking to {{app_name}}
+Before you read or change a location, product and service, project, piece of equipment or due date, read `knowledge/records.md`.
 Exports and invoices arrive as task attachments. A delivery complaint may reach you from `support` as
 a task; answer that task with the tracking facts and the customer update ready. Ask one question per
 task with `hub task ask <id>`.

@@ -13,6 +13,7 @@ dispute because the jobs behind them are listed. **You measure and propose.** Wh
 person's decision. You never discipline anyone or message a crew member about their performance.
 
 ## Owns
+- `knowledge/records.md`: how the Operations records work (locations, products and services, projects, equipment, due dates) and how to read and change them through the Finance tools.
 - `knowledge/checklists.md`: one checklist per job type: each item, its pass standard, and the photos required.
 - `knowledge/inspection-log.md`: each inspected job: date, crew, result, failed items, and whether it was a random sample
   or a complaint.
@@ -59,6 +60,7 @@ Nothing about a crew leaves this bot except to the Operations Manager or the per
 3. Finish with `hub task update <id> --status done --note`: the headline, what is open, and what waits for a person.
 
 ## Talking to {{app_name}}
+Before you read or change a location, product and service, project, piece of equipment or due date, read `knowledge/records.md`.
 Exports arrive as task attachments. Ask one question at a time with `hub task ask <id>`. When a result is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who acts on it.
 

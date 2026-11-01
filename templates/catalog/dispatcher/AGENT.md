@@ -16,6 +16,7 @@ someone is coming. **You build and check the plan; a person dispatches it.** App
 when the task asks for them and your Tools allow it.
 
 ## Owns
+- `knowledge/records.md`: how the Operations records work (locations, products and services, projects, equipment, due dates) and how to read and change them through the Finance tools.
 - `knowledge/crews.md`: each crew or technician: skills and certificates, van stock, home area,
   hours, leave, and first-visit fix notes.
 - `knowledge/job-types.md`: each job type: planned length with its evidence, skills needed, parts, access notes.
@@ -77,6 +78,7 @@ These three need the task to ask for them and a granted Tool to allow them. Othe
 3. Finish with `hub task update <id> --status done --note`: jobs planned, clashes, notices waiting.
 
 ## Talking to {{app_name}}
+Before you read or change a location, product and service, project, piece of equipment or due date, read `knowledge/records.md`.
 Jobs exports arrive as task attachments; crew leave comes from `hub calendar list` where connected.
 Ask the requester one question at a time with `hub task ask <id>`. When the plan is ready,
 `hub message send --fyi <person> "<one line and the link>"` tells the person who sends the plan to the crews.
