@@ -532,8 +532,8 @@ async function finLineLoad() {
   const state = FIN.line, L = FIN_LINE, load = ++state.load, id = encodeURIComponent(state.id);
   const [a, z] = finMonthBounds(L.month), [pa, pz] = finMonthBounds(finPrevMonth(L.month));
   const fq = state.fq ? '&' + state.fq : '';
-  const [cur, prev, budgets] = await Promise.allSettled([get(`/v2/finance/lines/${id}?start=${a}&end=${z}&top_n=50&limit=200${fq}`, {fresh: true}),
-    get(`/v2/finance/lines/${id}?start=${pa}&end=${pz}&top_n=50&limit=1${fq}`, {fresh: true}),
+  const [cur, prev, budgets] = await Promise.allSettled([get(`/v2/finance/lines/${id}?start=${a}&end=${z}&top_n=${FIN_LINE_TOP}&limit=200${fq}`, {fresh: true}),
+    get(`/v2/finance/lines/${id}?start=${pa}&end=${pz}&top_n=${FIN_LINE_TOP}&limit=1${fq}`, {fresh: true}),
     // Each budget as it stands in the month shown (the version in effect then), so a future month shows its own amount.
     get(`/v2/finance/budgets?at=${a}`, {fresh: true})]);
   if (FIN?.line !== state || state.load !== load || !$('#fin-line')) return;
@@ -547,18 +547,29 @@ async function finLineLoad() {
 }
 const FIN_PER = {month: 'mo', quarter: 'qtr', year: 'yr'};
 const finVendorBudget = vendor => (FIN.line?.budgets || []).find(b => b.active && b.account_id === FIN.line.id && b.vendor === vendor && !b.team && !b.teammate);
+const FIN_LINE_TOP = 50;     // the drill-down's top_n: rows past it fold into "Other · n"
 function finLineKeys() {
   const state = FIN.line, by = 'by_' + FIN_LINE.by, cur = state.cur?.[by] || [], prev = state.prev?.[by] || [];
   const keys = [...cur.map(r => r.key), ...prev.map(r => r.key).filter(k => !cur.some(r => r.key === k))];
   if (FIN_LINE.by === 'vendor') for (const b of state.budgets) if (b.active && b.account_id === state.id && b.vendor && !b.team && !b.teammate && !keys.includes(b.vendor)) keys.push(b.vendor);
+  // Next month's projection by row (next_by). A key with a projection but no spend in either month gets a row while the
+  // reads were not capped; otherwise (or past the cap) it goes into Other, so the column adds up to the line's.
+  const proj = state.cur?.next_by?.[FIN_LINE.by] || {}, names = state.cur?.next_labels?.[FIN_LINE.by] || {};
+  const extra = Object.keys(proj).filter(k => !keys.includes(k)).sort((x, y) => proj[y] - proj[x] || x.localeCompare(y));
+  const room = keys.includes('other') ? 0 : Math.max(0, FIN_LINE_TOP - keys.length);
+  const fold = extra.slice(room);
+  keys.push(...extra.slice(0, room));
+  if (fold.length && !keys.includes('other')) keys.push('other');
   // "Other · n" last, whichever read it came from.
   keys.sort((x, y) => (x === 'other') - (y === 'other'));
-  return keys.map(k => ({key: k, label: (cur.find(r => r.key === k) || prev.find(r => r.key === k))?.label || k,
-    cur: cur.find(r => r.key === k)?.amount ?? null, prev: prev.find(r => r.key === k)?.amount ?? null}));
+  const folded = fold.length ? fold.reduce((n, k) => n + proj[k], 0) : null;
+  return keys.map(k => ({key: k, label: (cur.find(r => r.key === k) || prev.find(r => r.key === k))?.label || names[k] || (k === 'other' ? `Other · ${fold.length}` : k),
+    cur: cur.find(r => r.key === k)?.amount ?? null, prev: prev.find(r => r.key === k)?.amount ?? null,
+    proj: k === 'other' ? folded : proj[k] ?? null}));
 }
 function finLineLabel(key, label) {
   if (key === 'other') return label;
-  if (FIN_LINE.by === 'teammate') return finWho(key);
+  if (FIN_LINE.by === 'teammate') return key === 'unattributed' ? 'Unattributed' : finWho(key);
   if (FIN_LINE.by === 'team') return key === 'unattributed' ? 'Unattributed' : key === 'no_team' ? 'No team' : finTeamName(key) || label;
   // A vendor's label is a contact's name or "" (a contact the viewer can't see), never the key: a bill's key is an id.
   if (FIN_LINE.by === 'vendor') return label || '—';
@@ -574,7 +585,7 @@ function finLineDraw() {
   if (!L.sel || !rows.some(r => r.key === L.sel)) L.sel = rows[0]?.key || '';
   const [cm, pm] = [finDate(L.month + '-01').getMonth(), finDate(finPrevMonth(L.month) + '-01').getMonth()];
   // Next month's projection for each row (the line's default method on that row's history).
-  const nm = state.cur.next_month?.month, proj = state.cur.next_by?.[L.by] || {};
+  const nm = state.cur.next_month?.month;
   const head = `<tr><th>${{vendor: 'Vendor', team: 'Team', teammate: 'Teammate'}[L.by]}</th>${vendor ? '<th>Team</th>' : ''}<th class="fin-n">${FIN_MON[pm]}</th><th class="fin-n">${FIN_MON[cm]}</th>${nm ? `<th class="fin-n fin-p">${FIN_MON[Number(nm.slice(5, 7)) - 1]} proj.</th>` : ''}${vendor ? `<th class="fin-n fin-b">Budget / mo${finExcl(state.budgetsRead)}</th><th>At limit</th>` : ''}</tr>`;
   const body = rows.map(r => {
     const b = vendor && finIsVendor(r.key) ? finVendorBudget(r.key) : null;
@@ -583,7 +594,7 @@ function finLineDraw() {
     const per = b && b.period !== 'month' ? ` <span class="muted">/ ${FIN_PER[b.period] || b.period}</span>` : '';
     const budgetCell = !vendor ? '' : !finIsVendor(r.key) ? '<td class="fin-n fin-b"></td><td></td>'
       : `<td class="fin-n fin-b">${edit ? `<input class="fin-in" inputmode="decimal" autocomplete="off" data-fin-vb="${esc(r.key)}" value="${finCentsField(amount)}" aria-label="${esc(r.label)} budget a month from ${esc(FIN_MONTH[cm])}">` : finNum(amount) + per}</td><td${b ? '' : ' class="muted"'}>${b ? esc(FIN_AT_LIMIT[b.at_limit] || b.at_limit) : ''}</td>`;
-    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${nm ? `<td class="fin-n fin-p">${proj[r.key] == null ? '<span class="muted">—</span>' : finNum(proj[r.key])}</td>` : ''}${budgetCell}</tr>`;
+    return `<tr data-fin-key="${esc(r.key)}"${L.sel === r.key ? ' class="fin-on"' : ''}><td>${esc(finLineLabel(r.key, r.label))}</td>${vendor ? `<td>${b ? esc(b.team ? finTeamName(b.team) : 'All') : ''}</td>` : ''}<td class="fin-n">${r.prev == null ? '<span class="muted">—</span>' : finNum(r.prev)}</td><td class="fin-n">${r.cur == null ? '<span class="muted">—</span>' : finNum(r.cur)}</td>${nm ? `<td class="fin-n fin-p">${r.proj == null ? '<span class="muted">—</span>' : finNum(r.proj)}</td>` : ''}${budgetCell}</tr>`;
   }).join('');
   box.innerHTML = rows.length ? `<table class="fin-t"><thead>${head}</thead><tbody>${body}</tbody></table>` : finNote('No spend on this line yet.');
 }

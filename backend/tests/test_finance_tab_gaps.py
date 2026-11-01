@@ -385,3 +385,43 @@ def test_a_saved_projection_with_no_weights_splits_its_cents_evenly(books):
         got = FR.line_detail(c, OWNER, line, *OCT, at=AT)["next_by"]
         assert got["vendor"] == {"acme-a": 1, "acme-b": 1, "acme-c": 0}
         assert got["team"] == {"eng": 2}
+
+
+def test_recently_paid_bills_page_by_when_they_were_paid(books):
+    with books.transaction() as c:
+        vendor = str(act(c, OWNER, "contact_create", {"name": "Acme Tools", "kind": "vendor"}).result["contact_id"])
+
+        def paid(number, day, on):
+            made = act(c, OWNER, "bill_create", {"vendor_id": vendor, "number": number, "bill_date": day,
+                                                 "due_date": day, "lines": [{"account_id": account(c, "6100"),
+                                                                             "amount": 1_000}]})
+            bill = str(made.result["bill_id"])
+            assert act(c, OWNER, "bill_approve", {"bill_id": bill}).status == "committed"
+            assert act(c, OWNER, "bill_mark_paid", {"bill_id": bill, "date": on}).status == "committed"
+        paid("AUG", "2026-08-03", "2026-10-15")                       # an old bill, paid last
+        for n in range(20):
+            paid(f"S-{n:02d}", f"2026-09-{n + 1:02d}", "2026-10-01")
+        assert "AUG" not in [b["number"] for b in FR.bills(c, OWNER, status="paid", limit=20, at=AT)["bills"]]
+        first = FR.bills(c, OWNER, status="paid", order="paid_on", limit=5, at=AT)
+        assert [b["number"] for b in first["bills"]][0] == "AUG" and first["bills"][0]["paid_on"] == "2026-10-15"
+        seen = [b["number"] for b in first["bills"]]
+        cursor = first["next_cursor"]
+        while cursor:
+            page = FR.bills(c, OWNER, status="paid", order="paid_on", limit=5, cursor=cursor, at=AT)
+            seen += [b["number"] for b in page["bills"]]
+            cursor = page["next_cursor"]
+        assert len(seen) == len(set(seen)) == 21
+        with pytest.raises(FinanceError):
+            FR.bills(c, "human:eve", status="paid", order="paid_on", at=AT)           # payables stay out of her view
+
+
+def test_a_projection_with_no_spend_is_named_for_its_drill_down_row(books):
+    with books.transaction() as c:
+        spend(c, "6100", 1_000, day="2026-10-02", team="eng", teammate="human:ben")
+        line = account(c, "6100")
+        assert act(c, OWNER, "projection_set", {"account_id": line, "month": "2026-11", "team": "sales",
+                                                "amount": 400}).status == "committed"
+        got = FR.line_detail(c, OWNER, line, *OCT, at=AT)
+        assert got["next_by"]["team"]["sales"] == 400 and "sales" not in {r["key"] for r in got["by_team"]}
+        assert got["next_labels"]["team"]["sales"] == "Sales"
+        assert got["next_labels"]["teammate"]["unattributed"] == "Unattributed"

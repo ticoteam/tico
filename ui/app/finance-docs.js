@@ -202,9 +202,9 @@ async function finDocPaidLoad(state) {
   state.paid = [];
   if (state.kind !== 'bill' || f.status !== 'unpaid' || f.q) return;
   let d;
-  try { d = await get(`/v2/finance/bills?status=paid&limit=20${finAs()}`, {fresh: true}); } catch { return; }
+  try { d = await get(`/v2/finance/bills?status=paid&order=paid_on&limit=5${finAs()}`, {fresh: true}); } catch { return; }
   if (FIN?.doc !== state) return;
-  state.paid = (d.bills || []).sort((a, b) => String(b.paid_on || '').localeCompare(String(a.paid_on || ''))).slice(0, 5);
+  state.paid = d.bills || [];
   finDocDraw();
 }
 function finDocDraw() {

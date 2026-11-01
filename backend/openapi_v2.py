@@ -1480,7 +1480,8 @@ STABLE.extend([
      "them; external_rule_id lists those linked to one external rule", "FinanceRules"),
     ("/api/v2/finance/bills", "get", "Finance", "listFinanceBills",
      "Bills the caller sees (payables: a view grant or finance.ap), newest first, filtered by status (comma-separated, "
-     "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor",
+     "or unpaid), vendor, dates, aging bucket or late, and a search, with the open total by aging bucket and a cursor; "
+     "order=paid_on lists the last paid first",
      "FinanceBills"),
     ("/api/v2/finance/bills/{bill_id}", "get", "Finance", "getFinanceBill",
      "One bill with its lines, the payments settled against it, its attachments and the actions and approvals on it",
@@ -1533,7 +1534,7 @@ STABLE.extend([
      "view_as", "FinanceReport"),
     ("/api/v2/finance/lines/{account_id}", "get", "Finance", "getFinanceLine",
      "One line's spend by vendor, team and teammate, its entries, how they were paid (paid_by) and next month's "
-     "projection, as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
+     "projection (next_month; by vendor, team and teammate in next_by, named in next_labels), as far as the caller sees; vendor narrows it to one vendor, and teams[], teammates[], who and "
      "unattributed filter it as the P&L's expenses view does (private totals only from whole cohorts). The owner may "
      "pass view_as",
      "FinanceReport"),

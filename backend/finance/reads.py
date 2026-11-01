@@ -688,6 +688,14 @@ def _next_by(s: _Seen, ids: Sequence[str], f: _Filter, vendor: str | None) -> di
     return out
 
 
+def _next_labels(s: _Seen, keys: Iterable[str], by: str) -> dict[str, str]:
+    """Each next_by key's label, as the breakdown rows have them ("unattributed" is the group with none), so a row
+    that only has a projection is named too."""
+    raw = {k: "" if k == "unattributed" else k for k in keys}
+    labels = _labels(s, set(raw.values()), by)
+    return {k: labels[r] for k, r in raw.items()}
+
+
 def _months(a: date, z: date) -> list[date]:
     """The first day of each month from `a`'s month to `z`'s."""
     count = (z.year * 12 + z.month) - (a.year * 12 + a.month)
@@ -845,13 +853,15 @@ def line_detail(c: sqlite3.Connection, viewer: str, account_id: str, start: str 
     sees_vendor = (account_id not in whole_hidden and bool(whole_cells)) or s.view.payables or s.view.everything
     if contact is not None and (str(contact["book_id"]) != s.ctx.book.id or not sees_vendor):
         contact = None
+    next_by = _next_by(s, now_ids, f, vendor)
     out: Row = {"account": {"id": account.id, "code": account.code, "name": account.name, "type": account.type},
                 "start": a.isoformat(), "end": z.isoformat(), "view_version": s.view.version,
                 "total": None if account_id in whole_hidden else sum(x.amount for x in whole_cells),
                 "excluded": excluded, "hidden": _hidden_labels(s, hidden),
                 "vendor": vendor, "filter": {"teams": list(f.teams), "teammates": list(f.teammates), "who": f.who,
                                              "unattributed": f.unattributed},
-                "next_month": _next_month(s, now_ids, f), "next_by": _next_by(s, now_ids, f, vendor),
+                "next_month": _next_month(s, now_ids, f), "next_by": next_by,
+                "next_labels": {by: _next_labels(s, keys, by) for by, keys in next_by.items()},
                 "seats": contact["seats"] if contact is not None else None,
                 "renewal_on": (contact["renewal_on"] or None) if contact is not None else None}
     for by in ("vendor", "team", "teammate"):

@@ -186,8 +186,8 @@ def aging_summary(c: sqlite3.Connection, ctx: Ctx, kind: str, cut: set[str]) -> 
 def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | None = None,
               contact_id: str | None = None, q: str = "", start: str | None = None, end: str | None = None,
               aging: str | None = None, late: bool = False, cursor: str | None = None, limit: int = 50,
-              at: str | None = None) -> Row:
-    """Bills or invoices newest first, filtered by status (or `unpaid`), contact, dates, aging bucket (or `late`: past
+              order: str = "date", at: str | None = None) -> Row:
+    """Bills or invoices newest first (by date, or with `order` paid_on by when they were last paid), filtered by status (or `unpaid`), contact, dates, aging bucket (or `late`: past
     due) and a search over number, memo and contact name, with the open total by aging bucket. Each row has the line
     its lines go to and their team; a paid one when it was paid and by whom. `next_cursor` pages."""
     ctx = load(c, at)
@@ -197,6 +197,8 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
     if aging is not None and aging not in AP.AGING:
         raise invalid(f"aging is {'|'.join(AP.AGING)}")
     statuses = _statuses(kind, status)
+    if order not in ("date", "paid_on"):
+        raise invalid("order is date|paid_on")
     cut = set(private_cut(ctx, view))
     most = page_size(limit)
     marks = decode_cursor(cursor)
@@ -208,7 +210,8 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
     while len(out) < most and scanned < SCAN:
         batch = SAP.docs_page(c, kind, book_id=ctx.book.id, statuses=statuses, contact_id=contact_id or "",
                               q=(q or "").strip()[:100], start=dates.day(start).isoformat() if start else "",
-                              end=dates.day(end).isoformat() if end else "", before=before, most=BATCH)
+                              end=dates.day(end).isoformat() if end else "", before=before, most=BATCH,
+                              by_paid=order == "paid_on")
         if not batch:
             break
         scanned += len(batch)
@@ -217,7 +220,7 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
         files = SAP.attachment_counts(c, kind, sorted(keep))
         pays = SK.last_payments(c, [f"bill:{i}" for i in sorted(keep)]) if kind == "bill" else {}
         for r in batch:
-            before = (str(r[f"{kind}_date"]), str(r["id"]))
+            before = (str(r["sort_key"]), str(r["id"]))
             if str(r["id"]) not in keep:
                 continue
             row = doc_row(kind, r, today, files.get(str(r["id"]), 0), pays.get(f"bill:{r['id']}"))
@@ -282,10 +285,12 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
 
 def bills(c: sqlite3.Connection, viewer: str, *, status: str | None = None, vendor_id: str | None = None,
           q: str = "", start: str | None = None, end: str | None = None, aging: str | None = None,
-          late: bool = False, cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
+          late: bool = False, cursor: str | None = None, limit: int = 50, order: str = "date",
+          at: str | None = None) -> Row:
     """Bills the viewer sees (`documents` with kind bill), with the install's bills address (`bills_email`)."""
     return {**documents(c, viewer, "bill", status=status, contact_id=vendor_id, q=q, start=start, end=end,
-                        aging=aging, late=late, cursor=cursor, limit=limit, at=at), "bills_email": bills_email(c)}
+                        aging=aging, late=late, cursor=cursor, limit=limit, order=order, at=at),
+            "bills_email": bills_email(c)}
 
 
 def invoices(c: sqlite3.Connection, viewer: str, *, status: str | None = None, customer_id: str | None = None,

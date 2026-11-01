@@ -6634,6 +6634,7 @@ export type ListFinanceBillsParams = {
   end?: string | null;
   late?: boolean;
   limit?: number;
+  order?: "date" | "paid_on";
   q?: string;
   start?: string | null;
   status?: string | null;
