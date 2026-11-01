@@ -162,6 +162,9 @@ INDEXES = (
     "CREATE INDEX IF NOT EXISTS messages_seq ON messages(seq) WHERE seq IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS messages_origin ON messages(origin_id) WHERE origin_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS messages_thread_seq ON messages(conversation_id, seq)",
+    # Migrated shared-room history: which Homes still hold messages read by their old readers.
+    "CREATE INDEX IF NOT EXISTS messages_legacy_audience ON messages(conversation_id, legacy_audience) "
+    "WHERE legacy_audience IS NOT NULL",
 )
 
 # The room a shared conversation belongs to, as SQL over a row named {r}: rooms.room_bot for a shared room.
@@ -420,6 +423,7 @@ class Viewer:
         self.role = str(getattr(who, "role", "") or "")
         self._chain = self._hidden = self._shared = self._admin = self._tasks = self._standing = None
         self._threads = {}
+        self._legacy = {}
 
     @property
     def is_bot(self):
@@ -601,7 +605,11 @@ def denial(c, v, row):
     if audience == "members":
         return None if _is_member(c, v, root["id"]) else _MISSING
     if audience == "home":
-        return None if v.can_read_home(c, home_owner(root)) else _MISSING
+        if v.can_read_home(c, home_owner(root)):
+            return None
+        # A migrated Home also opens (its root only) to its shared room's old readers, for that history alone.
+        found = _legacy_home(c, v, root["id"]) if row["id"] == root["id"] else None
+        return None if found and v.shared_slugs(c, sorted(found["slugs"])) else _MISSING
     if audience == "personal":
         if v.actor != personal_owner(root) and not _is_member(c, v, root["id"]):
             return _MISSING
@@ -723,14 +731,76 @@ def thread_readable(c, v, thread_id):
     return v._threads[thread_id]
 
 
-def legacy_hidden(c, v, message):
-    """A migrated shared-room message this viewer may not read (its old readers are evaluated live). Bots keep the
-    thread's grant, as they did in the room."""
-    legacy = (message or {}).get("legacy_audience")
-    if not legacy or not str(legacy).startswith("shared:") or v.is_bot:
+def legacy_home(c, conversation_id):
+    """For a thread of a migrated Home that still holds shared-room history: {"root", "owner", "slugs"} (its root, the
+    Home's owner and the bots whose old readers read that history), else None. One indexed lookup."""
+    found = c.execute("SELECT r.id, r.owner_actor FROM conversations x JOIN conversations r ON "
+                      "r.id=COALESCE(x.root_id,x.id) WHERE x.id=? AND r.audience='home' AND EXISTS (SELECT 1 FROM "
+                      "messages lm WHERE lm.conversation_id=r.id AND lm.legacy_audience IS NOT NULL)",
+                      (conversation_id,)).fetchone()
+    if found is None:
+        return None
+    slugs = {str(r[0])[len("shared:"):] for r in c.execute(
+        "SELECT DISTINCT legacy_audience FROM messages WHERE conversation_id=? AND legacy_audience LIKE 'shared:%'",
+        (found[0],))}
+    return {"root": found[0], "owner": found[1], "slugs": slugs}
+
+
+def _legacy_home(c, v, conversation_id):
+    if conversation_id not in v._legacy:
+        v._legacy[conversation_id] = legacy_home(c, conversation_id)
+    return v._legacy[conversation_id]
+
+
+def legacy_reader_only(c, v, thread):
+    """A person who opens a migrated Home only as one of its shared room's old readers (no Home Read): they see the
+    history they read before and nothing new (spec section 4)."""
+    if not v.is_person:
         return False
-    slug = str(legacy)[len("shared:"):]
-    return slug not in v.shared_slugs(c, [slug])
+    found = _legacy_home(c, v, thread["id"])
+    return bool(found) and not v.can_read_home(c, found["owner"]) and bool(v.shared_slugs(c, sorted(found["slugs"])))
+
+
+def legacy_hidden(c, v, message):
+    """A message of a migrated Home this viewer may not read: shared-room history is read by exactly its old readers
+    (evaluated live: room members for people; participants and the room's bot for an agent, any thread a run is
+    granted), and everything new by the Home's Read audience."""
+    message = message or {}
+    legacy = message.get("legacy_audience")
+    if legacy and str(legacy).startswith("shared:"):
+        slug = str(legacy)[len("shared:"):]
+        if v.is_bot:
+            if v.runner_turn:
+                return False
+            root = root_of(c, thread_row(c, message.get("conversation_id"))) or {}
+            return not (v.actor in (root.get("participants") or []) or v.actor == "bot:" + slug)
+        return slug not in v.shared_slugs(c, [slug])
+    if not v.is_person or not message.get("conversation_id"):
+        return False
+    found = _legacy_home(c, v, message["conversation_id"])
+    return bool(found) and not v.can_read_home(c, found["owner"])
+
+
+def legacy_gate(c, principals, message):
+    """The migrated-Home rule for the per-message check (task_privacy.message_readable), which the legacy readers
+    (/conversations, inboxes, claims) pass: each person principal is checked as `legacy_hidden` does. A bot principal
+    there acts in a run, which reads by its grant."""
+    message = dict(message or {})
+    cid = message.get("conversation_id")
+    names = principals if isinstance(principals, tuple) else (principals,)
+    people = [a for a in names if str(a).startswith("human:")]
+    if not cid or not people:
+        return True
+    if "legacy_audience" not in message:
+        row = c.execute("SELECT legacy_audience FROM messages WHERE id=?", (message.get("id"),)).fetchone()
+        message["legacy_audience"] = row[0] if row else None
+    if not message.get("legacy_audience") and legacy_home(c, cid) is None:
+        return True
+    for actor in people:
+        v = actor_viewer(c, actor)
+        if v is None or legacy_hidden(c, v, message):
+            return False
+    return True
 
 
 def message_readable(c, v, message, *, thread_checked=False):
@@ -862,6 +932,11 @@ def readable_sql(c, v, alias="conversations", *, inner=None, tasks="SELECT id FR
     if not person or not v.in_good_standing(c):
         return "0"
     bound = f" OR {meeting(x + 'id')}" if meeting else ""
+    # A migrated Home's root also opens to its shared room's old readers (legacy_reader_only).
+    if shared:
+        bound += (f" OR {x}id IN (SELECT lm.conversation_id FROM {t('messages')} lm JOIN {t('conversations')} lr ON "
+                  f"lr.id=lm.conversation_id WHERE lr.audience='home' AND lm.legacy_audience IN "
+                  f"{_qlist(['shared:' + s for s in shared])})")
     out = (f"(COALESCE({x}root_id,{x}id) IN (SELECT r.id FROM {t('conversations')} r WHERE {root}){bound}) "
            f"AND {fence}")
     return f"({out}) AND {conversation(x + 'id')}" if conversation else out
@@ -873,12 +948,22 @@ def message_sql(c, v, alias="messages", *, legacy_slugs=None):
     v = viewer(None, v) if not isinstance(v, Viewer) else v
     x = (alias + ".") if alias else ""
     if v.is_bot:
-        return "1"
+        if v.runner_turn:
+            return "1"
+        return (f"({x}legacy_audience IS NULL OR substr({x}legacy_audience,8)={_q(H.actor_id(v.actor))} OR EXISTS "
+                f"(SELECT 1 FROM conversations lr, {_PARTICIPANTS.format(r='lr')} WHERE lr.id={x}conversation_id "
+                f"AND value={_q(v.actor)}))")
+    slugs = [r[0][len("shared:"):] for r in c.execute(
+        "SELECT DISTINCT legacy_audience FROM messages WHERE legacy_audience LIKE 'shared:%'")]
     if legacy_slugs is None:
-        slugs = [r[0][len("shared:"):] for r in c.execute(
-            "SELECT DISTINCT legacy_audience FROM messages WHERE legacy_audience LIKE 'shared:%'")]
         legacy_slugs = v.shared_slugs(c, slugs)
-    return f"({x}legacy_audience IS NULL OR substr({x}legacy_audience,8) IN {_qlist(sorted(legacy_slugs))})"
+    # Everything new in a migrated Home is read by its Read audience, whoever read the old room.
+    blocked = sorted("bot:" + s for s in slugs if not v.can_read_home(c, "bot:" + s))
+    new = f"{x}legacy_audience IS NULL"
+    if blocked:
+        new += (f" AND {x}conversation_id NOT IN (SELECT lx.id FROM conversations lx JOIN conversations lr ON "
+                f"lr.id=COALESCE(lx.root_id,lx.id) WHERE lr.audience='home' AND lr.owner_actor IN {_qlist(blocked)})")
+    return f"(({new}) OR substr({x}legacy_audience,8) IN {_qlist(sorted(legacy_slugs))})"
 
 
 def readable_ids(c, v, ids):
@@ -2172,11 +2257,17 @@ def view(c, principal, row, *, follower=None):
            "last_seq": int(row.get("last_seq") or 0), "last_unread_seq": int(row.get("last_unread_seq") or 0)}
     if out["audience"] == "home":
         out["home"] = {"actor": home_owner(root)}
+    only_old = v is not None and legacy_reader_only(c, v, row)
+    if only_old:
+        last = c.execute("SELECT MAX(seq), MAX(created) FROM messages WHERE conversation_id=? AND legacy_audience "
+                         "IS NOT NULL", (row["id"],)).fetchone()
+        out.update(last_seq=int(last[0] or 0), last_unread_seq=int(last[0] or 0), last_message_at=last[1])
     if v is not None:
         f = follower if follower is not None else c.execute(
             "SELECT following, notify, last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?",
             (row["id"], v.actor)).fetchone()
-        u = unread(c, v, row["id"], follower=(f["last_read_seq"],) if f else None)
+        u = ({"unread": 0, "activity": False} if only_old
+             else unread(c, v, row["id"], follower=(f["last_read_seq"],) if f else None))
         out["me"] = {"member": _is_member(c, v, root["id"]) or v.actor in (root.get("participants") or []),
                      "following": bool(f and f["following"]), "notify": f["notify"] if f else "live",
                      "last_read_seq": f["last_read_seq"] if f else 0, "unread": u["unread"],
@@ -2215,8 +2306,9 @@ def timeline(c, v, thread_id, *, cursor=None, limit=50, max_bytes=None):
     limit = max(1, min(int(limit or 50), MAX_PAGE))
     max_bytes = min(int(max_bytes or MAX_PAGE_BYTES), MAX_PAGE_BYTES)
     below = int(cursor) if cursor not in (None, "") else (1 << 62)
-    rows = [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND seq IS NOT NULL AND seq<? "
-                                       "ORDER BY seq DESC LIMIT ?", (row["id"], below, limit + 1))]
+    only_old = " AND legacy_audience IS NOT NULL" if legacy_reader_only(c, v, row) else ""
+    rows = [dict(r) for r in c.execute("SELECT * FROM messages WHERE conversation_id=? AND seq IS NOT NULL AND seq<?"
+                                       f"{only_old} ORDER BY seq DESC LIMIT ?", (row["id"], below, limit + 1))]
     more = len(rows) > limit
     rows = rows[:limit]
     subs = {}
@@ -2405,9 +2497,11 @@ def _migrate(c):
               "AND COALESCE(room_key,'')<>'' AND id NOT IN (SELECT id FROM (SELECT id, ROW_NUMBER() OVER (PARTITION BY "
               f"{_ROOM_BOT.format(r='conversations')} ORDER BY COALESCE(last_message_at,created) DESC, id DESC) AS n "
               "FROM conversations WHERE scope='shared' AND closed_at IS NULL AND archived_at IS NULL) WHERE n=1)", (now,))
-    # Audience and owner stay unset on existing conversations: derived live from their columns, as for new ones.
+    # Audience and owner stay unset on other existing conversations: derived live from their columns. The open shared
+    # room is its bot's Home, stored: everything new follows Home Read, its history keeps its readers (below).
     c.execute("UPDATE conversations SET root_id=COALESCE(root_id,id), path=COALESCE(path,'/'||id||'/'), "
               "updated_at=COALESCE(updated_at,last_message_at,created)")
+    _store_shared_homes(c)
     install = install_id(c)
     safe = _qlist(sorted(SAFE_REF_KEYS))
     c.execute("UPDATE messages SET seq=rowid WHERE seq IS NULL")
@@ -2441,6 +2535,16 @@ def _migrate(c):
     c.execute("INSERT INTO registry_metadata(key,value_json) VALUES(?,?)",
               (MIGRATION_KEY, json.dumps({"at": now, "seq": c.execute(
                   "SELECT value FROM sequences WHERE name='messages'").fetchone()[0]})))
+
+
+def _store_shared_homes(c, slug=None):
+    """Each bot's open shared room becomes its Home: audience 'home', owned by the bot (unless it already has one)."""
+    one = f" AND {_ROOM_BOT.format(r='s')}=?" if slug else ""
+    c.execute(f"UPDATE conversations SET audience='home', owner_actor='bot:'||{_ROOM_BOT.format(r='conversations')} "
+              f"WHERE id IN (SELECT s.id FROM conversations s WHERE s.scope='shared' AND COALESCE(s.room_key,'')<>'' "
+              f"AND s.closed_at IS NULL AND s.archived_at IS NULL AND s.audience IS NULL{one} AND NOT EXISTS (SELECT 1 "
+              f"FROM conversations h WHERE h.audience='home' AND h.closed_at IS NULL AND "
+              f"h.owner_actor='bot:'||{_ROOM_BOT.format(r='s')}))", (slug,) if slug else ())
 
 
 def open_earlier_messages(c, principal, slug):
