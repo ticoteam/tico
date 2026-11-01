@@ -35,7 +35,7 @@ function thvDraftSave(view) {
 // the page owns). {focus: message id} shows that message.
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
-                readAt: 0, openSeq: 0, readSent: new Map(), wantRead: new Set(), pending: [], replyTo: '', editing: '',
+                readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: '', editing: '',
                 follow: null, gone: false, error: '', run: {openSteps: new Set(), steps: {}, openFolds: new Set()}};
   THV_VIEWS.add(view);
   host.innerHTML = `<section class="thv${opts.card ? ' thv-card' : ''}" data-thv="${view.key}">
@@ -100,7 +100,7 @@ async function thvLoad(view) {
     view.next = r.next_cursor || null;
     view.readAt = Number(view.thread?.me?.last_read_seq) || 0;
     view.openSeq = thvMaxSeq(view.messages);
-    for (const m of view.messages) if (m.sub_thread?.unread) view.wantRead.add(m.sub_thread.id);
+    thvLearnMarks(view, view.messages);
     view.state = view.messages.length ? 'ready' : 'empty';
     thvDraw(view, {stick: !view.opts.focus});
     thvMarkRead(view);
@@ -137,6 +137,10 @@ async function thvHoldsLoad(view) {
   } catch {}           // a server without rule holds has nothing to bring back
 }
 const thvMaxSeq = list => list.reduce((n, m) => Math.max(n, Number(m.seq) || 0), 0);
+// Where the viewer had read each inline sub-thread when it first came on screen: what is past it shows as new, per thread.
+function thvLearnMarks(view, rows) {
+  for (const m of rows) if (m.sub_thread?.id && !view.marks.has(m.sub_thread.id)) view.marks.set(m.sub_thread.id, Number(m.sub_thread.last_read_seq) || 0);
+}
 // A page read from the server merged with what the stream already put on screen: the higher revision of each message
 // wins, and newer messages the page does not have yet stay, at the bottom or under their parent.
 function thvMerge(view, fresh, tid) {
@@ -169,9 +173,12 @@ async function thvRefresh(view) {
     if (view.gone) return;
     const fresh = r.messages || [], ids = new Set(fresh.map(m => m.id));
     const first = fresh.find(m => (m.thread_id || view.id) === view.id)?.seq ?? Infinity;
-    const older = view.messages.filter(m => !ids.has(m.id) && (Number(m.seq) || 0) < first && view.olderRead);
+    // Everything above the page read again stays, a branch with its message: whatever came before the page's first own row.
+    const start = view.messages.findIndex(m => (m.thread_id || view.id) === view.id && !m.hidden && (Number(m.seq) || 0) >= first);
+    const older = view.olderRead ? view.messages.slice(0, start < 0 ? view.messages.length : start).filter(m => !ids.has(m.id)) : [];
     view.thread = r.thread || view.thread;
     view.breadcrumb = r.breadcrumb || view.breadcrumb;
+    thvLearnMarks(view, fresh);
     const olderIds = new Set(older.map(m => m.id));
     const merged = thvMerge({messages: view.messages.filter(m => !olderIds.has(m.id))}, fresh, view.id);
     view.messages = [...older, ...merged];
@@ -188,6 +195,7 @@ async function thvFocus(view, mid) {
   for (let pages = 0; !view.messages.some(m => m.id === mid) && view.next && pages < 10 && !view.gone; pages++) {
     const r = await get(thvPath(view.id) + '/timeline?limit=50&cursor=' + encodeURIComponent(view.next), {fresh: true}).catch(() => null);
     if (!r || view.gone) return;
+    thvLearnMarks(view, r.messages || []);
     const have = new Set(view.messages.map(m => m.id));
     view.messages = [...(r.messages || []).filter(m => !have.has(m.id)), ...view.messages];
     view.next = r.next_cursor || null;
@@ -205,6 +213,7 @@ async function thvOlder(view, button) {
   const box = view.el.querySelector('.thv-scroll'), from = box.scrollHeight - box.scrollTop;
   try {
     const r = await get(thvPath(view.id) + '/timeline?limit=50&cursor=' + encodeURIComponent(view.next), {fresh: true});
+    thvLearnMarks(view, r.messages || []);
     const have = new Set(view.messages.map(m => m.id));
     view.messages = [...(r.messages || []).filter(m => !have.has(m.id)), ...view.messages];
     view.next = r.next_cursor || null;
@@ -213,6 +222,26 @@ async function thvOlder(view, button) {
     box.scrollTop = box.scrollHeight - from;
   } catch (e) { toast(e.message, true); }
   button.disabled = false;
+}
+// "N more" in a long branch: the sub-thread's older messages take the row's place, and it stays while more are left.
+async function thvExpand(view, button) {
+  const row = view.messages.find(m => m.id === button.dataset.thExpand);
+  if (!row) return;
+  button.disabled = true;
+  const box = view.el.querySelector('.thv-scroll'), top = box.scrollTop;
+  try {
+    const r = await get(thvPath(row.thread_id) + '/timeline?limit=50&cursor=' + encodeURIComponent(row.cursor), {fresh: true});
+    const at = view.messages.indexOf(row);
+    if (view.gone || at < 0) return;
+    const have = new Set(view.messages.map(m => m.id));
+    const rows = (r.messages || []).filter(m => !have.has(m.id));
+    thvLearnMarks(view, rows);
+    const count = row.count - rows.filter(m => m.thread_id === row.thread_id && !m.hidden && !m.deleted).length;
+    view.messages.splice(at, 1, ...(r.next_cursor && count > 0 ? [{...row, count, cursor: r.next_cursor}] : []), ...rows);
+    thvDraw(view);
+    box.scrollTop = top;
+    thvMarkRead(view);
+  } catch (e) { toast(e.message, true); button.disabled = false; }
 }
 
 // ----------------------------------------------------------------- drawing
@@ -248,14 +277,18 @@ function thvRows(view) {
       rows.push({fold: 'earlier', n: 1, depth: m.depth || 0, id: m.id});
       continue;
     }
+    if (m.collapsed) { rows.push({more: m, id: m.id}); continue; }
     rows.push({m});
   }
   return rows;
 }
 function thvIsNew(view, m) {
-  if (!m.seq || thvMine(m) || m.seq <= view.readAt) return false;
-  // Arriving at the bottom of the thread on screen is not news; a reply arriving in an old sub-thread is.
-  return m.thread_id && m.thread_id !== view.id ? true : m.seq <= view.openSeq;
+  if (!m.seq || thvMine(m)) return false;
+  // Each sub-thread has its own read mark. Arriving at the bottom of the thread on screen is not news; a reply arriving
+  // in an old sub-thread is.
+  const tid = m.thread_id || view.id;
+  if (tid !== view.id) return m.seq > (view.marks.has(tid) ? view.marks.get(tid) : view.readAt);
+  return m.seq > view.readAt && m.seq <= view.openSeq;
 }
 function thvWhoHTML(a) {
   if (connectIsGuest(a)) return `<span class="th-who">${connectGuestHTML(a)}</span>`;   // another company's (ui/app/thread-connect.js)
@@ -327,6 +360,10 @@ function thvFoldHTML(view, row) {
   return `<div class="th-fold th-earlier" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Earlier messages</span>${
     manage ? '<button type="button" class="linkish" data-th-earlier>Open earlier messages to Read</button>' : ''}</div>`;
 }
+function thvMoreHTML(view, m) {
+  return `<button type="button" class="th-fold th-more" data-th-expand="${esc(m.id)}" data-mid="${esc(m.id)}" style="--d:${thvDepth(view, m.depth)}"><span>${esc(m.count)} more</span>${
+    m.unread ? '<span class="th-more-new">new</span>' : ''}</button>`;
+}
 function thvPendingHTML(view, p) {
   const depth = thvDepth(view, p.depth);
   const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
@@ -346,33 +383,30 @@ function thvReplyHTML(view, m) {
   return `<div class="th-reply" style="--d:${depth}" data-reply-to="${esc(m.id)}"><textarea class="th-reply-text" rows="1" aria-label="Reply in sub-thread" placeholder="Reply"></textarea>
     <button type="button" class="ghost small" data-th-reply-cancel>Cancel</button><button type="button" class="primary small" data-th-reply-send>Reply</button></div>`;
 }
+// The last row drawn in a message's branch: a pending reply or the reply box goes after it.
+function thvBranchEnd(view, id) {
+  const at = view.messages.findIndex(m => m.id === id), d = Number(view.messages[at]?.depth) || 0;
+  let end = at;
+  while (at >= 0 && end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d) end++;
+  while (end > at && view.messages[end].hidden) end--;
+  return view.messages[end]?.id || '';
+}
 function thvListHTML(view) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
   if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
-  const own = view.messages.filter(m => !m.hidden && (m.thread_id || view.id) === view.id).map(m => Number(m.depth) || 0);
+  const own = view.messages.filter(m => !m.hidden && !m.collapsed && (m.thread_id || view.id) === view.id).map(m => Number(m.depth) || 0);
   view.base = own.length ? Math.min(...own) : 0;
   const rows = thvRows(view), out = [];
   // Each pending and held message sits where it will land: after its parent's sub-thread, or at the bottom.
-  const lastIn = new Map();
-  view.messages.forEach((m, i) => { lastIn.set(m.id, i); });
   const afterParent = new Map();
   for (const p of view.pending) if (p.parent) {
-    const at = view.messages.findIndex(m => m.id === p.parent);
-    let end = at, d = Number(view.messages[at]?.depth) || 0;
-    while (at >= 0 && end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d) end++;
-    const key = view.messages[end]?.id;
+    const key = thvBranchEnd(view, p.parent);
     if (key) afterParent.set(key, [...(afterParent.get(key) || []), p]);
   }
-  let replyAt = '';
-  if (view.replyTo) {
-    const at = view.messages.findIndex(m => m.id === view.replyTo);
-    let end = at; const d = Number(view.messages[at]?.depth) || 0;
-    while (at >= 0 && end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d) end++;
-    replyAt = view.messages[end]?.id || '';
-  }
+  const replyAt = view.replyTo ? thvBranchEnd(view, view.replyTo) : '';
   for (const row of rows) {
-    out.push(row.fold ? thvFoldHTML(view, row) : thvMsgHTML(view, row.m));
+    out.push(row.fold ? thvFoldHTML(view, row) : row.more ? thvMoreHTML(view, row.more) : thvMsgHTML(view, row.m));
     const id = row.m?.id || row.id;
     for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
     if (replyAt && id === replyAt) out.push(thvReplyHTML(view, view.messages.find(m => m.id === view.replyTo)));
@@ -405,21 +439,21 @@ function thvDraw(view, {stick = false} = {}) {
 const thvVisible = (box, el) => { const a = box.getBoundingClientRect(), b = el.getBoundingClientRect(); return b.bottom > a.top && b.top < a.bottom; };
 
 // ----------------------------------------------------------------- read state
-// Up to the last message drawn, per thread drawn: the thread on screen, and each sub-thread that had news.
+// Up to the last message drawn, per thread drawn: the thread on screen and every sub-thread inline in it. A read mark is one
+// number, so a sub-thread whose collapsed "N more" still holds something unread stays where it is until that is opened.
 function thvMarkRead(view) {
   if (document.hidden || view.gone || !view.id || !['ready', 'empty'].includes(view.state) || !view.el.getClientRects().length) return;
-  const max = new Map();
+  const max = new Map(), held = new Set(view.messages.filter(m => m.collapsed && m.unread).map(m => m.thread_id));
   for (const m of view.messages) {
-    if (m.hidden || !m.seq) continue;
+    if (m.hidden || m.collapsed || !m.seq) continue;
     const tid = m.thread_id || view.id;
-    if (tid !== view.id && !view.wantRead.has(tid)) continue;
+    if (held.has(tid)) continue;
     max.set(tid, Math.max(max.get(tid) || 0, Number(m.seq)));
   }
   for (const [tid, seq] of max) {
-    const sent = view.readSent.get(tid) ?? (tid === view.id ? view.readAt : 0);
+    const sent = view.readSent.get(tid) ?? (tid === view.id ? view.readAt : view.marks.get(tid) ?? 0);
     if (seq <= sent) continue;
     view.readSent.set(tid, seq);
-    view.wantRead.delete(tid);
     post(thvPath(tid) + '/read', {seq}).catch(() => {});
     threadsMarkedRead(tid, seq);
   }
@@ -430,7 +464,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) for 
 // A message changed in a thread on screen: an edit or a delete in place, a new one at the bottom or under its parent's
 // sub-thread; anything the view cannot place reads the first page again.
 function thvApplyMessage(view, d) {
-  const tid = d.thread_id || d.message?.thread_id, inView = tid === view.id || view.messages.some(m => m.thread_id === tid || m.sub_thread?.id === tid);
+  const tid = d.thread_id || d.message?.thread_id || d.message?.conversation_id, inView = tid === view.id || view.messages.some(m => m.thread_id === tid || m.sub_thread?.id === tid);
   if (!inView && d.root_id !== (view.thread?.root_id || view.id)) return false;
   const at = view.messages.findIndex(m => m.id === d.id);
   if (d.deleted) {
@@ -447,14 +481,15 @@ function thvApplyMessage(view, d) {
   }
   view.pending = view.pending.filter(p => p.messageId !== m.id);
   if (tid === view.id) { view.messages.push({...m, depth: m.depth ?? view.base ?? 0}); if (view.state === 'empty') view.state = 'ready'; return true; }
-  const pi = view.messages.findIndex(x => x.sub_thread?.id === tid || (x.id === m.parent_message_id));
+  const pi = view.messages.findIndex(x => x.sub_thread?.id === tid || (x.id === (d.parent || m.parent_message_id)));
   if (pi < 0) { liveSoon('thv:' + view.key, () => thvRefresh(view), 150); return false; }
   const parent = view.messages[pi], d0 = Number(parent.depth) || 0;
   let end = pi;
   while (end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d0) end++;
-  view.messages.splice(end + 1, 0, {...m, depth: d0 + 1});
-  parent.sub_thread = {...(parent.sub_thread || {id: tid, count: 0}), count: (parent.sub_thread?.count || 0) + 1};
-  if (!thvMine(m)) view.wantRead.add(tid);
+  view.messages.splice(end + 1, 0, {...m, thread_id: tid, depth: d0 + 1});
+  const was = parent.sub_thread || {id: tid, count: 0, unread: 0};
+  parent.sub_thread = {...was, count: (was.count || 0) + 1, last_seq: Math.max(Number(was.last_seq) || 0, Number(m.seq) || 0),
+                       unread: (was.unread || 0) + (!thvMine(m) && thvAddressed(m) ? 1 : 0)};
   return true;
 }
 function threadViewsLive(topic, d) {
@@ -654,7 +689,7 @@ async function thvSend(view, {text, files = [], lib = [], parent = null}) {
     } else {
       view.pending = view.pending.filter(x => x !== p);
       const m = r?.message || (r?.id && r?.seq !== undefined ? r : null);
-      if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: m});
+      if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: m, parent: parent?.id});
       else void thvRefresh(view);
       for (const w of r?.warnings || []) if (w.rule === 'mention_outside') toast(`${actorName(w.actor)} is not in this thread`, true);
     }
@@ -701,6 +736,7 @@ async function thvClick(view, ev) {
   const t = ev.target, row = t.closest('.th-msg');
   const m = thvMsgOf(view, row);
   if (t.closest('[data-th-file]')) { const b = t.closest('[data-th-file]'); void openFileLink(b.dataset.thFile, b.dataset.name); return; }
+  if (t.closest('[data-th-expand]')) { void thvExpand(view, t.closest('[data-th-expand]')); return; }
   if (t.closest('[data-thv-members]')) { threadMembersOpen(view); return; }
   if (t.closest('[data-call]')) { void callAction(view, t.closest('[data-call]').dataset.call); return; }
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }

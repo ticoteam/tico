@@ -56,8 +56,8 @@ def test_a_bot_answers_in_the_sub_thread_it_was_asked_in_and_nowhere_else(api):
     assert reply["thread_id"] == sub_id, "the answer lands in the sub-thread that asked"
     assert "depth" in reply, "every timeline message carries depth (contract 10)"
     assert parent["sub_thread"]["count"] == len(replies), "the parent's summary counts the sub-thread's messages"
-    assert "Risks: pricing, timing" not in [row.get("body") for row in rows], "the root shows the answer only via the summary"
-    assert [row["body"] for row in rows] == ["Kickoff notes"]
+    assert [row["body"] for row in rows] == ["Kickoff notes", "@cpo list the risks", "Risks: pricing, timing"], "the root shows its sub-thread inline, in tree order"
+    assert [row["depth"] for row in rows] == [0, 1, 1]
 
 
 def test_a_mention_in_a_bots_home_wakes_it_once_for_that_message(api):
