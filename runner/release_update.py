@@ -312,9 +312,10 @@ def update(root, version, directory, *, run=subprocess.run, install=pip_install,
     version = tag[1:]
 
     def say(state, error=""):
-        error = disk_error_message(error)
+        # A blocked checkout's message holds file names, which may look like a disk error (test_enospc.py).
+        error = error if state == "blocked" else disk_error_message(error)
         disk = {}
-        if disk_space_error(error):
+        if state != "blocked" and disk_space_error(error):
             try:
                 disk["disk_free"] = shutil.disk_usage(directory).free
             except OSError:

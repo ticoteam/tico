@@ -110,6 +110,14 @@ def test_a_blocked_update_names_the_first_three_changed_files(repos):
     assert "notes/d.txt" not in error and "notes/e.txt" not in error and calls.restarts == 0
 
 
+def test_a_changed_file_named_like_a_disk_error_is_named_not_read_as_one(repos):
+    public, checkout, state = repos
+    commit(checkout, "tests/test_enospc.py", "one")
+    (checkout / "tests/test_enospc.py").write_text("two")
+    result, _ = run_apply(checkout, state)
+    assert result["state"] == "blocked" and result["error"].endswith("updates itself: tests/test_enospc.py")
+
+
 def test_a_renamed_file_is_named_with_both_paths(repos):
     public, checkout, state = repos
     # a staged rename is one status line: "R  app.py -> renamed.py"
