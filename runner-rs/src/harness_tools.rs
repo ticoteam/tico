@@ -68,6 +68,12 @@ pub struct Login {
     /// Platforms (runner::platform, e.g. "darwin") where the CLI keeps this login in the system keychain rather than in
     /// `files`: a switch cannot sign in on the side there, so it is not offered.
     pub keychain: Vec<String>,
+    /// Connect (Settings > Models): the command that signs a plan in for a company subscription. Empty: not offered.
+    pub connect: Vec<String>,
+    /// How Connect's result comes out: the command prints a token starting with this...
+    pub connect_token: String,
+    /// ...or leaves this file in a home of its own, so the computer's own login stays as it was.
+    pub connect_file: String,
 }
 
 /// How readiness tells whether a CLI is signed in (`[capabilities.sign_in_status]`, docs/harnesses.md).
@@ -401,7 +407,16 @@ pub fn parse(data: &toml::Table, source: &str) -> Result<Manifest, String> {
             return Err(format!("{at}: login.seed {extra:?} is not one of login.files"));
         }
         let keychain = strings(raw.get("keychain"), "login.keychain", &at, None, 0, &[])?;
-        Some(Login { command, terminal: flag("terminal"), logout, files, seed, keychain })
+        let connect = strings(raw.get("connect"), "login.connect", &at, None, 0, &[])?;
+        let word = |k: &str| raw.get(k).and_then(|v| v.as_str()).unwrap_or_default().to_string();
+        let (connect_token, connect_file) = (word("connect_token"), word("connect_file"));
+        if !connect.is_empty() && connect_token.is_empty() == connect_file.is_empty() {
+            return Err(format!("{at}: login.connect needs one of login.connect_token and login.connect_file"));
+        }
+        if !connect_file.is_empty() && !files.contains(&connect_file) {
+            return Err(format!("{at}: login.connect_file {connect_file:?} is not one of login.files"));
+        }
+        Some(Login { command, terminal: flag("terminal"), logout, files, seed, keychain, connect, connect_token, connect_file })
     } else if methods.iter().any(|m| m == "device-code") {
         return Err(format!("{at}: device-code sign-in needs a [login] command for the browser relay"));
     } else {
