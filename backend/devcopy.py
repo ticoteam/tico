@@ -99,6 +99,9 @@ EMPTY = (
     # in prune; the books, budgets, views and rules are kept.
     "fin_connections", "fin_external_refs", "fin_outbox", "fin_inbox", "fin_cards", "fin_card_auths", "fin_holds",
     "fin_recipients", "fin_payments", "fin_transfers", "fin_provider_users", "fin_card_saves",
+    # Calls: a live call's room and recorder are on the source's LiveKit, so the copy holds no live call. Its
+    # transcripts and action items are thread messages, kept with the history.
+    "calls", "call_participants",
 )
 # Definitions `--keep-automations` keeps (out of EMPTY, or unclassified): never their queues, deliveries or secrets.
 AUTOMATIONS = ("schedules", "schedule_config", "task_rules", "triggers", "webhooks", "automations",
