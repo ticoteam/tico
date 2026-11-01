@@ -1322,7 +1322,7 @@ def _replay_mail(c, bot, hold, replay, ingest, gate=None):
     return {"approved": True}
 
 
-THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments", "in_reply_to")
+THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments", "in_reply_to", "start")
 
 
 @replayer("threads")
@@ -1330,9 +1330,10 @@ def _replay_thread(c, bot, hold, replay, ingest, gate=None):
     """A message held in a thread: Send anyway posts it again through `threads.post`, as the person it was held for
     (`bot` is their replay identity), with the check skipped; the hold's nonce and the reviewer's send are the check.
     `replay` is what core's post passed to `apply`: `thread_id` and `body`, and the post's own arguments
-    (`THREAD_REPLAY`)."""
+    (`THREAD_REPLAY`). A held post that would have started a thread, sub-thread or DM has no `thread_id` but its
+    `start`, so Send anyway makes the thread then."""
     args = {k: replay[k] for k in THREAD_REPLAY if replay.get(k) is not None}
-    message = T.post(c, bot, replay["thread_id"], replay["body"], checked=None, **args)
+    message = T.post(c, bot, replay.get("thread_id"), replay["body"], checked=None, **args)
     return {"id": (message or {}).get("id")}
 
 
