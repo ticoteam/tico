@@ -222,7 +222,7 @@ def test_answer_uses_comment_wake_rule(api, role):
         assert bool(job) == (role in ("mover", "requester"))
 
 
-@pytest.mark.parametrize("status", ["cancelled"])
+@pytest.mark.parametrize("status", ["done", "closed", "declined"])
 def test_needs_you_excludes_inactive_tasks_with_structured_asks(api, status):
     tid = task(api)
     post(api, f"tasks/{tid}/comments", {"text": "Review", "ask": ask("ben")})

@@ -69,7 +69,7 @@ def test_an_unreadable_job_is_cancelled_and_a_readable_one_is_still_claimed(api)
         assert job_of(c, secret["id"])["state"] == "canceled"
         assert suppressed(c, unreadable["id"]) == [{"reason": "unreadable"}]
         done = job_of(c, finished["id"])
-        assert done["state"] == "done" and suppressed(c, done["id"]) == []
+        assert done["state"] == "completed" and suppressed(c, done["id"]) == []
         assert job_of(c, first["id"])["state"] == "queued" and suppressed(c, readable["id"]) == []
         # The message stays where it was: only the job is let go.
         assert H.message(c, unreadable["message_id"])

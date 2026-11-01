@@ -410,10 +410,10 @@ def test_task_page_reads_a_fixed_number_of_statements_and_hides_private_provenan
                 H.task_create(c, "human:ana", f"Step {size}-{n}", "Do it.", "human:ben", parent_id=parent["id"], lint=False)
                 asked = secret if n == 1 else H.task_comment(c, "human:ana", parent["id"], f"Please do {n}", wake=False)
                 aid = f"run-{size}-{n}"
-                c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','done',?,?)",
+                c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                           ("job-" + aid, asked["id"], H.now(), aid))
                 c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
-                          "VALUES(?,?,'ops','rn',0,?,'done',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
+                          "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + aid, aid, H.now(), H.now()))
                 c.execute("INSERT INTO turns(id,bot,started,task_id,exit) VALUES(?,'ops',?,?,'ok')", (aid, H.now(), parent["id"]))
                 H.task_comment(c, "bot:ops", parent["id"], f"Did {n}", wake=False, extra_refs={"turn_id": aid})
                 H.task_comment(c, "human:ana", parent["id"], f"See {n}", wake=False,

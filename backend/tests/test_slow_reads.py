@@ -18,10 +18,10 @@ def seed_turns(c, start, end, parent=None, tag="t"):
         key = f"{tag}-{n}"
         reply = H.task_comment(c, "human:ana", parent["id"], "Request " + key, wake=False)
         aid = "run-" + key
-        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','done',?,?)",
+        c.execute("INSERT INTO jobs(id,message_id,bot,state,created,attempt_id) VALUES(?,?,'ops','completed',?,?)",
                   ("job-" + key, reply["id"], H.now(), aid))
         c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
-                  "VALUES(?,?,'ops','rn',0,?,'done',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
+                  "VALUES(?,?,'ops','rn',0,?,'completed',?,?)", (aid, "job-" + key, aid, H.now(), H.now()))
         c.execute("INSERT INTO turns(id,bot,started,message_id,task_id,exit) VALUES(?,'ops',?,?,?,'ok')",
                   (aid, H.now(), reply["id"], parent["id"]))
     return parent

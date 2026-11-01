@@ -663,7 +663,7 @@ def fleet(store, bots, tasks, attempts, *, days=30):
             # A message to a bot queues its job under the message's id (store.QUEUE_TRIGGER).
             c.execute("UPDATE jobs SET state='completed' WHERE id=?", (f'fleet-m-{i}',))
             c.execute("INSERT INTO attempts(id,job_id,bot,runner_id,generation,token_hash,state,lease_until,created) "
-                      "VALUES(?,?,?,'fleet-runner',1,?,'done',?,?)",
+                      "VALUES(?,?,?,'fleet-runner',1,?,'completed',?,?)",
                       (f'fleet-a-{i}', f'fleet-m-{i}', slugs[b], f'fleet-h-{i}', now, at))
             if i % 5 == 0 and task:
                 c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs_json,created) "
