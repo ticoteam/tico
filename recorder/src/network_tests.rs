@@ -12,13 +12,25 @@ fn server(
     Arc<Mutex<Vec<(String, Value, String)>>>,
     std::thread::JoinHandle<()>,
 ) {
+    server_gated(steps, None)
+}
+/// As `server`, but the request at `gate.0` is answered only after `gate.1` receives a value, so a
+/// test can run something else while Tico holds that request open.
+fn server_gated(
+    steps: Vec<Option<Value>>,
+    gate: Option<(usize, std::sync::mpsc::Receiver<()>)>,
+) -> (
+    Tico,
+    Arc<Mutex<Vec<(String, Value, String)>>>,
+    std::thread::JoinHandle<()>,
+) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     let seen = Arc::new(Mutex::new(vec![]));
     let requests = seen.clone();
     listener.set_nonblocking(true).unwrap();
     let handle = std::thread::spawn(move || {
-        for reply in steps {
+        for (index, reply) in steps.into_iter().enumerate() {
             let deadline = std::time::Instant::now() + Duration::from_secs(8);
             let mut stream = loop {
                 match listener.accept() {
@@ -67,6 +79,11 @@ fn server(
                 },
                 key,
             ));
+            if let Some((at, release)) = &gate
+                && *at == index
+            {
+                release.recv().unwrap();
+            }
             if let Some(reply) = reply {
                 // `{"status": 404}` alone stands for a route this Tico does not have; with an
                 // `error` it is Tico refusing the request.
@@ -1309,4 +1326,168 @@ fn edits_and_removals_of_shared_lines_go_up_as_revisions_and_win_over_automatic_
         "{error}"
     );
     assert_eq!(seen.lock().unwrap().len(), 1, "nothing is filed");
+}
+
+/// Send after edits (synthetic, no bots): the edits go up before the meeting ends, the meeting is
+/// finalized, and the fence lifts. Tico files the stored text, so the edited lines are what is sent.
+#[test]
+fn send_after_edits_pushes_them_before_the_meeting_ends_and_leaves_the_fence() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Edited then sent");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    streamed(&store, id, "them", 1_200, "hi all", "S1");
+    pass(vec![Some(json!({"accepted":[1,2]}))]).0.unwrap();
+    store.state(id, "stopped").unwrap();
+    crate::live::edit_shared(&store, id, 1, Some("Hello there, friend")).unwrap();
+    crate::live::edit_shared(&store, id, 2, None).unwrap();
+    // Finished audio for the edited line: its automatic correction must not undo the edit, and the
+    // chunk's text is what makes Send finalize the meeting.
+    finished_chunk(
+        &store,
+        id,
+        0,
+        2_000,
+        vec![
+            word(1_000, 1_250, "Hello", ""),
+            word(1_300, 1_550, "there", ""),
+        ],
+    );
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture","seq":1,"revision":2,"replayed":false,"event_id":1})),
+        Some(json!({"id":"live-fixture","seq":2,"revision":2,"replayed":false,"event_id":2})),
+        Some(json!({"id":"live-fixture","state":"live"})),
+        Some(json!({"id":"live-fixture","state":"ended"})),
+        Some(json!({"meeting_id":"canonical-fixture"})),
+    ]);
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    let lines: Vec<&str> = requests.iter().map(|(line, _, _)| line.as_str()).collect();
+    assert_eq!(
+        lines,
+        [
+            "POST /api/v2/live-meetings/live-fixture/chunks/1/corrections HTTP/1.1",
+            "POST /api/v2/live-meetings/live-fixture/chunks/2/corrections HTTP/1.1",
+            "GET /api/v2/live-meetings/live-fixture HTTP/1.1",
+            "POST /api/v2/live-meetings/live-fixture/control HTTP/1.1",
+            "POST /api/v2/live-meetings/live-fixture/finalize HTTP/1.1",
+        ]
+    );
+    assert_eq!(requests[0].1["text"], "Hello there, friend");
+    assert_eq!(requests[1].1["text"], "[removed]");
+    assert!(!crate::live::is_sending(id), "Send released the meeting");
+    let stored = store.get(id).unwrap();
+    assert_eq!(store.context(id).unwrap().live_state, "ended");
+    assert_eq!(stored.deliveries[0].meeting_id, "canonical-fixture");
+}
+
+/// Edits are fenced from the last pass before a Send until it ends: a Send held at its end request
+/// refuses an edit and saves nothing, and once Send finishes the meeting is ended and refuses too.
+#[test]
+fn an_edit_while_send_is_held_at_the_end_is_refused_and_not_saved() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Held send");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    pass(vec![Some(json!({"accepted":[1]}))]).0.unwrap();
+    store.state(id, "stopped").unwrap();
+    finished_chunk(
+        &store,
+        id,
+        0,
+        2_000,
+        vec![
+            word(1_000, 1_250, "helo", ""),
+            word(1_300, 1_550, "there", ""),
+        ],
+    );
+    let (release, gate) = std::sync::mpsc::channel();
+    let (tico, seen, worker) = server_gated(
+        vec![
+            Some(json!({"id":"live-fixture","state":"live"})),
+            Some(json!({"id":"live-fixture","state":"ended"})),
+            Some(json!({"meeting_id":"canonical-fixture"})),
+        ],
+        Some((1, gate)),
+    );
+    std::thread::scope(|scope| {
+        let send = scope.spawn(|| tico.finish_live(&store, id));
+        // Wait until Tico holds the end request open.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while seen.lock().unwrap().len() < 2 {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "Send never reached its end request"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        let error = crate::live::edit_shared(&store, id, 1, Some("Late words"))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("being sent"), "{error}");
+        let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+        assert_eq!(
+            (lines[0].text.as_str(), lines[0].edited),
+            ("helo there", false)
+        );
+        release.send(()).unwrap();
+        send.join().unwrap().unwrap();
+    });
+    worker.join().unwrap();
+    assert!(!crate::live::is_sending(id));
+    let error = crate::live::edit_shared(&store, id, 1, Some("Late words"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("ended"), "{error}");
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        3,
+        "Send made its three requests and no edit went up"
+    );
+}
+
+/// A Send that fails releases the meeting: its edits are still pending and can be made again.
+#[test]
+fn a_failed_send_lifts_the_fence_so_edits_can_be_saved_again() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Failed send");
+    let id = record.id.as_str();
+    let pass = |steps: Vec<Option<Value>>| {
+        let (tico, seen, worker) = server(steps);
+        let result = tico.push_live(&store, id);
+        worker.join().unwrap();
+        let requests = seen.lock().unwrap().clone();
+        (result, requests)
+    };
+    streamed(&store, id, "me", 1_000, "helo there", "");
+    pass(vec![Some(json!({"accepted":[1]}))]).0.unwrap();
+    store.state(id, "stopped").unwrap();
+    let (tico, _seen, worker) = server(vec![
+        Some(json!({"id":"live-fixture","state":"live"})),
+        None,
+    ]);
+    assert!(tico.finish_live(&store, id).is_err());
+    worker.join().unwrap();
+    assert!(!crate::live::is_sending(id));
+    crate::live::edit_shared(&store, id, 1, Some("Hello again")).unwrap();
+    let lines = crate::live::shared_lines(&store, id, "synthetic").unwrap();
+    assert_eq!(lines[0].text, "Hello again");
 }

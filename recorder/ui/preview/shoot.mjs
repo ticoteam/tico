@@ -75,6 +75,26 @@ const scenes = {
     await page.keyboard.type('item');
     await page.keyboard.press('Enter');
   }],
+  // Drafts and removal questions belong to the meeting they were started in: an open edit does not
+  // follow the person to a second shared meeting, and a removal question does not either.
+  'shared-two': ['shared', open('m2'), transcript, async (page) => {
+    const openOther = async (id) => {
+      await page.click('[data-act="back"]');
+      await page.click(`.row[data-id="${id}"]`);
+      await page.waitForSelector('.title-input');
+      await transcript(page);
+    };
+    await page.hover('.bubble:has([data-act="edit-line"][data-seq="1"])');
+    await page.click('[data-act="edit-line"][data-seq="1"]');
+    await page.fill('textarea.line-edit', 'Draft for the first call');
+    await openOther('m3');
+    if ((await page.locator('textarea.line-edit').count()) !== 0) throw new Error('an edit draft followed to another meeting');
+    await openOther('m2');
+    await page.hover('.bubble:has([data-act="ask-remove-line"][data-seq="2"])');
+    await page.click('[data-act="ask-remove-line"][data-seq="2"]');
+    await openOther('m3');
+    if ((await page.getByText('Remove this line in Tico?').count()) !== 0) throw new Error('a removal question followed to another meeting');
+  }],
   // Sent lines of a live meeting: edit one (the draft survives a refresh), then remove another.
   shared: ['shared', open('m2'), transcript, async (page) => {
     if ((await page.locator('[data-act="edit-line"]').count()) !== 2) throw new Error('two sent lines should be editable');

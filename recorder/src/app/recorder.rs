@@ -1300,12 +1300,14 @@ impl Recorder {
         self.report(result);
         self.reload();
     }
-    /// A person's edit of a line already shared live, or its removal when `text` is None.
-    pub fn edit_shared_line(&mut self, seq: i64, text: Option<&str>) {
-        let Some(id) = self.meeting.clone() else {
-            return;
+    /// A person's edit of a line already shared live, or its removal when `text` is None. It only
+    /// changes the meeting the window has open, and only when that is the meeting named.
+    pub fn edit_shared_line(&mut self, id: &str, seq: i64, text: Option<&str>) {
+        let result = if self.meeting.as_deref() == Some(id) {
+            live::edit_shared(&self.store, id, seq, text)
+        } else {
+            Err(anyhow::anyhow!("That meeting is no longer open"))
         };
-        let result = live::edit_shared(&self.store, &id, seq, text);
         self.report(result);
         self.reload();
     }
@@ -2219,7 +2221,7 @@ impl Recorder {
                 json!({"speaker":line.speaker,"me":line.speaker == "Me","start_ms":line.start_ms,
                     "paragraphs":[line.text],"partial":false,"streamed":false,"seq":line.seq,
                     "edited":line.edited,"removed":removed,
-                    "editable":open && line.acknowledged})
+                    "editable":open && line.acknowledged && !live::is_sending(&record.id)})
             })
             .collect();
         if let Ok(turns) = stream::live_turns(&self.store, &record.id) {

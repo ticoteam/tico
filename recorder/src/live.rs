@@ -6,9 +6,9 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -376,6 +376,9 @@ impl Tico {
         }) {
             return Ok(());
         }
+        // Edits for this meeting are refused from here until Send ends or fails, so the final
+        // pass below carries every edit that will be filed.
+        let _fence = fence_send(id);
         self.sync_live(store, id)?;
         // An edit reaches Tico only while the meeting is live or paused; one still unsent would be missing from the filed transcript.
         let unsent = pending_edits(&*store.db()?, id, &self.destination.id)?;
@@ -940,6 +943,33 @@ impl<'a> Queue<'a> {
     }
 }
 
+/// Meetings whose Send is under way. Edits to them are refused, so the final pass sends every edit
+/// Tico will file.
+static SENDING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn sending_lock() -> MutexGuard<'static, BTreeSet<String>> {
+    SENDING.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Keeps a meeting fenced while Send runs; the fence lifts when Send returns, successful or not.
+struct SendFence(String);
+
+impl Drop for SendFence {
+    fn drop(&mut self) {
+        sending_lock().remove(&self.0);
+    }
+}
+
+fn fence_send(id: &str) -> SendFence {
+    sending_lock().insert(id.to_owned());
+    SendFence(id.to_owned())
+}
+
+/// Whether Send is running for this meeting, so its lines show no edit controls.
+pub fn is_sending(id: &str) -> bool {
+    sending_lock().contains(id)
+}
+
 /// What a removed line says in Tico: the line stays in place and reads this instead of its text.
 pub const REMOVED: &str = "[removed]";
 
@@ -1030,6 +1060,12 @@ fn pending_edits(db: &rusqlite::Connection, id: &str, destination: &str) -> Resu
 /// Tico accepts corrections while a meeting is live or paused, so this works during the meeting
 /// and after Stop, until Send ends the meeting there.
 pub fn edit_shared(store: &Store, id: &str, seq: i64, text: Option<&str>) -> Result<()> {
+    // Held for the whole edit, so Send's fence either sees this edit committed or refuses it.
+    let sending = sending_lock();
+    ensure!(
+        !sending.contains(id),
+        "This meeting is being sent to Tico. Edits can't be saved until it finishes."
+    );
     let context = store.context(id)?;
     ensure!(
         !context.live_id.is_empty() && !context.live_destination.is_empty(),

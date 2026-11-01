@@ -20,7 +20,7 @@
     statusKey: '',
     ui: {
       search: '', ask: '', addItem: '', peopleQuery: '', ownerQuery: '', tq: '', signin: null, legacy: '', key: '', xai: '',
-      editLine: null, editDraft: '', editInitial: '', removeLine: null,
+      editLine: null, editDraft: '', editInitial: '', removeLine: null, // { id, seq }: a draft or question belongs to one meeting
       hot: 0, mention: null,
       panel: null, opened: null, pop: null, tsearch: false, showAudio: false, confirm: null,
       form: null, saving: false, titleDraft: null, notesDraft: null, prevPage: 'library', stick: true,
@@ -626,14 +626,15 @@
   /** A line shared live: its text, or the edit form or removal question while one is open. */
   function sharedLine(b, q) {
     const seq = b.seq ?? null;
-    if (seq !== null && S.ui.editLine === seq) {
+    const current = S.transcript?.id;
+    if (seq !== null && S.ui.editLine?.id === current && S.ui.editLine?.seq === seq) {
       // The draft is typed into the box without a re-render, so the box keeps its place and focus.
       return `<textarea class="line-edit" data-model="editDraft" rows="3" aria-label="Edit line" spellcheck="false">${esc(S.ui.editInitial)}</textarea><div class="line-actions"><button class="btn small quiet" data-act="cancel-line">Cancel</button><button class="btn small" data-act="save-line" data-seq="${seq}">Save</button></div>`;
     }
     let html = b.paragraphs.map((p) => `<p>${highlight(p, q)}</p>`).join('');
     if (seq === null) return html;
     if (b.edited && !b.removed) html += `<i class="line-note">edited</i>`;
-    if (S.ui.removeLine === seq) {
+    if (S.ui.removeLine?.id === current && S.ui.removeLine?.seq === seq) {
       return html + `<div class="line-actions"><span class="faint">Remove this line in Tico?</span><button class="btn small quiet" data-act="cancel-remove-line">Cancel</button><button class="btn small danger" data-act="remove-line" data-seq="${seq}">Remove</button></div>`;
     }
     if (b.editable) {
@@ -1008,6 +1009,11 @@
     S.ui.tsearch = false;
     S.ui.tq = '';
     S.ui.ask = '';
+    // Drafts and removal questions belong to the meeting they were started in.
+    S.ui.editLine = null;
+    S.ui.editDraft = '';
+    S.ui.editInitial = '';
+    S.ui.removeLine = null;
     S.page = 'meeting';
     S.meeting = null;
     S.hash.meeting = '';
@@ -1135,9 +1141,10 @@
     finish: () => act('finish_live'),
     'edit-line': (el) => {
       const seq = Number(el.dataset.seq);
+      const id = S.transcript?.id;
       const block = (S.transcript?.blocks || []).find((b) => b.seq === seq);
-      if (!block) return;
-      S.ui.editLine = seq;
+      if (!block || !id) return;
+      S.ui.editLine = { id, seq };
       S.ui.editInitial = block.paragraphs.join(' ');
       S.ui.editDraft = S.ui.editInitial;
       S.ui.removeLine = null;
@@ -1146,15 +1153,19 @@
     },
     'cancel-line': () => { S.ui.editLine = null; render(); },
     'save-line': async (el) => {
+      const edit = S.ui.editLine;
+      if (!edit) return;
       const text = S.ui.editDraft || '';
       S.ui.editLine = null;
-      await act('edit_shared_line', { seq: Number(el.dataset.seq), text });
+      await act('edit_shared_line', { id: edit.id, seq: edit.seq, text });
     },
-    'ask-remove-line': (el) => { S.ui.removeLine = Number(el.dataset.seq); S.ui.editLine = null; render(); },
+    'ask-remove-line': (el) => { S.ui.removeLine = { id: S.transcript?.id, seq: Number(el.dataset.seq) }; S.ui.editLine = null; render(); },
     'cancel-remove-line': () => { S.ui.removeLine = null; render(); },
     'remove-line': async (el) => {
+      const removal = S.ui.removeLine;
+      if (!removal) return;
       S.ui.removeLine = null;
-      await act('remove_shared_line', { seq: Number(el.dataset.seq) });
+      await act('remove_shared_line', { id: removal.id, seq: removal.seq });
     },
     retry: (el) => { S.ui.pop = null; act('retry', { id: el.dataset.id }); },
     'audio-status': () => { S.ui.pop = null; S.ui.panel = 'transcript'; S.ui.showAudio = true; render(); },
