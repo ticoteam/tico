@@ -1494,6 +1494,7 @@ async def fast_answer(api, who, bots, text):
 
 # ------------------------------------------------------------------ the routes
 def install(app, store, auth, mutate, onboarding):
+    from . import org_rule_check
     settings = store.settings
 
     def person(request):
@@ -1554,7 +1555,46 @@ def install(app, store, auth, mutate, onboarding):
         auth.require_write(c, who, info["bot"])
         return info["bot"]
 
-    def post_message_sync(request, body, who, intent, reply, links, uploads=None):
+    def assistant_checks(who, bot, text):
+        """The org rule check of a person's message to their Assistant, outside the write, as `chat` checks one to a
+        bot: the chat is its place (`where:` rules), the bot its destination. Held, nothing is written (`assistant_say`).
+        None when no rule is in force, so nothing is read or called."""
+        if not text:
+            return None
+        with store.read() as c:
+            if not org_rule_check.in_force(c):
+                return None
+            room = find_room(c, who.actor)
+        room_id = (room or {}).get("id") or ""
+        return org_rule_check.preflight(store, app.state.judge, who, "assistant_message", text, ["bot:" + bot],
+                                        place=lambda c, author, recipients: org_rule_check.place_for(
+                                            c, author, recipients, room_id))
+
+    def assistant_say(c, who, bot, room, text, refs, rc, uploads=None, titles=(), fast=None):
+        """One person's message to their Assistant, as the route and Send anyway write it: the org rule check's verdict
+        first (held: nothing is written and the hold is the answer), then the message with its files, then the quick
+        answer when `fast` (said, intent, links) is given. `uploads` are the files' digests, sizes and names, kept
+        already; a replay carries them, so Send anyway attaches the same files."""
+        titles = list(titles or [])
+        gate = org_rule_check.apply(c, rc, text, {"text": text, "to": "bot:" + bot, "refs": refs,
+                                                  "uploads": uploads, "titles": titles})
+        if gate and gate.get("held"):
+            return org_rule_check.held_answer(c, who, gate, auth=auth)
+        message = H.say(c, who.actor, "bot:" + bot, org_rule_check.warned_text(gate, text) if gate else text,
+                        conversation_id=room["id"], kind="say", refs=refs)
+        if uploads is not None:
+            message = app.state.uploads.attach(c, who, bot, message, uploads, titles)
+        said, kind, links = fast or (None, None, [])
+        out = {"message": message, "reply": None, "fast": said is not None, "intent": kind,
+               **org_rule_check.answer(gate)}
+        if said is not None:
+            out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
+                                            {"assistant": True, "fast": True, "intent": kind, "links": links},
+                                            message["id"], None, delivered_at=H.now())
+            H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
+        return out
+
+    def post_message_sync(request, body, who, intent, reply, links, uploads=None, rc=None):
         def work(c):
             bot = chat_bot_for(c, who)
             room = chat_room(c, settings, who)
@@ -1572,20 +1612,22 @@ def install(app, store, auth, mutate, onboarding):
                 refs["page"] = {"path": page.path, "title": page.title}   # where they asked from (runner-rs prompt.rs)
             if said is not None:
                 refs["quiet"] = True
-            message = H.say(c, who.actor, "bot:" + bot, body.text, conversation_id=room["id"],
-                            kind="say", refs=refs)
-            if uploads is not None:
-                message = app.state.uploads.attach(c, who, bot, message, uploads, body.titles)
-            out = {"message": message, "reply": None, "fast": said is not None, "intent": kind}
-            if said is not None:
-                out["reply"] = H._write_message(c, "bot:" + bot, who.actor, said, room, "say",
-                                                {"assistant": True, "fast": True, "intent": kind, "links": fast_links},
-                                                message["id"], None, delivered_at=H.now())
-                H.event(c, who.actor, "assistant.fast", message["id"], {"intent": kind})
-            return out
+            return assistant_say(c, who, bot, room, body.text, refs, rc, uploads,
+                                 getattr(body, "titles", None) or [], fast=(said, kind, fast_links))
         if uploads is not None:
             return app.state.uploads.write(request, body, uploads, work)
         return mutate(request, body, work)
+
+    @org_rule_check.replayer("assistant_message")
+    def assistant_replay(c, who, hold, replay, ingest, gate=None):
+        """Send anyway's write: the person's message to their Assistant, as the person, with its files (kept already).
+        It is posted without a quick answer; its turn answers it."""
+        bot = chat_bot_for(c, who)
+        if "bot:" + bot != replay.get("to"):
+            raise Problem("changed", "Your " + settings.assistant_name + " changed since the message was held; send it "
+                          "again", 409)
+        return assistant_say(c, who, bot, chat_room(c, settings, who), replay["text"], replay.get("refs") or {},
+                             org_rule_check.decided(gate), replay.get("uploads"), replay.get("titles") or [])
 
     @app.post("/api/v2/assistant/messages")
     async def assistant_message(request: Request, body: M.AssistantMessage):
@@ -1597,10 +1639,12 @@ def install(app, store, auth, mutate, onboarding):
         info, bots = await asyncio.to_thread(read)
         if not info["available"]:
             raise Problem("assistant_off", "The " + info["name"] + " is off", 409)
-        # A question from the Updates chat is about the updates its turn is handed, which the quick answers never read.
-        intent, reply, links = (None, None, []) if body.place == "updates" else \
-            await fast_answer(Internal(request), who, bots, body.text)
-        return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links)
+        rc = await asyncio.to_thread(assistant_checks, who, info["bot"], body.text)
+        # A question from the Updates chat is about the updates its turn is handed, which the quick answers never
+        # read. A held message gets no quick answer: nothing of it is written, so nothing is answered.
+        intent, reply, links = (None, None, []) if body.place == "updates" or org_rule_check.holds(rc) \
+            else await fast_answer(Internal(request), who, bots, body.text)
+        return await asyncio.to_thread(post_message_sync, request, body, who, intent, reply, links, None, rc)
 
     # Files and pictures in a person's own Assistant chat (the Ask panel, the Assistant page), stored on the message like
     # any bot chat's, in their room's conversation. They skip the quick answers, which read words only.
@@ -1613,7 +1657,12 @@ def install(app, store, auth, mutate, onboarding):
             with store.read() as c:
                 chat_bot_for(c, who)
         body, uploads = await app.state.uploads.form(request, M.AssistantUpload, admit)
-        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads)
+        def bot_of():
+            with store.read() as c:
+                return chat_bot_for(c, who)
+        bot = await asyncio.to_thread(bot_of)
+        rc = await asyncio.to_thread(assistant_checks, who, bot, body.text)
+        return await asyncio.to_thread(post_message_sync, request, body, who, None, None, [], uploads, rc)
 
     @app.post("/api/v2/assistant/turn-on")
     def turn_on(request: Request, body: M.Empty):

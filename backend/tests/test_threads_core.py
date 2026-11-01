@@ -191,9 +191,10 @@ def test_a_held_post_writes_no_message_and_no_delivery(world, monkeypatch):
 
     def apply(c, verdict, payload=None, replay=None, **_):
         seen["payload"], seen["replay"] = payload, replay
-        return {"held": {"id": "hold-1", "rule": "No prices"}}
+        return {"held": {"id": "hold-1", "rule": "No prices"}, "hold_id": "hold-1"}
 
     monkeypatch.setattr(org_rule_check, "apply", apply)
+    monkeypatch.setattr(org_rule_check, "held_answer", lambda c, who, gate, auth=None: {"held": gate["held"]})
     with store.transaction() as c:
         before = (c.execute("SELECT COUNT(*) FROM messages").fetchone()[0],
                   c.execute("SELECT COUNT(*) FROM message_deliveries").fetchone()[0])
@@ -215,7 +216,9 @@ def test_a_held_first_message_makes_no_thread_sub_thread_or_dm(world, monkeypatc
         parent = threads.post(c, owner, tid, "Start here")
     seen = []
     verdict = {"held": {"id": "hold-1", "rule": "No prices"}}
-    monkeypatch.setattr(org_rule_check, "apply", lambda c, v, p=None, r=None, **_: seen.append(r) or verdict)
+    monkeypatch.setattr(org_rule_check, "apply",
+                        lambda c, v, p=None, r=None, **_: seen.append(r) or {**verdict, "hold_id": "hold-1"})
+    monkeypatch.setattr(org_rule_check, "held_answer", lambda c, who, gate, auth=None: {"held": gate["held"]})
 
     def rows(c):
         return (c.execute("SELECT COUNT(*) FROM conversations").fetchone()[0],

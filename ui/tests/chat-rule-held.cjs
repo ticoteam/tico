@@ -10,7 +10,9 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
 const TEXT = 'Our favorite color is gold.';
 const HOLD = {id: 'h-own', operation: 'threads', author: 'human:ana', author_name: 'Ana', state: 'held', outcome: 'blocked',
   rules: [{id: 'r-color', kind: 'internal', text: 'Acme does not name a favorite color.', version: 1, status: 'active', if_broken: 'warn'}],
-  text: TEXT, to: ['Sales'], reviewer: null, task_id: null, created: new Date().toISOString(), can_withdraw: true, can_send: false};
+  text: TEXT, to: ['Sales'], reviewer: null, reviewer_name: null, task_id: null, decided_at: null, decided_by: null,
+  reason: 'Your chat message was held: it broke the rule \'Acme does not name a favorite color.\'.',
+  created: new Date().toISOString(), can_withdraw: true, can_send: false};
 const me = {member: true, following: true, notify: 'live', last_read_seq: 0, unread: 0, activity: false, can_post: true, can_manage: false};
 const DM = {id: 't-dm', title: '', audience: 'personal', root_id: 't-dm', last_seq: 0, last_unread_seq: 0, me, members: []};
 

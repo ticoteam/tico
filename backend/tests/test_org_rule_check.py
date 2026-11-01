@@ -93,7 +93,7 @@ def test_a_short_break_is_held_with_a_200_and_never_a_refusal(ruled):
     api, judge = ruled
     color_rule(api)
     got = say(api, "My favorite color is blue")
-    assert got["held"]["outcome"] == "blocked" and "hub rules appeal" in got["held"]["text"]
+    assert got["held"]["outcome"] == "blocked" and "hub rules appeal" in got["held"]["reason"]
     assert bodies(api, "favorite color") == []
     assert len(judge.calls) == 1 and judge.locked == [False]
     # A hold is an answer, not a refusal: the bot is not quarantined and keeps working.

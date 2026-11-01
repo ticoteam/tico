@@ -1543,6 +1543,13 @@ def _actor_of(principal):
     return (v.actor if v else str(principal or "")), v
 
 
+def _held_answer(c, v, gate):
+    """A held post's answer as its sender reads it: the authorized hold view (text, can_withdraw, the nonce for a
+    reviewer). A caller with no viewer gets the check's own view."""
+    from . import org_rule_check
+    return org_rule_check.held_answer(c, v.who, gate, auth=v.auth) if v else org_rule_check.answer(gate)
+
+
 def _post_making(c, principal, thread_id, body, start, parent_message_id, checked, args):
     """The part of a post that makes its thread: everything is checked, then the org-rule verdict is applied, and only
     a message that goes makes the thread (or the sub-thread). Returns {"held": answer} or the thread to post in."""
@@ -1582,13 +1589,13 @@ def _post_making(c, principal, thread_id, body, start, parent_message_id, checke
                   "refs": args.get("refs") or None, "parent_message_id": parent_message_id,
                   "to_actor": args.get("to_actor"), "via": args.get("via"), "origin": args.get("origin"),
                   "attachments": args.get("attachments"), "start": start}
-        gate = org_rule_check.apply(c, checked, text, replay)
+        gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
                           retryable=True)
         if gate and gate.get("held"):
             _emit_message_held(c, thread_row(c, thread_id) if thread_id else None, actor, gate)
-            return {"held": org_rule_check.answer(gate)}
+            return {"held": _held_answer(c, v, gate)}
         if gate and gate.get("warn"):
             text = org_rule_check.warned_text(gate, text)
     if plan is not None:
@@ -1708,13 +1715,13 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         replay = {"thread_id": thread_id, "body": text, "kind": kind, "refs": given_refs or None,
                   "parent_message_id": parent_message_id, "to_actor": to_actor, "via": via, "origin": origin,
                   "attachments": attachments, "in_reply_to": in_reply_to}
-        gate = org_rule_check.apply(c, checked, text, replay)
+        gate = org_rule_check.apply(c, checked, text, replay, audience_now=org_rule_check.thread_people(c, replay))
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
                           retryable=True)
         if gate and gate.get("held"):
             _emit_message_held(c, thread, actor, gate)
-            return org_rule_check.answer(gate)
+            return _held_answer(c, v, gate)
         if gate and gate.get("warn"):
             text = org_rule_check.warned_text(gate, text)
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
