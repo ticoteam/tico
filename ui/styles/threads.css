@@ -192,3 +192,4 @@ body.in-call #main.chat-layout{padding-bottom:72px}
   .call-lbl{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 }
 .th-followup .th-body{color:var(--muted);font-size:var(--t-sm)}
+.dash-home{margin-top:var(--s4)}

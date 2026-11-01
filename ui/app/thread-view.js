@@ -88,6 +88,8 @@ async function thvLoad(view) {
     if (view.gone) return;
     view.state = e?.status === 404 ? 'gone' : 'error';
     view.error = e?.message || '';
+    // A Home the viewer may not read leaves no box behind on a person's or a team's page.
+    if (view.state === 'gone' && view.opts.hideGone) { (view.opts.hideGone === true ? view.host : view.opts.hideGone).hidden = true; return; }
     thvDraw(view);
   }
 }
