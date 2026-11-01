@@ -12,6 +12,7 @@ from datetime import timedelta
 from decimal import Decimal
 from typing import Any, Protocol, cast
 
+from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
 from . import banking, documents, handlers, posting
@@ -368,6 +369,8 @@ def _party(c: sqlite3.Connection, ctx: Ctx, cid: str, p: M.Party, at: str) -> No
 RECORD_TABLES = ("items", "locations", "projects")
 # The tags a provider record sets on its lines: where, which class, which job
 LOCATED = ("location", "class", "project")
+# The books table each of those tags names a record in
+DIMENSION_TABLES = {"location": "locations", "class": "fin_dimensions", "project": "projects"}
 
 
 def _local_record(c: sqlite3.Connection, cid: str, table: str, ext: M.Ext) -> str:
@@ -388,13 +391,28 @@ def _record_write(c: sqlite3.Connection, cid: str, table: str, ext: M.Ext, field
     return local
 
 
+# The kinds the books hold an item as when it is plain: no quantity is tracked.
+PLAIN_ITEM_KINDS = ("non_inventory", "service")
+
+
+def _item_kind(c: sqlite3.Connection, cid: str, i: M.Item) -> str:
+    """The kind an item keeps here. A Tico-only kind has no type in the books, so the books hold the item as a plain
+    one, and the kind stays in Tico while they do."""
+    local = _local_record(c, cid, "items", i.ext)
+    row = RR.get(c, "items", local) if local else None
+    if row is not None and str(row["kind"]) in RC.TICO_ONLY_ITEM_KINDS and i.kind in PLAIN_ITEM_KINDS:
+        return str(row["kind"])
+    return i.kind
+
+
 def _item(c: sqlite3.Connection, ctx: Ctx, cid: str, i: M.Item, at: str) -> None:
     """A provider item as a product or service, with the accounts it sells and buys on. Nothing is posted by an item, so
     a change to it is a rename or a price or account change, never a reversal."""
     if M.decide(_have(SX.ref(c, cid, "items", i.ext.key)), i.ext) in (M.SAME, M.OLDER, M.GONE):
         return
     fields: dict[str, object] = {
-        "name": i.name, "sku": i.sku, "kind": i.kind, "price": i.price, "currency": ctx.book.base_currency,
+        "name": i.name, "sku": i.sku, "kind": _item_kind(c, cid, i), "price": i.price,
+        "currency": ctx.book.base_currency,
         "income_account_id": _account_ref(c, cid, i.income), "expense_account_id": _account_ref(c, cid, i.expense),
         "asset_account_id": _account_ref(c, cid, i.asset), "archived_at": None if i.active else at}
     _record_write(c, cid, "items", i.ext, fields, at)
@@ -601,12 +619,21 @@ def _provider_marks(c: sqlite3.Connection, cid: str, lines: Sequence[M.Tags], jo
     return out
 
 
-def _with_dims(marks: Sequence[Mapping[str, str]], dims: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
+def _with_dims(c: sqlite3.Connection, cid: str, marks: Sequence[Mapping[str, str]],
+               dims: Sequence[Mapping[str, str]]) -> list[dict[str, str]]:
     """Each line's tags with the provider's location, class and job in place of the ones it carried: the provider's
-    record
-    is what the books take, so a line the provider no longer tags with a location loses it. The other tags carry on."""
-    return [{**{k: v for k, v in mark.items() if k not in LOCATED}, **dim}
-            for mark, dim in zip(marks, dims, strict=True)]
+    record is what the books take, so a line the provider no longer tags with a location loses it. A tag on a record
+    the books do not hold (a customer's site kept in Tico) is not the provider's to take away: the line keeps it while
+    the provider names nothing for that dimension. The other tags carry on."""
+    out: list[dict[str, str]] = []
+    for mark, dim in zip(marks, dims, strict=True):
+        kept = {k: v for k, v in mark.items() if k not in LOCATED}
+        for name, table in DIMENSION_TABLES.items():
+            local = str(mark.get(name) or "")
+            if name not in dim and local and _kept_local(c, table, local, _key(c, cid, table, local)):
+                kept[name] = local
+        out.append({**kept, **dim})
+    return out
 
 
 def _line_items(d: M.Document) -> list[str]:
@@ -625,8 +652,8 @@ def _entry(c: sqlite3.Connection, cid: str, ctx: Ctx, j: M.Journal, day: str, ol
     class
     and job the line carried."""
     accounts = [_account_of(c, cid, ctx, x.account) for x in j.lines]
-    tags = _with_dims(_carried(old, [(account, x.amount, x.key) for account, x in zip(accounts, j.lines, strict=True)]),
-                      _provider_marks(c, cid, [x.tags for x in j.lines]))
+    carried = _carried(old, [(account, x.amount, x.key) for account, x in zip(accounts, j.lines, strict=True)])
+    tags = _with_dims(c, cid, carried, _provider_marks(c, cid, [x.tags for x in j.lines]))
     lines_out: list[L.Line] = []
     for account, x, mark in zip(accounts, j.lines, tags, strict=True):
         contact, job = _party_of(c, cid, x.party) if x.party else ("", "")
@@ -939,7 +966,7 @@ def _write_document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, ve
         local = SAP.insert(c, table, _doc_row(ctx, kind, contact, d, total, _doc_state(kind, total, 0, 0), at))
         line_tags = [dict(mark) for mark in tags] or [{} for _ in rows]
     if dims is not None:
-        line_tags = _with_dims(line_tags, dims)
+        line_tags = _with_dims(c, cid, line_tags, dims)
     SAP.replace_lines(c, kind, local, _line_rows(rows, at, line_tags, keys, items, po_lines))
     new_entry = _book(c, ctx, cid, d.ext, verdict, old_entry, d.day,
                       lambda when: _doc_entry(ctx, control_kind=kind, sign=sign, source=kind, source_id=local,
@@ -1004,7 +1031,7 @@ def _credit(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str) -
     rows = _doc_lines(c, ctx, cid, d)
     keys = _line_keys(d)
     old = str(row["local_id"]) if verdict == M.REPLACE and row is not None and row["local_id"] else ""
-    carry = _with_dims(_carried(_entry_tags(c, old),
+    carry = _with_dims(c, cid, _carried(_entry_tags(c, old),
                                 [(account, sign * amount, key) for (account, amount, _), key in zip(rows, keys,
                                                                                                     strict=True)]),
                        _provider_marks(c, cid, _line_tags(d), job))
@@ -1525,6 +1552,9 @@ RECORD_COLUMNS = {
              "asset_account_id", "archived_at"),
     "location": ("name", "kind", "parent_id", "address", "archived_at"),
     "project": ("name", "customer_id", "status", "archived_at")}
+# The fields a record keeps as Tico set them: the books hold no value for them, or hold a plain type that a Tico-only
+# item kind stands for. A recovered write applies them to the record it is recorded against.
+RECORD_LOCAL_FIELDS = {"item": ("kind", "unit"), "location": ("kind", "parent_id", "address"), "project": ()}
 RECORD_OPS = ("item.create", "item.update", "location.create", "location.update", "project.create")
 ITEM_ACCOUNTS = (("income_account_id", "income"), ("expense_account_id", "expense"), ("asset_account_id", "asset"))
 
@@ -1581,20 +1611,25 @@ def _confirm_record(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str
         row = SX.ref(c, cid, table, ext.key)
         if row is not None and str(row["status"]) == "active":
             if str(row["local_id"]) != local_id:
-                _adopt_record(c, cid, table, str(row["local_id"]), local_id, now)
+                kept = {k: local[k] for k in RECORD_LOCAL_FIELDS[kind] if k in local}
+                _adopt_record(c, cid, table, str(row["local_id"]), local_id, now, kept)
             return
         RS.insert(c, table, {**fields, "id": local_id, "created_at": now, "created_by_id": SYSTEM,
                              "updated_at": now, "updated_by_id": SYSTEM})
     _bind(c, cid, table, local_id, ext, now)
 
 
-def _adopt_record(c: sqlite3.Connection, cid: str, table: str, held_id: str, local_id: str, now: str) -> None:
+def _adopt_record(c: sqlite3.Connection, cid: str, table: str, held_id: str, local_id: str, now: str,
+                  kept: Mapping[str, object]) -> None:
     """The provider's record came in under another local id first, from the change feed, before this write was
     confirmed. The row keeps its id and its lines, tags and queued writes keep naming it; the id the write was made
-    with becomes an alias of the row, so the id resolves to it on every read and write."""
+    with becomes an alias of the row, so the id resolves to it on every read and write. The row takes the fields the
+    write was made with that the books do not hold (`kept`), which the import set to its defaults."""
     if RR.get(c, table, local_id) is None:
         RS.alias(c, table, local_id, held_id, now)
         SK.outbox_repoint(c, local_id, held_id)
+        if kept:
+            RS.update(c, table, held_id, {**kept, "updated_at": now, "updated_by_id": SYSTEM})
 
 
 def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
@@ -1971,16 +2006,17 @@ def outbox(store: Any, books: Books, cid: str, now: str) -> list[str]:
             continue
         local, provider = prepared
         sent, found = _send(books, o, provider)
-        # A record the provider changed after the write is not confirmed as sent. A provider that counts revisions
-        # leaves the write unconfirmed; one that does not binds it at its oldest revision. Either way the change feed
-        # is read again from the start, to take the provider's record in as it holds it.
+        # A record the provider changed after the write is bound at the oldest revision, so the change feed, read again
+        # from the start, replaces it with the provider's record as it holds it. A bill or invoice is confirmed at once:
+        # its order lines keep the room its write took, which must not wait for the feed.
         with store.transaction() as c:
             op, initial = str(o["op"]), _initial_revision(c, cid)
             revised = found and sent.ok and \
                 _revised(c, cid, op, local, M.Ext(sent.kind, sent.external_id, sent.revision), sent.record)
-            if revised and not initial:
-                sent = Sent(ok=True, kind=sent.kind, external_id=sent.external_id, revision="")
-            _record(c, cid, o, local, provider, sent, now, confirm=not revised or not initial)
+            document = op in ("bill.create", "invoice.create")
+            if revised and (not initial or document):
+                sent = Sent(ok=True, kind=sent.kind, external_id=sent.external_id, revision=initial, lines=sent.lines)
+            _record(c, cid, o, local, provider, sent, now, confirm=not revised or not initial or document)
             if revised:
                 SX.set_mirror_state(c, cid, {"cursors": {}, "changed_at": None, "exact": []})
         if not sent.ok:

@@ -117,12 +117,6 @@ def _mirrored(ctx: Ctx) -> bool:
     return ctx.book.mode == "mirror"
 
 
-def _books_type(kind: object) -> None:
-    """A mirrored book takes an item only as one of the provider's item types; Tico's own kinds have none."""
-    if kind in RC.TICO_ONLY_ITEM_KINDS:
-        raise invalid(f"a {str(kind).replace('_', ' ')} item has no type in the books")
-
-
 def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
             key: str, *, books: bool) -> Result:
     """A new record: written here, or queued for the provider under the id it will have once confirmed. A record the
@@ -150,8 +144,6 @@ def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _item_fields(ctx, p, create=True))
     if _mirrored(ctx) and f["price"] is None:
         raise invalid("an item the provider holds needs a price")
-    if _mirrored(ctx):
-        _books_type(f["kind"])
     item_id = SL.new_id()
 
     def apply(aid: str) -> Result:
@@ -168,8 +160,6 @@ def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     f = _shape(lambda: _item_fields(ctx, p, create=False))
     if _mirrored(ctx) and "price" in f and f["price"] is None and old["price"] is not None:
         raise invalid("an item the provider holds keeps a price: set a new one")
-    if _mirrored(ctx) and "kind" in f:
-        _books_type(f["kind"])
     gate = K.default_gate(ctx.org, who, "item_update")
     if "price" in f and f["price"] != old["price"] and who != ctx.org.owner:
         gate = K.Gate("needs_approval", "finance_admin", "default:item-price")

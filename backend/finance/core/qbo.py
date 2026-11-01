@@ -721,8 +721,10 @@ def item_body(name: str, account: str) -> dict[str, Any]:
     return {"Name": name, "Type": "NonInventory", "IncomeAccountRef": {"value": account}}
 
 
+# Tico's raw material and assembly labels have no books type: the books take them as a plain non-inventory item, and the
+# label stays in Tico.
 ITEM_TYPES = {"service": "Service", "inventory": "Inventory", "non_inventory": "NonInventory", "bundle": "Group",
-              "category": "Category"}
+              "category": "Category", "raw_material": "NonInventory", "assembly": "NonInventory"}
 
 
 def _head(body: Mapping[str, Any], kind: str) -> dict[str, Any]:

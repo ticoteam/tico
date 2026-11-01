@@ -11,6 +11,7 @@ from backend.finance import mirror
 from backend.finance import qbo as QC
 from backend.finance.core import mirror as M
 from backend.finance.core import qbo as Q
+from backend.finance.core import xero as X
 from backend.finance.store import banking as SK
 from backend.finance.store import mirror as SX
 from backend.records import reads as RR
@@ -658,6 +659,41 @@ def test_a_new_bill_cannot_take_order_line_room_an_unknown_write_may_have_billed
         assert second.code == "invalid" and "40.00" in str(second.reason), second
 
 
+def test_a_bill_found_at_a_newer_revision_on_retry_takes_its_order_line_room_when_it_is_recorded(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, 6_000, "B-95"),
+                      key="bill.create:found-1", by=OWNER, at=AT)
+    # The first call was cut off after the provider took the bill, and the bill was changed there before the retry.
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER2)
+    fake.found["bill.create:found-1"] = mirror.Sent(True, kind="Bill", external_id="79", revision="2", lines=("L1",))
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert [op for op, _, _ in fake.sent if op == "bill.create"] == ["bill.create"]
+    with books.read() as c:
+        assert c.execute("SELECT status FROM fin_outbox WHERE idempotency_key='bill.create:found-1'").fetchone()[0] == \
+            "sent"
+        assert c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
+                         "WHERE b.number='B-95' AND l.po_line_id=?", (line,)).fetchone()[0] == 6_000
+    with books.transaction() as c:
+        second = act(c, OWNER, "bill_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                               "bill_date": "2026-10-05", "number": "B-96",
+                                               "lines": [{"po_line_id": line, "amount": 6_000}]})
+        assert second.code == "invalid" and "40.00" in str(second.reason), second
+    # The change feed then reads the newer record in: it replaces the bill and keeps the order line it was made against.
+    fake.changes = [M.Document(M.Ext("Bill", "79", "2"), party="Vendor:9", number="B-95", day="2026-10-05", due="",
+                               total=6_000, lines=(M.EntryLine("Account:2", 6_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        assert c.execute("SELECT COALESCE(SUM(amount), 0) FROM fin_bill_lines WHERE po_line_id=?",
+                         (line,)).fetchone()[0] == 6_000
+
+
 def test_a_bill_the_provider_bills_for_less_gives_its_order_line_the_difference_back_past_a_full_budget(books):
     fake = FakeBooks()
     _records(fake)
@@ -686,6 +722,64 @@ def test_a_bill_the_provider_bills_for_less_gives_its_order_line_the_difference_
                          "source_id LIKE ?", (f"{po}:%",)).fetchone()[0] == 8_000
         assert c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
                          "WHERE b.number='B-88'").fetchone()[0] == 2_000
+
+
+def test_a_line_tagged_to_a_site_kept_in_tico_keeps_the_site_when_the_provider_revises_the_bill(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "location_create", {"name": "Acme Site", "kind": "customer_site"})
+        assert made.status == "committed", made
+        site = str(made.result["location_id"])
+        billed = act(c, OWNER, "bill_create", {"vendor_id": _local(c, "Vendor:9", "fin_contacts"),
+                                               "bill_date": "2026-10-05", "number": "B-90",
+                                               "lines": [{"account_id": _local(c, "Account:2", "fin_accounts"),
+                                                          "amount": 4_000, "tags": {"location": site}}]})
+        assert billed.status == "committed", billed
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="90", revision="0", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    # The provider's memo edit comes in as a newer revision. It names no location, and the site is not in the books.
+    fake.changes = [M.Document(M.Ext("Bill", "90", "1"), party="Vendor:9", number="B-90", day="2026-10-05", due="",
+                               total=4_000, memo="edited in the provider",
+                               lines=(M.EntryLine("Account:2", 4_000, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        bill = _local(c, "Bill:90", "fin_bills")
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Bill:90'").fetchone()[0] == "1"
+        assert [json.loads(r[0]) for r in c.execute("SELECT tags_json FROM fin_bill_lines WHERE bill_id=?",
+                                                    (bill,))] == [{"location": site}]
+        assert c.execute("SELECT SUM(l.amount) FROM fin_lines l JOIN fin_line_tags t ON t.line_id=l.id "
+                         "WHERE t.kind='location' AND t.value=?", (site,)).fetchone()[0] == 4_000
+
+
+def test_a_location_made_here_keeps_its_kind_and_address_when_the_sync_imported_it_first(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "location_create", {"name": "Acme Depot", "kind": "warehouse",
+                                                 "address": {"city": "Denver"}})
+        assert made.status == "committed", made
+        site = str(made.result["location_id"])
+        key = str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='location.create'").fetchone()[0])
+    # The call was cut off after the provider made the department.
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER2)
+    # The change feed brings the department in first, with the books' defaults: no kind and no address.
+    fake.changes = [M.Location(M.Ext("Department", "3", "0"), name="Acme Depot")]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    fake.found[key] = mirror.Sent(True, kind="Department", external_id="3", revision="0")
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        row = c.execute("SELECT kind, address FROM locations WHERE id=?",
+                        (_local(c, "Department:3", "locations"),)).fetchone()
+        assert (row[0], json.loads(row[1])) == ("warehouse", {"city": "Denver"})
+        assert RS.resolve(c, "locations", site) == _local(c, "Department:3", "locations")
 
 
 def test_an_import_after_a_local_kind_change_keeps_the_location_kind(books):
@@ -733,7 +827,7 @@ def test_a_customer_site_made_in_a_mirrored_book_is_sent_nowhere_and_a_bill_line
     assert "DepartmentRef" not in repr(Q.bill_body(body))
 
 
-def test_an_item_kind_the_books_have_no_type_for_is_refused_in_a_mirrored_book(books):
+def test_a_raw_material_item_goes_to_the_books_as_a_plain_item_and_keeps_its_label(books):
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -741,7 +835,57 @@ def test_an_item_kind_the_books_have_no_type_for_is_refused_in_a_mirrored_book(b
     assert _drain(books, fake, cid) == []
     with books.transaction() as c:
         made = act(c, OWNER, "item_create", {"name": "Steel rod", "kind": "raw_material", "price": 500})
-        assert made.code == "invalid" and "no type in the books" in str(made.reason), made
+        assert made.status == "committed", made
+    fake.replies = [mirror.Sent(True, kind="Item", external_id="6", revision="0")]
+    assert _drain(books, fake, cid) == []
+    body = _sent(fake, "item.create")
+    assert Q.item_write(body)["Type"] == "NonInventory"
+    assert X.item_body(body)["Name"] == "Steel rod"
+    with books.read() as c:
+        row = c.execute("SELECT name, kind FROM items WHERE id=?", (_local(c, "Item:6", "items"),)).fetchone()
+        assert tuple(row) == ("Steel rod", "raw_material")
+
+
+def test_a_raw_material_item_keeps_its_label_when_the_books_later_hold_it_as_a_plain_item(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "item_create", {"name": "Steel rod", "kind": "raw_material", "price": 500})
+        assert made.status == "committed", made
+    fake.replies = [mirror.Sent(True, kind="Item", external_id="6", revision="0")]
+    assert _drain(books, fake, cid) == []
+    # The books hold a raw material as a non-inventory item, and a later provider revision renames it there.
+    fake.changes = [M.Item(M.Ext("Item", "6", "1"), "Steel rod, cut", kind="non_inventory", price=500)]
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        row = c.execute("SELECT name, kind FROM items WHERE id=?", (_local(c, "Item:6", "items"),)).fetchone()
+        assert tuple(row) == ("Steel rod, cut", "raw_material")
+
+
+def test_a_raw_material_item_keeps_its_label_when_the_sync_imports_it_before_the_write_is_recovered(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "item_create", {"name": "Steel rod", "kind": "raw_material", "price": 500})
+        assert made.status == "committed", made
+        key = str(c.execute("SELECT idempotency_key FROM fin_outbox WHERE op='item.create'").fetchone()[0])
+    # The call was cut off after the provider made the item.
+    fake.replies = [mirror.Sent(False, error="QuickBooks did not answer")]
+    _drain(books, fake, cid, now=LATER2)
+    # The change feed brings the item in first, as the books hold a raw material: a plain non-inventory item.
+    fake.changes = [M.Item(M.Ext("Item", "6", "0"), "Steel rod", kind="non_inventory", price=500)]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    fake.found[key] = mirror.Sent(True, kind="Item", external_id="6", revision="0")
+    assert _drain(books, fake, cid, now=LATER3) == []
+    with books.read() as c:
+        row = c.execute("SELECT name, kind FROM items WHERE id=?", (_local(c, "Item:6", "items"),)).fetchone()
+        assert tuple(row) == ("Steel rod", "raw_material")
 
 
 def test_a_bill_the_feed_brought_in_before_its_write_was_confirmed_takes_the_order_line_it_was_sent_with(books):

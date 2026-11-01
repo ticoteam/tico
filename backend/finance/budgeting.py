@@ -477,10 +477,16 @@ def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
 def would_place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int,
                 target: str = "") -> B.Decision | None:
     """What a hold of `amount` would meet, with nothing written: None when no budget covers the spend."""
-    if not target and isinstance(budget_scope, Mapping) and budget_scope.get("teammate"):
-        target = f"teammate:{budget_scope['teammate']}"
+    target = target or scope_target(budget_scope)
     b = _scope(ctx, budget_scope)
     return None if b is None else decide(ctx, b.id, amount, target)
+
+
+def scope_target(budget_scope: str | Mapping[str, object] | None) -> str:
+    """The hold target a spend takes from its budget scope: the teammate the scope names, if it names one."""
+    if isinstance(budget_scope, Mapping) and budget_scope.get("teammate"):
+        return f"teammate:{budget_scope['teammate']}"
+    return ""
 
 
 def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, currency: str, source: str,
@@ -498,8 +504,7 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
         raise invalid(f"a hold source is {'|'.join(HOLD_SOURCES)}")
     if target and target.partition(":")[0] not in TARGET_KINDS:
         raise invalid(f"a hold target is <{'|'.join(TARGET_KINDS)}>:<id>")
-    if not target and isinstance(budget_scope, Mapping) and budget_scope.get("teammate"):
-        target = f"teammate:{budget_scope['teammate']}"
+    target = target or scope_target(budget_scope)
     if source_id:
         prior = SB.hold_for_source(ctx.c, source, source_id)
         if prior is not None:
@@ -580,13 +585,14 @@ def held_amount(ctx: Ctx, source: str, source_id: str) -> int:
 
 def transfer(ctx: Ctx, *, amount: int, currency: str, source: str, source_id: str, expires_at: str | None,
              by: str = SYSTEM, budget_scope: str | Mapping[str, object] | None = None,
-             moved_from: tuple[str, str] | None = None) -> None:
+             moved_from: tuple[str, str] | None = None, target: str | None = None) -> None:
     """An amount of commitment going back to the hold it was taken from: a bill voided or billed for less gives its
     order line its room back. With `moved_from`, the amount comes off that hold (it is released when it empties) and
     goes onto the hold for `source` and `source_id`, on the same budget. Without it, the amount goes onto that hold
     with nothing taken from another, since the spend it stood for has been reversed in the books. Neither is
     fit-checked: the room was the commitment's own already, and a refusal on the way back could leave it with
-    no hold."""
+    no hold. The hold keeps the target of the hold the amount came from, or the teammate `budget_scope` names
+    when there is none, unless `target` says otherwise."""
     money.minor(amount)
     if amount <= 0:
         return
@@ -597,12 +603,14 @@ def transfer(ctx: Ctx, *, amount: int, currency: str, source: str, source_id: st
         src = SB.hold_for_source(ctx.c, *moved_from)
         if src is None or int(src["amount"]) < amount:
             raise FinanceError(CONFLICT, "the hold this moves from does not hold that much")
-        bid, target = str(src["budget_id"]), str(src["target"] or "")
+        bid = str(src["budget_id"])
+        target = str(src["target"] or "") if target is None else target
     else:
         b = None if budget_scope is None else _scope(ctx, budget_scope)
         if b is None:
             return
-        bid, target = b.id, ""
+        bid = b.id
+        target = scope_target(budget_scope) if target is None else target
     if src is not None:
         left = int(src["amount"]) - amount
         if left:

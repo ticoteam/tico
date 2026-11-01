@@ -113,7 +113,8 @@ def sync_orders(ctx: Ctx, who: str, po_ids: Sequence[str]) -> None:
 
 def _restore(ctx: Ctx, who: str, line: Any, amount: int) -> None:
     """An order line gets back `amount` of room: its hold grows by it with nothing taken from another hold, since the
-    spend it stood for is already reversed in the books. A line that posts to no expense account holds nothing."""
+    spend it stood for is already reversed in the books. A line that posts to no expense account holds nothing. The
+    hold is for the teammate the line's tags name, the one its hold was made for."""
     account = ctx.accounts.get(str(line["account_id"] or ""))
     if account is None or account.type != "expense":
         return
@@ -143,9 +144,12 @@ def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:
             continue
         held = budgeting.held_amount(ctx, "bill", f"{bill_id}:{n}")
         if held:
+            # The line keeps the teammate its hold was made for, which the bill's own tags may not name.
+            tags = cast(dict[str, str], SK.loads(line["tags_json"]))
             budgeting.transfer(ctx, amount=held, currency=ctx.book.base_currency, source="purchase_order",
                                source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who,
-                               moved_from=("bill", f"{bill_id}:{n}"))
+                               moved_from=("bill", f"{bill_id}:{n}"),
+                               target=budgeting.scope_target(DOC.scope_tags(tags)))
         elif posted:
             _restore(ctx, who, line, int(row["amount"]))
 

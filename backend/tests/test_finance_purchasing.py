@@ -5,6 +5,7 @@ import pytest
 
 from backend import hubdb as H
 from backend.finance import actions as FA
+from backend.finance import budgeting as BG
 from backend.finance import payments as FP
 from backend.finance import documents as DOC
 from backend.finance import reads as FR
@@ -568,6 +569,36 @@ def test_voiding_a_draft_bill_gives_its_order_line_its_hold_back_even_once_the_b
         # returns.
         assert _status(c, po) == ("approved", "")
         assert [amount for _, amount in _holds(c, po)] == [10_000]
+
+
+def test_a_posted_bill_voided_gives_its_order_line_back_to_the_teammate_its_hold_was_made_for(books):
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": account(c, "6100"), "amount": 20_000,
+                                               "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+        budget = str(c.execute("SELECT id FROM fin_budgets WHERE name='Software'").fetchone()[0])
+        assert act(c, OWNER, "allocation_set", {"budget_id": budget, "target_kind": "teammate", "target_id": EVE,
+                                                "amount": 10_000}).status == "committed"
+        vendor = _vendor(c)
+        po = _order(c, vendor, [_line(c, 10_000, tags={"teammate": EVE})])
+        bill = _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 10_000}])
+        assert bill.status == "committed", bill
+        bill_id = str(bill.result["bill_id"])
+        assert act(c, OWNER, "bill_approve", {"bill_id": bill_id}).status == "committed"
+        assert act(c, OWNER, "bill_void", {"bill_id": bill_id}).status == "committed"
+        # The line's room comes back on the hold it was made for, not an untargeted one beside Eve's allocation.
+        held = [tuple(r) for r in c.execute("SELECT amount, target FROM fin_holds WHERE source='purchase_order' "
+                                            "AND status='held' AND source_id LIKE ?", (f"{po}:%",)).fetchall()]
+        assert held == [(10_000, f"teammate:{EVE}")]
+        state = BG.budget_state(c, budget)
+        assert (state.actual, state.held, state.remaining) == (0, 10_000, 10_000)
+        # A bill still in draft takes the line's hold over, and voiding it gives the hold back to the same teammate.
+        draft = _bill(c, vendor, [{"po_line_id": _po_lines(c, po)[0], "amount": 10_000}])
+        assert draft.status == "committed", draft
+        assert act(c, OWNER, "bill_void", {"bill_id": str(draft.result["bill_id"])}).status == "committed"
+        assert [tuple(r) for r in c.execute("SELECT amount, target FROM fin_holds WHERE source='purchase_order' "
+                                            "AND status='held' AND source_id LIKE ?", (f"{po}:%",)).fetchall()] \
+            == [(10_000, f"teammate:{EVE}")]
 
 
 def test_a_bill_line_naming_an_item_by_an_alias_stores_the_item_and_posts_its_account(books):
