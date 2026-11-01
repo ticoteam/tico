@@ -71,7 +71,8 @@ def test_a_persons_comment_goes_first_once_the_bots_one_turn_ends(api):
     post(api, f"attempts/{running['id']}/started", {"thread_id": "long"}, machine["token"])
     with api.app.state.store.transaction() as c:
         for i in range(3):
-            H.task_create(c, "human:ana", f"Other {i}", "Do it.", "bot:ops", lint=False)
+            # Top of the queue: they outrank the waiting task, so only a person's message can put it first.
+            H.task_create(c, "human:ana", f"Other {i}", "Do it.", "bot:ops", top=True, lint=False)
     sent = post(api, f"tasks/{tid}/comments", {"text": "Please cut the release now."})
     assert claim(api, machine) is None, "one turn of the bot at a time on this runner"
     finish(api, machine, running)
