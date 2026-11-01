@@ -5,7 +5,8 @@ Tico reads both for one release (the new name wins), and a template refresh rena
   bot.yaml     <- employee.yaml            the bot's manifest
   routines:    <- schedules:               inside the manifest
   tools:       <- access:                  inside the manifest (the bot's declared tools)
-  bot-<slug>   <- emp-<slug>               the bot's repository folder on a computer
+  bot-<slug>   <- emp-<slug>               the bot's repository folder on a computer (the server records it:
+                                           folder_dir, since a rename keeps it)
   groups.yaml  <- departments.yaml         the template catalog's groups
   group:       <- department:              a catalog card's group
 
@@ -60,6 +61,16 @@ def repo_dir(root, slug):
         if (root / (prefix + slug)).exists():
             return root / (prefix + slug)
     return root / (REPO_PREFIX + slug)
+
+
+def folder_dir(root, folder, slug=""):
+    """A bot's repository folder under a workspace by the folder the server recorded for it (its `folder`: named once,
+    so a rename keeps it), else by its slug (repo_dir) for a server that does not say. An older bot's recorded
+    `bot-<id>` finds its `emp-<id>` folder too. A value that is not one plain folder name is never a path."""
+    folder = str(folder or "").strip()
+    if not folder or folder in (".", "..") or not all((ch.isascii() and ch.isalnum()) or ch in "-_." for ch in folder):
+        return repo_dir(root, slug) if slug else None
+    return repo_dir(root, folder[len(REPO_PREFIX):]) if folder.startswith(REPO_PREFIX) else Path(root) / folder
 
 
 def bot_slug_of_repo(name):

@@ -281,6 +281,51 @@ def test_the_tools_copy_update_and_share_a_skill_in_the_workspace_as_the_request
     assert "hub_bot_copy" in {t["name"] for t in hubtools.listing(local=True)} and "hub_bot_copy" not in {t["name"] for t in hubtools.listing()}
 
 
+def rename(api, slug, new_slug, token="ana-test"):
+    revision = get(api, f"bots/{slug}", token)["revision"]
+    post(api, f"bots/{slug}/definition", {"slug": new_slug, "expected_revision": revision}, token)
+
+
+@pytest.mark.slow
+def test_renamed_bots_are_found_in_the_folders_they_were_made_with(api, botops, scribe, monkeypatch, tmp_path):
+    # A rename keeps a bot's folder (bot-<slug it was made with>). The tools found a bot's checkout from the slug it has
+    # now, so after a rename a skill copy answered no_repository, and copying or updating a renamed original failed.
+    workspace = tmp_path / "workspace"
+    original = workspace / "bot-scribe"
+    original.mkdir(parents=True)
+    git(original, "init", "-q", "-b", "main")
+    for rel, text in {"AGENT.md": "# Scribe\n\nOne.\nTwo.\n", "bot.yaml": "name: scribe\n"}.items():
+        (original / rel).parent.mkdir(parents=True, exist_ok=True)
+        (original / rel).write_text(text)
+    git(original, "add", "-A")
+    git(original, "commit", "-q", "-m", "Start")
+    monkeypatch.setenv("HUB_WORKSPACE", str(workspace))
+    hub = Hub(api, turn(api, botops, text="Copy the scribe, then share its minutes skill")["token"])
+    def tool(tool_name, **args):
+        return hubtools.BY_NAME[tool_name]["fn"](hub, args)
+
+    rename(api, "scribe", "note-taker")                              # the original, renamed: still in bot-scribe
+    made = tool("hub_bot_copy", bot="note-taker", slug="cara-helper")
+    assert made["folder"] == "bot-cara-helper" and (workspace / "bot-cara-helper" / "AGENT.md").is_file()
+    rename(api, "cara-helper", "cara-assistant", token="cara-test")  # the copy, renamed: still in bot-cara-helper
+    (original / "skills" / "minutes").mkdir(parents=True)
+    (original / "skills" / "minutes" / "SKILL.md").write_text("Minutes.\n")
+    git(original, "add", "-A")
+    git(original, "commit", "-q", "-m", "A skill")
+    shared = tool("hub_skill_copy", skill="minutes", bot="note-taker", to=["cara-assistant"])
+    assert [(r["bot"], r["status"]) for r in shared["to"]] == [("cara-assistant", "copied")], shared
+    assert (workspace / "bot-cara-helper" / "skills" / "minutes" / "SKILL.md").read_text() == "Minutes.\n"
+    assert not (workspace / "bot-cara-assistant").exists()
+    (original / "AGENT.md").write_text("# Scribe\n\nOne.\nTwo, better.\n")
+    git(original, "commit", "-qam", "Better")
+    assert tool("hub_bot_update_from_original", bot="cara-assistant")["status"] == "updated"
+    assert "Two, better." in (workspace / "bot-cara-helper" / "AGENT.md").read_text()
+    # A new bot given the renamed copy's first slug is built in a folder of its own, not into that checkout.
+    again = tool("hub_bot_copy", bot="note-taker", slug="cara-helper")
+    assert again["folder"].startswith("bot-cara-helper-") and (workspace / again["folder"] / "AGENT.md").is_file()
+    assert "skills/minutes/SKILL.md" in git(workspace / "bot-cara-helper", "ls-files")
+
+
 def test_botops_is_given_a_read_only_token_for_a_bot_on_another_computer_only_for_a_person_who_may_read_it(api, botops, scribe, monkeypatch, tmp_path):
     service, minted = api.app.state.github_app, []
     attempt = turn(api, botops, text="Copy the scribe")

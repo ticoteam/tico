@@ -957,8 +957,9 @@ def bots(client, args):
         fields["operation_id"] = os.environ.get("HUB_OPERATION_ID")
         return hubtools.BY_NAME[tool_name(args.fn)]["fn"](client, fields)
     if args.fn == "bot check":
-        from clients.manifest import repo_dir
-        problems = catalog.check(repo_dir(workspace, args.slug), args.slug)
+        from clients.botcopy import folder_of
+        from clients.manifest import folder_dir
+        problems = catalog.check(folder_dir(workspace, folder_of(client, args.slug), args.slug), args.slug)
         return {"ready": not problems, "problems": problems}
     if not args.template:
         raise APIError("usage", "hub bot create --template T builds the bot; --record-only only registers it")
@@ -969,7 +970,8 @@ def bots(client, args):
     path = catalog.materialize(args.template, slug, workspace, client.get("config"),
                                record.get("answers") or {},
                                display_name=args.name or chosen.get("display_name"),
-                               instructions=chosen.get("instructions"))
+                               instructions=chosen.get("instructions"),
+                               folder=(registered or {}).get("folder"))
     result = {"path": str(path), "template": args.template, "slug": slug,
               "committed": catalog.committed(path),
               "automations": seed_automations(client if registered is None else _person(client), slug, path),
@@ -1009,7 +1011,7 @@ def github_repository(client, slug, path):
             # A bot the server has not registered stays on this computer, as before.
             return {"skipped": exc.detail, "note": f"register the bot, then hub bot repo-create {slug} --empty"}
         if exc.code == "github_repo_exists":
-            return {"repository": "bot-" + slug, "existing": True, "note": exc.detail}
+            return {"repository": path.name, "existing": True, "note": exc.detail}
         if exc.code == "github_permission_missing":
             raise APIError(exc.code, f"Not finished: {exc.detail} The bot stays planned and its files are in {path}; "
                            "finish and commit them there as usual.", exc.status, False, exc.operation_id) from None

@@ -174,7 +174,9 @@ class BotSetup:
                                 record.get("answers") or {},
                                 display_name=(config or {}).get("display_name") or chosen.get("display_name"),
                                 instructions=(config or {}).get("instructions") or chosen.get("instructions"),
-                                state=setup if isinstance(setup, dict) else None)
+                                state=setup if isinstance(setup, dict) else None,
+                                # The folder the runner works in: a bot made with a UUID id keeps its first slug's.
+                                folder=Path(path).name or None)
         except Exception as exc:
             return "", (f"Setting {bot} up from the {template} catalog template failed: "
                         f"{type(exc).__name__}: {exc}")[:500]

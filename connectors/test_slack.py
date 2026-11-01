@@ -219,6 +219,33 @@ class Workspace(unittest.TestCase):
             finally:
                 browser.PROJECTS, slack.PROJECTS = saved
 
+    def test_a_runs_own_bot_is_read_from_the_folder_the_runner_names(self):
+        # A bot made with a UUID id runs as HUB_BOT=<id> in the folder named from its first slug, which a rename keeps:
+        # bot-<HUB_BOT> is not its folder, HUB_BOT_FOLDER is. Another bot named by slug is still found by its slug.
+        import browser
+        sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+        from connectors import mail
+        bot = "01a19806-0460-77a7-860b-b797cea3f270"
+        with tempfile.TemporaryDirectory() as root:
+            workspace = Path(root)
+            for folder, text in (("bot-sales-helper", "tools: [own]\n"), ("bot-ops", "tools: [ops]\n")):
+                (workspace / folder).mkdir()
+                (workspace / folder / "bot.yaml").write_text(text)
+            saved = browser.PROJECTS, slack.PROJECTS
+            browser.PROJECTS = slack.PROJECTS = workspace
+            env = {"HUB_BOT": bot, "HUB_BOT_FOLDER": "bot-sales-helper"}
+            try:
+                with mock.patch.dict(os.environ, env):
+                    self.assertEqual(slack.manifest_of(bot)[0], workspace / "bot-sales-helper" / "bot.yaml")
+                    self.assertEqual(browser.load_manifest(bot), {"tools": ["own"]})
+                    self.assertEqual(mail.repo_dir(workspace, bot), workspace / "bot-sales-helper")
+                    self.assertEqual(slack.manifest_of("ops")[0], workspace / "bot-ops" / "bot.yaml")
+                    self.assertEqual(mail.repo_dir(workspace, "ops"), workspace / "bot-ops")
+                with mock.patch.dict(os.environ, {**env, "HUB_BOT_FOLDER": "../outside"}):
+                    self.assertEqual(slack.manifest_of(bot)[0], workspace / f"bot-{bot}" / "bot.yaml")
+            finally:
+                browser.PROJECTS, slack.PROJECTS = saved
+
 
 class ChannelList(FakeSlack):
     """The channel list is the hub's (Settings > Tools > Slack); the old registry file counts only until it is imported."""

@@ -37,6 +37,13 @@ def _json(value):
     return value if isinstance(value, dict) else {}
 
 
+def folder(c, bot):
+    """The folder the bot's checkout has on a computer, as recorded (H.bot_folder): the client finds its files by this,
+    never by its slug, which a rename changes while the folder stays."""
+    row = c.execute("SELECT config FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    return H.bot_folder(bot, _json(row["config"] if row else None))
+
+
 def free_slug(c, original):
     base = original[:70] + "-copy"
     for n in range(1, 100):
@@ -170,7 +177,8 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             H.event(c, who.actor, "bot.copied", copy_id, {"from": bot, "sha": body.sha, "with_memory": body.with_memory,
                                                            "granted": [g["env"] for g in credentials["granted"]]})
             return {**created, "copied_from": {"bot": bot, "sha": body.sha}, "with_memory": body.with_memory,
-                    "original_repo": row["repo"] or "emp-" + original["slug"], "credentials": credentials,
+                    "original_repo": row["repo"] or "emp-" + original["slug"], "original_folder": folder(c, bot),
+                    "folder": folder(c, copy_id), "credentials": credentials,
                     **({"placement": placed} if placed else {})}
         return mutate(request, body, work)
 
@@ -207,6 +215,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                 config, source = origin(c, who, bot)
                 original = H.bot(c, source["bot"])["slug"]       # the client names its folder and words by slug
                 return {"bot": bot, "original": original, "base_sha": source.get("sha") or "",
+                        "folder": folder(c, bot), "original_folder": folder(c, source["bot"]),
                         "repo": config["repo"] or "bot-" + H.bot(c, bot)["slug"],
                         "original_repo": (settings_admin._config(c, source["bot"])["repo"]
                                           or "emp-" + H.bot(c, source["bot"])["slug"])}
@@ -322,9 +331,11 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                     raise Problem("not_found", f"No bot {slug} to copy to", 404)
                 auth.require_write(c, who, slug)
                 settings_admin._manager(c, who, slug)
-                # The answer names each target by slug: the client makes its folder from it. The audit names ids.
-                targets.append({"bot": row["slug"], "repo": settings_admin._config(c, slug)["repo"] or "emp-" + row["slug"]})
+                # The answer names each target by slug and by the folder its checkout has (a rename keeps the folder):
+                # the client finds its files there. The audit names ids.
+                targets.append({"bot": row["slug"], "folder": folder(c, slug),
+                                "repo": settings_admin._config(c, slug)["repo"] or "emp-" + row["slug"]})
                 ids.append(slug)
             H.event(c, who.actor, "bot.skill_copy_requested", bot, {"skill": body.skill, "to": ids})
-            return {"skill": body.skill, "from": bot, "to": targets}
+            return {"skill": body.skill, "from": bot, "from_folder": folder(c, bot), "to": targets}
         return mutate(request, body, work)
