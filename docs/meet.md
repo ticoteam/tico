@@ -17,7 +17,8 @@ speech is not built (see Not built).
    live meeting, then the server's recorder joins the call's media session as a hidden participant. It hears the call
    and never publishes. If the recorder cannot join, the call ends at once with `meet_unavailable`.
 2. **Join.** People who can read the thread join and get a token good for 5 minutes. It grants microphone and screen
-   share, never a camera and no data messages. A joined client refreshes its token with
+   share, never a camera and no data messages. A join sent again with the same idempotency key gets its token back only
+   while the person can still read the thread. A joined client refreshes its token with
    `POST /api/v2/calls/{call_id}/token` before it expires.
 3. **Transcript.** The recorder subscribes to each microphone and screen-share audio track. Each speaker's audio goes to
    the Gateway's speech-to-text (the Recorder's model, `elevenlabs/scribe-v2`) in clips of up to 8 seconds, or sooner
@@ -26,13 +27,18 @@ speech is not built (see Not built).
    stored. If the Gateway does not answer, that clip is lost and the call goes on.
 4. **Bots.** A person who can write to the thread and has joined the call attaches bots (up to 10). A bot must be one
    that person can write to. Attached bots get turns on the call's speech and reply in the thread, as they do in a
-   live meeting. Their replies are messages in the thread.
+   live meeting. A reply is a run of the bot's own runner job, so the bot needs a runner that takes private meeting
+   turns (`private_lanes_v1`), and it is posted in the thread only through that run. A bot stays attached only while the
+   person who attached it can still read the thread and write to the bot. When that ends, the bot stops hearing the call
+   and its replies are refused at once. The sweep then detaches it and cancels its open turns.
 5. **Access.** When someone loses read access to the thread, the server removes them from the media session through
-   LiveKit's server API and refuses their token refresh. Bots that lose write access are detached the same way. A
-   background sweep does this on each pass.
+   LiveKit's server API and refuses their token refresh. Leaving removes a person the same way, at once. A removal that
+   LiveKit does not confirm stays pending, and the background sweep retries it on each pass until it is confirmed.
 6. **End.** The connector ends the call. Speech still waiting is sent, and the end waits up to 150 seconds for clips
-   already being transcribed. Then the recorder leaves and the media session closes. Then two messages are posted to
-   the thread, each once and each marked `restricted`, so only people who can read the thread see them:
+   already being transcribed. Then the recorder leaves and the media session closes. If LiveKit does not confirm the
+   close, the sweep retries it, and the transcript and action items wait until it does. Then two messages are posted to
+   the thread from the connector, each once. Each names the call's meeting, so the meeting's own rules decide who reads
+   it, and each is marked `restricted`:
    - `Call transcript: <title>` with one `speaker: text` line per piece of speech. Long transcripts are cut short, and
      the message says where the full one is.
    - `Action items: <title>` with one `- ` line per item, or `No action items were found.`. The items are drafted
@@ -41,8 +47,9 @@ speech is not built (see Not built).
      in `backend/call_items.py`. If the Gateway does not answer, no action items message is posted and the transcript
      stays the call's record.
    Tasks are still made by hand from the action items.
-7. **Restarts.** A Tico restart brings the recorder back for each live call from the database. If the media server
-   stops, the call ends with `end_reason: media_lost`, and the transcript so far is kept.
+7. **Restarts.** A Tico restart brings the recorder back for each live call from the database. A live call whose media
+   session is gone when the sweep looks ends with `end_reason: media_lost`, and the transcript so far is kept. A call
+   whose recorder never started ends the same way two minutes after it began.
 
 ## Spoken replies
 
@@ -56,13 +63,15 @@ is kept for when they do.
 | --- | --- |
 | See a call, list calls, join, refresh a token | People who can read the thread |
 | Start a call, attach or detach bots | People who can write to the thread (attach also needs the person to have joined) |
-| Leave | The person who joined |
+| Leave | The person who joined, even after losing access to the thread |
 | End | The connector |
 | Anything | Bots are refused. BotOps acts as the person it works for |
 
 Errors: `meet_unavailable` (503) when Tico Meet is not set up, the LiveKit package is missing, or the recorder cannot
 join. `call_in_progress` (409) for a second live call in a thread, `call_ended` (409), `not_joined` (409) when a token is
-asked for without joining, and `call_access_removed` (403) after removal. A call the caller cannot read is 404.
+asked for without joining, and `call_access_removed` (403) after removal. A call the caller cannot read is 404, the
+same as a call that does not exist. `call_meeting` (409) when the live meeting's own controls
+(`/api/v2/live-meetings/{id}/control`) are used on a call's meeting: a call is paused, resumed or ended through the call.
 
 ## API
 
@@ -86,6 +95,8 @@ CLI, and `hub_call_list`, `hub_call_show`, `hub_call_start`, `hub_call_join`, `h
 Changes are written to the change log on the `threads` topic: `call.started`, `call.joined`, `call.left`,
 `call.ended`, `call.bot_attached`, `call.bot_detached` and `call.participant_removed`. Each has an audit row. The live
 event stream sends them with `GET /api/v2/events?topics=threads`, and only to people who can read the call's thread.
+A call's view lists only the people and bots the viewer may see (the teammate See level), and a person always sees
+their own place in it.
 
 ## Self-hosting
 
@@ -135,7 +146,8 @@ a built image.
   when its TURN and media ports are open to browsers on the host.
 - **Live LiveKit beyond one dev server.** The live test covers one speaker on one `--dev` server. Not run yet: browsers
   through TURN and TLS, several calls at once, a LiveKit restart in the middle of a call, and the real Gateway.
-- **Bot replies after access ends.** A bot whose membership of the thread has ended cannot post its reply, and the
-  reply is not posted at all.
-- **Connector access.** The transcript and action items are posted as the connector. If the connector can no longer
-  post in the thread when the call ends, neither is posted, and the error report says so.
+- **Bot replies need a runner.** A reply is a run of the bot's runner job. A bot whose runner does not take private
+  meeting turns waits, and the meeting says so, until that runner is updated.
+- **Connector access.** The transcript and action items are posted as the connector. If the thread refuses that post when
+  the call ends (the connector can no longer write there), the post is not made, the error report says so, and nothing
+  retries it. Action items are drafted once, when the call ends. If the Gateway does not answer then, none are posted.
