@@ -1716,8 +1716,12 @@ impl Recorder {
                     "This meeting was discarded; its recording stays on this computer".into();
                 return;
             }
-            if !paused_confirmed && tico_recorder_native::live::paused_quotes(&record, &context) {
-                self.error = "A kept action item quotes paused speech. Review it and confirm Send in the Send menu.".into();
+            if context.live_state == "paused" {
+                self.error = "Resume sharing before Finish or Send".into();
+                return;
+            }
+            if !paused_confirmed && tico_recorder_native::live::paused_review_required(&context) {
+                self.error = "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.".into();
                 return;
             }
         }
@@ -1781,8 +1785,8 @@ impl Recorder {
             }
             let record = store.get(&id)?;
             network::ready(&record)?;
-            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_quotes(&record, &store.context(&id)?),
-                "A kept action item quotes paused speech. Review it and confirm Send in the Send menu.");
+            anyhow::ensure!(paused_confirmed || !tico_recorder_native::live::paused_review_required(&store.context(&id)?),
+                "A kept action item may quote paused speech. Review it and confirm Send in the Send menu.");
             let tico = Tico::saved(&config, &destination)?;
             if !store.context(&id)?.live_id.is_empty() {
                 say("Finishing…");
@@ -2110,7 +2114,7 @@ impl Recorder {
                     Some(("Tico sync needs attention".into(), "amber"))
                 };
                 let context = self.store.context(&record.id).unwrap_or_default();
-                let status = if context.live_discarded { Some(("Discarded · saved locally".into(), "muted")) } else { status };
+                let status = if context.live_discarded { Some(if context.live_state == "ended" { ("Discarded · saved locally".into(), "muted") } else { ("Discard pending · saved locally".into(), "amber") }) } else { status };
                 let sent = self.sent_everywhere(&record.deliveries);
                 json!({
                     "id": record.id,
@@ -2248,7 +2252,9 @@ impl Recorder {
             .chunks
             .iter()
             .any(|chunk| !chunk.text.trim().is_empty());
-        let blocked = if recording_here {
+        let blocked = if self.context.live_state == "paused" {
+            Some("Resume sharing before Finish or Send".into())
+        } else if recording_here {
             None
         } else {
             self.send_blocked(&record)
@@ -2276,7 +2282,8 @@ impl Recorder {
             "can_control": live && !ended && !self.context.live_discarded,
             "can_discard": live && !ended && record.state != "recording" && record.deliveries.is_empty(),
             "discarded": self.context.live_discarded,
-            "can_finish": live && !self.context.live_discarded && record.state != "recording" && record.deliveries.is_empty()
+            "discard_pending": self.context.live_discarded && !ended,
+            "can_finish": live && self.context.live_state != "paused" && !self.context.live_discarded && record.state != "recording" && record.deliveries.is_empty()
                 && (!ended || has_text),
             "place": if live { format!("Shared live · {org}") } else { "Private · on this Mac".into() },
             "sync_error": if sync_error.is_empty() { String::new() } else {

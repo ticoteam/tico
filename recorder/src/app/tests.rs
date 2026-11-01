@@ -1023,9 +1023,33 @@ fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording()
         })
         .unwrap();
     app.send_meeting(&id, "first");
-    assert!(app.error.contains("quotes paused speech"));
+    assert!(app.error.contains("may quote paused speech"));
     assert!(!app.busy);
     assert!(app.store.get(&id).unwrap().deliveries.is_empty());
+    // Confirmation reaches the bypass before the busy guard, without starting any network job.
+    app.busy = true;
+    app.error.clear();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.is_empty());
+    app.busy = false;
+    app.store
+        .update_context(&id, |c| {
+            c.items[0].quote = "Normalized or reworded quote".into();
+            c.items[0].at_ms = 1000;
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting(&id, "first");
+    assert!(app.error.contains("may quote paused speech"));
+    app.store
+        .update_context(&id, |c| {
+            c.live_state = "paused".into();
+            Ok(())
+        })
+        .unwrap();
+    app.send_meeting_confirmed(&id, "first", true);
+    assert!(app.error.contains("Resume sharing"));
+    assert!(!app.busy);
     app.store
         .update_context(&id, |c| {
             c.live_discarded = true;
@@ -1036,4 +1060,11 @@ fn send_requires_review_of_paused_quotes_and_discard_keeps_the_local_recording()
     assert!(app.error.contains("discarded"));
     assert!(!app.busy);
     assert!(!app.store.get(&id).unwrap().chunks.is_empty());
+    assert!(
+        full_view(&mut app)["library"]["data"]["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["id"] == id && r["status"]["label"] == "Discard pending · saved locally")
+    );
 }

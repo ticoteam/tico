@@ -233,6 +233,9 @@ impl Tico {
     /// Shares what is new, then reads the meeting back (and notes if it was paused or resumed).
     pub fn sync_live(&self, store: &Store, id: &str) -> Result<Value> {
         let _guard = store.live_lock();
+        self.sync_live_inner(store, id)
+    }
+    fn sync_live_inner(&self, store: &Store, id: &str) -> Result<Value> {
         self.push_live_inner(store, id)?;
         let context = store.context(id)?;
         let view = self.call(
@@ -440,6 +443,12 @@ impl Tico {
         })
     }
     pub fn finish_live(&self, store: &Store, id: &str) -> Result<()> {
+        // Keep controls serialized through the final sync and end request.
+        let _guard = store.live_lock();
+        ensure!(
+            store.context(id)?.live_state != "paused",
+            "Resume sharing before Finish or Send"
+        );
         ensure!(
             !store.context(id)?.live_discarded,
             "This meeting was discarded; its recording stays local"
@@ -473,7 +482,12 @@ impl Tico {
         }) {
             return Ok(());
         }
-        self.sync_live(store, id)?;
+        self.sync_live_inner(store, id)?;
+        let context = store.context(id)?;
+        ensure!(
+            context.live_state != "paused",
+            "Resume sharing before Finish or Send"
+        );
         let prefix = format!("/api/v2/live-meetings/{}", context.live_id);
         if context.live_state != "ended" {
             self.call(
@@ -685,6 +699,16 @@ fn shareable(record: &Recording, windows: &[(u64, Option<u64>)]) -> Recording {
     }
     shared
 }
+/// Exact text cannot reliably identify a reworded or number-normalized quote. Require
+/// review of any kept quote when the recording contains paused speech.
+pub fn paused_review_required(context: &crate::workspace::Context) -> bool {
+    !context.paused_windows.is_empty()
+        && context
+            .items
+            .iter()
+            .any(|i| i.task_id.is_empty() && !i.quote.trim().is_empty())
+}
+
 /// Kept draft items can disclose paused speech even though the transcript cannot.
 pub fn paused_quotes(record: &Recording, context: &crate::workspace::Context) -> bool {
     let tokens = |s: &str| {

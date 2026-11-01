@@ -189,7 +189,7 @@
       if (m.can_control && !sending) right += `<button class="btn small" data-act="control-live" data-action="${m.live_state === 'paused' ? 'resume' : 'pause'}" ${st.busy ? 'disabled' : ''}>${m.live_state === 'paused' ? 'Resume sharing' : 'Pause sharing'}</button>`;
       if (m.can_discard && !sending) right += `<button class="btn small" data-act="pop" data-pop="discard" ${st.busy ? 'disabled' : ''}>Discard…</button>`;
       right += peopleButton(m.people);
-      if (m.discarded) right += badge('Discarded · saved locally', 'muted');
+      if (m.discarded) right += badge(m.discard_pending ? 'Discard pending · saved locally' : 'Discarded · saved locally', m.discard_pending ? 'amber' : 'muted');
       else if (m.sent) right += badge(`${icon('check', 12)}In Tico`, 'accent');
       else if (sending) right += `<button class="btn small sending" disabled><span class="spin"></span>${esc(sending.label)}</button>`;
       else right += `<button class="btn small" data-act="pop" data-pop="send" data-id="${esc(m.id)}" ${st.busy ? 'disabled' : ''}>${icon('send', 13)}Send</button>`;

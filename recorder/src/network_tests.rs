@@ -1328,6 +1328,80 @@ fn paused_capture_stays_local_through_resume_retry_recovery_and_final_correction
 }
 
 #[test]
+fn paused_finish_requires_resume_then_files_pending_public_speech() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Pause before final public upload");
+    let id = &record.id;
+    finished_chunk(
+        &store,
+        id,
+        0,
+        8000,
+        vec![
+            word(1000, 1400, "Public opening", ""),
+            word(6000, 6300, "Secret words", ""),
+        ],
+    );
+    store.state(id, "stopped").unwrap();
+    store
+        .update_context(id, |c| {
+            c.live_state = "paused".into();
+            c.locally_paused = true;
+            c.paused_windows = vec![(5000, None)];
+            Ok(())
+        })
+        .unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"state":"live"})),
+        Some(json!({"accepted":[1]})),
+        Some(json!({"state":"live"})),
+        Some(json!({"state":"ended"})),
+        Some(json!({"meeting_id":"filed-public"})),
+    ]);
+    assert!(
+        tico.finish_live(&store, id)
+            .unwrap_err()
+            .to_string()
+            .contains("Resume sharing")
+    );
+    assert!(seen.lock().unwrap().is_empty());
+    assert!(store.get(id).unwrap().deliveries.is_empty());
+    tico.control_live(&store, id, "resume", 10000).unwrap();
+    tico.finish_live(&store, id).unwrap();
+    worker.join().unwrap();
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests[1].1["chunks"][0]["text"], "Public opening");
+    assert!(requests[4].0.contains("/finalize"));
+    assert!(
+        !serde_json::to_string(&*requests)
+            .unwrap()
+            .contains("Secret")
+    );
+    let kept = store.get(id).unwrap();
+    assert_eq!(kept.deliveries[0].meeting_id, "filed-public");
+    assert!(kept.chunks[0].text.contains("Secret"));
+}
+
+#[test]
+fn finish_stops_if_final_readback_discovers_a_remote_pause() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = live_recording(&store, "Remote pause before finish");
+    store.state(&record.id, "stopped").unwrap();
+    let (tico, seen, worker) = server(vec![Some(json!({"state":"paused"}))]);
+    assert!(
+        tico.finish_live(&store, &record.id)
+            .unwrap_err()
+            .to_string()
+            .contains("Resume sharing")
+    );
+    worker.join().unwrap();
+    assert_eq!(seen.lock().unwrap().len(), 1);
+    assert!(store.get(&record.id).unwrap().deliveries.is_empty());
+}
+
+#[test]
 fn uncertain_pause_stays_local_and_discard_never_finalizes_or_sends() {
     let dir = tempfile::tempdir().unwrap();
     let store = Store::open(dir.path()).unwrap();
