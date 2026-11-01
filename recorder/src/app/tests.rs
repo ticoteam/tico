@@ -996,3 +996,38 @@ fn the_open_meetings_bot_notices_show_with_the_bots_name() {
     app.context.live_id = "live-other".into();
     assert_eq!(full_view(&mut app)["live"]["notices"], json!([]));
 }
+
+#[test]
+fn open_in_tico_stays_on_the_shared_meetings_instance() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    seed_demo(&store).unwrap();
+    let mut app = app(store, directory.path());
+    app.config.destinations = vec![
+        connection("first", "acme.example"),
+        connection("second", "other.example"),
+    ];
+    let id = app.records[0].id.clone();
+    app.open(&id).unwrap();
+    app.busy = true; // No roster/network work: this replay is entirely synthetic.
+    assert!(full_view(&mut app)["meeting"]["data"]["live_url"].is_null());
+    app.context.live_destination = "first".into();
+    app.context.live_id = "room &/?#".into();
+    app.destination = "second".into();
+    for state in ["live", "paused", "ended"] {
+        app.context.live_state = state.into();
+        let view = full_view(&mut app)["meeting"]["data"].clone();
+        let link = reqwest::Url::parse(view["live_url"].as_str().unwrap()).unwrap();
+        assert_eq!(link.host_str(), Some("runner.acme.example"));
+        let route = link.fragment().unwrap();
+        assert!(route.starts_with("/meetings?"));
+        let query = reqwest::Url::parse(&format!("https://acme.example/{route}")).unwrap();
+        assert_eq!(
+            query.query_pairs().collect::<Vec<_>>(),
+            vec![("live".into(), "room &/?#".into())]
+        );
+    }
+    // Losing the connection must not send this meeting to the new default instance.
+    app.config.destinations.remove(0);
+    assert!(full_view(&mut app)["meeting"]["data"]["live_url"].is_null());
+}
