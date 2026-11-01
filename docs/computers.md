@@ -325,8 +325,9 @@ bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chro
 `PATH` so a browser started by name goes through it. A browser started another way takes the proxy itself, for example
 Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`. A browser started by name gets
 the bot's own profile (`~/.tico/browser-exit/<bot>` unless `--user-data-dir` is given), and refuses to start when a
-browser not started through the proxy is open on that profile or when a flag would skip the proxy. `localhost` stays
-local: the browser reaches the bot's own computer directly, never through the exit.
+browser it didn't start through the proxy is open on that profile, or when a flag would skip the proxy (with one
+dash or two, or a bare `--`). `localhost` stays local: the browser reaches the bot's own computer directly, never
+through the exit.
 
 The proxy asks for no password, because a browser can't send one for every connection. Under turn isolation (Linux
 runners with `TICO_RUNNER_BOT_UID`), it takes connections only from the OS users that bot's turns run as. Without

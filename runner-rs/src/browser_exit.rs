@@ -1184,12 +1184,13 @@ mod tests {
         std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
         let shims = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
         let proxy = "http://127.0.0.1:21001";
-        let run = |args: &[&str], proxy: Option<&str>| {
+        let run_with = |args: &[&str], proxy: Option<&str>, chromium_flags: &str| {
             let mut cmd = Command::new(shims.join("google-chrome"));
             cmd.args(args)
                 .env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()))
                 .env("HOME", &home)
                 .env("HUB_BOT", "ops")
+                .env("CHROMIUM_FLAGS", chromium_flags)
                 .env_remove("TICO_BROWSER_PROXY");
             if let Some(p) = proxy {
                 cmd.env("TICO_BROWSER_PROXY", p);
@@ -1197,47 +1198,72 @@ mod tests {
             let out = cmd.output().unwrap();
             (out.status.success(), String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect::<Vec<_>>())
         };
+        let run = |args: &[&str], proxy: Option<&str>| run_with(args, proxy, "");
         let profile = home.join(".tico/browser-exit/ops");
         let own = format!("--user-data-dir={}", profile.display());
         let flag = format!("--proxy-server={proxy}");
+        let webrtc = "--force-webrtc-ip-handling-policy=disable_non_proxied_udp";
 
+        // The enforced switches come first, so nothing the caller passes (a bare `--` included) can follow them.
         let (ok, args) = run(&["--new-window"], Some(proxy));
         assert!(ok);
-        assert_eq!(
-            args,
-            ["--new-window", own.as_str(), flag.as_str(), "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
-        );
+        assert_eq!(args, ["--tico-browser-exit=ops", flag.as_str(), webrtc, own.as_str(), "--new-window"]);
         let theirs = format!("--user-data-dir={}", root.join("kept").display());
-        let (ok, args) = run(&[&theirs, "--proxy-bypass-list=<-loopback>"], Some(proxy));
-        assert!(ok && args[0] == theirs && args.iter().filter(|a| a.starts_with("--user-data-dir")).count() == 1);
+        let (ok, args) = run(&[&theirs, "--proxy-bypass-list=<-loopback>", flag.as_str()], Some(proxy));
+        assert!(ok && args[3] == theirs && args.iter().filter(|a| a.starts_with("--user-data-dir")).count() == 1);
         for skip in [
+            "--",
             "--no-proxy-server",
+            "-no-proxy-server",
+            "--NO-PROXY-SERVER",
             "--proxy-server=socks5://10.0.0.8:1080",
+            "-proxy-server=socks5://10.0.0.8:1080",
             "--proxy-pac-url=http://x/p.pac",
+            "-proxy-pac-url=http://x/p.pac",
             "--proxy-auto-detect",
             "--proxy-bypass-list=*",
+            "-proxy-bypass-list=*",
+            "--winhttp-proxy-resolver",
+            "--tico-browser-exit=ops",
         ] {
-            assert!(!run(&[skip], Some(proxy)).0, "{skip}");
+            assert!(!run(&[skip, "https://www.acme.example"], Some(proxy)).0, "{skip}");
         }
+        assert!(run(&["-user-data-dir=/tmp/x", "-new-window"], Some(proxy)).0, "a single-dash profile is still read");
+        assert!(!run_with(&[], Some(proxy), "--no-proxy-server").0, "CHROMIUM_FLAGS is checked too");
+        assert!(run_with(&[], Some(proxy), &format!("{flag} {webrtc}")).0, "the runner's own CHROMIUM_FLAGS pass");
         assert!(!run(&[], None).0, "no proxy, no browser");
 
-        // A Chrome already open on the profile takes the launch: only one started through this proxy may.
+        // A Chrome already open on the profile takes the launch: only one this wrapper started, through this proxy and
+        // with nothing that bypasses it, may.
         let host = String::from_utf8(Command::new("uname").arg("-n").output().unwrap().stdout).unwrap();
         let lock = profile.join("SingletonLock");
-        let mut plain = Command::new("sleep").arg("30").spawn().unwrap();
-        symlink(format!("{}-{}", host.trim(), plain.id()), &lock).unwrap();
+        let mut held = Vec::new();
+        let mut holds = |args: &[&str]| {
+            let mut child = Command::new("sh");
+            child.args(["-c", "sleep 30; :", "sh"]).args(args);
+            let child = child.spawn().unwrap();
+            let _ = std::fs::remove_file(&lock);
+            symlink(format!("{}-{}", host.trim(), child.id()), &lock).unwrap();
+            held.push(child);
+        };
+        holds(&[]);
         assert!(!run(&[], Some(proxy)).0, "a browser without the proxy holds the profile");
-        let mut through = Command::new("sh").args(["-c", "sleep 30; :", "sh", flag.as_str()]).spawn().unwrap();
-        std::fs::remove_file(&lock).unwrap();
-        symlink(format!("{}-{}", host.trim(), through.id()), &lock).unwrap();
-        assert!(run(&[], Some(proxy)).0, "a browser started through this proxy holds it");
+        holds(&[flag.as_str()]);
+        assert!(!run(&[], Some(proxy)).0, "the proxy but not the wrapper's marker");
+        holds(&["--tico-browser-exit=ops", flag.as_str(), "-no-proxy-server"]);
+        assert!(!run(&[], Some(proxy)).0, "the marker and the proxy, but bypassed");
+        holds(&["--tico-browser-exit=ops", flag.as_str(), "--proxy-bypass-list=*"]);
+        assert!(!run(&[], Some(proxy)).0, "the marker and the proxy, but a bypass list");
+        holds(&["--tico-browser-exit=ops", flag.as_str(), webrtc]);
+        assert!(run(&[], Some(proxy)).0, "a browser this wrapper started holds it");
         assert!(!run(&[], Some("http://127.0.0.1:21002")).0, "but not through another bot's proxy");
-        let _ = plain.kill();
-        let _ = through.kill();
-        let _ = plain.wait();
-        let _ = through.wait();
+        let gone = held.last().unwrap().id();
+        for mut child in held {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
         std::fs::remove_file(&lock).unwrap();
-        symlink(format!("{}-{}", host.trim(), plain.id()), &lock).unwrap();
+        symlink(format!("{}-{}", host.trim(), gone), &lock).unwrap();
         assert!(run(&[], Some(proxy)).0, "a lock left by a browser that exited is stale");
         let _ = std::fs::remove_dir_all(&root);
     }
