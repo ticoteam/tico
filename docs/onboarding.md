@@ -232,6 +232,27 @@ Every bot goes **Recruiting -> Onboarding -> Active** (`backend/lifecycle.py`).
   a task for it is refused with the name of the manager it reports to, it is never woken and it has no routines. The owner
   places a seat anywhere; anyone else under themselves or someone below them.
 - A seat is filled by recruiting it ([Recruiting a seat](#recruiting-a-seat)); the bot it gets starts Onboarding.
+- **A cloud agent** Tico does not connect yet is a request, not a bot: `POST /api/v2/cloud-agents/{id}/request` (or
+  `POST /api/v2/seats/{id}/request-agent` for a seat that has none) makes a seat with `agent` and `request_state`, and
+  files the request with Tico's team through support as a feedback ticket carrying only its message, with no install ID.
+  The seat and its first task are made first and the seat is `filing` until Tico's ticket is kept, then `requested`. A
+  repeated key, or an identical request sent at the same time, shares that one seat and ticket. A first task whose title
+  matches an open task is refused (`409`, `duplicate`) before Tico hears of it. The first task waits on the seat as a task
+  its person owns; `GET /api/v2/seats/{id}/request` shows it to anyone who may read it. While a request is filing, being
+  cancelled, or open, the seat cannot be closed, filled, hired, or renamed, moved or given another team (`409`).
+  **Cancel request** (`POST /api/v2/seats/{id}/cancel-request`) marks the seat `cancelling`, tells Tico on the same
+  ticket, closes the seat and lets go of the first task: it is declined if the person may update it, else it stays with
+  its owner. If Tico cannot be reached, or the last step fails, the seat goes back to `requested` and can be tried again.
+  A request a stopped process left `filing` or `cancelling` is recovered by the next request or cancel on its seat once it
+  is older than two minutes, and every such request is recovered when the store starts. A request for a seat in a team
+  needs the right to add to that team (`403`), as an add does.
+- **Claude Code and Codex** are added, not requested: `POST /api/v2/cloud-agents/{claude|codex}/add` with `{seat_id}`
+  fills the seat with a bot on that harness, owned by the person. Its role is the template Recruit ranks first for the
+  seat, so it lands exactly as a hire of that template does: in Onboarding, in the seat's place on the chart, with its
+  repository built by its computer (a starter) or by BotOps (any other template). It joins the seat's team and runs under
+  its own bot identity, with no personal token issued. An add with `{team, reports_to}` and no seat first opens a
+  *Software engineer* seat there and names the bot for the agent. A seat no template fits is refused (`409`) and leaves
+  nothing behind: a bot needs a role to build its repository (`backend/cloud_agents.py`).
 - **Onboarding** replaces *Set up*. A starter is created Onboarding: the team chart shows a small amber gear (hover it for
   *Onboarding*) and its page an **Onboarding** pill. **Start onboarding** sends it "Let's set you up." as the person, in their
   own chat with it (the **Chat** tab); any first message from a person does the same. It learns only: it answers and asks in
@@ -448,15 +469,18 @@ Open a seat from its row on the team chart (`#/seat/<id>`) or right after Post a
 `backend/recruiting.py` does the work; the pages are `ui/app/recruit.js`.
 
 - **The job description.** Leaving the title asks `POST /api/v2/seats/draft` (`{title, team, reports_to}`), which answers
-  at once and stores nothing: the catalog template that best fits the title, composed into one line of summary, "What
-  you'll do" from what it owns and "Works in" from its tools (`source: "catalog"`), or nothing for a title no template fits
-  (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
+  and stores nothing: the catalog template that is the job the title names (its name shares a word of the work with
+  the title, never only a word of rank or a kind of job such as "Engineer" or "Analyst"; a title ending in a kind of job wants
+  that kind, and a head's title the department's head), composed at once into one line
+  of summary, "What you'll do" from what it owns and "Works in" from its tools (`source: "catalog"`). For a title no
+  template is, such as "Rust engineer", the team's model writes one from the title within five seconds (`source:
+  "model"`), or nothing comes back without a model (`source: "none"`). **Redraft** (`redraft: true`) also asks the team's model for one rewrite, given five seconds; if
   there is no model or it fails, the composed text comes back. A description typed by hand is never replaced by the first
   draft. Anyone who may change the seat edits it later from **Job post** (`PATCH /api/v2/seats/{id}`). Reading is
   `GET /api/v2/seats/{id}`, with `description_by` (`chart` or `person`) and `can_edit`.
 - **Applicants** (`POST /api/v2/seats/{id}/recruit`) answers at once, on this Tico, with no outside service and no trial
   task: up to eight Tico catalog templates matched against the title and description. Each has `match`: `strong` when
-  the template's name shares a word of the work with the title, `good` when it fits at all, else empty; strong ones come
+  the template's name shares a word of the work with the title (not "Engineer" alone), `good` when it fits at all, else empty; strong ones come
   first. Each carries a one-line summary, tags, what it owns and never does, its onboarding questions, what it needs (each
   `connected`, `on_hire` or `not_set`) and the model it suggests among the providers the team has turned on, with the list
   of those models to choose another. Built-in bots (BotOps, the Strategy Bot, the message bot) are never applicants. Each

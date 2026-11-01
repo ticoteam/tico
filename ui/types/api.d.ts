@@ -697,6 +697,40 @@ export type ClarifyAsk = {
   ask: string;
 };
 
+export type CloudAgent = {
+  connect_id: string | null;
+  id: string;
+  line: string;
+  maker: string;
+  name: string;
+  site: string;
+  supported: boolean;
+};
+
+export type CloudAgentAdd = {
+  reports_to?: string;
+  seat_id?: string;
+  team?: string;
+};
+
+export type CloudAgentAdded = {
+  bot: string;
+  harness: string;
+  model: string;
+  seat: string;
+};
+
+export type CloudAgentList = {
+  agents: Array<CloudAgent>;
+};
+
+export type CloudAgentRequest = {
+  first_task?: string;
+  name?: string;
+  reports_to?: string;
+  team?: string;
+};
+
 export type CommentDelivery = {
   default: "queue" | "defer" | null;
   default_for: string | null;
@@ -3360,15 +3394,35 @@ export type ScreeningModes = {
 export type ScreeningTest = Record<string, unknown>;
 
 export type Seat = {
+  agent: string;
+  agent_name: string;
   created?: string;
   description: string;
   id: string;
   kind: "seat";
   org_parent?: string;
   reports_to: string;
+  request_state: string;
   stage: "recruiting";
   team?: string;
   title: string;
+};
+
+export type SeatAgent = {
+  agent: CloudAgent;
+  seat: Seat;
+  steps: Array<"requested" | "building" | "ready">;
+  tasks: Array<{
+  id: string;
+  status: string;
+  title: string;
+}>;
+};
+
+export type SeatAgentRequest = {
+  agent: string;
+  first_task?: string;
+  name?: string;
 };
 
 export type SeatBatch = {
@@ -3377,6 +3431,12 @@ export type SeatBatch = {
 
 export type SeatBatchCreate = {
   seats: Array<SeatCreate>;
+};
+
+export type SeatCancelled = {
+  closed: boolean;
+  id: string;
+  request_state: string;
 };
 
 export type SeatCandidate = {
@@ -4784,6 +4844,14 @@ export type AddCardParams = {
 export type AddCardBody = CardAdd;
 export type AddCardResponse = unknown;
 
+/** POST /api/v2/cloud-agents/{agent_id}/add */
+export type AddCloudAgentParams = {
+  "Idempotency-Key": string;
+  agent_id: string;
+};
+export type AddCloudAgentBody = CloudAgentAdd;
+export type AddCloudAgentResponse = CloudAgentAdded;
+
 /** POST /api/v2/doc-sources */
 export type AddDocSourceParams = {
   "Idempotency-Key": string;
@@ -5000,6 +5068,14 @@ export type CancelInboundPhoneRequestParams = {
 };
 export type CancelInboundPhoneRequestBody = never;
 export type CancelInboundPhoneRequestResponse = unknown;
+
+/** POST /api/v2/seats/{seat_id}/cancel-request */
+export type CancelSeatRequestParams = {
+  "Idempotency-Key": string;
+  seat_id: string;
+};
+export type CancelSeatRequestBody = never;
+export type CancelSeatRequestResponse = SeatCancelled;
 
 /** POST /api/v2/model-subscriptions/{sid} */
 export type ChangeModelSubscriptionParams = {
@@ -6052,6 +6128,13 @@ export type GetSeatParams = {
 export type GetSeatBody = never;
 export type GetSeatResponse = SeatDetail;
 
+/** GET /api/v2/seats/{seat_id}/request */
+export type GetSeatAgentParams = {
+  seat_id: string;
+};
+export type GetSeatAgentBody = never;
+export type GetSeatAgentResponse = SeatAgent;
+
 /** GET /api/v2/sleep */
 export type GetSleepWhenIdleParams = Record<string, never>;
 export type GetSleepWhenIdleBody = never;
@@ -6373,6 +6456,11 @@ export type ListChangelogParams = {
 };
 export type ListChangelogBody = never;
 export type ListChangelogResponse = ChangelogList;
+
+/** GET /api/v2/cloud-agents */
+export type ListCloudAgentsParams = Record<string, never>;
+export type ListCloudAgentsBody = never;
+export type ListCloudAgentsResponse = CloudAgentList;
 
 /** GET /api/v2/computer-subscriptions */
 export type ListComputerSubscriptionsParams = Record<string, never>;
@@ -7461,6 +7549,14 @@ export type RequestApprovalParams = {
 export type RequestApprovalBody = ApprovalCreate;
 export type RequestApprovalResponse = ApprovalRequested;
 
+/** POST /api/v2/cloud-agents/{agent_id}/request */
+export type RequestCloudAgentParams = {
+  "Idempotency-Key": string;
+  agent_id: string;
+};
+export type RequestCloudAgentBody = CloudAgentRequest;
+export type RequestCloudAgentResponse = Seat;
+
 /** POST /api/v2/finance/actions */
 export type RequestFinanceActionParams = {
   "Idempotency-Key": string;
@@ -7490,6 +7586,14 @@ export type RequestPublicRoadmapTaskParams = {
 };
 export type RequestPublicRoadmapTaskBody = PublicRequester;
 export type RequestPublicRoadmapTaskResponse = unknown;
+
+/** POST /api/v2/seats/{seat_id}/request-agent */
+export type RequestSeatAgentParams = {
+  "Idempotency-Key": string;
+  seat_id: string;
+};
+export type RequestSeatAgentBody = SeatAgentRequest;
+export type RequestSeatAgentResponse = Seat;
 
 /** POST /api/v2/tasks/{tid}/comments/{mid}/resolve */
 export type ResolveTaskQuestionParams = {

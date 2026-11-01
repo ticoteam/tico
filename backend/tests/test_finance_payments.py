@@ -14,6 +14,8 @@ from backend import hubdb as H
 from backend import rules as TR
 from backend.finance import actions as FA
 from backend.finance import reads as FR
+from backend.finance import context as FC
+from backend.finance.store import tico as FT
 from backend.finance.actions import FinanceError
 from backend.finance.mercury import Answer
 from backend.finance.store import tico
@@ -111,7 +113,11 @@ def test_a_card_holder_who_cannot_see_the_budget_is_refused_without_its_name(boo
     assert refused.code == "denied" and "Cloud" not in refused.reason, refused
 
 
-def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books):
+def test_watch_rule_actions_run_as_the_rules_maker_once_per_event(books, monkeypatch):
+    # The rule runner passes no `at`, so the action is planned and stamped on the clock (finance.context.now,
+    # store.tico.now). The other fixtures pass AT, so pin both: the pause then lands in the period of AT that is read.
+    monkeypatch.setattr(FC, "now", lambda: AT)
+    monkeypatch.setattr(FT, "now", lambda: AT)
     fake = FakeMercury()
     connect(books, fake)
     budget_id, eve = _budget_and_card(books)

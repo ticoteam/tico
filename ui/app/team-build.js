@@ -103,7 +103,11 @@ async function tbSuggest(state) {
   state.hold = setTimeout(() => { if (state.dot.dataset.state === 'done') ldotSet(state.dot, 'idle'); }, TB_HOLD);
 }
 
-// A new briefing keeps what the person chose for a role: its checkbox, and its pick when that template still stands for
+// What a candidate is, across roles: a template, or a cloud agent's id (its template is "", so two agents never match each
+// other or a template).
+const tbKey = item => item.source === 'cloud' ? `cloud:${item.id}` : item.template;
+
+// A new briefing keeps what the person chose for a role: its checkbox, and its pick when that candidate still stands for
 // the role (the pick and the offers swap back). A role no longer suggested is dropped. `offers` is what the role can take
 // instead; `alternatives` is what it shows, from tbLayout.
 function tbRows(roles, prev) {
@@ -111,7 +115,7 @@ function tbRows(roles, prev) {
   return tbUnique(roles.map(role => {
     const old = before.get(role.role), cloud = role.pick.source === 'cloud';
     const pool = [role.pick, ...role.alternatives];
-    const kept = old?.pick.template && pool.find(item => item.template === old.pick.template);
+    const kept = old && tbKey(old.pick) && pool.find(item => tbKey(item) === tbKey(old.pick));
     const pick = kept || role.pick;
     return {role: role.role, pick, cloud, on_team: role.on_team, bot: role.bot ?? null,
       offers: kept && kept !== role.pick ? pool.filter(item => item !== kept) : role.alternatives,
@@ -121,11 +125,11 @@ function tbRows(roles, prev) {
   }));
 }
 
-// A role's alternatives are its offers less the templates the other roles pick: one template is never two roles' picks.
+// A role's alternatives are its offers less what the other roles pick: one template is never two roles' picks.
 function tbLayout(state) {
   state.rows.forEach((row, i) => {
-    const taken = new Set(state.rows.filter((_, k) => k !== i).map(other => other.pick.template));
-    row.alternatives = row.on_team || row.cloud ? [] : row.offers.filter(item => !taken.has(item.template));
+    const taken = new Set(state.rows.filter((_, k) => k !== i).map(other => tbKey(other.pick)));
+    row.alternatives = row.on_team ? [] : row.offers.filter(item => !taken.has(tbKey(item)));
   });
 }
 
@@ -162,11 +166,12 @@ function tbCard(row, i, still) {
   const {pick, role, cloud, bot} = row, team = row.on_team;
   // On the team, the card names the bot that fills the role, with that bot's avatar.
   const onBot = team && bot;
+  const change = row.alternatives.length ? `<button class="tb-link" type="button" data-tb-change="${i}" aria-expanded="${row.open}" aria-controls="tb-alts-${i}">Change</button>` : '';
+  // A cloud agent Tico connects is added as a bot; any other is requested. Both open the Cloud agents dialog.
   const action = team ? '<span class="tb-state">On the team</span>'
-    : cloud ? `<button class="tb-link" type="button" data-tb-request="${i}">Request</button>`
-    : row.alternatives.length ? `<button class="tb-link" type="button" data-tb-change="${i}" aria-expanded="${row.open}" aria-controls="tb-alts-${i}">Change</button>`
-    : '';
-  const alts = team || cloud || !row.alternatives.length ? '' : `<ul class="tb-alts" id="tb-alts-${i}"${row.open ? '' : ' hidden'}>${row.alternatives.map((alt, j) =>
+    : cloud ? `<button class="tb-link" type="button" data-tb-request="${i}">${pick.supported ? 'Add' : 'Request'}</button>${change}`
+    : change;
+  const alts = team || !row.alternatives.length ? '' : `<ul class="tb-alts" id="tb-alts-${i}"${row.open ? '' : ' hidden'}>${row.alternatives.map((alt, j) =>
     `<li><button class="tb-alt" type="button" data-tb-alt="${i}:${j}">${botAvatar({slug: alt.template || alt.name, icon: alt.icon}, 22)}`
     + `<span class="tb-alt-name">${esc(alt.name)}</span>${tbMatch(alt)}</button></li>`).join('')}</ul>`;
   return `<article class="tb-card${team ? ' is-team' : ''}${still ? ' tb-still' : ''}" data-card="${i}" style="--i:${i}">
@@ -193,13 +198,14 @@ function tbToggle(state, i, button) {
   if (list) list.hidden = !row.open;
 }
 
-// Swaps a role's pick for one of its alternatives: the old pick takes that alternative's place and the role is picked.
-// Every card is drawn again, still, so the other roles stop offering the template that is now picked.
+// Swaps a role's pick for one of its alternatives: the old pick takes that alternative's place and the role is picked
+// (a cloud agent is never hired here, so it stays unchecked). Every card is drawn again, still, so the other roles stop
+// offering the template that is now picked.
 function tbPick(state, i, j) {
   const row = state.rows[i], alt = row.alternatives[j];
   if (!alt) return;
   row.offers = row.offers.map(item => item === alt ? row.pick : item);
-  row.pick = alt; row.checked = true; row.open = false;
+  row.pick = alt; row.checked = !row.cloud; row.open = false;
   tbGrid(state, true);
   state.dialog.querySelector(`[data-card="${i}"] [data-tb-change]`)?.focus();
 }
@@ -217,11 +223,11 @@ function tbChooseTeam(state, team) {
   void tbSuggest(state);
 }
 
-// A cloud agent is requested from the Cloud agents page, into this team: the seat lands here, not at the top of the chart.
-// Until that page is there, the toast says where to go.
+// A cloud agent is added or requested from the Cloud agents page, into this team: the bot or seat lands here, not at the
+// top of the chart. Until that page is there, the toast says where to go.
 function tbRequest(state, pick) {
   if (typeof window.cloudAgentRequest === 'function') return window.cloudAgentRequest(pick, {team: state.team});
-  toast(`Request ${pick.name} from Cloud agents.`, false, null, {host: TEAM_BUILD?.dialog});
+  toast(`${pick.supported ? 'Add' : 'Request'} ${pick.name} from Cloud agents.`, false, null, {host: TEAM_BUILD?.dialog});
 }
 
 async function tbHire(state) {

@@ -16,26 +16,33 @@ from backend.tests.test_strategy_bot import as_bot
 
 BRIEF = "A Rust API and a React web app, deployed on AWS, with GitHub pull requests and flaky tests"
 CLOUD_ROLE = "Second pair of hands"
-CLOUD = {"id": "devin", "name": "Devin", "maker": "Cognition", "site": "devin.ai", "line": "A cloud engineer.",
-         "supported": False, "connect_id": None}
+# Out of order on purpose: the role offers the agents Tico connects first, then the rest, each group in listing order.
+CLOUDS = [{"id": "devin", "name": "Devin", "maker": "Cognition", "site": "devin.ai", "line": "A cloud engineer.",
+           "supported": False, "connect_id": None},
+          {"id": "claude", "name": "Claude Code", "maker": "Anthropic", "site": "claude.com", "line": "Codes in your repo.",
+           "supported": True, "connect_id": "claude"},
+          {"id": "droids", "name": "Droids", "maker": "Factory", "site": "factory.ai", "line": "Turns tickets into PRs.",
+           "supported": False, "connect_id": None},
+          {"id": "codex", "name": "Codex", "maker": "OpenAI", "site": "openai.com", "line": "Works in a sandbox.",
+           "supported": True, "connect_id": "codex"}]
 NOBODY = {"everyone": False, "people": [], "teams": [], "bots": []}
 
 
 @pytest.fixture(params=[(False, False), (False, True), (True, False), (True, True)],
                 ids=["absent", "absent-cached", "listed", "listed-cached"])
 def cloud(request, monkeypatch):
-    """backend/cloud_agents.py missing (its import fails) or there, listing Devin; and an earlier import of it either left
+    """backend/cloud_agents.py missing (its import fails) or there, listing its agents; and an earlier import of it either left
     on the package (`cached`) or not. `from . import cloud_agents` reads the package's attribute before the module table,
     so both are set for each case, and the test sees only what the case says."""
     listed, cached = request.param
     if cached:
         # An earlier import left a copy behind that answers the other way round: the suggestion must not read it.
         stale = types.ModuleType("backend.cloud_agents")
-        stale.listing = (lambda: []) if listed else (lambda: [CLOUD])
+        stale.listing = (lambda: []) if listed else (lambda: [dict(agent) for agent in CLOUDS])
         monkeypatch.setattr(backend, "cloud_agents", stale, raising=False)
     if listed:
         module = types.ModuleType("backend.cloud_agents")
-        module.listing = lambda: [CLOUD]
+        module.listing = lambda: [dict(agent) for agent in CLOUDS]
         monkeypatch.setitem(sys.modules, "backend.cloud_agents", module)
         monkeypatch.setattr(backend, "cloud_agents", module, raising=False)
     else:
@@ -93,7 +100,12 @@ def test_the_suggestion_is_the_departments_roles_head_first_with_compact_candida
     assert roles[:len(templates)] == templates
     assert len(clouds) == (1 if cloud else 0) and roles[len(templates):] == clouds
     for role in clouds:
-        assert role["role"] == CLOUD_ROLE and role["pick"]["name"] == CLOUD["name"]
+        # The pick is the first agent Tico connects (added as a bot); the others follow under Change, connected first.
+        assert role["role"] == CLOUD_ROLE and role["pick"]["id"] == "claude" and role["pick"]["supported"]
+        assert [alt["id"] for alt in role["alternatives"]] == ["codex", "devin", "droids"]
+        assert [alt["supported"] for alt in role["alternatives"]] == [True, False, False]
+        for agent in [role["pick"], *role["alternatives"]]:
+            assert agent["source"] == "cloud" and agent["template"] == "" and len(agent["line"]) <= 90
         assert not role["checked"] and not role["on_team"]
     assert templates[0]["pick"]["template"] == "engineering-lead"
     assert templates[0]["checked"] and not templates[0]["on_team"]

@@ -3,10 +3,11 @@
 A Recruiting seat (backend/lifecycle.py) is filled in three steps, the same from the org chart and from the Team plus
 menu's Post a job, which creates the seat first:
 
-1. **Post it.** `draft` writes a job description from the title at once, on this server: the catalog card whose name
-     and tags best fit the title, as one line from its summary, what it owns and the tools it works in. With
-     `redraft` and a Gemini key, one model call rewrites that text in under five seconds; without either, the composed
-     text is the answer. Nothing is stored until the person posts the job (`POST /v2/seats`), and anyone who may change
+1. **Post it.** `draft` writes a job description from the title at once, on this server: the catalog card that is
+     the job the title names (its name shares a word of work with the title, never only "Engineer" or "Manager"), as
+     one line from its summary, what it owns and the tools it works in. With `redraft` and a Gemini key, one model call
+     rewrites that text in under five seconds; without either, the composed text is the answer. When no card is the
+     job, that one call writes the description from the title alone, or the box stays empty. Nothing is stored until the person posts the job (`POST /v2/seats`), and anyone who may change
      the seat edits it later (lifecycle `_may_place`).
 2. **Recruit.** `candidates` answers at once, on this server, from the template catalog: up to eight Tico templates,
      the best fit to the seat's title and job description first, each with one line, what it does on day one, what it
@@ -16,11 +17,14 @@ menu's Post a job, which creates the seat first:
      repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
      BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
 import json
+import re
 import socket
 import threading
 import time
 from dataclasses import replace
 from urllib.request import Request, urlopen
+
+from clients import gateway as G
 
 from . import hubdb as H
 from . import lifecycle
@@ -37,6 +41,13 @@ REWRITE_BYTES = 64 * 1024               # the most of the model's answer read
 REWRITE_CHUNK = 8 * 1024                # read in pieces, so the deadline is checked as the answer arrives
 _REWRITES = threading.BoundedSemaphore(2)   # rewrites at once; a third keeps the composed text instead of queueing
 REWRITE_MODEL = "gemini-3.7-flash"
+# With no Gemini key (a hosted install), the Tico AI Gateway's General · Low tier at version 1.0 (Claude Haiku 5.5, the
+# cheapest general chat tier; backend/gateway_tiers.py). Pinned, so a later version never changes what a draft runs on.
+GATEWAY_REWRITE_MODEL = "tico-general-low-1.0"
+# Gateway models reason before they answer, and the reasoning counts against the cap: 400 left a rewrite (the longer
+# prompt) with no answer at all. The least reasoning, and room for it plus a 150-word answer.
+GATEWAY_MAX_TOKENS = 2000
+GATEWAY_EFFORT = "low"
 # The tools a card's `prerequisites` name, as a person reads them. Tico's own tasks, docs and the open web need nothing
 # set up, so a candidate needing them has them; any other tool is set up on hire (required) or later (optional).
 TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email", "calendar": "Calendar",
@@ -44,7 +55,96 @@ TOOL_LABELS = {"hub": "Tico tasks", "docs": "Docs", "web": "Web", "mail": "Email
 BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
 # Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
 RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior", "chief", "director", "specialist",
-                                    "associate", "officer") for stem, _ in R._words(word))
+                                    "associate", "officer", "staff", "principal") for stem, _ in R._words(word)) | {
+    "vp", "svp", "evp", "sr", "jr", "ii", "iii", "iv"}      # short ranks and levels: "VP, Product Marketing", "Designer II"
+# Words naming a kind of job, not its work, as written: "Rust engineer" and "QA Engineer" share no work, and neither do
+# "Data analyst" and "Pricing Analyst". "Engineering" is a field of work and stays.
+ROLE_WORDS = frozenset("""engineer engineers developer developers analyst analysts coordinator coordinators administrator
+administrators agent agents assistant assistants rep reps representative representatives generalist generalists
+consultant consultants writer writers designer designers producer producers accountant accountants""".split())
+
+
+# The only small words a job's name holds that say nothing: "Head of People" keeps "People", which the recommender's
+# stop words drop from free text.
+NAME_STOP = frozenset("of and the for to in on at with by a an".split())
+
+
+def _name_stem(word):
+    """A plural is its singular first ("Advocates" is "Advocate"), so both read the same to the recommender's stem."""
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return R._stem(word)
+
+
+# Words that make a title a department head's: its card is the department's `lead`.
+HEAD_WORDS = frozenset("head chief director vp".split())
+
+
+# A job named in full and by its letters is one job, in a title and in a template's name alike: "Human Resources
+# Generalist" is the HR Generalist, "SRE" the Site Reliability Engineer. The letters go in front of the words, which
+# stay ("Site Reliability Manager" still says "reliability").
+SHORT = ((r"human resources?", "hr"), (r"financial planning", "fp"), (r"public relations", "pr"),
+         (r"quality assurance", "qa"), (r"user experience", "ux"), (r"information technology", "it"),
+         (r"search engine optimi[sz]ation", "seo"), (r"site reliability", "sre"), (r"sales development", "sdr"))
+
+
+LETTERS = frozenset(short for _, short in SHORT)
+
+
+# How a job is held, not what it is: a qualifier made only of these words names no work.
+HELD = re.compile(r"(?:(?:contract(?:or)?|to|hire|remote|hybrid|on[\s-]?site|in[\s-]office|temporary|temp|part|full|"
+                  r"time|freelance|interim|fractional|permanent|intern(?:ship)?|us|usa|eu|uk|emea|apac|amer|americas|"
+                  r"latam|anz|global|worldwide|nyc|sf|\d+)[\s/-]*)+")
+
+
+def _name_words(text):
+    """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
+    text = re.sub(r"\bvice[\s-]+president\b", "vp", str(text or "").lower().replace("'", ""))
+    # A qualifier after a comma, dash or in brackets names the work ("Software Engineer, Security", "Analyst
+    # (Pricing)", "Manager, Engineering") unless it says how the job is held ("UX Designer (Contract)", "Rust engineer
+    # - remote"). The work goes in front, so the job's last word still names its kind.
+    brackets = re.findall(r"\(([^)]*)\)", text)
+    parts = re.split(r"\s+[-\u2013\u2014|]\s+|,|\|", re.sub(r"\([^)]*\)", " ", text))
+    work = [part for part in parts[1:] + brackets if part.strip() and not HELD.fullmatch(part.strip())]
+    text = " ".join(work + [parts[0]])
+    for full, short in SHORT:
+        text = re.sub(rf"\b{full}\b", lambda found, short=short: f"{short} {found.group(0)}", text)
+    text = re.sub(r"\baccounting\b", "bookkeeping", text)      # the books, not a client account ("Account Manager")
+    text = re.sub(r"\bcustomer service\b", "support customer service", text)     # the Support Agent's work
+    text = re.sub(r"\bemployee relations?\b", lambda found: f"hr {found.group(0)}", text)    # HR's, not investors'
+    words = re.findall(r"[a-z0-9]+", text)
+    return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
+
+
+# The words a department head's title may use for the department's field beyond its id ("Head of Human Resources").
+FIELDS = {"hr": "hr human resources people", "support": "support customer service",
+          "operations": "operations ops", "product": "product", "legal": "legal", "finance": "finance",
+          "marketing": "marketing growth", "sales": "sales revenue", "engineering": "engineering technology"}
+
+
+def _kind(title):
+    """The kind of job the title's last word names ("engineer" in "Rust engineer"), as a stem, or "" when it names none
+    ("Developer relations", "Head of Sales")."""
+    words = [word for stem, word in _name_words(title) if stem not in RANKS]
+    if not words or words[-1] not in ROLE_WORDS:
+        return ""
+    # A rep is a representative, and a developer the same kind of job as an engineer (the catalog names engineers).
+    return {"rep": "representative", "reps": "representative", "developer": "engineer",
+            "developers": "engineer"}.get(words[-1]) or _name_stem(words[-1])
+
+
+# Kinds of job that are one job: a Support Representative is the Support Agent.
+SAME_KIND = {stem: {_name_stem("agent"), _name_stem("representative")} for stem in (_name_stem("agent"),
+                                                                                    _name_stem("representative"))}
+
+
+def _work(title):
+    """The stems of the title's words of work: not of rank, and not the kind of job its last word names ("Rust
+    engineer" is "Rust"; "Developer relations" keeps "Developer")."""
+    words = [(stem, word) for stem, word in _name_words(title) if stem not in RANKS]
+    if _kind(title):
+        words = words[:-1]
+    return {stem for stem, _ in words}
 
 
 # ------------------------------------------------------------------ the seat as the recruiting page shows it
@@ -82,30 +182,61 @@ def _tool(tool):
 
 
 def _best_card(cards, title, team=""):
-    """The catalog card whose name and tags best fit the title, or None when nothing does. A card in the department
-    the seat's group is named for wins a tie."""
-    words = R._words(title)
-    if not words:
+    """The catalog card that is the job the title names, or None when none is: its name must share a word of work with
+    the title ("Support" in "Customer support lead", not "Engineer" in "Rust engineer", nor a tag like "software" on
+    the Product Manager). Among those, the one whose name and tags fit best; a card in the department the seat's group
+    is named for wins a tie."""
+    words, work = R._words(title), _work(title)
+    if not work:
         return None
     common = R._common(cards)
     group = str(team or "").strip().lower()
     best = None
+    stems = {stem for stem, _ in _name_words(title)} - RANKS
+    heads, kind = bool({word for _, word in _name_words(title)} & HEAD_WORDS), _kind(title)
     for card in cards:
-        score, _ = R._match(card, words, common)
-        score += 3 * len(R._stems(card["name"]) & R._stems(title) - RANKS)
-        if not score:
+        name = {stem for stem, _ in _name_words(card["name"])}
+        if kind and not SAME_KIND.get(kind, {kind}) & name:
+            continue                        # a designer is not the UX Writer, an engineer not a specialist
+        if heads and card.get("lead"):
+            # A head's title names the field it heads, which the head's card may not: "Head of HR" is the Head of
+            # People, the head of the HR department. Only a title that is all field: "Director of Revenue
+            # Recognition" heads revenue recognition, not Sales.
+            field = {stem for stem, _ in _name_words(FIELDS.get(card["department"], card["department"]))}
+            if work <= field:
+                name |= field
+        # A job's letters are a whole name ("PR" is Public Relations), so they outweigh one of its words ("Relations").
+        shared = sum(2 if stem in LETTERS else 1 for stem in name & work)
+        if not shared:
             continue
+        score, _ = R._match(card, words, common)
+        # More of the work in the name wins ("Legal Operations Manager" for "Head of Legal Operations", not the head of
+        # Legal), then a head's card for a head's title, then more of the title: "Security Engineer", not "Security and
+        # Compliance Analyst".
+        score = (shared, heads and bool(card.get("lead")), len(name & stems), score)
         key = (score, card["department"] == group, -len(card["name"]), card["template"])
         if best is None or key > best[0]:
             best = (key, card)
     return best[1] if best else None
 
 
+# What a card's bullet says for the bot's own files and limits, not for the person reading the job: "(knowledge/labels.md)",
+# ", in knowledge/company.md" and "within the requested work and Tools" go.
+_FILE = r"(?:knowledge|reports|docs|_[\w-]+)/[\w./-]*|[\w./-]*\.(?:md|json|ya?ml|csv)\b"
+_PLAIN = re.compile(rf"\s*\((?:[^()]*?(?:{_FILE})[^()]*?)\)|,?\s+in\s+(?:{_FILE})\s*$"
+                    r"|,?\s*(?:prepared\s+)?(?:to apply\s+)?within the requested work(?:\s+and\s+tools)?", re.I)
+
+
+def _plain(item, limit=160):
+    """One bullet of what a card owns, as a job description says it (see _PLAIN), cut to `limit`."""
+    return R._text(_PLAIN.sub("", str(item or "")).strip(" ,"), limit)
+
+
 def compose(card):
     """One line from the card's summary, what it owns as "What you'll do", and the tools it works in."""
     raw = card["raw"]
     lines = [R._first_sentence(raw["summary"] or card["summary"], 200)]
-    owns = [R._text(item, 160) for item in raw["owns"][:DRAFT_OWNS] if R._text(item, 160)]
+    owns = [_plain(item) for item in raw["owns"][:DRAFT_OWNS] if _plain(item)]
     if owns:
         lines += ["", "What you'll do", *("- " + item for item in owns)]
     tools = list(dict.fromkeys(_tool(row["tool"]) for row in raw["prerequisites"]))
@@ -142,24 +273,31 @@ def may_draft(who):
         raise Problem("forbidden", "Only a person drafts a job description", 403)
 
 
-def _rewrite_call(text, title, boss, deadline):
-    """One Gemini call that rewrites the composed description for this role, given up at `deadline` (a monotonic
-    time): no request starts once it has passed, each socket wait is at most the time left, and the answer is read in
-    pieces with the deadline checked between them. It raises when there is no key, the call fails or time is up."""
-    from clients.docs_qa import key
-    secret = key()
+def _rewrite_prompt(text, title, boss):
+    """The instructions a rewrite is asked with: the composed text to rewrite for this role, or, with no template that is
+    the job, the role written from its title. The same words go to Gemini and to the Tico Gateway."""
+    role = f"the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
+    rules = ("Plain words, under 150 words, no other headings, and never name a template, a model or a vendor. Answer "
+             "with the text only.")
+    if text:
+        return (f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
+                "with three to five short bullets starting with \"- \", then one \"Works in:\" line. " + rules
+                + "\n\n" + text)
+    # No template is this job: written from the title alone, in the same shape less the tools, which nobody named.
+    return (f"Write a job description for an AI teammate in {role}. Its shape: one opening line saying what it "
+            "owns, then \"What you'll do\" with three to five short bullets starting with \"- \", each a concrete "
+            "piece of work it delivers. " + rules)
+
+
+def _answer(request, opener, deadline):
+    """The bytes of the answer to `request`, opened with `opener` (urlopen, or the Gateway's transport) and read until
+    `deadline` (a monotonic time): each socket wait is at most the time left, and the answer is read in pieces with the
+    deadline checked between them. It raises when the time is up or the answer is longer than REWRITE_BYTES."""
     left = deadline - time.monotonic()
     if left <= 0:
-        raise TimeoutError("the key came too late")
-    prompt = (f"Rewrite this job description for the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
-              + ". Keep its shape: one opening line, then \"What you'll do\" with three to five short bullets "
-              "starting with \"- \", then one \"Works in:\" line. Plain words, under 150 words, no other headings, and "
-              "never name a template, a model or a vendor. Answer with the text only.\n\n" + text)
-    body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
-    request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
-                      data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+        raise TimeoutError("the request came too late")
     raw = b""
-    with urlopen(request, timeout=left) as response:
+    with opener(request, timeout=left) as response:
         # A server that keeps trickling bytes never lets a read time out, so the connection is cut at the deadline,
         # which ends any read waiting on it; each read also returns whatever has arrived and waits no longer than the
         # time left.
@@ -185,8 +323,49 @@ def _rewrite_call(text, title, boss, deadline):
                     raise ValueError("the model's answer is too long")
         finally:
             cut.cancel()
-    parts = json.loads(raw)["candidates"][0]["content"]["parts"]
-    return "".join(part.get("text", "") for part in parts).strip()
+    return raw
+
+
+def _gateway_answer(base, key, body, deadline):
+    """The Tico AI Gateway's answer to one chat request (`<base>/chat/completions`, OpenAI chat shape, not streamed), as
+    the parsed JSON. Sent with Tico's user agent and never through a redirect (clients/gateway.py `_send`), and read
+    under the same deadline as Gemini's answer. Its own function, so a test can answer without the network."""
+    request = Request(base + "/chat/completions", data=json.dumps(body).encode(), method="POST",
+                      headers={"Authorization": "Bearer " + key, "Content-Type": "application/json",
+                               "Accept": "application/json"})
+    return json.loads(_answer(request, G._send, deadline))
+
+
+def _rewrite_call(text, title, boss, deadline, gateway=None):
+    """One model call that rewrites the composed description for this role, given up at `deadline` (a monotonic time):
+    Gemini when the server has a key, else the Tico AI Gateway with the company's gateway key (`gateway`: its key and
+    base URL, from backend/gateway_connection.py `target`, or a function that reads them, called only here, inside the
+    time bound, so a draft that needs no model never reads the vault). No request starts once the deadline has passed, and each
+    socket wait is at most the time left. It raises when there is neither key, the call fails or time is up."""
+    from clients.docs_qa import NoKey, key
+    try:
+        secret = key()
+    except Exception:  # noqa: BLE001 - no Gemini key (NoKey) or it could not be read: the Gateway may still answer
+        secret = ""
+    left = deadline - time.monotonic()
+    if left <= 0:
+        raise TimeoutError("the key came too late")
+    prompt = _rewrite_prompt(text, title, boss)
+    if secret:
+        body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
+        request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
+                          data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
+        parts = json.loads(_answer(request, urlopen, deadline))["candidates"][0]["content"]["parts"]
+        return "".join(part.get("text", "") for part in parts).strip()
+    target = gateway() if callable(gateway) else gateway
+    if time.monotonic() >= deadline:
+        raise TimeoutError("the gateway key came too late")
+    if target and target[0]:
+        body = {"model": GATEWAY_REWRITE_MODEL, "messages": [{"role": "user", "content": prompt}],
+                "max_tokens": GATEWAY_MAX_TOKENS, "reasoning_effort": GATEWAY_EFFORT, "stream": False}
+        answer = _gateway_answer(G.safe_base(target[1]), target[0], body, deadline)
+        return str(answer["choices"][0]["message"]["content"] or "").strip()
+    raise NoKey("no Gemini key and no Tico AI Gateway key")
 
 
 def _socket_of(response):
@@ -204,10 +383,11 @@ def _cut(sock):
         pass                                # already closed
 
 
-def _rewrite(text, title, boss):
+def _rewrite(text, title, boss, gateway=None):
     """The rewrite, or "" when it fails, is not done within REWRITE_SECONDS in all (finding the key, which may wait on a
     secret store, the request and reading the answer), or two are already running. The worker holds its place until it
-    ends, which is at most about one socket wait past the deadline, so slow calls never pile up."""
+    ends, which is at most about one socket wait past the deadline, so slow calls never pile up. The model is Gemini,
+    else the Tico Gateway with `gateway` (see `_rewrite_call`)."""
     if not _REWRITES.acquire(blocking=False):
         return ""
     deadline = time.monotonic() + REWRITE_SECONDS
@@ -215,7 +395,7 @@ def _rewrite(text, title, boss):
 
     def work():
         try:
-            out["text"] = _rewrite_call(text, title, boss, deadline)
+            out["text"] = _rewrite_call(text, title, boss, deadline, gateway)
         except Exception:  # noqa: BLE001 - no key, slow, failed or odd: the caller keeps the composed text
             out["text"] = ""
         finally:
@@ -231,19 +411,26 @@ def _rewrite(text, title, boss):
     return "" if worker.is_alive() else out.get("text", "")
 
 
-def draft(onboarding, title, team="", boss="", redraft=False):
-    """A job description for a seat not posted yet, in well under a second: composed from the catalog card that best
-    fits the title (`source` "catalog"), or "" when none does (`source` "none"). `redraft` asks the model to rewrite
-    the composed text once (`source` "model"); with no key, a slow or failed call, or in a rehearsal or demo (which
-    never reach a model or read a key), the composed text stands."""
+def draft(onboarding, title, team="", boss="", redraft=False, gateway=None):
+    """A job description for a seat not posted yet: composed in well under a second from the catalog card that is the
+    job the title names (`source` "catalog"). `redraft` asks the model to rewrite the composed text once (`source`
+    "model"); with no key, a slow or failed call, or in a rehearsal or demo (which never reach a model or read a key),
+    the composed text stands. When no card is the job, the model writes one from the title within the same bound
+    (`source` "model"), else "" (`source` "none"). The model is Gemini when the server has a key, else the Tico AI
+    Gateway with `gateway` (the company's (key, base URL), or None)."""
     _, cards = _recruitable(onboarding)
     card = _best_card(cards, str(title or "")[:lifecycle.TITLE_MAX], team)
+    offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
     if not card:
+        # Another job's description is no draft ("Rust engineer" is not the QA Engineer): the model writes one from the
+        # title, under the same bound, or the box stays empty for the person's own words.
+        written = "" if offline else _rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway)
+        if len(written) >= 40:
+            return {"description": written[:lifecycle.DESCRIPTION_MAX], "source": "model"}
         return {"description": "", "source": "none"}
     text = compose(card)
-    offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
     if redraft and not offline:
-        rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss)
+        rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss, gateway)
         if len(rewritten) >= 40:
             return {"description": rewritten[:lifecycle.DESCRIPTION_MAX], "source": "model"}
     return {"description": text, "source": "catalog"}
@@ -294,7 +481,8 @@ def _needs(raw):
 
 def candidates(auth, onboarding, c, who, seat_id):
     """Recruit: up to eight Tico templates for the seat, strong matches first, then good ones, each tier best first.
-    `match` is "strong" when the template's name shares a word of the work with the title (not one of rank), "good"
+    `match` is "strong" when the template's name shares a word of the work with the title (not one of rank or a kind
+    of job: `_work`), "good"
     when its tags, name or summary fit the title or job description at all, else "". Deterministic and local: the same
     seat gives the same list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
@@ -310,7 +498,7 @@ def candidates(auth, onboarding, c, who, seat_id):
     for card in cards:
         score, _ = R._match(card, words, common)
         named, _ = R._match(card, title, common)
-        shared = len(R._stems(card["name"]) & R._stems(row["title"]) - RANKS)
+        shared = len({stem for stem, _ in _name_words(card["name"])} & _work(row["title"]))
         score += 2 * named + 3 * shared
         match = "strong" if shared else "good" if score > 0 else ""
         scored.append((("strong", "good", "").index(match), -score, {"default": 0, "common": 1}.get(card["suggest"], 2),
@@ -322,7 +510,7 @@ def candidates(auth, onboarding, c, who, seat_id):
         out.append({"template": card["template"], "name": card["name"], "icon": card["icon"],
                     "department": departments.get(card["department"], ""), "department_id": card["department"],
                     "line": R._first_sentence(card["summary"], 90), "summary": R._text(raw["summary"], 1000),
-                    "tags": card["tags"][:6], "owns": raw["owns"][:6], "never": raw["never"][:6],
+                    "tags": card["tags"][:6], "owns": [_plain(item, 400) for item in raw["owns"][:6] if _plain(item, 400)], "never": raw["never"][:6],
                     "onboarding": [item["ask"] for item in raw["onboarding"] if item["ask"]][:6],
                     "prerequisites": _needs(raw), "match": match, "source": "template", "starter": bool(raw["starter"]),
                     **_suggested(c, onboarding, raw)})
@@ -339,16 +527,68 @@ def _may_hire(auth, c, who, row):
     lifecycle._may_place(auth, c, who, row["reports_to"])
 
 
+def top_card(auth, onboarding, c, who, row):
+    """The raw card of the template Recruit ranks first for the seat, or None when none fits it (no Strong or Good match). A cloud agent's
+    add to a seat builds its bot from this card, since a bot's repository is built from a template."""
+    ranked = candidates(auth, onboarding, c, who, row["id"])["candidates"]
+    _, cards = _recruitable(onboarding)
+    template = ranked[0]["template"] if ranked and ranked[0]["match"] else ""   # a template that does not fit is not one
+    return next((card["raw"] for card in cards if card["template"] == template), None)
+
+
+def brief(c, onboarding, card, row):
+    """The reviewed instructions a seat's bot starts with: the template rendered for this company, then the seat's job
+    description. Returns the company's record, the rendered template, the description and the instructions."""
+    from .onboarding import display_names, load, render
+    record = load(c)
+    rendered = render(card, display_names(onboarding.settings, record), row["title"])
+    description = str(row["description"] or "").strip()
+    instructions = rendered["instructions"].rstrip() + ("\n\n## Job description\n" + description + "\n" if description else "")
+    return record, rendered, description, instructions
+
+
+def onboard(c, who, onboarding, row, card, slug, *, name, description, instructions, rendered, answers, model):
+    """Put the bot that fills a seat into Onboarding, in the seat's place, and only then give it its repository: a starter's
+    computer builds it from this definition (`materialize`), any other template's BotOps does on its "Set up" task. A hire
+    and a cloud agent's add to a seat both land here, so they land the same way. Returns the setup task's id, if any."""
+    from . import message_bots
+    if card.get("session") == "task":
+        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
+    if row["team"]:
+        c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
+    declared = onboarding._declared(c, slug)
+    declared.update(template=card["template"], instructions=instructions, template_version=releases.version(),
+                    recruited_from=row["id"])
+    onboarding._write_config(c, slug, declared)
+    # Onboarding from the start: it learns, takes no work, and a person above it marks it complete (lifecycle.py).
+    c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
+    message_bots.link(c, who.actor, slug, who.actor)
+    now = H.now()
+    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
+              (now, who.actor, slug, now, who.actor, row["id"]))
+    # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
+    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+              (slug, now, who.actor, "seat:" + row["id"]))
+    end_draft(c, row, "The seat was filled")
+    H.event(c, who.actor, "seat.filled", row["id"], {"bot": slug, "template": card["template"], "model": model})
+    if card["starter"]:
+        onboarding._make_starter(c, who, slug, card["template"])
+        return None
+    choice = {"template": card["template"], "display_name": name, "instructions": instructions,
+              "description": description}
+    return onboarding._setup_task(c, who, slug, choice, rendered, answers)
+
+
 def hire(auth, onboarding, c, who, seat_id, body):
     """Fill the seat with the picked candidate: the bot in Onboarding, in the seat's place, and only then its repo."""
-    from . import message_bots
-    from .onboarding import BOTOPS, display_names, load, render
+    from .onboarding import BOTOPS
     row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
     if row and row["filled_by"]:
         name = (H.bot(c, row["filled_by"]) or {}).get("display_name") or row["filled_by"]
         raise Problem("filled", f"This seat is already filled by {name}", 409)
     row = lifecycle.seat(c, seat_id)
     _may_hire(auth, c, who, row)
+    row = lifecycle.refuse_if_requested(row, c)
     _, cards = _recruitable(onboarding)
     card = next((card["raw"] for card in cards if card["template"] == body.template), None)
     if not card:
@@ -367,10 +607,7 @@ def hire(auth, onboarding, c, who, seat_id, body):
         # No provider yet: a stand-in satisfies the definition, then the bot follows the company default (as setup does).
         model, effort = next((m["id"], m.get("default_effort") or "") for m in onboarding.models.values()
                              if m.get("provider") and not m.get("deprecated"))
-    record = load(c)
-    rendered = render(card, display_names(onboarding.settings, record), row["title"])
-    description = str(row["description"] or "").strip()
-    instructions = rendered["instructions"].rstrip() + ("\n\n## Job description\n" + description + "\n" if description else "")
+    record, rendered, description, instructions = brief(c, onboarding, card, row)
     name = (body.name or row["title"]).strip()[:100] or row["title"][:100]
     slug = onboarding.admin.pick_slug(c, name)
     # The bot first, under the rules for any bot this person adds: who may create one, under whom, on which model and
@@ -383,33 +620,8 @@ def hire(auth, onboarding, c, who, seat_id, body):
     if stand_in:
         onboarding._follow_default(c, slug)
         model = ""
-    if card.get("session") == "task":
-        c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.session','task') WHERE bot=?", (slug,))
-    if row["team"]:
-        c.execute("UPDATE bot_config SET team=? WHERE bot=?", (row["team"], slug))
-    declared = onboarding._declared(c, slug)
-    declared.update(template=card["template"], instructions=instructions, template_version=releases.version(), recruited_from=seat_id)
-    onboarding._write_config(c, slug, declared)
-    # Onboarding from the start: it learns, takes no work, and a person above it marks it complete (lifecycle.py).
-    c.execute("UPDATE bot_config SET onboarding_state=? WHERE bot=?", (lifecycle.statuses.NEEDS_SETUP, slug))
-    message_bots.link(c, who.actor, slug, who.actor)
-    now = H.now()
-    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
-              (now, who.actor, slug, now, who.actor, seat_id))
-    # Seats that reported to this one move under the bot that fills it, rather than under a closed seat.
-    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
-              (slug, now, who.actor, "seat:" + seat_id))
-    end_draft(c, row, "The seat was filled")
-    H.event(c, who.actor, "seat.filled", seat_id, {"bot": slug, "template": card["template"], "model": model})
-    # Only now its repository: a starter's computer builds it from this definition (`materialize`), any other
-    # template's BotOps on its "Set up" task.
-    setup_task = None
-    if card["starter"]:
-        onboarding._make_starter(c, who, slug, card["template"])
-    else:
-        choice = {"template": card["template"], "display_name": name, "instructions": instructions,
-                  "description": description}
-        setup_task = onboarding._setup_task(c, who, slug, choice, rendered, record["answers"])
+    setup_task = onboard(c, who, onboarding, row, card, slug, name=name, description=description,
+                         instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
     return {"slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
             "template": card["template"], "model": model, "setup_task_id": setup_task,
             "note": (created or {}).get("note") if isinstance(created, dict) else None}

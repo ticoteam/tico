@@ -567,15 +567,19 @@ def facts(c, settings, current, at):
 
 def runner_behind(c, runner_id):
     """Whether computer `runner_id` reports a release older than this server's and will follow the server's: not one its
-    owner pinned, or one blocked from updating (the runner says so), nor one whose update to this same release failed
-    (the runner waits hours before it tries that again: a wake now would be spent on nothing). A blank or unparsed
-    release, and a development server, are never behind: nothing is woken for what cannot be compared."""
+    owner pinned, nor one whose update to this same release failed or was blocked (a failed one waits hours before it
+    tries again, a blocked one until its checkout changes: a wake now would be spent on nothing). A block names the
+    release it stopped at, so a newer release wakes the machine once more: what blocked it may be gone by then. A blank
+    or unparsed release, and a development server, are never behind: nothing is woken for what cannot be compared."""
     found = c.execute("SELECT release,update_state,update_target FROM runner_versions WHERE runner_id=?",
                       (runner_id,)).fetchone()
     have, want = releases.parse(found["release"]) if found else None, releases.parse(releases.version())
-    if not (have and want and have < want) or found["update_state"] in ("pinned", "blocked"):
+    if not (have and want and have < want) or found["update_state"] == "pinned":
         return False
-    return not (found["update_state"] in ("failed", "rolled_back") and releases.parse(found["update_target"]) == want)
+    target = releases.parse(found["update_target"])
+    if found["update_state"] == "blocked":
+        return bool(target and target < want)
+    return not (found["update_state"] in ("failed", "rolled_back") and target == want)
 
 
 def covers(woke_for, key):

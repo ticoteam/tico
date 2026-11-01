@@ -29,7 +29,9 @@ const hiring = page => page.evaluate(() => ['Post a job', typeof teamBuildOpen =
 
 async function open(browser, me, branches = false) {
   const page = await browser.newPage({viewport: {width: 1300, height: 900}, serviceWorkers: 'block'});
-  const errors = [], calls = [], failures = new Set();
+  // `recruits` holds the applicants calls a seat page makes when it opens (POST .../recruit). They land whenever the
+  // page gets them, so they are never mixed into `calls`, which steps compare exactly.
+  const errors = [], calls = [], recruits = [], failures = new Set();
   const deletion = {status: 0, hold: null}, seatSave = {status: 0, hire: 0, draftHold: null, draftText: null};
   const people = [
     {id: 'ana', name: 'Ana Rivera', email: 'ana@example.test', org_parent: '', team: '', inbox_bot: 'inbox'},
@@ -121,7 +123,8 @@ async function open(browser, me, branches = false) {
     let s;
     if ((s = p.match(/^\/api\/v2\/seats\/([^/]+)(?:\/(recruit|hire))?$/))) {
       const seat = seats.find(row => row.id === s[1]), body = method === 'GET' ? null : request.postDataJSON();
-      if (s[2]) calls.push(['POST', s[2], s[1], body]);
+      if (s[2] === 'recruit') recruits.push(['POST', 'recruit', s[1], body]);
+      else if (s[2]) calls.push(['POST', s[2], s[1], body]);
       if (!s[2] && method === 'PATCH') {
         calls.push(['PATCH', s[1], body]);
         if (seatSave.status) return route.fulfill({status: seatSave.status, contentType: 'application/json',
@@ -190,7 +193,7 @@ async function open(browser, me, branches = false) {
   page.on('pageerror', e => errors.push(e.message));
   await page.goto('https://tico-ui.test/#/updates');
   await page.locator('#tree a.node').first().waitFor();
-  return {page, errors, calls, people, groups, bots, failures, deletion, seatSave};
+  return {page, errors, calls, recruits, people, groups, bots, failures, deletion, seatSave};
 }
 
 // The chart as nested text: a group is {name: [...]}, a human or a bot is its name.
@@ -575,7 +578,7 @@ async function member(browser) {
 }
 
 async function teamAdd(browser) {
-  const {page, errors, calls, failures, bots, seatSave} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
+  const {page, errors, calls, recruits, failures, bots, seatSave} = await open(browser, {id: 'ana', role: 'owner', name: 'Ana', email: 'ana@acme.example', cloud: true});
   const choose = async name => {
     await page.locator('#org-add-group').click();
     await page.getByRole('menuitem', {name, exact: true}).click();
@@ -626,8 +629,9 @@ async function teamAdd(browser) {
   await page.locator('[data-recruit-hire="bookkeeping"]').click();
   await node(page, 'b:ledger').waitFor({state: 'attached'});
   await page.waitForFunction(() => location.hash === '#/bot/ledger');
-  assert.deepEqual(calls.filter(c => c[1] === 'recruit' || c[1] === 'hire'),
-    [['POST', 'recruit', 'seat1', {}], ['POST', 'hire', 'seat1', {template: 'bookkeeping', model: '', name: 'Ledger'}]]);
+  assert.deepEqual(recruits, [['POST', 'recruit', 'seat1', {}]]);
+  assert.deepEqual(calls.filter(c => c[1] === 'hire'),
+    [['POST', 'hire', 'seat1', {template: 'bookkeeping', model: '', name: 'Ledger'}]]);
   assert.deepEqual(calls.find(c => c[0] === 'hired with'), ['hired with', 'Keeps the books and closes each month.']);
   calls.length = 0;
   assert.equal(await page.locator('#tree a.node.seat').count(), 0, 'the filled seat leaves the chart');

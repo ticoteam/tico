@@ -9,6 +9,10 @@ the team fills (a bot built from that template). Only the bots the caller may se
 `hire` makes one Recruiting seat per pick in the team, then fills each with the seat page's own call
 (backend/recruiting.py `hire`). The department head goes first, so the other seats report to it as they do when hired one
 at a time. The whole request is one transaction: a refused pick leaves nothing behind.
+
+The last role is a cloud agent (backend/cloud_agents.py), unchecked and never hired here: its pick is the first agent Tico
+connects (added as a bot from the Cloud agents dialog), and its alternatives are the other agents, the connected ones first
+and the rest to request.
 """
 from typing import Annotated
 
@@ -29,7 +33,6 @@ ROLES = 8               # the roles a team's suggestion shows at most, and the p
 ALTERNATIVES = 6        # the other candidates a role offers under Change
 LINE = 90               # a candidate's one line, in characters
 STRONG, GOOD = 6, 3     # how well a candidate fits the briefing, on recruit_rank's own score
-CLOUD_ID = "devin"      # the cloud agent the team offers last, unchecked, as a second pair of hands
 CLOUD_ROLE = "Second pair of hands"
 OWNS = 3                # a candidate's owns, shown in the seat's job description and on the card
 
@@ -123,25 +126,30 @@ def _item(card, raw, match):
             "match": match, "source": "template"}
 
 
-def _cloud_agent():
-    """Devin as a cloud agent, when backend/cloud_agents.py is there to list them (GET /v2/cloud-agents); else none."""
-    try:
-        from . import cloud_agents
-    except ImportError:
-        return None
-    listing = getattr(cloud_agents, "listing", None)
-    agent = next((row for row in listing() if row.get("id") == CLOUD_ID), None) if callable(listing) else None
-    if not agent:
-        return None
+def _cloud(agent):
+    """A cloud agent as the web app shows it: the shape of a template candidate, with no template, so a hire skips it."""
     return {"id": agent["id"], "name": agent["name"], "maker": agent.get("maker", ""), "site": agent.get("site", ""),
             "line": str(agent.get("line") or "")[:LINE], "supported": bool(agent.get("supported")),
             "connect_id": agent.get("connect_id"), "source": "cloud", "template": "", "icon": "", "department": "",
             "tags": [], "owns": [], "prerequisites": [], "match": ""}
 
 
+def _cloud_agents():
+    """The cloud agents the last role offers, the ones Tico connects first and otherwise in the listing's order
+    (GET /v2/cloud-agents): the first is the pick. Empty when backend/cloud_agents.py is not there to list them."""
+    try:
+        from . import cloud_agents
+    except ImportError:
+        return []
+    listing = getattr(cloud_agents, "listing", None)
+    agents = [row for row in listing() if row.get("id") and row.get("name")] if callable(listing) else []
+    return [_cloud(row) for row in sorted(agents, key=lambda row: not row.get("supported"))]     # a stable sort
+
+
 def suggest(auth, onboarding, c, who, team, briefing=""):
     """The roles a team of bots needs for this briefing: one per suggested template, the head first, each with its
-    alternatives and whether a bot on the team already fills it. Deterministic: the same answer gives the same roles."""
+    alternatives and whether a bot on the team already fills it, then the cloud agent role. Deterministic: the same answer
+    gives the same roles."""
     _may_read(who)
     group = _group(c, auth, who, team)
     value = recruit.catalog(onboarding.settings)
@@ -173,9 +181,9 @@ def suggest(auth, onboarding, c, who, team, briefing=""):
                       "on_team": on_team,
                       "bot": _bot(c, filled[template], card["icon"]) if on_team else None,
                       "checked": not on_team and (template in suggested or match in ("strong", "good"))})
-    agent = _cloud_agent()
-    if agent:
-        roles.append({"role": CLOUD_ROLE, "pick": agent, "alternatives": [], "on_team": False, "checked": False})
+    agents = _cloud_agents()
+    if agents:
+        roles.append({"role": CLOUD_ROLE, "pick": agents[0], "alternatives": agents[1:], "on_team": False, "checked": False})
     return {"team": team, "department": dept, "roles": roles}
 
 

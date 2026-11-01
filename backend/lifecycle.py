@@ -34,10 +34,28 @@ SCHEMA = ("CREATE TABLE IF NOT EXISTS seats(id TEXT PRIMARY KEY, title TEXT NOT 
 # a chart model's text), when an earlier release's Strategy Bot drafted it and the task that asked it to, and the bot
 # that filled the seat.
 COLUMNS = (("description_by", "TEXT NOT NULL DEFAULT ''"), ("drafted_at", "TEXT"),
-           ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"))
+           ("draft_task", "TEXT NOT NULL DEFAULT ''"), ("filled_by", "TEXT NOT NULL DEFAULT ''"),
+           # A cloud agent this seat asks Tico to connect (backend/cloud_agents.py): its id, its name for `other`, where
+           # the request stands, the support ticket that asked, and the first task waiting for the agent.
+           ("agent", "TEXT NOT NULL DEFAULT ''"), ("agent_name", "TEXT NOT NULL DEFAULT ''"),
+           ("request_state", "TEXT NOT NULL DEFAULT ''"), ("request_ticket", "TEXT NOT NULL DEFAULT ''"),
+           ("first_task", "TEXT NOT NULL DEFAULT ''"))
 # `description_by` for a job description written before authorship was recorded. Only people and BotOps acting for them
 # wrote seats then, so it reads as a person's words.
 EARLIER = "earlier"
+# A cloud agent request Tico is asked to file for a seat (backend/cloud_agents.py), kept under its Idempotency-Key. It is
+# reserved as `filing` before Tico hears of it, so a repeat waits for the request in flight; it is `filed` once the seat
+# and its ticket are kept. A reservation older than FILING_STALE_SECONDS never came back, and its key may be used again.
+# `made` says the request made its seat, so releasing the request closes the seat rather than only clearing it.
+REQUESTS = ("CREATE TABLE IF NOT EXISTS seat_requests(id TEXT PRIMARY KEY, actor TEXT NOT NULL, "
+            "request_key TEXT NOT NULL, request_hash TEXT NOT NULL, seat_id TEXT NOT NULL DEFAULT '', "
+            "state TEXT NOT NULL, ticket_id TEXT NOT NULL DEFAULT '', created TEXT NOT NULL, "
+            "made INTEGER NOT NULL DEFAULT 0)")
+FILING_STALE_SECONDS = 120
+# A seat's cloud agent request (`request_state`): `filing` while Tico is told, `requested` once its ticket is kept,
+# `cancelling` while a cancel is told to Tico, and `cancelled` once the cancel is finished. A seat with an open request
+# changes only once the request is cancelled (refuse_if_requested).
+FILING, REQUESTED, CANCELLING, CANCELLED = "filing", "requested", "cancelling", "cancelled"
 
 
 def ensure(c):
@@ -50,6 +68,11 @@ def ensure(c):
             c.execute(f"ALTER TABLE seats ADD COLUMN {name} {kind}")
     if "description_by" not in have:
         c.execute("UPDATE seats SET description_by=? WHERE TRIM(description)<>''", (EARLIER,))
+    c.execute(REQUESTS)
+    if "made" not in {row[1] for row in c.execute("PRAGMA table_info(seat_requests)")}:
+        c.execute("ALTER TABLE seat_requests ADD COLUMN made INTEGER NOT NULL DEFAULT 0")
+    c.execute("CREATE UNIQUE INDEX IF NOT EXISTS seat_requests_key ON seat_requests(actor,request_key)")
+    c.execute("CREATE INDEX IF NOT EXISTS seat_requests_seat ON seat_requests(seat_id,state)")
 
 
 # ------------------------------------------------------------------ stages
@@ -150,7 +173,8 @@ def ready_of(config_json):
 def _seat(row):
     return {"id": row["id"], "kind": "seat", "stage": RECRUITING, "title": row["title"],
             "description": row["description"], "reports_to": row["reports_to"], "team": row["team"],
-            "created": row["created"], "created_by": row["created_by"], "updated": row["updated"]}
+            "created": row["created"], "created_by": row["created_by"], "updated": row["updated"],
+            "agent": row["agent"], "agent_name": row["agent_name"], "request_state": row["request_state"]}
 
 
 def seats(c):
@@ -183,6 +207,57 @@ def _reports_to(c, value, seat_id=""):
     if not bot or bot.get("state") == "archived":
         raise Problem("not_found", "Reports-to bot was not found", 404)
     return slug
+
+
+def placement(auth, c, who, reports_to, seat_id=""):
+    """The reporting line a seat would take, checked the way create_seat and update_seat check it, so a caller can
+    refuse before anything outside the database is done."""
+    reports_to = _reports_to(c, reports_to or who.actor, seat_id)
+    _may_place(auth, c, who, reports_to)
+    return reports_to
+
+
+def seat_view(c, seat_id):
+    """One open seat as the API shows it."""
+    return _seat(seat(c, seat_id))
+
+
+def seat_record(c, seat_id):
+    """A seat as the API shows it, open or closed: a request's answer still names its seat after the seat was closed."""
+    row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
+    if not row:
+        raise Problem("not_found", "Seat not found", 404)
+    return _seat(row)
+
+
+def refuse_if_requested(row, c=None):
+    """Refuse a change to a seat that has an open cloud agent request. A request being filed or cancelled is in flight
+    with Tico, so the change waits for it to finish; a requested seat keeps its line, team and title until the request
+    is cancelled (cancel_request in backend/cloud_agents.py). Filling, closing, renaming, moving and re-teaming a seat all
+    call this, so none of them can land while a request is open. Given the transaction, a request a dead process left in
+    flight past its window is recovered first, so the change goes ahead; returns the seat as it now is."""
+    if c is not None and row["request_state"] in (FILING, CANCELLING):
+        from .cloud_agents import _recover_stale
+        _recover_stale(c, row["id"])
+        row = seat(c, row["id"])
+    state = row["request_state"]
+    if state in (FILING, CANCELLING):
+        raise Problem(state, "This seat's cloud agent request is in progress. Try again in a moment.", 409, retryable=True)
+    if state and state != CANCELLED:
+        raise Problem("requested", "This seat has a cloud agent request: cancel the request first", 409)
+    return row
+
+
+def may_place_seat(auth, c, who, row):
+    """Whether this person may change the line of a seat row, as update_seat and close_seat check it."""
+    _may_place(auth, c, who, row["reports_to"])
+
+
+def bot_parent(c, reports_to):
+    """The bot or person a bot placed on this line reports to. A bot cannot report to a seat, so a seat answers to the
+    person or bot above it."""
+    value = str(reports_to or "")
+    return _anchor(c, value) if value.startswith(SEAT_PREFIX) else value
 
 
 def _seat_chain(c, seat_id):
@@ -305,6 +380,9 @@ def update_seat(auth, c, who, seat_id, fields):
     if fields.get("reports_to") is not None:
         values["reports_to"] = _reports_to(c, fields["reports_to"], seat_id)
         _may_place(auth, c, who, values["reports_to"])
+    # A title, team or line said again is no change, and a requested seat still takes description edits.
+    if any(k in values and values[k] != row[k] for k in ("title", "team", "reports_to")):
+        row = refuse_if_requested(row, c)
     if values:
         values.update(updated=H.now(), updated_by=who.actor)
         c.execute("UPDATE seats SET " + ",".join(k + "=?" for k in values) + " WHERE id=?", (*values.values(), seat_id))
@@ -319,11 +397,28 @@ def update_seat(auth, c, who, seat_id, fields):
 def close_seat(auth, c, who, seat_id):
     row = seat(c, seat_id)
     _may_place(auth, c, who, row["reports_to"])
+    # Closing would leave the ticket open at Tico and the first task waiting; cancelling the request does both.
+    row = refuse_if_requested(row, c)
     c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
     from .recruiting import end_draft
     end_draft(c, row, "The seat was taken off the org chart")
     H.event(c, who.actor, "seat.closed", seat_id, {})
     return {"id": seat_id, "closed": True}
+
+
+def fill_seat(c, who, seat_id, bot):
+    """The seat a bot now fills: closed with the bot on it, and the seats that reported to it report to the bot, as a
+    candidate's hire does (backend/recruiting.py)."""
+    row = seat(c, seat_id)
+    row = refuse_if_requested(row, c)
+    now = H.now()
+    c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
+              (now, who.actor, bot, now, who.actor, seat_id))
+    c.execute("UPDATE seats SET reports_to=?,updated=?,updated_by=? WHERE reports_to=? AND closed_at IS NULL",
+              (bot, now, who.actor, SEAT_PREFIX + seat_id))
+    from .recruiting import end_draft
+    end_draft(c, row, "The seat was filled")
+    H.event(c, who.actor, "seat.filled", seat_id, {"bot": bot})
 
 
 def org_parent(seat_row, roster, employees, archived=(), all_seats=None, bare_people=False):

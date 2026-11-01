@@ -36,7 +36,7 @@
 .tb-pick-text{display:flex;flex-direction:column;min-width:0}
 .tb-pick-name{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:var(--t-sm)}
 .tb-pick-sub{font-size:var(--t-xs);color:var(--muted)}
-.tb-card-foot{display:flex;align-items:center;min-height:20px;font-size:var(--t-sm)}
+.tb-card-foot{display:flex;align-items:center;gap:14px;min-height:20px;font-size:var(--t-sm)}
 .tb-state{color:var(--muted)}
 .tb-link{padding:0;border:0;background:none;color:var(--accent);font:inherit;font-size:var(--t-sm);cursor:pointer;
   text-decoration:underline;text-underline-offset:3px}

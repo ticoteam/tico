@@ -471,6 +471,14 @@ class Support:
         self._pull(row)
         return self.one(who, ticket_id)
 
+    def note(self, row, text):
+        """Tell HQ that a ticket this install filed has changed, such as a request withdrawn (backend/cloud_agents.py). It
+        goes with the ticket's own secret, not as a person's words; a ticket HQ already deleted has no one to hear it."""
+        answer = _ask_hq("POST", f"/v1/support/{row['hq_id']}/messages", body={"message": clean_message(text)},
+                         secret=self.secret(row))
+        if answer.status_code != 404:
+            _answer(answer, (201, 200))
+
     def remove(self, who, ticket_id):
         """Delete the ticket at HQ, then here."""
         row = self._own(who, ticket_id)

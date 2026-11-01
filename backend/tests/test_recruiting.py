@@ -46,6 +46,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     assert drafted["source"] == "catalog"
     text = drafted["description"]
     assert "\n\nWhat you'll do\n- " in text and "\n\nWorks in: " in text and not text.startswith("What")
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(RuntimeError("no key")))
     assert post(api, "seats/draft", {"title": "Qwxz vrrb"}) == {"description": "", "source": "none"}
     # Nothing is stored: drafting is not posting.
     assert get(api, "seats")["seats"] == []
@@ -53,7 +54,7 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     # Redraft asks the model once, for this title and boss; a failure, or an answer too short to use, keeps the
     # composed text. The first draft never asks.
     asked = []
-    def rewrite(composed, title, boss, deadline):
+    def rewrite(composed, title, boss, deadline, gateway=None):
         asked.append((title, boss))
         return "Leads our support desk.\n\nWhat you'll do\n- Answer every ticket the same day"
     monkeypatch.setattr(recruiting, "_rewrite_call", rewrite)
@@ -80,6 +81,130 @@ def test_post_a_job_drafts_a_description_from_the_title_at_once_and_redraft_rewr
     assert asked == [("Customer support lead", "")] * 3 + [("Customer support lead", cara)]
     bot = as_bot(api, "coo")
     assert api.post("/api/v2/seats/draft", headers=bot, json={"title": "Customer support lead"}).status_code == 403
+
+
+def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_another_job(api, monkeypatch):
+    """A word of rank or a kind of job ("Engineer", "Analyst") never makes a fit: "Rust engineer" is not the QA Engineer,
+    whose name shares only "Engineer". With no template that is the job, the model writes one from the title alone
+    (no template text to rewrite), under the same bound; with no model, the box stays empty."""
+    asked = []
+    def write(composed, title, boss, deadline, gateway=None):
+        asked.append((composed, title))
+        return "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"
+    monkeypatch.setattr(recruiting, "_rewrite_call", write)
+    for title in ("Rust engineer", "iOS developer", "Data analyst"):
+        drafted = post(api, "seats/draft", {"title": title})
+        assert drafted == {"description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day",
+                           "source": "model"}
+    assert asked == [("", "Rust engineer"), ("", "iOS developer"), ("", "Data analyst")]
+    # A title that is a template's job drafts from that template at once, without the model, two-letter work included.
+    _, cards = recruiting._recruitable(api.app.state.onboarding)
+    for title, template in (("QA engineer", "issue-triage"), ("Security engineer", "security-engineer"),
+                            ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead"),
+                            ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate"),
+                            ("Head of HR", "people-lead"), ("HR generalist", "people-hr"),
+                            ("Head of engineering", "engineering-lead"), ("Director of marketing", "marketing-lead"),
+                            ("Head of Human Resources", "people-lead"), ("Head of Legal Operations", "legal-ops"),
+                            ("Developer relations", "developer-advocate"), ("PR manager", "pr"),
+                            ("VP Engineering", "engineering-lead"), ("Head of Compliance", "compliance"),
+                            ("Head of Customer Success", "customer-success"), ("Account Director", "account-manager"),
+                            ("Human Resources Generalist", "people-hr"), ("Financial Planning Analyst", "spend-watcher"),
+                            ("SRE", "incident-scribe"), ("SDR", "sdr-research"),
+                            ("Site Reliability Manager", "incident-scribe"),
+                            ("Sales Development Specialist", "sdr-research"), ("Public relations manager", "pr"),
+                            ("Senior Software Developer", "pr-reviewer"), ("QA engineer (contract)", "issue-triage"),
+                            ("Security engineer - remote", "security-engineer"),
+                            ("Manager, Engineering", "engineering-manager"), ("Engineer, Security", "security-engineer"),
+                            ("Manager, Customer Success", "customer-success"),
+                            ("VP, Product Marketing", "product-marketing"), ("Sr. Security Engineer", "security-engineer"),
+                            ("Vice President, Product Marketing", "product-marketing"),
+                            ("Manager (Engineering)", "engineering-manager"), ("Analyst (Pricing)", "pricing"),
+                            ("Software Engineer, Security", "security-engineer"),
+                            ("Software Engineer (Security)", "security-engineer"),
+                            ("Software Engineer, Site Reliability", "incident-scribe"),
+                            ("Engineer (QA) - Remote, US", "issue-triage"),
+                            ("Support Representative", "support"), ("Customer Support Rep", "support"),
+                            ("Customer Service Agent", "support"),
+                            ("Director of Revenue Recognition", "revenue-accountant"),
+                            ("Employee Relations Manager", "hr-business-partner")):
+        assert recruiting._best_card(cards, title)["template"] == template, title
+    # A title ending in a kind of job wants that kind: a designer is not the UX Writer, an assistant not the Account
+    # Executive, a machine learning engineer not the Learning and Development Specialist.
+    for title in ("UX designer", "Executive assistant", "Machine learning engineer", "Product designer",
+                  "Accounting manager", "UX Designer (Contract)", "Rust engineer, platform",
+                  "UX Designer II", "UX Designer III"):
+        assert recruiting._best_card(cards, title) is None, title
+    # Every template's own name, and its plural, is that template's job.
+    misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
+              if (recruiting._best_card(cards, title) or {}).get("template") != card["template"]]
+    assert misses == []
+    asked.clear()
+    assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog" and asked == []
+    monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(TimeoutError("slow")))
+    assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
+
+    # Applicants: no template is "strong" for a Rust engineer on "Engineer" alone; the QA Engineer is for a QA engineer.
+    rust = post(api, "seats", {"title": "Rust engineer", "reports_to": "coo"})
+    assert "strong" not in {c["match"] for c in post(api, f"seats/{rust['id']}/recruit", {})["candidates"]}
+    qa = post(api, "seats", {"title": "QA engineer", "reports_to": "coo"})
+    first = post(api, f"seats/{qa['id']}/recruit", {})["candidates"][0]
+    assert first["template"] == "issue-triage" and first["match"] == "strong"
+
+
+def test_without_a_gemini_key_a_draft_is_written_on_the_tico_gateway_or_stays_empty(api, monkeypatch):
+    """A hosted install has no Gemini key: the title's draft is written on the Tico AI Gateway with the company's key,
+    and with no gateway key it stays empty. Gemini still answers first when it has a key. The network is stubbed: the
+    Gemini lookup raises or answers, and the Gateway's answer is canned."""
+    import io
+    from clients import docs_qa
+    from clients import gateway as G
+    asked = []
+    def gateway_answer(base, key, body, deadline):
+        asked.append((base, key, body))
+        return {"choices": [{"message": {"content": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day"}}]}
+    monkeypatch.setattr(recruiting, "_gateway_answer", gateway_answer)
+    monkeypatch.setattr(docs_qa, "key", lambda: (_ for _ in ()).throw(docs_qa.NoKey("no key")))
+    monkeypatch.delenv("TICO_GATEWAY_URL", raising=False)
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "gw-test-key")
+    drafted = post(api, "seats/draft", {"title": "Rust engineer"})
+    assert drafted == {"description": "Owns the Rust services.\n\nWhat you'll do\n- Ship one tested change a day", "source": "model"}
+    [(base, key, body)] = asked
+    assert (base, key) == (G.DEFAULT_BASE, "gw-test-key") and body["model"] == recruiting.GATEWAY_REWRITE_MODEL
+    assert body["stream"] is False and body["messages"][0]["role"] == "user"
+    assert body["reasoning_effort"] == "low" and body["max_tokens"] >= 2000     # reasoning counts against the cap
+    assert "the role \"Rust engineer\"" in body["messages"][0]["content"]
+
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "")
+    assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
+    assert len(asked) == 1
+
+    monkeypatch.setenv("TICO_GATEWAY_KEY", "gw-test-key")
+    monkeypatch.setattr(docs_qa, "key", lambda: "gemini-test-key")
+    gemini = {"candidates": [{"content": {"parts": [{"text": "Owns the Rust services, as Gemini wrote it."}]}}]}
+    monkeypatch.setattr(recruiting, "urlopen", lambda request, timeout: io.BytesIO(json.dumps(gemini).encode()))
+    assert post(api, "seats/draft", {"title": "Rust engineer"})["description"] == "Owns the Rust services, as Gemini wrote it."
+    assert len(asked) == 1
+
+    # A draft that needs no model never reads the gateway key, so a vault that is down cannot break it.
+    from backend import gateway_connection
+    monkeypatch.setattr(gateway_connection, "target", lambda *a, **k: (_ for _ in ()).throw(RuntimeError("vault down")))
+    assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog"
+
+
+def test_a_job_description_never_shows_the_bot_s_own_files_or_limits(api):
+    """What a card owns says where the bot keeps things and that it stays in its lane; a job description says the work.
+    No draft, and no applicant's day one, shows a file path or "within the requested work"."""
+    _, cards = recruiting._recruitable(api.app.state.onboarding)
+    assert recruiting._plain("The label scheme it works from (knowledge/labels.md, knowledge/repro-checklist.md)") == (
+        "The label scheme it works from")
+    assert recruiting._plain("Every issue it handles, within the requested work and Tools") == "Every issue it handles"
+    assert recruiting._plain("What the team does, in knowledge/company.md") == "What the team does"
+    assert recruiting._plain("Specs in Given/When/Then (red/amber/green)") == "Specs in Given/When/Then (red/amber/green)"
+    for card in cards:
+        text = recruiting.compose(card).split("Works in:")[0]
+        day_one = [recruiting._plain(item, 400) for item in card["raw"]["owns"][:6]]
+        for words in [text, *day_one]:
+            assert "knowledge/" not in words and ".md" not in words and "requested work" not in words, (card["name"], words)
 
 
 def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch):
@@ -225,6 +350,7 @@ def test_redraft_is_bounded_in_all_and_never_leaves_a_rehearsal(api, monkeypatch
     for flag in ("rehearsal", "demo"):
         monkeypatch.setattr(api.app.state.onboarding.settings, flag, True)
         assert post(api, "seats/draft", body) == composed
+        assert post(api, "seats/draft", {"title": "Rust engineer"}) == {"description": "", "source": "none"}
         monkeypatch.setattr(api.app.state.onboarding.settings, flag, False)
     assert touched == []
 

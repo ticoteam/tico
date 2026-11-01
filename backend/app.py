@@ -149,6 +149,9 @@ def create_app(settings=None):
         from concurrent.futures import ThreadPoolExecutor
         asyncio.get_running_loop().set_default_executor(ThreadPoolExecutor(max_workers=64, thread_name_prefix="tico"))
         store.initialize()
+        # A cloud agent request a stopped process left filing is released before any request is served.
+        from . import cloud_agents
+        cloud_agents.release_abandoned(store)
         # Files go to the company's own bucket from the first request, when the owner set one.
         from . import company_storage
         company_storage.startup(store, app.state.vault, app.state.blobs)
@@ -2547,7 +2550,8 @@ def create_app(settings=None):
                 parent = parents[seat["id"]]
                 if (person or team) and not shown_here(parent):
                     continue
-                shown = {k: v for k, v in dict(seat).items() if k in ("id", "title", "description", "team", "created")}
+                shown = {k: v for k, v in dict(seat).items()
+                         if k in ("id", "title", "description", "team", "created", "agent", "agent_name", "request_state")}
                 reports = seat["reports_to"]
                 if reports and not reports.startswith("human:") and not access.get(reports, auth.FULL)["see"]:
                     reports = parent[2:] if parent.startswith("b:") else (
@@ -5463,18 +5467,26 @@ def create_app(settings=None):
         auth.domain(who)
         return mutate(request, body, lambda c: lifecycle.create_seats(auth, c, who, body.seats))
 
+    def _recover_seat(seat_id):
+        """A cloud agent request a dead process left in flight on this seat is recovered in its own transaction first, so
+        the action below goes ahead and a refusal of it cannot roll the recovery back (backend/cloud_agents.py)."""
+        from . import cloud_agents
+        cloud_agents.recover(store, seat_id)
+
     @app.patch("/api/v2/seats/{seat_id}")
     def seat_update(request: Request, seat_id: str, body: M.SeatUpdate):
         who = request.state.identity
         auth.domain(who)
+        _recover_seat(seat_id)
         return mutate(request, body, lambda c: lifecycle.update_seat(auth, c, who, seat_id,
                                                                      body.model_dump(exclude_unset=True)))
 
     @app.post("/api/v2/seats/draft")
     def seat_draft(request: Request, body: M.SeatDraft):
-        """A job description for a job not posted yet, from its title: composed from the template catalog at once,
-        or with `redraft` rewritten once by the model when the server has a key (backend/recruiting.py). Stores
-        nothing."""
+        """A job description for a job not posted yet, from its title: composed from the template catalog at once, or
+        written by the model when no catalog card is the job, or with `redraft` rewritten once by the model. The model
+        is Gemini when the server has a key, else the Tico AI Gateway with the company's gateway key
+        (backend/recruiting.py). Stores nothing."""
         who = request.state.identity
         auth.domain(who)
         recruiting.may_draft(who)
@@ -5482,7 +5494,12 @@ def create_app(settings=None):
         if body.redraft and body.reports_to:
             with store.read() as c:
                 boss = recruiting.boss_name(auth, c, who, body.reports_to)
-        return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft)
+
+        def gateway():
+            # Read only when the model is asked, inside its time bound: a catalog draft never waits on the vault.
+            with store.read() as c:
+                return gateway_connection.target(c, app.state.vault, settings)[:2]
+        return recruiting.draft(onboarding, body.title, body.team, boss, body.redraft, gateway=gateway)
 
     @app.get("/api/v2/seats/{seat_id}")
     def seat_show(request: Request, seat_id: str):
@@ -5507,6 +5524,7 @@ def create_app(settings=None):
         then its repository (by its computer for a starter, else BotOps)."""
         who = request.state.identity
         auth.domain(who)
+        _recover_seat(seat_id)
         return mutate(request, body, lambda c: recruiting.hire(auth, onboarding, c, who, seat_id, body))
 
     @app.post("/api/v2/seats/{seat_id}/close")
@@ -5514,6 +5532,7 @@ def create_app(settings=None):
         """Take a seat off the chart; its row stays for the record."""
         who = request.state.identity
         auth.domain(who)
+        _recover_seat(seat_id)
         return mutate(request, body, lambda c: lifecycle.close_seat(auth, c, who, seat_id))
 
     @app.post("/api/v2/bots/{bot}/archive")
@@ -7943,6 +7962,8 @@ def create_app(settings=None):
     install_settings_catalog(app, store, auth, settings)
     from .support import install as install_support
     install_support(app, store, settings, census)
+    from .cloud_agents import install as install_cloud_agents
+    install_cloud_agents(app, store, auth, settings, mutate, settings_admin, onboarding)
     from .inbound import install as install_inbound
     install_inbound(app, store, settings, auth)
     from .hook_relay import install as install_hook_relay
