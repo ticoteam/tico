@@ -63,7 +63,7 @@ EVENTS_DESCRIPTION = (
     "`GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not "
     "`base`. `ready` then carries `needs_version`.\n"
     "Also `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes "
-    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), "
+    "the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours or more than 5,000 changes: read in full), "
     "`event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. "
     "Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the "
     "browser's own `Last-Event-ID`). People only: a bot is refused with 403."
@@ -2251,10 +2251,11 @@ STABLE.extend([
     ('/api/v2/bots/{bot}/rules', 'get', 'Rules', 'getBotRules', 'A bot\'s Rules tab: its settings as sentences, then internal and external rules, each paged by its own cursor', None),
     ('/api/v2/rules/stats', 'get', 'Rules', 'getRuleCheckStats', 'Rule checks today: checks, unchecked, blocked, dollars left in the rules budget, and whether checks are on', None),
     ('/api/v2/rules/check', 'post', 'Rules', 'checkRuleDraft', 'A bot checks a draft as the write it will be; sending that exact draft then costs no second check', None),
-    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The holds on one review task, as its reviewer or the author bot reads them: summaries, a page at a time (next_cursor)', None),
-    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output: only the author bot and the reviewer read it', None),
+    ('/api/v2/rule-holds', 'get', 'Rules', 'listRuleHolds', 'The held writes the caller may read, as summaries, a page at a time: a review task\'s holds (task), a conversation\'s held writes (thread), or every held write the caller may read', None),
+    ('/api/v2/rule-holds/{hold_id}', 'get', 'Rules', 'getRuleHold', 'One held output as its reader sees it: the author reads the writes they made, a person or a bot; the reviewer reads the rest', None),
     ('/api/v2/rule-holds/{hold_id}/keep', 'post', 'Rules', 'keepRuleHold', 'The reviewer keeps it blocked', None),
-    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce', None),
+    ('/api/v2/rule-holds/{hold_id}/withdraw', 'post', 'Rules', 'withdrawRuleHold', 'The author takes a held write back to edit and resend it; nothing is sent', None),
+    ('/api/v2/rule-holds/{hold_id}/send', 'post', 'Rules', 'sendRuleHold', 'The reviewer sends it anyway, once, with the hold\'s nonce; for a person\'s write that is the rule\'s author, its editors or an admin', None),
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
@@ -2337,6 +2338,74 @@ STABLE.extend([
     ('/api/v2/federation/peerings/{peering_id}/revoke', 'post', 'Federation', 'revokeFederationPeering', 'End a peering; a new request starts over', None),
     ('/api/v2/federation/threads/{thread_id}/installs', 'post', 'Federation', 'shareFederationThread', 'Share a thread this install owns with an active peer; it gets the thread from now on', None),
     ('/api/v2/federation/threads/{thread_id}/installs/{install_id}', 'delete', 'Federation', 'unshareFederationThread', 'Remove an install from a thread this install owns; it gets the removal and nothing after', None),
+])
+# Threads (docs/dev/threads-contract.md §10): a thread is a conversation read through threads.view, and its messages
+# carry thread_id, root_id-free fields as _message_out writes them.
+TAGS["Threads"] = ("Threads: the sidebar, a thread and its timeline, read marks, search, members, follow, and the messages "
+                   "in a thread. A thread the viewer may not read answers 404, never 403.")
+SCHEMAS.update({
+    "ThreadView": obj({"id": "s", "title": "s", "audience": "s", "audience_group_id": "n", "owner_actor": "n",
+                       "parent_id": "n", "parent_message_id": "n", "root_id": "s", "path": "a", "kind": "n",
+                       "task_id": "n", "created_at": "s", "last_message_at": "n", "archived_at": "n",
+                       "last_seq": "i", "last_unread_seq": "i", "me": "o"},
+                      required=["id", "title", "audience", "root_id", "last_seq", "last_unread_seq"]),
+    "ThreadSidebar": obj({"attention": items({"type": "object"}), "threads": items(ref("ThreadView")),
+                          "dms": items({"type": "object"}), "next_cursor": "n"},
+                         required=["attention", "threads", "dms"]),
+    "ThreadSearch": obj({"hits": items(obj({"message_id": "s", "thread_id": "s", "title": "s", "from_actor": "s",
+                                            "created": "s", "excerpt": "s"},
+                                           required=["message_id", "thread_id", "excerpt"])),
+                         "next_cursor": "n"}, required=["hits", "next_cursor"]),
+    "ThreadMessage": obj({"id": "s", "conversation_id": "s", "thread_id": "s", "seq": "i", "from_actor": "s",
+                          "to_actor": "n", "kind": "s", "body": "n", "created": "s", "edited_at": "n",
+                          "revision": "i", "refs": "o", "deleted": "b"}, required=["id", "thread_id"]),
+    "ThreadTimeline": obj({"thread": ref("ThreadView"), "breadcrumb": items({"type": "object"}),
+                           "messages": items({"type": "object"}), "next_cursor": "n"},
+                          required=["thread", "messages"]),
+    "ThreadMembers": obj({"members": items(obj({"actor": "s", "role": "s", "added_by": "n", "created_at": "s"},
+                                               required=["actor", "role"])),
+                          "next_cursor": "n"}, required=["members"]),
+    "ThreadMemberChange": obj({"thread_id": "s", "actor": "s", "role": "s", "removed": "b"},
+                              required=["thread_id", "actor"]),
+    "ThreadRead": obj({"thread_id": "s", "last_read_seq": "i"}, required=["thread_id", "last_read_seq"]),
+    "ThreadReadAll": obj({"threads": "i"}, required=["threads"]),
+    "ThreadFollow": obj({"thread_id": "s", "following": "b", "notify": "s"}, required=["thread_id", "following"]),
+    "ThreadMessageDeleted": obj({"id": "s", "deleted": "b", "revision": "i"}, required=["id", "deleted"]),
+})
+STABLE.extend([
+    ("/api/v2/threads", "get", "Threads", "listThreads",
+     "The viewer's sidebar: needs attention, threads (recent first) and DMs they may read, one page (`cursor`)", "ThreadSidebar"),
+    ("/api/v2/threads", "post", "Threads", "createThread",
+     "Start a thread (audience members unless asked otherwise); with `parent_message_id` it is a sub-thread; with `body` "
+     "its first message is posted too", "ThreadView"),
+    ("/api/v2/threads/search", "get", "Threads", "searchThreads",
+     "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
+    ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
+     "A thread as the viewer sees it: its unread count, read mark and what they may do", "ThreadView"),
+    ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
+     "Rename, archive or unarchive a thread, or change who it is for; its managers only", "ThreadView"),
+    ("/api/v2/threads/{thread_id}/timeline", "get", "Threads", "getThreadTimeline",
+     "The thread's messages in tree order, a page at a time (`cursor` is the seq from next_cursor), with the breadcrumb", "ThreadTimeline"),
+    ("/api/v2/threads/{thread_id}/members", "get", "Threads", "listThreadMembers",
+     "Who a thread is for, a page at a time", "ThreadMembers"),
+    ("/api/v2/threads/{thread_id}/members", "post", "Threads", "addThreadMember",
+     "Add a member to a thread (its managers); the new member reads up to now, so the backfill is not unread", "ThreadMemberChange"),
+    ("/api/v2/threads/{thread_id}/members/{actor}", "delete", "Threads", "removeThreadMember",
+     "Remove a member from a thread (its managers)", "ThreadMemberChange"),
+    ("/api/v2/threads/{thread_id}/messages", "post", "Threads", "postThreadMessage",
+     "Post a message in a thread, or in a sub-thread with `parent_message_id`; a bot's post passes the org rules first", "ThreadMessage"),
+    ("/api/v2/threads/{thread_id}/read", "post", "Threads", "markThreadRead",
+     "Read up to `seq` in the thread; the highest mark wins, so a device that is ahead keeps its place", "ThreadRead"),
+    ("/api/v2/threads/{thread_id}/read-all", "post", "Threads", "markThreadAndSubthreadsRead",
+     "Read up to now in the thread and every sub-thread under it", "ThreadReadAll"),
+    ("/api/v2/threads/{thread_id}/follow", "put", "Threads", "followThread",
+     "Follow a thread so its messages reach the viewer (`notify`: live or digest)", "ThreadFollow"),
+    ("/api/v2/threads/{thread_id}/follow", "delete", "Threads", "unfollowThread",
+     "Stop following a thread", "ThreadFollow"),
+    ("/api/v2/messages/{message_id}", "patch", "Threads", "editMessage",
+     "Edit one's own message in a thread; the search index and the timeline follow", "ThreadMessage"),
+    ("/api/v2/messages/{message_id}", "delete", "Threads", "deleteMessage",
+     "Delete one's own message in a thread", "ThreadMessageDeleted"),
 ])
 
 
