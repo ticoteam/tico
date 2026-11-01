@@ -8,7 +8,12 @@ HQ contract (the paths sit under the Gateway's API root, so `<root>/finance/oaut
   POST .../claim     {company_id, claim}              -> {access_token, refresh_token, expires_at,
                                                           refresh_expires_at|null, realm_id|null, tenant_id|null};
                                                           409 connected_elsewhere: another install holds that
-                                                          realm or tenant
+                                                          realm or tenant. 409 already_connected: this install
+                                                          holds another organisation, and this one is refused.
+                                                          With `replacement` ({company_id, access_token,
+                                                          refresh_token, expires_at, refresh_expires_at, realm_id,
+                                                          tenant_id}) the new pair is for the held organisation and
+                                                          is saved for its connection; without it nothing changes
   POST .../refresh   {company_id, refresh_token}      -> the same shape; 409 reconnect_required when the grant is gone
   POST .../disconnect {company_id, refresh_token[, access_token]} -> {ok, disconnected}. Xero also takes the install's
                                                           current access_token and deletes only this company's
@@ -67,6 +72,15 @@ class ConsentFailed(BrokerFailed):
     """The browser came back without a finished consent (or its claim made no connection). `code` is HQ's reason."""
 
 
+class AlreadyConnected(BrokerFailed):
+    """HQ refused the claim because this install already holds another organisation for the provider (409
+    already_connected). `replacement` is the new pair HQ sent for the held organisation, or None when it sent none."""
+
+    def __init__(self, replacement: dict[str, Any] | None) -> None:
+        super().__init__("already_connected")
+        self.replacement = replacement
+
+
 class NotStarted(Exception):
     """The return names no consent this person started, or one that has already ended."""
 
@@ -109,6 +123,11 @@ def _call(link: Link, path: str, body: Mapping[str, object]) -> dict[str, Any]:
     try:
         return root(link).call("POST", path, dict(body), area=AREA)
     except Failed as e:
+        if e.code == "already_connected" and path.endswith("/claim"):    # HQ answers this to a claim only
+            held = _map(e.body).get("replacement")
+            if held is not None and not isinstance(held, dict):
+                raise BrokerFailed("bad_answer") from None
+            raise AlreadyConnected(cast(dict[str, Any], held) if held is not None else None) from None
         if e.code in REASONS:
             raise BrokerFailed(e.code) from None
         if e.code == "reconnect_required" or e.status == 409:
@@ -299,8 +318,17 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
     `reconnect` before the vault write, so a failure is visible. The pair stays in this call's memory while the vault
     write is tried VAULT_TRIES times; when every try fails the connection stays in `reconnect`, a Needs-you item asks
     for a new connect, and ReconnectRequired is raised. A pair cut off by a crash before the write is lost the same
-    way."""
-    tokens = claim(link, provider, company_id, claim_id)
+    way.
+
+    HQ may refuse the claim `already_connected`, because this install holds another organisation for the provider. Then
+    nothing is made here, and a `replacement` for the held organisation is first kept for its connection
+    (_replace_held). The connect ends as AlreadyConnected either way."""
+    try:
+        tokens = claim(link, provider, company_id, claim_id)
+    except AlreadyConnected as refused:
+        if refused.replacement is not None:
+            _replace_held(store, provider=provider, replacement=refused.replacement, by=by, now=now)
+        raise
     with store.transaction() as c:
         cid = _same_account(c, provider, tokens)
         if cid is None:
@@ -309,12 +337,20 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
             SX.set_books_settings(c, cid, {"provider": provider, "company_id": company_id,
                                           "realm_id": tokens.realm_id, "tenant_id": tokens.tenant_id})
         SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
+    _keep_claimed(store, cid, tokens, provider=provider, by=by, now=now)
+    return cid
+
+
+def _keep_claimed(store: Any, cid: str, tokens: Tokens, *, provider: str, by: str, now: str) -> None:
+    """A claimed pair into the vault for a books connection, which is active once it lands. The write is tried
+    VAULT_TRIES times; when every try fails the connection stays in `reconnect`, a Needs-you item asks for a new connect,
+    and ReconnectRequired is raised."""
     for attempt in range(1, VAULT_TRIES + 1):
         try:
             with store.transaction() as c:
                 save(c, cid, tokens, by=by, at=now)
                 SX.set_connection_status(c, cid, "active", "", now)
-            return cid
+            return
         except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the claimed pair must not be lost
             log.warning("Books connection %s: vault write try %d of %d failed", cid, attempt, VAULT_TRIES,
                         exc_info=True)
@@ -323,6 +359,32 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
         tico.needs_you(c, by, f"Connect {provider} again",
                        "Tico could not keep the grant for this books connection. Connect it again in Finance.")
     raise ReconnectRequired("vault_write_failed")
+
+
+def _held(c: Any, provider: str, *, company_id: str, tenant_id: str | None) -> str | None:
+    """The books connection, not disconnected, that holds this organisation (tenant) for this company."""
+    if not (company_id and tenant_id):
+        return None
+    for cid, _, _ in SX.books_connections(c, provider):
+        books = SX.books_settings(c, cid)
+        if str(books.get("tenant_id") or "") == tenant_id and str(books.get("company_id") or "") == company_id:
+            return cid
+    return None
+
+
+def _replace_held(store: Any, *, provider: str, replacement: dict[str, Any], by: str, now: str) -> None:
+    """HQ's pair for the organisation this install already holds, sent with a refused claim. Its company and tenant must
+    be that connection's, or nothing is saved (bad_answer). The pair takes the connection's place: the provider has
+    already superseded its old pair, since one Xero login authorised the second organisation. It is kept as a claimed
+    pair is."""
+    fresh = _tokens(replacement)
+    company = str(replacement.get("company_id") or "")
+    with store.transaction() as c:
+        cid = _held(c, provider, company_id=company, tenant_id=fresh.tenant_id)
+        if cid is None:
+            raise BrokerFailed("bad_answer")
+        SX.set_connection_status(c, cid, "reconnect", "vault_pending", now)
+    _keep_claimed(store, cid, fresh, provider=provider, by=by, now=now)
 
 
 def _drop_grant(store: Any, vault: object, link: Link, cid: str, provider: str, state: _State) -> None:
@@ -469,7 +531,8 @@ def finish(store: Any, vault: object, link: Link, *, flow: str, user: str, outco
            claim_id: str) -> str:
     """The browser came back from HQ for a consent: the flow is spent, then the pair is claimed once and kept, and the
     books connection made or repaired. Returns its id. Raises NotStarted, ConsentFailed (HQ did not finish the consent)
-    or the BrokerFailed of the claim or the vault."""
+    or the BrokerFailed of the claim or the vault. AlreadyConnected is HQ refusing the organisation: no connection is
+    made, and its code is the reason the return carries."""
     now = tico.now()
     with store.transaction() as c:
         started = _spend_flow(c, flow, user=user, now=now)

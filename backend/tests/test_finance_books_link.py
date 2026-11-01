@@ -488,3 +488,132 @@ def test_a_disconnect_that_HQ_refuses_keeps_the_connection_once_the_retried_writ
     with store.read() as c:
         assert SX.books_status(c, cid) == "active"
         assert T.credential_secret(c, T._VAULT[0], str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+
+
+# ------------------------------------------------------------------------------------ one organisation per install
+def replacement(**changes: Any) -> dict[str, Any]:
+    """HQ's replacement for the held organisation: the new pair, the held company and its tenant."""
+    return {"company_id": COMPANY, **xero_tokens("acc-2", "ref-2"), **changes}
+
+
+def _refusal(replacement_: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+    """HQ's 409 already_connected, with the replacement when HQ sends one."""
+    body: dict[str, Any] = {"error": "already_connected"}
+    if replacement_ is not None:
+        body["replacement"] = replacement_
+    return 409, body
+
+
+def test_already_connected_with_a_replacement_keeps_the_held_connection_on_the_new_pair(books, monkeypatch):
+    vault = T._VAULT[0]
+    wire = wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    with pytest.raises(books_link.AlreadyConnected) as refused:
+        _claimed_xero(books, vault)
+    assert refused.value.code == "already_connected" and refused.value.replacement is not None
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "xero")] == [cid]      # the refused organisation made none
+        assert SX.books_status(c, cid) == "active"
+        after = SX.books_settings(c, cid)
+        assert (after["company_id"], after["tenant_id"]) == (COMPANY, "ten-1")
+        assert not T.credential_exists(c, str(before["access"]))                # the old pair is no longer used
+        assert not T.credential_exists(c, str(before["refresh"]))
+        assert T.credential_secret(c, vault, str(after["access"])) == "acc-2"
+        assert T.credential_secret(c, vault, str(after["refresh"])) == "ref-2"
+    assert books_link.access_token(books, vault, LINK, cid, "xero", now=AT) == "acc-2"   # not due: no HQ call
+    assert [path for path, _ in wire.calls].count("oauth/xero/refresh") == 0
+
+
+@pytest.mark.parametrize("changes", [{"tenant_id": "ten-2"}, {"company_id": "co-other"}, {"tenant_id": None}])
+def test_already_connected_whose_ids_are_not_the_held_connections_saves_nothing(books, monkeypatch,
+                                                                               changes: dict[str, Any]):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement(**changes))])
+    cid = _claimed_xero(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    with pytest.raises(books_link.BrokerFailed) as bad:
+        _claimed_xero(books, vault)
+    assert bad.value.code == "bad_answer"
+    with books.read() as c:
+        assert SX.books_settings(c, cid) == before
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(before["refresh"])) == "ref-1"
+
+
+def test_already_connected_without_a_replacement_changes_nothing(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal()])
+    cid = _claimed_xero(books, vault)
+    with books.read() as c:
+        before = dict(SX.books_settings(c, cid))
+    with pytest.raises(books_link.AlreadyConnected) as refused:
+        _claimed_xero(books, vault)
+    assert refused.value.code == "already_connected" and refused.value.replacement is None
+    with books.read() as c:
+        assert [row[0] for row in SX.books_connections(c, "xero")] == [cid]
+        assert SX.books_settings(c, cid) == before
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(before["refresh"])) == "ref-1"
+
+
+def test_a_replacement_whose_vault_write_fails_once_still_lands(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    real_save, tries = books_link.save, []
+
+    def flaky(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        tries.append(fresh.refresh_token)
+        if len(tries) == 1:
+            raise RuntimeError("vault is busy")
+        real_save(c, cid_, fresh, by=by, at=at)
+
+    monkeypatch.setattr(books_link, "save", flaky)
+    with pytest.raises(books_link.AlreadyConnected):
+        _claimed_xero(books, vault)
+    assert tries == ["ref-2", "ref-2"]                                          # the same pair, written again
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+
+
+def test_a_replacement_vault_write_that_always_fails_asks_to_connect_again(books, monkeypatch):
+    vault = T._VAULT[0]
+    wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    cid = _claimed_xero(books, vault)
+    tries, asks = [], []
+
+    def down(c: Any, cid_: str, fresh: Any, *, by: str, at: str) -> None:
+        tries.append(fresh.refresh_token)
+        raise RuntimeError("vault is down")
+
+    monkeypatch.setattr(books_link, "save", down)
+    monkeypatch.setattr(T, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    with pytest.raises(books_link.ReconnectRequired) as failed:
+        _claimed_xero(books, vault)
+    assert failed.value.code == "vault_write_failed"
+    assert len(tries) == books_link.VAULT_TRIES and asks == [(OWNER, "Connect xero again")]
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "reconnect"
+
+
+def test_a_return_refused_already_connected_says_so_and_the_held_connection_keeps_the_new_pair(wired_api, monkeypatch):
+    store = wired_api.app.state.store
+    wire = wired(monkeypatch,
+                 connect=[ok({"url": CONSENT, "expires_in": 900}), ok({"url": CONSENT, "expires_in": 900})],
+                 claim=[ok(xero_tokens("acc-1", "ref-1")), _refusal(replacement())])
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_8", headers=headers(),
+                  follow_redirects=False)
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    r = wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_9", headers=headers(),
+                      follow_redirects=False)
+    assert r.status_code == 302
+    assert result_of(r.headers["location"]) == {"books": ["error"], "reason": ["already_connected"]}
+    with store.read() as c:
+        held = SX.books_connections(c)
+        assert len(held) == 1
+        assert T.credential_secret(c, T._VAULT[0], str(SX.books_settings(c, held[0][0])["refresh"])) == "ref-2"
