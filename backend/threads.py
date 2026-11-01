@@ -1321,7 +1321,7 @@ def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_a
     people = list(dict.fromkeys([actor] + [p for p in participants if p != actor])) if participants else [actor]
     c.execute("INSERT INTO conversations(id,kind,subject,task_id,participants_json,created,last_message_at,closed_at,"
               "scope,owner_actor,room_key,audience,audience_group_id,parent_id,parent_message_id,root_id,path,"
-              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,NULL,?,NULL,?,?,?,?,?,?,"
+              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,'direct',?,NULL,?,?,?,?,?,?,"
               "0,0,NULL,?)",
               (tid, kind, str(title or "")[:MAX_TITLE], task_id, H._dump(people), now, owner_actor, audience,
                audience_group_id, parent["id"] if parent is not None else None, parent_message_id, root_id, path, now))
@@ -1461,6 +1461,8 @@ def sub_thread(c, principal, parent_message_id):
         c.execute("SAVEPOINT threads_sub_thread")
         row = _insert_thread(c, actor, title="", audience=None, parent=parent, parent_message_id=parent_message_id,
                              kind=parent.get("kind") or "chat", owner_actor=None)
+        for outside in _outside(c, root_of(c, parent)["id"]):        # an outside destination follows its root's replies
+            add_outside_delivery(c, row["id"], outside, added_by=actor)
         c.execute("RELEASE threads_sub_thread")
     except sqlite3.IntegrityError:
         c.execute("ROLLBACK TO threads_sub_thread")
