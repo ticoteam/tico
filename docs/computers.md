@@ -302,6 +302,11 @@ The bot's browser then goes out through that computer for every site. Both runne
 the computer screen; neither needs an open port. The browser's encrypted traffic passes through unread: Tico sees the
 site name and how many bytes, never the pages.
 
+What each side guards against: the sharing computer protects its owner from any bot, so its rules below (home
+network, router, its own addresses, ports, the cap, the owner's choice of bots) hold whatever the bot does. The bot's
+side (its proxy, the browser wrapper, failing closed) keeps a bot from browsing directly by accident. It is no wall
+against a bot set on going around it, which could only reach the web from its own computer's address anyway.
+
 What the sharing computer allows:
 
 - Ports 80 and 443 only.
@@ -326,9 +331,9 @@ In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PRO
 bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
 `PATH` so a browser started by name goes through it. A browser started another way takes the proxy itself, for example
 Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`. A browser started by name gets
-the bot's own profile (`~/.tico/browser-exit/<bot>` unless `--user-data-dir` is given), and refuses to start when a
-browser it didn't start through the proxy is open on that profile, or when a flag would skip the proxy (with one
-dash or two, or a bare `--`). `localhost` stays local: the browser reaches the bot's own computer directly, never
+the bot's own profile (`~/.tico/browser-exit/<bot>`; any other `--user-data-dir` is refused), and refuses to start
+when a browser it didn't start through the proxy is open on that profile, or when a flag would skip the proxy (with
+one dash or two, spaces around it, or a bare `--`). `localhost` stays local: the browser reaches the bot's own computer directly, never
 through the exit.
 
 The proxy asks for no password, because a browser can't send one for every connection. Under turn isolation (Linux

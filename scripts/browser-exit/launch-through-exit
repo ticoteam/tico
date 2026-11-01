@@ -4,11 +4,14 @@
 # starts Chrome by name. Without TICO_BROWSER_PROXY the browser does not start: a bot with an exit never browses
 # from this computer's own address.
 #
+# This keeps a bot from browsing directly by accident; it is not a boundary against a bot set on it (docs/computers.md).
+#
 # Chrome hands a launch to a Chrome already running on the same profile (user data directory), which keeps its own
-# proxy settings. So the browser gets a profile of the bot's own, and when a Chrome is already running on it, the
-# launch goes ahead only if that Chrome was started by this wrapper (its --tico-browser-exit marker) through this same
-# proxy and with nothing that takes it around the proxy. Chromium reads a switch with one dash or two and stops at a
-# bare `--`, so every spelling is checked, `--` is refused, and the enforced switches come before the caller's.
+# proxy settings. So the browser always gets the bot's own profile (any other --user-data-dir is refused), and when a
+# Chrome is already running on it, the launch goes ahead only if that Chrome was started by this wrapper (its
+# --tico-browser-exit marker) through this same proxy and with nothing that takes it around the proxy. Chromium trims
+# each argument, reads a switch with one dash or two and stops at a bare `--`, so every spelling is checked, `--` is
+# refused, and the enforced switches come before the caller's.
 name="$1"
 shift
 bot="${HUB_BOT:-bot}"
@@ -18,14 +21,22 @@ if [ -z "$TICO_BROWSER_PROXY" ]; then
 fi
 proxy_flag="--proxy-server=$TICO_BROWSER_PROXY"
 marker="--tico-browser-exit=$bot"
+if [ -z "$HOME" ]; then
+  echo "$name: no HOME for this bot's browser profile" >&2
+  exit 1
+fi
+profile="$HOME/.tico/browser-exit/$bot"
 
-# Reads one argument as Chromium would. Sets `bad` to the argument when it would take the browser around the proxy,
-# `profile` to a --user-data-dir value, and `marked`/`proxied` when it is the marker or exactly this proxy.
+# Reads one argument as Chromium would (trimmed). Sets `bad` to the argument when it would take the browser around the
+# proxy or onto another profile, and `marked`/`proxied` when it is the marker or exactly this proxy.
 read_switch() {
-  case "$1" in
+  arg=$1
+  while :; do case "$arg" in [[:space:]]*) arg=${arg#?} ;; *) break ;; esac; done
+  while :; do case "$arg" in *[[:space:]]) arg=${arg%?} ;; *) break ;; esac; done
+  case "$arg" in
     --) bad="$1"; return ;;
-    --*) body=${1#--} ;;
-    -*) body=${1#-} ;;
+    --*) body=${arg#--} ;;
+    -*) body=${arg#-} ;;
     *) return ;;
   esac
   switch=$(printf '%s' "${body%%=*}" | tr '[:upper:]' '[:lower:]')
@@ -36,14 +47,14 @@ read_switch() {
     proxy-bypass-list) [ "$value" = "<-loopback>" ] || bad="$1" ;;
     no-proxy-server | proxy-pac-url | proxy-auto-detect | winhttp-proxy-resolver) bad="$1" ;;
     tico-browser-exit) if [ "$value" = "$bot" ]; then marked=1; else bad="$1"; fi ;;
-    user-data-dir) profile="$value" ;;
+    user-data-dir) [ "$value" = "$profile" ] || bad="$1" ;;
   esac
 }
 
-bad="" profile="" marked="" proxied=""
+bad="" marked="" proxied=""
 for arg in "$@"; do
   read_switch "$arg"
-  case "$arg" in -*tico-browser-exit*) bad="$arg" ;; esac   # the marker is the wrapper's own
+  [ -n "$marked" ] && bad="$arg"   # the marker is the wrapper's own
   if [ -n "$bad" ]; then
     echo "$name: $bad would take this bot's browser around its browser exit" >&2
     exit 1
@@ -57,18 +68,9 @@ for arg in $CHROMIUM_FLAGS; do
     exit 1
   fi
 done
-enforced="--user-data-dir="
-if [ -z "$profile" ]; then
-  if [ -z "$HOME" ]; then
-    echo "$name: no HOME for this bot's browser profile" >&2
-    exit 1
-  fi
-  profile="$HOME/.tico/browser-exit/$bot"
-  if ! mkdir -p "$profile"; then
-    echo "$name: can't make this bot's browser profile at $profile" >&2
-    exit 1
-  fi
-  enforced="--user-data-dir=$profile"
+if ! mkdir -p "$profile"; then
+  echo "$name: can't make this bot's browser profile at $profile" >&2
+  exit 1
 fi
 
 # SingletonLock names the Chrome holding the profile as host-pid.
@@ -122,7 +124,5 @@ if [ -z "$real" ]; then
   echo "$name: not installed" >&2
   exit 127
 fi
-if [ "$enforced" = "--user-data-dir=" ]; then
-  exec "$real" "$marker" "$proxy_flag" --force-webrtc-ip-handling-policy=disable_non_proxied_udp "$@"
-fi
-exec "$real" "$marker" "$proxy_flag" --force-webrtc-ip-handling-policy=disable_non_proxied_udp "$enforced" "$@"
+exec "$real" "$marker" "$proxy_flag" --force-webrtc-ip-handling-policy=disable_non_proxied_udp \
+  "--user-data-dir=$profile" "$@"

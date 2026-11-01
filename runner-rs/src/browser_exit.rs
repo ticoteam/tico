@@ -1355,10 +1355,18 @@ mod tests {
         let (ok, args) = run(&["--new-window"], Some(proxy));
         assert!(ok);
         assert_eq!(args, ["--tico-browser-exit=ops", flag.as_str(), webrtc, own.as_str(), "--new-window"]);
+        // One profile, always the bot's: naming it again is fine, any other is refused.
+        let (ok, args) = run(&[&own, "--proxy-bypass-list=<-loopback>", flag.as_str()], Some(proxy));
+        assert!(ok && args[3] == own, "{args:?}");
         let theirs = format!("--user-data-dir={}", root.join("kept").display());
-        let (ok, args) = run(&[&theirs, "--proxy-bypass-list=<-loopback>", flag.as_str()], Some(proxy));
-        assert!(ok && args[3] == theirs && args.iter().filter(|a| a.starts_with("--user-data-dir")).count() == 1);
+        assert!(!run(&[&theirs], Some(proxy)).0);
+        assert!(!run(&["-user-data-dir=/tmp/x", "-new-window"], Some(proxy)).0, "a single-dash profile is read too");
+        assert!(!run_with(&[], Some(proxy), &theirs).0, "and one in CHROMIUM_FLAGS");
         for skip in [
+            " --no-proxy-server",
+            "--no-proxy-server ",
+            "\t-no-proxy-server",
+            "\n--no-proxy-server",
             "--",
             "--no-proxy-server",
             "-no-proxy-server",
@@ -1375,7 +1383,6 @@ mod tests {
         ] {
             assert!(!run(&[skip, "https://www.acme.example"], Some(proxy)).0, "{skip}");
         }
-        assert!(run(&["-user-data-dir=/tmp/x", "-new-window"], Some(proxy)).0, "a single-dash profile is still read");
         assert!(!run_with(&[], Some(proxy), "--no-proxy-server").0, "CHROMIUM_FLAGS is checked too");
         assert!(run_with(&[], Some(proxy), &format!("{flag} {webrtc}")).0, "the runner's own CHROMIUM_FLAGS pass");
         assert!(!run(&[], None).0, "no proxy, no browser");
