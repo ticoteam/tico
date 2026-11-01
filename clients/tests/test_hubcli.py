@@ -875,3 +875,19 @@ def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatc
     assert "stage" not in kpi
     assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
         "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
+    p = hubcli.parser()
+    assert hubcli.parse(p, ["task", "show", "t_1", "--json"]).id == ["t_1"]
+    assert hubcli.parse(p, ["tool", "list", "--json"]).json is True                  # its own flag
+    assert hubcli.parse(p, ["--json", "tool", "list", "--json"]).json is True
+    assert hubcli.parse(p, ["meeting", "search", "--", "--json"]).q == "--json"       # a value stays a value
+    for wrong in (["task", "get", "t_1", "--json"], ["task", "show", "t_1", "--json", "--bogus"]):
+        with pytest.raises(SystemExit) as e:
+            hubcli.parse(p, wrong)
+        assert e.value.code == 2
+    assert "--bogus" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
+    args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
+    assert args.payload == {"vendor": "v_1"}

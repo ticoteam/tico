@@ -3519,6 +3519,17 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
 
 
+def parse(p, argv):
+    """`p.parse_args(argv)`, except that a `--json` no command on the line takes is ignored, so a bot that adds it out of
+    habit gets the command's normal answer instead of a usage error. One parse: a value read from standard input is read
+    once, a `--json` after `--` stays a value, and a command with its own `--json` (`hub tool list`) still gets it."""
+    args, extra = p.parse_known_args(argv)
+    left = [a for a in extra if a != "--json"]
+    if left:
+        p.error("unrecognized arguments: " + " ".join(left))
+    return args
+
+
 def rename_argv(argv):
     """`argv` for the new spelling of an old command line, and the notice to print (or None when nothing was renamed)."""
     argv = list(argv)
@@ -3569,7 +3580,7 @@ def main(argv):
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
     p = parser()
     try:
-        args = p.parse_args(argv)
+        args = parse(p, argv)
     except SystemExit as e:                 # argparse already said what was wrong, or printed help
         return 0 if not e.code else 1
     if not getattr(args, "fn", None):
