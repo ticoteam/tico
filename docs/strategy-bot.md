@@ -8,7 +8,7 @@ changes that, and what stays yours. There is no On/Off switch: you choose how mu
 
 ## The three levels
 
-**Settings > Strategy Bot** shows the regular checks, then three levels. Each level has one sentence on what the Strategy Bot will
+The **Strategy Bot** card under **Settings > More > System** shows the regular checks, then three levels. Each level has one sentence on what the Strategy Bot will
 and won't do. Every company starts at **Suggests actions** until its owner chooses another level. Until then the
 owner can also confirm Suggests actions as their own choice, so a later change to where companies start never moves it.
 
@@ -30,7 +30,7 @@ An install whose owner chose the old level 1, **Goals and tracking**, is **Passi
 
 ## Regular checks
 
-**Regular checks** is a toggle at the top of **Settings > Strategy Bot**. It is on by default. It covers the Strategy Bot's KPI
+**Regular checks** is a toggle at the top of the **Strategy Bot** card under **Settings > More > System**. It is on by default. It covers the Strategy Bot's KPI
 pass (it computes each KPI and posts the reading) and the automatic goal colours.
 
 Turn it off and neither runs until you turn it back on. You can still talk to the Strategy Bot. Turn it on again and every
@@ -38,7 +38,7 @@ goal's automatic colour is worked out at once. A colour a person set by hand sta
 
 ## Change the level
 
-1. Open **Settings > Strategy Bot**. Only the owner sees this tab.
+1. Open **Settings > More > System** and find the **Strategy Bot** card. Only the owner sees this card.
 2. Click a level. Its sentence shows again with **Confirm** and **Cancel**.
 3. Click **Confirm**. A "Saved" notice appears and the level shows **Now**.
 

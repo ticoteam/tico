@@ -108,7 +108,7 @@ stays, and the Strategy Bot only suggests a different one. Turning the regular c
 ### A human can override
 
 A colour a human sets (`hub goal status`, or the colour control on the Goals page) is theirs. It carries their name and
-their one-sentence note ("set by Ana"), and it **stays until a human hands it back**: **Let Strategy Bot set it**
+their one-sentence note ("set by Ana"), and it **stays until a human hands it back**: **Let the Assistant set it**
 (`hub goal status <id> auto`, `POST /api/v2/goals/{id}/status/auto`) ends the override and the colour is worked out at once.
 
 While a goal is overridden the Strategy Bot may *suggest* a different colour. The suggestion is shown on the goal and never
@@ -150,8 +150,9 @@ the first KPI exists, once: a human who pauses it afterwards is not overruled.
 
 ### The Strategy Bot on the chart
 
-On the chart and in the Goals tree it sits under the owner, with the Heads (in their departments' groups) and the bots
-that report to no one under it ([Team chart](org-chart.md)). Only the picture moves. Nobody's `reports_to` changes and the
+In the Goals tree it sits under the owner, with the Heads (in their departments' groups) and the bots that report to no
+one under it. The team chart leaves it out, and the Heads and bots that report to no one show under the owner there too
+([Team chart](org-chart.md)). Only the picture moves. Nobody's `reports_to` changes and the
 Strategy Bot gets no new access: it does the five things above and proposes each goal's [Why](#a-goals-why), nothing more.
 
 Its name is **Strategy Bot** unless the owner gives it another in **Settings > Bots**. `GET /api/v2/strategy-bot` shows the name,
@@ -159,7 +160,7 @@ the level and whether the regular checks are on. Each goal gets a [Why line](#a-
 
 ### How much your Strategy Bot does
 
-**Settings > Strategy Bot** has the **Regular checks** toggle and three levels: **Passive**, **Suggests actions** (where
+The **Strategy Bot** card under **Settings > More > System** has the **Regular checks** toggle and three levels: **Passive**, **Suggests actions** (where
 every company starts) and **Acts on its own**. At **Acts on its own** it also decides on bots' tasks itself, each
 decision with an Undo ([Your Strategy Bot](strategy-bot.md#the-strategy-bot-log)).
 
@@ -319,7 +320,7 @@ pointer each line has a **+** for that owner (a group's line: its lead), and on 
 same. A member sets goals for themselves and anyone below them; the owner sets them for anyone, the company included.
 
 Tapping a name opens that owner's panel (a sheet at the bottom on a phone). It lists their goals: tap one to edit its
-words, what it supports and its colour (or **Let Strategy Bot set it**). Under each goal are its KPIs, its latest
+words, what it supports and its colour (or **Let the Assistant set it**). Under each goal are its KPIs, its latest
 check-in, **Post update** and **Add KPI**. **Post update** (a check-in) is there for whoever may colour the goal: say in a
 sentence what is going on and, if you like, how it is going (on track, at risk or off track). On a goal no KPI judges, that
 answer sets its colour for three weeks; a colour a person set stays, as does the colour of a goal whose KPIs carry a target
