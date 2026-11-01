@@ -340,9 +340,13 @@ class QuickBooks:
         for raw in rows:
             row = Q.as_map(raw) or {}
             if not mark or mark in str(row.get("PrivateNote") or ""):
+                # The record comes back as the write's answer would carry it, so a found write's lines and revision
+                # are bound the way a sent one's are.
+                made = Q.records(entity, [row]) if op in TRANSACTIONS else []
+                record = made[0] if made and isinstance(made[0], (M.Document, M.Journal, M.Settlement)) else None
                 return Sent(True, kind=SENT_AS.get(op, entity), external_id=str(row.get("Id") or ""),
                             revision=str(row.get("SyncToken") or ""),
-                            lines=Q.line_ids(row) if op == "bill.create" else ())
+                            lines=Q.line_ids(row) if op == "bill.create" else (), record=record)
         if len(rows) >= 1000:
             return Sent(False, error="UNKNOWN: too many writes that day to tell", final=True, unknown=True)
         return None
@@ -408,6 +412,8 @@ def _write_of(op: str, body: Mapping[str, Any],
         return "Invoice", "invoice", Q.invoice_body(body, income), {}
     if op == "purchaseorder.create":
         return "PurchaseOrder", "purchaseorder", Q.purchase_order_body(body), {}
+    if op == "purchaseorder.close":
+        return "PurchaseOrder", "purchaseorder", Q.purchase_order_close_body(body), {}
     if op == "estimate.create":
         return "Estimate", "estimate", Q.estimate_body(body, Q.income_items(items)), {}
     if op == "bill.void":

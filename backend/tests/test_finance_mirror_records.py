@@ -296,8 +296,9 @@ def test_a_job_made_here_is_sent_to_quickbooks_as_a_job_under_its_customer(books
 
 def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_provider_confirms_or_refuses(
         books, monkeypatch):
-    asks: list[tuple[str, str]] = []
-    monkeypatch.setattr(mirror.tico, "needs_you", lambda c, person, title, body: asks.append((person, title)))
+    """X9: a refused price keeps the local price, asks once with the provider's reason, and lands once fixed."""
+    asks: list[tuple[str, str, str]] = []
+    monkeypatch.setattr(mirror.tico, "needs_you", lambda c, person, title, body: asks.append((person, title, body)))
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -319,7 +320,7 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
         assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 15_000
         status, error = c.execute("SELECT status, last_error FROM fin_outbox WHERE op='item.update'").fetchone()
         assert (status, error) == ("failed", "Price is not allowed on this item")
-    assert len(asks) == 1, asks
+    assert len(asks) == 1 and "Price is not allowed on this item" in asks[0][2], asks
     with books.transaction() as c:
         assert act(c, OWNER, "item_update", {"item_id": item, "price": 21_000}).status == "committed"
     assert _drain(books, fake, cid, now=LATER) == []
@@ -1741,3 +1742,145 @@ def test_a_purchase_order_and_an_estimate_come_in_with_their_lines_and_follow_th
         assert tuple(row) == ("closed", "hand", 1800)
         assert [int(r[0]) for r in c.execute("SELECT amount FROM fin_po_lines")] == [1800]
         assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='PurchaseOrder:40'").fetchone()[0] == "2"
+
+
+def test_an_inventory_item_marked_raw_material_keeps_the_mark_through_the_next_import_m1(books):
+    """M1: a QuickBooks inventory item comes in as inventory; a person marks it raw material, and the next import of it
+    keeps the mark while its name and price still come in."""
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Item(M.Ext("Item", "6", "1"), "Resin", kind="inventory", price=800,
+                                          income="Account:3", expense="Account:2"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        resin = _local(c, "Item:6", "items")
+        marked = act(c, OWNER, "item_update", {"item_id": resin, "kind": "raw_material"})
+        assert marked.status == "committed", marked
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert c.execute("SELECT kind FROM items WHERE id=?", (resin,)).fetchone()[0] == "raw_material"
+    fake.changes.append(M.Item(M.Ext("Item", "6", "2"), "Resin pellets", kind="inventory", price=900,
+                               income="Account:3", expense="Account:2"))
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, kind, price FROM items WHERE id=?", (resin,)).fetchone()) == \
+            ("Resin pellets", "raw_material", 900)
+
+
+def test_a_service_fee_change_that_needs_approval_reaches_the_provider_before_tico_changes_h6(books):
+    """H6: a service call fee of $89 going to $99 asks for approval; once approved, QuickBooks takes the new price
+    first, and Tico's row changes only when QuickBooks confirms it."""
+    from backend import hubdb as H
+    from backend.finance import actions as FA
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"][0] = M.Item(M.Ext("Item", "5", "1"), "Service call", kind="service", price=8900,
+                                        income="Account:3", expense="Account:2")
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
+                                            "whose": "company"}).status == "committed"
+        asked = act(c, "human:dan", "item_update", {"item_id": item, "price": 9900})
+        assert asked.status == "needs_approval", asked
+        H.approval_decide(c, str(asked.approver), str(asked.approval_id), "approved")
+        assert FA.approval_decided(c, str(asked.approval_id), LATER).status == "committed"
+    with books.read() as c:
+        assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 8900
+    fake.replies.append(mirror.Sent(True, kind="Item", external_id="5", revision="2"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [body.get("price") for op, body, _ in fake.sent if op == "item.update"] == [9900]
+    with books.read() as c:
+        assert c.execute("SELECT price FROM items WHERE id=?", (item,)).fetchone()[0] == 9900
+
+
+def test_a_purchase_order_billed_in_two_parts_is_partial_then_closed_at_the_provider_m2(books):
+    """M2: a resin order billed in two bills is partial; closing it sends the close to QuickBooks, and the order
+    closes here once QuickBooks confirms it, with what was not billed released."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    po, line = _approved_order(books, fake, cid, 10_000)
+    for number, amount, now in (("B-81", 6_000, LATER2), ("B-82", 3_000, LATER3)):
+        with books.transaction() as c:
+            billed = act(c, OWNER, "bill_create", {
+                "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "bill_date": "2026-10-05", "number": number,
+                "lines": [{"po_line_id": line, "amount": amount}]})
+            assert billed.status == "committed", billed
+        assert _drain(books, fake, cid, now=now) == []
+    with books.read() as c:
+        status, total = c.execute("SELECT status, total FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()
+        assert SP.shown_po(str(status), SP.billed_total(c, po), int(total)) == "partial"
+        po_ext = str(c.execute("SELECT external_id FROM fin_external_refs WHERE local_table='fin_purchase_orders' "
+                               "AND local_id=?", (po,)).fetchone()[0])
+    with books.transaction() as c:
+        assert act(c, OWNER, "po_close", {"po_id": po}).status == "committed"
+    fake.replies.append(mirror.Sent(True, kind="PurchaseOrder", external_id=po_ext.split(":")[1], revision="2"))
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z") == []
+    assert [op for op, _, _ in fake.sent if op == "purchaseorder.close"] == ["purchaseorder.close"]
+    with books.read() as c:
+        assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders WHERE id=?", (po,)).fetchone()) == \
+            ("closed", "hand")
+
+
+def test_a_description_a_person_wrote_survives_an_import_that_has_none_item_7(books):
+    """Item 7: a provider item with no description keeps the one Tico holds when the provider renames it."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        c.execute("UPDATE items SET description=? WHERE id=?", ("Hourly rate, onsite", item))
+    fake.changes.append(M.Item(M.Ext("Item", "5", "2"), "Consulting (renamed)", kind="service", price=15000,
+                               income="Account:3", expense="Account:2"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, description FROM items WHERE id=?", (item,)).fetchone()) == \
+            ("Consulting (renamed)", "Hourly rate, onsite")
+
+
+def test_a_parent_a_person_set_on_a_department_survives_an_import_that_renames_it_item_7(books):
+    """Item 7: a department's parent (a Tico field the books do not send back) survives the provider renaming it."""
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"].append(M.Location(M.Ext("Department", "4", "1"), "Region West"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        austin = _local(c, "Department:3", "locations")
+        region = _local(c, "Department:4", "locations")
+        c.execute("UPDATE locations SET parent_id=? WHERE id=?", (region, austin))
+    fake.changes.append(M.Location(M.Ext("Department", "3", "2"), "Austin East"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, parent_id FROM locations WHERE id=?", (austin,)).fetchone()) == \
+            ("Austin East", region)
+
+
+def test_a_location_kind_a_person_set_survives_an_import_that_renames_it_x20(books):
+    """X20, the import side: the kind is set on create and never by an import, so a kind a person set afterwards
+    survives every later import. The upgrade that moves existing `location` rows to `other` is the records builder's."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        austin = _local(c, "Department:3", "locations")
+        assert c.execute("SELECT kind FROM locations WHERE id=?", (austin,)).fetchone()[0] == "other"
+        c.execute("UPDATE locations SET kind='warehouse' WHERE id=?", (austin,))
+    fake.changes.append(M.Location(M.Ext("Department", "3", "2"), "Austin East"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT name, kind FROM locations WHERE id=?", (austin,)).fetchone()) == \
+            ("Austin East", "warehouse")

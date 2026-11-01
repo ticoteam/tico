@@ -50,8 +50,8 @@ XERO_LOCATION_SETTING = "mirror.xero_location"   # the Xero tracking category wh
 REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match",
-           # a purchase order's close and void are not written to the provider yet (its create is)
-           "po_close", "po_void")
+           # a purchase order's void is not written to the provider yet (its create and close are)
+           "po_void")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension |
 M.Project | M.Order
@@ -1763,6 +1763,8 @@ def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any
         return _pay_out(c, cid, local)
     if op == "writeoff.create":
         return _writeoff_out(c, cid, local)
+    if op == "purchaseorder.close":
+        return _order_close_out(c, cid, local)
     if op != "journal.create":
         return dict(local)
     export = bool(local.get("local_entry_id"))
@@ -2059,6 +2061,8 @@ def _confirm(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any],
         _confirm_apply(c, cid, provider, sent, now)
     elif op in RECORD_OPS:
         _confirm_record(c, cid, op, local, sent, now)
+    elif op == "purchaseorder.close":
+        _confirm_po_close(c, cid, local, now)
 
 
 def _link_order(c: sqlite3.Connection, cid: str, o: Any, local: Mapping[str, Any], provider: Mapping[str, Any],
@@ -2803,6 +2807,47 @@ def _confirm_order(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str,
     _bind(c, cid, table, oid, ext, now)
 
 
+def _order_close_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
+    """A purchase order's close as the provider takes it: the id and the revision QuickBooks last gave the order, so the
+    write is a sparse update on the order the books hold. The order waits while the provider does not hold it."""
+    ref = SX.ref_for_local(c, cid, "fin_purchase_orders", str(local["local_id"]))
+    if ref is None or str(ref["status"]) != "active":
+        raise _Missing("that purchase order is not in the provider yet")
+    return {"ext": str(ref["external_id"]), "revision": str(ref["revision"])}
+
+
+def _confirm_po_close(c: sqlite3.Connection, cid: str, local: Mapping[str, Any], now: str) -> None:
+    """QuickBooks closed the purchase order: it closes here by hand, and the holds its bills did not take are released.
+    An order that moved on here since (billed in full, or closed) is left as it is."""
+    po = str(local["local_id"])
+    if SP.update(c, "fin_purchase_orders", po, {"status": "closed", "closed_by": "hand", "closed_at": now,
+                                                "updated_at": now}, "status='approved'") == 1:
+        PU._settle(load(c, now), SYSTEM, po)
+
+
+def _po_close_planner(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
+    """Close an approved purchase order: QuickBooks is sent the close first, and the order closes here when it confirms.
+    The same checks as the native close run now, so a refused close is refused before it is queued."""
+    V.only(p, ("po_id",))
+    _quickbooks_only(ctx, "a purchase order's close")
+    cid = _cid(ctx)
+    po_id = V.text(p, "po_id", 80)
+    po, lines = PU._seen(ctx, who, "fin_purchase_orders", "po", po_id, "purchase order")
+    PU._visible(ctx, who, lines)
+    if str(po["status"]) not in PU.OPEN_ORDER:
+        raise FinanceError(CONFLICT, "only an approved order closes")
+    ref = SX.ref_for_local(ctx.c, cid, "fin_purchase_orders", po_id)
+    if ref is None or str(ref["status"]) != "active":
+        raise FinanceError(CONFLICT, "that purchase order is not in the provider yet")
+
+    def apply(aid: str) -> handlers.Result:
+        outbox = _queue(ctx.c, cid, "purchaseorder.close", {"local_id": po_id, "day": ctx.today}, by=who,
+                        action_id=aid, at=ctx.at)
+        return {"po_id": po_id, "outbox_id": outbox, "status": "queued"}
+    return handlers.Plan(K.default_gate(ctx.org, who, "po_close"),
+                         f"Close purchase order {po['number']}; what is not billed is released"[:200], apply)
+
+
 def _claim_estimate(c: sqlite3.Connection, cid: str, sent: Sent, local: Mapping[str, Any], now: str) -> None:
     """An invoice made from an accepted estimate invoices it once the provider confirms the invoice, whichever read
     brought the invoice in."""
@@ -2816,7 +2861,7 @@ def _claim_estimate(c: sqlite3.Connection, cid: str, sent: Sent, local: Mapping[
 DOC_PLANNERS: dict[str, handlers.Planner] = {
     "bill_create": _create_planner("bill"), "invoice_create": _create_planner("invoice"),
     "po_create": _order_planner("po"), "estimate_create": _order_planner("estimate"),
-    "estimate_convert": _estimate_convert,
+    "estimate_convert": _estimate_convert, "po_close": _po_close_planner,
 
     "bill_void": _void_planner("bill"), "invoice_void": _void_planner("invoice"),
     "bill_mark_paid": _payment_planner("bill"), "invoice_record_payment": _payment_planner("invoice"),

@@ -161,7 +161,10 @@ def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def _books_kind_change(old: str, new: str) -> None:
-    """Refuses a kind change that crosses the item type the books hold, since the books keep an item's type."""
+    """Refuses a kind change that crosses the item type the books hold, since the books keep an item's type. A raw
+    material or an assembly is a Tico label on an inventory item, so a change between one and inventory stays here."""
+    if {old, new} <= {"inventory", *RC.TICO_ONLY_ITEM_KINDS}:
+        return
     held = mirror.books_item_type(old)
     if held != mirror.books_item_type(new):
         raise invalid(f"an item the books hold as {held} cannot change to {mirror.books_item_type(new)}: "

@@ -719,6 +719,13 @@ def purchase_order_body(body: Mapping[str, Any]) -> dict[str, Any]:
     return {**bill_body(body), "POStatus": "Open"}
 
 
+def purchase_order_close_body(body: Mapping[str, Any]) -> dict[str, Any]:
+    """A purchase order's close: a sparse update that sets its status to Closed, on the revision the books hold (a stale
+    revision is refused by QuickBooks, so the close is tried again after the change feed brings the newer one)."""
+    return {"Id": _keyed(body["ext"], "PurchaseOrder"), "SyncToken": str(body["revision"]), "POStatus": "Closed",
+            "sparse": True}
+
+
 def estimate_body(body: Mapping[str, Any], income: Mapping[str, str]) -> dict[str, Any]:
     """An estimate's request body: an invoice's lines, since QuickBooks prices an estimate by item too."""
     return invoice_body(body, income)

@@ -64,7 +64,8 @@ class FakeBooks:
             return self.replies.pop(0)
         kind = {"account.create": "Account", "party.create": "Vendor", "bill.create": "Bill", "bill.void": "Bill",
                 "invoice.create": "Invoice", "invoice.void": "Invoice", "payment.bill": "BillPayment",
-                "purchaseorder.create": "PurchaseOrder", "estimate.create": "Estimate",
+                "purchaseorder.create": "PurchaseOrder", "purchaseorder.close": "PurchaseOrder",
+                "estimate.create": "Estimate", "item.create": "Item", "item.update": "Item",
                 "payment.invoice": "Payment", "writeoff.create": "CreditMemo", "credit.apply": "Payment"}.get(
                     op, "JournalEntry")
         return mirror.Sent(True, kind=kind, external_id=str(900 + len(self.sent)), revision="1")
