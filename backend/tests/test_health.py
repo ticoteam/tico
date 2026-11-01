@@ -1184,3 +1184,17 @@ def test_aged_prs_use_synced_condition_age_and_clear_on_review_or_resolution(env
         G.pr_signal(c, 'pull_request_review', {'action': 'submitted', 'pull_request': {'html_url': urls[1]},
                     'review': {'id': 1, 'state': 'approved', 'commit_id': '2' * 40, 'user': {'login': 'reviewer'}}})
     assert 'aged_prs' not in health_of(api)[1]
+
+
+def test_a_status_the_loop_has_not_checked_for_too_long_is_a_warning_then_bad(monkeypatch):
+    from types import SimpleNamespace
+
+    from backend import health
+    remote = SimpleNamespace(loopback=False)
+    backup = lambda checked: {"mode": "remote", "target_kind": "s3", "last_replicated_at": H.now(), "checked_at": checked}
+    check_at = lambda minutes: health._backups({"backup": backup(H.shift(H.now(), minutes=-minutes))}, remote)
+    monkeypatch.delenv("TICO_BACKUP_SYNC_INTERVAL", raising=False)
+    assert check_at(5)["status"] == "ok"
+    stale = check_at(15)
+    assert stale["status"] == "warn" and stale["summary"].startswith("Backup status not checked since ")
+    assert check_at(120)["status"] == "bad"
