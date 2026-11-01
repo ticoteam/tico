@@ -982,3 +982,80 @@ def test_the_loop_reads_the_replica_position_from_the_generation_the_volume_name
     replication.loop(env, sleep=lambda s: None, rounds=1)
     saved = json.loads(Path(env["TICO_BACKUP_STATUS_FILE"]).read_text())
     assert saved["replica_txid"] == f"{1:016x}" and saved["behind_since"]
+
+
+class ReplicaStub:
+    """Just the listing write_status makes: the newest copy time and the highest TXID of the replica's first level."""
+    def __init__(self, txid):
+        self.txid, self.fail = txid, None
+
+    def latest(self, levels, replica=""):
+        if self.fail:
+            raise self.fail
+        return (1_793_000_000.0 if self.txid is not None else None), self.txid
+
+
+def test_a_busy_install_restarts_its_lag_each_round_while_the_replica_keeps_up(tmp_path):
+    path, replica, start, local, seen = tmp_path / "status.json", ReplicaStub(90), 1_793_000_000.0, 100, []
+    for round_no in range(4):
+        now = start + 30 * round_no
+        replication.write_status(replica, path, local_txid=local, now=now)
+        seen.append((json.loads(path.read_text())["behind_since"], now))
+        replica.txid, local = local, local + 60    # the replica reaches what was local; local writes on
+    assert [since for since, _ in seen] == [replication._stamp(now) for _, now in seen]    # never older than one round
+
+
+def test_a_replica_that_stops_advancing_keeps_its_first_time_until_it_catches_up(tmp_path):
+    path, replica, start = tmp_path / "status.json", ReplicaStub(90), 1_793_000_000.0
+    seen = []
+    for round_no, local in enumerate((100, 160, 220)):
+        replication.write_status(replica, path, local_txid=local, now=start + 30 * round_no)
+        seen.append(json.loads(path.read_text())["behind_since"])
+    assert seen == [replication._stamp(start)] * 3
+    assert json.loads(path.read_text())["pending_txid"] == f"{100:016x}"
+    replica.txid = 220
+    replication.write_status(replica, path, local_txid=220, now=start + 90)
+    assert json.loads(path.read_text())["behind_since"] is None
+
+
+def test_an_unreachable_listing_keeps_the_last_copy_counts_the_pile_up_and_leaves_checked_at_old(tmp_path):
+    path = tmp_path / "status.json"
+    path.write_text(json.dumps({"last_replicated_at": "2026-10-30T11:59:51Z", "behind_since": "2026-10-30T11:00:00Z",
+                                "pending_txid": f"{5:016x}", "replica_txid": f"{3:016x}",
+                                "checked_at": "2026-10-30T11:59:00Z"}))
+    replica = ReplicaStub(None)
+    replica.fail = ConnectionError("unreachable")
+    replication.write_status(replica, path, unsent=27914, local_txid=9, now=1_793_361_600.0)
+    saved = json.loads(path.read_text())
+    assert saved["listing_error"] == "ConnectionError"
+    assert saved["checked_at"] == "2026-10-30T11:59:00Z"          # not moved, so the age shows
+    assert saved["unsent_files"] == 27914 and saved["local_txid"] == f"{9:016x}"
+    assert saved["last_replicated_at"] == "2026-10-30T11:59:51Z" and saved["behind_since"] == "2026-10-30T11:00:00Z"
+    replica.fail, replica.txid = None, 9
+    replication.write_status(replica, path, unsent=0, local_txid=9, now=1_793_361_660.0)
+    saved = json.loads(path.read_text())
+    assert "listing_error" not in saved and saved["checked_at"] != "2026-10-30T11:59:00Z" and saved["behind_since"] is None
+
+
+def test_a_generation_change_between_rounds_switches_levels_and_drops_the_old_lag(tmp_path):
+    env = key_env(tmp_path)
+    db = Path(env["TICO_DB"])
+    level = replication.litestream_state_dir(db) / "ltx" / "0"
+    level.mkdir(parents=True)
+    for txid in range(1, 8):
+        (level / f"{txid:016x}-{txid:016x}.ltx").write_bytes(b"x")
+    add_copy("local", tmp_path / "backups", 0, 3, seconds_ago=10)    # the root replica holds TXID 3
+    status_file, gen, rounds = Path(env["TICO_BACKUP_STATUS_FILE"]), "gen-20261101T000000Z", []
+
+    def between_rounds(seconds):
+        # The reset job lands between two rounds: the cache names a new generation, whose folder is still empty.
+        rounds.append(seconds)
+        if len(rounds) == 1:
+            status_file.write_text(json.dumps({**json.loads(status_file.read_text()), "behind_since": "2026-10-31T00:00:00Z"}))
+            replication.write_generation_cache(db.parent, gen)
+
+    replication.loop(env, sleep=between_rounds, rounds=2)
+    after = json.loads(status_file.read_text())
+    assert after["generation"] == gen
+    assert after["last_replicated_at"] is None and after["reason"] == replication.NO_RECENT_COPY    # not the root's copy
+    assert after["behind_since"] not in (None, "2026-10-31T00:00:00Z")                              # old lag dropped

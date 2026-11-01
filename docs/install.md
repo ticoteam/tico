@@ -1041,11 +1041,11 @@ Backups are on from the first start. Inside the server container, Litestream cop
 | `TICO_BACKUP=off` | nowhere | nothing |
 
 Without a bucket the server logs a warning at start and every hour, and the config payload
-(`GET /api/v2/config`) carries `backup: {mode, last_replicated_at, reason, behind_since, unsent_files, target_kind, warning}`
+(`GET /api/v2/config`) carries `backup: {mode, last_replicated_at, reason, behind_since, checked_at, unsent_files, target_kind, warning}`
 with `mode` one of `remote`, `local-only` or `off`, so the app can show it to the owner. A copy is behind when Litestream
 holds a change the backup location lacks, and `behind_since` is when that began. Health warns once that has lasted longer
 than the greater of 10 minutes and 10 sync intervals, and marks it bad past the greater of an hour and that. A quiet
-database is never behind, however old its last copy. It reports a stuck backup when more than 1,000 files pile up in
+database is never behind, however old its last copy. `checked_at` is when the loop last read the backup location; once it is older than the same warning time, Health warns that the location may be unreachable. It reports a stuck backup when more than 1,000 files pile up in
 Litestream's local level-0 folder (`unsent_files`); restart the server first. Point it at a bucket when you can:
 
 ```

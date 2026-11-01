@@ -1132,14 +1132,14 @@ def _slack(c):
     return _check("slack", "Slack", "bad", "Slack is disconnected" + (": " + state["message"] if state["message"] else "."), [fix])
 
 
-def _behind_age(since):
-    """Whether the backup location is ok, warn or bad for how long it has been behind the database (since is
-    replication.write_status's behind_since). It is timed from when it fell behind, never from the age of the last copy:
-    a quiet database writes nothing new and is not behind, however old its copy. Bad once it is past an hour, or past
-    the warning time when that is later."""
-    if not since:
+def _age_status(stamp):
+    """ok, warn or bad by how old a status-file time is: `behind_since` (how long the backup location has been behind the
+    database) or `checked_at` (when the loop last read it). A missing time is ok. The warning waits for ten sync intervals
+    (replication.behind_warn_seconds); bad past an hour, or past that warning time when it is later. It is judged from the
+    time itself, never from the age of the last copy: a quiet database writes nothing new and is not behind."""
+    if not stamp:
         return "ok"
-    at = H.parse_ts(since)
+    at = H.parse_ts(stamp)
     if at is None:
         return "warn"
     age = (H.parse_ts(H.now()) - at).total_seconds()
@@ -1168,7 +1168,14 @@ def _backups(config, settings):
     if mode == "off":
         return _check("backups", "Backups", "bad",
                       "Backups are off." + (KEY_LOST if key_here else ""), [fix])
-    behind = _behind_age(since) if mode == "remote" else "ok"
+    # The loop writes checked_at every round, even when the listing fails; an old one means it has stopped or cannot reach
+    # the backup location, so nothing it last reported (copies, lag) can be trusted.
+    checked = _age_status(backup.get("checked_at"))
+    if checked != "ok":
+        return _check("backups", "Backups", checked,
+                      f"Backup status not checked since {backup.get('checked_at')}; the backup location may be unreachable.",
+                      [fix])
+    behind = _age_status(since) if mode == "remote" else "ok"
     unsent = backup.get("unsent_files") if isinstance(backup.get("unsent_files"), int) else 0
     if unsent > BACKUP_UNSENT_FILES:
         return _check("backups", "Backups", "bad" if behind == "bad" else "warn",

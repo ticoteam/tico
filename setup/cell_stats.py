@@ -794,7 +794,8 @@ def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
     """The backup as the server's own backup loop last saw it (/tmp/tico-backup-status.json in the server container, read
     through /proc/<pid>/root: no docker exec). `age_s` is the newest copy's age, for display. `behind_s` is how long the
     backup location has been behind the database, null when caught up, and `stale` says it is past the warning time the
-    server wrote (`warn_after_s`, ten sync intervals at least ten minutes). `unsent_files` is the local pile-up. A quiet
+    server wrote (`warn_after_s`, ten sync intervals at least ten minutes). `checked_s` is how long ago the loop last read
+    the backup location; past the warning time it is stale too. `unsent_files` is the local pile-up. A quiet
     database is never stale, whatever its copy's age: it has nothing new to send."""
     if not pid:
         return None
@@ -809,8 +810,11 @@ def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
     since = parse_iso(saved.get("behind_since"))
     warn_after = saved["warn_after_s"] if isinstance(saved.get("warn_after_s"), int) else 600
     behind = None if since is None else max(0, int(now - since))
-    return {"age_s": None if at is None else max(0, int(now - at)), "behind_s": behind,
-            "stale": behind is not None and behind > warn_after, "unsent_files": unsent, "detail": "litestream"}
+    checked = parse_iso(saved.get("checked_at"))
+    checked_s = None if checked is None else max(0, int(now - checked))
+    stale = (behind is not None and behind > warn_after) or (checked_s is not None and checked_s > warn_after)
+    return {"age_s": None if at is None else max(0, int(now - at)), "behind_s": behind, "checked_s": checked_s,
+            "stale": stale, "unsent_files": unsent, "detail": "litestream"}
 
 
 FLIGHT = "data/flight"      # under the company's folder

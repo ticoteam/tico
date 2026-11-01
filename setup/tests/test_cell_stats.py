@@ -269,7 +269,8 @@ def test_a_snapshot_from_proc_docker_and_the_volume(box):
     assert {c["role"] for c in b["containers"]} == {"server", "updater"}
     assert b["db"]["size_mb"] > 0 and b["db"]["wal_mb"] is not None and b["db"]["freelist_pct"] > 0
     assert b["db"]["files_mb"] == 1.5
-    assert b["backup"] == {"age_s": 9, "behind_s": None, "stale": False, "unsent_files": None, "detail": "litestream"}
+    assert b["backup"] == {"age_s": 9, "behind_s": None, "checked_s": None, "stale": False, "unsent_files": None,
+                           "detail": "litestream"}
     f = b["flight"]
     assert f["window_s"] == 300
     assert f["requests"]["count"] == 204 and f["requests"]["errors_5xx"] == 1
@@ -299,13 +300,17 @@ def test_a_backup_behind_the_database_past_its_warning_time_is_stale_and_its_pil
     status = {"last_replicated_at": "2026-10-30T11:59:51Z", "warn_after_s": 600, "unsent_files": 27914,
               "behind_since": "2026-10-30T11:45:00Z"}
     (root / "tico-backup-status.json").write_text(json.dumps(status))
-    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": 900, "stale": True, "unsent_files": 27914,
-                                               "detail": "litestream"}
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": 900, "checked_s": None, "stale": True,
+                                               "unsent_files": 27914, "detail": "litestream"}
     (root / "tico-backup-status.json").write_text(json.dumps({**status, "behind_since": "2026-10-30T11:55:00Z"}))
     assert cs.backup_block(box, 4300, NOW)["stale"] is False and cs.backup_block(box, 4300, NOW)["behind_s"] == 300
     (root / "tico-backup-status.json").write_text(json.dumps({**status, "behind_since": None, "unsent_files": None}))
-    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": None, "stale": False, "unsent_files": None,
-                                               "detail": "litestream"}
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": None, "checked_s": None, "stale": False,
+                                               "unsent_files": None, "detail": "litestream"}
+    # A status the loop has not checked within the warning time is stale too: the copy state is then unknown.
+    (root / "tico-backup-status.json").write_text(json.dumps({**status, "behind_since": None, "checked_at": "2026-10-30T11:45:00Z"}))
+    assert cs.backup_block(box, 4300, NOW) == {"age_s": 9, "behind_s": None, "checked_s": 900, "stale": True,
+                                               "unsent_files": 27914, "detail": "litestream"}
 
 
 def test_docker_runs_once_for_every_company_and_never_reads_the_environment(box):

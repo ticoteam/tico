@@ -57,8 +57,8 @@ BEHIND_WARN_MIN_S = 600
 BEHIND_BAD_MIN_S = 3600
 NO_RECENT_COPY = "Litestream has not sent any copy of the database to the backup location."
 SYNC_INTERVAL_DEFAULT = 60
-# The replica fields write_status keeps when it has no mirror to read (backups off).
-REPLICA_FIELDS = ("last_replicated_at", "reason", "local_txid", "replica_txid", "behind_since")
+# The replica fields write_status keeps when it has no mirror to read, and drops when the generation changes.
+REPLICA_FIELDS = ("last_replicated_at", "reason", "replica_txid", "behind_since", "pending_txid")
 _LTX_NAME = re.compile(r"([0-9a-f]{16})-([0-9a-f]{16})\.ltx")
 _SYNC_UNITS = {"s": 1, "m": 60, "h": 3600}
 FILES_PREFIX = "files"
@@ -204,9 +204,10 @@ def _status_file(env, path):
 
 
 def status(env=None, path=None):
-    """{mode, last_replicated_at, reason, behind_since, unsent_files, target_kind, warning, credential_key, key_files} for
-    the config payload. `reason` says why there is no copy at all; `behind_since` is when the backup location fell behind
-    the database (null when caught up); `unsent_files` is the local level-0 pile-up (local_level_zero())."""
+    """{mode, last_replicated_at, reason, behind_since, checked_at, unsent_files, target_kind, warning, credential_key,
+    key_files} for the config payload. `reason` says why there is no copy at all; `behind_since` is when the backup location
+    fell behind the database (null when caught up); `checked_at` is when the loop last read the backup location, and
+    `unsent_files` is the local level-0 pile-up (local_level_zero())."""
     env = os.environ if env is None else env
     if rehearsal_on(env) or env.get("TICO_BACKUP_MODE") == "rehearsal":
         return {"mode": "rehearsal", "last_replicated_at": None, "target_kind": "none", "warning": ""}
@@ -224,7 +225,8 @@ def status(env=None, path=None):
     saved = _status_file(env, path)
     warning = {"local-only": LOCAL_WARNING, "off": OFF_WARNING}.get(mode, "")
     return {"mode": mode, "last_replicated_at": saved.get("last_replicated_at"), "reason": saved.get("reason"),
-            "behind_since": saved.get("behind_since"), "unsent_files": saved.get("unsent_files"), "target_kind": kind,
+            "behind_since": saved.get("behind_since"), "checked_at": saved.get("checked_at"),
+            "unsent_files": saved.get("unsent_files"), "target_kind": kind,
             "warning": warning,
             "credential_key": credential_key_state(env, None if mode == "off" else saved.get("credential_key")),
             "key_files": key_files_state(env, None if mode == "off" else saved.get("key_files"))}
@@ -669,29 +671,67 @@ def check_new_company(data_dir, mirror, restore_failed=False, initialize_empty=F
     return None
 
 
-def write_status(mirror, path, credential_key=None, key_files=None, unsent=None, local_txid=None,
-                 warn_after=BEHIND_WARN_MIN_S, levels=DB_LEVELS):
-    """The newest database copy and whether the backup location is behind the database, and when the key files were
-    last copied. They are kept apart: a round where one fails must not wipe what the others last did.
+def _txid(text):
+    """The TXID a status file holds in hex; None when there is none or it cannot be read."""
+    try:
+        return int(text, 16) if text else None
+    except (TypeError, ValueError):
+        return None
 
-    Behind means the local level-0 files hold a TXID the replica does not (local_txid above the replica's highest), so
-    `behind_since` is when that began: kept while it lasts, cleared once caught up. `last_replicated_at` is the newest
-    copy of the first replica level that has one, so an idle replica still shows a time. It is null, with `reason`, only
-    when the replica holds no database file at all. `warn_after` is the warning time, for the cell stats to judge by.
-    Without a mirror (backups off) the replica fields are carried over, not read. `levels` are the folders of the
-    current backup generation (db_levels)."""
+
+def _next_lag(saved, local_txid, replica_txid, now):
+    """(behind_since, pending_txid) after this round. Behind means the local level-0 files hold a TXID the replica lacks.
+    An interval starts when the backup location falls behind and is timed against `pending_txid`, the local TXID the
+    replica must reach. A busy install is behind at nearly every round (Litestream writes local TXIDs every second and
+    uploads once per sync interval), so once the replica reaches the pending TXID that interval is retired and a new one
+    starts if it is still behind. Real lag then reads as at most a sync interval plus a round, while a replica that stops
+    advancing keeps its first time."""
+    if local_txid is None or (replica_txid is not None and local_txid <= replica_txid):
+        return None, None
+    since, pending = saved.get("behind_since"), _txid(saved.get("pending_txid"))
+    if since and pending is not None and not (replica_txid is not None and replica_txid >= pending):
+        return since, pending
+    return _stamp(now), local_txid
+
+
+def write_status(mirror, path, credential_key=None, key_files=None, unsent=None, local_txid=None,
+                 warn_after=BEHIND_WARN_MIN_S, levels=DB_LEVELS, generation="", now=None):
+    """The newest database copy, whether the backup location is behind the database, when the loop last checked it, and
+    when the key files were last copied. They are kept apart: a round where one fails must not wipe what the others last
+    did. `levels` are the folders of the current backup generation (`generation`, "" for the root).
+
+    Lag is judged by TXIDs (_next_lag). `last_replicated_at` is the newest copy of the first replica level that has one,
+    so an idle replica still shows a time; it is null, with `reason`, only when the replica holds no database file at all.
+    When the listing fails, the replica fields are kept, the error type is recorded as `listing_error`, the local pile-up is
+    still written, and `checked_at` is left where it was, so health sees the status age. Without a mirror (backups off) the
+    replica fields are carried over, not read. `warn_after` is the warning time, for the cell stats to judge by."""
+    now = time.time() if now is None else now
     saved = _status_file({}, path)
-    data = {"checked_at": _now(), "unsent_files": unsent, "warn_after_s": warn_after}
+    if (saved.get(GENERATION_FIELD) or "") != generation:
+        # Written for another backup generation: a reset may have moved the data to a new folder, so none of its lag or
+        # copy times apply here and they are dropped before anything is compared.
+        saved = {key: value for key, value in saved.items() if key not in REPLICA_FIELDS}
+    data = {"unsent_files": unsent, "warn_after_s": warn_after, GENERATION_FIELD: generation,
+            "local_txid": _hex_txid(local_txid), "checked_at": _stamp(now)}
     if mirror is None:
         data.update({key: saved[key] for key in REPLICA_FIELDS if key in saved})
     else:
-        newest, replica_txid = mirror.latest(levels)
-        behind = local_txid is not None and (replica_txid is None or local_txid > replica_txid)
-        data.update({"last_replicated_at": _stamp(newest) if newest is not None else None,
-                     "local_txid": _hex_txid(local_txid), "replica_txid": _hex_txid(replica_txid),
-                     "behind_since": (saved.get("behind_since") or _now()) if behind else None})
-        if newest is None:
-            data["reason"] = NO_RECENT_COPY
+        try:
+            newest, replica_txid = mirror.latest(levels)
+        except Exception as exc:    # unreachable or unreadable: the type only, nothing a message might quote
+            data.update({key: saved[key] for key in REPLICA_FIELDS if key in saved})
+            data["listing_error"] = type(exc).__name__
+            if saved.get("checked_at"):
+                data["checked_at"] = saved["checked_at"]
+            else:
+                del data["checked_at"]
+        else:
+            since, pending = _next_lag(saved, local_txid, replica_txid, now)
+            data.update({"last_replicated_at": _stamp(newest) if newest is not None else None,
+                         "replica_txid": _hex_txid(replica_txid), "behind_since": since,
+                         "pending_txid": _hex_txid(pending)})
+            if newest is None:
+                data["reason"] = NO_RECENT_COPY
     if credential_key is not None or saved.get("credential_key"):
         data["credential_key"] = credential_key if credential_key is not None else saved["credential_key"]
     kept = {**(saved.get("key_files") if isinstance(saved.get("key_files"), dict) else {}), **(key_files or {})}
@@ -1080,12 +1120,10 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None, 
     file_states, files_copied = {name: {} for name in KEY_FILES}, {}
     db = env.get("TICO_DB") or "/data/hub.sqlite"
     watch = StallWatch()
-    # The generation can only change at a start (the reset job rotates it), so the volume's cache is read once here,
-    # rather than environment.json from the bucket every round. No cache means the root layout, as at the start.
-    try:
-        levels = db_levels(read_generation_cache(Path(db).parent) or "")
-    except (OSError, ValueError):
-        levels = DB_LEVELS
+    # The reset job can move the data to another backup generation while this loop runs, so the volume's cache (a local
+    # file, no network) is read every round. No cache means the root layout, as at a start. An unreadable cache is not a
+    # switch: the generation read last time stays.
+    generation, levels = "", DB_LEVELS
     while rounds is None or done < rounds:
         if warning and time.monotonic() - last_warned >= warn_every:
             print("tico: WARNING: " + warning, flush=True)
@@ -1109,8 +1147,14 @@ def loop(env=None, interval=30, warn_every=3600, sleep=time.sleep, rounds=None, 
             except Exception as exc:
                 print("tico: warning: could not copy " + name + " to the backup location: " + type(exc).__name__, flush=True)
         try:
+            generation = read_generation_cache(Path(db).parent) or ""
+            levels = db_levels(generation)
+        except (OSError, ValueError):
+            pass
+        try:
             unsent, local_txid = local_level_zero(db)
-            write_status(mirror, path, copied, files_copied, unsent, local_txid, behind_warn_seconds(env), levels)
+            write_status(mirror, path, copied, files_copied, unsent, local_txid, behind_warn_seconds(env), levels,
+                         generation, clock())
         except Exception as exc:
             print("tico: warning: backup status failed: " + type(exc).__name__ + ": " + str(exc)[:200], flush=True)
         try:
