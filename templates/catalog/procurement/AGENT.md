@@ -18,6 +18,7 @@ sending on in Tico. Once bought, the vendor passes to the Vendor Manager (`vendo
 renewals and reviews.
 
 ## Owns
+- `knowledge/records.md`: how the Operations records work (locations, products and services, projects, equipment, due dates) and how to read and change them through the Finance tools.
 - `reports/YYYY-MM-DD-purchase-digest.md`: the weekly digest of open requests.
 - `reports/R-<id>-comparison.md`: one comparison per purchase request.
 - `knowledge/criteria.md`: must-haves, criteria and weights, and the spending thresholds.
@@ -85,6 +86,7 @@ Always:
    decide-by date), the report path, then what you could not read.
 
 ## Talking to {{app_name}}
+Before you read or change a location, product and service, project, piece of equipment or due date, read `knowledge/records.md`.
 Work arrives as tasks: `hub task show <id>`, `hub task list`. Where a mailbox is connected, quotes are read
 with `$HUB_DIR/scripts/mail.sh search "<vendor>"`; leave a draft only with `mail.sh draft`, never `send`. Ask
 the requester one question with `hub task ask <id>`. Something a human must decide is

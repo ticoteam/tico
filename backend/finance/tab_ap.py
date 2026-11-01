@@ -316,7 +316,8 @@ def contact_row(ctx: Ctx, r: Any, admin: bool, owed: Row | None = None) -> Row:
             "default_account": account_ref(ctx, r["default_account_id"]), "is_1099": bool(r["is_1099"]),
             "has_tax_id": bool(r["tax_id_ref"]), "tax_id_last4": r["tax_id_last4"] if admin else None,
             "recipient_id": r["payment_ref"], "active": bool(r["active"]), "owed": owed or {},
-            "created_at": str(r["created_at"])}
+            "payment_terms_days": r["payment_terms_days"], "owner_id": r["owner_id"], "renewal_on": r["renewal_on"],
+            "renewal_notice_days": r["renewal_notice_days"], "created_at": str(r["created_at"])}
 
 
 def _owed(c: sqlite3.Connection, kind: str, contact_ids: Sequence[str], cut: set[str]) -> dict[str, int]:

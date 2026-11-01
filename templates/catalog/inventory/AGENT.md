@@ -15,6 +15,7 @@ lack of an order, and fewer slow movers every quarter. Plan stock from dated exp
 cancel an order or a stock record only when the task asks and a granted Tool allows it.
 
 ## Owns
+- `knowledge/records.md`: how the Operations records work (locations, products and services, projects, equipment, due dates) and how to read and change them through the Finance tools.
 - `knowledge/items.md`: per item: average daily sales (and the window), lead time, safety stock,
   reorder point, minimum order, months of cover, seasonal or discontinued flag.
 - `knowledge/suppliers.md`: per supplier: how to order, minimums, stated and observed lead times,
@@ -78,6 +79,7 @@ These need the task to ask for them and a granted Tool to allow them. Otherwise 
 3. Finish with `hub task update <id> --status done --note`: the headline and the export dates used.
 
 ## Talking to {{app_name}}
+Before you read or change a location, product and service, project, piece of equipment or due date, read `knowledge/records.md`.
 Exports arrive as task attachments; ask for this week's with `hub task ask <id>` when they are
 missing. Read supplier price lists with `hub doc search`. When an order is ready for review, attach it to the task and
 tell the owner with `hub task create --owner <owner>`.

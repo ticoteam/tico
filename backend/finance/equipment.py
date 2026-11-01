@@ -1,23 +1,33 @@
 """Equipment as Finance writes it (backend/records/store.py): owned pieces such as vans and tools, and a customer's unit at
 its site. Local records only: nothing here reaches the books. A bot's photo is a draft a person confirms, so the
 approval carries the photo and the person compares it with the record."""
+import sqlite3
 from collections.abc import Callable
 
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
+from .catalog import record_customer
 from .context import Ctx
 from .core import kinds as K
 from .core import validate as V
-from .core.errors import NOT_FOUND, FinanceError, invalid
+from .core.errors import NOT_AVAILABLE, NOT_FOUND, FinanceError, invalid
 from .handlers import Plan, Planner, Result
-from .store import ap as SAP
 from .store import ledger as SL
 
 FIELDS = ("name", "kind", "location_id", "customer_id", "make", "model", "serial", "installed_on", "warranty_ends_on",
           "photo_file_id")
 # A bot's photo asks a person who holds the records right: the owner holds every right, whatever the bot holds.
 PHOTO_GATE = K.Gate("needs_approval", "owner", "default:bot-equipment-photo")
+# Whether an actor may read a Library file by its id: Library's own check (files.readable_by), which needs the sign-in's
+# Auth, so the app installs it once (finance_routes.install). Until then a photo is refused, never taken unchecked.
+FILE_READABLE: Callable[[sqlite3.Connection, str, str], bool] | None = None
+
+
+def set_file_check(check: Callable[[sqlite3.Connection, str, str], bool]) -> None:
+    """Install the photo read check: (connection, actor, file id) -> readable."""
+    global FILE_READABLE
+    FILE_READABLE = check
 
 
 def _shape(build: Callable[[], dict[str, object]]) -> dict[str, object]:
@@ -27,8 +37,15 @@ def _shape(build: Callable[[], dict[str, object]]) -> dict[str, object]:
         raise invalid(str(exc)) from exc
 
 
-def _fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
-    """The columns a payload sets. A van names no location, and a customer's unit names its customer."""
+def _photo_readable(ctx: Ctx, who: str, photo: str) -> bool:
+    if FILE_READABLE is None:
+        raise FinanceError(NOT_AVAILABLE, "photos can't be checked on this install")
+    return FILE_READABLE(ctx.c, who, photo)
+
+
+def _fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str, object]:
+    """The columns a payload sets. A van names no location, and a customer's unit names its customer. A photo must be
+    a Library file the asker can read: a file they cannot see is no photo to them."""
     out: dict[str, object] = {}
     if create or "name" in p:
         out["name"] = RC.name(V.text(p, "name", RC.MAX_NAME))
@@ -41,11 +58,8 @@ def _fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
         out["location_id"] = RS.resolve(ctx.c, "locations", location) if location else None
     if create or "customer_id" in p:
         customer = V.opt_text(p, "customer_id", 80) or ""
-        if customer:
-            row = SAP.get(ctx.c, "fin_contacts", customer)
-            if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both"):
-                raise FinanceError(NOT_FOUND, "no such customer")
-        out["customer_id"] = customer or None
+        # The records right (or a bot's approval for it) decides who writes; a holder names any customer.
+        out["customer_id"] = record_customer(ctx, who, customer, holder=True) if customer else None
     for key in ("make", "model", "serial"):
         if create or key in p:
             out[key] = V.opt_text(p, key, 80) or ""
@@ -53,7 +67,10 @@ def _fields(ctx: Ctx, p: V.Payload, create: bool) -> dict[str, object]:
         if create or key in p:
             out[key] = V.opt_day(p, key)
     if create or "photo_file_id" in p:
-        out["photo_file_id"] = V.opt_text(p, "photo_file_id", 80) or None
+        photo = V.opt_text(p, "photo_file_id", 80) or ""
+        if photo and not _photo_readable(ctx, who, photo):
+            raise FinanceError(NOT_FOUND, "no such photo")
+        out["photo_file_id"] = photo or None
     if not create and "active" in p:
         out["archived_at"] = None if V.flag(p, "active", True) else ctx.at
     return out
@@ -67,6 +84,16 @@ def _check_owner(kind: str, customer: str) -> None:
         raise invalid("owned equipment has no customer")
 
 
+def _check_location(ctx: Ctx, kind: str, location: str, customer: str) -> None:
+    """A customer's unit at a location that names a customer must name that same customer; a location that names
+    none takes the unit as it is."""
+    if kind != "customer" or not location:
+        return
+    row = RR.get(ctx.c, "locations", location)
+    if row is not None and row["customer_id"] and str(row["customer_id"]) != customer:
+        raise invalid("that location belongs to another customer")
+
+
 def _gate(ctx: Ctx, who: str, kind: str, photo: object) -> K.Gate:
     """A bot's photo asks a person to confirm it; everything else follows the default gate."""
     if photo and who in ctx.org.bots:
@@ -76,8 +103,9 @@ def _gate(ctx: Ctx, who: str, kind: str, photo: object) -> K.Gate:
 
 def equipment_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, FIELDS)
-    f = _shape(lambda: _fields(ctx, p, create=True))
+    f = _shape(lambda: _fields(ctx, who, p, create=True))
     _check_owner(str(f["kind"]), str(f["customer_id"] or ""))
+    _check_location(ctx, str(f["kind"]), str(f["location_id"] or ""), str(f["customer_id"] or ""))
     equipment_id = SL.new_id()
 
     def apply(aid: str) -> Result:
@@ -92,12 +120,14 @@ def equipment_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     if old is None:
         raise FinanceError(NOT_FOUND, "no such equipment")
     equipment_id = str(old["id"])
-    f = _shape(lambda: _fields(ctx, p, create=False))
+    f = _shape(lambda: _fields(ctx, who, p, create=False))
     if not f:
         raise invalid("say what changes")
     kind = str(f.get("kind", old["kind"]))
-    customer = f["customer_id"] if "customer_id" in f else old["customer_id"]
-    _check_owner(kind, str(customer or ""))
+    customer = str((f["customer_id"] if "customer_id" in f else old["customer_id"]) or "")
+    location = str((f["location_id"] if "location_id" in f else old["location_id"]) or "")
+    _check_owner(kind, customer)
+    _check_location(ctx, kind, location, customer)
 
     def apply(aid: str) -> Result:
         RS.update(ctx.c, "equipment", equipment_id, {**f, "updated_at": ctx.at, "updated_by_id": who})

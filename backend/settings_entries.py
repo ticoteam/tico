@@ -199,6 +199,10 @@ ENTRIES = TEAM_RULES + [
       value="json", card=_card("bots"), read="usage/limits#bots.{bot}", words="usd dollars spend budget " + _USD),
     S("team.budget", "Run budget", BOTS + " > Run budget", "admin", "confirm", "POST", "settings/turn-budgets",
       value="json", card=_card("bots", "settings-turn-budgets"), words="turns per hour day"),
+    # Hiding is display only (backend/sidebar.py), so an admin's change runs at once.
+    S("company.sidebar", "Sidebar", GENERAL + " > Sidebar", "admin", "direct", "PUT", "company/sidebar", value="json",
+      card=_card("general", "settings-sidebar"), read="company/sidebar#hidden_sections",
+      words="sidebar sections tabs hide hidden business type operations finance growth meetings strategy"),
     S("bots.create", "New bot", BOTS + " > New bot", "anyone", "direct", "POST", "bots", value="json",
       card=_card("bots"), words="create hire"),
     S("bot.compact_at", "Compact at", BOTS + " > Bot editor", "bot", "direct", "POST", "bots/{bot}/compact-at",

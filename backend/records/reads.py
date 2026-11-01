@@ -24,6 +24,12 @@ def is_active(c: sqlite3.Connection, table: str, row_id: str) -> bool:
     return row is not None and row[0] is None
 
 
+def at_customer(c: sqlite3.Connection, customer_id: str) -> list[Any]:
+    """Active locations whose customer contact is this one, by name then id."""
+    return c.execute("SELECT * FROM locations WHERE customer_id=? AND archived_at IS NULL ORDER BY name, id",
+                     (customer_id,)).fetchall()
+
+
 def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
     """Every row's name by id, active or not: a line keeps naming the record it was tagged with."""
     assert table in ROW_TABLES

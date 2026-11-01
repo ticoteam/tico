@@ -25,7 +25,7 @@ from . import models as M
 from . import providers
 from . import beta, census, changelog, hosted_updates, releases, replication, runner_versions, support_asks, ui_bundle
 from .config import ASSISTANT_NAME
-from . import strategy_bot, lifecycle, rooms, routines, statuses
+from . import strategy_bot, lifecycle, rooms, routines, sidebar, statuses
 from . import access as Access
 from . import groups as Groups
 from . import message_bots as MessageBots
@@ -307,6 +307,7 @@ def config_view(c, settings, who=None):
     record = load(c)
     value = {**settings.environment(), **display_names(settings, record)}
     value["onboarding_needed"] = needed(c, who, record)
+    value.update(sidebar.config(c))          # business_type and hidden_sections: null where nothing is stored
     chosen = providers.load(c, settings)
     value["providers_configured"] = providers.configured(chosen)
     # The model a computer's sign-in is for; empty until a provider is chosen, so no sign-in is asked before then. A
@@ -538,6 +539,8 @@ class Onboarding:
     # ------------------------------------------------------------------ writes
     def save(self, c, who, body):
         self._owner(who)
+        if body.business_type is not None:
+            sidebar.check_business_type(body.business_type)      # refused before anything is written
         record = load(c)
         selected = {}
         known = {card["template"] for card in read_cards(self.settings)}
@@ -575,6 +578,9 @@ class Onboarding:
         if owner and body.names.owner_name.strip():
             Access.rename_person(c, rooms.roster(c), owner, body.names.owner_name)
         self._store(c, record, who.actor)
+        if body.business_type is not None:
+            # Setup's business type is the company's, not the onboarding record's; setup may still change its answer.
+            sidebar.set_business_type(c, who.actor, body.business_type, during_setup=not record["completed"])
         H.event(c, who.actor, "onboarding.saved", "", {"selected": sorted(selected)})
         return self.view(c, who)
 
@@ -596,6 +602,7 @@ class Onboarding:
         (backend/sample_company.py). `models` names the model a new bot runs on, by slug, in place of its card's (the
         sample company spreads its bots over two subscriptions); a model whose provider is off is ignored."""
         self._owner(who)
+        sidebar.settle_setup(c, who.actor)      # a company that never answered the business type is Other
         record = load(c)
         names = display_names(self.settings, record)
         cards = {card["template"]: card for card in read_cards(self.settings)}

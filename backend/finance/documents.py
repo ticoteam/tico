@@ -209,7 +209,7 @@ def _vendor_alias(ctx: Ctx, name: str, kind: str, contact_id: str) -> str:
 def contact_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     """A vendor or customer. Its tax id was sealed into the vault before this runs (payments.strip_details): the
     payload carries the vault ref and the last 4 only."""
-    V.only(p, (*CONTACT_FIELDS, *TAX_FIELDS))
+    V.only(p, (*CONTACT_FIELDS, *TAX_FIELDS, *VENDOR_FIELDS))
     f = _contact_fields(ctx, p)
     _need_contact_rights(ctx, who, str(f["kind"]))
     if "tax_id_last4" in p and not f.get("tax_id_ref") and f.get("tax_id_last4"):

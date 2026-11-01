@@ -546,6 +546,8 @@ ADDED = (
     # the shared item a bill or invoice line names (migration 76, backend/records)
     ("fin_bill_lines", "item_id", "TEXT"), ("fin_invoice_lines", "item_id", "TEXT"),
     ("fin_bill_lines", "po_line_id", "TEXT"),
+    # a Stripe price's details (amount, currency, interval) on its own ref (backend/finance/stripe_sync.py catalog)
+    ("fin_external_refs", "detail", "TEXT NOT NULL DEFAULT '{}'"),
 )
 
 

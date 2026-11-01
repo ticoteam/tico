@@ -146,6 +146,16 @@ def number_taken(c: sqlite3.Connection, kind: str, contact_id: str, number: str,
                      (contact_id, number, not_id)).fetchone() is not None
 
 
+def invoice_item_revenue(c: sqlite3.Connection, book_id: str, start: str, end: str) -> list[Any]:
+    """The lines of the posted invoices dated in the window, summed by the item each names (item_id NULL is the lines
+    that name none). Draft and void invoices count for nothing."""
+    return c.execute("SELECT l.item_id, MAX(it.name) AS item_name, SUM(l.amount) AS amount "
+                     "FROM fin_invoice_lines l JOIN fin_invoices v ON v.id=l.invoice_id "
+                     "LEFT JOIN items it ON it.id=l.item_id "
+                     "WHERE v.book_id=? AND v.status IN ('sent','partial','paid') AND v.invoice_date BETWEEN ? AND ? "
+                     "GROUP BY l.item_id", (book_id, start, end)).fetchall()
+
+
 # ------------------------------------------------------------------------------------------------ contacts
 def contacts_page(c: sqlite3.Connection, *, book_id: str, kinds: Sequence[str] = (), q: str = "",
                   active: bool | None = True, after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
