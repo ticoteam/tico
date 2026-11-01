@@ -6,10 +6,17 @@ default, plus BotOps, which every company gets."""
 import pytest
 
 from clients import catalog
+from backend.tests.live import block_outside_network
 from backend.tests.test_api import api, get, post  # noqa: F401
 
 CORE = sorted({row["template"] for row in catalog.cards() if row.get("suggest") == "default"} | {"botops"})
 NAMES = {"company_name": "Acme", "app_name": "Tico", "assistant_name": "Tico"}
+
+
+@pytest.fixture(autouse=True)
+def no_outside_network(monkeypatch):
+    """Only this computer is reached: a company made from a template calls no provider."""
+    block_outside_network(monkeypatch, "the template e2e test has no network")
 
 
 def jobs_for(api, bot):

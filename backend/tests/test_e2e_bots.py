@@ -9,10 +9,16 @@ Slow: the runner binary is built once per run (cargo), and the runner starts as 
 import pytest
 
 from backend.tests.test_api import api, assign, get, post, ready, setup_attempt  # noqa: F401
-from backend.tests.live import live  # noqa: F401
+from backend.tests.live import block_outside_network, live  # noqa: F401
 from runner.tests.test_conformance import Computer, reply_to, rust_binary, until  # noqa: F401
 
 pytestmark = pytest.mark.slow
+
+
+@pytest.fixture(autouse=True)
+def no_outside_network(monkeypatch):
+    """Only this computer is reached: a company made from a template calls no provider."""
+    block_outside_network(monkeypatch, "the bot e2e test has no network")
 
 
 @pytest.fixture
