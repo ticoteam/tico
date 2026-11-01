@@ -247,3 +247,42 @@ The child diary is validated but never trusted for counts, budget or flags. Resu
 No UI, API endpoint, schema, runner setting or everyday memory is modified by this
 module. Caller integration and independent conflict checking remain separate from
 these pure checks. Focused synthetic regressions live in `backend/tests/test_memory_tidy.py`.
+
+### Nightly memory tidy reviewer cards
+
+`backend.memory_tidy_cards.file_card` is the trusted filing seam. Call it in the
+filing transaction with an `offer` from `backend.memory_tidy.evaluate`, the ledger
+pass id/start, base memory commit, named reviewer actor, pass model and the ledger's
+estimated USD cost (including subscription usage). GPT-6.1 Sol's current table
+rates are $2 input, $0.10 cached and $10 output per million; filing calculates cost,
+while cards preserve its estimate. Do not use a stand-in rate or “unmeasured”.
+Skipped/flagged/no-change results create no card and do not replace an existing one.
+Only this internal seam files a proposal; there is no client offer endpoint.
+The pilot model floor forbids Haiku-tier passes; the card rejects Haiku-labelled
+filings as defense in depth alongside filing admission. This never changes the
+bot’s everyday model.
+
+The persistent record is independent of the private parent/check tasks. File it
+before closing both tasks. The named reviewer retains access after those closures
+and the approval-expiry sweep; this is covered with synthetic tasks, not a live
+pilot run. Filing writes no message, approval or job and does not wake the parent.
+
+A human reviewer sees the card in Needs you. A bot reviewer uses
+`hub api GET memory-tidy/cards` and `hub api GET memory-tidy/cards/<id>`; both
+interfaces admit only that named reviewer, regardless of task ownership. Lists
+omit large diffs; the detail read shows the checked diff, diary (at most three
+lines), model, ledger estimate and base memory commit. The UI treats memory text
+as plain text. Discard uses `POST memory-tidy/cards/<id>/decide` with
+`{"decision":"discard"}` and an idempotency key, without touching the repository.
+
+A new offered pass replaces the previous open card for that bot; pass ids make
+retries harmless and pass starts reject late older offers. Unreviewed cards leave
+the list at two business days using the existing team Pacific weekday clock;
+the existing hourly sweep persists withdrawal. No new routine is enabled.
+
+Keep is visible but disabled until the separate Keep slice installs application.
+The server refuses `keep` without changing the open proposal. That slice can read
+stored `edits_json` and provenance under the same reviewer authorization, apply
+under the push lock, and mark `kept` only after a successful push. A failed Keep
+must leave the card open. Keep execution, pass scheduling and pilot activation
+are separate from this card change.

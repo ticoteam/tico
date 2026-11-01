@@ -5163,7 +5163,8 @@ def message_redact(api, args):
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
-    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
+    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True,
+                                                    "source": "botops"}, key=_key(args))
 
 
 
