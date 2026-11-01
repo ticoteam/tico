@@ -159,7 +159,17 @@ checkout path: tracked, untracked, ignored, symlink targets and file modes. Mani
 values must identify content AND kind/mode. Pass these to `evaluate`; any difference,
 even under memory, flags the proposal. Always discard the whole child checkout at
 settlement, on success, failure or cancellation. An attachment is returned through the
-child result channel, never written into that checkout. The module trusts these
+child result channel, never written into that checkout.
+
+Criterion 24 additionally requires the runner to skip `finish_place`'s automatic
+memory/knowledge commit and push for a pass check. Suppress the ordinary
+"committed for you" instruction; the pass prompt explicitly prohibits all file
+writes. Do not use stateless mode: the child must retain its permitted memory reads.
+Manifest validation alone cannot stop an automatic commit that happened before
+validation. These runner controls are a prerequisite supplied by the platform slice,
+not an effect of this pure module. Child output is consumed by code and the child is
+closed without an ordinary parent wake turn, per the engineering run-path decision.
+ The module trusts these
 manifests, not a child's claim that it wrote nothing.
 
 ### JSON attachment
@@ -201,10 +211,12 @@ a review flag rather than silently widening the read scope.
 
 `conflict_check(agent_text, rules)` is a required trusted semantic check of both old
 and proposed rules against AGENT.md. It returns a list of conflict descriptions. Its
-absence, failure or any conflicts flag the proposal; the public diary reports only
+absence, expected operational failure or any conflicts flag the proposal; the public diary reports only
 the count. Do not substitute the edit-producing child's unchecked 'no conflicts'
 claim. This module does not pretend lexical matching proves semantic consistency.
-The orchestration slice must provide this check before enabling offers.
+Unexpected checker exceptions propagate without returning an offer; the caller must
+settle them as failed runs. The orchestration slice must provide this check before
+enabling offers.
 
 Token/key patterns share the company-file detector, including labelled and opaque
 values. Newly introduced secret-shaped strings anywhere in the submitted JSON or

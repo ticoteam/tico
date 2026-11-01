@@ -4,7 +4,7 @@ from datetime import date, datetime, timezone
 
 import pytest
 
-from backend.memory_tidy import ARCHIVE, LEARNINGS, build_packet, evaluate, parse
+from backend.memory_tidy import ARCHIVE, LEARNINGS, build_packet, evaluate, parse, preservation_flags
 
 TODAY = date(2026, 11, 1)
 
@@ -41,7 +41,8 @@ def test_scratch_diff_preserves_originals_and_input_is_unchanged():
     for entry in parse(snap[LEARNINGS]).rules[:2]:
         assert entry.text in result.files[ARCHIVE]
         assert entry.text not in result.files[LEARNINGS]
-    assert result.files["AGENT.md"] == snap["AGENT.md"]
+    assert "AGENT.md" not in result.files
+    assert "memory/evidence/private.txt" not in result.files
     assert "a/memory/learnings.md" in result.diff
     assert len(result.diary.splitlines()) == 3
     assert "20,000" in result.diary
@@ -206,3 +207,76 @@ def test_undated_imported_log_needs_previous_snapshot_to_select_new_text_only():
     assert not build_packet(snap, since=since).scope_complete
     initial = build_packet(snap, since=None)
     assert "Imported rule" in json.dumps(initial.model_input())
+
+
+def test_semantic_checker_failure_withholds_all_offer_artifacts():
+    def unavailable(agent, rules):
+        raise OSError("private diagnostic text")
+
+    result = run(snapshot(), proposal(snapshot()), conflict_check=unavailable)
+    assert result.status == "flagged" and "instruction-conflict check failed" in result.diary
+    assert "private diagnostic" not in str(result)
+    assert not result.files and not result.edits_json and not result.diff
+
+
+
+def test_dated_bullet_logs_are_individual_scoped_entries_and_archive_alone():
+    snap = snapshot(heading="## Working rules")
+    snap[LEARNINGS] += ("\n## Log\n- 2026-11-01 New note.\n"
+                        "- 2026-10-31 Recent note.\n- 2026-09-01 Old note.\n")
+    entries = parse(snap[LEARNINGS]).all_logs
+    assert len(entries) == 3
+    packet = build_packet(snap, since=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    assert [e.text for e in packet.entries if e.kind == "log"] == [entries[0].text]
+    old = entries[2]
+    result = run(snap, {"edits": [{"number": 1, "operation": "archive_log",
+                 "targets": [{"entry_id": old.entry_id, "old_text": old.text}],
+                 "replacement": "", "sources": [old.entry_id]}], "diary": "Archive one."})
+    assert result.status == "offer"
+    assert old.text in result.files[ARCHIVE] and old.text not in result.files[LEARNINGS]
+    assert all(e.text in result.files[LEARNINGS] for e in entries[:2])
+
+
+def test_oldest_first_bullet_log_does_not_hide_appended_new_entries():
+    snap = snapshot("\n## Log\n- 2026-09-01 Old.\n- 2026-11-01 New.\n")
+    packet = build_packet(snap, since=datetime(2026, 11, 1, tzinfo=timezone.utc))
+    logs = [e.text for e in packet.entries if e.kind == "log"]
+    assert logs == ["- 2026-11-01 New.\n"]
+
+
+def test_old_note_move_to_log_is_flagged_even_when_archive_also_contains_it():
+    snap = snapshot("\n## 2026-09-01 Old.\nAn old dated note.\n")
+    old = parse(snap[LEARNINGS]).all_logs[0]
+    result = run(snap, {"edits": [{"number": 1, "operation": "move_log",
+                 "targets": [{"entry_id": old.entry_id, "old_text": old.text}],
+                 "replacement": "", "sources": [old.entry_id]}], "diary": "Move."})
+    assert result.status == "flagged" and any(f.startswith("10:") for f in result.flags)
+    assert not result.files
+
+
+def test_nothing_lost_is_independent_of_archive_implementation():
+    before = {LEARNINGS: "- Keep exact wording.\n"}
+    after = {LEARNINGS: "- Changed wording.\n"}
+    assert preservation_flags(before, after) == ["7: removed line not preserved verbatim"]
+    assert preservation_flags(before, {**after, "knowledge/facts.md": before[LEARNINGS]}) == []
+    assert preservation_flags(before, {**after, "state.md": before[LEARNINGS]})
+
+
+def test_indented_note_bullets_stay_log_and_undated_top_level_bullets_resume_rules():
+    snap = snapshot(heading="## Standing rules")
+    snap[LEARNINGS] = snap[LEARNINGS].replace("- Rule 0.",
+        "### 2026-10-31 A note\nText.\n  - Its detail.\n\n- Rule 0.")
+    packet = parse(snap[LEARNINGS])
+    assert len(packet.rules) == 8
+    assert len(packet.all_logs) == 1 and "  - Its detail." in packet.all_logs[0].text
+    assert "Rule 0" not in packet.all_logs[0].text
+
+
+def test_attachment_uses_only_server_diary_and_scratch_contains_changed_paths_only():
+    snap = snapshot()
+    obj = proposal(snap)
+    obj["diary"] = "Untrusted narrative."
+    result = run(snap, obj)
+    attachment = json.loads(result.edits_json)
+    assert attachment["diary"] == result.diary and "Untrusted narrative" not in result.edits_json
+    assert set(result.files) == {LEARNINGS, ARCHIVE}
