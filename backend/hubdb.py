@@ -3151,7 +3151,7 @@ def say(conn, actor, to_actor, body, conversation_id=None, kind="say", refs=None
              actor, revision=0)
     if warnings:
         event(conn, actor, "message.lint", msg["id"], {"problems": warnings})
-        return {**msg, "warnings": warnings}
+        return {**msg, "warnings": list(msg.get("warnings") or []) + warnings}
     return msg
 
 
@@ -3435,7 +3435,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
         ":in_reply_to, :created, :delivered_at, :read_at, :expires_at, :wait_s, :origin_id, :revision, "
         ":restricted, :legacy_audience)", row)
     conn.execute("UPDATE conversations SET last_message_at=? WHERE id=?", (row["created"], conv["id"]))
-    threads.record(conn, message(conn, row["id"]), conv)
+    # A mention outside the audience grants nothing and warns the author (contract §2): carried on the result.
+    mention_warnings = (threads.record(conn, message(conn, row["id"]), conv) or {}).get("warnings") or []
     # Notes, comments and runner final replies all pass here, including quiet ones
     # and checks requested by a person. Only the check owner may supply its verdict.
     if kind in ("say", "notice") and wake_rules.VERDICT_FIELDS.search(str(body or "")):
@@ -3448,7 +3449,8 @@ def _write_message(conn, actor, target, body, conv, kind, refs, in_reply_to, wai
     event(conn, actor, f"message.{kind}", row["id"], {"to": target, "conversation": conv["id"]})
     if held:
         wake_rules.hold(conn, message(conn, row["id"]), held, rule_id=decision.rule)
-    return message(conn, row["id"])
+    written = message(conn, row["id"])
+    return {**written, "warnings": mention_warnings} if mention_warnings else written
 
 
 def feed(conn, target, body, conv, refs=None):
