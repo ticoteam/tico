@@ -406,3 +406,18 @@ def test_a_teammate_added_as_a_requester_by_botops_waits_for_the_owners_tap(api,
     assert confirm(api, answer.json(), "ana-test")["action"]["status"] == "done"
     rows = get(api, f"tasks/{task['id']}/requesters")["requesters"]
     assert [r["actor"] for r in rows] == ["human:ben"]
+
+
+def test_botops_acting_for_a_person_puts_a_task_link_and_an_outside_requester_on_a_card(api, botops):
+    task = post(api, "tasks", {"owner": "ana", "title": "Plan the launch", "body": "Plan it"}, token="ana-test")
+    ana = turn(api, botops, person="ana-test", text="Link my launch doc and add the agency as a contact")
+    link = act(api, ana, "POST", f"tasks/{task['id']}/links", {"url": "https://docs.acme.example/launch", "title": "Doc"})
+    assert link.status_code == 200 and link.json()["needs_confirm"], link.text
+    contact = act(api, ana, "POST", f"tasks/{task['id']}/requesters", {"email": "agency@acme.example", "name": "Agency"})
+    assert contact.status_code == 200 and contact.json()["needs_confirm"], contact.text
+    assert not any(l.get("url") == "https://docs.acme.example/launch" for l in get(api, f"tasks/{task['id']}/links")["links"])
+    assert get(api, f"tasks/{task['id']}/requesters")["requesters"] == []
+    assert confirm(api, link.json(), "ana-test")["action"]["status"] == "done"
+    assert confirm(api, contact.json(), "ana-test")["action"]["status"] == "done"
+    assert any(l.get("url") == "https://docs.acme.example/launch" for l in get(api, f"tasks/{task['id']}/links")["links"])
+    assert [r["email"] for r in get(api, f"tasks/{task['id']}/requesters")["requesters"]] == ["agency@acme.example"]

@@ -334,13 +334,14 @@ def install_internal(app, store, auth, mutate, mover):
                 actor = H.resolve_actor(c, body.actor)
                 if not actor or not (H.is_human(actor) or H.is_bot(actor)) or not H._actor_exists(c, actor):
                     raise Problem('identity', 'Teammate not found', 422)
-            if actor and actor != who.actor and who.via == 'botops' and not who.confirmed:
-                # BotOps acting for a person adds a teammate to their task only on that person's own tap.
+            if (actor != who.actor or not actor) and who.via == 'botops' and not who.confirmed:
+                # BotOps acting for a person adds a teammate or an outside contact only on that person's own tap.
                 made = getattr(request.app.state, 'botops_propose', None)
                 if made:
-                    name = H.human(c, H.actor_id(actor)) or {}
-                    return made(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters', body.model_dump(),
-                                'Add ' + (name.get('name') or actor) + ' as a requester on “' + row['title'] + '”')
+                    name = H.human(c, H.actor_id(actor)) or {} if actor else {}
+                    who_is = name.get('name') or actor or body.name or body.email or 'a contact'
+                    return made(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters', body.model_dump(exclude_unset=True),
+                                'Add ' + who_is + ' as a requester on “' + row['title'] + '”')
             if actor != who.actor:
                 task(c, who, tid, True)
             return add_requester(c, row['id'], body.model_dump(), actor)
@@ -353,6 +354,10 @@ def install_internal(app, store, auth, mutate, mover):
             row = task(c, who, tid)
             own = c.execute('SELECT 1 FROM task_requesters WHERE task_id=? AND id=? AND actor=?',
                             (row['id'], rid, who.actor)).fetchone()
+            if not own and who.via == 'botops' and not who.confirmed:
+                return request.app.state.botops_propose(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters/' + rid
+                                                        + '/delete', body.model_dump(exclude_unset=True),
+                                                        'Remove a requester from “' + row['title'] + '”')
             if not own:
                 task(c, who, tid, True)
             return remove_requester(c, row['id'], ident=rid, actor=who.actor)
@@ -363,6 +368,10 @@ def install_internal(app, store, auth, mutate, mover):
         def work(c):
             who = request.state.identity
             row = task(c, who, tid, True)
+            if who.via == 'botops' and not who.confirmed:
+                return request.app.state.botops_propose(c, who, 'POST', '/api/v2/tasks/' + tid + '/requesters/' + rid,
+                                                        body.model_dump(exclude_unset=True),
+                                                        'Change a requester on “' + row['title'] + '”')
             values = body.model_dump(exclude_unset=True, exclude={'actor'})
             if not values:
                 raise Problem('requester', 'Provide at least one requester field', 422)
