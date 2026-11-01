@@ -10,13 +10,14 @@ line.
 1. Read the invoice: `hub api GET finance/invoices/<invoice id>`. If it is paid or void, go to step 6.
 2. Look for the payment: `hub finance search --kind feed --q <customer name>`. Find a row from this customer that paid this
    invoice: the invoice's `remaining`, or part of it when the row names the invoice.
-   The invoice's `paid` is money already recorded on it. A row with `entry_id` null is not booked yet: it is new money,
-   never a double count.
+   When the invoice already shows some `paid`, a matching row may be that same payment waiting for its bank row (it stays
+   unbooked, `entry_id` null, until someone links it): never record it, ask.
 3. Decide, then do the step the table names.
 
 | If | Do |
 |---|---|
-| a row pays all or part of it | step 4 (a part: then step 5 for what is still owed) |
+| `paid` is 0 and a row pays all or part of it | step 4 (a part: then step 5 for what is still owed) |
+| `paid` is above 0 and a row matches | ask the invoice's owner on the task whether it is new money; draft the step 5 reminder for them too, to send only if it is not; step 6 |
 | no row matches | step 5 |
 | the invoice is already paid or void | step 6 |
 
