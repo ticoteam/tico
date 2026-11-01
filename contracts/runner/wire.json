@@ -18,6 +18,7 @@
     "x-note": "Request fields, values and endpoints a runner sends only after the server says it takes them (or drops on a 422 that names them). The check allows them in the new-runner/old-server direction. Key: '<endpoint>.request<path>' as the check prints it; value: how the runner gates it.",
     "heartbeat.request.capabilities[]=\"private_lanes_v1\"": "runner-rs lanes::refused_field drops it on the 422 that refuses it and sends it again ten minutes later",
     "heartbeat.request.capabilities[]=\"model_subscriptions_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
+    "heartbeat.request.capabilities[]=\"model_subscription_activation_v1\"": "runner-rs/src/lanes.rs refused_field drops it on an older server's 422; only a claim with activate metadata triggers hop-time fetch, and that fetch requires subscription_activated acknowledgement after rollback",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)"
   },
   "$defs": {
@@ -99,7 +100,7 @@
         "credential_vault": {"type": "boolean"},
         "gateway": {"type": "boolean"},
         "continue_thread": {"type": "string"},
-        "subscriptions": {"type": "array", "x-note": "The company subscriptions this turn signs in with (its computer's, per runtime) (backend/model_subscriptions.py hand_out): ids and kinds, never values, which the run reads from credential-runtime. Only to a runner with model_subscriptions_v1; absent when none.", "items": {"type": "object", "additionalProperties": true}},
+        "subscriptions": {"type": "array", "x-note": "The company subscriptions this turn signs in with (its computer's, per runtime) (backend/model_subscriptions.py hand_out): ids and kinds, never values, which the run reads from credential-runtime. Only to a runner with model_subscriptions_v1; absent when none. Automatic candidates carry activate=true only with model_subscription_activation_v1: credential-runtime with subscription_runtime must acknowledge subscription_activated before the runner places that runtime login.", "items": {"type": "object", "additionalProperties": true}},
         "source_continuation": {"type": "object", "additionalProperties": true},
         "worktrees": {"type": "array", "items": {"type": "object", "additionalProperties": true}},
         "learned": {"oneOf": [{"type": "object", "additionalProperties": true}, {"type": "null"}]},

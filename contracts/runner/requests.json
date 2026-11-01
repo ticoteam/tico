@@ -913,7 +913,8 @@
        "source_continue_v1",
        "turns_at_once_v1",
        "private_lanes_v1",
-       "model_subscriptions_v1"
+       "model_subscriptions_v1",
+       "model_subscription_activation_v1"
       ],
       "type": "string"
      },
