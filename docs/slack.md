@@ -75,7 +75,7 @@ A channel can be linked to a Tico thread, and the two carry each other's message
 
 In the app, an owner or an admin links a thread in Library > Connections > Slack (Link a thread), or in the thread's
 Who can read sheet. The same list shows each link's state, with Resume and Unlink. Elsewhere: `hub thread link-slack
-<thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. `GET /api/v2/slack/links` reads a page
+<thread> [<channel>]` (CLI), the `hub_thread_link_slack` tool (MCP), or the API. Resume is `hub thread slack-resume <link-id>`. `GET /api/v2/slack/links` reads a page
 at a time (`limit`, `cursor`; follow `next_cursor`).
 
 ## What humans can do

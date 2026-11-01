@@ -8,7 +8,7 @@ Status on this branch: the call API, the CLI, the MCP tools, the OpenAPI operati
 browser signal path are built. Most tests run against fakes for LiveKit and the Gateway. One live test
 (`backend/tests/test_call_live.py`) runs against a real `livekit-server` in dev mode, the digest-pinned image: a
 synthetic speaker publishes audio through the LiveKit SDK, the recorder hears it, the Gateway's speech-to-text is the
-only fake, and the transcript posts into the thread and the room is deleted. No install has run calls yet. Text to
+only fake, and the transcript posts into the thread and the LiveKit session is closed. No install has run calls yet. Text to
 speech is not built (see Not built).
 
 ## How a call works

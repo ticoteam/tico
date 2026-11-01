@@ -104,6 +104,8 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
 | `hub thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
 | `hub thread task <message-id> --title T --owner O` | `hub_thread_task` | a task from a message, private unless the thread is company-wide |
+| `hub thread delete <message-id>` | `hub_thread_delete` | delete your message: a marker stays and the asks it answered reopen |
+| `hub thread upload <thread> <file> [--text ..] [--kind say\|ask] [--to ACTOR] [--under MESSAGE]` | `hub_thread_upload` | a message with a local file streamed to the thread (or to a message's sub-thread) |
 | `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
 | `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
 | `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
@@ -111,6 +113,7 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread members list\|add\|remove` | `hub_thread_members_list`, `_add`, `_remove` | who reads the thread; `add --owner` makes an owner |
 | `hub thread update <thread>` | `hub_thread_update` | `--title`, `--archive` or `--unarchive`, `--audience`, `--group` |
 | `hub thread link-slack <thread> [<channel>] [--history] [--off]` | `hub_thread_link_slack` | link a Slack channel (admins), list the thread's links, or take them away ([Slack](slack.md)) |
+| `hub thread slack-resume <link-id>` | `hub_thread_slack_resume` | check a suspended or refused Slack link again (admins) |
 
 The commands are `hub thread` in the CLI and `hub_thread_*` over MCP. The REST routes live under `/api/v2/threads`
 and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The thread routes a client calls are:
@@ -122,10 +125,16 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `PUT` and `DELETE /api/v2/messages/{id}/reactions/{emoji}`: add or remove your reaction.
 - `POST /api/v2/threads/{id}/open-earlier`: a bot's manager opens its earlier messages to its Home readers.
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
-  `files`), under the chat upload size caps. It is not in the CLI or MCP yet.
+  `file`), under the chat upload size caps: `hub thread upload`.
+- `DELETE /api/v2/messages/{id}`: delete your message (`hub thread delete`).
+- `POST /api/v2/slack/links/{id}/resume`: check a suspended or refused link again (`hub thread slack-resume`).
 - `POST /api/v2/threads/messages/{id}/task` with `title` and `owner`: a task made from a message you can read. The server
   copies the message and a link back, and the task stays private unless the thread is company-wide
   (`hub thread task <message-id> --title T --owner O`).
+
+BotOps acting for a person runs the thread writes above as that person, the same as the CLI: edits, deletes, reactions, DMs,
+uploads, Slack links and call steps (start, end, leave, bots, retry). It does not join a call or take a call's token; the
+person joins in the app or with `hub call join`.
 
 ## Webhooks
 

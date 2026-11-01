@@ -20,6 +20,23 @@ def test_thread_writes_run_as_the_person_who_asked_and_botops_messages_do_not():
     assert not default_delegable("POST", "/api/v2/messages", {"text": "Working on it"})
 
 
+def test_thread_deletes_reactions_dms_uploads_and_call_steps_run_as_the_person_who_asked():
+    for method, path in [("DELETE", "messages/m1"), ("PUT", "messages/m1/reactions/:thumbsup:"),
+                         ("DELETE", "messages/m1/reactions/:thumbsup:"), ("POST", "threads/dm"),
+                         ("POST", "threads/t1/open-earlier"), ("POST", "uploads/threads/t1/messages"),
+                         ("POST", "slack/links"), ("DELETE", "slack/links/L1"), ("POST", "slack/links/L1/resume"),
+                         ("POST", "threads/t1/calls"), ("POST", "calls/c1/end"), ("POST", "calls/c1/leave"),
+                         ("POST", "calls/c1/bots"), ("DELETE", "calls/c1/bots/bot:ops"),
+                         ("POST", "calls/c1/action-items/retry"), ("PUT", "inbound/inboxes/ibx1/audience")]:
+        assert default_delegable(method, "/api/v2/" + path, {}), (method, path)
+
+
+def test_joining_a_call_is_not_delegated_because_its_token_is_the_persons():
+    # A join answers with a media token good for five minutes: BotOps does not take one for a person.
+    assert not default_delegable("POST", "/api/v2/calls/c1/join", {})
+    assert not default_delegable("POST", "/api/v2/calls/c1/token", {})
+
+
 def _follow_route(api):
     """A thread route that sets the follow state of whoever the call ran as, and answers with that identity."""
     def follow(thread: str, request: Request):

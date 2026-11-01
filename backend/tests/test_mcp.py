@@ -82,7 +82,8 @@ THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_
 THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
                  "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
                  "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack", "hub_thread_dm_group",
-                 "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier", "hub_thread_task"}
+                 "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier", "hub_thread_task",
+                 "hub_thread_delete", "hub_thread_upload", "hub_thread_slack_resume"}
 
 
 def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
