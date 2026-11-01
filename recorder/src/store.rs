@@ -248,7 +248,10 @@ impl Store {
           CREATE TABLE IF NOT EXISTS live_corrections(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
           destination_id TEXT NOT NULL,seq INTEGER NOT NULL,revision INTEGER NOT NULL,payload_json TEXT NOT NULL,
           state INTEGER NOT NULL DEFAULT 0);
-          CREATE INDEX IF NOT EXISTS live_corrections_seq ON live_corrections(recording_id,destination_id,seq);")?;
+          CREATE INDEX IF NOT EXISTS live_corrections_seq ON live_corrections(recording_id,destination_id,seq);
+          CREATE TABLE IF NOT EXISTS live_edits(recording_id TEXT NOT NULL REFERENCES recordings(id) ON DELETE CASCADE,
+          destination_id TEXT NOT NULL,seq INTEGER NOT NULL,
+          PRIMARY KEY(recording_id,destination_id,seq));")?;
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;

@@ -68,7 +68,7 @@ EMPTY = (
     "credentials", "credential_keys", "credential_grants", "credential_uses", "credential_requests", "credential_imports",
     "directory_credentials", "company_storage", "tico_storage",
     # company model subscriptions: the sealed logins (vault values) and which computer or attempt holds which one
-    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions",
+    "model_subscriptions", "computer_subscriptions", "attempt_subscriptions", "subscription_connects",
     # mail, Slack, GitHub, Granola, meeting bots, support
     "mail_mailboxes", "bot_mail_settings", "google_connects", "google_mail_holders", "slack_credentials", "slack_posts", "slack_events", "slack_threads",
     "github_app", "github_app_states", "granola_connections", "meeting_importers", "live_meeting_bots",
@@ -131,7 +131,7 @@ KEEP = frozenset((
     "message_links_seen", "notes", "pages", "runner_load_samples", "perf_overloads", "perf_points", "perf_usage", "preferences", "rate_limits",
     "recording_source_refs", "recording_transcripts", "org_rules", "org_rule_misses", "redesign_migrated", "redesign_migration_accepts", "refusals", "registry_metadata", "repositories", "rule_due_dates", "rule_due_status", "rule_reads", "rule_sources", "rule_suggestions", "rules", "run_backoff", "runners",
     "seats", "service_health", "settings_changes", "slack_channels", "slack_digests", "slack_reads", "stale_judged",
-    "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
+    "memory_tidy_cards", "stale_suggestions", "stall_triage", "storage_moves", "strategy_bets", "strategy_events", "strategy_versions",
     "system_runs", "tags", "task_assets",
     "task_check_models", "task_delegations", "task_events", "task_file_reviews", "task_links", "task_relations",
     "task_roles", "task_run_models", "task_steps", "task_tags", "task_trash", "task_trash_assets", "task_types", "tasks",

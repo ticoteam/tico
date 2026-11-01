@@ -17,7 +17,7 @@ module.exports = async browser => {
     await page.evaluate(() => {
       const state = window.__PREVIEW__.state, meeting = state.meetings.m1;
       Object.assign(meeting, {live_state: 'live', can_control: true, can_finish: true, can_discard: true, paused_warning: false});
-      Object.assign(meeting.actions.items[0], {owner: 'bot:fixture', can_send: true, paused_warning: true});
+      Object.assign(meeting.actions.items[0], {title: 'Paused launch date', quote: '', owner: 'bot:fixture', can_send: true, paused_warning: true});
       window.fixtureCalls = [];
       const original = window.__TAURI__.core.invoke;
       window.__TAURI__.core.invoke = async (cmd, args = {}) => {

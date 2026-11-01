@@ -497,6 +497,50 @@ async fn a_stateless_task_lane_commits_no_memory_and_leaves_what_it_wrote_in_mem
 }
 
 #[tokio::test]
+async fn a_memory_pass_checkout_drops_its_edits_and_commits_and_leaves_main_alone() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-pass");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-pass");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "tico-pass", "t4");
+    assert_eq!(sessions::ensure(&main, &session, "t4", &env).await, ("origin/main".into(), "".into()));
+    let base = sh(&session, &["rev-parse", "HEAD"]);
+
+    // A pass commits outside memory/ and edits memory/ without committing it; both must be gone after the turn.
+    std::fs::write(session.join("stray.txt"), "outside memory\n").unwrap();
+    sh(&session, &["add", "stray.txt"]);
+    sh(&session, &["commit", "-qm", "Pass commit"]);
+    std::fs::create_dir_all(session.join("memory")).unwrap();
+    std::fs::write(session.join("memory/learnings.md"), "a rule the pass rewrote\n").unwrap();
+
+    let changed = sessions::discard_pass(&session, &env).await.unwrap();
+    assert!(changed.iter().any(|c| c.starts_with("commit ")), "{changed:?}");
+    assert!(changed.iter().any(|c| c.contains("memory/learnings.md")), "{changed:?}");
+    assert_eq!(sh(&session, &["rev-parse", "HEAD"]), base, "the pass's commit is dropped");
+    assert_eq!(sh(&session, &["status", "--porcelain"]), "", "nothing is left uncommitted");
+    assert!(!session.join("stray.txt").exists() && !session.join("memory").exists());
+    assert_eq!(sh(&session, &["rev-parse", "origin/main"]), base, "nothing reached main");
+    assert_eq!(sh(&session, &["log", "--format=%H", "origin/main..HEAD"]), "");
+}
+
+#[tokio::test]
+async fn a_memory_pass_with_nothing_changed_discards_nothing_and_says_so() {
+    let tmp = Tmp::new();
+    let (bare, _seed) = remote(&tmp.0, "bot-quiet");
+    let projects = tmp.0.join("projects");
+    std::fs::create_dir_all(&projects).unwrap();
+    let main = projects.join("bot-quiet");
+    sh(&projects, &["clone", "-q", bare.to_str().unwrap(), main.to_str().unwrap()]);
+    let env = turn_env(&tmp.0, &[]);
+    let session = sessions::path_for(&projects, "tico-quiet", "t5");
+    assert_eq!(sessions::ensure(&main, &session, "t5", &env).await, ("origin/main".into(), "".into()));
+    assert_eq!(sessions::discard_pass(&session, &env).await.unwrap(), Vec::<String>::new());
+}
+
+#[tokio::test]
 async fn a_private_meetings_checkout_needs_no_upstream_but_a_tasks_does() {
     // A repository made on this computer with no remote: a task has no upstream to share, a private meeting's copy,
     // never pushed, starts from the checkout's own HEAD.

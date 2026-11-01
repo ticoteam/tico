@@ -130,6 +130,7 @@ ACTIONS = {
                           ("engineering", "exceptions", "wake", "manager")),
     "read_activity": ("read yesterday's chats, tasks, Slack, mail and meetings",
                       ("learnings", "chat", "slack", "mail", "meetings")),
+    "propose_memory_tidy": ("propose memory and knowledge edits for the pilot bots", ("memory", "tidy", "pilot")),
     "send_learnings": ("send each bot what it should remember", ("learnings", "memory", "send")),
     "remind_due": ("tell a bot when one of its tasks reaches its due time", ("due", "remind", "tasks")),
     "go_ahead": ("go ahead on a past-deadline question's default answer, or expire it",
@@ -215,6 +216,9 @@ JOBS = [
         "Lists each engineering board's exceptions in plain code and wakes its manager (Manager profile) with them only "
         "when the list has an entry the last one did not. Tickets that move on their own are not listed.",
         CHECKS, "Hourly", 3600, control=True, then=("list_exceptions", "wake_type_manager")),
+    Job("memory_tidy", "Nightly memory tidy",
+        "Proposes memory and knowledge edits for up to three pilot bots on their named models. Pilot stop: $50.",
+        LEARNING, "Nightly at 03:30", control=True, then=("propose_memory_tidy",)),
     Job("learnings", "Nightly learnings",
         "Reads yesterday's chats, tasks, Slack, mail and meetings and sends each bot what it should remember.",
         LEARNING, "Nightly at 03:00", ai=True, control=True, labels=("learnings-route",), then=("read_activity", "send_learnings")),
@@ -321,6 +325,7 @@ CONTROLS = {
     "health_scan": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00", owner_only=True),
     # One run a night reads the day before (backend/learnings.py claims one per night): the choice is its time.
     "learnings": Control(presets=(DAILY,), preset=DAILY, at="03:00"),
+    "memory_tidy": Control(on=False, presets=(DAILY,), preset=DAILY, at="03:30"),
     "ask_deadlines": Control(presets=EVERY_PRESET, preset=HOURLY, at="09:00"),
     # Hourly while people are at work: a report outside business hours would wait on nobody to read it.
     "task_manager_report": Control(presets=(BUSINESS, HOURLY, FOUR_HOURS, DAILY), preset=BUSINESS, at="09:00"),
@@ -374,7 +379,7 @@ def schedule_words(key, cfg):
     if not cfg or not cfg.get("preset"):
         return BY_KEY[key].schedule
     words = PRESETS[cfg["preset"]][0].format(at=cfg.get("at") or "")
-    return "Nightly at " + cfg["at"] if key == "learnings" else words
+    return "Nightly at " + cfg["at"] if key in ("learnings", "memory_tidy") else words
 
 
 def may_change(auth, who, key):
@@ -769,6 +774,13 @@ def listing(c, settings, now=None, who=None, auth=None):
                 "owner_only": bool(ctl and ctl.owner_only),
                 "can_change": bool(ctl and who is not None and auth is not None and can_change(auth, who, job.key)),
                 "last": None, "next": _stamp(following) if following else None}
+        if job.key == "memory_tidy":
+            from . import memory_tidy_controls
+            item["run_unavailable"] = memory_tidy_controls.UNAVAILABLE
+        if job.key == "memory_tidy" and item["can_change"]:
+            from . import memory_tidy_controls
+            item["pilots"] = memory_tidy_controls.pilots(c)
+            item["pilot_models"] = memory_tidy_controls.model_options(c, settings)
         item["search"] = search_words(job, when_words, then_words, department)
         if job.key == "task_manager_report":
             from .task_manager import active as task_manager_active
@@ -823,7 +835,15 @@ def install(app, store, auth, mutate):
         owner. Stale ticket review's and Topic changed's switch is their team rule (backend/team_rules.py)."""
         who = request.state.identity
         may_change(auth, who, key)
-        mutate(request, body, lambda c: save_config(c, who.actor, key, body.on, body.preset, body.at))
+        if body.pilots is not None and key != "memory_tidy":
+            raise Problem("invalid", "Only Nightly memory tidy has a pilot list", 422)
+
+        def work(c):
+            if body.pilots is not None:
+                from . import memory_tidy_controls
+                memory_tidy_controls.save(c, store.settings, who.actor, [p.model_dump() for p in body.pilots])
+            return save_config(c, who.actor, key, body.on, body.preset, body.at)
+        mutate(request, body, work)
         with store.read() as c:
             return {"job": row_of(c, store.settings, key, who, auth)}
 

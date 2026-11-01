@@ -766,8 +766,10 @@ impl Tico {
             return Ok(());
         }
         ensure!(
-            paused_confirmed || context.paused_windows.is_empty() || item.quote.trim().is_empty(),
-            "This action item may quote paused speech. Review its quote before sending"
+            paused_confirmed
+                || context.paused_windows.is_empty()
+                || (item.quote.trim().is_empty() && item.title.trim().is_empty()),
+            "This action item may quote paused speech. Review its title and quote before sending"
         );
         let record = crate::live::shareable(&record, &context.paused_windows);
         ensure!(

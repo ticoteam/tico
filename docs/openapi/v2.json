@@ -157,6 +157,10 @@
     {
       "name": "Model subscriptions",
       "description": "The company's saved model logins and keys, given to computers per runtime. A value is sent only to add or reconnect one; no answer carries it."
+    },
+    {
+      "name": "Memory tidy",
+      "description": "Nightly memory tidy proposals, visible only to the named reviewer, independently of pass tasks."
     }
   ],
   "paths": {
@@ -18655,6 +18659,170 @@
         },
         "tags": [
           "Meetings"
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/cards": {
+      "get": {
+        "summary": "The named reviewer\u2019s open cards; diffs are fetched on opening a card. Human and bot reviewers.",
+        "operationId": "listMemoryTidyCards",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCards"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/cards/{ident}": {
+      "get": {
+        "summary": "A named reviewer\u2019s card with its checked diff, including after both pass tasks close.",
+        "operationId": "getMemoryTidyCard",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCardResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
+        ]
+      }
+    },
+    "/api/v2/memory-tidy/cards/{ident}/decide": {
+      "post": {
+        "summary": "Discard an open card without repository changes. Keep returns 409 until its separate implementation is available.",
+        "operationId": "decideMemoryTidyCard",
+        "parameters": [
+          {
+            "name": "ident",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Ident"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "1-200 characters. Reusing a key with the same body replays the first answer."
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MemoryTidyDecision"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MemoryTidyCardResult"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Memory tidy"
         ]
       }
     },
@@ -38578,6 +38746,12 @@
                     "none"
                   ]
                 },
+                "default_team": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "grants": {
                   "type": "array",
                   "items": {
@@ -38600,6 +38774,7 @@
               },
               "required": [
                 "default",
+                "default_team",
                 "grants",
                 "kind",
                 "may_grant",
@@ -46402,6 +46577,160 @@
         ],
         "additionalProperties": true
       },
+      "MemoryTidyCard": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "memory_tidy"
+            ]
+          },
+          "bot": {
+            "type": "string"
+          },
+          "reviewer": {
+            "type": "string"
+          },
+          "requester": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "memory_commit": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "cost_usd": {
+            "type": "number",
+            "description": "Filing-ledger list-price estimate, including subscription usage."
+          },
+          "diary": {
+            "type": "string"
+          },
+          "diff": {
+            "type": "string",
+            "description": "Checked unified diff; present on detail reads and decisions, omitted from lists."
+          },
+          "created": {
+            "type": "string"
+          },
+          "expires": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "open",
+              "withdrawn",
+              "discarded",
+              "kept"
+            ]
+          },
+          "reason": {
+            "type": "string"
+          },
+          "keep_available": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "bot",
+          "cost_usd",
+          "created",
+          "diary",
+          "expires",
+          "id",
+          "keep_available",
+          "kind",
+          "memory_commit",
+          "model",
+          "reason",
+          "requester",
+          "reviewer",
+          "status",
+          "title"
+        ],
+        "additionalProperties": true
+      },
+      "MemoryTidyCardResult": {
+        "type": "object",
+        "properties": {
+          "card": {
+            "$ref": "#/components/schemas/MemoryTidyCard"
+          }
+        },
+        "required": [
+          "card"
+        ],
+        "additionalProperties": true
+      },
+      "MemoryTidyCards": {
+        "type": "object",
+        "properties": {
+          "cards": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/MemoryTidyCard"
+            }
+          }
+        },
+        "required": [
+          "cards"
+        ],
+        "additionalProperties": true
+      },
+      "MemoryTidyDecision": {
+        "properties": {
+          "decision": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "discard"
+            ],
+            "title": "Decision"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "title": "MemoryTidyDecision"
+      },
+      "MemoryTidyPilot": {
+        "properties": {
+          "bot": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Bot"
+          },
+          "model": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Model"
+          },
+          "effort": {
+            "type": "string",
+            "const": "low",
+            "title": "Effort",
+            "default": "low"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "bot",
+          "model"
+        ],
+        "title": "MemoryTidyPilot"
+      },
       "Message": {
         "type": "object",
         "properties": {
@@ -52411,6 +52740,21 @@
       },
       "SystemRoutineUpdate": {
         "properties": {
+          "pilots": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/MemoryTidyPilot"
+                },
+                "type": "array",
+                "maxItems": 3
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pilots"
+          },
           "on": {
             "anyOf": [
               {

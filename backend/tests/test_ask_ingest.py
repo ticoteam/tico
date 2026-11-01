@@ -1,4 +1,4 @@
-"""Ask ingest (backend/ask_ingest.py, spec ask-ingest.md v1): a bot's task for a person is judged before it lands.
+"""Ask ingest (backend/ask_ingest.py, spec ask-ingest.md v2): a bot's task for a person is judged before it lands.
 With the filter On, the budget tightens as the person's plate fills; sent back or FYI, the task stays the bot's own
 and the reply says why, naming the bot's manager. Rehearsal changes nothing and lists what On would have done. A
 person's own write is never gated, and any failure lets the item through as before."""
@@ -95,8 +95,11 @@ def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=Fal
     (4, answers(), (A.THROUGH, "under_budget")),                                           # criterion 1
     (15, answers(), (A.SENT_BACK, "criteria")),                                            # criterion 2
     (15, answers(meets="line-4"), (A.THROUGH, "criteria")),                                # criterion 3
-    (40, answers(meets="line-4", recommends=True, urgency=1), (A.SENT_BACK, "recommends")),  # criterion 4
+    (40, answers(meets="line-4", recommends=True, urgency=1), (A.THROUGH, "recommends")),  # criterion 4: no urgency rule
     (40, answers(meets="line-4", recommends=True, urgency=2), (A.THROUGH, "recommends")),
+    (40, answers(meets="line-4", recommends=False, urgency=3), (A.THROUGH, "urgent")),
+    (40, answers(meets="line-4", recommends=False, urgency=1), (A.SENT_BACK, "recommends")),
+    (40, answers(meets="none", recommends=True, urgency=2), (A.SENT_BACK, "recommends")),
     (120, answers(meets="line-4", recommends=True, urgency=2), (A.SENT_BACK, "urgent_only")),  # criterion 5
     (120, answers(urgency=3), (A.THROUGH, "urgent")),
     (0, answers(kind="status"), (A.FYI, "status")),                                         # criterion 7
@@ -106,10 +109,17 @@ def answers(clear=True, kind="decision", meets="none", urgency=1, recommends=Fal
     (0, answers(clear=False, urgency=3), (A.THROUGH, "urgent")),
     (0, answers(clear=None), (A.FAILED_OPEN, "below_threshold")),
     (15, answers(meets=None), (A.FAILED_OPEN, "below_threshold")),
-    (40, answers(meets="line-1", recommends=True, urgency=None), (A.FAILED_OPEN, "below_threshold")),
+    (40, answers(meets="line-1", recommends=None), (A.FAILED_OPEN, "below_threshold")),
+    (40, answers(meets="line-1", recommends=True, urgency=None), (A.THROUGH, "recommends")),  # the band reads no urgency
 ])
 def test_the_budget_tightens_as_the_plate_fills(load, given, expected):
     assert A.decide(given, 10, 5, load, 0) == expected
+
+
+def test_a_recommends_reply_names_the_criterion_and_the_recommendation_only():
+    text = A.message("recommends", "Ben", 40, 0, "Priya")
+    assert "Ben has 40 open items" in text and "criteria and your recommendation" in text
+    assert "date" not in text and "past today" not in text, "no band asks for a date now"
 
 
 def test_chores_have_their_own_budget():
@@ -1085,6 +1095,7 @@ def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
              headers=headers(token))                                      # refused: a named reason
     row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"] == {"calls": 2, "landed": 1, "reasons": {"refused": 1}, "unexplained": 0, "no_call": 0}
+    assert row["versions"] == ["2"], "the readout groups answers by the set's version, now 2"
     assert "calls reconciled: 2 = 1 with an item row, refused 1; unexplained 0; rows with no call 0" \
         in get(api, "judge/readout")["text"]
 
@@ -1092,7 +1103,7 @@ def test_the_readout_reconciles_every_call_to_a_row_or_a_named_reason(gate):
 def test_a_call_with_neither_a_row_nor_a_reason_is_shown_as_unexplained(gate):
     api, model, token = gate
     with api.app.state.store.transaction() as c:
-        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@1", {"label": "person-ask-ingest@1", "mode": "on"})
+        H.event(c, H.KEEPER, "judge.call", "person-ask-ingest@2", {"label": "person-ask-ingest@2", "mode": "on"})
     row = next(r for r in get(api, "judge/readout")["sets"] if r["set"] == A.QUESTION_SET)
     assert row["reconcile"]["unexplained"] == 1 and row["reconcile"]["calls"] == 1
 

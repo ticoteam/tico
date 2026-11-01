@@ -13,7 +13,7 @@ use tico_recorder_native::{
     audio::Channel,
     capture,
     engine::RecordingHandle,
-    live::LiveSync,
+    live::{self, LiveSync},
     network::{self, Tico, Transcriber},
     notices,
     settings::{self, AppLock, Settings},
@@ -1316,6 +1316,17 @@ impl Recorder {
             Ok(json!({}))
         });
     }
+    /// A person's edit of a line already shared live, or its removal when `text` is None. It only
+    /// changes the meeting the window has open, and only when that is the meeting named.
+    pub fn edit_shared_line(&mut self, id: &str, seq: i64, text: Option<&str>) {
+        let result = if self.meeting.as_deref() == Some(id) {
+            live::edit_shared(&self.store, id, seq, text)
+        } else {
+            Err(anyhow::anyhow!("That meeting is no longer open"))
+        };
+        self.report(result);
+        self.reload();
+    }
     pub fn finish_live(&mut self) {
         if self.context.live_id.is_empty() {
             return;
@@ -1424,8 +1435,8 @@ impl Recorder {
                     let reason = tico_recorder_native::live::item_send_blocked(&context)
                         .map(str::to_owned)
                         .or_else(|| (!paused_confirmed && !context.paused_windows.is_empty()
-                            && context.items.iter().any(|i| i.id == item_id && !i.quote.trim().is_empty()))
-                            .then(|| "This action item may quote paused speech. Review its quote before sending".into()));
+                            && context.items.iter().any(|i| i.id == item_id && (!i.quote.trim().is_empty() || !i.title.trim().is_empty())))
+                            .then(|| "This action item may quote paused speech. Review its title and quote before sending".into()));
                     if let Some(reason) = reason {
                         self.item_error = Some((item_id.to_owned(), reason));
                         return;
@@ -2238,6 +2249,9 @@ impl Recorder {
         };
         let recording = record.state == "recording"
             || self.active.as_ref().is_some_and(|(id, _)| id == &record.id);
+        if let Some(view) = self.shared_transcript(record, recording) {
+            return view;
+        }
         if recording {
             // While recording: finished chunks, streamed final words, then the words still
             // being spoken, which the window shows softer and updates in place.
@@ -2259,6 +2273,11 @@ impl Recorder {
             self.blocks = (current, transcript_blocks(record));
         }
         json!({"id": record.id, "blocks": self.blocks.1})
+    }
+    /// A meeting shared live shows the lines Tico holds, one per line, so an edit or removal names
+    /// the line Tico changes. Speech not sent yet follows without controls. None if not shared.
+    fn shared_transcript(&self, record: &Recording, recording: bool) -> Option<Value> {
+        live::shared_transcript(&self.store, record, recording)
     }
     /// Keep the destination pinned to this live meeting, even if the default Tico changes.
     fn live_url(&self) -> Option<String> {
@@ -2407,7 +2426,7 @@ impl Recorder {
                     "task_url": item.task_url,
                     "sending": self.sending.as_deref() == Some(item.id.as_str()),
                     "send_blocked": send_blocked,
-                    "paused_warning": !self.context.paused_windows.is_empty() && !item.quote.trim().is_empty(),
+                    "paused_warning": !self.context.paused_windows.is_empty() && (!item.quote.trim().is_empty() || !item.title.trim().is_empty()),
                     "can_send": can_send && !chosen.is_empty() && !item.title.trim().is_empty(),
                     "error": error,
                 })

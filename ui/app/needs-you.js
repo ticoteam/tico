@@ -77,7 +77,7 @@ function needRowHTML(it, ctx = {}) {
   const from = stale ? '' : taskRequester(it) || it.requester || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
-  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : 'Question';
+  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : 'Question';
   const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
   return tasksSigned(`<div class="tl-row tl-need" data-task-key="n${esc(key)}" data-need-card="${esc(key)}" role="listitem" aria-level="1" style="--depth:0">
     <span class="tl-check-pad${ctx.select ? ' tl-check-room' : ''}"></span><span class="tl-chev-pad"></span>
@@ -90,7 +90,7 @@ function needRowHTML(it, ctx = {}) {
   </div>`);
 }
 // The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask'].includes(it.kind) && !decideGone(decideItemKey(it)));
+const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy'].includes(it.kind) && !decideGone(decideItemKey(it)));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.

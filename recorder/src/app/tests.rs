@@ -1122,6 +1122,107 @@ fn individual_item_send_uses_durable_pause_discard_and_quote_guards() {
 }
 
 #[test]
+fn a_meeting_shared_live_shows_the_lines_tico_holds_with_controls_only_where_an_edit_can_reach_it()
+{
+    use tico_recorder_native::live;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Shared edit view").unwrap();
+    let mut context = store.context(&record.id).unwrap();
+    context.live_id = "live-fixture".into();
+    context.live_destination = "synthetic".into();
+    context.live_state = "live".into();
+    store.save_context(&record.id, &context).unwrap();
+    // Three lines in Tico's order: two accepted, one still on its way.
+    {
+        let db = store.db().unwrap();
+        for (seq, speaker, start, end, text, acknowledged) in [
+            (1, "Me", 1000, 1550, "Hello there", 1),
+            (2, "S1", 1200, 1750, "hi all", 1),
+            (3, "S1", 2000, 2500, "pending words", 0),
+        ] {
+            db.execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,?,?,?,?)",
+                rusqlite::params![
+                    record.id,
+                    "synthetic",
+                    seq,
+                    format!("stream:{seq}"),
+                    json!({"seq":seq,"speaker":speaker,"start_ms":start,"end_ms":end,"text":text}).to_string(),
+                    acknowledged
+                ],
+            )
+            .unwrap();
+        }
+    }
+    live::edit_shared(&store, &record.id, 1, Some("Hi there")).unwrap();
+    live::edit_shared(&store, &record.id, 2, None).unwrap();
+    let mut app = app(store, directory.path());
+    app.open(&record.id).unwrap();
+    let blocks = full_view(&mut app)["transcript"]["data"]["blocks"].clone();
+    assert_eq!(
+        blocks,
+        json!([
+            {"speaker":"Me","me":true,"start_ms":1000,"paragraphs":["Hi there"],"partial":false,
+             "streamed":false,"seq":1,"edited":true,"removed":false,"editable":true},
+            {"speaker":"S1","me":false,"start_ms":1200,"paragraphs":["[removed]"],"partial":false,
+             "streamed":false,"seq":2,"edited":true,"removed":true,"editable":true},
+            {"speaker":"S1","me":false,"start_ms":2000,"paragraphs":["pending words"],"partial":false,
+             "streamed":false,"seq":3,"edited":false,"removed":false,"editable":false},
+        ]),
+        "{blocks}"
+    );
+}
+
+#[test]
+fn an_edit_or_removal_names_the_open_meeting_and_leaves_another_alone() {
+    use tico_recorder_native::live;
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let mut ids = vec![];
+    for title in ["First call", "Second call"] {
+        let record = store.create(title).unwrap();
+        let mut context = store.context(&record.id).unwrap();
+        context.live_id = format!("live-{}", record.id);
+        context.live_destination = "synthetic".into();
+        context.live_state = "live".into();
+        store.save_context(&record.id, &context).unwrap();
+        store
+            .db()
+            .unwrap()
+            .execute(
+                "INSERT INTO live_outbox(recording_id,destination_id,seq,chunk_id,payload_json,acknowledged) VALUES(?,?,1,'stream:1',?,1)",
+                rusqlite::params![
+                    record.id,
+                    "synthetic",
+                    json!({"seq":1,"speaker":"Me","start_ms":1000,"end_ms":1550,"text":"Hello there"}).to_string()
+                ],
+            )
+            .unwrap();
+        ids.push(record.id);
+    }
+    let (first, second) = (ids[0].clone(), ids[1].clone());
+    let mut app = app(store, directory.path());
+    app.open(&first).unwrap();
+    app.edit_shared_line(&second, 1, Some("Changed elsewhere"));
+    assert_eq!(app.error, "That meeting is no longer open");
+    app.dismiss_error();
+    app.edit_shared_line(&second, 1, None);
+    assert_eq!(app.error, "That meeting is no longer open");
+    app.dismiss_error();
+    let other = live::shared_lines(&app.store, &second, "synthetic").unwrap();
+    assert_eq!(
+        (other[0].text.as_str(), other[0].edited),
+        ("Hello there", false)
+    );
+    // The open meeting is the one that changes.
+    app.edit_shared_line(&first, 1, Some("Changed here"));
+    assert!(app.error.is_empty(), "{}", app.error);
+    let open = live::shared_lines(&app.store, &first, "synthetic").unwrap();
+    assert_eq!(open[0].text, "Changed here");
+}
+
+#[test]
 fn open_in_tico_stays_on_the_shared_meetings_instance() {
     let directory = tempfile::tempdir().unwrap();
     let store = Store::open(directory.path()).unwrap();
@@ -1154,4 +1255,50 @@ fn open_in_tico_stays_on_the_shared_meetings_instance() {
     // Losing the connection must not send this meeting to the new default instance.
     app.config.destinations.remove(0);
     assert!(full_view(&mut app)["meeting"]["data"]["live_url"].is_null());
+}
+
+#[test]
+fn a_title_without_a_quote_requires_fresh_review_after_each_edit() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(dir.path()).unwrap();
+    let record = store.create("Synthetic title review").unwrap();
+    store
+        .update_context(&record.id, |c| {
+            c.paused_windows = vec![(5000, Some(10000))];
+            c.items = vec![Item {
+                id: "title-only".into(),
+                title: "Secret launch date".into(),
+                owner: "bot:fixture".into(),
+                ..Default::default()
+            }];
+            Ok(())
+        })
+        .unwrap();
+    let mut app = app(store.clone(), dir.path());
+    app.open(&record.id).unwrap();
+    for title in ["Secret launch date", "Changed secret launch date"] {
+        store
+            .update_context(&record.id, |c| {
+                c.items[0].title = title.into();
+                Ok(())
+            })
+            .unwrap();
+        app.send_item("title-only", "bot:fixture");
+        assert!(
+            app.item_error
+                .as_ref()
+                .unwrap()
+                .1
+                .contains("Review its title and quote")
+        );
+        assert!(app.sending.is_none());
+        assert!(tico_recorder_native::live::paused_review_required(
+            &store.context(&record.id).unwrap()
+        ));
+    }
+    app.context = store.context(&record.id).unwrap();
+    assert_eq!(
+        full_view(&mut app)["meeting"]["data"]["actions"]["items"][0]["paused_warning"],
+        true
+    );
 }

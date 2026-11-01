@@ -177,6 +177,9 @@ def run_now(store, auth, key, actor):
         if stale_review.tick(store, stamp(at), force=True) is None:
             raise Problem("conflict", "A stale ticket review is already running, or it was just switched off", 409)
         running = True
+    elif key == "memory_tidy":
+        from . import memory_tidy_controls
+        running = memory_tidy_controls.run_now(store, auth, actor)
     elif key == "learnings":
         from . import learnings
         with store.transaction() as c:
@@ -471,6 +474,16 @@ class Scheduler:
             learnings.nightly(self.store, at)
         except Exception as exc:
             failures.append({"learnings": type(exc).__name__})
+        try:
+            from . import memory_tidy_controls
+            from .store import Problem
+            try:
+                memory_tidy_controls.nightly(self.store, self.execution.auth, at)
+            except Problem as exc:
+                if exc.detail != memory_tidy_controls.UNAVAILABLE:
+                    raise
+        except Exception as exc:
+            failures.append({"memory_tidy": type(exc).__name__})
         # Page monitors (backend/market_watch.py): once a day the watched competitor pages are read on their own thread.
         try:
             from . import market_watch
@@ -784,13 +797,16 @@ class Scheduler:
             self.asks_checked = at
             # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
             with SR.recording(self.store, "approval_expiry", failures) as run:
-                from . import approval_expiry
+                from . import approval_expiry, memory_tidy_cards
                 with self.store.transaction() as c:
                     ended = approval_expiry.sweep(c, stamp(at))
+                    # Standalone cards use their own two-business-day clock, never task closure.
+                    tidy_expired = memory_tidy_cards.sweep(c, stamp(at))
                 ended = ended or {}
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
-                                     "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
+                                     "asks cleared": ended.get("asks") or [],
+                                     "tidy cards withdrawn": tidy_expired}, none="Nothing expired"))
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             try:
                 from .finance import actions as finance

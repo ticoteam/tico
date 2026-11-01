@@ -1,24 +1,21 @@
-/* ui/app/growth-page.js — The Growth section (#/growth, docs: the growth spec §4): its head and tabs; a framework picker
-   (North Star · Loops · Journey · Bets × Channels · Experiments), each a view over the same ideas, KPIs, channels and bets;
-   Working now; + Idea; This week (#/growth/week). Segments, Channels and Learning are their own files
-   (growth-segments.js, growth-channels.js, growth-learning.js); the Idea panel on a task is growth-idea.js; Brand and Go-to-market are
-   brand-page.js and gtm-page.js. Also what those files share: formats, chips, idea cards, a small dialog, the lists
-   the forms pick from. Reads GET /api/v2/growth/{ideas,kpis,channels,segments,settings,working,week} and GET /api/v2/strategy (bets).
-   Every write is the server's to allow; edit controls show to the owner.
+/* ui/app/growth-page.js — The Growth section (#/growth, docs/growth.md): its head (tabs Ideas · Buyers · Channels ·
+   Sources, the page's one action and the Learning icon) and Ideas, the Bets × Channels grid (a list grouped by bet on a
+   phone) with + Idea, which can also ask the marketing lead to propose ideas. Buyers, Channels, Sources and Learning
+   are their own files (growth-buyers.js, growth-channels.js, growth-sources.js, growth-learning.js); the Idea panel on
+   a task is growth-idea.js; Brand is brand-page.js. Also what those files share: formats, idea cards, a small dialog,
+   the owner picker, the lists the forms pick from. Old addresses (This week, Segments, Go-to-market) land on what
+   replaced them. Reads GET /api/v2/growth/{ideas,kpis,channels,segments} and GET /api/v2/strategy (bets).
+   Every write is the server's to allow; edit controls show to the owner and admins.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const GR_ROUTE = '#/growth', GR_WEEK = GR_ROUTE + '/week', GR_SEGMENTS = GR_ROUTE + '/segments', GR_CHANNELS = GR_ROUTE + '/channels',
-  GR_LEARNING = GR_ROUTE + '/learning', BRAND_ROUTE = '#/strategy/brand', GTM_ROUTE = GR_ROUTE + '/gtm';
-// Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them here.
+const GR_ROUTE = '#/growth', GR_BUYERS = GR_ROUTE + '/buyers', GR_CHANNELS = GR_ROUTE + '/channels', GR_SOURCES = GR_ROUTE + '/sources',
+  GR_LEARNING = GR_ROUTE + '/learning', BRAND_ROUTE = '#/strategy/brand';
+// Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them here, and pageGrowth on from there.
 const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
-const GR_TABS = [['', GR_ROUTE, 'Overview'], ['segments', GR_SEGMENTS, 'Segments'], ['week', GR_WEEK, 'This week'], ['channels', GR_CHANNELS, 'Channels'],
-  ['learning', GR_LEARNING, 'Learning'], ['gtm', GTM_ROUTE, 'Go-to-market']];
-let GR = null;            // the open Growth page: {load, sub, data, fw}
+const GR_TABS = [['', GR_ROUTE, 'Ideas'], ['buyers', GR_BUYERS, 'Buyers'], ['channels', GR_CHANNELS, 'Channels'], ['sources', GR_SOURCES, 'Sources']];
+let GR = null;            // the open Growth page: {load, sub, data}
 let GR_LOAD = 0;
-const GR_FW_KEY = 'tico.growth.framework';
-const GR_FWS = [['north_star', 'North Star'], ['loops', 'Loops'], ['journey', 'Journey'], ['bets_channels', 'Bets × Channels'],
-  ['experiments', 'Experiments']];
 const GR_STAGES = [['reach', 'Reach'], ['acquire', 'Acquire'], ['activate', 'Activate'], ['retain', 'Retain'], ['refer', 'Refer']];
 const GR_STATUS = {idea: ['Idea', ''], testing: ['Testing', 'in-progress'], paused: ['Paused', 'waiting'], won: ['Won', 'ok'],
   lost: ['Lost', 'fail'], inconclusive: ['Inconclusive', 'waiting'], dropped: ['Dropped', '']};
@@ -45,6 +42,8 @@ const grMonth = m => { const [y, n] = String(m || '').split('-').map(Number); re
 const grDay = iso => { if (!iso) return ''; const d = new Date(String(iso).length <= 10 ? iso + 'T12:00:00' : iso); return isNaN(d) ? String(iso) : `${GR_MON[d.getMonth()]} ${d.getDate()}`; };
 const grStatus = s => { const [w, c] = GR_STATUS[s] || [s || '', '']; return w ? `<span class="pill ${c}">${esc(w)}</span>` : ''; };
 const grStage = s => { const [w, c] = GR_CH_STAGE[s] || [s || '', '']; return w ? `<span class="pill ${c}">${esc(w)}</span>` : ''; };
+// An idea's status as a small dot and word, for a card or a row.
+const grMark = s => { const st = GR_STATUS[s] ? s : 'idea'; return `<span class="gr-mk gr-mk-${st}"><i aria-hidden="true"></i>${esc(GR_STATUS[st][0])}</span>`; };
 const grKpiVal = k => k?.latest == null ? '—' : kpiNum(k.latest, k.unit);
 const grChanName = (chans, slug) => (chans || []).find(c => c.slug === slug)?.name || slug;
 const grTaskHref = id => '#/task/' + encodeURIComponent(id);
@@ -58,12 +57,32 @@ const grCrumbs = (base, baseLabel, title, tools = '') => `<div class="gr-crumbs"
 // A labelled field: the caption over the control.
 const grField = (label, control, cls = '') => `<label class="gr-f${cls ? ' ' + cls : ''}"><span>${esc(label)}</span>${control}</label>`;
 const grNum = (v, d = null) => { const t = String(v ?? '').trim().replace(/[$,%\s]/g, ''); if (t === '') return d; const n = Number(t); return Number.isFinite(n) ? n : d; };
+// The people and bots a row can belong to, as human:<id> and bot:<slug>.
+function grOwnerOpts(selected) {
+  const sel = String(selected || ''), bare = sel.replace(/^bot:/, '');
+  const people = (S.people || []).filter(p => !p.hidden).slice().sort((a, b) => String(a.name || a.id).localeCompare(String(b.name || b.id)));
+  const bots = (S.emps || []).filter(e => e.status !== 'archived').slice().sort((a, b) => String(a.display_name || a.name).localeCompare(String(b.display_name || b.name)));
+  return `<option value="">—</option><optgroup label="People">${people.map(p => `<option value="human:${esc(p.id)}"${sel === 'human:' + p.id ? ' selected' : ''}>${esc(p.name || p.id)}</option>`).join('')}</optgroup>
+    <optgroup label="Bots">${bots.map(e => `<option value="bot:${esc(e.name)}"${bare === e.name ? ' selected' : ''}>${esc(e.display_name || e.name)}</option>`).join('')}</optgroup>`;
+}
+// Retire asks once more on the same button (no window.confirm); `after` runs once it is retired.
+function grRetireButton(btn, dlg, path, after) {
+  btn.onclick = async () => {
+    if (!btn.dataset.armed) { btn.dataset.armed = '1'; btn.textContent = 'Retire for good'; return; }
+    btn.disabled = true;
+    try { await post(path, {}); toast('Retired'); dlg.close(); after?.(); }
+    catch (e) { toast(e.message || 'Not retired', true); btn.disabled = false; }
+  };
+}
 
+// Testing first, then ideas, then results; within each, the highest ICE first.
+const GR_ORDER = ['testing', 'paused', 'idea', ...GR_RESULTS];
+const grRank = i => { const n = GR_ORDER.indexOf(i.status || 'idea'); return n < 0 ? 2 : n; };
+const grSort = list => list.slice().sort((a, b) => grRank(a) - grRank(b) || (b.ice ?? -1) - (a.ice ?? -1));
 function grIdeaCard(i, chans, {chan = true, result = false} = {}) {
   const tags = chan ? (i.channels || []).map(s => `<span class="gr-tag">${esc(grChanName(chans, s))}</span>`).join('') : '';
   return `<a class="gr-ic gr-is-${esc(i.status || 'idea')}" href="${grTaskHref(i.task_id)}" data-idea="${esc(i.task_id)}"><span class="gr-ic-t">${esc(i.title)}</span>
-    <span class="gr-ic-f">${grStatus(i.status)}${i.ice != null ? `<span class="gr-ice">ICE ${esc(grX(i.ice))}</span>` : ''}${tags}${i.assignee ? `<span class="gr-who">${esc(grWho(i.assignee))}</span>` : ''}</span>
-    ${result && i.result ? `<span class="gr-ic-r">${esc(i.result)}</span>` : ''}</a>`;
+    <span class="gr-ic-f">${grMark(i.status)}${tags}</span>${result && i.result ? `<span class="gr-ic-r">${esc(i.result)}</span>` : ''}</a>`;
 }
 
 // The bets a reader sees: the owner's live bets, everyone else the published version's.
@@ -73,7 +92,7 @@ function grBetsOf(s) {
   return ((owner ? s.bets : s.current?.bets) || []).filter(b => b.status !== 'retired')
     .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9)).map((b, n) => ({...b, n: n + 1}));
 }
-// What the forms pick from: KPIs, channels, segments and bets, read together.
+// What the forms pick from: KPIs, channels, buyers (segments) and bets, read together.
 async function grRefs(fresh = false) {
   const opts = fresh ? {fresh: true} : undefined;
   const [k, c, s, g] = await Promise.all([get('/v2/growth/kpis', opts).catch(() => null), get('/v2/growth/channels', opts).catch(() => null),
@@ -142,12 +161,22 @@ function grIdeaBody(form, was = null) {
   const same = (a, b) => Array.isArray(a) ? [...a].sort().join('\n') === [...(b || [])].sort().join('\n') : (a ?? '') === (b ?? '');
   return Object.fromEntries(Object.entries(body).filter(([k, x]) => !same(x, was[k])));
 }
+// + Idea: the form, and with a marketing lead on the team a second way out, asking them to propose ideas instead.
 function grNewIdea(after) {
-  void grRefs().then(refs => grDialog('New idea', grIdeaFields(refs), 'Add', async form => {
-    const out = await post('/v2/growth/ideas', grIdeaBody(form));
-    toast('Idea added');
-    after?.(out);
-  }));
+  void grRefs().then(refs => {
+    const dlg = grDialog('New idea', grIdeaFields(refs), 'Add', async form => {
+      const out = await post('/v2/growth/ideas', grIdeaBody(form));
+      toast('Idea added');
+      after?.(out);
+    });
+    const lead = grLead();
+    if (!lead) return;
+    const ask = Object.assign(document.createElement('button'), {type: 'button', className: 'ghost gr-ask',
+      textContent: `Ask ${lead.display_name || lead.name} to propose`});
+    ask.dataset.grPropose = '';
+    ask.onclick = async () => { if (await grPropose(lead, ask)) dlg.close(); };
+    dlg.querySelector('.gr-foot').prepend(ask);
+  });
 }
 
 // The ask itself carries the steps, for a lead whose bot predates the propose-ideas playbook.
@@ -156,199 +185,108 @@ const GR_PROPOSE_BODY = `File 3–8 growth ideas. Start no tests.
 1. Read: \`hub gtm show\`, \`hub brand summary\`, \`hub growth channel list\`, \`hub growth kpis\`, \`hub growth idea list\`, \`hub strategy show\`.
 2. Skip duplicates: \`hub growth idea list --q "<two words>"\`.
 3. File each with \`hub growth idea create --title ... --hypothesis "If we X for Y, Z moves because W" --prediction "<KPI> from <now> to <number> by <date>" --kpi <id> --channel <slug> --i N --c N --e N --source-kind strategy|competitor|listening|peec|lost_test|person|other --source-ref <item>\`, adding \`--bet <id>\` when a strategy bet fits. With no bets yet, file without one.
-4. Follow the brand and the go-to-market wishes.
-5. Close this task with the count and the top three by ICE; say so if the strategy has no bets.`;
+4. Close this task with the count and the top three by ICE; say so if the strategy has no bets.`;
 
-// The marketing lead: who "Propose ideas" asks.
+// The marketing lead: who "Ask … to propose" asks.
 const grLead = () => (S.emps || []).find(e => e.status !== 'archived' && (e.template === 'marketing-lead' || e.name === 'marketing-lead'
   || /^(head of marketing|growth lead|marketing lead)$/i.test(String(e.display_name || '').trim())));
-async function grPropose(button) {
-  const lead = grLead();
-  if (!lead) return;
+async function grPropose(lead, button) {
   if (button) button.disabled = true;
   try {
     await post('/v2/tasks', {title: 'Propose growth ideas', body: GR_PROPOSE_BODY, owner: lead.name});
     toast(`Sent to ${lead.display_name || lead.name}`);
-  } catch (e) { toast(e.message || 'Not sent', true); if (button) button.disabled = false; }
+    return true;
+  } catch (e) { toast(e.message || 'Not sent', true); if (button) button.disabled = false; return false; }
 }
 
-// ----------------------------------------------------------------- the page
-// The Growth section's heading: its tabs, and the current page's actions on the right (#strat-actions).
+// ----------------------------------------------------------------- the section
+// The Growth section's heading: its tabs, the current page's one action (#strat-actions) and the Learning icon.
 function growthHead(tab) {
   return `<div class="strat-head rd-strat-head gr-head"><h1>Growth</h1>
       <nav class="tabs slim strat-tabs" aria-label="Growth">${GR_TABS.map(([id, href, label]) =>
-        `<a href="${href}" data-gr-tab="${id || 'overview'}"${tab === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
-      <span class="spacer"></span><div class="strat-actions" id="strat-actions"></div></div>`;
+        `<a href="${href}" data-gr-tab="${id || 'ideas'}"${tab === id ? ' class="cur" aria-current="page"' : ''}>${label}</a>`).join('')}</nav>
+      <span class="spacer"></span><div class="strat-actions" id="strat-actions"></div>
+      <a class="ghost gr-brain${tab === 'learning' ? ' cur' : ''}" href="${GR_LEARNING}" aria-label="Learning" title="Learning"${tab === 'learning' ? ' aria-current="page"' : ''}><span class="nav-icon" aria-hidden="true">psychology</span></a></div>`;
 }
-// What a Growth page puts above its body now that its name is the current tab: its tools, if any.
+// A page's tools above its body, right-aligned, if any.
 const grTools = (tools = '') => tools ? `<div class="gr-crumbs"><span class="spacer"></span>${tools}</div>` : '';
 
-// After every route: forget each of the Growth, Brand and Go-to-market pages once off it, so a late answer for one
-// never draws over another (each page's reads check that its own state is still the open one).
+// After every route: forget the Growth and Brand pages once off them, so a late answer for one never draws over
+// another (each page's reads check that its own state is still the open one).
 window.growthStop = function growthStop() {
   const r = S.route || '';
-  const off = base => !rdUnder(r, base);
-  const offGrowth = off(GR_ROUTE) || !off(GTM_ROUTE);   // Go-to-market sits under #/growth but is its own page
-  if (!(GR && offGrowth) && !(BR && off(BRAND_ROUTE)) && !(GT && off(GTM_ROUTE))) return;
+  gkvStop(r);
+  const offGrowth = !rdUnder(r, GR_ROUTE), offBrand = !rdUnder(r, BRAND_ROUTE);
+  if (!(GR && offGrowth) && !(BR && offBrand)) return;
   GR_LOAD++;
   if (offGrowth) GR = null;
-  if (off(BRAND_ROUTE)) BR = null;
-  if (off(GTM_ROUTE)) GT = null;
-  if ([GR_ROUTE, BRAND_ROUTE, GTM_ROUTE].every(off)) document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
+  if (offBrand) BR = null;
+  if (offGrowth && offBrand) document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
 };
+// Old addresses: This week is gone, Segments are Buyers, and Go-to-market's tabs live on Buyers, Channels and Sources.
+function grMoved(parts) {
+  if (parts[0] === 'week') return GR_ROUTE;
+  if (parts[0] === 'segments') return GR_BUYERS;
+  if (parts[0] === 'gtm') return parts[1] === 'sources' ? GR_SOURCES : parts[1] === 'channels' ? GR_CHANNELS : GR_BUYERS;
+  return parts[0] && !['buyers', 'channels', 'sources', 'learning'].includes(parts[0]) ? GR_ROUTE : '';
+}
 function pageGrowth() {
   const path = (S.route || '').split('?')[0];
-  const sub = path.slice(GR_ROUTE.length + 1).split('/')[0] || '';
+  const parts = path.slice(GR_ROUTE.length + 1).split('/'), sub = parts[0] || '';
+  const moved = grMoved(parts);
+  if (moved) { location.replace(moved); return; }
   document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());
   const load = ++GR_LOAD;
-  GR = {load, sub, data: null, fw: ''};
+  GR = {load, sub, data: null};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
-  main.innerHTML = growthHead(['segments', 'channels', 'learning', 'week'].includes(sub) ? sub : '') + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
-  if (sub === 'segments') return pageGrowthSegments(GR);
+  main.innerHTML = growthHead(sub) + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  if (sub === 'buyers') return pageGrowthBuyers(GR);
   if (sub === 'channels') return pageGrowthChannels(GR);
+  if (sub === 'sources') return pageGrowthSources(GR);
   if (sub === 'learning') return pageGrowthLearning(GR);
-  if (sub === 'week') return void growthWeek(GR);
-  if (sub) { location.replace(GR_ROUTE); return; }
-  void growthMain(GR);
+  void growthIdeas(GR);
 }
 
-async function growthMain(state) {
+// ----------------------------------------------------------------- Ideas
+async function growthIdeas(state) {
   let data;
   try {
-    const [ideas, refs, settings, working] = await Promise.all([get('/v2/growth/ideas', {fresh: true}), grRefs(true),
-      get('/v2/growth/settings').catch(() => ({})), get('/v2/growth/working', {fresh: true}).catch(() => ({items: []}))]);
-    data = {ideas: ideas.ideas || [], ...refs, settings: settings || {}, working: working.items || []};
+    const [ideas, refs] = await Promise.all([get('/v2/growth/ideas', {fresh: true}), grRefs(true)]);
+    data = {ideas: ideas.ideas || [], ...refs};
   } catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
   state.data = data;
-  let saved = '';
-  try { saved = localStorage.getItem(GR_FW_KEY) || ''; } catch { /* not kept */ }
-  const known = f => GR_FWS.some(([v]) => v === f);
-  state.fw = (!(data.settings.may_edit ?? grAdmin()) && known(saved) && saved) || (known(data.settings.framework) && data.settings.framework) || 'north_star';
-  growthMainDraw(state);
+  patchHTML($('#strat-actions'), '<button class="primary" type="button" data-gr-new>+ Idea</button>');
+  $('#strat-actions [data-gr-new]').onclick = () => grNewIdea(() => void growthIdeas(state));
+  $('#gr-body').innerHTML = grGrid(data) + grPhoneList(data);
 }
-function growthMainDraw(state) {
-  const d = state.data, body = $('#gr-body');
-  if (!body || !d) return;
-  patchHTML($('#strat-actions'), (grLead() ? '<button class="ghost" type="button" data-gr-propose>Propose ideas</button>' : '')
-    + '<button class="primary" type="button" data-gr-new>+ Idea</button>');
-  const view = grView(state.fw, d);
-  const now = d.working.length ? `<aside class="card gr-now" aria-label="Working now"><h2 class="gr-k">Working now</h2>${d.working.map(w =>
-    `<a class="gr-now-row" href="${grTaskHref(w.task_id)}"><span class="gr-now-top"><b>${esc(grWho(w.assignee) || '—')}</b>${w.channel ? `<span class="gr-tag">${esc(grChanName(d.channels, w.channel))}</span>` : ''}</span>
-      <span class="gr-now-t">${w.status ? `<span class="gr-dot gr-ts-${esc(w.status)}" aria-hidden="true"></span>` : ''}${esc(w.title)}</span>${w.idea_title ? `<span class="muted gr-now-i">${esc(w.idea_title)}</span>` : ''}</a>`).join('')}</aside>` : '';
-  body.innerHTML = `<div class="gr-bar">${grSeg('fw', 'Framework', GR_FWS, state.fw)}</div>
-    <div class="gr-split${now ? '' : ' gr-solo'}"><div class="gr-view" id="gr-view">${view}</div>${now}</div>`;
-  $('#strat-actions [data-gr-new]').onclick = () => grNewIdea(() => void growthMain(state));
-  const propose = $('#strat-actions [data-gr-propose]');
-  if (propose) propose.onclick = () => void grPropose(propose);
-  body.querySelector('[data-gr-seg="fw"]').onclick = ev => {
-    const b = ev.target.closest('button[data-v]'); if (!b || b.dataset.v === state.fw) return;
-    state.fw = b.dataset.v;
-    if (d.settings.may_edit ?? grAdmin()) void put('/v2/growth/settings', {framework: state.fw}).catch(e => toast(e.message || 'Not saved', true));
-    try { localStorage.setItem(GR_FW_KEY, state.fw); } catch { /* not kept */ }
-    growthMainDraw(state);
-  };
-}
-
-// ----------------------------------------------------------------- the five views
-function grView(fw, d) {
-  if (fw === 'loops') return grLoops(d);
-  if (fw === 'journey') return grJourney(d);
-  if (fw === 'bets_channels') return grGrid(d);
-  if (fw === 'experiments') return grExperiments(d);
-  return grNorthStar(d);
-}
-const grByKpi = ideas => { const m = new Map(); for (const i of ideas) { const k = i.kpi_id || ''; if (!m.has(k)) m.set(k, []); m.get(k).push(i); } return m; };
-const grCards = (list, d, opts) => list.map(i => grIdeaCard(i, d.channels, opts)).join('');
-const grCol = (kind, name, value, list, d, cls = '') => `<section class="gr-col${cls ? ' ' + cls : ''}"><header class="gr-col-h">${kind ? `<span class="gr-k">${esc(kind)}</span>` : ''}
-    <span class="gr-col-n">${esc(name)}</span>${value ? `<span class="gr-mv">${esc(value)}</span>` : ''}<span class="muted gr-cnt">${list.length}</span></header>${grCards(list, d)}</section>`;
-// The KPIs below the North Star in tree order: each input, then its own inputs.
-function grTree(kpis, rootId) {
-  const out = [], seen = new Set([rootId]);
-  const walk = (pid, depth) => { for (const k of kpis.filter(k => k.parent_kpi_id === pid && !seen.has(k.id))) { seen.add(k.id); out.push({...k, depth}); walk(k.id, depth + 1); } };
-  walk(rootId, 0);
-  return out;
-}
-function grNorthStar(d) {
-  const ns = d.kpis.find(k => k.growth_role === 'north_star'), by = grByKpi(d.ideas);
-  const tree = ns ? grTree(d.kpis, ns.id).filter(k => k.growth_role !== 'guardrail') : [];
-  const inputs = [...tree, ...d.kpis.filter(k => k.growth_role === 'input' && !tree.some(t => t.id === k.id))];
-  const guards = d.kpis.filter(k => k.growth_role === 'guardrail');
-  const shown = new Set([ns?.id, ...inputs.map(k => k.id), ...guards.map(k => k.id)].filter(Boolean));
-  const loose = d.ideas.filter(i => !shown.has(i.kpi_id));
-  const head = ns ? `<section class="card gr-ns"><span class="gr-k">North Star</span><span class="gr-ns-n">${esc(ns.name)}</span>
-      <span class="gr-mv gr-big">${esc(grKpiVal(ns))}</span>${ns.target != null ? `<span class="muted">/ ${esc(kpiNum(ns.target, ns.unit))}</span>` : ''}
-      ${(by.get(ns.id) || []).length ? `<div class="gr-ns-ideas">${grCards(by.get(ns.id), d)}</div>` : ''}</section>` : '';
-  const cols = [...inputs.map(k => grCol('Input', k.name, grKpiVal(k), by.get(k.id) || [], d)),
-    ...guards.map(k => grCol('Guardrail', k.name, grKpiVal(k), by.get(k.id) || [], d, 'gr-guard')),
-    ...(loose.length ? [grCol('', 'No metric', '', loose, d)] : [])];
-  return head + `<div class="gr-cols">${cols.join('')}</div>`;
-}
-function grLoops(d) {
-  const by = grByKpi(d.ideas), loops = new Map();
-  for (const k of d.kpis.filter(k => k.loop_name)) { if (!loops.has(k.loop_name)) loops.set(k.loop_name, []); loops.get(k.loop_name).push(k); }
-  const on = new Set();
-  const html = [...loops].map(([name, steps]) => {
-    steps.sort((a, b) => (a.loop_step ?? 1e9) - (b.loop_step ?? 1e9));
-    return `<section class="card gr-loop"><h3 class="gr-loop-h">${esc(name)}</h3><div class="gr-steps">${steps.map((k, n) => {
-      on.add(k.id);
-      return `<div class="gr-step"><header class="gr-col-h"><span class="gr-col-n">${esc(k.name)}</span><span class="gr-mv">${esc(grKpiVal(k))}</span>${n < steps.length - 1 ? '<span class="gr-arrow" aria-hidden="true">→</span>' : '<span class="gr-arrow" aria-hidden="true">↺</span>'}</header>${grCards(by.get(k.id) || [], d)}</div>`;
-    }).join('')}</div></section>`;
-  }).join('');
-  const off = d.ideas.filter(i => !on.has(i.kpi_id));
-  return html + (off.length ? `<section class="gr-off"><h3 class="gr-k">Not on a loop</h3><div class="gr-flow">${grCards(off, d)}</div></section>` : '');
-}
-function grJourney(d) {
-  const stageOf = new Map(d.kpis.map(k => [k.id, k.stage]));
-  const cols = GR_STAGES.map(([id, label]) => {
-    const kp = d.kpis.filter(k => k.stage === id);
-    const list = d.ideas.filter(i => stageOf.get(i.kpi_id) === id);
-    return `<section class="gr-col"><header class="gr-col-h"><span class="gr-col-n">${esc(label)}</span><span class="muted gr-cnt">${list.length}</span>
-      ${kp.length ? `<span class="muted gr-col-m">${esc(kp.map(k => `${k.name} ${grKpiVal(k)}`).join(' · '))}</span>` : ''}</header>${grCards(list, d)}</section>`;
-  });
-  const none = d.ideas.filter(i => !GR_STAGES.some(([id]) => stageOf.get(i.kpi_id) === id));
-  if (none.length) cols.push(grCol('', 'No stage', '', none, d));
-  return `<div class="gr-cols gr-journey">${cols.join('')}</div>`;
+// The rows and columns both layouts share: live bets (then No bet when an idea has none, or there are no bets) and live
+// channels (then No channel the same way). An idea on two channels shows in both.
+function grAxes(d) {
+  const chans = d.channels.filter(c => !c.retired_at);
+  const inChan = (i, slug) => slug ? (i.channels || []).includes(slug) : !(i.channels || []).some(s => chans.some(c => c.slug === s));
+  const inBet = (i, id) => id ? i.bet_id === id : !i.bet_id || !d.bets.some(b => b.id === i.bet_id);
+  const bets = d.bets.map(b => ({id: b.id, label: `${b.n} · ${b.statement}`}));
+  if (!bets.length || d.ideas.some(i => inBet(i, ''))) bets.push({id: '', label: 'No bet'});
+  const cols = chans.map(c => ({slug: c.slug, name: c.name}));
+  if (!cols.length || d.ideas.some(i => inChan(i, ''))) cols.push({slug: '', name: 'No channel'});
+  return {bets, cols, inBet, inChan};
 }
 function grGrid(d) {
-  const chans = d.channels.filter(c => !c.retired_at);
-  const has = (i, slug) => slug ? (i.channels || []).includes(slug) : !(i.channels || []).some(s => chans.some(c => c.slug === s));
-  const bets = [...d.bets.map(b => ({id: b.id, label: `${b.n} · ${b.statement}`}))];
-  if (!bets.length || d.ideas.some(i => !i.bet_id || !d.bets.some(b => b.id === i.bet_id))) bets.push({id: '', label: 'No bet'});
-  const cols = [...chans.map(c => ({slug: c.slug, name: c.name, track: c.track}))];
-  if (!cols.length || d.ideas.some(i => has(i, ''))) cols.push({slug: '', name: 'No channel', track: ''});
-  const inBet = (i, id) => id ? i.bet_id === id : !i.bet_id || !d.bets.some(b => b.id === i.bet_id);
-  return `<div class="card gr-scroll"><table class="gr-grid"><thead><tr><th scope="col"><span class="sr-only">Bet</span></th>${cols.map(c =>
-    `<th scope="col">${c.track ? `<span class="gr-track gr-track-${esc(c.track)}">${c.track === 'brand' ? 'Brand' : 'Performance'}</span>` : ''}<span>${esc(c.name)}</span></th>`).join('')}</tr></thead>
+  const {bets, cols, inBet, inChan} = grAxes(d);
+  return `<div class="card gr-scroll gr-grid-wrap"><table class="gr-grid"><thead><tr><th scope="col"><span class="sr-only">Bet</span></th>${cols.map(c =>
+    `<th scope="col">${esc(c.name)}</th>`).join('')}</tr></thead>
     <tbody>${bets.map(b => `<tr><th scope="row">${esc(b.label)}</th>${cols.map(c =>
-      `<td>${grCards(d.ideas.filter(i => inBet(i, b.id) && has(i, c.slug)), d, {chan: false})}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
+      `<td>${grSort(d.ideas.filter(i => inBet(i, b.id) && inChan(i, c.slug))).map(i => grIdeaCard(i, d.channels, {chan: false})).join('')}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
 }
-function grExperiments(d) {
-  const ice = (a, b) => (b.ice ?? -1) - (a.ice ?? -1);
-  const cols = [['Ideas', d.ideas.filter(i => i.status === 'idea' || !i.status).sort(ice)],
-    ['Testing', d.ideas.filter(i => i.status === 'testing' || i.status === 'paused').sort((a, b) => String(a.test_to || '').localeCompare(String(b.test_to || '')))],
-    ['Results', d.ideas.filter(i => GR_RESULTS.includes(i.status)).sort((a, b) => String(b.verdict_at || '').localeCompare(String(a.verdict_at || '')))]];
-  return `<div class="gr-cols gr-exp">${cols.map(([name, list]) => `<section class="gr-col"><header class="gr-col-h"><span class="gr-col-n">${esc(name)}</span><span class="muted gr-cnt">${list.length}</span></header>
-    ${list.map(i => grIdeaCard(i, d.channels, {result: true})).join('')}</section>`).join('')}</div>`;
-}
-
-// ----------------------------------------------------------------- This week
-async function growthWeek(state) {
-  let w, chans = [];
-  try { [w, chans] = await Promise.all([get('/v2/growth/week', {fresh: true}), get('/v2/growth/channels').then(r => r.channels || []).catch(() => [])]); }
-  catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
-  if (GR !== state) return;
-  const row = i => `<a class="gr-row" href="${grTaskHref(i.task_id)}"><span class="gr-row-t">${esc(i.title)}</span>${grStatus(i.status)}`;
-  const sec = (title, inner, cls = '') => inner ? `<section class="card gr-sec${cls ? ' ' + cls : ''}"><h3 class="gr-k">${esc(title)}</h3>${inner}</section>` : '';
-  const guards = (w.guardrails || []).map(g => `<div class="gr-row gr-breach"><span class="gr-row-t">${esc(grChanName(chans, g.channel))} · ${esc(g.kpi_name || '')}</span>
-    <span class="gr-num">${esc(grX(g.value))} / ${esc(grX(g.max))}</span></div>`).join('');
-  const readings = (w.readings || []).map(r => ({...r, latest: r.value})).map(k => `<div class="gr-row"><span class="gr-row-t">${esc(k.name)}</span><span class="muted">${esc({north_star: 'North Star', input: 'Input', guardrail: 'Guardrail'}[k.growth_role] || '')}</span>
-    <span class="gr-num">${esc(grKpiVal(k))}${k.target != null ? `<span class="muted"> / ${esc(kpiNum(k.target, k.unit))}</span>` : ''}</span></div>`).join('');
-  const due = (w.tests_due || []).map(i => `${row(i)}<span class="muted gr-num">${esc(grDay(i.test_to))}</span></a>`).join('');
-  const top = (w.top_ideas || []).map(i => `${row(i)}<span class="gr-ice">ICE ${esc(grX(i.ice))}</span></a>`).join('');
-  const verdicts = (w.recent_verdicts || []).map(i => `<a class="gr-row gr-row-v" href="${grTaskHref(i.task_id)}"><span class="gr-row-t">${esc(i.title)}</span>${grStatus(i.status)}
-    <span class="muted gr-num">${esc(grDay(i.verdict_at))}</span>${i.result || i.learning ? `<span class="gr-row-l">${esc([i.result, i.learning].filter(Boolean).join(' · '))}</span>` : ''}</a>`).join('');
-  $('#gr-body').innerHTML = `<div class="gr-week">
-    ${sec('Guardrails', guards, 'gr-amber')}${sec('Readings', readings)}${sec('Tests due', due)}${sec('Top ideas', top)}${sec('Verdicts', verdicts)}</div>`;
+// A phone: no grid. Each bet with its ideas as rows: title, channels, status.
+function grPhoneList(d) {
+  const {bets, inBet} = grAxes(d);
+  return `<div class="gr-plist">${bets.map(b => {
+    const list = grSort(d.ideas.filter(i => inBet(i, b.id)));
+    return list.length ? `<section class="card gr-pbet"><h3 class="gr-pbet-h">${esc(b.label)}</h3>${list.map(i =>
+      `<a class="gr-prow gr-is-${esc(i.status || 'idea')}" href="${grTaskHref(i.task_id)}" data-idea="${esc(i.task_id)}"><span class="gr-prow-t">${esc(i.title)}</span>
+        <span class="gr-prow-f">${(i.channels || []).length ? `<span class="muted">${esc(i.channels.map(s => grChanName(d.channels, s)).join(', '))}</span>` : ''}${grMark(i.status)}</span></a>`).join('')}</section>` : '';
+  }).join('')}</div>`;
 }

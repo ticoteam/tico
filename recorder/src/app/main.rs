@@ -66,6 +66,8 @@ commands! {
     rename(title: String) => |app| app.rename(&title);
     finish_live() => |app| app.finish_live();
     control_live(action: String) => |app| app.control_live(&action);
+    edit_shared_line(id: String, seq: i64, text: String) => |app| app.edit_shared_line(&id, seq, Some(&text));
+    remove_shared_line(id: String, seq: i64) => |app| app.edit_shared_line(&id, seq, None);
     retry(id: String) => |app| app.retry(&id);
     set_notes(notes: String) => |app| app.set_notes(&notes);
     add_item(title: String) => |app| app.add_item(&title);
@@ -236,6 +238,8 @@ fn main() {
             rename,
             finish_live,
             control_live,
+            edit_shared_line,
+            remove_shared_line,
             retry,
             set_notes,
             add_item,
