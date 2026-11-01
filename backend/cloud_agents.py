@@ -187,7 +187,7 @@ def _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, f
     if seat_id:
         _recover_stale(c, seat_id)
         row = lifecycle.seat(c, seat_id)
-        lifecycle.refuse_if_requested(row)
+        row = lifecycle.refuse_if_requested(row, c)
         placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
         joined = _joins(c, row, placed)
         if joined:
@@ -224,7 +224,7 @@ def _reserve(store, auth, who, agent, key, digested, seat_id, reports_to, team, 
                 return True, lifecycle.seat_record(c, row["seat_id"])
             if row and row["created"] < H.shift(H.now(), seconds=-lifecycle.FILING_STALE_SECONDS):
                 _release(c, who.actor, row)      # its first try never came back: this one takes the key
-                row = None
+                continue                         # committed on its own, so a refusal of the retry cannot undo it
             if not row:
                 return False, _reserve_in(c, auth, who, agent, digested, key, seat_id, reports_to, team, first_task)
         if time.monotonic() > deadline:
@@ -415,7 +415,7 @@ def _add_bot(c, auth, onboarding, settings_admin, who, agent, body):
         name = agent["name"]
     _recover_stale(c, seat_id)
     row = lifecycle.seat(c, seat_id)
-    lifecycle.refuse_if_requested(row)
+    row = lifecycle.refuse_if_requested(row, c)
     placed = lifecycle.placement(auth, c, who, row["reports_to"], seat_id)
     if str(row["reports_to"] or "").startswith(lifecycle.SEAT_PREFIX):
         # A bot cannot report to a seat, and filling the seat above later would leave this bot under the wrong manager.

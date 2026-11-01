@@ -646,3 +646,40 @@ def test_a_seat_under_an_unfilled_seat_waits_for_its_manager_before_an_add(envir
     before = bot_count(api)
     assert ask(api, "cloud-agents/codex/add", {"seat_id": seat["id"]}, expected=409)["error"]["code"] == "manager_seat"
     assert bot_count(api) == before
+
+
+def plant_stale_filing(api, seat_id, actor="dead-process", key=None, request_hash="x", made=0):
+    stale = H.shift(H.now(), seconds=-(lifecycle.FILING_STALE_SECONDS + 1))
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE seats SET request_state=?,agent='devin',agent_name='Devin' WHERE id=?", (lifecycle.FILING, seat_id))
+        c.execute("INSERT INTO seat_requests(id,actor,request_key,request_hash,seat_id,state,created,made) "
+                  "VALUES(?,?,?,?,?,?,?,?)", (uuid.uuid4().hex, actor, key or "key-" + seat_id, request_hash, seat_id,
+                                             "filing", stale, made))
+
+
+def test_an_ordinary_seat_action_recovers_a_stale_filing_and_goes_ahead(environment, hq):
+    api = environment()
+    seat = ask(api, "seats", {"title": "Engineer"})
+    plant_stale_filing(api, seat["id"])
+    ask(api, f"seats/{seat['id']}/close", {})
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM seat_requests WHERE seat_id=?", (seat["id"],)).fetchone()[0] == 0
+        assert c.execute("SELECT closed_at FROM seats WHERE id=?", (seat["id"],)).fetchone()[0]
+
+
+def test_a_refused_retry_of_a_stale_seatless_request_still_releases_it(environment, hq):
+    api = environment(catalog_dir=SHIPPED)
+    team = ask(api, "groups", {"name": "Engineering"})["id"]
+    quinn = as_person(api, "quinn")                  # a plain member: the team's rule refuses the retry
+    seat = ask(api, "seats", {"title": "Devin", "reports_to": "human:quinn"})
+    from backend.store import digest, encode
+    hashed = digest(encode({"agent": "devin", "name": "Devin", "first_task": "", "team": team,
+                            "reports_to": "human:quinn", "seat": ""}))
+    with api.app.state.store.read() as c:
+        actor = c.execute("SELECT created_by FROM seats WHERE id=?", (seat["id"],)).fetchone()[0]
+    plant_stale_filing(api, seat["id"], actor="human:quinn", key="k-retry", request_hash=hashed, made=1)
+    ask(api, "cloud-agents/devin/request", {"team": team, "reports_to": "human:quinn"},
+        headers={**quinn, "Idempotency-Key": "k-retry"}, expected=403)
+    with api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM seat_requests WHERE request_key='k-retry'").fetchone()[0] == 0
+    assert actor and filed(hq) == []

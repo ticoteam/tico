@@ -230,16 +230,22 @@ def seat_record(c, seat_id):
     return _seat(row)
 
 
-def refuse_if_requested(row):
+def refuse_if_requested(row, c=None):
     """Refuse a change to a seat that has an open cloud agent request. A request being filed or cancelled is in flight
     with Tico, so the change waits for it to finish; a requested seat keeps its line, team and title until the request
     is cancelled (cancel_request in backend/cloud_agents.py). Filling, closing, renaming, moving and re-teaming a seat all
-    call this, so none of them can land while a request is open."""
+    call this, so none of them can land while a request is open. Given the transaction, a request a dead process left in
+    flight past its window is recovered first, so the change goes ahead; returns the seat as it now is."""
+    if c is not None and row["request_state"] in (FILING, CANCELLING):
+        from .cloud_agents import _recover_stale
+        _recover_stale(c, row["id"])
+        row = seat(c, row["id"])
     state = row["request_state"]
     if state in (FILING, CANCELLING):
         raise Problem(state, "This seat's cloud agent request is in progress. Try again in a moment.", 409, retryable=True)
     if state and state != CANCELLED:
         raise Problem("requested", "This seat has a cloud agent request: cancel the request first", 409)
+    return row
 
 
 def may_place_seat(auth, c, who, row):
@@ -376,7 +382,7 @@ def update_seat(auth, c, who, seat_id, fields):
         _may_place(auth, c, who, values["reports_to"])
     # A title, team or line said again is no change, and a requested seat still takes description edits.
     if any(k in values and values[k] != row[k] for k in ("title", "team", "reports_to")):
-        refuse_if_requested(row)
+        row = refuse_if_requested(row, c)
     if values:
         values.update(updated=H.now(), updated_by=who.actor)
         c.execute("UPDATE seats SET " + ",".join(k + "=?" for k in values) + " WHERE id=?", (*values.values(), seat_id))
@@ -392,7 +398,7 @@ def close_seat(auth, c, who, seat_id):
     row = seat(c, seat_id)
     _may_place(auth, c, who, row["reports_to"])
     # Closing would leave the ticket open at Tico and the first task waiting; cancelling the request does both.
-    refuse_if_requested(row)
+    row = refuse_if_requested(row, c)
     c.execute("UPDATE seats SET closed_at=?,closed_by=? WHERE id=?", (H.now(), who.actor, seat_id))
     from .recruiting import end_draft
     end_draft(c, row, "The seat was taken off the org chart")
@@ -404,7 +410,7 @@ def fill_seat(c, who, seat_id, bot):
     """The seat a bot now fills: closed with the bot on it, and the seats that reported to it report to the bot, as a
     candidate's hire does (backend/recruiting.py)."""
     row = seat(c, seat_id)
-    refuse_if_requested(row)
+    row = refuse_if_requested(row, c)
     now = H.now()
     c.execute("UPDATE seats SET closed_at=?,closed_by=?,filled_by=?,updated=?,updated_by=? WHERE id=?",
               (now, who.actor, bot, now, who.actor, seat_id))
