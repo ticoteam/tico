@@ -21853,7 +21853,7 @@
     },
     "/api/v2/purchase-orders/{po_id}": {
       "get": {
-        "summary": "One purchase order with its lines and what each line has billed",
+        "summary": "One purchase order with its lines, what each line has billed, the bills on it and the approvals asked",
         "operationId": "getPurchaseOrder",
         "parameters": [
           {
@@ -39066,6 +39066,13 @@
               },
               "view_version": {
                 "type": "integer"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
               }
             },
             "required": [
@@ -40696,12 +40703,32 @@
           "more": {
             "type": "boolean"
           },
+          "classes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
           "view_version": {
             "type": "integer"
           }
         },
         "required": [
           "accounts",
+          "classes",
           "more",
           "view_version"
         ],
@@ -41803,6 +41830,50 @@
           },
           "memo": {
             "type": "string"
+          },
+          "billed": {
+            "type": "integer"
+          },
+          "held": {
+            "type": "integer"
+          },
+          "locations": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "name"
+              ],
+              "additionalProperties": true
+            }
           }
         },
         "required": [
@@ -50200,6 +50271,48 @@
               },
               "view_version": {
                 "type": "integer"
+              },
+              "actions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              },
+              "bills": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "id": {
+                      "type": "string"
+                    },
+                    "number": {
+                      "type": "string"
+                    },
+                    "vendor": {
+                      "type": "string"
+                    },
+                    "date": {
+                      "type": "string"
+                    },
+                    "status": {
+                      "type": "string"
+                    },
+                    "total": {
+                      "type": "integer"
+                    },
+                    "on_order": {
+                      "type": "integer"
+                    }
+                  },
+                  "required": [
+                    "id",
+                    "on_order",
+                    "total"
+                  ],
+                  "additionalProperties": true
+                }
               }
             },
             "required": [

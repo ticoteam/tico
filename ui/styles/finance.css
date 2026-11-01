@@ -252,3 +252,18 @@ th .fin-tag{display:block;width:max-content;margin:2px 0 0 auto}
   .fin-vpick{min-width:0}
   .fin-form label.fin-map-row{grid-template-columns:1fr}
 }
+
+/* A line form: the item above the line, then Location, Project and Class under it. */
+.fin-il .fin-il-item,.fin-il .fin-dims{grid-column:1/-1}
+.fin-dims{display:grid;grid-template-columns:repeat(auto-fit,minmax(96px,1fr));gap:6px}
+.fin-form .fin-dims select{min-width:0}
+.fin-il:has(.fin-dims)+.fin-il{margin-top:12px;padding-top:12px;border-top:1px solid var(--line)}
+.fin-rail-back{height:auto;margin:0 0 8px;padding:2px 8px 2px 4px;font-size:var(--t-sm)}
+.fin-rail h2 .fin-link{font-weight:inherit}
+.fin-rail h2 .fin-link:hover{text-decoration:underline}
+
+/* A long split label wraps so Net stays on screen; on a phone a list keeps what picks a row, and the rail has the rest. */
+.fin-split-t td:first-child{white-space:normal}
+@media (max-width:640px){
+  .fin-doc-t .fin-wide{display:none}
+}

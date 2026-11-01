@@ -9,6 +9,7 @@ from collections.abc import Iterable, Sequence
 from datetime import date
 from typing import Any, cast
 
+from ..records import reads as RR
 from .context import Ctx, load
 from .core import ap as AP
 from .core import dates
@@ -18,6 +19,7 @@ from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .store import ap as SAP
 from .store import banking as SK
+from .store import catalog as SC
 from .store import ledger as SL
 from .tab import BILLS_EMAIL_KEY, decode_cursor, encode_cursor, page_size, private_cut
 
@@ -241,7 +243,18 @@ def documents(c: sqlite3.Connection, viewer: str, kind: str, *, status: str | No
             "currency": ctx.book.base_currency, "view_version": view.version}
 
 
-def _approvals(c: sqlite3.Connection, kind: str, doc_id: str) -> list[Row]:
+def record_names(c: sqlite3.Connection) -> dict[str, dict[str, str]]:
+    """Each record's name by id, archived ones too: a line keeps naming what it was tagged with."""
+    return {"location": RR.names(c, "locations"), "project": RR.names(c, "projects"), "class": SC.class_names(c),
+            "item": RR.names(c, "items")}
+
+
+def tag_names(names: dict[str, dict[str, str]], tags: dict[str, str]) -> dict[str, str]:
+    """A line's location, project and class by name, for a panel that shows them."""
+    return {k: names[k].get(tags[k], tags[k]) for k in ("location", "project", "class") if tags.get(k)}
+
+
+def doc_approvals(c: sqlite3.Connection, kind: str, doc_id: str) -> list[Row]:
     return [{"action_id": str(r["id"]), "kind": str(r["kind"]), "status": str(r["status"]), "actor": str(r["actor"]),
              "approval_id": r["approval_id"], "approval_to": r["approval_to"], "rule_id": str(r["rule_id"]) or None,
              "created_at": str(r["created_at"])} for r in SAP.doc_actions(c, kind, doc_id, 20)]
@@ -262,8 +275,10 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
     settled = SAP.settlement_count(c, kind, doc_id)
     pay = SK.last_payments(c, [f"bill:{doc_id}"]).get(f"bill:{doc_id}") if kind == "bill" else None
     out = doc_row(kind, r, dates.day(ctx.today), attached, pay)
+    names = record_names(c)
     out["lines"] = [{"id": str(x["id"]), "account": account_ref(ctx, x["account_id"]), "amount": int(x["amount"]),
                      "description": str(x["description"]), "tags": SK.loads(x["tags_json"]),
+                     "tag_names": tag_names(names, cast(dict[str, str], SK.loads(x["tags_json"]))),
                      **({"taxable": bool(x["taxable"])} if kind == "invoice" else {})}
                     for x in found[doc_id]]
     out["settlements"] = [{"id": str(s["id"]), "from_kind": str(s["from_kind"]), "from_id": str(s["from_id"]) or None,
@@ -275,7 +290,7 @@ def document(c: sqlite3.Connection, viewer: str, kind: str, doc_id: str, at: str
                            "created_at": str(f["created_at"])}
                           for f in SAP.attachments_first(c, kind, doc_id, NESTED_MOST)]
     out["attachment_count"], out["attachments_more"] = attached, attached > NESTED_MOST
-    out["actions"] = _approvals(c, kind, doc_id)
+    out["actions"] = doc_approvals(c, kind, doc_id)
     out["terms_days"] = r["terms_days"]
     if kind == "bill":
         out["schedule"] = SK.loads(r["schedule_json"]) or None
@@ -393,7 +408,8 @@ def chart(c: sqlite3.Connection, viewer: str, *, for_: str | None = None, at: st
         if not wide:
             row["attributable"] = _attributable(ctx, viewer, a)
         out.append(row)
-    return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST, "view_version": view.version}
+    return {"accounts": out[:CHART_MOST], "more": len(out) > CHART_MOST,
+            "classes": [{"id": i, "name": n} for i, n in SC.classes_active(c)], "view_version": view.version}
 
 
 ATTRIBUTABLE_MOST = 200

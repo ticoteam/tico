@@ -1043,6 +1043,7 @@ export type DueSatisfied = {
 export type Empty = Record<string, unknown>;
 
 export type Estimate = (FinanceOrderRow & {
+  actions?: Array<Record<string, unknown>>;
   lines: Array<{
   id: string;
   line_no: number;
@@ -1403,6 +1404,10 @@ export type FinanceChart = {
   subtype?: string;
   type: string;
 }>;
+  classes: Array<{
+  id: string;
+  name: string;
+}>;
   more: boolean;
   view_version: number;
 };
@@ -1628,15 +1633,25 @@ export type FinanceOpenTotal = {
 };
 
 export type FinanceOrderRow = {
+  billed?: number;
   contact: {
   id: string;
   name: string;
 };
   currency: string;
   date: string;
+  held?: number;
   id: string;
+  locations?: Array<{
+  id: string;
+  name: string;
+}>;
   memo: string;
   number: string;
+  projects?: Array<{
+  id: string;
+  name: string;
+}>;
   status: string;
   total: number;
 };
@@ -3306,6 +3321,16 @@ export type PublicationInput = {
 };
 
 export type PurchaseOrder = (FinanceOrderRow & {
+  actions?: Array<Record<string, unknown>>;
+  bills?: Array<{
+  date?: string;
+  id: string;
+  number?: string;
+  on_order: number;
+  status?: string;
+  total: number;
+  vendor?: string;
+}>;
   lines: Array<{
   id: string;
   line_no: number;

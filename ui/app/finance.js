@@ -6,7 +6,8 @@
    Reads: GET /api/v2/finance/access (who sees what: the sidebar link and the tabs follow it).
    The tabs are their own files: finance-pnl.js (P&L and a line's page), finance-books.js (Balance sheet, Cards,
    Transactions), finance-docs.js (Payables, Receivables, and entering a bill, invoice or journal entry),
-   finance-admin.js (Sources, Access).
+   finance-orders.js (Purchase orders, Estimates, what a line form picks from), finance-contact.js (a vendor's or customer's
+   panel), finance-admin.js (Sources, Access).
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
@@ -30,7 +31,7 @@ function finCapsOf(acc, who) {
   const all = owner || what.has('everything');
   const rights = new Set(row.rights || []);
   const may = right => owner || rights.has(right) || rights.has('finance.admin');
-  return {row, owner, all, rights, may,
+  return {row, owner, all, rights, what, may,
     any: all || row.default !== 'none' || live.length > 0,
     company: all || what.has('pnl') || what.has('pnl_lines'),
     // Company-wide expenses (backend/finance/core/view.py company_expenses), which the Unattributed filter needs.
@@ -50,6 +51,13 @@ function finCaps() {
   if (!caps) return null;
   const viewing = who !== me;
   return {...caps, who, viewing, may: right => !viewing && caps.may(right)};
+}
+// Whether purchase orders (finance.ap) or estimates (finance.ar) will read for whoever the reads run as, viewing as someone
+// included: those reads need the right and that side's view both (backend/finance/tab_purchasing.py _check).
+function finHolds(right) {
+  const c = finCaps();
+  if (!c || !(c.owner || c.rights.has(right) || c.rights.has('finance.admin'))) return false;
+  return c.all || c.what.has(right === 'finance.ap' ? 'payables' : 'receivables');
 }
 // Tax workpapers are filed whole, so only a viewer who sees everything reads them (backend/finance/tax.py).
 const finTabShown = (tab, caps, acc) => !!caps?.any && (tab === 'balance' ? caps.balance : tab === 'sources' ? caps.sources : tab === 'tax' ? caps.all
@@ -274,8 +282,8 @@ function finShow(state) {
   if (state.tab === 'line') finLinePage(state.arg);
   else if (tab === 'pnl') finPnlPage();
   else if (tab === 'balance') finBalancePage();
-  else if (tab === 'payables') finDocPage('bill');
-  else if (tab === 'receivables') finDocPage('invoice');
+  else if (tab === 'payables') { if (state.arg === 'orders' && finHolds('finance.ap')) finOrdPage('po'); else finDocPage('bill'); }
+  else if (tab === 'receivables') { if (state.arg === 'estimates' && finHolds('finance.ar')) finOrdPage('estimate'); else finDocPage('invoice'); }
   else if (tab === 'cards') finCardsPage();
   else if (tab === 'transactions') finTxPage();
   else if (tab === 'tax') finTaxPage();

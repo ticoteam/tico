@@ -150,6 +150,23 @@ def billed_total(c: sqlite3.Connection, po_id: str) -> int:
     return int(c.execute(_BILLED_ON.format(po="?"), (po_id, po_id)).fetchone()[0])
 
 
+def held_total(c: sqlite3.Connection, po_id: str) -> int:
+    """What an order's live holds keep of its budgets now (a hold shrinks as bills take it over)."""
+    return int(c.execute("SELECT COALESCE(SUM(h.amount), 0) FROM fin_po_lines l JOIN fin_holds h "
+                         "ON h.source='purchase_order' AND h.source_id=l.po_id || ':' || l.line_no AND h.status='held' "
+                         "WHERE l.po_id=?", (po_id,)).fetchone()[0])
+
+
+def order_bills(c: sqlite3.Connection, po_id: str) -> list[sqlite3.Row]:
+    """The bills that bill an order's lines (a void one bills nothing), oldest first, with what each bills on it."""
+    return c.execute(
+        "SELECT b.*, k.name AS contact_name, SUM(x.amount) AS on_order FROM (SELECT bill_id, po_line_id, amount FROM "
+        "fin_bill_lines UNION ALL SELECT bill_id, po_line_id, amount FROM fin_bill_retained) x "
+        "JOIN fin_po_lines l ON l.id=x.po_line_id JOIN fin_bills b ON b.id=x.bill_id "
+        "LEFT JOIN fin_contacts k ON k.id=b.vendor_id WHERE l.po_id=? AND b.status!='void' "
+        "GROUP BY b.id ORDER BY b.bill_date, b.id", (po_id,)).fetchall()
+
+
 def shown_po(status: str, billed_so_far: int, total: int) -> str:
     """The status a reader sees of an order: an approved order billed in part is partial."""
     return "partial" if status == "approved" and 0 < billed_so_far < total else status
