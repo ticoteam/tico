@@ -6,6 +6,9 @@
 
 const THV_VIEWS = new Set();
 const THV_DEPTH_MAX = 3;
+// The server's depth is the place in the whole tree (a sub-thread's own messages are 1); on screen it counts from the
+// thread shown, capped.
+const thvDepth = (view, d) => Math.max(0, Math.min((Number(d) || 0) - (view.base || 0), THV_DEPTH_MAX));
 const THV_ACK = '✅';
 let THV_N = 0;
 const thvPath = id => '/v2/threads/' + encodeURIComponent(id);
@@ -19,7 +22,7 @@ const thvAddressed = m => thvHuman(m?.from_actor) || m?.to_actor === myActor() |
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
                 readAt: 0, openSeq: 0, readSent: new Map(), wantRead: new Set(), pending: [], replyTo: '', editing: '',
-                follow: null, gone: false, error: ''};
+                follow: null, gone: false, error: '', run: {openSteps: new Set(), steps: {}, openFolds: new Set()}};
   THV_VIEWS.add(view);
   host.innerHTML = `<section class="thv${opts.card ? ' thv-card' : ''}" data-thv="${view.key}">
     ${opts.header === false ? '' : '<header class="thv-head"></header>'}
@@ -167,14 +170,16 @@ function thvHeadHTML(view) {
       ${!t.parent_id && ['members', 'personal'].includes(t.audience) ? '<button type="button" class="ghost small" data-thv-members>Members</button>' : ''}
       <button type="button" class="ghost thv-menu-btn" data-thv-menu aria-haspopup="menu" aria-expanded="false" aria-label="Thread menu" title="More"><span class="nav-icon" aria-hidden="true">more_horiz</span></button></div>`;
 }
-// Hidden rows in a run fold into one: earlier shared history as "Earlier messages", anything else as "Not shown".
+// A message the viewer may not read leaves no trace: no row, no gap. Only earlier shared history, which the Home
+// says it keeps, folds into one "Earlier messages" row.
 function thvRows(view) {
   const rows = [];
   for (const m of view.messages) {
     if (m.hidden) {
-      const kind = m.earlier || m.legacy ? 'earlier' : 'hidden', last = rows[rows.length - 1];
-      if (last?.fold === kind && last.depth === (m.depth || 0)) { last.n++; continue; }
-      rows.push({fold: kind, n: 1, depth: m.depth || 0, id: m.id});
+      if (!(m.earlier || m.legacy)) continue;
+      const last = rows[rows.length - 1];
+      if (last?.fold && last.depth === (m.depth || 0)) { last.n++; continue; }
+      rows.push({fold: 'earlier', n: 1, depth: m.depth || 0, id: m.id});
       continue;
     }
     rows.push({m});
@@ -214,7 +219,7 @@ function thvReactionsHTML(m) {
   return `<div class="th-reacts">${rs.map(r => `<button type="button" class="th-react${r.me ? ' me' : ''}" data-th-react="${esc(r.emoji)}" aria-pressed="${r.me ? 'true' : 'false'}" title="${r.emoji === THV_ACK ? 'Acknowledged' : esc(r.emoji)}">${esc(r.emoji)} <span class="tnum">${r.count}</span></button>`).join('')}</div>`;
 }
 function thvMsgHTML(view, m) {
-  const depth = Math.min(Number(m.depth) || 0, THV_DEPTH_MAX), sub = m.thread_id && m.thread_id !== view.id;
+  const depth = thvDepth(view, m.depth), sub = m.thread_id && m.thread_id !== view.id;
   const fresh = thvIsNew(view, m), quiet = fresh && !thvAddressed(m);
   const cls = ['th-msg', sub && 'th-sub', m.refs?.follow_up && 'th-followup', thvMine(m) && 'th-mine', fresh && 'th-new', quiet && 'th-new-quiet', m.deleted && 'th-deleted']
     .filter(Boolean).join(' ');
@@ -234,9 +239,14 @@ function thvMsgHTML(view, m) {
   // What a bot's turn did, in the same muted rows a chat shows (ui/app/chat.js), and the runner's warnings.
   if (!m.deleted && view.editing !== m.id && String(m.from_actor || '').startsWith('bot:'))
     body += (m.refs?.warnings || []).map(w => `<div class="chat-warn">${esc(String(w).charAt(0).toUpperCase() + String(w).slice(1))}</div>`).join('')
-      + v2RunHTML(m) + v2MessageCards(m);
-  const st = m.sub_thread, more = st?.more ? `<a class="th-more" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">${
-    typeof st.more === 'number' ? `${st.more} more ${st.more === 1 ? 'reply' : 'replies'}` : 'More replies'}${st.unread ? ` · <span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
+      + v2RunHTML(m, view.run) + v2MessageCards(m);
+  // A sub-thread opens with one quiet header row (its title, replies and what is new) that opens it; the replies the
+  // timeline carries follow it, indented.
+  const st = m.sub_thread, n = Number(st?.count) || 0;
+  const more = st?.id && !m.deleted ? `<a class="th-subhead" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">
+    <span class="th-subhead-title">${esc(st.title || v2Firstline(m.body || '') || 'Sub-thread')}</span>
+    <span class="th-subhead-n">${n ? `${n} ${n === 1 ? 'reply' : 'replies'}` : 'No replies'}</span>${
+    st.unread ? `<span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
     <div class="th-av">${actorAvatar(m.from_actor, sub ? 20 : 28)}</div>
     <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}</div>
@@ -244,16 +254,12 @@ function thvMsgHTML(view, m) {
   </div>${more}`;
 }
 function thvFoldHTML(view, row) {
-  const depth = Math.min(row.depth, THV_DEPTH_MAX);
-  if (row.fold === 'earlier') {
-    const manage = !!view.thread?.me?.can_manage;
-    return `<div class="th-fold th-earlier" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Earlier messages</span>${
-      manage ? '<button type="button" class="linkish" data-th-earlier>Open earlier messages to Read</button>' : ''}</div>`;
-  }
-  return `<div class="th-fold" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Not shown</span></div>`;
+  const depth = thvDepth(view, row.depth), manage = !!view.thread?.me?.can_manage;
+  return `<div class="th-fold th-earlier" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Earlier messages</span>${
+    manage ? '<button type="button" class="linkish" data-th-earlier>Open earlier messages to Read</button>' : ''}</div>`;
 }
-function thvPendingHTML(p) {
-  const depth = Math.min(p.depth || 0, THV_DEPTH_MAX);
+function thvPendingHTML(view, p) {
+  const depth = thvDepth(view, p.depth);
   const text = `<div class="th-body">${esc(p.text)}${p.files?.length ? ` <span class="muted">· ${p.files.length} file${p.files.length === 1 ? '' : 's'}</span>` : ''}</div>`;
   if (p.state === 'held') {
     const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${esc(r.text)}</div>`).join('');
@@ -267,14 +273,16 @@ function thvPendingHTML(p) {
     ${p.state === 'failed' ? '<div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button><button type="button" class="ghost small" data-held-drop>Discard</button></div>' : ''}</div></div>`;
 }
 function thvReplyHTML(view, m) {
-  const depth = Math.min((Number(m.depth) || 0) + 1, THV_DEPTH_MAX);
+  const depth = thvDepth(view, (Number(m.depth) || 0) + 1);
   return `<div class="th-reply" style="--d:${depth}" data-reply-to="${esc(m.id)}"><textarea class="th-reply-text" rows="1" aria-label="Reply in sub-thread" placeholder="Reply"></textarea>
     <button type="button" class="ghost small" data-th-reply-cancel>Cancel</button><button type="button" class="primary small" data-th-reply-send>Reply</button></div>`;
 }
 function thvListHTML(view) {
   if (view.state === 'loading') return '<div class="th-empty muted">Loading…</div>';
-  if (view.state === 'gone') return '<div class="th-empty muted">Not shown</div>';
+  if (view.state === 'gone') return '<div class="th-empty muted">Not found</div>';
   if (view.state === 'error') return `<div class="th-empty err">${esc(view.error || 'Could not load')}</div>`;
+  const own = view.messages.filter(m => !m.hidden && (m.thread_id || view.id) === view.id).map(m => Number(m.depth) || 0);
+  view.base = own.length ? Math.min(...own) : 0;
   const rows = thvRows(view), out = [];
   // Each pending and held message sits where it will land: after its parent's sub-thread, or at the bottom.
   const lastIn = new Map();
@@ -297,10 +305,10 @@ function thvListHTML(view) {
   for (const row of rows) {
     out.push(row.fold ? thvFoldHTML(view, row) : thvMsgHTML(view, row.m));
     const id = row.m?.id || row.id;
-    for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(p));
+    for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
     if (replyAt && id === replyAt) out.push(thvReplyHTML(view, view.messages.find(m => m.id === view.replyTo)));
   }
-  for (const p of view.pending) if (!p.parent) out.push(thvPendingHTML(p));
+  for (const p of view.pending) if (!p.parent) out.push(thvPendingHTML(view, p));
   if (!out.length) out.push(`<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`);
   return out.join('');
 }
@@ -605,6 +613,12 @@ function thvWire(view) {
     if (!pill.hidden && first && thvVisible(el.querySelector('.thv-scroll'), first)) pill.hidden = true;
   }, {passive: true});
   el.addEventListener('click', ev => void thvClick(view, ev));
+  // A turn's steps load when their fold opens; open folds stay open across redraws (ui/app/chat.js).
+  el.addEventListener('toggle', ev => {
+    if (ev.target.matches?.('details.run-steps')) void v2StepsOpen(view.run, ev.target, el);
+    const fold = ev.target.dataset?.fold;
+    if (fold) view.run.openFolds[ev.target.open ? 'add' : 'delete'](fold);
+  }, true);
 }
 const thvMsgOf = (view, row) => view.messages.find(m => m.id === row?.dataset.mid);
 async function thvClick(view, ev) {
@@ -693,9 +707,11 @@ async function thvReact(view, m, emoji) {
 function thvMsgMenu(view, m, button) {
   thvMenuClose();
   const can = thvCanPost(view), mine = thvMine(m), sayable = !m.kind || m.kind === 'say';
-  const items = [can && ['reply', 'Reply in sub-thread'], ['task', 'Make task'], mine && sayable && ['edit', 'Edit'], mine && ['delete', 'Delete']].filter(Boolean);
+  const touch = matchMedia('(hover: none)').matches;   // a phone shows only ⋯, so Acknowledge is here
+  const items = [touch && ['ack', 'Acknowledge'], can && ['reply', 'Reply in sub-thread'], ['task', 'Make task'], mine && sayable && ['edit', 'Edit'], mine && ['delete', 'Delete']].filter(Boolean);
   thvMenuShow(button, items, async key => {
-    if (key === 'reply') {
+    if (key === 'ack') await thvReact(view, m, THV_ACK);
+    else if (key === 'reply') {
       view.replyTo = m.id; thvDraw(view);
       view.el.querySelector('.th-reply-text')?.focus();
     } else if (key === 'task') threadMakeTask(m, view);

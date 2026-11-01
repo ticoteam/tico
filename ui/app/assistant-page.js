@@ -26,6 +26,9 @@ const assistantEmptyHTML = () => `<div class="asst-empty"><div class="asst-hints
   ASSISTANT_HINTS.map(t => `<button class="ghost" type="button" data-hint="${esc(t)}">${esc(t)}</button>`).join('')}</div></div>`;
 async function pageAssistant() {
   const slug = myChatBot(), load = ++ASSISTANT_LOAD;
+  // A redraw moves the composer: where the cursor was comes back with it.
+  const typing = ASSISTANT_PILL?.el.contains(document.activeElement) ? document.activeElement : null;
+  const caret = typing && 'selectionStart' in typing ? [typing.selectionStart, typing.selectionEnd] : null;
   $('#main').classList.add('chat-layout', 'bot-chat-layout');
   $('#main').innerHTML = `
   <div class="bot-top asst-top" id="bot-top"><div class="bot-ident">${avatar(slug, 36, stateOf(slug))}
@@ -62,16 +65,19 @@ async function pageAssistant() {
   }
   const P = assistantPill(), thread = $('#conv-thread');
   $('#chat-composer').append(P.el);
+  if (typing && P.el.contains(typing)) { typing.focus({preventScroll: true}); if (caret) typing.setSelectionRange(...caret); }
   chatDropZone($('#pane-chat'), P);
   bindChatSwipe(thread);
   thread.addEventListener('click', ev => { const b = ev.target.closest('[data-hint]'); if (b) assistantSend(P, b.dataset.hint); });
   void v2ChatLoad(slug, {conv: {id: d.room_id}, messages: d.messages, execution: d.execution, nextBefore: d.next_before,
                          empty: assistantEmptyHTML()});
 }
-async function assistantSend(P, text) {
+async function assistantSend(P, text, queued = null) {
   text = String(text || '').trim();
-  const files = P.files.slice();
-  if ((!text && !files.length) || P.sending) return;
+  const files = queued || P.files.slice();
+  if (!text && !files.length) return;
+  // A Return while a send is out waits its turn: the box clears now and the message goes right after.
+  if (P.sending) { (P.queue ||= []).push({text, files}); pillClear(P); return; }
   P.sending = true;
   const btn = pq(P, '.p-send'), state = V2C, scope = sessionScope(pq(P, '.p-text'));
   btn.disabled = true; pillBtnSay(btn, 'Sending…');
@@ -79,7 +85,7 @@ async function assistantSend(P, text) {
     const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.'}, files);
     // A 200 without the message (a sign-in page from a proxy) did not send: the draft stays.
     if (!r?.message) throw new Error('Not sent. Try again.');
-    pillAcknowledge(P, text, files, scope);
+    if (!queued) pillAcknowledge(P, text, files, scope);
     if (state && V2C === state) {
       // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.
       for (const m of [r.message, r.reply].filter(Boolean)) { state.messages.push(m); state.mine.push(m); }
@@ -88,8 +94,17 @@ async function assistantSend(P, text) {
       v2ChatRender(state);
       if (!r.fast) v2ChatStream(state);
     }
-  } catch (e) { toast(e.message, true); }
-  finally { P.sending = false; pillBtnSay(btn, ''); pillLabel(P); pillButtons(P); }
+  } catch (e) {
+    toast(e.message, true);
+    // A queued message that did not go returns to an empty box, so nothing typed is lost.
+    const box = pq(P, '.p-text');
+    if (queued && !box.value.trim()) { box.value = text; box.dispatchEvent(new Event('input', {bubbles: true})); P.files.push(...files); pillChips(P); }
+  }
+  finally {
+    P.sending = false; pillBtnSay(btn, ''); pillLabel(P); pillButtons(P);
+    const next = P.queue?.shift();
+    if (next) void assistantSend(P, next.text, next.files);
+  }
 }
 
 // "Earlier chats": the owner's earlier chat with the Strategy Bot, by its name, read-only, newest page first and older

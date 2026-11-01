@@ -78,8 +78,12 @@ a.th-who:hover{text-decoration:underline}
 /* New since the last read: an accent edge; a bot post not addressed to you gets the lighter mark. */
 .th-new{box-shadow:inset 3px 0 0 var(--accent)}
 .th-new-quiet{box-shadow:inset 3px 0 0 var(--g4)}
-.th-more{--d:1;display:block;padding:2px 6px 6px calc(6px + var(--d) * 28px + 30px);color:var(--muted);font-size:var(--t-sm)}
-.th-more:hover{color:var(--ink)}
+/* a sub-thread's header row: title, replies, new; quiet, one line, opens the sub-thread */
+.th-subhead{--d:1;display:flex;align-items:baseline;gap:var(--s2);min-width:0;margin:0 6px 2px calc(6px + var(--d) * 28px);padding:3px 8px;border-left:2px solid var(--line);color:var(--muted);font-size:var(--t-sm)}
+.th-subhead:hover{color:var(--ink);text-decoration:none;background:var(--surface2)}
+.th-subhead-title{min-width:0;overflow:hidden;color:var(--ink-2,var(--ink));font-weight:600;text-overflow:ellipsis;white-space:nowrap}
+.th-subhead-n{flex:none}
+.th-subhead .th-more-new{flex:none}
 .th-more-new{color:var(--accent);font-weight:600}
 .th-fold{--d:0;display:flex;align-items:center;gap:var(--s2);padding:6px 6px 6px calc(6px + var(--d) * 28px);color:var(--muted);font-size:var(--t-sm)}
 .th-fold::before{content:"";width:18px;height:1px;background:var(--line)}
@@ -87,7 +91,8 @@ a.th-who:hover{text-decoration:underline}
 /* the actions on a message show on hover or focus; on touch they are always there, small */
 .th-acts{position:absolute;top:2px;right:4px;display:flex;gap:2px;padding:2px;border:1px solid var(--line);border-radius:8px;background:var(--surface);opacity:0;pointer-events:none}
 .th-msg:hover .th-acts,.th-msg:focus-within .th-acts{opacity:1;pointer-events:auto}
-@media (hover:none){.th-acts{position:static;align-self:flex-start;opacity:1;pointer-events:auto;border:0;background:none}}
+/* on touch only ⋯ shows, quiet; Acknowledge and the rest are in its menu */
+@media (hover:none){.th-acts{position:static;align-self:flex-start;opacity:.55;pointer-events:auto;border:0;background:none}.th-acts [data-th-ack]{display:none}}
 .th-act{display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:none;color:var(--muted);cursor:pointer;font-size:14px}
 .th-act:hover{background:var(--surface2);color:var(--ink)}
 .th-act .nav-icon{font-size:18px;width:18px;height:18px;color:inherit}
@@ -169,7 +174,7 @@ a.th-who:hover{text-decoration:underline}
   .thread-page{max-width:none}
   .th-msg{padding-left:calc(4px + var(--d) * 16px)}
   .th-sub::before{left:calc(var(--d) * 16px - 6px)}
-  .th-more{padding-left:calc(4px + var(--d) * 16px + 30px)}
+  .th-subhead{margin-left:calc(4px + var(--d) * 16px)}
   .th-fold{padding-left:calc(4px + var(--d) * 16px)}
   .th-reply{padding-left:calc(4px + var(--d) * 16px)}
   .threads-head h1{font-size:var(--t-lg)}

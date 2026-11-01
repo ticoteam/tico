@@ -1,7 +1,7 @@
 // Offline browser regression: the Assistant's Send never does nothing (ui/app/assistant-page.js). A send the server
-// refuses, or answers without a message (a sign-in page), says so and keeps the draft; text that arrived without an
-// input event (autofill, a tool filling the box) still sends on a click and shows in the thread. The bot chat's retry,
-// slow-send line and Return-during-a-send queue went with its composer; a bot's DM composer is in threads.cjs.
+// refuses, or answers without a message (a sign-in page), says so and keeps the draft; Return during a send that is
+// still out sends after it; text that arrived without an input event (autofill, a tool filling the box) still sends on
+// a click and shows in the thread. A bot's DM composer is in threads.cjs.
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -35,6 +35,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
         const text = route.request().postDataJSON().text;
         if (answer === 'error') return json({error: {code: 'internal', detail: 'Server error'}}, 500);
         if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
+        if (answer === 'slow') await new Promise(r => setTimeout(r, 700));
         sends.push(text);
         const message = {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
         thread.push(message);
@@ -71,6 +72,14 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
     await page.waitForFunction(() => !document.querySelector('#chat-composer textarea').value);
     assert.deepEqual(sends, ['Filled by a tool']);
     await page.locator('#conv-thread', {hasText: 'Filled by a tool'}).waitFor();
+
+    // Return while the previous send is still out: the second message follows it instead of vanishing.
+    answer = 'slow';
+    await box.fill('First of two'); await page.keyboard.press('Enter');
+    await box.fill('Second of two'); await page.keyboard.press('Enter');
+    await page.waitForFunction(() => document.querySelector('#conv-thread')?.textContent.includes('Second of two'));
+    assert.deepEqual(sends.slice(-2), ['First of two', 'Second of two']);
+    assert.equal(await value(), '', 'both went; the box is empty');
     assert.deepEqual(errors, []);
     console.log('ok');
   } finally { await browser.close(); }

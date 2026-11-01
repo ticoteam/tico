@@ -37,6 +37,7 @@ const timeline = {
     msg('s2', 2, 'human:bea', 'Then 45 this time.', {thread_id: 't-sub', depth: 1}),
     {id: 'h1', seq: 3, thread_id: 't-plan', hidden: true},
     msg('m4', 4, 'bot:ops', 'Daily update, Oct 31', {kind: 'notice', refs: {card: 'update', update: {id: 'u1', kind: 'daily', day: '2026-10-31'}}}),
+    msg('m5', 5, 'bot:ops', 'Checked the notes.', {refs: {turn_id: 'turn1'}, run: {steps: 3, tool_calls: 1, took_s: 4}}),
   ]}),
   't-sub': () => ({thread: sub, breadcrumb: [{id: 't-plan', title: 'Launch plan'}, {id: 't-sub', title: 'Pricing'}], next_cursor: null, messages: [
     msg('s1', 1, 'bot:ops', 'Last quarter we opened at 40.', {thread_id: 't-sub'}),
@@ -55,7 +56,7 @@ const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'group:ops': ''};
 async function open(browser, who, {phone = false} = {}) {
   const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
-  const seen = {errors: [], posts: [], reads: [], homes: []};
+  const seen = {errors: [], posts: [], reads: [], homes: [], steps: []};
   page.on('pageerror', e => seen.errors.push(e.message));
   const bob = who === 'bob';
   await page.route('**/*', async route => {
@@ -95,6 +96,8 @@ async function open(browser, who, {phone = false} = {}) {
       return json({message: msg('n' + seen.posts.length, 9 + seen.posts.length, 'human:ana', body.text, {thread_id: send[1], parent_message_id: body.parent_message_id || null})});
     }
     if (p === '/api/v2/rule-holds/hold1') return json({id: 'hold1', can_send: false});
+    const steps = p.match(/^\/api\/v2\/turns\/([^/]+)\/steps$/);
+    if (steps) { seen.steps.push(steps[1]); return json({steps: [{kind: 'tool', tool: 'search', text: 'pricing notes', at: at(57)}]}); }
     return json(unrouted(p));
   });
   return {page, seen};
@@ -130,7 +133,14 @@ async function shot(page, name) {
     const order = await page.locator('.thv-list .th-msg .th-body').allTextContents();
     assert.deepEqual(order.slice(0, 5).map(s => s.trim()), ['Kickoff is Monday.', 'What price do we open with?', 'Last quarter we opened at 40.', 'And churn was low.', 'Then 45 this time.'], 'tree order');
     assert.equal(await page.locator('.th-msg.th-sub[data-mid="s1a"]').getAttribute('style'), '--d:2');
-    assert.equal(await page.locator('.th-fold').count(), 1, 'a hidden message is one quiet row');
+    assert.equal(await page.locator('.th-fold, [data-mid="h1"]').count(), 0, 'a message the viewer may not read leaves no row');
+    // Each sub-thread opens with one header row that links to it; its replies follow, indented.
+    assert.deepEqual(await page.locator('.th-subhead').evaluateAll(els => els.map(a => a.getAttribute('href'))), ['#/thread/t-sub', '#/thread/t-sub2']);
+    assert.equal(await page.locator('.th-msg[data-mid="m2"] + .th-subhead + .th-msg[data-mid="s1"]').count(), 1, 'the header sits between the message and its replies');
+    // A turn's steps load when their fold opens.
+    await page.locator('.th-msg[data-mid="m5"] details.run-steps summary').click();
+    await page.locator('.th-msg[data-mid="m5"] .steps-list .step-tool').waitFor();
+    assert.deepEqual(seen.steps, ['turn1']);
     assert.equal(await page.locator('.th-update').getAttribute('href'), '#/updates?kind=daily&day=2026-10-31&update=u1', 'the update card links to the update');
     await shot(page, 'thread-desktop');
 
@@ -227,6 +237,9 @@ async function shot(page, name) {
     await shot(page, 'sidebar-phone');
     await page.goto('https://tico-ui.test/#/thread/t-plan');
     await page.getByText('And churn was low.').waitFor();
+    // On a phone each message shows only ⋯; Acknowledge is in its menu.
+    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-ack]').isVisible(), false);
+    assert.equal(await page.locator('.th-msg[data-mid="m1"] [data-th-more]').isVisible(), true);
     const width = await page.evaluate(() => document.documentElement.scrollWidth);
     assert.ok(width <= 390, 'no sideways scroll: ' + width);
     await shot(page, 'thread-phone');

@@ -264,7 +264,8 @@ function v2RunRow(verb, what, {task = '', href = '', failed = false, title = ''}
 }
 const tookWords = s => s == null ? '' : s < 60 ? `${s}s` : s < 3600 ? `${Math.round(s / 60)}m` : `${Math.floor(s / 3600)}h ${Math.round(s % 3600 / 60)}m`;
 // What the run did reads as one folded line under the reply, named by its first few actions.
-function v2RunHTML(m) {
+// `state` keeps which folds are open and the steps read so far: the chat's (V2C), or a thread view's own.
+function v2RunHTML(m, state = V2C) {
   const run = m.run || {}, rows = [], said = [], given = new Set((run.did || []).filter(d => d.kind === 'task').map(d => d.task_id));
   for (const [id, t] of Object.entries(m.ref_tasks || {}))
     if (!given.has(id)) rows.push(v2RunRow('task ·', esc(t.title), {task: id}));
@@ -285,9 +286,9 @@ function v2RunHTML(m) {
   }
   if (run.steps) {
     const label = [`${run.steps} step${run.steps === 1 ? '' : 's'}`, run.tool_calls ? `${run.tool_calls} tool call${run.tool_calls === 1 ? '' : 's'}` : '', tookWords(run.took_s)].filter(Boolean).join(' · ');
-    const turn = m.refs?.turn_id, open = V2C?.openSteps?.has(turn);
+    const turn = m.refs?.turn_id, open = state?.openSteps?.has(turn);
     rows.push(`<details class="run-steps" data-turn="${esc(turn)}"${open ? ' open' : ''}><summary>${esc(label)}</summary><div class="steps-list">${
-      V2C?.steps?.[turn] || '<div class="step muted">Loading…</div>'}</div></details>`);
+      state?.steps?.[turn] || '<div class="step muted">Loading…</div>'}</div></details>`);
   }
   const about = Object.values(m.ref_tasks || {})[0]?.title;
   if (!said.length && !about) return rows.length ? `<div class="run-did">${rows.join('')}</div>` : '';
@@ -295,11 +296,11 @@ function v2RunHTML(m) {
   const named = [...new Set(said)], head = named.length
     ? named.slice(0, 2).join(', ') + (named.length > 2 ? ` +${named.length - 2}` : '') : chatLine(about, 60);
   const label = [head.charAt(0).toUpperCase() + head.slice(1), tookWords(run.took_s)].filter(Boolean).join(' · ');
-  return `<details class="run-did run-fold" data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}><summary>${esc(label)}</summary>${rows.join('')}</details>`;
+  return `<details class="run-did run-fold" data-fold="${esc(m.id || '')}"${v2FoldOpen(m, state) ? ' open' : ''}><summary>${esc(label)}</summary>${rows.join('')}</details>`;
 }
 const chatLine = (text, n) => { const t = String(text || '').replace(/\s+/g, ' ').trim(); return t.length > n ? t.slice(0, n - 1) + '…' : t; };
 // Folded lines stay as the reader left them across redraws.
-const v2FoldOpen = m => !!(m.id && V2C?.openFolds?.has(m.id));
+const v2FoldOpen = (m, state = V2C) => !!(m.id && state?.openFolds?.has(m.id));
 const v2FoldAttrs = m => `data-fold="${esc(m.id || '')}"${v2FoldOpen(m) ? ' open' : ''}`;
 // A turn's steps are read when someone opens them, once, and kept open across redraws.
 function v2StepsHTML(d) {
@@ -309,7 +310,8 @@ function v2StepsHTML(d) {
     ? `<details class="step think"><summary>Thinking</summary><div class="step-text">${esc(st.text)}</div></details>`
     : `<div class="step${st.kind === 'error' ? ' err' : ''}${st.nested ? ' nested' : ''}" title="${esc(fmt(st.at))}"><span class="step-tool">${esc(st.kind === 'tool' ? st.tool : st.kind)}</span><span class="step-sum">${esc(st.text)}</span></div>`).join('');
 }
-async function v2StepsOpen(state, el) {
+// `root` is where the fold sits when it is not the chat's thread (a thread view).
+async function v2StepsOpen(state, el, root = null) {
   const turn = el.dataset.turn;
   state.openSteps ||= new Set(); state.steps ||= {};
   if (!el.open) { state.openSteps.delete(turn); return; }
@@ -319,8 +321,8 @@ async function v2StepsOpen(state, el) {
   let html;
   try { html = state.steps[turn] = v2StepsHTML(await get(`/v2/turns/${encodeURIComponent(turn)}/steps`)); }
   catch (error) { delete state.steps[turn]; html = `<div class="step err">${esc(error.message)}</div>`; }   // reopening tries again
-  if (V2C !== state) return;
-  const list = $(`#conv-thread details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
+  if (root ? !root.isConnected : V2C !== state) return;
+  const list = (root || $('#conv-thread'))?.querySelector(`details.run-steps[data-turn="${CSS.escape(turn)}"] .steps-list`);
   if (list) list.innerHTML = html;
 }
 // Copy the original message, not timestamps, action labels or rendered link shortcuts.
