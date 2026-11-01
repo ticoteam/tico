@@ -79,7 +79,15 @@ Every persistent schema change is a file in `backend/migrations`: `NNNN_name.sql
 (an `up(conn)` that does not commit). The number is the next after the highest file. A file runs once, in its own
 transaction with its `schema_migrations` row, so a failure leaves neither. Never edit a file that has run: its checksum is
 recorded, and a start refuses the database if it changed. Make the change in a new file. Temporary views and tables
-(`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code.
+(`CREATE TEMP`, `backend/sql.py`) are per connection and stay in code. hubdb's `MIGRATIONS` list (user_version 71) and
+the cloud steps in `Store.initialize` (75) no longer grow.
+
+The files run right after hubdb's own steps, before the module schema code (`SCHEMA` scripts, `ensure_schema`,
+`add_column`), so a rename or move lands before code that uses the new names. On a new database a module's table does
+not exist yet at that point: a migration that touches one skips it when absent (`DROP ... IF EXISTS`, or a check of
+`sqlite_master`/`PRAGMA table_info`), and the module's `CREATE` makes the new shape. A `.py` file that rebuilds a table
+sets `FOREIGN_KEYS_OFF = True`: the runner turns foreign keys off before the transaction, checks `PRAGMA
+foreign_key_check` for references the migration broke before it commits, and restores the setting.
 
 `backend/tests/test_ddl_guard.py` counts the `CREATE`, `ALTER TABLE` and `add_column` statements still outside
 migrations, per file, in `backend/migrations/ddl_allowlist.txt`. A new one fails the test; when a statement moves into a

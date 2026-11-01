@@ -55,12 +55,6 @@ COLUMNS = {"pending_hash": "TEXT", "grant_hash": "TEXT"}
 
 
 def ensure_schema(c):
-    # The OAuth nonce was `state`; it is `oauth_state`, so it is not read as the connect's lifecycle (`status`). A file
-    # with the old name gets it renamed before the index on it is built.
-    have = {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
-    if "state" in have and "oauth_state" not in have:
-        c.execute("DROP INDEX IF EXISTS google_connects_state")
-        c.execute("ALTER TABLE google_connects RENAME COLUMN state TO oauth_state")
     c.executescript(SCHEMA)
     have = {r[1] for r in c.execute("PRAGMA table_info(google_connects)")}
     for name, declaration in COLUMNS.items():

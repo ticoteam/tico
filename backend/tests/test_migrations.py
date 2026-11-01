@@ -50,8 +50,9 @@ def test_fresh_database_converges_and_has_no_broken_references(tmp_path):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         assert c.execute("PRAGMA user_version").fetchone()[0] == len(H.MIGRATIONS)
+        # A new file has no cloud history when it first gets schema_migrations: the cloud steps run after the files.
         assert {row[0] for row in c.execute("SELECT version FROM schema_migrations")} == {
-            f"legacy_user_version_{len(H.MIGRATIONS)}", f"legacy_cloud_{migrations.CLOUD_VERSION}", "0001_audit_log"}
+            f"legacy_user_version_{len(H.MIGRATIONS)}", *(m.version for m in migrations.files())}
         assert "audit_log" in _tables(c)
         assert c.execute("PRAGMA foreign_key_check").fetchall() == []
 
@@ -63,15 +64,111 @@ def test_booting_again_changes_nothing(tmp_path):
     assert snapshot(path) == first
 
 
-def test_audit_log_migration_adopts_a_database_that_already_has_the_table(tmp_path):
+def test_every_migration_adopts_a_database_that_already_has_its_change(tmp_path):
     path = fresh(tmp_path)
     with sqlite3.connect(path) as c:
         c.execute("INSERT INTO audit_log VALUES('a1','2026-01-01T00:00:00.000000Z','human:ana','task_cap:1',NULL,NULL,NULL)")
-        c.execute("DELETE FROM schema_migrations WHERE version='0001_audit_log'")
+        c.execute("DELETE FROM schema_migrations WHERE version NOT LIKE 'legacy_%'")
     boot(path)
     with sqlite3.connect(path) as c:
         assert c.execute("SELECT id FROM audit_log").fetchall() == [("a1",)]
-        assert _versions(c).count("0001_audit_log") == 1
+        versions = _versions(c)
+        assert all(versions.count(m.version) == 1 for m in migrations.files())
+
+
+def test_the_migrations_run_before_the_module_schema_code(tmp_path, monkeypatch):
+    """A new file: a migration sees none of the tables the module code creates, so it must tolerate their absence."""
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    for migration in migrations.files():
+        shutil.copy(migration.path, directory / migration.path.name)
+    (directory / "0999_probe.py").write_text(
+        "def up(conn):\n"
+        "    have = conn.execute(\"SELECT count(*) FROM sqlite_master WHERE name IN ('google_connects','cloud_migrations')\")\n"
+        "    conn.execute('CREATE TABLE probe(module_tables INTEGER)')\n"
+        "    conn.execute('INSERT INTO probe VALUES(?)', (have.fetchone()[0],))\n")
+    monkeypatch.setattr(migrations, "DIRECTORY", directory)
+    path = tmp_path / "hub.sqlite"
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT module_tables FROM probe").fetchone()[0] == 0
+        assert "google_connects" in _tables(c)
+
+
+def test_a_rename_lands_before_startup_code_that_uses_the_new_name(tmp_path):
+    """google_connect.ensure_schema builds an index on oauth_state at every start; on a file that still has `state`,
+    migration 0003 must rename it first or the start fails."""
+    path = fresh(tmp_path)
+    with sqlite3.connect(path) as c:
+        c.execute("DROP INDEX google_connects_oauth_state")
+        c.execute("ALTER TABLE google_connects RENAME COLUMN oauth_state TO state")
+        c.execute("CREATE UNIQUE INDEX google_connects_state ON google_connects(state) WHERE state IS NOT NULL")
+        c.execute("INSERT INTO google_connects(person_id,mailbox,status,state,created,updated) "
+                  "VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t')")
+        c.execute("DELETE FROM schema_migrations WHERE version='0003_google_connects_oauth_state'")
+    boot(path)
+    with sqlite3.connect(path) as c:
+        assert c.execute("SELECT oauth_state FROM google_connects").fetchall() == [("nonce-1",)]
+        indexes = {row[1] for row in c.execute("PRAGMA index_list(google_connects)")}
+        assert "google_connects_oauth_state" in indexes and "google_connects_state" not in indexes
+
+
+FAMILY = ("CREATE TABLE parent(id TEXT PRIMARY KEY, name TEXT);\n"
+          "CREATE TABLE child(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id) ON DELETE CASCADE);\n"
+          "INSERT INTO parent VALUES('p1','one');\nINSERT INTO child VALUES('c1','p1');\n")
+REBUILD = ("FOREIGN_KEYS_OFF = True\n\n\ndef up(conn):\n"
+           "    conn.execute('ALTER TABLE parent RENAME TO parent_old')\n"
+           "    conn.execute(\"CREATE TABLE parent(id TEXT PRIMARY KEY, name TEXT CHECK (name <> ''))\")\n"
+           "    conn.execute('INSERT INTO parent SELECT * FROM parent_old')\n"
+           "    conn.execute('DROP TABLE parent_old')\n")
+
+
+def _family(tmp_path, second):
+    directory = tmp_path / "migrations"
+    directory.mkdir()
+    (directory / "0001_family.sql").write_text(FAMILY)
+    (directory / "0002_rebuild.py").write_text(second)
+    conn = sqlite3.connect(tmp_path / "hub.sqlite", isolation_level=None)
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    return conn, directory
+
+
+def test_a_foreign_keys_off_migration_rebuilds_a_parent_without_cascading_and_restores_the_setting(tmp_path):
+    conn, directory = _family(tmp_path, REBUILD)
+    try:
+        migrations.apply(conn, directory)
+        assert conn.execute("SELECT id FROM child").fetchall() == [("c1",)]
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert _versions(conn) == ["0001_family", "0002_rebuild"]
+    finally:
+        conn.close()
+
+
+def test_a_foreign_keys_off_migration_that_breaks_a_reference_rolls_back(tmp_path):
+    conn, directory = _family(tmp_path, REBUILD.replace("SELECT * FROM parent_old", "SELECT * FROM parent_old WHERE 0"))
+    try:
+        with pytest.raises(migrations.MigrationError, match="0002_rebuild left rows referring to missing rows"):
+            migrations.apply(conn, directory)
+        assert conn.execute("SELECT id FROM parent").fetchall() == [("p1",)]
+        assert "parent_old" not in _tables(conn)
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
+        assert _versions(conn) == ["0001_family"]
+    finally:
+        conn.close()
+
+
+def test_a_broken_reference_the_file_already_had_does_not_block_a_foreign_keys_off_migration(tmp_path):
+    conn, directory = _family(tmp_path, REBUILD)
+    conn.execute("CREATE TABLE stray(id TEXT PRIMARY KEY, parent_id TEXT REFERENCES parent(id))")
+    conn.execute("PRAGMA foreign_keys=OFF")
+    conn.execute("INSERT INTO stray VALUES('s1','gone')")
+    conn.execute("PRAGMA foreign_keys=ON")
+    try:
+        migrations.apply(conn, directory)
+        assert _versions(conn) == ["0001_family", "0002_rebuild"]
+    finally:
+        conn.close()
 
 
 @pytest.mark.parametrize("kind", ["sql", "py"])

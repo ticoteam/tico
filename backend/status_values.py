@@ -10,8 +10,9 @@ list the database enforces. Two kinds of enforcement, both refusing a value outs
 
 Changing a list is a code change here. `enforce` compares what is installed with what this module says and replaces
 it when they differ, so the next start applies a new list without a separate migration. A list that drops a value
-still in use is refused by `upgrade`, which is migration 71 (hubdb.migrate): it counts the stored values outside the
-list and stops, naming them, before it rewrites anything.
+still in use is refused by `upgrade`, which is backend/migrations/0002_status_values.py: it counts the stored values
+outside the list and stops, naming them, before it rewrites anything. A later list change that drops a value needs a new
+migration that maps or refuses the stored rows the same way.
 
 Retired spellings are rewritten by `upgrade` (one spelling per meaning). Each retired value is accepted by the
 precheck and mapped to its replacement, never kept as a second spelling.
@@ -121,7 +122,7 @@ def unknown_values(conn):
 
 
 def upgrade(conn):
-    """Migration 71. Refuse stored values outside the lists (naming them), then rewrite retired spellings and
+    """Migration 0002. Refuse stored values outside the lists (naming them), then rewrite retired spellings and
     install the constraints. Runs inside the migration's transaction, with foreign keys already off."""
     problems = unknown_values(conn)
     if problems:

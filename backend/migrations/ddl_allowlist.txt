@@ -82,6 +82,8 @@ backend/sleep_idle_schema.py:1
 backend/stale_review.py:4
 backend/stall_triage.py:1
 backend/start_places.py:2
+# Derived constraints from the lists, idempotent per start (status_values.enforce); the upgrade is migration 0002.
+backend/status_values.py:5
 backend/step_flow.py:1
 backend/storage_schema.py:11
 backend/store.py:181

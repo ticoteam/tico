@@ -971,9 +971,9 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA,
-    "",   # 71: the status and state lists; migrate() runs backend/status_values.upgrade, not SQL here
-]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA]
+# The list ends here, at user_version 71 (migrations.MIN_BRIDGE_USER_VERSION): every later persistent change is a file in
+# backend/migrations.
 
 
 class Refused(Exception):
@@ -1335,10 +1335,6 @@ def migrate(conn, adopt_legacy=False):
     _sync_strategy_tables(conn)
     from .flight import begin
     for i in range(version, len(MIGRATIONS)):
-        # A table rebuild (backend/status_values.py) must not cascade into child rows, and foreign keys can only be
-        # switched off outside a transaction: they go off here and come back on after the step's COMMIT.
-        if i == 71:
-            conn.execute("PRAGMA foreign_keys=OFF")
         done = begin(conn)
         try:
             if i == 23:
@@ -1348,8 +1344,6 @@ def migrate(conn, adopt_legacy=False):
             elif i == 39:
                 _apply(conn, MIGRATIONS[i])
                 RT.backfill(conn)
-            elif i == 71:
-                SV.upgrade(conn)
             else:
                 _apply(conn, MIGRATIONS[i])
             conn.execute(f"PRAGMA user_version={i + 1}")
@@ -1359,8 +1353,6 @@ def migrate(conn, adopt_legacy=False):
             raise
         finally:
             done()
-            if i == 71:
-                conn.execute("PRAGMA foreign_keys=ON")
     _keep_old_strategy_tables(conn)
     ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
@@ -1618,8 +1610,6 @@ def migrate(conn, adopt_legacy=False):
     from . import message_links
     message_links.ensure(conn)
     clear_finished_close_times(conn)
-    # Constraints for columns the steps above add (tasks.blocked_from_status) and for tables a later step creates.
-    SV.enforce(conn)
     return len(MIGRATIONS)
 
 

@@ -300,7 +300,7 @@ def test_an_older_google_connects_table_gets_the_fingerprint_columns():
     import sqlite3
     c = sqlite3.connect(":memory:")
     c.execute("CREATE TABLE google_connects(person_id TEXT PRIMARY KEY, mailbox TEXT NOT NULL, status TEXT NOT NULL, "
-              "state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, "
+              "oauth_state TEXT, verifier TEXT, code TEXT, kind TEXT, message TEXT, hint TEXT, can_json TEXT, runner_id TEXT, "
               "holder TEXT, started REAL, created TEXT NOT NULL, updated TEXT NOT NULL)")
     google_connect.ensure_schema(c)
     google_connect.ensure_schema(c)

@@ -23,14 +23,14 @@ Three kinds of enforcement:
 Changing a list is a code change in `backend/status_values.py`. `Store.initialize` calls `enforce` on every start: it
 replaces a trigger whose text differs and rebuilds a CHECK whose list differs. Adding a value needs nothing else.
 
-Removing a value is not free. Only migration 71 counts stored values against the list. After that, a removed value that
+Removing a value is not free. Only migration 0002 counts stored values against the list. After that, a removed value that
 is still stored is left alone on trigger columns (old rows keep it, new writes are refused), and makes the CHECK rebuild
 fail on a CHECK column. A removal therefore needs its own migration that maps or refuses those rows first.
 
 ## Retired spellings and the upgrade
 
-Migration 71 (`backend/hubdb.py` `MIGRATIONS` index 71, so `PRAGMA user_version` becomes 72) runs
-`backend/status_values.py` `upgrade`:
+Migration `backend/migrations/0002_status_values.py` runs `backend/status_values.py` `upgrade`, with foreign keys off
+(`FOREIGN_KEYS_OFF`) so a CHECK rebuild does not cascade:
 
 1. Counts every stored value outside the list, plus the retired spellings it maps. If any remain, it stops before
    changing anything and raises `StatusValuesError` listing each one as `table.column = 'value' (n rows)`.
@@ -49,8 +49,8 @@ That is unchanged here. New writes can only be `needs_setup` or `onboarded`.
 
 `complete` is not stored in any stable-set column. Two live-meeting tables still write it (see "Outside the stable set").
 
-Migration 71 touches a fresh file too: `Store.initialize` calls `enforce` after migrations, so a new database has the
-constraints and no retired spelling.
+On a fresh file the migration runs before the module schema code creates most tables, so `Store.initialize` calls
+`enforce` last, on every start: a new database has the constraints and no retired spelling.
 
 ## Same word, different meanings (kept apart)
 
@@ -144,7 +144,7 @@ Values (`JOB_STATES`):
 - `failed`: the attempt failed.
 - `uncertain`: the outcome cannot be known (the runner was lost, or the hub restarted mid-run). Looked at before any retry.
 - `canceled`: stopped before it finished (a person stopped it, the task closed or was declined, a duplicate wake
-  replaced it, or the owner's rule dropped it). Spelled `cancelled` before migration 71.
+  replaced it, or the owner's rule dropped it). Spelled `cancelled` before migration 0002.
 
 Transitions:
 
@@ -222,7 +222,7 @@ Values (`WEBHOOK_SEND_STATES`):
 - `sending`: claimed by a delivery worker.
 - `delivered`: the endpoint answered with a 2xx.
 - `failed`: retries are used up, or the endpoint refused it for good.
-- `canceled`: the endpoint asked not to be sent this message again, or the endpoint was deleted. Spelled `cancelled` before migration 71.
+- `canceled`: the endpoint asked not to be sent this message again, or the endpoint was deleted. Spelled `cancelled` before migration 0002.
 - `withheld`: a rehearsal copy did not send it. Nothing is sent from a copy.
 
 Transitions (`backend/webhook_delivery.py`, `backend/webhooks.py`):
@@ -427,7 +427,7 @@ renames it on an existing database and recreates its index as `google_connects_o
 
 Values: `queued` (default), `sending`, `awaiting_bank_approval` (sent, the bank needs its own approval), `submitted`
 (accepted by the bank), `settled` (money moved), `returned`, `failed` (refused or the send failed), `canceled` (stopped
-before it moved; spelled `cancelled` before migration 71), `unknown` (the send got no answer, so the outcome is not known
+before it moved; spelled `cancelled` before migration 0002), `unknown` (the send got no answer, so the outcome is not known
 and reconciliation is pending). `unknown` is not `withheld`.
 
 Transitions (`backend/finance/payments.py`, `backend/finance/store/banking.py`): `queued` to `sending` when the send
@@ -442,7 +442,7 @@ The OpenAPI v2 enum (`docs/openapi/v2.json`) uses the same list, so the public p
 ### fin_transfers.status (check)
 
 Values: `queued` (default), `submitted` (sent to the bank, feed ids cleared), `unknown` (send got no answer; reconciliation
-pending), `failed`, `posted` (in the books), `canceled` (spelled `cancelled` before migration 71).
+pending), `failed`, `posted` (in the books), `canceled` (spelled `cancelled` before migration 0002).
 
 Transitions (`backend/finance/transfers.py`, `backend/finance/store/banking.py`): `queued` to `submitted` on send
 (`banking.py`); the bank's answer or an error moves it to `posted`, `unknown` or `failed` (`transfers.py`); `unknown` is

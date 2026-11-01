@@ -4,7 +4,7 @@ import sqlite3
 
 import pytest
 
-from backend import google_connect, hubdb, status_values as SV
+from backend import google_connect, hubdb, migrations, status_values as SV
 from backend.config import Settings
 from backend.store import Store
 
@@ -84,14 +84,14 @@ def test_the_cancelled_spelling_is_refused_on_a_fresh_file(db):
 
 def test_a_fresh_file_is_at_the_current_version_with_the_lists_installed(db):
     with sqlite3.connect(db) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS) == 72
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == len(hubdb.MIGRATIONS) == 71
         triggers = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
         assert "status_values_jobs_state_ins" in triggers and "status_values_webhook_sends_state_upd" in triggers
         sql = conn.execute("SELECT sql FROM sqlite_master WHERE name='fin_payments'").fetchone()[0]
         assert "'canceled'" in sql and "'cancelled'" not in sql
 
 
-# The upgrade, on small hand-made tables (what an existing file held before migration 71).
+# The upgrade, on small hand-made tables (what an existing file held before migration 0002).
 
 def _old_file(path):
     conn = sqlite3.connect(path, isolation_level=None)
@@ -147,12 +147,15 @@ def test_google_connects_state_is_renamed_to_oauth_state(tmp_path):
         INSERT INTO google_connects(person_id,mailbox,status,state,created,updated)
           VALUES('p1','ana@acme.example','signing_in','nonce-1','t','t');
     """)
+    rename = migrations.Migration(migrations.DIRECTORY / "0003_google_connects_oauth_state.py")
+    migrations._module(rename).up(conn)
     google_connect.ensure_schema(conn)
     columns = [r[1] for r in conn.execute("PRAGMA table_info(google_connects)")]
     assert "oauth_state" in columns and "state" not in columns
     assert conn.execute("SELECT oauth_state FROM google_connects").fetchone()[0] == "nonce-1"
     indexes = {r[1] for r in conn.execute("PRAGMA index_list(google_connects)")}
     assert "google_connects_oauth_state" in indexes and "google_connects_state" not in indexes
+    migrations._module(rename).up(conn)
     google_connect.ensure_schema(conn)
 
 

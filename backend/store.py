@@ -1110,6 +1110,11 @@ class Store:
         from . import migrations as Migrations
         Migrations.preflight(self.settings.db_path, adopt_legacy=adopt_legacy)
         with H.connect(self.settings.db_path, adopt_legacy=adopt_legacy) as c:
+            # hubdb's own steps ran in connect. The pending migration files run next, before the module schema code
+            # below: a rename or move must land before startup code that already uses the new names creates or alters
+            # anything. On a new file a module's tables do not exist yet; a migration skips them and the module's
+            # CREATE makes the new shape (backend/migrations).
+            Migrations.apply(c)
             c.executescript(SCHEMA)
             from . import start_places as _start_places
             c.executescript(_start_places.SCHEMA)
@@ -2103,18 +2108,17 @@ class Store:
             roster_clock.ensure(c)
             from . import row_clock
             row_clock.ensure(c)
-            # The tables SCHEMA just created get the status and state constraints (backend/status_values.py).
-            from . import status_values as _status_values
-            _status_values.enforce(c)
             # What each message's and run's readability depends on (backend/read_deps.py); settled beside the server.
             from . import read_deps
             read_deps.ensure(c)
             # Every start, in short batches of their own: rows written since the last pass, including any an
             # older server wrote after a rollback, get their task links (backend/message_links.py).
             message_links.backfill(c)
-            # The histories this file already has are recorded as applied, then its pending migration files run
-            # (backend/migrations): the persistent schema changes, each in its own transaction.
-            Migrations.apply(c)
+            # Last: the status and state constraints, derived from the lists (backend/status_values.py). Migration 0002
+            # checked and rewrote the stored values; this installs the triggers and CHECKs on tables the module code
+            # above created on a new file, and refreshes them when a list changes. Idempotent.
+            from . import status_values as _status_values
+            _status_values.enforce(c)
         c.close()
         # Once per install: routines and wake rules become automations (backend/redesign_migration.py). Each object
         # in its own write, so a restart part way goes on where it stopped.

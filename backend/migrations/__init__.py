@@ -6,9 +6,20 @@ in order. Each one runs in its own transaction together with its `schema_migrati
 behind and the next start tries it again. An applied file is never edited: its checksum is recorded, and a start refuses
 a database whose recorded checksum no longer matches its file.
 
-The histories a database already has are recorded as applied, not replayed: `legacy_user_version_<N>` for hubdb's
-`PRAGMA user_version` steps and `legacy_cloud_<N>` for the cloud steps in `Store.initialize`. Those steps still run where
-they always did, guarded by their own markers, and nothing here runs them again.
+`Store.initialize` calls `apply` right after hubdb's own steps and before the module schema code (the SCHEMA scripts,
+ensure_schema and add_column calls), so a rename or move lands before code that uses the new names. On a new file a
+module's tables do not exist yet when the migrations run: a migration that touches one skips it when it is absent, and
+the module's CREATE then makes the new shape.
+
+A `.py` migration that rebuilds a table may set `FOREIGN_KEYS_OFF = True`. Foreign keys can only be switched off
+outside a transaction, so the runner turns them off before BEGIN, runs `PRAGMA foreign_key_check` before COMMIT and
+rolls back when the migration left a broken reference the database did not already have, then restores the setting.
+
+The histories a database already has are recorded as applied, not replayed, once, when the file first gets
+`schema_migrations`: `legacy_user_version_<N>` for hubdb's `PRAGMA user_version` steps and `legacy_cloud_<N>` for the
+cloud steps in `Store.initialize`. Those steps still run where they always did, guarded by their own markers, and
+nothing here runs them again. After hubdb's last step (user_version 71, `MIN_BRIDGE_USER_VERSION`) and the last cloud
+step (`CLOUD_VERSION`) neither list grows: every persistent change is a file here.
 
 `preflight` runs before anything writes to a database. It refuses a file newer than this code, a recorded migration this
 code does not know or whose file has changed, and a file below `MIN_BRIDGE_USER_VERSION`, which a release that writes that
@@ -19,6 +30,7 @@ import hashlib
 import importlib.util
 import re
 import sqlite3
+from collections import Counter
 from contextlib import closing
 from pathlib import Path
 
@@ -82,13 +94,13 @@ def statements(sql):
         yield buffer.strip()
 
 
-def _up(migration):
+def _module(migration):
     spec = importlib.util.spec_from_file_location(f"migration_{migration.version}", migration.path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     if not callable(getattr(module, "up", None)):
         raise MigrationError(f"{migration.path.name} must define up(conn)")
-    return module.up
+    return module
 
 
 def _legacy_known(version):
@@ -145,7 +157,9 @@ def preflight(path, *, adopt_legacy=False, directory=None):
 
 
 def _record_legacy(conn):
-    """Each history the database already has, recorded once as applied: its user_version and its newest cloud step."""
+    """Each history the database already has, recorded as applied when it first gets schema_migrations: its
+    user_version and its newest cloud step. A new file has no cloud steps yet at that point (they run after the
+    migrations), so it records only its user_version."""
     version = conn.execute("PRAGMA user_version").fetchone()[0]
     names = [f"legacy_user_version_{version}"] if version else []
     if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='cloud_migrations'").fetchone():
@@ -157,29 +171,53 @@ def _record_legacy(conn):
                      (name, LEGACY, H.now()))
 
 
+def _broken_references(conn):
+    """How many rows of each (table, parent) refer to a missing row."""
+    return Counter((row[0], row[2]) for row in conn.execute("PRAGMA foreign_key_check"))
+
+
 def _run(conn, migration):
     """One migration in one transaction with its row, so a failure rolls back both. `conn` must be in autocommit."""
-    up = _up(migration) if migration.kind == "py" else None
-    conn.execute("BEGIN IMMEDIATE")
+    module = _module(migration) if migration.kind == "py" else None
+    keys_off = bool(module and getattr(module, "FOREIGN_KEYS_OFF", False))
+    prior = conn.execute("PRAGMA foreign_keys").fetchone()[0]
+    if keys_off:
+        # A no-op inside a transaction, so it goes off before BEGIN.
+        conn.execute("PRAGMA foreign_keys=OFF")
     try:
-        if up:
-            up(conn)
-        else:
-            for statement in statements(migration.path.read_text(encoding="utf-8")):
-                conn.execute(statement)
-        conn.execute("INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
-                     (migration.version, migration.checksum, H.now()))
-        conn.execute("COMMIT")
-    except BaseException:
-        if conn.in_transaction:
-            conn.execute("ROLLBACK")
-        raise
+        conn.execute("BEGIN IMMEDIATE")
+        try:
+            before = _broken_references(conn) if keys_off else None
+            if module:
+                module.up(conn)
+            else:
+                for statement in statements(migration.path.read_text(encoding="utf-8")):
+                    conn.execute(statement)
+            if keys_off:
+                # Only references this migration broke count: a file may already hold some from before.
+                after = _broken_references(conn)
+                broken = {key: n - before.get(key, 0) for key, n in after.items() if n > before.get(key, 0)}
+                if broken:
+                    raise MigrationError(f"Migration {migration.version} left rows referring to missing rows "
+                                         f"(table, parent: rows): {broken}. Nothing was changed.")
+            conn.execute("INSERT INTO schema_migrations(version,checksum,applied_at) VALUES(?,?,?)",
+                         (migration.version, migration.checksum, H.now()))
+            conn.execute("COMMIT")
+        except BaseException:
+            if conn.in_transaction:
+                conn.execute("ROLLBACK")
+            raise
+    finally:
+        if keys_off:
+            conn.execute(f"PRAGMA foreign_keys={'ON' if prior else 'OFF'}")
 
 
 def apply(conn, directory=None):
     """Record the histories the database already has, then run each migration file it has not, in version order."""
+    adopting = not conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='schema_migrations'").fetchone()
     conn.execute(TABLE)
-    _record_legacy(conn)
+    if adopting:
+        _record_legacy(conn)
     known = files(directory)
     recorded = conn.execute("SELECT version, checksum FROM schema_migrations").fetchall()
     _verify(recorded, known)
