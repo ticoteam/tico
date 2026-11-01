@@ -14205,6 +14205,128 @@
         ]
       }
     },
+    "/api/v2/groups/{gid}/access": {
+      "get": {
+        "summary": "Who may see, read and write to a group (its leads and admins; docs/permissions.md)",
+        "operationId": "getGroupAccess",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          },
+          {
+            "name": "on_behalf_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "On Behalf Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeammateAccessView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      },
+      "put": {
+        "summary": "Set who may see, read and write to a group; send the revision you read (409 version_conflict otherwise)",
+        "operationId": "setGroupAccess",
+        "parameters": [
+          {
+            "name": "gid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Gid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeammateAccess"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeammateAccessView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
     "/api/v2/health": {
       "get": {
         "summary": "Checks, computers and failures (bots see counts, computers and failed runs)",
@@ -14721,6 +14843,128 @@
             "content": {
               "application/json": {
                 "schema": {}
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      }
+    },
+    "/api/v2/humans/{pid}/access": {
+      "get": {
+        "summary": "Who may see, read and write to a person (themselves, whoever they report up to, admins; docs/permissions.md)",
+        "operationId": "getPersonAccess",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          },
+          {
+            "name": "on_behalf_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "",
+              "title": "On Behalf Of"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeammateAccessView"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "A problem: {\"error\": {\"code\", \"detail\", \"retryable\", ...}}",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        },
+        "tags": [
+          "Team chart"
+        ]
+      },
+      "put": {
+        "summary": "Set who may see, read and write to a person; send the revision you read (409 version_conflict otherwise)",
+        "operationId": "setPersonAccess",
+        "parameters": [
+          {
+            "name": "pid",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Pid"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TeammateAccess"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TeammateAccessView"
+                }
               }
             }
           },
@@ -20312,7 +20556,7 @@
         ]
       },
       "put": {
-        "summary": "Save a Dashboard or team page (its default cards become pins) and a team page's audience",
+        "summary": "Save a Dashboard or team page (its default cards become pins); a team page's audience sets its group's Read",
         "operationId": "savePlace",
         "parameters": [
           {
@@ -55665,6 +55909,108 @@
         "type": "object",
         "title": "TeamBudgets",
         "description": "The team defaults for bots with no budget of their own. Fields left out stay as they are; 0 is no limit."
+      },
+      "TeammateAccess": {
+        "properties": {
+          "see": {
+            "$ref": "#/components/schemas/AccessAudience"
+          },
+          "read": {
+            "$ref": "#/components/schemas/AccessAudience"
+          },
+          "write": {
+            "$ref": "#/components/schemas/AccessAudience"
+          },
+          "revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Revision"
+          },
+          "on_behalf_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "On Behalf Of"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "see",
+          "read",
+          "write",
+          "revision"
+        ],
+        "title": "TeammateAccess",
+        "description": "A person's or a group's See, Read and Write (backend/teammate_access.py), in a bot's shape. `revision` is the\none the editor read: 0 while they still have the defaults."
+      },
+      "TeammateAccessView": {
+        "type": "object",
+        "properties": {
+          "target": {
+            "type": "string"
+          },
+          "see": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "read": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "write": {
+            "$ref": "#/components/schemas/Audience"
+          },
+          "default": {
+            "type": "object"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "you": {
+            "type": "object",
+            "properties": {
+              "see": {
+                "type": "boolean"
+              },
+              "read": {
+                "type": "boolean"
+              },
+              "write": {
+                "type": "boolean"
+              },
+              "manage": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "manage",
+              "read",
+              "see",
+              "write"
+            ],
+            "additionalProperties": true
+          },
+          "teams": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "read",
+          "revision",
+          "see",
+          "target",
+          "write"
+        ],
+        "additionalProperties": true
       },
       "TickedRepo": {
         "properties": {

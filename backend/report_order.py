@@ -29,6 +29,7 @@ import unicodedata
 from . import hubdb as H
 from . import people as P
 from . import read_cache
+from . import teammate_access as TA
 from .store import Problem, encode
 
 KEY = "report_order"
@@ -169,8 +170,8 @@ def roster_saved(c, roster):
 
 
 def manager_key(c, auth, who, name):
-    """`bot:<slug>` or `human:<id>` for a bot's slug or a human's id (`bot:` or `human:` in front picks one). A bot the
-    caller may not see is nobody they can name."""
+    """`bot:<slug>` or `human:<id>` for a bot's slug or a human's id (`bot:` or `human:` in front picks one). A bot or
+    a person the caller may not see is nobody they can name."""
     name = str(name or "").strip()
     roster, _, archived = _chart(c)
     kind, _, ident = name.partition(":")
@@ -180,7 +181,7 @@ def manager_key(c, auth, who, name):
             and auth.bot_accesses(c, who).get(ident, auth.FULL)["see"]):
         return "bot:" + ident
     person = P.person(ident, roster) if kind in ("", "human") and ident else None
-    if person and not person.get("hidden"):
+    if person and not person.get("hidden") and person["id"] not in TA.unseen(c, who, auth)[0]:
         return "human:" + person["id"]
     raise Problem("not_found", f"There is no bot or human called {name or '(nobody)'} on the team chart", 404)
 
@@ -197,10 +198,11 @@ def _reports(c, auth, who, manager):
     roster, configs, archived = _chart(c)
     kind, _, ident = manager.partition(":")
     doc, rows = _load(c), []
+    people_hidden = TA.unseen(c, who, auth)[0] if kind == "human" else set()
     for person in P.visible_people(roster):
         if kind == "human" and str(person.get("reports_to") or "").strip() == ident:
             rows.append({"key": "human:" + person["id"], "id": person["id"], "kind": "human",
-                         "name": person.get("name") or person["id"], "seen": True})
+                         "name": person.get("name") or person["id"], "seen": person["id"] not in people_hidden})
     access = auth.bot_accesses(c, who)
     target = manager if kind == "human" else ident
     for bot in H.bots(c):

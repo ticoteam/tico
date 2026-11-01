@@ -171,20 +171,39 @@ function accessPresetOf(policy) {
 async function settingsEditAccess(slug, {stage} = {}) {
   const e = S.emps.find(row => row.name === slug);
   if (!e) return;
+  return accessEditor({path: `/v2/bots/${encodeURIComponent(slug)}`, name: e.display_name, levels: ACCESS_LEVELS,
+    presets: ACCESS_PRESETS, skipBot: slug, stage, panel: true, after: () => loadSettings()});
+}
+// People and groups (backend/teammate_access.py): the same editor. Whoever manages them always has all three.
+const TEAMMATE_ACCESS_LEVELS = {
+  human: [['see', 'See', 'them in the chart, lists and @ picker'], ['read', 'Read', 'their Home'], ['write', 'Write', 'DM them, add them to threads']],
+  group: [['see', 'See', 'it in the chart and lists'], ['read', 'Read', 'its Home'], ['write', 'Write', 'post to it, add it to threads']],
+};
+const teammateAccessPath = (kind, id) => `/v2/${kind === 'human' ? 'humans' : 'groups'}/${encodeURIComponent(id)}`;
+// The access, or null when the viewer does not manage them: the server decides (docs/permissions.md).
+async function teammateAccessRead(kind, id) {
+  try { return await get(teammateAccessPath(kind, id) + '/access', {fresh: true}); } catch { return null; }
+}
+function teammateEditAccess(kind, id, name, after) {
+  return accessEditor({path: teammateAccessPath(kind, id), name, levels: TEAMMATE_ACCESS_LEVELS[kind],
+    presets: ACCESS_PRESETS.filter(([value]) => value !== 'requests'), skipPerson: kind === 'human' ? id : '', after});
+}
+async function accessEditor({path, name, levels, presets, skipBot = '', skipPerson = '', stage, panel, after}) {
   let data;
-  try { data = await get(`/v2/bots/${encodeURIComponent(slug)}/access`); }
+  try { data = await get(`${path}/access`, {fresh: true}); }
   catch (error) { toast(error.message, true); return; }
-  let dialog = botSettingsPanel('access-editor', 'access-editor', 'access-editor-title') || $('#access-editor');
+  let dialog = (panel && botSettingsPanel('access-editor', 'access-editor', 'access-editor-title')) || $('#access-editor');
   if (!dialog) {
     dialog = document.createElement('dialog');
     dialog.className = 'access-editor'; dialog.id = 'access-editor'; dialog.setAttribute('aria-labelledby', 'access-editor-title');
     document.body.append(dialog);
   }
-  const people = (SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.people || []).filter(p => !p.hidden));
-  const bots = S.emps.filter(row => row.name !== slug && row.status !== 'archived');
+  const people = (SETTINGS_DATA.people?.length ? SETTINGS_DATA.people : (S.people || []).filter(p => !p.hidden)).filter(p => p.id !== skipPerson);
+  const bots = S.emps.filter(row => row.name !== skipBot && row.status !== 'archived');
   const teams = data.teams || [];
   const draft = {see: {...data.see}, read: {...data.read}, write: {...data.write}};
-  let preset = accessPresetOf(draft);
+  const offered = presets.map(([value]) => value);
+  let preset = offered.includes(accessPresetOf(draft)) ? accessPresetOf(draft) : 'custom';
   // What the two "chosen" presets edit: the Read audience (requests only), or one audience for all three (Private).
   const chosenOf = () => {
     const pick = ['read', 'see', 'write'].map(key => draft[key]).find(level => !level.everyone) || accessEmpty();
@@ -205,11 +224,11 @@ async function settingsEditAccess(slug, {stage} = {}) {
     host.innerHTML = preset === 'open' ? ''
       : preset === 'requests' ? picker(['read'], 'Who can read its work', '', false)
       : preset === 'private' ? picker(['see', 'read', 'write'], 'Who can use it', '', false)
-      : ACCESS_LEVELS.map(([key, label, what]) => picker([key], label, what, true)).join('');
+      : levels.map(([key, label, what]) => picker([key], label, what, true)).join('');
   };
-  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="access-editor-title">Access to ${esc(e.display_name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-access-close aria-label="Close">✕</button></div>
+  dialog.innerHTML = `<form><div class="tmodal-head"><h2 id="access-editor-title">Access to ${esc(name)}</h2><span class="spacer"></span><button class="ghost" type="button" data-access-close aria-label="Close">✕</button></div>
     <div class="access-body">
-      <fieldset class="access-presets"><legend>Access</legend>${ACCESS_PRESETS.map(([value, label, hint]) =>
+      <fieldset class="access-presets"><legend>Access</legend>${presets.map(([value, label, hint]) =>
         `<label><input type="radio" name="preset" value="${value}" ${value === preset ? 'checked' : ''}><span>${esc(label)}<small>${esc(hint)}</small></span></label>`).join('')}</fieldset>
       <div data-access-pickers></div>
       <div class="row"><button class="primary" type="submit">${stage ? 'Done' : 'Save'}</button><button class="ghost" type="button" data-access-close>Cancel</button><span class="muted" data-access-status role="status"></span></div></div></form>`;
@@ -242,13 +261,13 @@ async function settingsEditAccess(slug, {stage} = {}) {
     collect();
     if (stage) {
       const policy = {see: draft.see, read: draft.read, write: draft.write};
-      stage(async rev => (await put(`/v2/bots/${encodeURIComponent(slug)}/access`, {...policy, revision: rev}))?.revision ?? rev + 1, policy);
+      stage(async rev => (await put(`${path}/access`, {...policy, revision: rev}))?.revision ?? rev + 1, policy);
       settingsPanelClose(dialog); return;
     }
     const submit = form.querySelector('[type=submit]'); submit.disabled = true; status.textContent = 'Saving…';
     try {
-      await put(`/v2/bots/${encodeURIComponent(slug)}/access`, {see: draft.see, read: draft.read, write: draft.write, revision: data.revision});
-      settingsPanelClose(dialog); await loadSettings(); toast('Saved');
+      const saved = await put(`${path}/access`, {see: draft.see, read: draft.read, write: draft.write, revision: data.revision});
+      settingsPanelClose(dialog); if (after) await after(saved); toast('Saved');
     } catch (error) { status.innerHTML = `<span class="err">${esc(error.message)}</span>`; submit.disabled = false; }
   };
   dialog.onclose = () => { dialog.innerHTML = ''; };

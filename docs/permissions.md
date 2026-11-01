@@ -14,7 +14,7 @@ is back, except that a bot's send is refused as `queue_full` once the queue held
 repeat; [How it works](how-it-works.md)); a new task or hand-off to it, or a message to a bot not started yet, is refused as `target_inactive`, which
 never counts as a repeat against the sender ([How it works](how-it-works.md), rule 8).
 
-An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it. Anyone who may read or write a bot can also see it, whatever its See list says.
+An audience is **Everyone**, or a list of **humans**, **groups** and **bots**. Naming a group names everyone in it and in the groups nested in it, humans and bots. People and groups have the same three levels ([People and groups](#people-and-groups)). Anyone who may read or write a bot can also see it, whatever its See list says.
 
 New bots, and every bot after an upgrade, start **Open**: Everyone for all three.
 
@@ -52,6 +52,73 @@ A bot above another in the `reports_to` chain also reads that bot's runs (`hub_r
 estimated cost) and their steps: its task and routine runs, and the wake-ups the hub posts into its chat room. A run a
 human started by chatting with the bot stays with that chat, and private tasks stay with their parties. Peers and
 the bots below keep the usual conversation rule, so they never read a manager's chat-room runs.
+
+## People and groups
+
+People and groups have the same three levels, with the same audiences (Everyone, or humans, groups and bots).
+
+| Level | A person | A group |
+| --- | --- | --- |
+| **See** | Them in the team chart, the people lists, the @ picker, their page and photo, and `hub sql`. | It in the team chart, the group lists, team pages and `hub sql`. |
+| **Read** | Their Home. | Its Home. |
+| **Write** | DMs to them, and adding them to a thread. | Posting to it, and adding it to a thread. |
+
+Defaults:
+
+| | See | Read | Write |
+| --- | --- | --- | --- |
+| A person | Everyone | Everyone | Everyone |
+| A group | Everyone | Everyone | its members |
+| A bot | Everyone | Everyone | Everyone (unchanged) |
+
+How the levels relate, for people, groups and bots alike:
+
+| Has | Also has |
+| --- | --- |
+| Manage | See, Read and Write |
+| Read | See |
+| Write | See (Write without Read is allowed: you can DM someone whose Home you cannot read) |
+
+Who manages:
+
+- **a person**: themselves, everyone they report up to on the chart, the admins and the owner;
+- **a group**: its leads and the leads of the groups above it, the admins and the owner;
+- **a bot**: its owners, as in [Always full access](#always-full-access).
+
+Whoever manages someone always has all three levels and edits their access: **Access** on a person's page, and
+**Seen by** on a group's team page, both with the same editor as a bot's.
+
+A group names the **people and bots** in it and in the groups nested in it. That holds in every audience: a bot in
+Contracts, nested under Legal, is in an audience that names Legal, for a bot, a person or a group.
+
+Hidden means hidden: someone you may not see is left out of the chart (the ones under them hang from the nearest
+shown row above), the people and group lists, the @ picker, the group choices of an Access editor and the card picker,
+report order, the bots' rows (`/api/employees`, `/api/v2/bots`, a bot's detail and `/api/v2/org`: operator, owners,
+users, team, department and who they report to), messages and tasks in answers and the event stream (`from_actor`,
+`to_actor`, a conversation's participants, a task's `owner`, `requester`, `closed_by`, `origin_actor` and
+`from_person`, which read `""`), the stream's actors, and `hub sql` (`humans` rows, `humans.teams`, `bot_config`'s
+`team`, `operator`, `reports_to`, owner lists, `created_by` and the same keys in `config_json`,
+`conversations.participants`, `messages.from_actor` and `to_actor`, `tasks.owner`, `requester` and `closed_by`,
+and the `actor` of `events` and `task_events`, which read `''`), and their page, photo and access answer the same
+`404` as someone who does not exist. A hidden group's people and bots are shown under the nearest group above it.
+Inside a conversation you are in, and on a task you own or asked for, everyone in it stays known to you. The owner,
+the admins and whoever manages them always see them.
+
+Deleting a group deletes its access, and takes it out of every other audience that named it, so a group made later
+with the same id starts from the defaults; the old values stay in the audit log.
+
+```
+GET  /api/v2/humans/cara/access          GET  /api/v2/groups/legal/access
+PUT  /api/v2/humans/cara/access          PUT  /api/v2/groups/legal/access
+{"see": {"everyone": true}, "read": {"teams": ["legal"]}, "write": {"everyone": true}, "revision": 0}
+```
+
+The GET answers `{target, see, read, write, default, revision, you, teams}`; `revision` is `0` until the first save,
+and a stale one answers `409 version_conflict`. `hub human access <id>` and `hub group access <id>` (with `--see`,
+`--read`, `--write`, each `everyone` or `ben,group:legal,bot:analyst`), and the MCP tools `hub_human_access` and
+`hub_group_access`, do the same; BotOps uses them with the rights of the person who asked, with or without
+`on_behalf_of`, and can put them to the person as a Confirm card. Each save writes an audit row
+(`human:<id>:access`, `group:<id>:access`) and a `person.access_changed` or `group.access_changed` event.
 
 ## Roles, and what a member may do
 
@@ -97,8 +164,11 @@ read its value, and share it with their other bots ([Bot owners](#bot-owners)).
 ## Dashboard, team pages and pins
 
 The owner and admins arrange the Dashboard. A team page is arranged by them and by a person who leads the group or a group
-above it; it is seen by its audience, Everyone unless they narrow it to people, groups or bots (the same audience as a
-bot's levels above; naming a group names the groups under it). A bot pins only its own pages and cards, to its own
+above it; it is the group's content, so it is seen by whoever may Read the group (See is only being on the chart).
+**Seen by** on the page opens the group's Access editor ([People and groups](#people-and-groups));
+`PUT /api/v2/places/team:<group>` with an `audience` sets the group's Read to it. A page audience narrowed before this
+release moved into its group's Read once on upgrade: whoever both the page and the group's Read let in (the page's
+audience when Read was Everyone), never more; See was left as it was. A bot pins only its own pages and cards, to its own
 sidebar or a task it holds or asked for; a person who manages a bot may pin another bot's page to its sidebar. A page a
 person pins to the Dashboard or a team page may be read by that place's audience, and a private task's file is never
 pinned there ([Overview](overview.md), [Files](files.md)). BotOps does all of this with the rights of the person who

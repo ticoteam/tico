@@ -54,8 +54,18 @@ function server(me) {
   };
   const pinPlace = pid => Object.keys(places).find(p => places[p].pins.some(x => x.id === pid));
   return {writes, places, handle(method, p, body) {
-    if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards)\b/.test(p)) writes.push([method, p, body]);
+    if (method !== 'GET' && /^\/api\/v2\/(places|pins|cards|groups)\b/.test(p)) writes.push([method, p, body]);
     let m;
+    // A team page's "Seen by" is its group's See and Read (backend/teammate_access.py).
+    if ((m = p.match(/^\/api\/v2\/groups\/([^/]+)\/access$/))) {
+      const at = places['team:' + decodeURIComponent(m[1])];
+      if (!at || me.company_role === 'member') return [403, {error: {code: 'forbidden', detail: 'Only its leads'}}];
+      if (method === 'PUT') { at.audience = body.read; at.revision = (at.revision || 0) + 1; }
+      const everyone = {everyone: true, people: [], teams: [], bots: []};
+      return [200, {target: 'group:' + m[1], see: at.audience, read: at.audience, write: {everyone: false, people: [], teams: [m[1]], bots: []},
+        default: {see: everyone, read: everyone, write: {everyone: false, people: [], teams: [m[1]], bots: []}}, revision: at.revision || 0,
+        you: {see: true, read: true, write: true, manage: true}, teams: [{id: 'eng', name: 'Engineering'}]}];
+    }
     if ((m = p.match(/^\/api\/v2\/places\/([^/]+)(\/order)?$/))) {
       const place = decodeURIComponent(m[1]);
       if (!places[place]) return [404, {error: {code: 'not_found', detail: 'No such place'}}];
@@ -217,13 +227,20 @@ async function shot(page, name) {
       assert.equal(await page.evaluate(() => location.hash), '#/team/eng', 'and does not open the page');
       // Its name unfolds a folded group.
       if (!(await kids.isVisible())) { await label.click(); await kids.waitFor(); }
-      // Its audience: narrowed to chosen people.
+      // Its audience is the group's See and Read: "Seen by" opens the group's Access editor, narrowed to chosen people.
       await page.locator('[data-dash-audience]').click();
-      await page.locator('#dash-dialog[open] [name="everyone"]').uncheck();
-      await page.locator('#dash-dialog[open] [name="people"][value="ana"]').check();
-      await page.locator('#dash-dialog[open] [type="submit"]').click();
+      await page.locator('#access-editor[open] [name="preset"][value="custom"]').check();
+      for (const level of ['see', 'read']) {
+        const box = page.locator(`#access-editor[open] [data-access-levels="${level}"]`);
+        await box.locator('[data-access-everyone]').uncheck();
+        await box.locator('[data-access-pick="people"][value="ana"]').check();
+      }
+      await page.locator('#access-editor[open] [type="submit"]').click();
       await page.waitForFunction(() => document.querySelector('[data-dash-audience]')?.textContent.includes('Seen by Ana Silva'));
-      assert.deepEqual(fake.writes.at(-1).slice(1), ['/api/v2/places/team%3Aeng', {audience: {everyone: false, teams: [], people: ['ana'], bots: []}}]);
+      const chosen = {everyone: false, people: ['ana'], teams: [], bots: []};
+      const [method, url, body] = fake.writes.at(-1);
+      assert.deepEqual([method, url, body.see, body.read, body.write.teams, body.revision],
+        ['PUT', '/api/v2/groups/eng/access', chosen, chosen, ['eng'], 0]);
       await shot(page, 'desktop-team');
       assert.deepEqual(errors, []);
       await page.close();

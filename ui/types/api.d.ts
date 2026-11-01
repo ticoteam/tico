@@ -4433,6 +4433,30 @@ export type TeamBudgets = {
   turns_per_hour?: number | null;
 };
 
+export type TeammateAccess = {
+  on_behalf_of?: string | null;
+  read: AccessAudience;
+  revision: number;
+  see: AccessAudience;
+  write: AccessAudience;
+};
+
+export type TeammateAccessView = {
+  default?: Record<string, unknown>;
+  read: Audience;
+  revision: number;
+  see: Audience;
+  target: string;
+  teams?: Array<Record<string, unknown>>;
+  write: Audience;
+  you?: {
+  manage: boolean;
+  read: boolean;
+  see: boolean;
+  write: boolean;
+};
+};
+
 export type TickedRepo = {
   edit_workflows?: boolean | null;
   full_name: string;
@@ -6006,6 +6030,14 @@ export type GetGranolaStatusParams = Record<string, never>;
 export type GetGranolaStatusBody = never;
 export type GetGranolaStatusResponse = GranolaStatus;
 
+/** GET /api/v2/groups/{gid}/access */
+export type GetGroupAccessParams = {
+  gid: string;
+  on_behalf_of?: string;
+};
+export type GetGroupAccessBody = never;
+export type GetGroupAccessResponse = TeammateAccessView;
+
 /** GET /api/v2/health */
 export type GetHealthParams = Record<string, never>;
 export type GetHealthBody = never;
@@ -6131,6 +6163,14 @@ export type GetPageParams = {
 };
 export type GetPageBody = never;
 export type GetPageResponse = PageShown;
+
+/** GET /api/v2/humans/{pid}/access */
+export type GetPersonAccessParams = {
+  on_behalf_of?: string;
+  pid: string;
+};
+export type GetPersonAccessBody = never;
+export type GetPersonAccessResponse = TeammateAccessView;
 
 /** GET /api/v2/people/{person}/assistant */
 export type GetPersonAssistantParams = {
@@ -8082,6 +8122,13 @@ export type SetGoalWhyParams = {
 export type SetGoalWhyBody = GoalWhy;
 export type SetGoalWhyResponse = GoalResult;
 
+/** PUT /api/v2/groups/{gid}/access */
+export type SetGroupAccessParams = {
+  gid: string;
+};
+export type SetGroupAccessBody = TeammateAccess;
+export type SetGroupAccessResponse = TeammateAccessView;
+
 /** PUT /api/v2/usage/pools/groups/{group} */
 export type SetGroupUsageLimitParams = {
   group: string;
@@ -8111,6 +8158,13 @@ export type SetMeetingReviewSettingsParams = {
 };
 export type SetMeetingReviewSettingsBody = ReviewSettings;
 export type SetMeetingReviewSettingsResponse = MeetingReviewPreferences;
+
+/** PUT /api/v2/humans/{pid}/access */
+export type SetPersonAccessParams = {
+  pid: string;
+};
+export type SetPersonAccessBody = TeammateAccess;
+export type SetPersonAccessResponse = TeammateAccessView;
 
 /** PUT /api/v2/org/order/{manager} */
 export type SetReportOrderParams = {

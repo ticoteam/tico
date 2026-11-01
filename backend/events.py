@@ -811,6 +811,8 @@ class _Viewer:
         self._conversations = {}
         from . import threads
         self.reader = threads.Viewer(auth, who)
+        self._unseen = None
+        self._known = None
 
     def bots(self):
         if self._bots is None:
@@ -820,8 +822,41 @@ class _Viewer:
     def bot_readable(self, slug):
         return not slug or self.bots().get(slug, self.auth.FULL)["read"]
 
-    def hidden_actor(self, actor):
-        return bool(actor) and str(actor).startswith("bot:") and not self.bot_readable(str(actor)[4:])
+    def hidden_actor(self, actor, row=None):
+        actor = str(actor or "")
+        if actor.startswith("bot:"):
+            return not self.bot_readable(actor[4:])
+        if actor.startswith("human:") and actor[6:] in self.unseen_people():
+            return not self._known_there(row)
+        return False
+
+    @property
+    def known(self):
+        """What a payload may say about people this reader may not see (backend/teammate_access.py `Known`)."""
+        if self._known is None:
+            from . import teammate_access
+            self._known = teammate_access.Known(self.c, self.who, self.auth)
+        return self._known
+
+    def unseen_people(self):
+        """The people this reader may not see (backend/teammate_access.py): their name leaves the stream too."""
+        if self._unseen is None:
+            from . import teammate_access
+            self._unseen = teammate_access.unseen(self.c, self.who, self.auth)[0]
+        return self._unseen
+
+    def _known_there(self, row):
+        """Whoever is in a conversation with the reader, or a party to a task with them, is known to them there."""
+        if row is None:
+            return False
+        keys = row.keys()
+        conversation = self.conversation(row["conversation_id"]) if "conversation_id" in keys and row["conversation_id"] else None
+        if conversation and self.who.actor in (conversation.get("participants") or []):
+            return True
+        if "topic" in keys and row["topic"] == "tasks" and row["subject_id"]:
+            task = H.task(self.c, row["subject_id"])
+            return bool(task) and self.who.actor in (task.get("owner"), task.get("requester"))
+        return False
 
     def prime(self, cids):
         """Decide many threads at once (threads.readable_ids, C1's SSE rendering)."""
@@ -920,8 +955,8 @@ def _messages(view, rows):
                  "message_seq": message.get("seq"), "revision": message.get("revision") or 0}
         if threads.message_readable(c, view.reader, message, thread_checked=True):
             out.append((row, {"id": subject, "conversation_id": cid, **place,
-                              "message": {**message, "refs": refs, "thread_id": cid,
-                                          "root_id": place["root_id"]}}))
+                              "message": view.known.message({**message, "refs": refs, "thread_id": cid,
+                                                             "root_id": place["root_id"]})}))
         elif (message.get("deleted_at") and not threads.legacy_hidden(c, view.reader, message)
               and _readable_before_deletion(view, message)):
             out.append((row, {"id": subject, "conversation_id": cid, **place, "deleted": True}))
@@ -1135,7 +1170,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             picked += [("threads", r, e) for r, e in _threads(view, by_topic["threads"])]
         events = []
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
-            actor = None if view.hidden_actor(row["actor"]) else row["actor"]
+            actor = None if view.hidden_actor(row["actor"], row) else row["actor"]
             events.append((row["seq"], topic, {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}))
         return events, cursor, False, more
     finally:

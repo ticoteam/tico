@@ -444,6 +444,10 @@ def place_row(c, place):
 
 
 def audience_of(c, place):
+    """Who sees a team page: its group's Read (teammate_access.migrate_team_pages moved the old page audiences there)."""
+    from . import teammate_access
+    if place.startswith("team:"):
+        return teammate_access.document(c, "group:" + place[5:])["read"]
     row = place_row(c, place)
     return A.audience(json.loads(row["audience_json"]) if row and row["audience_json"] else {"everyone": True})
 
@@ -457,10 +461,9 @@ def may_view(ctx, kind, ident):
     if kind == "team":
         if may_manage(ctx, kind, ident):
             return True
-        level = audience_of(ctx.c, "team:" + ident)
-        if who.role == "bot":
-            return A.names(level, bot=H.actor_id(who.actor), team=ctx.chain())
-        return A.names(level, person=H.actor_id(who.actor), team=ctx.chain())
+        from . import teammate_access
+        # A team page is read by whoever may read its group (backend/teammate_access.py): "Seen by" is the group's Read.
+        return teammate_access.can(ctx.c, who, "read", "group:" + ident, ctx.auth)
     if kind == "bot":
         return bool(ctx.auth.bot_access(ctx.c, who, ident)["read"])
     try:
@@ -825,9 +828,16 @@ def save_place(ctx, place, audience=None):
     if audience is not None:
         if kind != "team":
             raise bad("Everyone sees the Dashboard")
+        # The page's audience is its group's Read (See, being on the chart, is left as it is): set there, with the
+        # group's Manage check and audit row.
+        from . import teammate_access
+        target = "group:" + ident
         level = A.audience(audience.model_dump())
-        ctx.c.execute("UPDATE pin_places SET audience_json=?, saved=?, saved_by=? WHERE place=?",
-                      (None if level["everyone"] else json.dumps(level), H.now(), ctx.who.actor, place))
+        current = teammate_access.document(ctx.c, target)
+        if current["read"] != level:
+            teammate_access.save(ctx.c, ctx.who, target, {**current, "read": level,
+                                                         "revision": teammate_access.revision(ctx.c, target)}, ctx.auth)
+        ctx.c.execute("UPDATE pin_places SET saved=?, saved_by=? WHERE place=?", (H.now(), ctx.who.actor, place))
         H.event(ctx.c, ctx.who.actor, "place.audience", place, {"everyone": level["everyone"]})
     return place
 
@@ -854,13 +864,12 @@ def widened(c, auth, who, fid, cache):
 def choices(ctx, team=""):
     """What the card and pin forms offer the reader: templates, teams, the KPIs and pages they may read."""
     from . import kpis as K  # noqa: F401
-    from . import goal_routes
+    from . import goal_routes, teammate_access
     hidden = goal_routes._hidden_owners(ctx.c, ctx.auth, ctx.who)
     kpis = [{"id": r["id"], "name": r["name"]} for r in ctx.c.execute(
         "SELECT id, name, owner FROM kpis WHERE archived_at IS NULL ORDER BY name LIMIT 500") if r["owner"] not in hidden]
     return {"templates": [{"id": k, "name": v["name"], "fields": [f for f in v["fields"]]} for k, v in TEMPLATES.items()],
-            "teams": [{"id": gid, "name": g.get("name") or gid, "parent": g.get("parent") or None}
-                      for gid, g in ctx.groups.items()],
+            "teams": teammate_access.group_rows(ctx.c, ctx.who, ctx.groups, ctx.auth),
             "kpis": kpis, "pages": pages_for(ctx, team if team in ctx.groups else "", LIST_MAX)}
 
 

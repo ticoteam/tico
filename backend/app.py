@@ -29,6 +29,7 @@ from . import repo_waits
 from . import built_on
 from . import agents, app_delivery, batch, external_sync, inbox_isolation, lifecycle, mcp_oauth, recruiting, harness_actions, model_login, oidc, personal_tokens, views
 from . import outcome_stats
+from . import teammate_access
 from . import start_places
 from . import ask_ingest, delivery, strategy_bot, invites, owner_link
 from . import org_rule_check
@@ -1204,6 +1205,8 @@ def create_app(settings=None):
             value["parts"] = parts
             if since := step_age.since_map(c, [row]).get(row["id"]):
                 value["step_since"] = since      # how long a Dev ticket has been at its working step (backend/step_age.py)
+            if who is not None:
+                value = teammate_access.Known(c, who, auth).task(value)     # people the reader may not see
         return value
 
     def task_views(rows, c, who, visible_sql="1"):
@@ -1327,7 +1330,7 @@ def create_app(settings=None):
                 value["origin_actor"] = None
             value["from_person"] = views.person_origin(c, row, visible_sql, who.actor)
             result.append(value)
-        return result
+        return teammate_access.Known(c, who, auth).tasks(result)       # people the reader may not see
 
     def mover(c, who):
         """Whether this person may move any task: the owner, or a person on a mover team."""
@@ -2444,8 +2447,9 @@ def create_app(settings=None):
                 shown.append((bot, level))
             rows = BotRows(c, who, [bot["slug"] for bot, _ in shown],
                            {bot["slug"] for bot, level in shown if level["read"]})
-            return [{**bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
-                     "goal_active": readable_active(c, auth, who, bot["slug"], rows.goals.get(bot["slug"], []))}
+            redact = teammate_access.bot_redactor(c, who, auth)     # people and groups the caller may not see
+            return [redact({**bot_view(c, bot, level, access, registry_roster, registry_entries, who, rows),
+                            "goal_active": readable_active(c, auth, who, bot["slug"], rows.goals.get(bot["slug"], []))})
                     for bot, level in shown]
 
     @app.get("/api/v2/bots/{bot}")
@@ -2475,7 +2479,7 @@ def create_app(settings=None):
                 value["reports_to_name"] = (H.bot(c, reports) or {}).get("display_name") or reports
             if value.get("operator"):
                 value["operator_name"] = (H.human(c, value["operator"]) or {}).get("name") or value["operator"]
-            return value
+            return teammate_access.bot_redactor(c, who, auth)(value)
 
     @app.get("/api/v2/org")
     def org(request: Request, person: str | None = None, team: str | None = None, can: str | None = None):
@@ -2565,7 +2569,10 @@ def create_app(settings=None):
                               "org_parent": parent})
             for row in bots:
                 row["stage"] = lifecycle.stage(row["onboarding_state"])
-            return {**view, "bots": bots, "seats": seats}
+            # People and groups the caller may not see are left out, and what hung under them moves up.
+            people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+            return teammate_access.redact_chart({**view, "bots": bots, "seats": seats}, roster, people_hidden,
+                                                groups_hidden)
 
     def may_edit_person(c, who, pid):
         """Yourself, or someone who reports up to you (backend/people.py `manages`)."""
@@ -2810,7 +2817,9 @@ def create_app(settings=None):
                                 **views.page_options(limit, max_bytes))
             turn_work.annotate(c, auth, request.state.identity, page["messages"])
             visual_view(c, request.state.identity, page["messages"])
-            return {"conversation": H.conversation(c, cid), **page}
+            known = teammate_access.Known(c, request.state.identity, auth)     # people the reader may not see
+            return {"conversation": known.conversation(H.conversation(c, cid)),
+                    **page, "messages": known.messages(page["messages"])}
 
     @app.get("/api/v2/conversations/{cid}/outline")
     def outline(request: Request, cid: str):
@@ -7238,6 +7247,46 @@ def create_app(settings=None):
             auth.require_see(c, who, bot)
             return settings_admin.set_access(c, who, bot, body)
         return mutate(request, body, work)
+
+    # A person's and a group's See, Read and Write, the bots' shape (backend/teammate_access.py, docs/permissions.md).
+    # Whoever manages them reads and changes it: the person themselves and whoever they report up to, a group's leads,
+    # the admins and the owner. BotOps does it as the person who asked.
+    def teammate_access_read(request, target, on_behalf_of=""):
+        who = request.state.identity
+        auth.domain(who)
+        with store.read() as c:
+            if on_behalf_of:
+                who = delegated_identity(c, who, on_behalf_of)
+            return teammate_access.view(c, who, target, auth)
+
+    def teammate_access_write(request, target, body):
+        caller = request.state.identity
+        def work(c):
+            auth.domain(caller)
+            who = delegated_identity(c, caller, body.on_behalf_of) if body.on_behalf_of else caller
+            return teammate_access.save(c, who, target, body.model_dump(exclude={"on_behalf_of"}), auth,
+                                        via="botops" if who.via == "botops" else None)
+        return mutate(request, body, work)
+
+    @app.get("/api/v2/people/{pid}/access")
+    def person_access_read(request: Request, pid: str, on_behalf_of: str = ""):
+        """Who may see, read and write to this person (docs/permissions.md). For whoever manages them."""
+        return teammate_access_read(request, "human:" + pid, on_behalf_of)
+
+    @app.post("/api/v2/people/{pid}/access")     # the same write for the tools, whose client only posts
+    @app.put("/api/v2/people/{pid}/access")
+    def person_access_write(request: Request, pid: str, body: M.TeammateAccess):
+        return teammate_access_write(request, "human:" + pid, body)
+
+    @app.get("/api/v2/groups/{gid}/access")
+    def group_access_read(request: Request, gid: str, on_behalf_of: str = ""):
+        """Who may see, read and write to this group (docs/permissions.md). For its leads and the admins."""
+        return teammate_access_read(request, "group:" + gid, on_behalf_of)
+
+    @app.post("/api/v2/groups/{gid}/access")
+    @app.put("/api/v2/groups/{gid}/access")
+    def group_access_write(request: Request, gid: str, body: M.TeammateAccess):
+        return teammate_access_write(request, "group:" + gid, body)
 
     @app.post("/api/v2/bots/register")
     def bot_register(request: Request, body: M.BotRegister):

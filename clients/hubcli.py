@@ -486,6 +486,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub human add <email> [--name N] [--title T] [--reports-to P]
                                            add a human to the roster and sign-in list (a Confirm card first, unless they are in the team's domain)
     hub human list                         the humans on the roster
+    hub human access <human> [--see V] [--read V] [--write V]
+                                           show or set who sees, reads (their Home), writes (DMs) to a person
     hub group list                         the groups (they nest), with their humans and bots
     hub group update [<group>] [--name N] [--parent G|''] [--lead bot:B|person:P|''] [--add-human H ...]
                      [--add-bot B ...] [--remove-human H ...] [--remove-bot B ...] [--on-behalf-of turn]
@@ -494,6 +496,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                                            rename, move, lead or fill it. A teammate is in one group at a time
     hub group delete <group> [--on-behalf-of turn]
                                            delete a group; its teammates and groups move up to its parent
+    hub group access <group> [--see V] [--read V] [--write V]
+                                           show or set who sees, reads, writes to a group (a lead or an admin)
     hub api GET|POST|PUT|PATCH|DELETE <path> ['{json}']
                                            BotOps: any v2 route, as the person who asked; a Confirm card for what
                                            always needs their click. Never a secret in the body
@@ -3245,6 +3249,11 @@ def parser():
     s.add_argument("--reports-to")
     s.set_defaults(fn="human add")
     humans.add_parser("list", help="the humans on the roster").set_defaults(fn="human list")
+    s = humans.add_parser("access", help="show or set who may see, read and write to a human")
+    s.add_argument("human")
+    for level in ("see", "read", "write"):
+        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
+    s.set_defaults(fn="human access")
     groups = sub.add_parser("group", help="the groups: sub-teams that nest, holding humans and bots").add_subparsers(dest="sub")
     groups.add_parser("list", help="the groups with their humans and bots").set_defaults(fn="group list")
 
@@ -3263,6 +3272,11 @@ def parser():
     s.add_argument("group")
     s.add_argument("--on-behalf-of", metavar="MESSAGE_ID", help=ASKED)
     s.set_defaults(fn="group delete")
+    s = groups.add_parser("access", help="show or set who may see, read and write to a group")
+    s.add_argument("group")
+    for level in ("see", "read", "write"):
+        s.add_argument("--" + level, help="everyone, or a comma list: human ids, group:<id>, bot:<slug>")
+    s.set_defaults(fn="group access")
     s = sub.add_parser("api", help="BotOps: any v2 route, as the person who asked")
     s.add_argument("method", type=str.upper, choices=["GET", "POST", "PUT", "PATCH", "DELETE"])
     s.add_argument("path", help="/api/v2/... or the part after it")

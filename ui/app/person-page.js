@@ -88,6 +88,9 @@ function pagePerson(id, tab) {
       <div>${reports.map(row => `<a class="chip" href="#/person/${encodeURIComponent(row.id)}">${personAvatar(row, 20)}<span>${esc(firstName(row.name) || row.id)}</span></a>`).join('')}</div></section>` : ''}
     ${(bots.length || under.length) ? `<section class="card"><header><h2>Bots</h2></header>
       <div>${[...new Map([...bots, ...under].map(e => [e.name, e])).values()].sort((a, b) => inOrder({kind: 'bot', ...a}, {kind: 'bot', ...b})).map(e => `<a class="chip" href="#/bot/${esc(e.name)}">${avatar(e.name, 20, stateOf(e.name))}<span>${shownName(e)}</span>${runtimeTag(e)}</a>`).join('')}</div></section>` : ''}
+    <section class="card" id="person-access" hidden><header><h2>Access</h2>
+        <button class="linkish person-edit-btn" type="button" id="person-access-edit">Edit</button></header>
+      <div class="muted" id="person-access-text"></div></section>
     ${edit ? `<section class="card" id="person-notify"><header><h2>Notifications</h2></header>
       <label class="person-notify" title="A Slack DM when a task they asked for is finished or declined">
         <input type="checkbox" role="switch" class="people-switch" id="person-notify-slack" ${p.notify_slack_task_done !== false ? 'checked' : ''}>
@@ -106,6 +109,7 @@ function pagePerson(id, tab) {
       <div id="person-slack">Loading…</div></section>
   </div>`;
   void headGoalsLoad('human:' + p.id);
+  void personAccessLoad(p);
   $('#ptabs').onclick = ev => {
     const b = ev.target.closest('[data-pt]'); if (!b) return;
     location.hash = b.dataset.pt === 'assistant' ? ASSISTANT : `#/person/${encodeURIComponent(p.id)}${b.dataset.pt === 'profile' ? '' : '/' + b.dataset.pt}`;
@@ -239,6 +243,14 @@ function pagePerson(id, tab) {
 // The human's tasks: what they own, active first, finished behind a toggle. The rows are
 // the same as a keeper bot's (v2TaskRow), opening the shared task detail.
 let PERSON_TASKS = null;
+// Shown only to whoever manages this person: the read is refused to everyone else.
+async function personAccessLoad(p) {
+  const data = await teammateAccessRead('human', p.id), card = $('#person-access');
+  if (!data || !card || !$('#person-access-text')) return;
+  $('#person-access-text').textContent = accessSummary(data);
+  card.hidden = false;
+  $('#person-access-edit').onclick = () => teammateEditAccess('human', p.id, p.name || p.id, () => personAccessLoad(p));
+}
 async function personTasksLoad(p) {
   PERSON_TASKS = p.id;
   const box = $('#person-tasks'); if (!box) return;

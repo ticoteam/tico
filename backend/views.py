@@ -2233,7 +2233,9 @@ def install_views(app, store, auth, mutate, task_view):
         human_only(request.state.identity)
         # One snapshot from the start, so read_cache serves the roster, configs and access rows once.
         with store.read_transaction() as c:
-            return employee_rows(c, request.state.identity)
+            from . import teammate_access
+            # The people and groups this caller may not see are not named on a bot either.
+            return teammate_access.redact_bots(c, request.state.identity, employee_rows(c, request.state.identity), auth)
 
     @app.get("/api/people")
     def people(request: Request):
@@ -2257,7 +2259,7 @@ def install_views(app, store, auth, mutate, task_view):
             places = positions(c)
             from . import lifecycle
             seats = lifecycle.chart_seats(c, r, chart, archived, lambda slug: access.get(slug, auth.FULL)["see"])
-            return {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "seats": seats, "people": [{
+            out = {**r, "by_team": P.by_team(r), "org_groups": view["org_groups"], "seats": seats, "people": [{
                 **p, "org_parent": P.org_parent("person", p["id"], r, configs, archived, bare),
                 "report_position": places.get("human:" + p["id"]),
                 **({"photo_url": "/api/humans/" + p["id"] + "/photo"}
@@ -2265,6 +2267,15 @@ def install_views(app, store, auth, mutate, task_view):
                 "bots": [b for b in P.bots_of(p["id"], r, configs)
                          if access.get(b, auth.FULL)["see"] and b not in archived]}
                 for p in r["people"]]}
+            # The people and groups this caller may not see are not on the roster, the chart or the @mention picker.
+            from . import teammate_access
+            people_hidden, groups_hidden = teammate_access.unseen(c, who, auth)
+            if people_hidden or groups_hidden:
+                out = teammate_access.redact_chart(out, r, people_hidden, groups_hidden)
+                out["by_team"] = {gid: [pid for pid in ids if pid not in people_hidden]
+                                  for gid, ids in out["by_team"].items() if gid not in groups_hidden}
+                out["developers"] = [pid for pid in out.get("developers") or [] if pid not in people_hidden]
+            return out
 
     @app.get("/api/people/{pid}/photo")
     def person_photo(request: Request, pid: str):
@@ -2273,7 +2284,8 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             r = roster(c)
             row = P.person(pid, r)
-            if not row or row.get("hidden"):
+            from . import teammate_access
+            if not row or row.get("hidden") or not teammate_access.can(c, who, "see", "human:" + pid, auth):
                 raise Problem("not_found", "Person not found", 404)
             from . import people_photos
             fetched = people_photos.load(store.settings, row.get("email"),

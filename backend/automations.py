@@ -2699,7 +2699,8 @@ def install(app, store, auth, mutate):
         from . import assistant
         with store.read() as c:
             auth.domain(request.state.identity)
-            if not H.human(c, person):
+            from . import teammate_access
+            if not H.human(c, person) or not teammate_access.can(c, request.state.identity, "see", "human:" + person, auth):
                 raise Problem("not_found", "No such person", 404)
             return {"bot": hub.settings.assistant_bot if assistant.find_room(c, "human:" + person) else None}
 

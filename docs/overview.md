@@ -11,7 +11,7 @@ in the sidebar tree; its arrow still folds it) is the same grid for one group. B
 | Place | Who sees it | Who arranges it |
 |---|---|---|
 | `dashboard` | Everyone | The owner and admins |
-| `team:<group>` | Its audience: Everyone, or chosen people, groups and bots (the model in permissions.md) | The owner, admins, and a person who leads the group or a group above it |
+| `team:<group>` | Whoever may Read the group: **Seen by** opens the group's Access (permissions.md, People and groups) | The owner, admins, and a person who leads the group or a group above it |
 | `bot:<slug>` | Whoever may Read the bot | The bot itself, or a person who manages it |
 | `task:<id>` | Whoever may read the task | The bot on it (owner or requester), its people, someone who can move it |
 
