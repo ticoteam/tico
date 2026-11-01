@@ -1189,8 +1189,10 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             clauses.append("(topic NOT IN ('messages','runs') OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
             args += list(conversations)
         if threads_scope:               # ?thread=: the messages and threads of these threads' subtrees (by path)
+            # A path ends in '/', so its subtree is the index range [path, path with that '/' made '0').
             clauses.append("(topic NOT IN ('messages','threads') OR conversation_id IN (SELECT d.id FROM conversations d "
-                           "JOIN conversations t ON t.id IN (%s) AND substr(d.path,1,length(t.path))=t.path))"
+                           "JOIN conversations t ON t.id IN (%s) AND d.path>=t.path "
+                           "AND d.path<substr(t.path,1,length(t.path)-1)||'0' AND substr(d.path,1,length(t.path))=t.path))"
                            % ",".join("?" * len(threads_scope)))
             args += list(threads_scope)
         if bots:
@@ -1231,9 +1233,10 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         events, size = [], 0
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
             actor = None if view.hidden_actor(row["actor"]) else row["actor"]
-            data = {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}
+            data = _Data({"seq": row["seq"], "actor": actor, "at": row["at"], **entry})
             # The first event always goes, however large; the rest wait for the next read once the budget is spent.
-            size += len(encode(data))
+            data.encoded = encode(data)
+            size += len(data.encoded)
             if events and size > READ_BYTES:
                 return events, events[-1][0], False, True
             events.append((row["seq"], topic, data))
@@ -1243,8 +1246,14 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             c.rollback()
 
 
+class _Data(dict):
+    """An event's data, with the JSON its read measured it by (`encoded`), so the stream sends that same text."""
+    encoded = None
+
+
 def _frame(seq, topic, data):
-    return (f"id: {seq}\n" if seq is not None else "") + f"event: {topic}\ndata: {encode(data)}\n\n"
+    text = getattr(data, "encoded", None) or encode(data)
+    return (f"id: {seq}\n" if seq is not None else "") + f"event: {topic}\ndata: {text}\n\n"
 
 
 def _list(value, name):
