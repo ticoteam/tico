@@ -93,6 +93,7 @@ Each command is also an MCP tool with the same name and arguments ([Connect an a
 | `hub thread react <message-id> <emoji>` | `hub_thread_react` | your reaction to a message, such as `:+1:` |
 | `hub thread unreact <message-id> <emoji>` | `hub_thread_unreact` | remove your reaction |
 | `hub thread open-earlier <thread>` | `hub_thread_open_earlier` | a manager of a bot opens its earlier messages to its Home readers |
+| `hub thread task <message-id> --title T --owner O` | `hub_thread_task` | a task from a message, private unless the thread is company-wide |
 | `hub thread follow <thread> [--notify ...]` | `hub_thread_follow` | follow at a level |
 | `hub thread unfollow <thread>` | `hub_thread_unfollow` | stop following |
 | `hub thread read <thread> [--seq N \| --all]` | `hub_thread_read` | mark read |
@@ -113,8 +114,8 @@ and `/api/v2/messages/{id}`, and are described in the [API guide](api.md). The t
 - `POST /api/v2/uploads/threads/{id}/messages`: a person posts a message with files attached (multipart, `text` and
   `files`), under the chat upload size caps. It is not in the CLI or MCP yet.
 - `POST /api/v2/threads/messages/{id}/task` with `title` and `owner`: a task made from a message you can read. The server
-  copies the message and a link back, and the task stays private unless the thread is company-wide. It is not in the
-  CLI or MCP yet.
+  copies the message and a link back, and the task stays private unless the thread is company-wide
+  (`hub thread task <message-id> --title T --owner O`).
 
 ## Webhooks
 

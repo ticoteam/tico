@@ -36,6 +36,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub thread sub <message>                   open a message's sub-thread without posting
     hub thread react|unreact <message-id> <emoji>   your reaction to a message, such as :+1:
     hub thread open-earlier <thread>           a bot's manager opens its earlier messages to its Home readers
+    hub thread task <message-id> --title T --owner O   a task from a message: private unless the thread is company-wide
     hub thread follow|unfollow <thread> [--notify live|mentions|digest|muted]
     hub thread read <thread> [--seq N | --all]
     hub thread search "<words>" [--cursor C]   the messages in threads you can read
@@ -1021,6 +1022,11 @@ def parser():
     s = thread.add_parser("open-earlier", help="open a bot's earlier messages to the people who read its Home (a manager of the bot)")
     s.add_argument("thread_id")
     s.set_defaults(fn="thread open-earlier")
+    s = thread.add_parser("task", help="make a task from a message: private unless the thread is company-wide")
+    s.add_argument("message_id")
+    s.add_argument("--title", required=True)
+    s.add_argument("--owner", required=True, help="a bot slug, a person id, or me")
+    s.set_defaults(fn="thread task")
     s = thread.add_parser("follow", help="follow a thread: live, mentions, digest or muted")
     s.add_argument("thread")
     s.add_argument("--notify", choices=["live", "mentions", "digest", "muted"], help="live by default")

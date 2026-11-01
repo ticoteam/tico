@@ -200,7 +200,7 @@ THREADS = _routes(
     ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
     ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
     ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
-    ("PATCH", rf"messages/{_S}"),
+    ("PATCH", rf"messages/{_S}"), ("POST", rf"threads/messages/{_S}/task"),
 )
 
 

@@ -260,14 +260,15 @@ async function shot(page, name) {
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').getAttribute('href'), '#/threads?with=bot%3Aops');
     await shot(page, 'bot-home-desktop');
+    // The Home's actions (the call and the menu) sit in the Home/DM bar; the thread has no title line.
+    await page.locator('#pane-chat .bot-talk-acts [data-thv-menu]').waitFor();
+    assert.equal(await page.locator('#bot-thread .thv-title').count(), 0);
     // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
     assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
     await page.locator('#pane-chat [data-talk="dm"]').click();
     await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
     await page.locator('#pane-chat [data-talk="dm"][aria-selected="true"]').waitFor();
     await page.locator('#bot-thread .thv-composer .p-text').waitFor();
-    // The DM keeps its actions in a compact row: the thread menu is there without a title line.
-    await page.locator('#bot-thread .thv-compact [data-thv-menu]').waitFor();
     await shot(page, 'bot-dm-desktop');
     // A draft survives a switch to Home and back.
     await page.locator('#bot-thread .thv-composer .p-text').fill('Half a thought');

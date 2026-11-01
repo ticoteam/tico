@@ -384,7 +384,7 @@ async function pageBot(slug, tab) {
   <div id="pane-chat" hidden>
     ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
       `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
-      <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a></div>`}
+      <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a><span class="bot-talk-acts"></span></div>`}
     <div class="bot-thread" id="bot-thread"></div>
   </div>
 
@@ -700,7 +700,9 @@ function botThreadShow(kind) {
   if (BOT.thread?.kind === kind && BOT.thread.view.host === host && !BOT.thread.view.gone) return;
   botThreadStop();
   const actor = 'bot:' + BOT.slug;
-  const view = threadMount(host, kind === 'home' ? {home: actor, header: 'compact'} : {dm: actor, header: 'compact'});
+  // The thread's actions (call, Members, menu) sit in the Home/DM bar instead of a title line.
+  const acts = {header: 'compact', actsHost: $('#pane-chat .bot-talk-acts')};
+  const view = threadMount(host, kind === 'home' ? {home: actor, ...acts} : {dm: actor, ...acts});
   BOT.thread = {kind, view};
 }
 function botThreadStop() {

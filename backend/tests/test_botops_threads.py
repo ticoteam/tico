@@ -13,7 +13,8 @@ def test_thread_writes_run_as_the_person_who_asked_and_botops_messages_do_not():
     for method, path in [("POST", "threads"), ("PATCH", "threads/t1"), ("POST", "threads/t1/messages"),
                          ("POST", "threads/t1/read"), ("POST", "threads/t1/read-all"), ("POST", "threads/t1/members"),
                          ("DELETE", "threads/t1/members/human:ben"), ("PUT", "threads/t1/follow"),
-                         ("DELETE", "threads/t1/follow"), ("PATCH", "messages/m1")]:
+                         ("DELETE", "threads/t1/follow"), ("PATCH", "messages/m1"),
+                         ("POST", "threads/messages/m1/task")]:
         assert default_delegable(method, "/api/v2/" + path, {}), (method, path)
     # BotOps' own message (the legacy send) is its own, never the requester's.
     assert not default_delegable("POST", "/api/v2/messages", {"text": "Working on it"})
