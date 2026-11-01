@@ -1258,10 +1258,19 @@ fn paused_capture_stays_local_through_resume_retry_recovery_and_final_correction
         &store,
         id,
         0,
-        15000,
+        8000,
         vec![
             word(1000, 1300, "Public opening.", ""),
             word(6000, 6300, "Secret launch.", ""),
+        ],
+    );
+    finished_chunk(
+        &store,
+        id,
+        8000,
+        15000,
+        vec![
+            word(9000, 9300, "Secret plan.", ""),
             word(11000, 11300, "Public closing.", ""),
         ],
     );
@@ -1283,7 +1292,7 @@ fn paused_capture_stays_local_through_resume_retry_recovery_and_final_correction
     );
     assert_eq!(
         store.get(id).unwrap().chunks[0].text,
-        "Public opening. Secret launch. Public closing."
+        "Public opening. Secret launch."
     );
     let mut context = store.context(id).unwrap();
     context.items.push(crate::workspace::Item {
