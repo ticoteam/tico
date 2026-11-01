@@ -433,10 +433,20 @@ def apply(c, verdict):
     keep the item off the person's plate (mode On and sent back or FYI). The write then calls `record` with the
     item's id. Reads only."""
     person, asker = verdict["person"], verdict["asker"]
-    own = settings(c, person)          # the settings at this item, not at the call
-    decisions, chores = load(c, person)
-    if verdict.get("error"):
-        would, reason = FAILED_OPEN, verdict["error"]
+    try:
+        own = settings(c, person)          # the settings at this item, not at the call
+        decisions, chores = load(c, person)
+        error = verdict.get("error")
+    except Exception as exc:
+        # A read that fails inside the write does not stop the write: the item is a failed open, and it acts on no
+        # plate (the mode is the verdict's, or Rehearsal when even that is unknown).
+        LOG.warning("Ask ingest read failed inside the write: %s", type(exc).__name__)
+        own = {"mode": verdict.get("mode") or REHEARSAL, "budget": DEFAULTS["budget"],
+               "chores_budget": DEFAULTS["chores_budget"]}
+        decisions, chores = 0, 0
+        error = verdict.get("error") or "error"
+    if error:
+        would, reason = FAILED_OPEN, error
     else:
         would, reason = decide(verdict["answers"], own["budget"], own["chores_budget"], decisions, chores)
     mode = own["mode"]
