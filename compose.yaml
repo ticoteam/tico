@@ -350,14 +350,17 @@ services:
   # includes meet; one per cell host. The server calls its API at http://livekit:7880, and Caddy proxies browsers'
   # signal connection from the app host's /rtc path to that same port (backend/caddy_assets.py), so only the media
   # and TURN ports are published. The key and secret come from .env and go to this service and the server only. The
-  # image tag v1.8.4 is on Docker Hub; pin a digest before enabling it. This service joins edge so Caddy can reach it.
+  # image is pinned by digest, so a retagged upstream image cannot change it. It joins edge at a fixed address outside
+  # the dynamic range, so the server does not trust it as a front door, and Caddy and the tunnel reach it there.
   livekit:
     <<: *hardening
     profiles: [meet]
-    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4}
+    image: ${TICO_MEET_IMAGE:-livekit/livekit-server:v1.8.4@sha256:621fd87bd64a0c83e1f2418ee0323eb920d00acdd73e5f79b303c64f6cc532af}
     read_only: true
     tmpfs: [/tmp]
-    networks: [default, edge]
+    networks:
+      default: {}
+      edge: {ipv4_address: "${TICO_LIVEKIT_ADDRESS:-172.30.254.4}"}
     environment:
       LIVEKIT_KEYS: "${TICO_MEET_API_KEY:-}: ${TICO_MEET_API_SECRET:-}"
       LIVEKIT_CONFIG: |
@@ -412,9 +415,11 @@ services:
       - ./:/project
 
 # The front doors reach the server only over this network, from fixed addresses the server trusts for forwarded
-# client addresses (TICO_TRUSTED_PROXIES above). Nothing else joins it. Containers given no fixed address (the server
+# client addresses (TICO_TRUSTED_PROXIES above). The media server (meet profile) joins at a fixed address the
+# server does not trust. Containers given no fixed address (the server
 # and the hold) draw from the upper half of the range, so they never take a front door's. If the subnet clashes with a
-# network on this computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS and TICO_CLOUDFLARED_ADDRESS in .env.
+# network on this computer, set TICO_EDGE_SUBNET, TICO_EDGE_DYNAMIC_RANGE, TICO_CADDY_ADDRESS, TICO_CLOUDFLARED_ADDRESS
+# and TICO_LIVEKIT_ADDRESS in .env.
 networks:
   edge:
     ipam:
