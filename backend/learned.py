@@ -19,6 +19,7 @@ the others, so no entry's words are in the audit log.
 Unversioned and idempotent, like the task tabs (backend/bot_task_tabs.py): an older release never reads the table."""
 
 import logging
+import sqlite3
 
 from fastapi import Request
 
@@ -136,7 +137,8 @@ def growth_facing(c, bot):
             if any(word in f"{gid} {group.get('name') or ''}".lower() for word in GROWTH_TEAMS):
                 return True
             gid = group.get("parent")
-    except Exception:
+    except (sqlite3.Error, LookupError, TypeError, ValueError, AttributeError):
+        # A roster that does not parse leaves the turn without the brand, never without a turn.
         log.warning("growth-facing check failed for %s", bot, exc_info=True)
     return False
 

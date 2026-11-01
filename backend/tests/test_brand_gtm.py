@@ -114,3 +114,40 @@ def test_growth_facing_bots_get_the_brand_and_gtm_in_their_turn(api):
     with api.app.state.store.read() as c:
         assert learned.for_turn(c, settings, None, "growth")["brand"].startswith("Brand v1.")
         assert "brand" not in (learned.for_turn(c, settings, None, "ops") or {})
+
+
+def test_the_hub_tools_reach_every_brand_gtm_and_growth_route(api):
+    """Each MCP tool's path and body match its route, run through the server as the MCP endpoint runs them."""
+    from backend.tests.test_mcp import call
+    ok = lambda name, args=None, token="ana-test": call(api, name, args, token)  # noqa: E731
+    err, out = ok("hub_brand_draft", {"section": "words", "body": '{"avoid": [{"word": "cheap", "level": "block"}]}'})
+    assert not err and out["draft"]["revision"] == 1
+    assert not ok("hub_brand_publish", {"note": "First"})[0]
+    err, out = ok("hub_brand_check", {"text": "So cheap"}, token="cara-test")
+    assert not err and [h["match"] for h in out["hits"]] == ["cheap"]
+    err, out = ok("hub_brand_show", {"section": "words"}, token="cara-test")
+    assert not err and out["n"] == 1 and out["value"]["avoid"][0]["word"] == "cheap"
+    assert not ok("hub_gtm_draft", {"sections": {"motion": {"primary": "local"}}})[0]
+    assert not ok("hub_growth_source_add", {"truth_for": "bookings", "system": "Stripe", "reach_kind": "mcp"})[0]
+    assert ok("hub_gtm_sources")[1]["sources"][0]["system"] == "Stripe"
+    assert not ok("hub_growth_channel_add", {"slug": "google-search", "name": "Google Search", "stage": "scaling"})[0]
+    assert not ok("hub_growth_channel_update", {"slug": "google-search", "budget_month": 3400})[0]
+    assert ok("hub_growth_channel_show", {"slug": "google-search"})[1]["budget_month"] == 3400
+    err, made = ok("hub_growth_idea_create", {"title": "Referral card", "channels": ["google-search"],
+                                              "ice_i": 7, "ice_c": 5, "ice_e": 8, "assignee": "me"})
+    assert not err and made["ice"] and made["channels"] == ["google-search"]
+    tid = made["task_id"]
+    assert ok("hub_growth_idea_score", {"id": tid, "i": 3, "c": 3, "e": 3})[1]["ice_i"] == 3
+    err, started = ok("hub_growth_idea_start", {"id": tid, "test_to": "2026-11-15", "change": "Card in every box",
+                                                "stop_if": "Complaints"})
+    assert not err and started["status"] == "testing"
+    assert ok("hub_growth_idea_verdict", {"id": tid, "status": "lost", "learning": "Nobody reads the box"})[1]["status"] == "lost"
+    assert [i["task_id"] for i in ok("hub_growth_idea_list", {"status": "lost"})[1]["ideas"]] == [tid]
+    err, _ = ok("hub_growth_cohort_set", {"channel": "google-search", "month": "2026-10", "spend": 3400,
+                                         "bot_cost": 260, "new_customers": 71, "source": ["spend=Google Ads"]})
+    assert not err and ok("hub_growth_economics", {"month": "2026-10"})[1]["rows"][0]["cac"]
+    assert not ok("hub_growth_settings", {"set": ["revenue_month=90", "margin_pct=40"]})[0]
+    assert ok("hub_growth_settings")[1]["revenue_month"] == 90
+    for name in ("hub_growth_week", "hub_growth_evidence", "hub_growth_working", "hub_growth_kpis",
+                 "hub_growth_cohort_list", "hub_growth_channel_list", "hub_brand_summary", "hub_gtm_show"):
+        assert not ok(name)[0], name

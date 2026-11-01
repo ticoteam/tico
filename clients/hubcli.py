@@ -186,7 +186,8 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
                 [--cadence daily|weekly|monthly] [--owner me|X|company] [--source-note "..."] [target flags]
                                            a KPI of its own; with --goal it is linked, the target on the link
     hub kpi update <id> [--name ...] [--definition ...] [--unit ...] [--direction ...] [--cadence ...]
-                    [--source-note ...] [--owner X]
+                    [--source-note ...] [--owner X] [--parent ID] [--role north_star|input|guardrail]
+                    [--stage reach|acquire|activate|retain|refer] [--loop NAME:STEP]
                                            a change to what it measures is a new definition version
     hub kpi link <goal-id> <kpi-id> [target flags]   link a goal to a KPI, or change the target on the link
     hub kpi unlink <goal-id> <kpi-id>      take a KPI off a goal
@@ -241,6 +242,25 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub strategy bet retire <id>
                                            draft, publish and bets: the owner only; a bot proposes with
                                            proposal create --kind strategy_draft
+    hub brand show [--section S] [--version N] | summary | check <file|->
+                                           the brand; check: avoided words, wrong names, never-made claims in a draft
+    hub gtm show [--section S] [--version N] | summary | sources
+                                           the go-to-market: motion, buyer, wishes, playbooks; sources of truth
+    hub brand|gtm draft --section S --body JSON [--revision N] | publish [--note "..."]
+                                           owner or admin; a bot proposes with --kind brand_draft|gtm_draft
+    hub growth channel list [--retired] | show SLUG | add SLUG --name ... | update SLUG | retire SLUG
+    hub growth source list | add --truth-for ... --system ... --reach-kind ... | update ID | retire ID
+    hub growth idea create --title ... [--hypothesis --prediction --bet --kpi --channel ... --i --c --e
+                           --source-kind --source-ref --follow-up-of --assignee]
+    hub growth idea list [--status S] [--bet ID] [--channel SLUG] [--kpi ID] [--q ...] | show ID | update ID
+    hub growth idea score ID --i N --c N --e N
+    hub growth idea start ID --to D --change ... --stop-if ... [--from D] [--judged-kpi ID] [--min-events N]
+    hub growth idea verdict ID --status won|lost|inconclusive|dropped|paused [--result --learning
+                            --bet-effect --confidence]   a stop-rule hit or missed baseline is lost, before min events
+    hub growth cohort list [--channel SLUG] [--month M] | set --channel SLUG|unknown --month YYYY-MM [--spend N
+                           --bot-cost N --new N --d30 PCT --d90 PCT --d180 PCT --revenue N --margin PCT
+                           --quality actual|estimate --source FIELD=TEXT]
+    hub growth economics [--month M] | week | evidence | working | kpis | settings [--set KEY=VALUE]
     hub lens list [--market]               the lenses: thought exercises run against the strategy or the market
     hub lens run <id> [--answers-file f.json] [--draft] [--no-wait]
                                            run one (the owner, the Strategy Bot; a market lens also the Librarian);
@@ -1663,6 +1683,11 @@ def parser():
     s.add_argument("--name")
     s.add_argument("--owner")
     kpi_flags(s)
+    s.add_argument("--parent", dest="parent_kpi_id", metavar="ID", help='the KPI it feeds in the growth tree; "" clears')
+    s.add_argument("--role", dest="growth_role", choices=["north_star", "input", "guardrail", ""],
+                   help="one North Star at a time: naming a new one moves the role")
+    s.add_argument("--stage", choices=["reach", "acquire", "activate", "retain", "refer", ""])
+    s.add_argument("--loop", metavar="NAME:STEP", help='its place in a growth loop, referral:2; "" clears')
     s.set_defaults(fn="kpi update")
     s = kpi.add_parser("link", help="link a goal to a KPI, or change the target on the link")
     s.add_argument("goal_id")
@@ -1892,6 +1917,198 @@ def parser():
     s = bet.add_parser("retire", help="its goals keep their link")
     s.add_argument("id")
     s.set_defaults(fn="strategy bet retire")
+
+    def json_flag(s):
+        s.add_argument("--json", action="store_true", help="print the API response as JSON")
+        return s
+
+    brand_sections = ("positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
+    gtm_sections = ("motion", "buyer", "wishes", "playbooks")
+    for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
+                                  ("gtm", "the go-to-market: motion, buyer, wishes, playbooks", gtm_sections)):
+        page = sub.add_parser(kind, help=title).add_subparsers(dest="sub")
+        s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
+        s.add_argument("--section", choices=sections, help="only this section")
+        s.add_argument("--version", type=int, metavar="N", help="a published version; default the latest")
+        s.set_defaults(fn=f"{kind} show")
+        s = json_flag(page.add_parser("summary", help="the text a growth-facing bot's turn carries"))
+        s.set_defaults(fn=f"{kind} summary")
+        if kind == "brand":
+            s = json_flag(page.add_parser("check", help="check a draft against the published brand; - reads stdin"))
+            s.add_argument("file", help="a file holding the draft, or - for stdin")
+            s.set_defaults(fn="brand check")
+        else:
+            s = json_flag(page.add_parser("sources", help="the source of truth for each number, and conflicts"))
+            s.add_argument("--retired", dest="include_retired", action="store_true", default=None)
+            s.set_defaults(fn="gtm sources")
+        s = json_flag(page.add_parser("draft", help=f"owner or admin: change one section of the draft; a bot proposes "
+                                                    f"instead (proposal create --kind {kind}_draft)"))
+        s.add_argument("--section", required=True, choices=sections)
+        s.add_argument("--body", required=True, help="the section's value as JSON; null removes it")
+        s.add_argument("--revision", type=int, help="the draft's revision you read; stale is refused")
+        s.set_defaults(fn=f"{kind} draft")
+        s = json_flag(page.add_parser("publish", help="owner or admin: the draft becomes the next version"))
+        s.add_argument("--note", default="")
+        s.set_defaults(fn=f"{kind} publish")
+
+    growth = sub.add_parser("growth", help="growth: channels, sources, ideas and tests, cohorts, unit economics").add_subparsers(dest="sub")
+    channel = growth.add_parser("channel", help="the channels customers come from").add_subparsers(dest="subsub")
+
+    def channel_flags(s):
+        s.add_argument("--track", choices=["performance", "brand"])
+        s.add_argument("--stage", choices=["idea", "testing", "scaling", "paused"])
+        s.add_argument("--owner", help='me, a bot slug or a person id; "" clears')
+        s.add_argument("--budget", dest="budget_month", type=float, metavar="N", help="spend per month")
+        s.add_argument("--source", dest="source_id", metavar="ID", help="the source that holds its spend")
+        s.add_argument("--why")
+        s.add_argument("--guardrail-kpi", dest="guardrail_kpi_id", metavar="ID")
+        s.add_argument("--guardrail-max", dest="guardrail_max", type=float, metavar="N")
+        s.add_argument("--sort", type=int)
+    s = json_flag(channel.add_parser("list"))
+    s.add_argument("--retired", dest="include_retired", action="store_true", default=None, help="also retired ones")
+    s.set_defaults(fn="growth channel list")
+    s = json_flag(channel.add_parser("show"))
+    s.add_argument("slug")
+    s.set_defaults(fn="growth channel show")
+    s = json_flag(channel.add_parser("add", help="owner or admin"))
+    s.add_argument("slug", help="lowercase, digits and dashes: google-search")
+    s.add_argument("--name", required=True)
+    channel_flags(s)
+    s.set_defaults(fn="growth channel add")
+    s = json_flag(channel.add_parser("update", help="owner or admin; the owning bot may change why, stage, budget"))
+    s.add_argument("slug")
+    s.add_argument("--name")
+    channel_flags(s)
+    s.set_defaults(fn="growth channel update")
+    s = json_flag(channel.add_parser("retire", help="owner or admin"))
+    s.add_argument("slug")
+    s.set_defaults(fn="growth channel retire")
+
+    source = growth.add_parser("source", help="which system holds the truth for each number").add_subparsers(dest="subsub")
+
+    def source_flags(s, required):
+        s.add_argument("--truth-for", dest="truth_for", required=required, help="the number: bookings, ad spend")
+        s.add_argument("--system", required=required, help="Stripe, Google Ads")
+        s.add_argument("--reach-kind", dest="reach_kind", required=required, choices=["mcp", "credential", "url", "person"])
+        s.add_argument("--reach-ref", dest="reach_ref", help="the MCP server, credential, URL or person")
+        s.add_argument("--may", help="what a bot may do there")
+        s.add_argument("--owner", help="me, a bot slug or a person id")
+    s = json_flag(source.add_parser("list"))
+    s.add_argument("--retired", dest="include_retired", action="store_true", default=None)
+    s.set_defaults(fn="growth source list")
+    s = json_flag(source.add_parser("add", help="owner or admin"))
+    source_flags(s, True)
+    s.set_defaults(fn="growth source add")
+    s = json_flag(source.add_parser("update", help="owner or admin"))
+    s.add_argument("id")
+    source_flags(s, False)
+    s.set_defaults(fn="growth source update")
+    s = json_flag(source.add_parser("retire", help="owner or admin"))
+    s.add_argument("id")
+    s.set_defaults(fn="growth source retire")
+
+    idea = growth.add_parser("idea", help="growth ideas and their tests").add_subparsers(dest="subsub")
+    idea_sources = ["strategy", "competitor", "listening", "peec", "lost_test", "person", "other"]
+
+    def idea_flags(s):
+        s.add_argument("--hypothesis", help="we believe X because Y")
+        s.add_argument("--prediction", help="what will move, by how much, by when")
+        s.add_argument("--bet", dest="bet_id", metavar="ID", help="the strategy bet it tests")
+        s.add_argument("--kpi", dest="kpi_id", metavar="ID", help="the KPI it should move")
+        s.add_argument("--channel", dest="channels", action="append", metavar="SLUG", help="repeatable")
+        s.add_argument("--source-kind", dest="source_kind", choices=idea_sources)
+        s.add_argument("--source-ref", dest="source_ref", help="a link or id for that source")
+    s = json_flag(idea.add_parser("create", help="file an idea; anyone may"))
+    s.add_argument("--title", required=True)
+    idea_flags(s)
+    s.add_argument("--i", dest="ice_i", type=int, metavar="1-10", help="impact")
+    s.add_argument("--c", dest="ice_c", type=int, metavar="1-10", help="confidence")
+    s.add_argument("--e", dest="ice_e", type=int, metavar="1-10", help="ease")
+    s.add_argument("--follow-up-of", dest="follow_up_of", metavar="ID", help="the finished idea this follows")
+    s.add_argument("--assignee", help="me, a bot slug or a person id; default you")
+    s.add_argument("--body", help="more detail for the task")
+    s.set_defaults(fn="growth idea create")
+    s = json_flag(idea.add_parser("list", help="best ICE first"))
+    s.add_argument("--status", choices=["idea", "testing", "won", "lost", "inconclusive", "dropped", "paused"])
+    s.add_argument("--bet", dest="bet_id", metavar="ID")
+    s.add_argument("--channel", metavar="SLUG")
+    s.add_argument("--kpi", dest="kpi_id", metavar="ID")
+    s.add_argument("--q", help="words in the title or hypothesis")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="growth idea list")
+    s = json_flag(idea.add_parser("show"))
+    s.add_argument("id")
+    s.set_defaults(fn="growth idea show")
+    s = json_flag(idea.add_parser("update", help="its assignee, creator or an admin"))
+    s.add_argument("id")
+    s.add_argument("--title")
+    idea_flags(s)
+    s.add_argument("--judged-kpi", dest="judged_kpi_id", metavar="ID")
+    s.add_argument("--from", dest="test_from", metavar="YYYY-MM-DD")
+    s.add_argument("--to", dest="test_to", metavar="YYYY-MM-DD")
+    s.add_argument("--change")
+    s.add_argument("--stop-if", dest="stop_if")
+    s.add_argument("--min-events", dest="min_events", type=int)
+    s.add_argument("--audience")
+    s.add_argument("--external-ref", dest="external_ref")
+    s.set_defaults(fn="growth idea update")
+    s = json_flag(idea.add_parser("score", help="impact, confidence, ease: 1-10 each"))
+    s.add_argument("id")
+    s.add_argument("--i", type=int, required=True, metavar="1-10")
+    s.add_argument("--c", type=int, required=True, metavar="1-10")
+    s.add_argument("--e", type=int, required=True, metavar="1-10")
+    s.set_defaults(fn="growth idea score")
+    s = json_flag(idea.add_parser("start", help="start its test; its assignee or an admin"))
+    s.add_argument("id")
+    s.add_argument("--from", dest="test_from", metavar="YYYY-MM-DD", help="default today")
+    s.add_argument("--to", dest="test_to", required=True, metavar="YYYY-MM-DD")
+    s.add_argument("--change", required=True, help="what the test changes")
+    s.add_argument("--stop-if", dest="stop_if", required=True, help="stop early if this happens")
+    s.add_argument("--judged-kpi", dest="judged_kpi_id", metavar="ID", help="default the idea's KPI")
+    s.add_argument("--min-events", dest="min_events", type=int, help="events needed before a won verdict")
+    s.add_argument("--audience")
+    s.set_defaults(fn="growth idea start")
+    s = json_flag(idea.add_parser("verdict", help="a stop-rule hit or missed baseline is lost, before min events; "
+                                                  "its assignee or an admin"))
+    s.add_argument("id")
+    s.add_argument("--status", required=True, choices=["won", "lost", "inconclusive", "dropped", "paused"])
+    s.add_argument("--result", help="what happened, with the numbers")
+    s.add_argument("--learning", help="what we now know")
+    s.add_argument("--bet-effect", dest="bet_effect", choices=["supports", "weakens", "none"])
+    s.add_argument("--confidence", choices=["low", "medium", "high"])
+    s.set_defaults(fn="growth idea verdict")
+
+    cohort = growth.add_parser("cohort", help="monthly numbers by channel").add_subparsers(dest="subsub")
+    s = json_flag(cohort.add_parser("list"))
+    s.add_argument("--channel", metavar="SLUG", help="a channel slug, or unknown")
+    s.add_argument("--month", metavar="YYYY-MM")
+    s.add_argument("--limit", type=int)
+    s.set_defaults(fn="growth cohort list")
+    s = json_flag(cohort.add_parser("set", help="one channel's month, only the fields given; any bot or an admin"))
+    s.add_argument("--channel", required=True, metavar="SLUG", help="a channel slug, or unknown")
+    s.add_argument("--month", required=True, metavar="YYYY-MM")
+    s.add_argument("--spend", type=float)
+    s.add_argument("--bot-cost", dest="bot_cost", type=float)
+    s.add_argument("--new", dest="new_customers", type=int, metavar="N", help="new customers")
+    s.add_argument("--d30", dest="kept_d30", type=float, metavar="PCT", help="%% kept after 30 days")
+    s.add_argument("--d90", dest="kept_d90", type=float, metavar="PCT")
+    s.add_argument("--d180", dest="kept_d180", type=float, metavar="PCT")
+    s.add_argument("--revenue", dest="revenue_month", type=float, metavar="N", help="per customer per month")
+    s.add_argument("--margin", dest="margin_pct", type=float, metavar="PCT")
+    s.add_argument("--quality", choices=["actual", "estimate"])
+    s.add_argument("--source", action="append", metavar="FIELD=TEXT", help="where a number came from; repeatable")
+    s.set_defaults(fn="growth cohort set")
+    s = json_flag(growth.add_parser("economics", help="CAC, months kept, LTV and LTV:CAC by channel"))
+    s.add_argument("--month", metavar="YYYY-MM")
+    s.set_defaults(fn="growth economics")
+    for word, text in (("week", "tests running and due, verdicts, guardrails, the North Star"),
+                       ("evidence", "each bet with the verdicts for and against it"),
+                       ("working", "won tests and channels by CAC"),
+                       ("kpis", "the KPI tree: North Star, inputs, guardrails")):
+        json_flag(growth.add_parser(word, help=text)).set_defaults(fn="growth " + word)
+    s = json_flag(growth.add_parser("settings", help="unit, revenue, margin, win threshold; --set: owner or admin"))
+    s.add_argument("--set", action="append", metavar="KEY=VALUE", help="repeatable")
+    s.set_defaults(fn="growth settings")
 
     lens = sub.add_parser("lens", help="thought exercises run against the strategy or the market").add_subparsers(dest="sub")
     s = lens.add_parser("list", help="the lenses, with their steps")

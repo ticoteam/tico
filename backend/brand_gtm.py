@@ -121,11 +121,8 @@ def summary_text(c, kind, current=None):
 
 
 def _channels_line(c):
-    try:
-        rows = H._rows(c.execute("SELECT name, stage FROM growth_channels WHERE retired_at IS NULL "
-                                 "AND stage IN ('scaling','testing') ORDER BY sort, name"))
-    except Exception:
-        return []
+    rows = H._rows(c.execute("SELECT name, stage FROM growth_channels WHERE retired_at IS NULL "
+                             "AND stage IN ('scaling','testing') ORDER BY sort, name"))
     out = []
     for stage in ("scaling", "testing"):
         names = [r["name"] for r in rows if r["stage"] == stage][:4]
