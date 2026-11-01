@@ -11,7 +11,8 @@ CREATE TABLE IF NOT EXISTS locations (
   id TEXT PRIMARY KEY, name TEXT NOT NULL,
   kind TEXT NOT NULL DEFAULT 'other' CHECK (kind IN ('store','office','warehouse','plant','customer_site','vehicle',
                                                        'other')),
-  parent_id TEXT REFERENCES locations(id), address TEXT NOT NULL DEFAULT '{}', archived_at TEXT,
+  parent_id TEXT REFERENCES locations(id), customer_id TEXT REFERENCES fin_contacts(id),
+  address TEXT NOT NULL DEFAULT '{}', archived_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS items (
@@ -19,6 +20,8 @@ CREATE TABLE IF NOT EXISTS items (
   kind TEXT NOT NULL CHECK (kind IN ('service','inventory','non_inventory','bundle','category',
     'raw_material','assembly')),
   unit TEXT NOT NULL DEFAULT '', price BIGINT, currency TEXT NOT NULL DEFAULT '',
+  description TEXT NOT NULL DEFAULT '', taxable INTEGER NOT NULL DEFAULT 0 CHECK (taxable IN (0,1)),
+  quantity_on_hand REAL, quantity_synced_at TEXT,
   income_account_id TEXT REFERENCES fin_accounts(id), expense_account_id TEXT REFERENCES fin_accounts(id),
   asset_account_id TEXT REFERENCES fin_accounts(id), archived_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
@@ -34,11 +37,27 @@ CREATE TABLE IF NOT EXISTS record_aliases (
 """
 
 
+# Columns added after a table first existed: an install that made the table before them gets each one once.
+ADDED_COLUMNS = (
+    ("locations", "customer_id", "TEXT REFERENCES fin_contacts(id)"),
+    ("items", "description", "TEXT NOT NULL DEFAULT ''"),
+    ("items", "taxable", "INTEGER NOT NULL DEFAULT 0 CHECK (taxable IN (0,1))"),
+    ("items", "quantity_on_hand", "REAL"),
+    ("items", "quantity_synced_at", "TEXT"))
+
+
 def create(c: sqlite3.Connection) -> None:
     """The locations, items and projects tables. Idempotent; runs on the caller's transaction."""
     for statement in TABLES.split(";"):
         if statement.strip():
             c.execute(statement)
+    have: dict[str, set[str]] = {}
+    for table, column, ddl in ADDED_COLUMNS:
+        if table not in have:
+            have[table] = {str(r[1]) for r in c.execute(f"PRAGMA table_info({table})").fetchall()}
+        if column not in have[table]:
+            c.execute(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}")
+            have[table].add(column)
 
 
 def insert(c: sqlite3.Connection, table: str, row: Mapping[str, object]) -> str:

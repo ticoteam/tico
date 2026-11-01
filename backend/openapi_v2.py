@@ -1517,8 +1517,9 @@ STABLE.extend([
      "overdue invoices, budgets near their limit, failed syncs and months ready to close, with counts and a cursor",
      "FinanceInbox"),
     ("/api/v2/finance/reports/{kind}", "get", "Finance", "getFinanceReport",
-     "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging or spend_by, cut to the "
-     "caller's view; compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
+     "pnl (cash or accrual), balance_sheet, cash_flow, budget_vs_actual, ap_aging, ar_aging, spend_by or "
+     "revenue_by_item (posted invoices by the item each line names; receivables view), cut to the caller's view; "
+     "compare=prior adds the window before; rows past top_n fold into one Other row (key \" other\"; the "
      "group with no vendor, team or teammate is keyed \" unattributed\": no real key starts with a space)",
      "FinanceReportOf"),
     ("/api/v2/finance/search", "get", "Finance", "searchFinance",
@@ -1550,6 +1551,12 @@ STABLE.extend([
      "Projects"),
     ("/api/v2/projects/{project_id}", "get", "Finance", "getProject",
      "One project, archived or not", "ProjectOne"),
+    ("/api/v2/customers", "get", "Finance", "listCustomers",
+     "Active customers by name for pickers: id and name only, to every teammate; q matches a name or an email; with a "
+     "cursor", "Customers"),
+    ("/api/v2/customers/{contact_id}", "get", "Finance", "getCustomer",
+     "A customer's panel: the contact, its active locations, and its open estimates and unpaid invoices where the "
+     "caller sees receivables (null where not)", "CustomerPanel"),
     ("/api/v2/finance/metrics/{name}", "get", "Finance", "getFinanceMetric",
      "One number with when it was worked out (and for bank-backed numbers how fresh the data is): cash, burn, "
      "runway_months, revenue, spend, budget_remaining, budget_pct_used, ap_due, ar_overdue, uncategorized_count, "
@@ -1774,7 +1781,7 @@ SCHEMAS.update({
         "next_cursor": "n", "currency": "s", "view_version": "i"}),
     "FinanceReportOf": obj({"kind": {"type": "string", "enum": ["pnl", "pnl_by", "balance_sheet", "cash_flow",
                                                                  "budget_vs_actual", "ap_aging", "ar_aging",
-                                                                 "spend_by"]},
+                                                                 "spend_by", "revenue_by_item"]},
                             "prior": {"type": "object", "additionalProperties": True}}, required=["kind"]),
     "FinanceOrderRow": obj({
         "id": "s", "number": "s", "contact": obj({"id": "s", "name": "s"}), "date": "s", "status": "s",
@@ -1792,8 +1799,8 @@ SCHEMAS.update({
         required=["lines"])]},
     "Locations": obj({"locations": items(ref("Location")), "next_cursor": "n"}, required=["locations", "next_cursor"]),
     "LocationOne": obj({"location": ref("Location")}, required=["location"]),
-    "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n"},
-                    required=["id", "name", "kind", "address"]),
+    "Location": obj({"id": "s", "name": "s", "kind": "s", "parent_id": "n", "address": "o", "archived_at": "n",
+                     "customer_id": "n", "customer_name": "n"}, required=["id", "name", "kind", "address"]),
     "Items": obj({"items": items(ref("Item")), "next_cursor": "n"}, required=["items", "next_cursor"]),
     "ItemOne": obj({"item": ref("Item")}, required=["item"]),
     "Item": obj({"id": "s", "name": "s", "sku": "s", "kind": {"type": "string", "enum": [
@@ -1803,9 +1810,15 @@ SCHEMAS.update({
         required=["id", "name", "sku", "kind", "unit", "currency"]),
     "Projects": obj({"projects": items(ref("Project")), "next_cursor": "n"}, required=["projects", "next_cursor"]),
     "ProjectOne": obj({"project": ref("Project")}, required=["project"]),
-    "Project": obj({"id": "s", "name": "s", "customer_id": "n", "status": {"type": "string",
+    "Project": obj({"id": "s", "name": "s", "customer_id": "n", "customer_name": "n", "status": {"type": "string",
                                                                           "enum": ["open", "closed"]},
                     "archived_at": "n"}, required=["id", "name", "status"]),
+    "Customers": obj({"customers": items(obj({"id": "s", "name": "s"}, required=["id", "name"])),
+                      "next_cursor": "n"}, required=["customers", "next_cursor"]),
+    "CustomerPanel": obj({"contact": obj({"id": "s", "name": "s"}, required=["id", "name"]),
+                          "locations": items(ref("Location")), "estimates": {"type": ["array", "null"]},
+                          "invoices": {"type": ["object", "null"], "additionalProperties": True}},
+                         required=["contact", "locations", "estimates", "invoices"]),
     "FinanceSearch": obj({"results": items(obj({"kind": {"type": "string", "enum": [
         "entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project"]}, "id": "s",
         "label": "s"})),

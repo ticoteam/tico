@@ -71,14 +71,18 @@ NEEDS: dict[str, str | tuple[str, ...]] = {
          "invoice_write_off": R.AR, "invoice_void": R.AR, "attach": (R.BOOK, R.AP, R.AR),
          "feed_match": (R.AP, R.AR), "mirror_start": R.BOOK, "mirror_stop": R.BOOK, "mirror_tags": R.BOOK, "mirror_xero_location": R.BOOK,
          "tax_jurisdiction_add": R.BOOK, "tax_remit": R.AP, "import_raw_totals": R.BOOK,
-         "item_create": R.BOOK, "item_update": R.BOOK, "location_create": R.BOOK, "location_update": R.BOOK,
-         "project_create": R.BOOK, "project_update": R.BOOK,
+         "item_create": R.RECORDS, "item_update": R.RECORDS, "location_create": R.RECORDS,
+         "location_update": R.RECORDS, "project_create": R.RECORDS, "project_update": R.RECORDS,
          "po_create": R.AP, "po_send": R.AP, "po_approve": R.AP, "po_close": R.AP, "po_void": R.AP,
          "estimate_create": R.AR, "estimate_send": R.AR, "estimate_accept": R.AR, "estimate_decline": R.AR,
          "estimate_convert": R.AR}
 # Kinds whose authority is a who-may rule rather than a right: grants, privacy, rights.
 ADMIN_ONLY = ("private_lines_set", "right_grant", "right_revoke", "connection_create", "connection_sync",
               "connection_disconnect", "connection_map")
+# Grants a company Admin may make: the records right only (the planner refuses every other right).
+ADMIN_GRANTS = ("right_grant", "right_revoke")
+# Record kinds a bot without the records right asks for: a person who holds the right decides (BotOps parity).
+RECORD_KINDS = ("item_create", "item_update", "location_create", "location_update", "project_create", "project_update")
 # Only the owner turns direct send on or off for the company (§9) and sets what each role sees by default (§7.5).
 OWNER_ONLY = ("payment_settings", "view_defaults_set", "mirror_tags", "mirror_xero_location")
 # System work may freeze cards (a budget at cutoff, §6.4 rule 4) and nothing else card-side.
@@ -117,9 +121,11 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     if kind in OWNER_ONLY:
         return None if org.owner and actor == org.owner else Gate("deny", rule="right:owner")
     if kind in ADMIN_ONLY:
-        if not R.is_admin(org, actor, held):
-            return Gate("deny", rule="right:finance.admin")
-        return Gate("needs_approval", "owner", "default:bot-admin") if actor in org.bots else None
+        if R.is_admin(org, actor, held):
+            return Gate("needs_approval", "owner", "default:bot-admin") if actor in org.bots else None
+        if kind in ADMIN_GRANTS and actor in org.admins:
+            return None                     # the planner refuses any right but the records right
+        return Gate("deny", rule="right:finance.admin")
     need = NEEDS.get(kind)
     if need is None:
         return None
@@ -129,6 +135,8 @@ def authority(org: Org, actor: str, kind: str, held: Collection[str]) -> Gate | 
     right = anyof[0]
     if right == R.BUDGETS and actor != SYSTEM:
         return Gate("needs_approval", "manager", "default:budget-request")
+    if right == R.RECORDS and kind in RECORD_KINDS and actor in org.bots:
+        return Gate("needs_approval", "owner", "default:bot-records")
     return Gate("deny", rule=f"right:{right}")
 
 
@@ -331,22 +339,27 @@ SHAPES: dict[str, tuple[Field, ...]] = {
     "item_create": (("name", "str", ""),
                     ("kind", "service|inventory|non_inventory|bundle|category|raw_material|assembly", ""),
                     ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "in the book's currency"),
+                    ("description?", "str", "what lines and documents say about it"),
+                    ("taxable?", "bool", "whether a sale of it is taxed"),
                     ("income_account_id?", "str", "the account a sale of it posts to"),
                     ("expense_account_id?", "str", "the account a purchase of it posts to"),
                     ("asset_account_id?", "str", "inventory it holds")),
     "item_update": (("item_id", "str", ""), ("name?", "str", ""),
                     ("kind?", "service|inventory|non_inventory|bundle|category|raw_material|assembly", ""),
                     ("sku?", "str", ""), ("unit?", "str", ""), ("price?", "minor", "a change asks for approval"),
+                    ("description?", "str", ""), ("taxable?", "bool", ""),
                     ("income_account_id?", "str", ""), ("expense_account_id?", "str", ""),
                     ("asset_account_id?", "str", ""), ("active?", "bool", "")),
     "location_create": (("name", "str", ""), ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
                         ("in_books?", "bool",
                          "a mirrored book: false keeps it in Tico; customer sites and vehicles default to false"),
                         ("parent_id?", "str", "the location it sits under"),
+                        ("customer_id?", "str", "a customer contact this site belongs to"),
                         ("address?", "obj", "up to 10 text fields")),
     "location_update": (("location_id", "str", ""), ("name?", "str", ""),
                         ("kind?", "store|office|warehouse|plant|customer_site|vehicle|other", ""),
-                     ("parent_id?", "str", "empty to clear"), ("address?", "obj", ""), ("active?", "bool", "")),
+                     ("parent_id?", "str", "empty to clear"), ("customer_id?", "str", "empty to clear"),
+                     ("address?", "obj", ""), ("active?", "bool", "")),
     "project_create": (("name", "str", ""), ("customer_id?", "str", "a customer contact"),
                        ("status?", "open|closed", "")),
     "project_update": (("project_id", "str", ""), ("name?", "str", ""), ("customer_id?", "str", "empty to clear"),
