@@ -449,6 +449,9 @@ def _tell_bot(c, author, text):
 
 
 def _bot_name(c, author):
+    """The name a hold shows for its author: the bot's display name, or the person's when a person wrote it."""
+    if H.is_human(author):
+        return H.person_name(c, H.actor_id(author))
     return (H.bot(c, H.actor_id(author)) or {}).get("display_name") or H.actor_id(author)
 
 

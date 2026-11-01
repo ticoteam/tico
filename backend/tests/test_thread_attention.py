@@ -90,6 +90,14 @@ def test_a_held_post_is_listed_to_the_person_its_bot_reports_to_until_they_withd
     assert needs(api, "thread_held", token="ben-test") == []
 
 
+def test_a_person_sees_a_hold_on_their_own_post_until_they_withdraw_it(api):
+    hid = hold(api, reviewer="human:ana", author="human:cara")
+    assert [i["id"] for i in needs(api, "thread_held", token="cara-test")] == [hid]
+    assert needs(api, "thread_held", token="ben-test") == []
+    post(api, f"rule-holds/{hid}/keep", {}, token="cara-test")
+    assert needs(api, "thread_held", token="cara-test") == []
+
+
 def test_a_held_message_outside_a_thread_write_is_not_listed(api):
     hold(api, operation="mail")
     assert needs(api, "thread_held") == []

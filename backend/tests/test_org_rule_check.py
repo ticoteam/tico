@@ -411,6 +411,23 @@ def test_the_person_a_bot_reports_to_reads_and_withdraws_its_held_post_but_canno
     assert bodies(api, "gold") == []
 
 
+def test_a_person_reads_and_withdraws_a_hold_on_their_own_post_and_a_peer_does_not(ruled):
+    api, _ = ruled
+    with api.app.state.store.transaction() as c:          # rules-people's person checks write holds with a person author
+        c.execute("INSERT INTO org_rule_holds(id, operation, payload_json, author, destinations_json, rule_ids_json, "
+                  "verdict_json, nonce, state, reviewer, task_id, created) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
+                  ("h-cara", "message", json.dumps({"text": "Our favorite color is gold", "replay": {}}), "human:cara",
+                   "[]", "[]", "{}", "n-cara", "held", "human:ana", None, H.now()))
+    view = get(api, "rule-holds/h-cara", token="cara-test")
+    assert view["can_withdraw"] and not view["can_send"] and "nonce" not in view and "gold" in view["text"]
+    assert view["author_name"] == "Cara"                      # the person's name, not the actor id
+    get(api, "rule-holds/h-cara", token="ben-test", expected=404)
+    post(api, "rule-holds/h-cara/send", {"nonce": "n-cara"}, token="cara-test", expected=404)
+    assert "nonce" in get(api, "rule-holds/h-cara", token="ana-test")
+    kept = post(api, "rule-holds/h-cara/keep", {}, token="cara-test")
+    assert kept["state"] == "kept" and kept["decided_by"] == "human:cara"
+
+
 def test_an_appeal_reaches_the_reviewer_even_when_a_rule_blocks_messaging_them(ruled):
     api, judge = ruled
     color_rule(api, reviewer="ben")
