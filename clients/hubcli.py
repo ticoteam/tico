@@ -109,12 +109,18 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub page list [--bot X] [--task ID] [--archived]   pages you may read, newest first
     hub page show <id>                     one page's status: updated, by, version, cadence, stale or replaced
     hub page archive <id> [--restore]      hide a page from lists and search, or bring it back
-    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug> or task:<id>
+    hub card list [--place P]              what is pinned at dashboard, team:<group>, bot:<slug>, task:<id> or
+                                           person:me (My dashboard)
     hub card add <template> [--place P] [--team G] [--weeks N] [--count N] [--kpi ID] [--title T] [--size S]
                                            tasks_by_status, done_per_week, needs_you, spend, kpi, automation_runs,
-                                           latest_pages; a bot pins to its own sidebar or task
+                                           latest_pages, needs_attention, unread_threads, my_tasks, updates; a bot
+                                           pins to its own sidebar or task
     hub card update <id> [--title T] [--team G] [--weeks N] [--count N] [--kpi ID]
     hub card remove <id>
+    hub connections list [--cursor C] [--limit N]
+                                           every connection you may see: status, scope, who reads it, its bots
+    hub inbound audience <inbox-id> company|team [--group G]
+                                           who reads an Email & Phone inbox (owner or admin)
     hub pin add <place> <page:FILE|card:ID> [--size small|medium|large] [--position N]
     hub pin update <pin-id> [--size S] [--position N]
     hub pin remove <pin-id>
@@ -797,12 +803,18 @@ def parser():
             item.add_argument('--before', type=int)
         if action == 'list':
             item.add_argument('--spam', action='store_true', default=None)
+    item = inbound.add_parser('audience'); item.set_defaults(fn='inbound audience')
+    item.add_argument('inbox_id'); item.add_argument('audience', choices=('company', 'team')); item.add_argument('--group')
     for action in ('read', 'code'):
         item = inbound.add_parser(action); item.set_defaults(fn='inbound '+action)
         item.add_argument('message_id')
         if action == 'read':
             item.add_argument('--offset', type=int); item.add_argument('--max-chars', type=int)
 
+
+    connections = sub.add_parser('connections', help='every connection in one list').add_subparsers(dest='sub')
+    item = connections.add_parser('list'); item.set_defaults(fn='connections list')
+    item.add_argument('--cursor'); item.add_argument('--limit', type=int)
 
     mail = sub.add_parser('mail', help='physical mail the company received (scanned letters)').add_subparsers(dest='sub')
     item = mail.add_parser('list'); item.set_defaults(fn='mail list')

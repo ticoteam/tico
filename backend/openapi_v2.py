@@ -1989,6 +1989,7 @@ STABLE.extend([
     ('/api/v2/inbound/inboxes','get','Inbound','listInboundInboxes','Company email and phone inboxes','InboundInboxes'),
     ('/api/v2/inbound/inboxes','post','Inbound','createInboundInbox','Create a free email inbox; SMS creation requires a phone approval request',None),
     ('/api/v2/inbound/inboxes/{ident}','patch','Inbound','editInboundInbox','Rename an inbox across connected interfaces and save local dependencies',None),
+    ('/api/v2/inbound/inboxes/{ident}/audience','put','Inbound','setInboundInboxAudience','An owner or admin sets who reads an inbox: company, or team with group_id (that group and the groups under it)','InboundInbox'),
     ('/api/v2/inbound/inboxes/{ident}/release','post','Inbound','releaseInboundInbox','An admin retires email or cancels phone renewal',None),
     ('/api/v2/inbound/phone-quote','get','Inbound','quoteInboundPhone','A current monthly US mobile rental quote',None),
     ('/api/v2/inbound/phone-requests','get','Inbound','listInboundPhoneRequests','An owner or admin lists phone approval requests','InboundPhoneRequests'),
@@ -2008,6 +2009,8 @@ SCHEMAS.update({
         {**obj({'connected':{'enum':[True]},'scope':{'enum':['inbox']},'company':{'$ref':'#/components/schemas/InboundConnectionCompany'}}),'additionalProperties':False},
     ]},
     'InboundCursor': obj({'cursor':'i'}),
+    'InboundInbox': obj({'inbox_id':'s','kind':'s','name':'s','address':'s','state':'s','audience':{'enum':['company','team']},
+                         'group_id':{'type':['string','null']}}),
     'InboundInboxes': obj({'inboxes':items({'type':'object'}),'configured':'b','last_sync':NUM_N,'error':'s','gaps':items({'type':'object'})}),
     'InboundMessages': obj({'messages':items({'type':'object'}),'next':{'type':['integer','null']},'cursor':'i'}),
     'InboundPhoneRequests': obj({'phone_requests':items({'type':'object'}),'next':{'type':['string','null']}}),
@@ -2027,6 +2030,20 @@ STABLE.extend([
     ('/api/v2/triggers/{trigger_id}/deliveries/{delivery}/replay','post','Triggers','replayTriggerDelivery','Run a kept call again as a new occurrence',None),
     ('/api/v2/triggers/{trigger_id}/recover','post','Triggers','recoverTrigger','Run again, under the current secret and preset, the calls refused in the last since_hours (1-720) whose body is kept; each keeps its delivery id',None),
 ])
+TAGS['Connections'] = 'Every connection in one list: who reads what it brings in, its bots and where to configure it.'
+STABLE.extend([
+    ('/api/v2/connections','get','Connections','listConnections','Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+     'importers, webhooks, physical mail and Listening: the owner and admins see every row, anyone else their own and the '
+     'company\'s they may read. Paged with cursor','ConnectionList'),
+])
+SCHEMAS['Connection'] = obj({'id': 's', 'kind': {'enum': ['slack', 'github', 'mailbox', 'inbox', 'meetings', 'trigger',
+                                                         'webhook', 'postal', 'listening']},
+                             'name': 's', 'detail': 's', 'status': {'enum': ['on', 'off', 'waiting', 'error', 'paused']},
+                             'scope': {'enum': ['company', 'team', 'person']}, 'readers': 's',
+                             'bots': items(obj({'slug': 's', 'name': 's'})), 'more_bots': 'i', 'configure': 's',
+                             'can_configure': 'b'},
+                            required=['id', 'kind', 'name', 'status', 'scope', 'readers', 'bots', 'configure'])
+SCHEMAS['ConnectionList'] = obj({'connections': items(ref('Connection')), 'next': 'n'})
 TAGS['Webhook relay'] = 'Addresses for triggers through Tico Gateway: they keep deliveries while this server is off (backend/hook_relay.py).'
 STABLE.extend([
     ('/api/v2/relay', 'get', 'Webhook relay', 'getWebhookRelay', 'The Gateway key, how many relay addresses exist, the last '
@@ -2213,9 +2230,10 @@ TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are p
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
     ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<slug>, task:<id>), each card with what it shows the caller; unreadable pages are left out', 'Place'),
-    ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard or team page (its default cards '
-     'become pins) and a team page\'s audience', 'Place'),
+     'bot:<slug>, task:<id>, person:me for My dashboard), each card with what it shows the caller; unreadable pages are '
+     'left out', 'Place'),
+    ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard, team page or My dashboard (its '
+     'default cards become pins) and a team page\'s audience', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),
     ('/api/v2/pins', 'post', 'Cards and pins', 'addPin', 'Pin page:<file id> or card:<id> at a place: a bot its own, to '
      'its sidebar or task; a person who arranges the Dashboard or a team page there', 'Place'),
@@ -2258,12 +2276,13 @@ STABLE.extend([
     ('/api/v2/rule-holds/{hold_id}/appeal', 'post', 'Rules', 'appealRuleHold', 'The author bot asks the reviewer to look, with why', None),
 ])
 SCHEMAS['Card'] = obj({'id': 'n', 'template': {'enum': ['tasks_by_status', 'done_per_week', 'needs_you', 'spend', 'kpi',
-                                                        'automation_runs', 'latest_pages']},
+                                                        'automation_runs', 'latest_pages', 'needs_attention',
+                                                        'unread_threads', 'my_tasks', 'updates']},
                        'title': 's', 'heading': 's', 'name': 's', 'team_name': 's', 'settings': 'o', 'hidden': 'b',
                        'data': {'type': ['object', 'null'], 'description': 'What the card shows the caller; null when hidden'}},
                       required=['id', 'template', 'heading', 'settings', 'hidden', 'data'])
 SCHEMAS['CardList'] = obj({'cards': items(ref('Card')), 'next': 'n'})
-SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task']}, 'saved': 'b', 'can_edit': 'b',
+SCHEMAS['Place'] = obj({'place': 's', 'kind': {'enum': ['dashboard', 'team', 'bot', 'task', 'person']}, 'saved': 'b', 'can_edit': 'b',
                         'pins': items(obj({'id': 'n', 'item': 'n', 'position': 'i', 'size': {'enum': ['small', 'medium', 'large']},
                                            'card': ref('Card'),
                                            'page': obj({'file_id': 's', 'title': 's', 'bot': 's', 'updated': 's', 'archived': 'b'})},

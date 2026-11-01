@@ -61,7 +61,7 @@ def ensure(c):
     H.add_column(c,'inbound_inboxes','group_id','TEXT')
 
 
-class Audience(Contract):
+class InboxAudience(Contract):
     audience: Literal['company','team'] = 'company'
     group_id: str | None = Field(default=None,max_length=120)
 
@@ -625,7 +625,7 @@ def install(app,store,settings,auth):
     def edit(request:Request,ident:str,body:Edit):return service.edit(request.state.identity,ident,body)
 
     @app.put('/api/v2/inbound/inboxes/{ident}/audience')
-    def audience(request:Request,ident:str,body:Audience):
+    def audience(request:Request,ident:str,body:InboxAudience):
         """Who reads the inbox: `company` (everyone) or `team` with `group_id` (that group and the groups under it).
         The owner and admins always read it. Owner and admins only."""
         return service.set_audience(request.state.identity,ident,body)

@@ -2897,11 +2897,14 @@ OLD_SERVER_MEDIA = ("This Tico server takes video and audio files up to 25 MB. A
 
 
 # ----------------------------------------------------------------------------- cards and pins (docs/overview.md)
-CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages")
-PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar) or task:<id>")
+CARD_TEMPLATES = ("tasks_by_status", "done_per_week", "needs_you", "spend", "kpi", "automation_runs", "latest_pages",
+                  "needs_attention", "unread_threads", "my_tasks", "updates")
+PLACE = _s("Where: dashboard, team:<group id>, bot:<slug> (a sidebar), task:<id>, or person:me (My dashboard, the "
+           "person's own landing page)")
 CARD_SETTINGS = {"team": _s("A group id; empty for the whole company"),
                  "weeks": {"type": "integer", "description": "Done per week: weeks shown, 4 to 26"},
-                 "count": {"type": "integer", "description": "Latest pages: how many, 1 to 10"},
+                 "count": {"type": "integer", "description": "Latest pages, Unread threads, My tasks, Updates: how many, "
+                           "1 to 10"},
                  "kpi": _s("KPI: the KPI id")}
 SIZE = _s("small, medium or large", enum=["small", "medium", "large"])
 
@@ -6362,6 +6365,15 @@ def inbound_inboxes(api,args):
     return api.get('inbound/inboxes',**{k:args[k] for k in ('after','limit') if args.get(k) is not None})
 
 
+@tool('hub_inbound_audience','Who reads an inbox: company (everyone), or team with group (that group and the groups '
+      'under it). The owner and admins always read it. Owner or admin only (BotOps: the person who asked).',
+      {'inbox_id':_s('Inbox id'),'audience':_s('company or team',enum=['company','team']),
+       'group':_s('Group id, for team')},required=('inbox_id','audience'),writes=True)
+def inbound_audience(api,args):
+    body = {'audience':args['audience'],'group_id':args.get('group') or None}
+    return _as_person(api).call('PUT','inbound/inboxes/'+quote(args['inbox_id'],safe='')+'/audience',body,_key(args))
+
+
 @tool('hub_inbound_create_email','Create a free inbound-only @tico.team inbox for company agents. Usage is recorded, not billed.',
       {'name':_s('Inbox name')},writes=True)
 def inbound_create_email(api,args):
@@ -6406,6 +6418,15 @@ def inbound_code(api,args):
 def inbound_wait(api,args):
     body = {k:v for k,v in args.items() if k in ('inbox_ids','kind','sender','has_code','after','timeout','limit') and v is not None}
     return api.post('inbound/wait',body)
+
+
+# ----------------------------------------------------------------------------- connections (backend/connections.py)
+@tool('hub_connections_list','Every connection you may see: Slack, GitHub, mail bots, Email & Phone inboxes, meeting '
+      'importers, incoming and outgoing webhooks, physical mail and Listening. Each row: name, status, scope, who reads '
+      'it, its bots and where to configure it. Follow next with cursor.',
+      {'cursor':_s('The previous page\'s next'),'limit':{'type':'integer','minimum':1,'maximum':100}})
+def connections_list(api,args):
+    return _as_person(api).get('connections',**{k:args[k] for k in ('cursor','limit') if args.get(k) is not None})
 
 
 # ----------------------------------------------------------------------------- physical mail (backend/postal_mail.py)

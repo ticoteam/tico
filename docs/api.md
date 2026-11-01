@@ -286,6 +286,13 @@ creates a free inbound address under the company quota, with an `Idempotency-Key
 `used_for` remains a local dependency note and is preserved when omitted or when HQ syncs a name change.
 Updating only dependency notes works even while HQ is unavailable.
 Phone edits and releases are owner/admin actions. Releasing an inbox with dependencies requires its exact address in `confirm`.
+
+Each inbox has an audience. `company`, the default, is everyone above. An owner or admin narrows it with
+`PUT inboxes/{id}/audience` and `{audience:"team",group_id}`: then only the people and bots in that group and the groups
+under it read it, with the owner and admins. Outside its audience an inbox is not there on any read: the inbox list,
+`messages` (search included), `cursor`, `wait`, a message and its code (`404`). Each change leaves an `audit_log` row
+(`inbound_inbox:<id>`) and an `inbound.inbox_audience` event. CLI: `hub inbound audience <id> company|team --group G`;
+MCP: `hub_inbound_audience`. Settings > More > Email & Phone shows who reads each inbox, and an admin changes it there.
 Phone cancellation keeps receiving until the paid period ends; email retirement is permanent.
 
 Phone provisioning requires TICO approval until billing is available. Owners and admins can

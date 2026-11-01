@@ -71,3 +71,21 @@ def test_the_list_is_paged_and_byte_capped(api, monkeypatch):
     capped = get(api, "connections?limit=100")
     assert len(capped["connections"]) == 1 and capped["next"] == "1"
     get(api, "connections?cursor=abc", expected=422)
+
+
+def test_mcp_and_cli_read_the_same_list_and_set_an_inbox_audience(api, monkeypatch):
+    from backend.tests.test_mcp import call
+    seed(api)
+    err, result = call(api, "hub_connections_list", {"limit": 100}, "cara-test")
+    assert not err and {r["id"] for r in result["connections"]} == ids(api, "cara-test")
+    err, result = call(api, "hub_inbound_audience", {"inbox_id": "ibx_a", "audience": "team", "group": "sales"},
+                       "cara-test")
+    assert err                                              # a member may not
+    err, result = call(api, "hub_inbound_audience", {"inbox_id": "ibx_a", "audience": "team", "group": "ops-team"})
+    assert not err and result["group_id"] == "ops-team"
+    assert "inbox:ibx_a" not in ids(api, "cara-test")
+    from clients import hubcli, remotecli
+    args = hubcli.parser().parse_args(["connections", "list", "--limit", "5"])
+    assert remotecli.tool_name(args.fn) == "hub_connections_list"
+    args = hubcli.parser().parse_args(["inbound", "audience", "ibx_a", "company"])
+    assert remotecli.tool_name(args.fn) == "hub_inbound_audience" and args.audience == "company"
