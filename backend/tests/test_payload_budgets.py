@@ -43,7 +43,7 @@ def test_payloads_stay_under_their_budgets(api):
         first = dict(c.execute("SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         # 1,000 long replies before it; a person's message would queue a run of its own.
         clone(c, "messages", {**first, "body": BODY, "from_actor": "bot:ops", "to_actor": "human:ana"}, 1000,
-              created=lambda i: H.shift(first["created"], seconds=-i - 1))
+              created=lambda i: H.shift(first["created"], seconds=-i - 1), origin_id=lambda i: uuid.uuid4().hex, seq=lambda i: None)
         # 60 bots at work, each with a status line as a busy team's are (focus, task, last result, counts).
         bot = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         c.executemany(f"INSERT INTO bots({','.join(bot)}) VALUES({','.join('?' * len(bot))})",
@@ -166,7 +166,7 @@ def prepared_transitions(api, cid, count, text):
         first = dict(c.execute(
             "SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
         clone(c, "messages", {**first, "from_actor": "bot:ops", "to_actor": "human:ana"}, count,
-              created=lambda i: H.shift(first["created"], seconds=-i - 1))
+              created=lambda i: H.shift(first["created"], seconds=-i - 1), origin_id=lambda i: uuid.uuid4().hex, seq=lambda i: None)
         messages = [row[0] for row in c.execute(
             "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]
         for i, message in enumerate(messages):

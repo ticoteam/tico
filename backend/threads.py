@@ -1293,7 +1293,7 @@ def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_a
     people = list(dict.fromkeys([actor] + [p for p in participants if p != actor])) if participants else [actor]
     c.execute("INSERT INTO conversations(id,kind,subject,task_id,participants_json,created,last_message_at,closed_at,"
               "scope,owner_actor,room_key,audience,audience_group_id,parent_id,parent_message_id,root_id,path,"
-              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,NULL,?,NULL,?,?,?,?,?,?,"
+              "last_seq,last_unread_seq,archived_at,updated_at) VALUES(?,?,?,?,?,?,NULL,NULL,'direct',?,NULL,?,?,?,?,?,?,"
               "0,0,NULL,?)",
               (tid, kind, str(title or "")[:MAX_TITLE], task_id, H._dump(people), now, owner_actor, audience,
                audience_group_id, parent["id"] if parent is not None else None, parent_message_id, root_id, path, now))
@@ -1625,12 +1625,9 @@ def unread(c, v, thread_id, *, follower=None):
         return {"unread": 0, "activity": False}
     f = follower if follower is not None else c.execute(
         "SELECT last_read_seq FROM thread_followers WHERE thread_id=? AND actor=?", (row["id"], v.actor)).fetchone()
-    if f is None:
-        n = c.execute("SELECT COUNT(*) FROM message_deliveries d JOIN messages m ON m.id=d.message_id "
-                      "WHERE d.recipient=? AND d.thread_id=? AND d.state IN ('pending','delivered') "
-                      "AND m.deleted_at IS NULL", (v.actor, row["id"])).fetchone()[0]
-        return {"unread": n, "activity": False}
-    mark = f[0] if not isinstance(f, int) else f
+    # No follower row: the viewer has read nothing here, so the mark is 0 and the contract's rule counts every human or
+    # addressed message (a deliveries-only count missed the humans in a sub-thread the viewer never followed).
+    mark = 0 if f is None else (f[0] if not isinstance(f, int) else f)
     if int(row.get("last_seq") or 0) <= mark:
         return {"unread": 0, "activity": False}
     n = c.execute("SELECT COUNT(*) FROM messages m WHERE m.conversation_id=? AND m.seq>? AND m.deleted_at IS NULL "

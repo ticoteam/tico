@@ -29,7 +29,8 @@ function liveFollow(id) {
   id = String(id);
   const had = LIVE.conversations.has(id);
   LIVE.conversations.set(id, (LIVE.conversations.get(id) || 0) + 1);
-  if (!had) liveRestart();
+  // A page that is not cloud never wires the stream (liveWire), so a chat on screen starts it here.
+  if (!had) { if (LIVE.started) liveRestart(); else liveStart(); }
   let released = false;
   return () => {
     if (released) return;
