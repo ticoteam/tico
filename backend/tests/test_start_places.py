@@ -610,22 +610,28 @@ def test_a_computer_that_reported_then_went_silent_past_retention_is_not_reporti
     assert claim(api, computer, 'finance') is not None
 
 
-def test_a_computer_that_sampled_before_the_upgrade_is_held_once_its_samples_age_out(api):
-    """The mark is backfilled from the samples a computer already kept, so an upgraded computer that then goes
-    silent past retention is still not reporting, and a fresh sample releases it."""
+def test_an_upgraded_computer_stays_held_after_its_samples_are_pruned_and_startups_keep_its_mark(api):
+    """A database from before the mark: starting the server backfills it from the samples the computer kept. Retention
+    then prunes those samples with nothing new ingested, and a second start keeps the mark, so the computer is still
+    not reporting until a fresh sample arrives."""
     import time
     from backend import performance as P
+    store = api.app.state.store
     computer = bot_waiting_for_finance(api)
+    rid = computer['runner_id']
     memory(api, computer, .3)
     now = int(time.time()) // 60 * 60
-    with api.app.state.store.transaction() as c:
-        c.execute('UPDATE runners SET last_sampled_at=NULL WHERE id=?', (computer['runner_id'],))
-        P.backfill_last_sampled(c)
-    with api.app.state.store.read() as c:
-        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (computer['runner_id'],)).fetchone()[0] == now
-    with api.app.state.store.transaction() as c:
-        c.execute('DELETE FROM runner_load_samples WHERE runner_id=?', (computer['runner_id'],))
-        c.execute('UPDATE runners SET last_sampled_at=last_sampled_at-200000 WHERE id=?', (computer['runner_id'],))
+    with store.transaction() as c:
+        c.execute('ALTER TABLE runners DROP COLUMN last_sampled_at')
+    store.initialize()
+    with store.read() as c:
+        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
+    P.sweep(store, now=int(time.time()) + 49 * 3600)
+    with store.read() as c:
+        assert c.execute('SELECT count(*) FROM runner_load_samples WHERE runner_id=?', (rid,)).fetchone()[0] == 0
+    store.initialize()
+    with store.read() as c:
+        assert c.execute('SELECT last_sampled_at FROM runners WHERE id=?', (rid,)).fetchone()[0] == now
     assert claim(api, computer, 'finance') is None
     memory(api, computer, .3)
     assert claim(api, computer, 'finance') is not None
