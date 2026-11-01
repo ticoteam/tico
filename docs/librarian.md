@@ -1,7 +1,8 @@
 # The Librarian
 
-The Librarian is a built-in bot that answers questions from the team's docs. Humans ask it from **Ask the Librarian** on Docs
-and on the Market tab of [Strategy](strategy.md) (`#/strategy/market`); other bots and the Assistant ask it with `hub doc ask`. It cites every claim, says "Not in the docs." plainly when the
+The Librarian is a built-in bot that answers questions from the team's docs. Humans reach it through the Assistant: **Ask** on
+[Docs](docs.md#ask-on-docs) opens the Assistant panel, and the Assistant hands it research. Other bots and the Assistant ask it
+with `hub doc ask`. It cites every claim, says "Not in the docs." plainly when the
 docs do not say, and keeps a map of the docs so the next question is cheaper. It never answers from general knowledge.
 
 ## Watching competitor pages and the weekly briefing
@@ -56,24 +57,16 @@ pages web search returns).
 
 ## Asking
 
-**Humans.** Docs and the Market tab show an **Ask the Librarian** rail on the right on desktop. Its arrow hides it and **Ask the
-Librarian** brings it back; the choice is kept per viewer in this browser. On a phone, the button opens a full-screen sheet.
-On Docs, matching internal, indexed external, linked and manual docs appear at once
-from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
-The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
-conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on
-`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the conversation's snapshot). Each human has one private docs conversation with the Librarian
-(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s room: only they can read it, and the owner and
-administrators cannot. **New chat** starts a fresh conversation, so the Librarian remembers only what is on screen.
-**Previous conversations** lists your saved Docs chats. Pick one to reopen it and continue where you left off;
-your current chat stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
-`GET /api/v2/librarian/conversations` lists them (`limit`, `offset`, `next_offset`), and
-`POST /api/v2/librarian/conversations/{id}/reopen {}` makes one current. Reopening waits until the current turn finishes.
+**Humans.** There is no Librarian rail or chat of its own. **Ask** on Docs opens your Assistant panel with the Docs page in view
+([Docs](docs.md#ask-on-docs)), and the Assistant hands research to the Librarian. Only you can see your Assistant chat.
+The server still has the Docs chat routes: `POST /api/v2/docs/ask {question, conversation_id?, new_conversation?}` returns
+`{conversation_id, message_id, results}`, with the answer on `GET /api/v2/events?topics=messages,runs&conversation={id}`; and
+`GET /api/v2/librarian/conversations` lists your saved Docs chats, `POST /api/v2/librarian/conversations/{id}/reopen {}` makes
+one current. Each human has one private docs conversation with the Librarian (`scope: personal`, `room_key: docs`), and only that
+human can read it, including when an owner or administrator asks. No screen in the app calls these routes today.
 
-On Market, a question is answered from the market graph as it is at that moment (`POST /api/v2/market/ask {question}`,
-the same answer the Market page has always given, which needs no computer): the answer, then the organizations, people and
-pages it drew on, which open the note and light up on the graph. Docs and Market each keep their own thread while the page
-is open. The sentence is written by Gemini (`gemini-3.7-flash`) with the server's `GEMINI_API_KEY`; without a key, when the
+The Market tab has no question box now. The server still answers `POST /api/v2/market/ask {question}` from the market graph as
+it is at that moment: the answer, then the organizations, people and pages it drew on. No screen calls it today. The sentence is written by Gemini (`gemini-3.7-flash`) with the server's `GEMINI_API_KEY`; without a key, when the
 call fails, or in rehearsal, the answer is the rows that were pulled. Each model call is a `market.ask` event (the model,
 latency, how many excerpts and how long the question was; never its text) and counts per person per day under the decision
 caps (`TICO_DECISIONS_DAILY_CALLS_*`, counted apart from decisions); over the cap the ask is a 429.
@@ -143,7 +136,7 @@ map and `FAQ.md` do not count), a card above the list asks "Where are your docs?
 indexed, as with **Add source**) and files one task, "Set up Docs", to the Librarian. Its `playbooks/docs-setup.md` walks each
 source, builds the map (`_librarian/index.md`, `where-things-live.md`, `glossary.md`) and lists in `_librarian/missing.md`
 any place it could not read, with what a person can do about it. **Import files** opens the Docs import. **Skip for now** is
-the person's own choice; **Set up with the Librarian…** in the Docs menu brings the card back at any time.
+the person's own choice; **Set up Docs…** in the Docs menu brings the card back at any time.
 
 **Market.** Market is a tab of [Strategy](strategy.md) (`#/strategy/market`; the old `#/market` redirects there). On a
 first visit to an empty Market tab the owner answers four questions, one at a time: what you sell, who
@@ -268,8 +261,8 @@ renaming stay allowed, and Settings > Bots shows it as **Built-in**.
 a model is chosen and a computer is enrolled. It is checked when the server starts and when a computer enrolls, so the order
 in which a team does things does not matter. It goes on the computer BotOps runs on, its daily routine is created once (a
 routine a human deletes is never put back), and an owner who paused it keeps it paused. Where one of those is missing (no
-model yet, no computer), Ask the Librarian says the Librarian is not set up, and the owner gets **Turn on the Librarian** there (the same
-steps, `POST /api/v2/librarian/turn-on`), as the Assistant has **Turn on Assistant**.
+model yet, no computer), the Librarian does not answer until it is. The app has no **Turn on** button for it; the owner can
+still call `POST /api/v2/librarian/turn-on`.
 
 ## Trying it: the eval
 

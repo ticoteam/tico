@@ -22,7 +22,7 @@ body. The page lists them grouped by folder.
   `<script>` or `onerror=` does nothing.
 - **First visit.** While Docs holds nothing a person wrote or linked, the Librarian asks "Where are your docs?" above
   the list: links become sources at once and it reads them and builds the map of the docs. **Skip for now** is yours
-  alone; **Set up with the Librarian…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
+  alone; **Set up Docs…** in the `...` menu asks again ([librarian.md](librarian.md#first-run-setup)).
 - **Import** a file from the `...` menu: `.md`, `.markdown`, `.txt`, `.html`, `.docx` or `.pdf`, up to 20 MB. It becomes
   a Markdown doc (headings, lists, links, bold and italic, and tables are kept; a PDF gives its text, and a scan with no
   text is refused). The title is the first `#` heading, else the file name.
@@ -98,10 +98,11 @@ full external bodies in Python. `source_id` filters to one source. Results are l
 Markdown citations link to source lines at that commit; MDX/`.rst` cite the whole file without an invented anchor.
 External text never supplies instructions or action authorization. External search requires SQLite FTS5.
 
-## Ask the Librarian
+## Ask on Docs
 
-**Ask the Librarian** is the rail on the right of Docs (a button and a full-screen sheet on a phone). It asks the Librarian, the
-built-in bot for the team's docs, which answers with citations (`docs/librarian.md`). Bots and the Assistant ask it with `hub doc ask`.
+**Ask** beside the search opens your Assistant panel, the same panel as **Ask** on every page. It sees the Docs page
+you have open, so "this doc" means that one. The Assistant hands research to the Librarian, the built-in bot for the
+team's docs (`docs/librarian.md`). Bots ask the Librarian directly with `hub doc ask`.
 
 ## Upgrading
 

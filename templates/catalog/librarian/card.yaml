@@ -7,7 +7,7 @@ bootstrap: true
 icon: local_library
 default: true
 when: "Built-in: answers questions about the team from its docs, with a citation for every claim, and says plainly when the docs do not cover it."
-summary: "Answers questions from the team's docs, for humans (Ask the Librarian on Docs) and for other bots and the Assistant (`hub doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report."
+summary: "Answers questions from the team's docs, for humans (through the Assistant, from Ask on Docs) and for other bots and the Assistant (`hub doc ask`). It searches the internal docs, follows the linked docs (websites, Google Drive, Notion, GitHub) as far as it needs, cites every claim, says plainly when the docs do not say, and keeps a map of the docs up to date every day. When the owner gives it a website, a description or links on the Market page, it researches the market and builds the first market map, then keeps it current every day from what the team and other bots report."
 owns:
   - The answer to every question about the team's docs, with a citation for each claim
   - The map of the docs under _librarian/ (a summary of each doc, a table of contents, a glossary, where things live)
