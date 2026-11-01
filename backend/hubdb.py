@@ -4792,6 +4792,8 @@ def task_link(conn, actor, task_id, url, title=None, kind=None, mover=None, wake
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
     _task_link_allowed(conn, actor, row, mover, kind or link_kind(str(url or "")))
+    from .strategy_acts import TASK, person_task
+    person_task(conn, actor, row, f"link {TASK}")          # a person's task stays theirs
     url = str(url or "").strip()
     if kind == "session":
         return _task_session_link(conn, actor, task_id, url, title)
@@ -5031,6 +5033,8 @@ def task_unlink(conn, actor, task_id, link_id, mover=None):
     if not have:
         refuse(conn, actor, "not-found", f"no link {link_id} on {task_id}")
     _task_link_allowed(conn, actor, row, mover, have["kind"])
+    from .strategy_acts import TASK, person_task
+    person_task(conn, actor, row, f"unlink {TASK}")        # a person's task stays theirs
     if have['kind'] == 'worktree' and have.get('state') != 'removed' and 'detail_json' in have:
         detail = json.loads(have.get('detail_json') or '{}')
         detail['delete_requested'] = True
@@ -6407,6 +6411,17 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                f"{task_id} is changed by its owner, requester, their managers, delegates or task movers; " + (
                    f"ask {actor_id(row.get('closed_by') or row['requester'])} to reopen it, or file a new task"
                    if row['status'] == 'closed' else "ask the owner to set doing or open, or file a new task"))
+    # A person's task is theirs: the Strategy Bot changes nothing on it, at any level, even as its requester (strategy_acts).
+    asked = [name for name, value in (
+        ("title", title), ("body", body), ("due date", due), ("place in the queue", rank), ("owner", owner),
+        ("status", status), ("type", type), ("step", step), ("step rank", step_rank), ("note", note), ("lane", lane),
+        ("labels", labels), ("goal", goal_id), ("number", number), ("privacy", private), ("wait", waiting_on),
+        ("roles", roles), ("visibility", visibility), ("public title", public_title),
+        ("public summary", public_summary), ("size", size), ("review PRs", review_prs), ("verdict", verdict),
+        ("verdict head", verdict_head)) if value is not None] + (["size"] if clear_size else [])
+    if asked:
+        from .strategy_acts import TASK, person_task
+        person_task(conn, actor, row, f"change {TASK} ({', '.join(dict.fromkeys(asked))})")
     type_id = row.get("type_id") or GENERAL_TYPE
     queue_return = (requested_status == 'open' and step is None and actor == row['owner']
                     and row['status'] in ('doing', 'waiting', 'review', 'done'))
@@ -7210,6 +7225,9 @@ def task_close(conn, actor, task_id, note="", quiet=False, *, type=None, step=No
     if not row:
         refuse(conn, actor, "not-found", f"no task {task_id}")
     _task_close_allowed(conn, actor, row, note, mover)
+    if row["status"] != "closed" or type is not None or step is not None:
+        from .strategy_acts import TASK, person_task
+        person_task(conn, actor, row, f"close {TASK}")
     if row["status"] == "closed":
         if type is not None or step is not None:
             _set_status(conn, actor, row, status="closed", type=type, step=step, note=note or "")

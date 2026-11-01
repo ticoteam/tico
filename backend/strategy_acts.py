@@ -19,6 +19,7 @@ these; each try becomes a proposal in the owner's Needs you that says what it wa
 (`Proposed`). A change in a decision that can't be made now (a person's task, a bot that is offline, a refusal) is never
 dropped either: it becomes a proposal the same way, and the log keeps it."""
 
+import contextlib
 import contextvars
 
 from . import strategy_bot
@@ -84,6 +85,33 @@ def gate(c, actor, kind, what, why="", task_id=None):
         what = " ".join(str(what or "").split())[:500]
         raise Proposed(kind, what, " ".join(str(why or "").split())[:1000], task_id,
                        _say(c, what, task_id, _company(c), PRIVATE))
+
+
+# Tico's own upkeep of the Strategy Bot's asks in a person's Needs you is written as the Strategy Bot: rewording or relisting an
+# ask, and closing it once settled (backend/goal_asks.py, strategy.settle_card). Only that server code says so
+# (`upkeep`), and only for a task the Strategy Bot asked for; none of the bot's own calls ever does.
+UPKEEP = contextvars.ContextVar("strategy_upkeep", default=False)
+
+
+@contextlib.contextmanager
+def upkeep():
+    token = UPKEEP.set(True)
+    try:
+        yield
+    finally:
+        UPKEEP.reset(token)
+
+
+def person_task(c, actor, row, what):
+    """Refuse the Strategy Bot any change to a task a person owns (`PERSON_ONLY` "person_task"), at every level, even one
+    it asked for, which the ordinary task rules let its requester change. `what` says the change, with TASK for the
+    task. Each task write calls it once its ordinary rules would let the change through, so a task the Strategy Bot may not
+    write is refused as before and nothing about it is logged or proposed."""
+    if not row or not H.is_human(row.get("owner") or "") or not is_strategy_bot(actor):
+        return
+    if UPKEEP.get() and row.get("requester") == STRATEGY_BOT:
+        return
+    gate(c, actor, "person_task", what, task_id=row["id"])
 
 
 def settle(c, exc):
