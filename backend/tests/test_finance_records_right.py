@@ -292,8 +292,8 @@ def test_revenue_by_item_leaves_out_a_whole_invoice_with_a_line_on_a_private_acc
                 c.execute("UPDATE fin_invoice_lines SET account_id=? WHERE invoice_id=? AND amount=1000",
                           (payroll, made))
         owner = FR.report(c, OWNER, "revenue_by_item", start=WINDOW[0], end=WINDOW[1], at=AT)
-        assert owner["total"] == 44_000
-        assert {r["label"]: r["amount"] for r in owner["rows"]} == {"Gadget": 44_000}
+        assert owner["total"] == 43_000     # the 1,000 line on the expense account is not revenue
+        assert {r["label"]: r["amount"] for r in owner["rows"]} == {"Gadget": 43_000}
         assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
         assert act(c, OWNER, "view_grant", {"subject": "human:cara", "what": "receivables"}).status == "committed"
         cut = FR.report(c, "human:cara", "revenue_by_item", start=WINDOW[0], end=WINDOW[1], at=AT)
@@ -310,3 +310,54 @@ def test_the_picker_matches_an_email_only_for_a_viewer_of_receivables(books):
         assert FR.customers(c, "human:eve", q="billing@acme-retail", at=AT)["customers"] == []
         assert [r["id"] for r in FR.customers(c, "human:eve", q="acme", at=AT)["customers"]] == [acme]
         assert [r["id"] for r in FR.customers(c, OWNER, q="billing@acme-retail", at=AT)["customers"]] == [acme]
+
+
+def test_revenue_by_item_counts_income_lines_only_and_not_a_sales_tax_line(books):
+    with books.transaction() as c:
+        gadget = str(_ok(act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2_500,
+                                                       "income_account_id": account(c, "4000")})).result["item_id"])
+        customer = str(_ok(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}))
+                       .result["contact_id"])
+        lines = [{"item_id": gadget, "amount": 10_000}, {"item_id": gadget, "amount": 800}]
+        made = str(_ok(act(c, OWNER, "invoice_create", {"customer_id": customer, "invoice_date": "2026-10-05",
+                                                        "lines": lines})).result["invoice_id"])
+        _ok(act(c, OWNER, "invoice_send", {"invoice_id": made}))
+        # The fixture chart has no sales-tax account, so the 800 line is moved onto the liability account 2000 by hand.
+        c.execute("UPDATE fin_invoice_lines SET account_id=?, item_id=NULL WHERE invoice_id=? AND amount=800",
+                  (account(c, "2000"), made))
+        report = FR.report(c, OWNER, "revenue_by_item", start=WINDOW[0], end=WINDOW[1], at=AT)
+        assert report["total"] == 10_000
+        assert {row["label"]: row["amount"] for row in report["rows"]} == {"Gadget": 10_000}
+
+
+def test_a_records_holder_without_a_finance_view_edits_an_items_name_and_not_its_accounts(books):
+    with books.transaction() as c:
+        item = str(_ok(act(c, OWNER, "item_create", {"name": "Gadget", "kind": "service", "price": 2_500,
+                                                     "income_account_id": account(c, "4000")})).result["item_id"])
+        assert act(c, OWNER, "right_grant", {"teammate": "human:eve", "right": "finance.records"}).status == "committed"
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        renamed = act(c, "human:eve", "item_update", {"item_id": item, "name": "Gadget Pro"})
+        assert renamed.status == "committed", renamed.reason
+        owner_view = FR.record(c, OWNER, kind="item", record_id=item, at=AT)["item"]
+        assert owner_view["name"] == "Gadget Pro" and owner_view["income_account_id"] == account(c, "4000")
+        eve_view = FR.record(c, "human:eve", kind="item", record_id=item, at=AT)["item"]
+        assert eve_view["name"] == "Gadget Pro" and "income_account_id" not in eve_view
+        assert act(c, "human:eve", "item_update", {"item_id": item, "price": 3_000}).status == "needs_approval"
+        named = act(c, "human:eve", "item_update", {"item_id": item, "income_account_id": account(c, "4000")})
+        assert named.code == NOT_FOUND, named
+
+
+def test_a_bot_without_records_asks_about_a_location_or_project_that_names_a_customer(books):
+    with books.transaction() as c:
+        customer = str(_ok(act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"}))
+                       .result["contact_id"])
+        assert act(c, OWNER, "view_defaults_set", {"member": "none"}).status == "committed"
+        asked = act(c, "bot:coder", "location_create", {"name": "Yard", "customer_id": customer})
+        assert asked.status == "needs_approval", asked
+        asked = act(c, "bot:coder", "project_create", {"name": "Job 4", "customer_id": customer})
+        assert asked.status == "needs_approval", asked
+        assert c.execute("SELECT COUNT(*) FROM locations WHERE name='Yard'").fetchone()[0] == 0
+        missing = act(c, "bot:coder", "location_create", {"name": "Yard 2", "customer_id": "no-such-contact"})
+        assert missing.code == NOT_FOUND, missing
+        person = act(c, "human:eve", "location_create", {"name": "Yard 3", "customer_id": customer})
+        assert person.status == "denied", person     # a person without the right is refused by the rights gate first

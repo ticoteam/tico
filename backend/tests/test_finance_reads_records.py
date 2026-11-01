@@ -303,3 +303,13 @@ def test_a_teammate_without_a_finance_view_narrows_the_locations_by_customer(boo
         rest = FR.records(c, "human:eve", kind="location", equal={"customer_id": acme}, limit=1,
                           cursor=first["next_cursor"], at=AT)
         assert [r["name"] for r in rest["locations"]] == ["Acme Denver"] and rest["next_cursor"] is None
+
+
+def test_a_location_detail_carries_its_next_due_day_as_its_list_does(books):
+    with books.transaction() as c:
+        denver = _made(c, "location_create", {"name": "Denver", "kind": "store"}, "location_id")
+        due = act(c, OWNER, "due_date_create", {"name": "Permit", "subject_type": "location", "subject_id": denver,
+                                                "repeats": "once", "starts_on": "2026-11-05", "assignee_id": OWNER})
+        assert due.status == "committed", due.reason
+        assert FR.records(c, OWNER, kind="location", at=AT)["locations"][0]["next_due_on"] == "2026-11-05"
+        assert FR.record(c, OWNER, kind="location", record_id=denver, at=AT)["location"]["next_due_on"] == "2026-11-05"
