@@ -32,6 +32,11 @@ with every computer asks "this computer only" or "all of them" first (`key_info`
 Remove (`remove`) takes a named subscription's login for one tool off a computer: the runner signs it out there and,
 once nothing else is signed in on that subscription, deletes the subscription from the computer. It is refused while
 bots run on it; they are moved on the Bots page first, never by this.
+
+Connect (`connect`, Settings > Models) is the one job that does end with a credential: the CLI signs in to a plan, and
+the runner sends what that gave it to `backend/model_subscriptions.py`, which seals it as a company subscription. It
+leaves the computer's own login as it was. The value never passes through this relay: not in a report, a line or a row.
+Only that save ends the job `done`; a report can only fail it.
 """
 
 import json
@@ -46,9 +51,11 @@ from .store import H, Problem
 RUNTIMES = manifests.with_capability("browser_sign_in")
 PASTE_RUNTIMES = manifests.with_capability("paste_code")
 SIGN_OUT_RUNTIMES = manifests.with_capability("sign_out")
+CONNECT_RUNTIMES = manifests.with_capability("subscription_connect")
 # What a row asks the runner to do. A runner without SIGN_OUT_CAPABILITY knows only `sign_in`, so it is never
 # handed another kind: it would start a sign-in instead.
-KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove", "to_key")
+KINDS = ("sign_in", "switch", "sign_out", "use_shared_key", "clear_key", "use_key", "to_subscription", "remove", "to_key",
+         "connect")
 SIGN_OUT_CAPABILITY = "model_sign_out_v1"
 # A runner that clears and uses a computer's key (runner-rs/src/login.rs); an older one is asked to update first.
 KEYS_CAPABILITY = "model_keys_v1"
@@ -62,6 +69,8 @@ SWITCH_TYPE_CAPABILITY = "model_switch_type_v1"
 REMOVE_CAPABILITY = "model_remove_v1"
 # A runner that can move a computer login off its subscription onto a key (`to_key`, runner-rs/src/login.rs).
 SWITCH_TO_KEY_CAPABILITY = "model_switch_to_key_v1"
+# A runner that can sign a plan in for a company subscription (`connect`, runner-rs/src/login.rs).
+CONNECT_CAPABILITY = "model_connect_v1"
 # The kinds that sign in on the side and have a commit point (`finishing`).
 SIDE_KINDS = ("switch", "to_subscription")
 # A removal has a commit point too: the bots check is made again there, before anything is signed out or deleted.
@@ -81,7 +90,7 @@ VERDICTS = {"sign_in": ("signed_in", "failed"), "switch": ("signed_in", "failed"
             "sign_out": ("signed_out", "failed"), "use_shared_key": ("done", "failed"),
             "clear_key": ("signed_out", "failed"), "use_key": ("done", "failed"),
             "to_subscription": ("signed_in", "failed"), "remove": ("done", "failed"),
-            "to_key": ("done", "failed")}
+            "to_key": ("done", "failed"), "connect": ("failed",)}
 MAX_LINES, MAX_LINE = 12, 200
 ONLINE_SECONDS = 60
 PASTE_RE = re.compile(r"^[A-Za-z0-9_\-#.~%+=/]{6,600}$")
@@ -138,6 +147,10 @@ def sweep(c):
         computer_keys.discard(c, row["id"])
     c.execute("UPDATE model_logins SET state='expired', url='', user_code='', pending_code=NULL, updated=? "
               f"WHERE {ACTIVE_SQL} AND expires_at<?", (now, now))
+    # What a Connect that is over would have become: the job names no value, and nothing reads this once it has ended.
+    if H._has_table(c, "subscription_connects"):
+        c.execute("DELETE FROM subscription_connects WHERE login_id NOT IN "
+                  f"(SELECT id FROM model_logins WHERE {ACTIVE_SQL})")
     c.execute("DELETE FROM model_logins WHERE created<?", (H.shift(now, days=-1),))
 
 
@@ -213,6 +226,10 @@ def _removes(runner):
     return REMOVE_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
 
 
+def connects(runner):
+    return CONNECT_CAPABILITY in set(H._json(runner["capabilities_json"], []) or [])
+
+
 def _queue(c, who, runner, runtime, profile, kind, what):
     """(row, new): a new row for the runner to run, or the one already running for this login. One thing at a time
     per login: a sign-out never races a sign-in on the same files."""
@@ -236,7 +253,7 @@ def _queue(c, who, runner, runtime, profile, kind, what):
         raise Problem("offline", f"That computer is offline, so it cannot {what}", 409)
     if (kind != "sign_in" and not _signs_out(runner) or kind in KEY_KINDS and not _handles_keys(runner)
             or kind == "to_subscription" and not _switches_type(runner) or kind == "remove" and not _removes(runner)
-            or kind == "to_key" and not _switches_to_key(runner)):
+            or kind == "to_key" and not _switches_to_key(runner) or kind == "connect" and not connects(runner)):
         raise Problem("runner_version", f"Update {runner['label']} to {what} from here", 409)
     now = H.now()
     lid = H.new_id()
@@ -670,7 +687,8 @@ def report(c, runner_id, lid, body, settings=None):
     done_with_page = terminal or state == "finishing"
     url = "" if done_with_page else clean_url(body.url) or row["url"]
     code = "" if done_with_page else clean_user_code(body.code) or row["user_code"]
-    lines = clean_lines(body.lines) or json.loads(row["lines_json"] or "[]")
+    # Connect keeps no lines: what it prints ends with the credential itself.
+    lines = [] if row["kind"] == "connect" else clean_lines(body.lines) or json.loads(row["lines_json"] or "[]")
     pending_code = None if terminal or body.code_taken else row["pending_code"]
     c.execute("UPDATE model_logins SET state=?, url=?, user_code=?, lines_json=?, message=?, pending_code=?, "
               "updated=? WHERE id=?",

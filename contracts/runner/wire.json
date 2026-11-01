@@ -19,6 +19,7 @@
     "heartbeat.request.capabilities[]=\"private_lanes_v1\"": "runner-rs lanes::refused_field drops it on the 422 that refuses it and sends it again ten minutes later",
     "heartbeat.request.capabilities[]=\"model_subscriptions_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.capabilities[]=\"browser_exit_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
+    "heartbeat.request.capabilities[]=\"model_connect_v1\"": "runner-rs/src/lanes.rs refused_field: an older server's 422 on capabilities drops the newest one for ten minutes",
     "heartbeat.request.readiness.trust": "runner-rs/src/readiness.rs trust_field: sent only once GET config says readiness_trust (fallback.rs server_takes_trust)",
     "complete.request.parent_message_id": "echoed only from the claim's message.parent_message_id, which only a server with native threads sends; an older server's claim has none, so the runner never sends it there"
   },

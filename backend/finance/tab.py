@@ -15,6 +15,7 @@ from .core import rights as R
 from .core import view as VW
 from .core.errors import FinanceError, NOT_FOUND, denied, invalid
 from .core.ledger import PNL_TYPES, Account, Book, descendants
+from .core.org import Org
 from .store import access as SA
 from .store import ap as SAP
 from .store import banking as SK
@@ -739,6 +740,26 @@ def _default_of(org_led: bool, defaults: VW.Defaults, owner: bool) -> str:
     return "own_expenses" if org_led or defaults.member == "own_expenses" else "none"
 
 
+def default_team(org: Org, manager: str) -> str | None:
+    """The team a manager's default names ("Engineering expenses"): the single top team of what they cover, the teams
+    they lead (with the teams under them) and the team of each report, when that top is a team they lead. Their team
+    slice then covers everyone on it, so the name is true. A team they only have reports in is never named: a manager
+    who leads nothing gets None, and so does a sub-team lead with a report in the parent team. None too when what they
+    cover spans several teams, or a report sits on no team."""
+    led, mates = org.led_by(manager), org.reports(manager)
+    covered = set(led)
+    for mate in mates:
+        team = org.team_of.get(mate, "")
+        if team not in org.teams:
+            return None
+        covered.add(team)
+    tops = {t for t in covered if not covered.intersection(org.chain(t)[1:])}
+    if len(tops) != 1:
+        return None
+    top = next(iter(tops))
+    return top if top in led else None
+
+
 def _grant_row(g: VW.Grant, ctx: Ctx) -> Row:
     return {"id": g.id, "subject_kind": g.subject_kind, "subject": g.subject, "what": g.what, "whose": g.whose,
             "whose_team": g.whose_team or None, "account_ids": sorted(g.account_ids), "new_members": g.new_members,
@@ -761,6 +782,10 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
     else:
         under = org.members(led) | org.reports(viewer)
         shown = sorted({viewer} | {m for m in under if m in org.humans or m in org.bots})
+    # The teams the viewer sees: the ones they manage, and the teams of the teammates shown. A default names a team only
+    # from this set, so a teammate's row never gives away a team the viewer can't see.
+    shown_teams = {org.team_of.get(m, "") for m in shown}
+    visible = {t.id for t in org.teams.values() if admin or t.id in led or t.id in shown_teams}
     defaults = SA.defaults(c)
     grants = SA.grants(c, "active") + SA.grants(c, "suspended")
     teammates: list[Row] = []
@@ -768,14 +793,16 @@ def access(c: sqlite3.Connection, viewer: str, at: str | None = None) -> Row:
         mine = [g for g in grants if VW.applies(org, g, m)]
         # Rights are admin-only, except a teammate's own.
         rights = sorted(ctx.rights(m)) if admin or m == viewer else None
+        default = _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner)
+        team = default_team(org, m) if default == "team_expenses" else None
         teammates.append({"teammate": m, "kind": "bot" if m in org.bots else "person",
                           "team": org.team_of.get(m) or None, "reports_to": org.reports_to.get(m) or None,
-                          "default": _default_of(org.manages(m), defaults, bool(org.owner) and m == org.owner),
+                          "default": default,
+                          "default_team": team if team in visible else None,
                           "grants": [_grant_row(g, ctx) for g in mine], "rights": rights,
                           "may_grant": _may_grant(ctx, viewer, m, defaults)})
     teams = [{"id": t.id, "name": t.name, "parent": t.parent or None, "lead": t.lead or None}
-             for t in sorted(org.teams.values(), key=lambda x: x.name)
-             if admin or t.id in led or t.id in {org.team_of.get(m, "") for m in shown}]
+             for t in sorted(org.teams.values(), key=lambda x: x.name) if t.id in visible]
     private = [{"account_id": a, "name": ctx.accounts[a].name if a in ctx.accounts else a,
                 "others_see": p.others_see, "full_detail": sorted(p.full_detail) if owner else None}
                for a, p in sorted(ctx.private().items())] if admin else []

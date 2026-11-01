@@ -818,13 +818,16 @@ class Scheduler:
             self.asks_checked = at
             # Every hour: approvals and asks nobody will act on leave Needs you (backend/approval_expiry.py).
             with SR.recording(self.store, "approval_expiry", failures) as run:
-                from . import approval_expiry
+                from . import approval_expiry, memory_tidy_cards
                 with self.store.transaction() as c:
                     ended = approval_expiry.sweep(c, stamp(at))
+                    # Standalone cards use their own two-business-day clock, never task closure.
+                    tidy_expired = memory_tidy_cards.sweep(c, stamp(at))
                 ended = ended or {}
                 run.did(SR.words_of({"approvals expired": ended.get("stale") or [],
                                      "approvals closed with their task": ended.get("ended") or [],
-                                     "asks cleared": ended.get("asks") or []}, none="Nothing expired"))
+                                     "asks cleared": ended.get("asks") or [],
+                                     "tidy cards withdrawn": tidy_expired}, none="Nothing expired"))
             # A Finance action whose approval was decided, withdrawn or expired ends now (its hold released).
             try:
                 from .finance import actions as finance

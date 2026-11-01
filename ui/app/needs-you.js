@@ -80,7 +80,7 @@ function needRowHTML(it, ctx = {}) {
   const from = stale ? '' : taskRequester(it) || it.requester || '';
   const name = stale ? 'Tico' : actorLabel(from) || 'Tico';
   const title = stale ? it.title || 'Stale tickets' : approvalTitle(it) || it.first_line || it.title || v2Firstline(it.body) || V2_KIND[it.kind] || 'Item';
-  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : thread || 'Question';
+  const kind = it.kind === 'approval' ? 'Approval' : stale ? 'Stale check' : it.kind === 'memory_tidy' ? 'Nightly memory tidy' : thread || 'Question';
   const face = stale ? personCircle('Tico', 18) : actorFace(from, 18);
   const open = thread && it.conversation_id
     ? `<a class="tl-open" href="#/thread/${encodeURIComponent(it.conversation_id)}" tabindex="-1"><span class="tl-title"><b class="req-from">${esc(name)}:</b> ${esc(plainActors(title))}</span></a>`
@@ -98,7 +98,7 @@ function needRowHTML(it, ctx = {}) {
   </div>`);
 }
 // The items Needs you lists outside any task, without the ones just answered on a card (decide.js decideGone).
-const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', ...Object.keys(THREAD_NEED_KINDS)].includes(it.kind) && !decideGone(decideItemKey(it)));
+const needsExtras = () => (S.v2?.needs || []).filter(it => ['approval', 'stale', 'ask', 'memory_tidy', ...Object.keys(THREAD_NEED_KINDS)].includes(it.kind) && !decideGone(decideItemKey(it)));
 // How long an approval's exact payload has been ready to decide, in seconds (until its decision once decided), and whose
 // decision it is: "Ready 2 h 10 min, waiting on Chris" (backend/hubdb.py approval_wait). Counted here from `ready_since`
 // so a page left open stays right.

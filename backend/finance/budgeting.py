@@ -12,7 +12,7 @@ from .core import budgets as B
 from .core import dates, money
 from .core import validate as V
 from .core import view as VW
-from .core.errors import FinanceError, NOT_FOUND, invalid
+from .core.errors import CONFLICT, FinanceError, NOT_FOUND, invalid
 from .core.ledger import descendants, vendor_text
 from .core.org import SYSTEM
 from .store import access as SA
@@ -20,7 +20,7 @@ from .store import ap as SAP
 from .store import budgets as SB
 from .store import ledger as SL
 
-HOLD_SOURCES = ("run", "video", "card", "payment", "bill", "request", "action", "manual")
+HOLD_SOURCES = ("run", "video", "card", "payment", "bill", "request", "action", "manual", "purchase_order")
 TARGET_KINDS = B.TARGETS
 WARN_EVENT, LIMIT_EVENT = "finance.budget.warn", "finance.budget.cutoff"
 
@@ -392,8 +392,8 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     """A budget now: amount, actual, held (holds and allocations' reserves in its whole subtree), remaining, percent.
     With a `target` and the budget `path` a spend sits on, that target's own unused allocations on that path are not
     counted against it (it may spend what was set aside for it there); its allocations on other branches still are.
-    A read passes its `Netted`: the actual, the held and what depends on them (rollover, reserves) leave out the
-    settled private payroll the viewer can't see, and the State says so (`excluded`). Enforcement passes none."""
+    A read passes its `Netted`: the actual, the held and what depends on them (rollover, reserves) leave out the settled private payroll the viewer can't see, and the
+    State says so (`excluded`). Enforcement passes none."""
     b = ctx.budgets().get(budget_id)
     if b is None:
         raise FinanceError(NOT_FOUND, "no such budget")
@@ -403,7 +403,7 @@ def state(ctx: Ctx, budget_id: str, at: date, target: str = "", path: Sequence[s
     tree = subtree(ctx, b.id)
     mine = set(path)
     reserve = sum(v for bid, t, v in _reserve(ctx, tree, start, end, read)
-                  if not (target and t == target and bid in mine))
+                  if not (bid in mine and target and t == target))
     held = _held(ctx, tree, start, end, read) + reserve
     st = B.state(b, period, _amount(ctx, b, versions, period, at, read), actual(ctx, b, start, end, read=read), held)
     return st if read is None else replace(st, excluded=read.excluded)
@@ -467,15 +467,35 @@ def _scope(ctx: Ctx, budget_scope: str | Mapping[str, object]) -> B.Budget | Non
 
 
 def decide(ctx: Ctx, leaf_id: str, amount: int, target: str = "") -> B.Decision:
-    """What a new spend of `amount` meets across its budget and every parent."""
+    """What a new spend of `amount` meets across its budget and every parent, on the budgets the spend sits on (the chain
+    of `leaf_id`)."""
     at = dates.day(ctx.today)
-    path = chain_of(ctx, leaf_id)
-    chain = [(b, state(ctx, b.id, at, target, path)) for b in B.chain(ctx.budgets(), leaf_id)]
+    spent_on = chain_of(ctx, leaf_id)
+    chain = [(b, state(ctx, b.id, at, target, spent_on)) for b in B.chain(ctx.budgets(), leaf_id)]
     return B.decide(chain, amount)
 
 
+def would_place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int,
+                target: str = "") -> B.Decision | None:
+    """What a hold of `amount` would meet, with nothing written: None when no budget covers the spend."""
+    target = target or scope_target(budget_scope)
+    b = _scope(ctx, budget_scope)
+    return None if b is None else decide(ctx, b.id, amount, target)
+
+
+def scope_target(budget_scope: str | Mapping[str, object] | None) -> str:
+    """The hold target a spend takes from its budget scope: the teammate the scope names, if it names one."""
+    if isinstance(budget_scope, Mapping) and budget_scope.get("teammate"):
+        return f"teammate:{budget_scope['teammate']}"
+    return ""
+
+
 def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, currency: str, source: str,
-          source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM) -> HoldDecision:
+          source_id: str, expires_at: str | None, target: str = "", by: str = SYSTEM,
+          force: bool = False, moved_from: tuple[str, str] | None = None) -> HoldDecision:
+    """A hold for a spend. `force` holds it past an ask or hold_payment limit, for a spend someone approved; decline
+    still refuses. `moved_from` names a hold the spend takes over part of (an order line a bill bills): that hold
+    shrinks by the amount and the new hold takes it in the same step, without a fit check."""
     money.minor(amount)
     if amount <= 0:
         raise invalid("a hold is for a positive amount")
@@ -485,17 +505,20 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
         raise invalid(f"a hold source is {'|'.join(HOLD_SOURCES)}")
     if target and target.partition(":")[0] not in TARGET_KINDS:
         raise invalid(f"a hold target is <{'|'.join(TARGET_KINDS)}>:<id>")
-    if not target and isinstance(budget_scope, Mapping) and budget_scope.get("teammate"):
-        target = f"teammate:{budget_scope['teammate']}"
+    target = target or scope_target(budget_scope)
     if source_id:
         prior = SB.hold_for_source(ctx.c, source, source_id)
         if prior is not None:
-            return _again(ctx, prior, amount, target, by)
+            return _again(ctx, prior, amount, target, by, force)
     b = _scope(ctx, budget_scope)
     if b is None:
         return HoldDecision(allowed=True, action="ok", reason="no budget covers this spend")
+    if moved_from is not None:
+        moved = _move(ctx, b, moved_from, amount, source, source_id, expires_at, by)
+        if moved is not None:
+            return moved
     verdict = decide(ctx, b.id, amount, target)
-    if not verdict.allowed:
+    if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
         crossings(ctx, [verdict.limit_budget], by)
         limit = ctx.budgets()[verdict.limit_budget]
         return HoldDecision(allowed=False, action=verdict.action, budget_id=b.id, limit_budget_id=limit.id,
@@ -505,13 +528,37 @@ def place(ctx: Ctx, *, budget_scope: str | Mapping[str, object], amount: int, cu
     crossings(ctx, chain_of(ctx, b.id), by)
     left = state(ctx, b.id, dates.day(ctx.today), target, chain_of(ctx, b.id)).remaining
     return HoldDecision(allowed=True, action=verdict.action, hold_id=hid, budget_id=b.id,
-                        warn_budget_ids=verdict.warn_budgets, remaining=left)
+                        limit_budget_id=verdict.limit_budget or None, warn_budget_ids=verdict.warn_budgets,
+                        remaining=left)
 
 
-def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: str) -> HoldDecision:
+def _move(ctx: Ctx, b: B.Budget, moved_from: tuple[str, str], amount: int, source: str, source_id: str,
+          expires_at: str | None, by: str) -> HoldDecision | None:
+    """A spend that takes over `amount` of another hold on the same budget: that hold shrinks (or is released when
+    it empties) and the new hold takes the amount, in one step. None when the hold is not there, is on another budget,
+    or is smaller than the amount, so the spend is fit-checked like any other."""
+    src = SB.hold_for_source(ctx.c, *moved_from)
+    if src is None or str(src["budget_id"]) != b.id or int(src["amount"]) < amount:
+        return None
+    left = int(src["amount"]) - amount
+    if left:
+        SB.resize_hold(ctx.c, str(src["id"]), left)
+    else:
+        SB.release(ctx.c, str(src["id"]), ctx.at)
+    hid = SB.insert_hold(ctx.c, budget_id=b.id, amount=amount, currency=ctx.book.base_currency, source=source,
+                         source_id=source_id, target=str(src["target"] or ""), held_on=ctx.today,
+                         expires_at=expires_at, by=by, at=ctx.at)
+    crossings(ctx, chain_of(ctx, b.id), by)
+    return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=b.id,
+                        remaining=state(ctx, b.id, dates.day(ctx.today), "", chain_of(ctx, b.id)).remaining,
+                        reason=f"moved {amount} from {moved_from[0]} {moved_from[1]}")
+
+
+def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: str,
+           force: bool = False) -> HoldDecision:
     """The same (source, source_id) asked again. The same amount returns the live hold; a smaller one shrinks it; a
-    larger one grows it only if the increase passes a fresh budget check, else the hold stays as it was and the
-    decision says so."""
+    larger one grows it only if the increase passes a fresh budget check (or is forced past an ask or hold_payment
+    limit, as a new hold is), else the hold stays as it was and the decision says so."""
     hid, bid, was = str(prior["id"]), str(prior["budget_id"]), int(str(prior["amount"]))
     target = target or str(prior["target"] or "")
     path = chain_of(ctx, bid)
@@ -519,7 +566,7 @@ def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: 
         return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=bid, reason="already held")
     if amount > was:
         verdict = decide(ctx, bid, amount - was, target)
-        if not verdict.allowed:
+        if not verdict.allowed and not (force and verdict.action in ("ask", "hold_payment")):
             crossings(ctx, [verdict.limit_budget], by)
             limit = ctx.budgets()[verdict.limit_budget]
             return HoldDecision(allowed=False, action=verdict.action, hold_id=hid, budget_id=bid,
@@ -530,6 +577,58 @@ def _again(ctx: Ctx, prior: Mapping[str, object], amount: int, target: str, by: 
     return HoldDecision(allowed=True, action="ok", hold_id=hid, budget_id=bid,
                         remaining=state(ctx, bid, dates.day(ctx.today), target, path).remaining,
                         reason=f"resized the hold from {was} to {amount}")
+
+
+def held_amount(ctx: Ctx, source: str, source_id: str) -> int:
+    """What the hold for a source holds now: 0 when it holds nothing."""
+    row = SB.hold_for_source(ctx.c, source, source_id)
+    return 0 if row is None else int(row["amount"])
+
+
+def transfer(ctx: Ctx, *, amount: int, currency: str, source: str, source_id: str, expires_at: str | None,
+             by: str = SYSTEM, budget_scope: str | Mapping[str, object] | None = None,
+             moved_from: tuple[str, str] | None = None, target: str | None = None) -> None:
+    """An amount of commitment going back to the hold it was taken from: a bill voided or billed for less gives its
+    order line its room back. With `moved_from`, the amount comes off that hold (it is released when it empties) and
+    goes onto the hold for `source` and `source_id`, on the same budget. Without it, the amount goes onto that hold
+    with nothing taken from another, since the spend it stood for has been reversed in the books. Neither is
+    fit-checked: the room was the commitment's own already, and a refusal on the way back could leave it with
+    no hold. The hold keeps the target of the hold the amount came from, or the teammate `budget_scope` names
+    when there is none, unless `target` says otherwise."""
+    money.minor(amount)
+    if amount <= 0:
+        return
+    if money.currency(currency) != ctx.book.base_currency:
+        raise invalid(f"holds are in the book's currency ({ctx.book.base_currency})")
+    src = None
+    if moved_from is not None:
+        src = SB.hold_for_source(ctx.c, *moved_from)
+        if src is None or int(src["amount"]) < amount:
+            raise FinanceError(CONFLICT, "the hold this moves from does not hold that much")
+        bid = str(src["budget_id"])
+        target = str(src["target"] or "") if target is None else target
+    else:
+        b = None if budget_scope is None else _scope(ctx, budget_scope)
+        if b is None:
+            return
+        bid = b.id
+        target = scope_target(budget_scope) if target is None else target
+    if src is not None:
+        left = int(src["amount"]) - amount
+        if left:
+            SB.resize_hold(ctx.c, str(src["id"]), left)
+        else:
+            SB.release(ctx.c, str(src["id"]), ctx.at)
+    prior = SB.hold_for_source(ctx.c, source, source_id)
+    if prior is None:
+        SB.insert_hold(ctx.c, budget_id=bid, amount=amount, currency=ctx.book.base_currency, source=source,
+                       source_id=source_id, target=target, held_on=ctx.today, expires_at=expires_at, by=by,
+                       at=ctx.at)
+    elif str(prior["budget_id"]) == bid:
+        SB.resize_hold(ctx.c, str(prior["id"]), int(prior["amount"]) + amount)
+    else:
+        raise FinanceError(CONFLICT, "that hold is on another budget")
+    crossings(ctx, chain_of(ctx, bid), by)
 
 
 def settle(ctx: Ctx, hold_id: str, actual_amount: int, entry_id: str | None, by: str = SYSTEM) -> bool:

@@ -130,7 +130,7 @@ function redesignRoute(r) {
   if (r === '#/settings/listening') { location.replace(RD_LISTENING); return true; }
   if (r === '#/library') { location.replace(DOCS); return true; }
   if (rdUnder(r, GR_OLD_ROUTE)) { location.replace(GR_ROUTE + r.slice(GR_OLD_ROUTE.length)); return true; }
-  if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace(GTM_ROUTE + r.slice(GTM_OLD_ROUTE.length)); return true; }
+  if (rdUnder(r, GTM_OLD_ROUTE)) { location.replace(GR_ROUTE + '/gtm' + r.slice(GTM_OLD_ROUTE.length)); return true; }   // pageGrowth sends it on
   if (['#/recurring', '#/tasks/routines'].includes(r.split('?')[0])) { location.replace(RD_AUTOMATIONS); return true; }   // the Tasks page's Routines view
   if (rdUnder(r, RD_AUTOMATIONS)) {
     // The Automations page is its own files (ui/app/automations*.js); until they load, an empty mount point.
@@ -140,7 +140,6 @@ function redesignRoute(r) {
   }
   if (rdToolsRoute(r)) return true;
   if (rdUnder(r, BRAND_ROUTE)) { pageBrand(); return true; }   // ui/app/brand-page.js
-  if (rdUnder(r, GTM_ROUTE)) { pageGtm(); return true; }   // ui/app/gtm-page.js
   if (rdUnder(r, GR_ROUTE)) { pageGrowth(); return true; }   // ui/app/growth-page.js
   if (rdUnder(r, RULES_ROUTE)) { pageRules(); return true; }   // ui/app/org-rules.js
   if (pagesRoute(r)) return true;   // Library › Files and #/page/<id> (ui/app/pages.js)

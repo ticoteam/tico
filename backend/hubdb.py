@@ -2607,9 +2607,31 @@ QUARANTINE_COOLDOWN_S = 3600
 COUNT_QUARANTINE = re.compile(r"\d+ (?:refused writes|repeated refusals|refusals) today")   # the first: before #287
 
 
+# A bot's latest quarantine event, and when it was last quarantined: the statements the readers below run, named so a
+# batch can seed them (prime_quarantines).
+QUARANTINE_DETAIL_SQL = "SELECT detail_json FROM events WHERE action='quarantine' AND target=? ORDER BY ts DESC, rowid DESC LIMIT 1"
+QUARANTINE_SINCE_SQL = "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?"
+
+
+def prime_quarantines(conn, slugs):
+    """The latest quarantine event and last quarantine time of every bot in `slugs`, in two reads for all of them
+    (per 500 bots): a loop of explanations then reads none of them again. Outside a snapshot nothing is kept."""
+    from .read_cache import prime
+    actors = sorted({bot_actor(s) for s in slugs if s})
+    for part in chunks(actors):
+        marks = ",".join("?" * len(part))
+        latest = {r["target"]: r for r in conn.execute(
+            "SELECT target, detail_json FROM (SELECT target, detail_json, row_number() OVER (PARTITION BY target "
+            "ORDER BY ts DESC, rowid DESC) AS n FROM events WHERE action='quarantine' AND target IN (" + marks + ")) WHERE n=1", part)}
+        since = {r["target"]: r["ts"] for r in conn.execute(
+            "SELECT target, max(ts) AS ts FROM events WHERE action='quarantine' AND target IN (" + marks + ") GROUP BY target",
+            part)}
+        prime(conn, QUARANTINE_DETAIL_SQL, {(a,): latest.get(a) for a in part})
+        prime(conn, QUARANTINE_SINCE_SQL, {(a,): {"ts": since.get(a)} for a in part})
+
+
 def quarantine_reason(conn, slug):
-    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
     return ((_json(row["detail_json"], {}) or {}) if row else {}).get("reason") or ""
 
 
@@ -2625,8 +2647,7 @@ LEGACY_ESCAPE = re.compile(r"escape: the (.+?) (?:payload )?reaches outside the 
 def quarantine_review(conn, slug):
     """What a person resuming an escape quarantine reads: what was being written (`what`), what the check
     matched (`found`), the refused words with credential values masked (`preview`) and the task (`task`)."""
-    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
     detail = (_json(row["detail_json"], {}) or {}) if row else {}
     if detail.get("review"):
         return detail["review"]
@@ -2639,8 +2660,7 @@ def quarantine_review(conn, slug):
 
 def quarantine_resumes(conn, slug):
     """Since when a bot is quarantined, whether it lifts by itself (a refusal count), and when (`resumes_at`)."""
-    since = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?",
-                 (bot_actor(slug),))["ts"]
+    since = _one(conn, QUARANTINE_SINCE_SQL, (bot_actor(slug),))["ts"]
     auto = not quarantine_is_escape(conn, slug)
     return {"since": since, "auto": auto,
             "resumes_at": shift(since, seconds=QUARANTINE_COOLDOWN_S) if auto and since else None}
@@ -2687,8 +2707,7 @@ def quarantine_lifted_note(conn, slug):
     """When a quarantine lifts (the cooldown, or a person or BotOps clearing it), a quiet note for the bot's next
     run: the refusal that stopped it and not to retry it. While quarantined nobody could tell it why, and a bot
     back from a cooldown retried the same refused write."""
-    row = _one(conn, "SELECT detail_json FROM events WHERE action='quarantine' AND target=? "
-                     "ORDER BY ts DESC LIMIT 1", (bot_actor(slug),))
+    row = _one(conn, QUARANTINE_DETAIL_SQL, (bot_actor(slug),))
     detail = (_json(row["detail_json"], {}) or {}) if row else {}
     review, refused = quarantine_review(conn, slug) or {}, detail.get("refusal") or {}
     if review.get("what"):
@@ -5212,10 +5231,12 @@ def _awaited_by(conn, row, who):
     return any((task(conn, tid) or {}).get("owner") == who for tid in TR.blocked_ids(conn, row["id"]))
 
 
-def _parent_finished(conn, row, previous, actor=None, parent=None, told=None):
+def _parent_finished(conn, row, previous, actor=None, parent=None, told=None, wake=True):
     """Wake the immediate parent whose subtasks are now all finished. `parent` names it when the
-    task has just left it; `told` is a bot `_subtask_wake` already woke on it."""
+    task has just left it; `told` is a bot `_subtask_wake` already woke on it; `wake=False` leaves the parent asleep."""
     terminal = ("done", "closed", "declined")
+    if not wake:
+        return
     first = parent or TR.parent_of(conn, row["id"])
     if previous in terminal or row["status"] not in terminal or not first:
         return
@@ -6368,7 +6389,8 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
                 lane=None, labels=None, rank=None, mover=None, goal_id=None, quiet=False, type=None, step=None,
                 step_rank=None, number=None, title=None, private=None, waiting_on=None, roles=None, visibility=None, public_title=None,
                 public_summary=None, approval_id=None, size=None, clear_size=False, review_prs=None, verdict=None,
-                verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0):
+                verdict_head=None, skip_step_wake=(), review_reader=None, receipt_owner=None, public_allowance=0,
+                wake_others=True):
     """Rule 5. The owner may set open|doing|waiting|review|done|declined and a note; it may not close.
 
     `lane` and `labels` are a mover's to change (`mover` says whether this actor is one; the
@@ -6845,7 +6867,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
     # A bot that asked for `tasks` is always told and never woken for it, so there is nothing to
     # weigh: the news is free. Everyone else keeps the original rule, where the only way to
     # spare a bot the run was to withhold the notice.
-    notify_requester = (status in ("done", "declined") and actor != row["requester"]
+    notify_requester = (wake_others and status in ("done", "declined") and actor != row["requester"]
                         and (status == "declined" or tasks_only(conn, after["requester"])
                              or TR.parent_of(conn, task_id) and is_bot(after["requester"])
                              or _owed_the_news(conn, after)))
@@ -6950,7 +6972,7 @@ def task_update(conn, actor, task_id, status=None, note=None, owner=None, due=No
             check_pools.safely(conn, check_pools.entered, actor, after, review_prs)
     recount(conn, [after["owner"], after["requester"], row["owner"]])   # the old owner too, on a handoff
     if not closing_step:
-        _parent_finished(conn, after, row["status"], actor, told=subtask_told)
+        _parent_finished(conn, after, row["status"], actor, told=subtask_told, wake=wake_others)
     if asked_in:
         after = {**after, "asked_in": {k: asked_in[k] for k in ("id", "title", "owner")}}
     return {**after, "warnings": plain} if plain else after
@@ -8241,10 +8263,12 @@ def _stall_stand(conn, row):
     return hashlib.sha256(json.dumps(parts, default=str).encode()).hexdigest()[:16]
 
 
-def _stall_streak(conn, row, stand):
-    """How many of the task's latest stall wakes in a row it stood unchanged through."""
+def _stall_streak(conn, row, stand, quiet=False):
+    """How many of the task's latest stall wakes in a row it stood unchanged through. With `quiet`, notices a wake rule
+    held (task.stall_quiet) count too: they space the next notice, and never count as a wake that was tried."""
+    actions = "('task.stall_wake','task.stall_quiet')" if quiet else "('task.stall_wake')"
     streak = 0
-    for (detail,) in conn.execute("SELECT detail_json FROM events WHERE action='task.stall_wake' AND target=? "
+    for (detail,) in conn.execute(f"SELECT detail_json FROM events WHERE action IN {actions} AND target=? "
                                   "ORDER BY ts DESC LIMIT 6", (row["id"],)):
         if _json(detail, {}).get("stand") != stand:
             break
@@ -8252,10 +8276,10 @@ def _stall_streak(conn, row, stand):
     return streak
 
 
-def _stall_gap(conn, row, stand):
+def _stall_gap(conn, row, stand, quiet=False):
     """Minutes to leave between two stall wakes. STALL_REPEAT_MINUTES after a wake that the task has changed since;
     doubled for each earlier wake in a row the task stood unchanged through (30, 60, 120, then the cap)."""
-    streak = _stall_streak(conn, row, stand)
+    streak = _stall_streak(conn, row, stand, quiet)
     return min(STALL_REPEAT_MINUTES * 2 ** max(streak - 1, 0), STALL_BACKOFF_CAP_MINUTES)
 
 
@@ -8382,7 +8406,11 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                     continue
                 if count >= STALL_WAKES_PER_DAY:
                     continue
-            if last and last > shift(at, seconds=-_stall_gap(conn, row, stand) * 60):
+            # A wake a rule held leaves no stall wake, so its own event spaces the next one, or every pass would write
+            # another notice. Decide's go-ahead is not such a notice: it keeps to the gap of the wakes that went out.
+            quiet = None if triaged else conn.execute("SELECT max(ts) FROM events WHERE action='task.stall_quiet' "
+                                                      "AND target=?", (row["id"],)).fetchone()[0]
+            if max(last or "", quiet or "") > shift(at, seconds=-_stall_gap(conn, row, stand, not triaged) * 60):
                 continue
             if row["id"] not in stalled:
                 # A spot check: one status check into the task's session per quiet stretch.
@@ -8393,7 +8421,10 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
                 if queued_here is not None and msg:
                     queued_here.append(msg["id"])
                 if msg and msg["refs"].get(wake_rules.MARK) in wake_rules.SILENT:
-                    continue     # no attempted wake for the retry/escalation machinery to count
+                    # No attempted wake for the retry/escalation machinery to count.
+                    event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner"]), "stand": stand,
+                                                                        "kind": "status_check"})
+                    continue
                 if triaged:
                     stall_triage.sent(conn, row, at)
                 event(conn, KEEPER, "task.stall_wake", row["id"],
@@ -8416,6 +8447,7 @@ def wake_stalled(conn, at=None, task_ids=None, queued_here=None):
             if queued_here is not None and msg:
                 queued_here.append(msg["id"])
             if msg and msg["refs"].get(wake_rules.MARK) in wake_rules.SILENT:
+                event(conn, KEEPER, "task.stall_quiet", row["id"], {"bot": actor_id(row["owner"]), "stand": stand})
                 continue
             if triaged:
                 stall_triage.sent(conn, row, at)

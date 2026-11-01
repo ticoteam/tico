@@ -1085,6 +1085,7 @@ mod tests {
             http: reqwest::Client::new(),
             proxy: reqwest::Client::new(),
             trusted_proxies: Arc::new(gateway::trusted_proxies("127.0.0.1/32").unwrap()),
+            client_ip_header: gateway::ClientIpHeader::XForwardedFor,
         };
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let relay = format!("ws://{}", listener.local_addr().unwrap());

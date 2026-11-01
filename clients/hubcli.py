@@ -290,7 +290,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub brand show [--section S] [--version N] | summary | check <file|->
                                            the brand; check: avoided words, wrong names, never-made claims in a draft
     hub gtm show [--section S] [--version N] | summary | sources
-                                           the go-to-market: motion, buyer, wishes, playbooks; sources of truth
+                                           the go-to-market: motion, buyer, playbooks; sources of truth
     hub brand|gtm draft --section S --body JSON [--revision N] | publish [--note "..."]
                                            owner or admin; a bot proposes with --kind brand_draft|gtm_draft
     hub growth segment list | create --name ...|--segment-id ID [--status S --motion M --who-buys ... --deal-size ...
@@ -2116,9 +2116,9 @@ def parser():
         return s
 
     brand_sections = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-    gtm_sections = ("motion", "buyer", "wishes", "playbooks")
+    gtm_sections = ("motion", "buyer", "playbooks")
     for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
-                                  ("gtm", "the go-to-market: motion, buyer, wishes, playbooks", gtm_sections)):
+                                  ("gtm", "the go-to-market: motion, buyer, playbooks", gtm_sections)):
         page = sub.add_parser(kind, help=title).add_subparsers(dest="sub")
         s = json_flag(page.add_parser("show", help="the published page; owner and admins also get the draft"))
         s.add_argument("--section", choices=sections, help="only this section")

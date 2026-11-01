@@ -1871,7 +1871,7 @@ def strategy_bet_retire(api, args):
 # ----------------------------------------------------------------------------- brand, go-to-market, growth
 PAGE_TITLES = {"brand": "brand", "gtm": "go-to-market"}
 BRAND_SECTIONS = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
-GTM_SECTIONS = ("motion", "buyer", "wishes", "playbooks")
+GTM_SECTIONS = ("motion", "buyer", "playbooks")
 
 
 def _page_show(api, kind, args):
@@ -5314,7 +5314,8 @@ def message_redact(api, args):
       "product answered, the bot and the version. No secrets, no other people's details.",
       {"message": _s("What happened and what is missing, in plain words")}, required=("message",), writes=True)
 def support_file(api, args):
-    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True}, key=_key(args))
+    return _as_person(api).post("support/tickets", {"message": "[BotOps] " + args["message"], "include_ids": True,
+                                                    "source": "botops"}, key=_key(args))
 
 
 

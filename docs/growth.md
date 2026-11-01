@@ -1,7 +1,7 @@
 # Growth
 
 Growth is how the team finds customers and learns what works. It is its own section in the sidebar, under Strategy
-(`#/growth`; tabs Overview, Segments, This week, Channels, Learning and Go-to-market). Tico keeps the bets, the channels, the
+(`#/growth`; tabs Ideas, Buyers, Channels and Sources, and a brain icon for Learning). Tico keeps the bets, the channels, the
 ideas, the tests, the verdicts and the economics. The tools (CRM, ad accounts, email) stay where they are and Tico reads
 their numbers.
 
@@ -11,22 +11,24 @@ learning goes back into the bet.
 
 Examples use Acme, a home-cleaning company. Its bet 1 is "Half the price of other cleaners".
 
-## Segments
+## Buyers
 
-A segment is a group of customers the company sells to, such as homeowners or property managers. **Segments**
-(`#/growth/segments`) lists them by status:
+A buyer is a group of customers the company sells to, such as homeowners or property managers. **Buyers**
+(`#/growth/buyers`) lists each one's name and who buys. The API and `hub` call them segments. A buyer's status is in its
+dialog, and dropped ones fold behind a toggle:
 
 - `serving`: the company sells to them now;
 - `testing`: a candidate the team is trying out;
 - `next`: the one to enter after;
 - `dropped`: no longer pursued.
 
-Each segment has a motion (the same choices as the GTM card), who buys, the deal size, a why and an owner. Its name and
+Each segment has a motion (the same choices as GTM), who buys, the deal size, a why and an owner. Its name and
 place live in the market graph as a `segment` entity. Adding a segment by name uses the market segment of that name or
 alias, and makes one under the market's root when there is none. **Where we play** on the Strategy page follows Growth:
 a serving segment is Us and a next one is Next, and a click there sets the status here. Several of each are allowed.
 
-Channels and ideas name the segments they reach (`segments`). A cohort may be one segment's share of a channel's month
+Ideas name the buyers they reach (`segments`), and the idea form picks them. Channels can name them through the API, but
+Growth › Channels shows no buyers and only whole months. A cohort may be one segment's share of a channel's month
 (`segment_id`). Economics for one segment (`?segment=`) reads only its rows. Without a segment, a channel's row with no segment is
 its whole month when it has one (segment rows beside it are a breakdown, not added again); otherwise its segment rows
 are added into one. The GTM summary bots read names the serving and testing
@@ -64,18 +66,19 @@ moves to `testing` when a test starts. A verdict moves it to a result and closes
 
 Anyone may file an idea. Changing an idea needs an admin, its assignee or its creator. A verdict needs an admin or the assignee.
 
-## Frameworks are views
+## Ideas and KPI views
 
-The same ideas, KPIs and bets can be read in five ways. Growth keeps the choice for each company.
+**Ideas** (`#/growth`) is a grid of bets and channels, with the ideas in each cell: testing first, then ideas, then results,
+which are greyed. Each shows its status. On a phone it is a list grouped by bet.
 
-- **North Star**: the one KPI the company is judged on, and the inputs under it. A KPI has a `parent_kpi_id` and a `growth_role`
-  of `north_star`, `input` or `guardrail`. There is one North Star; setting a new one clears the old.
+The KPIs are read on Strategy › Goals (`#/strategy/goals`), with a switch:
+
+- **Tree**: the one KPI the company is judged on (the North Star), and the inputs under it. A KPI has a `parent_kpi_id` and a
+  `growth_role` of `north_star`, `input` or `guardrail`. There is one North Star; setting a new one clears the old.
 - **Loops**: KPIs grouped by `loop_name` and `loop_step`, for a loop such as referrals (invite, first clean, referral).
 - **Journey**: KPIs by `stage`: `reach`, `acquire`, `activate`, `retain`, `refer`.
-- **Bets × Channels**: a grid of bets and channels, with the ideas in each cell.
-- **Experiments**: ideas by status, with their tests and verdicts.
 
-Set these on a KPI with `hub kpi update` (see [Goals and KPIs](goals-and-kpis.md)).
+Whoever may edit a KPI sets these from its row, or with `hub kpi update` (see [Goals and KPIs](goals-and-kpis.md)).
 
 ## Verdicts
 
@@ -115,10 +118,10 @@ Bot cost is what the channel's bot work cost. Each row says its quality: `actual
 which channel a customer came from. The Unknown row has no CAC and no LTV.
 
 **A month with no numbers** still lists every active channel and Unknown, each blank, so the owner can enter the first
-month from Growth › Channels (+ Month).
+month from its row on Growth › Channels (+ Month).
 
 **Guardrails.** A channel can name a KPI and a maximum (for example, first-month churn at most 10%). A breach shows on the
-channel and on the weekly page.
+channel.
 
 ## The weekly loop
 
@@ -150,8 +153,9 @@ The report links to the Finance report for the books. It does not copy them.
 
 ## Brand and GTM cards
 
-Two cards on the Strategy page feed Growth and every bot that writes outward. Brand opens at `#/strategy/brand`, GTM at
-`#/growth/gtm`.
+Brand and GTM feed Growth and every bot that writes outward. Brand is a strip on the Strategy page and opens at
+`#/strategy/brand`. GTM is read and edited under the list on Growth › Buyers, where Edit saves the draft and publishes it
+with a note. Its sources are on Growth › Sources, and its versions on Learning.
 
 **Brand** is the brand book: the brand name (when it differs from the company's), the positioning line, voice traits (each with a do and a don't), tone by situation, the
 words to use and to avoid, naming rules, claims and proof, visual files (as links to Library Files) and examples.
@@ -159,9 +163,8 @@ words to use and to avoid, naming rules, claims and proof, visual files (as link
 and does not detect claims missing from the allowed list, so a bot checks those against the claims list itself.
 
 **GTM** is the go-to-market card: the motion (self-serve, sales-led, partner, marketplace, local, community or
-e-commerce), the buyer and deal size, the objections, the **sources** (which system holds each number), and the **wishes**.
-A wish is a plain sentence, such as "No cold SMS", with a level: `block`, `warn` or `setting`. Wishes become rules, and a
-blocking wish stops the work it names.
+e-commerce), the buyer and deal size, the objections, and the **sources** (which system holds each number). Standing
+instructions and spend limits are Rules (the Rules page): a blocking rule stops the work it names.
 
 Each card is versioned and published on its own. The owner edits the draft and publishes. A bot that wants a change
 proposes it (a `brand_draft` or `gtm_draft` proposal), and the owner confirms it. Anyone may read the published version
@@ -169,7 +172,7 @@ with the CLI or MCP.
 
 ```
 hub brand show [--section voice] | summary | check -      hub brand draft --section S --body JSON | publish --note N
-hub gtm show   [--section wishes] | summary | sources     hub gtm draft --section S --body JSON | publish --note N
+hub gtm show   [--section buyer] | summary | sources     hub gtm draft --section S --body JSON | publish --note N
 ```
 
 ## Commands

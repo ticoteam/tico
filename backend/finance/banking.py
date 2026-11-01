@@ -21,7 +21,7 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 
-from . import budgeting, documents, payments, posting, posting_rules
+from . import budgeting, documents, payments, posting, posting_rules, shared
 from .context import Ctx
 from .core import dates
 from .core import feeds as F
@@ -755,7 +755,7 @@ def categorize_feed(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     account = ctx.accounts.get(V.text(p, "account_id", 80))
     if account is None or not account.active:
         raise FinanceError(NOT_FOUND, "no such account")
-    tags = posting.with_team(ctx, L.tags(p.get("tags")))
+    tags = shared.check_tags(ctx, posting.with_team(ctx, L.tags(p.get("tags"))))
     if not may_write(ctx, who, account.id, tags):
         raise denied("that line or those tags are outside your view")
     gl = _gl(ctx, money)

@@ -4,7 +4,7 @@ journal delete), in the shapes that client parses. Point Tico at it with TICO_QU
 Nothing here reaches the network.
 
 Control endpoints under /_fake/ are not QuickBooks':
-  POST /_fake/seed     {"Account": [...], "Vendor": [...], "Customer": [...], "JournalEntry": [...]} adds records
+  POST /_fake/seed     {"Account": [...], "Vendor": [...], "Item": [...], ...} adds records of any entity
   POST /_fake/change   the same shape: records the change feed (CDC) reports next time it is read
   POST /_fake/expire   the next call is refused with 401 once (the token has expired)
   GET  /_fake/calls    every call made, in order (method, path, query, body; never the token)
@@ -20,8 +20,10 @@ from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
-ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry")
-CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry"}
+ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
+            "Invoice")
+CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
+          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice"}
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
@@ -33,7 +35,7 @@ def reset() -> None:
 
 
 def _rows(entity: str) -> list[dict[str, object]]:
-    return STATE["books"][entity]  # type: ignore[index,return-value]
+    return STATE["books"].setdefault(entity, [])  # type: ignore[union-attr,return-value]
 
 
 def _fault(message: str) -> tuple[int, dict[str, object]]:
@@ -66,7 +68,7 @@ def query(sql: str) -> tuple[int, dict[str, object]]:
 
 
 def cdc(entities: str) -> tuple[int, dict[str, object]]:
-    wanted = [e for e in entities.split(",") if e in ENTITIES]
+    wanted = [e for e in entities.split(",") if e]
     block: dict[str, object] = {e: [] for e in wanted}
     for entity, row in STATE["changes"]:  # type: ignore[index,misc]
         if entity in wanted:
@@ -161,7 +163,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(200, {"ok": True})
         if path == "/_fake/seed" or path == "/_fake/change":
             for entity, rows in body.items():
-                if entity in ENTITIES and isinstance(rows, list):
+                if entity and isinstance(rows, list):
                     for row in rows:
                         if path == "/_fake/seed":
                             _rows(entity).append(dict(row))

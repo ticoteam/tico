@@ -150,6 +150,33 @@ def positive_effect(c, aid, body):
     return False
 
 
+def only_a_notice(c, aid, row, body):
+    """Whether a stopped turn did nothing but report why it stopped, so nothing of it needs its session continued.
+    Claude Code writes a limit or a refused request as an assistant message of its own, the same line as the turn's
+    error, so "a message came back" is no evidence of work. Missing token counts are never proof here (a host may not
+    report them). The proof is what the host promised and streamed: it reports every tool call and none came, no text
+    streamed, each message is word for word a line the turn ended on, and no write, push, output or used approval shows.
+    An older runner or a harness that makes no such promise never passes."""
+    stopped_on = {error.strip() for error in limit_errors(c, aid) if error.strip()}
+    for event in c.execute("SELECT kind,payload_json FROM attempt_events WHERE attempt_id=? ORDER BY seq", (aid,)):
+        payload = json.loads(event["payload_json"] or "{}") or {}
+        if event["kind"] == "tokens":
+            usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+            if payload.get("output") or usage.get("output"):
+                return False
+        elif event["kind"] == "message":
+            if str(payload.get("text") or "").strip() not in stopped_on:
+                return False
+        elif event["kind"] not in SILENT_KINDS:
+            return False
+    text = split_runner_notices(body.text or "")[0].strip()
+    if (text and text not in stopped_on) or body.yielded or positive_effect(c, aid, body.model_copy(update={"text": ""})):
+        return False
+    job = c.execute("SELECT * FROM jobs WHERE id=?", (row["job_id"],)).fetchone()
+    facts = retry_facts(c, job, row["started"], H.now())
+    return bool(facts["reported"] and not facts["calls"] and not facts["consumed"] and not facts["fallback_unknown"])
+
+
 def turns_here(c, runner_id):
     """{bot: turns it holds on this computer now}."""
     return start_places.held(c, runner_id)
@@ -361,8 +388,15 @@ def lift_after_connection_change(c, settings, actor, bot):
     if (H.status(c, bot) or {}).get("state") != "limited":
         return
     why = model_change_hold(c, settings, bot)
+    if why == "login" and fallback_takes(c, settings, bot):
+        why = ""        # the named or default fallback runs the turn now (fallback_choice), so the held login does not
     if why:
         until = own_login_hold(c, settings, bot).get("until") or ""
+        if why == "login" and until:
+            # The bot stays held on its own login until that login's hold ends (a replaced plan's later deadline is no
+            # longer the one): the claim releases these at this time (wake_presets.release_quota_resets).
+            c.execute("UPDATE jobs SET hold_until=? WHERE bot=? AND state='queued' AND held=1 "
+                      "AND wake_class='quota-reset' AND hold_reason IS NULL", (until, bot))
         H.status_set(c, actor, bot, state="limited",
                      focus=("Connection changed; the new login is at its usage limit"
                             + (f" until {until[11:16]} UTC" if why == "login" and until else "")
@@ -378,17 +412,39 @@ def lift_after_connection_change(c, settings, actor, bot):
                  reason="Connection changed")
 
 
+def fallback_takes(c, settings, bot):
+    """Whether the bot's named or default fallback takes its turn on its computer now: the same answer the claim gives
+    (fallback_choice), on the config a claim runs (shared_bots.follow)."""
+    from .shared_bots import follow
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
+    if not place or not place["runner_id"]:
+        return False
+    row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+    config = follow(c, bot, json.loads(row[0]) if row and row[0] else {})
+    return fallback_choice(c, settings, place["runner_id"], bot, config) is not None
+
+
+def lift_limited_on_computer(c, settings, actor, runner_id, runtime):
+    """Re-judge each Rate limited bot on this computer that runs `runtime`, as its primary or its named fallback
+    (lift_after_connection_change). Its config is the one a claim runs (shared_bots.follow). Call it after the
+    computer's sign-in for `runtime` has changed in the database: the re-judge reads the login the bot would use now."""
+    from .shared_bots import follow
+    record = providers.load(c, settings)
+    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
+                         "WHERE s.state='limited' AND a.runner_id=? ORDER BY s.bot", (runner_id,)).fetchall():
+        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
+        filled = providers.fill(record, follow(c, row[0], json.loads(config[0]) if config and config[0] else {}))
+        if runtime == filled.get("runtime") or runtime in model_subscriptions.turn_runtimes(filled):
+            lift_after_connection_change(c, settings, actor, row[0])
+
+
 def lift_after_login_switch(c, settings, actor, runner_id, runtime):
     """A computer's login for `runtime` was switched to another account or key: the hold on it was the old account's.
     It ends as Try now does (login_holds.try_now: one probe turn tests the new account), and every bot that was
     Rate limited on it is freed."""
     for key in {k for k in (login_holds.canonical(c, runner_id, "", runtime), "") if k is not None}:
         login_holds.try_now(c, runner_id, key, runtime)
-    for row in c.execute("SELECT s.bot FROM bot_status s JOIN assignments a ON a.bot=s.bot "
-                         "WHERE s.state='limited' AND a.runner_id=?", (runner_id,)).fetchall():
-        config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (row[0],)).fetchone()
-        if providers.bot_choice(c, settings, json.loads(config[0]) if config and config[0] else {})[0] == runtime:
-            lift_after_connection_change(c, settings, actor, row[0])
+    lift_limited_on_computer(c, settings, actor, runner_id, runtime)
 
 
 # The room messages a claim hands its turn (the runner forwards only what arrived since the session last answered).
@@ -1564,9 +1620,14 @@ def clear_limits(c, settings, actor, bot):
     """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
     runtime on the same computer, since they share the subscription a person has just renewed.
     Returns how many bots it cleared."""
-    def runtime(slug):
+    from .shared_bots import follow
+
+    def config(slug):
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
-        return providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[0]
+        return follow(c, slug, json.loads(row[0]) if row and row[0] else {})
+
+    def runtime(slug):
+        return providers.bot_choice(c, settings, config(slug))[0]
     mine, place = runtime(bot), c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     bots = [bot]
     if place and place["runner_id"] and mine:
@@ -1574,12 +1635,10 @@ def clear_limits(c, settings, actor, bot):
                                          "WHERE s.state='limited' AND a.runner_id=? AND s.bot<>? ORDER BY s.bot",
                                          (place["runner_id"], bot)) if runtime(r[0]) == mine]
     for slug in bots:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
         if place and place["runner_id"]:
             # The plan behind the login was just renewed: its hold ends for every bot on it, but only one queued job
             # tries it until that turn's result (login_holds.try_now), so a plan still spent sees one turn, not a burst.
-            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug,
-                                            json.loads(row[0]) if row and row[0] else {}))
+            login_holds.try_now(c, *login_key(c, settings, place["runner_id"], slug, config(slug)))
         if (H.status(c, slug) or {}).get("state") == "limited":
             H.status_set(c, actor, slug, state="idle", focus="", reason="Try now")
         c.execute("UPDATE jobs SET held=0,hold_until=NULL WHERE bot=? AND state='queued' "
@@ -1590,12 +1649,14 @@ def clear_limits(c, settings, actor, bot):
 
 def own_login_hold(c, settings, bot):
     """The hold on the bot's own login on its computer (backend/login_holds.py), or {}: it can stand while the bot is
-    not `limited`, its work going on on a fallback."""
+    not `limited`, its work going on on a fallback. The bot's config is the one a claim runs (shared_bots.follow)."""
+    from .shared_bots import follow
     place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
     row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
     if not place or not place["runner_id"] or not row:
         return {}
-    return login_holds.get(c, *login_key(c, settings, place["runner_id"], bot, json.loads(row[0] or "{}")))
+    config = follow(c, bot, json.loads(row[0] or "{}"))
+    return login_holds.get(c, *login_key(c, settings, place["runner_id"], bot, config))
 
 
 def _github_app(c):
@@ -4801,16 +4862,21 @@ class Execution:
         failure = None
         source_pause = False
         quota_acted = False
+        notice_only = False
         if body.outcome in ('failed', 'interrupted') and not row['stop_requested']:
             failure = run_backoff.classify(c, aid, body)
             errors = limit_errors(c, aid)
+            notice_only = only_a_notice(c, aid, row, body)
+            if notice_only and body.continues and errors and all(login_holds.capacity(e) for e in errors):
+                # The runner took the busy notice for work and kept the thread; the turn never ran, so it just waits.
+                body = body.model_copy(update={'limited': True, 'continues': False})
             if body.limited and not any(gateway.run_code(e) for e in errors) and not (errors and all(login_holds.capacity(e) for e in errors)):
                 job = c.execute('SELECT * FROM jobs WHERE id=?', (row['job_id'],)).fetchone()
                 facts = retry_facts(c, job, row['started'], H.now())
                 quota_acted = bool(facts['consumed'] or outside_actions(c, job, row['started'], H.now()))
                 source_pause = not quota_acted
                 if source_pause:
-                    worked = c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message','delta') LIMIT 1", (aid,)).fetchone()
+                    worked = not notice_only and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? AND kind IN ('tool','message','delta') LIMIT 1", (aid,)).fetchone()
                     body = body.model_copy(update={'outcome': 'interrupted' if worked else body.outcome, 'retryable': True})
         c.execute("UPDATE attempts SET state=?,finished=?,final_text=?,result_json=? WHERE id=?",
                   (body.outcome, H.now(), body.text,
@@ -4850,8 +4916,8 @@ class Execution:
         errors = limit_errors(c, aid)
         busy = (body.outcome != "completed" and not stopped and bool(errors)
                 and all(login_holds.capacity(error) for error in errors))
-        busy_acted = busy and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? "
-                                        "AND kind IN ('message','tool') LIMIT 1", (aid,)).fetchone() is not None
+        busy_acted = busy and not notice_only and c.execute("SELECT 1 FROM attempt_events WHERE attempt_id=? "
+                                                            "AND kind IN ('message','tool') LIMIT 1", (aid,)).fetchone() is not None
         # Unless the runner kept its thread (`continues`): then the job goes back in the queue, and after the capacity
         # hold its next turn continues that thread, which knows what it did. Once only: a continuation the model's
         # capacity stops again is held for review, even before it acts (capacity_continuation).
@@ -4866,7 +4932,7 @@ class Execution:
             c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.limited',json('true'),"
                       "'$.capacity_continue',json('true')) WHERE id=?", (aid,))
         source = body.source_continuation
-        if (source_pause or continues) and source and body.fallback and source.harness == body.fallback:
+        if (source_pause or continues) and source and body.fallback and source.harness == body.fallback and not notice_only:
             computer = c.execute('SELECT capabilities_json FROM runners WHERE id=?', (row['runner_id'],)).fetchone()
             if computer and SOURCE_CONTINUE in json.loads(computer[0] or '[]'):
                 c.execute("UPDATE attempts SET result_json=json_set(result_json,'$.source_continue',json('true')) WHERE id=?", (aid,))
@@ -4911,9 +4977,9 @@ class Execution:
             kinds = {r[0] for r in c.execute("SELECT DISTINCT kind FROM attempt_events WHERE attempt_id=?", (aid,))}
             tries = c.execute("SELECT count(*) FROM attempts WHERE job_id=?", (row["job_id"],)).fetchone()[0]
             quick = (row["started"] or row["created"]) >= H.shift(H.now(), seconds=-NO_EFFECT_WITHIN)
-            silent = (kinds <= SILENT_KINDS and (quick or tico_code == gateway.UNAVAILABLE) and tries < NO_EFFECT_TRIES
-                      and tico_code not in gateway.FINAL)
-            if silent and positive_effect(c, aid, body):
+            silent = ((kinds <= SILENT_KINDS or notice_only) and (quick or tico_code == gateway.UNAVAILABLE)
+                      and tries < NO_EFFECT_TRIES and tico_code not in gateway.FINAL)
+            if silent and not notice_only and positive_effect(c, aid, body):
                 silent = False
         # A refused key or sign-in blocks this profile until its credential changes.
         # Only runs with no evidence of actions may wait queued rather than held for review.
@@ -5051,7 +5117,9 @@ class Execution:
             elif not checkpoint_safe(c, aid, checkpoint_task):
                 c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (checkpoint_task["id"],))
                 checkpoint_task = None
-        if (body.outcome == "completed" or yielded or source_pause) and body.text and checkpoint_task:
+        # A turn that only said why it stopped leaves the task where it stood: its line is no place to pick the work up
+        # from, and a checkpoint would have the same-state rule hold the stall checks.
+        if (body.outcome == "completed" or yielded or source_pause) and not notice_only and body.text and checkpoint_task:
             # Where the task stood after this turn: a later turn that cannot resume this session
             # starts from it (runner prompt). It is not the task's activity, so `updated` stays.
             started = (c.execute("SELECT started FROM turns WHERE id=?", (aid,)).fetchone() or [None])[0]
@@ -5092,10 +5160,12 @@ class Execution:
             # clears it.
             login_holds.after_turn(c, row["runner_id"], row["bot"], "", runtime, body, aid, H.now(),
                                    subscriptions_only=True)
-        if reset_wait or unstarted and body.primary_held and body.limited and not body.fallback:
+        # A nightly memory tidy pass never waits for a reset or retries: its limit ends it as skipped (below).
+        memory_pass_turn = bool(check and check.get("memory_pass"))
+        if not memory_pass_turn and (reset_wait or unstarted and body.primary_held and body.limited and not body.fallback):
             login_hold = hold_job_until_reset(c, row, own_login_hold(c, self.store.settings, row['bot']),
                                 'No fallback could take this claim; waiting for the primary login reset.') or login_hold
-        if source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
+        if not memory_pass_turn and source_pause and login_hold and (quota_continue or body.fallback or not fallback_choice(
                 c, self.store.settings, row['runner_id'], row['bot'], json.loads(config[0] or '{}') if config else {})):
             hold_job_until_reset(c, row, login_hold, 'Provider quota paused this turn; continue its saved session at reset.')
         # A turn signed in with a company subscription: a refusal is that subscription's, never the computer's login.
@@ -5135,6 +5205,16 @@ class Execution:
             H.event(c, H.KEEPER, "attempt.skipped", aid, {"bot": row["bot"], "job_id": row["job_id"]})
         elif stopped:
             self.stopped(c, row, conv["id"], held=held_back)
+        elif memory_pass_turn and body.limited and body.outcome != "completed":
+            # A nightly memory tidy pass never moves to another model and never waits for a reset: its named model
+            # cannot run, so the pass ends skipped with the reason in the run log (spec criterion 22). Any limit does
+            # it, even one after work the turn already did (`limited` is cleared then).
+            check_models.skip_pass(c, check_task, check)
+            settle_status(c, row["bot"], "idle", f"Nightly memory tidy skipped: {runtime} is out of quota on this "
+                          f"computer, so its named model could not run", claimed=row["created"])
+            H.event(c, H.KEEPER, "attempt.check_skipped", aid,
+                    {"bot": row["bot"], "job_id": row["job_id"], "task_id": check_task, "runtime": runtime,
+                     "reason": check_models.PASS_SKIPPED})
         elif limited and check and not body.profile_used and (moved := check_models.move_on(
                 c, self.store.settings, row["bot"], check_task, check, row["runner_id"])):
             # The computer's default login for the check's model is already out of quota (Health's

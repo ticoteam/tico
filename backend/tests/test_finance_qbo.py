@@ -139,6 +139,24 @@ def test_a_validation_refusal_from_quickbooks_is_final():
     assert sent.ok is False and sent.final is True and "does not balance" in sent.error
 
 
+def test_a_refused_estimate_link_sends_the_invoice_again_under_a_new_request_with_the_same_marker():
+    wire = Wire(QC.Reply(200, {"QueryResponse": {"Item": [{"Id": "7", "IncomeAccountRef": {"value": "3"}}]}}),
+                QC.Reply(400, {"Fault": {"Error": [{"Message": "Estimate is not linkable"}],
+                                         "type": "ValidationFault"}}),
+                QC.Reply(200, {"Invoice": {"Id": "903", "SyncToken": "0"}}))
+    sent = _client(wire).send("invoice.create", {"party": "Customer:4", "number": "I-7", "day": "2026-10-05",
+                                                 "due": "", "memo": "", "linked_estimate": "41", "lines": [
+                                                     {"account": "Account:3", "amount": 2000, "description": "x"}]},
+                              "invoice-key-3")
+    assert (sent.ok, sent.external_id) == (True, "903")
+    first, second = (json.loads(data or b"{}") for _, _, _, data in wire.sent[1:])
+    assert f"requestid={uuid.uuid5(QC.NAMESPACE, 'invoice-key-3')}" in wire.sent[1][1]
+    assert f"requestid={uuid.uuid5(QC.NAMESPACE, 'invoice-key-3:unlinked')}" in wire.sent[2][1]
+    assert first["PrivateNote"].endswith(QC._marker("invoice-key-3"))
+    assert second["PrivateNote"].endswith(QC._marker("invoice-key-3"))   # the retry finds the same write
+    assert "LinkedTxn" in first and "LinkedTxn" not in second
+
+
 class FakeHQ:
     """HQ's broker answers, given to the Gateway link's call in place of the network (what the install sends and gets)."""
 
