@@ -141,9 +141,6 @@ def test_the_chat_page_read_is_a_snapshot_and_the_outline_lists_the_prompts(api)
     assert row["text"] == "Check the release notes" and row["task"] is None
 
 
-@pytest.mark.xfail(strict=True, reason="conversations_for (backend/hubdb.py:9121) reads only the newest 500 conversations "
-                   "in the whole company before it keeps the person's, so an older chat drops out of the list and of "
-                   "?bot=. Fix: filter participants in SQL, as chats_with does.")
 def test_an_older_chat_stays_in_the_list_behind_many_newer_conversations(api):
     cid = post(api, "chat/ops", {"text": "Old question"})["conversation_id"]
     # The control: before the newer conversations exist, the chat is listed for both reads.
