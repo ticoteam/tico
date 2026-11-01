@@ -1304,6 +1304,61 @@ def _actor_of(principal):
     return (v.actor if v else str(principal or "")), v
 
 
+def _post_making(c, principal, thread_id, body, start, parent_message_id, checked, args):
+    """The part of a post that makes its thread: everything is checked, then the org-rule verdict is applied, and only
+    a message that goes makes the thread (or the sub-thread). Returns {"held": answer} or the thread to post in."""
+    actor, v = _actor_of(principal)
+    if not str(body or "").strip() and not args.get("attachments"):
+        raise Problem("empty", "Write the message", 422)
+    plan = None
+    if start is not None:
+        if thread_id:
+            raise Problem("start", "A post that starts a thread names no thread", 422)
+        if args.get("as_actor") is not None:
+            raise Problem("start", "A remote author posts into a linked thread", 422)
+        start = dict(start)
+        if "dm" in start:
+            members = _dm_members_for(c, actor, start.get("dm"))
+            existing = _open_dm(c, actor, members)
+            plan = None if existing else _create_plan(c, principal, audience="personal", members=members,
+                                                      title=start.get("title") or "")
+            if existing:
+                thread_id = existing
+        else:
+            allowed = ("title", "audience", "audience_group_id", "members", "task_id", "kind")
+            plan = _create_plan(c, principal, **{k: start[k] for k in allowed if k in start})
+    else:
+        parent = H.message(c, parent_message_id)
+        thread = thread_row(c, thread_id)
+        if not parent or thread is None or parent["conversation_id"] != thread["id"]:
+            raise Problem("not_found", "Message not found", 404)
+        if v is not None and (not message_readable(c, v, parent) or not can_post(c, v, thread)):
+            raise Problem("not_found", "Message not found", 404)
+        if args.get("as_actor") is not None and not remote_member(c, root_of(c, thread), args["as_actor"]):
+            raise Problem("not_found", "Thread not found", 404)
+    text = str(body or "")
+    if checked is not None:
+        from . import org_rule_check
+        replay = {"thread_id": thread_id if start is None else None, "body": text, "kind": args.get("kind"),
+                  "refs": args.get("refs") or None, "parent_message_id": parent_message_id,
+                  "to_actor": args.get("to_actor"), "via": args.get("via"), "origin": args.get("origin"),
+                  "attachments": args.get("attachments"), "start": start}
+        gate = org_rule_check.apply(c, checked, text, replay)
+        if gate and gate.get("moved"):
+            raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
+                          retryable=True)
+        if gate and gate.get("held"):
+            _emit_message_held(c, thread_row(c, thread_id) if thread_id else None, actor, gate)
+            return {"held": org_rule_check.answer(gate)}
+        if gate and gate.get("warn"):
+            text = org_rule_check.warned_text(gate, text)
+    if plan is not None:
+        thread_id = _create_from(c, principal, plan)["id"]
+    elif start is None:
+        thread_id = sub_thread(c, principal, parent_message_id)["id"]
+    return {"thread_id": thread_id, "body": text}
+
+
 def remote_install(actor):
     """The install a remote author belongs to (`human:ana@<install>`, `bot:legal@<install>`), else None."""
     match = REMOTE_ACTOR.match(str(actor or ""))
@@ -1327,10 +1382,14 @@ def remote_member(c, root, actor):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None, as_actor=None):
+         origin=None, checked=None, attachments=None, as_actor=None, start=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
-    `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`)."""
+    `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`).
+
+    A post that would make a thread (`start`: a new thread's `create` arguments, or `{"dm": [...], "title"}`, with
+    `thread_id` None; or a `parent_message_id` with no sub-thread yet) is checked first: a held message makes
+    nothing, and its Send anyway replays this same post."""
     actor, v = _actor_of(principal)
     if as_actor is not None:
         install = str((origin or {}).get("install") or "")
@@ -1346,6 +1405,14 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         if found:
             existing = H.message(c, found[0], include_deleted=True)
             return {**(existing or {"id": found[0]}), "duplicate": True}
+    if start is not None or (parent_message_id and not c.execute(
+            "SELECT 1 FROM conversations WHERE parent_message_id=?", (parent_message_id,)).fetchone()):
+        made = _post_making(c, principal, thread_id, body, start, parent_message_id, checked,
+                            dict(kind=kind, refs=refs, to_actor=to_actor, via=via, origin=origin,
+                                 attachments=attachments, as_actor=as_actor))
+        if made.get("held") is not None:
+            return made["held"]
+        thread_id, body, parent_message_id, checked = made["thread_id"], made["body"], None, None
     thread = thread_row(c, thread_id)
     if thread is None:
         raise Problem("not_found", "Thread not found", 404)
@@ -1482,9 +1549,19 @@ def _insert_thread(c, actor, *, title, audience, audience_group_id=None, owner_a
 
 def create(c, principal, *, title="", audience="members", audience_group_id=None, members=(), parent_message_id=None,
            task_id=None, kind="chat"):
-    """A new root thread (or, with `parent_message_id`, that message's sub-thread). The starter is its owner member."""
+    """A new root thread (or, with `parent_message_id`, that message's sub-thread). The starter is its owner member.
+    A thread made with its first message is `post(..., start={...})`: a held first message makes no thread."""
     if parent_message_id:
         return view(c, principal, sub_thread(c, principal, parent_message_id))
+    row = _create_from(c, principal, _create_plan(c, principal, title=title, audience=audience,
+                                                  audience_group_id=audience_group_id, members=members,
+                                                  task_id=task_id, kind=kind))
+    return view(c, principal, thread_row(c, row["id"]))
+
+
+def _create_plan(c, principal, *, title="", audience="members", audience_group_id=None, members=(), task_id=None,
+                 kind="chat"):
+    """Every check a new root thread needs, writing nothing: what `_create_from` then makes."""
     actor, v = _actor_of(principal)
     if audience not in ("company", "team", "members", "task", "personal"):
         raise Problem("audience", "A new thread is company, team, members, task or personal", 422)
@@ -1504,9 +1581,16 @@ def create(c, principal, *, title="", audience="members", audience_group_id=None
         if target != actor:
             _require_write(c, v, target)
             resolved.append(target)
+    return {"title": title, "audience": audience, "audience_group_id": audience_group_id, "members": resolved,
+            "task_id": task_id, "kind": kind}
+
+
+def _create_from(c, principal, plan):
+    actor, _v = _actor_of(principal)
+    audience, resolved = plan["audience"], plan["members"]
     owner = actor if audience != "task" else None
-    row = _insert_thread(c, actor, title=title, audience=audience, audience_group_id=audience_group_id,
-                         owner_actor=owner, task_id=task_id, kind=kind)
+    row = _insert_thread(c, actor, title=plan["title"], audience=audience, audience_group_id=plan["audience_group_id"],
+                         owner_actor=owner, task_id=plan["task_id"], kind=plan["kind"])
     now = _now()
     if audience in ("members", "personal"):
         for who, role in [(actor, "owner")] + [(m, "member") for m in resolved]:
@@ -1518,7 +1602,7 @@ def create(c, principal, *, title="", audience="members", audience_group_id=None
     _emit_thread_created(c, row)
     _audit(c, actor, "thread:" + row["id"], None, {"audience": audience, "title": row["subject"],
                                                     "members": resolved})
-    return view(c, principal, thread_row(c, row["id"]))
+    return row
 
 
 def _require_write(c, v, target):
@@ -1540,25 +1624,39 @@ def _require_write(c, v, target):
 
 
 def dm(c, principal, members, *, title=""):
-    """A personal thread with exactly these teammates: the open one, or a new one."""
+    """A personal thread with exactly these teammates: the open one, or a new one. With a first message it is
+    `post(..., start={"dm": members})`: a held first message makes no DM."""
     actor, v = _actor_of(principal)
+    resolved = _dm_members_for(c, actor, members)
+    existing = _open_dm(c, actor, resolved)
+    if existing:
+        return view(c, principal, thread_row(c, existing))
+    return create(c, principal, title=title, audience="personal", members=resolved)
+
+
+def _dm_members_for(c, actor, members):
     resolved = []
     for m in members or ():
         target = H.resolve_actor(c, m)
         if not target:
             raise Problem("not_found", f"Unknown teammate {m}", 404)
-        if target != actor:
+        if target != actor and target not in resolved:
             resolved.append(target)
     if not resolved:
         raise Problem("members", "Name who the DM is with", 422)
+    return resolved
+
+
+def _open_dm(c, actor, resolved):
+    """The open personal thread with exactly `resolved` and the actor, or None."""
     want = set(resolved) | {actor}
     for r in c.execute("SELECT c.id FROM conversations c JOIN thread_members m ON m.thread_id=c.id "
                        "WHERE c.audience='personal' AND c.parent_id IS NULL AND c.closed_at IS NULL "
                        "AND c.archived_at IS NULL AND m.actor=? ORDER BY c.last_seq DESC LIMIT 500", (actor,)):
         have = {x[0] for x in c.execute("SELECT actor FROM thread_members WHERE thread_id=?", (r[0],))}
         if have == want:
-            return view(c, principal, thread_row(c, r[0]))
-    return create(c, principal, title=title, audience="personal", members=resolved)
+            return r[0]
+    return None
 
 
 def home(c, owner_actor, *, create=True):
