@@ -2865,6 +2865,13 @@ def create_app(settings=None):
         return lambda c, author, recipients: org_rule_check.place_for(
             c, author, recipients, (views.direct_chat(c, who.actor, bot) or {}).get("id") or "")
 
+    def task_place(who, tid):
+        """A task comment's place: its task's conversation, the thread its comments are in (`where: thread:<id>`)."""
+        def place(c, author, recipients):
+            row = H.task(c, auth.resolve_task(c, who, tid))
+            return org_rule_check.place_for(c, author, recipients, (row or {}).get("conversation_id") or "")
+        return place
+
     def rule_check(who, operation, output, audience, obj="", context=None, place=None):
         """The check for one write by a person or a bot, or None (nothing to judge, a write the caller cannot make: the
         write itself refuses that). `place`: the write's place, or a function of (c, author, recipients) that reads
@@ -5014,7 +5021,7 @@ def create_app(settings=None):
                           422)
         rc = rule_check(who, "comment", body.text, lambda c: rule_task_audience(
             c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text,
-            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])))
+            *([rule_target(c, who, body.ask.who)] if body.ask and body.ask.who else [])), place=task_place(who, tid))
         ingest = None if org_rule_check.holds(rc) or saved_retry(request, who) else comment_ingest(who, tid, body)
         result = ask_ingest.judged(store, ingest, lambda: mutate(request, body, lambda c: comment_write(
             c, who, tid, body, ingest, rc, request.state.identity)))
@@ -5125,7 +5132,8 @@ def create_app(settings=None):
         if body.ask is not None or body.attachments:
             raise Problem("validation", "An edit changes only a plain comment's text", 422)
         rc = rule_check(who, "comment_edit", body.text, lambda c: rule_task_audience(
-            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text), obj=mid)
+            c, auth.task(c, who, auth.resolve_task(c, who, tid)), who.actor, body.text), obj=mid,
+            place=task_place(who, tid))
         return mutate(request, body, lambda c: comment_edit_write(c, who, tid, mid, body, rc),
                       check=lambda c: own_comment(c, who, tid, mid, allow_deleted=True))
 

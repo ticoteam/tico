@@ -71,10 +71,24 @@ def test_a_persons_chat_message_held_in_their_direct_chat_is_listed_by_that_thre
     hold_id = chat(api, "Our favorite color is gold.", to="finance", token="cara-test")["held"]["id"]
     with api.app.state.store.read() as c:
         thread = views.direct_chat(c, "human:cara", "finance")["id"]
-    assert hold_row(api, hold_id)["payload_json"].count(thread) == 1     # the place names the chat
+    place = json.loads(hold_row(api, hold_id)["payload_json"])["provenance"]["place"]
+    assert place["thread"] == thread                                    # the place names the chat
     listed = get(api, f"rule-holds?thread={thread}", token="cara-test")
     assert [h["id"] for h in listed["holds"]] == [hold_id]
     assert get(api, "rule-holds?thread=some-other-chat", token="cara-test")["holds"] == []
+
+
+def test_a_where_thread_rule_holds_a_task_comment_in_that_task_and_not_in_another(ruled):
+    api, _ = ruled
+    task = post(api, "tasks", {"owner": "ops", "title": "Write the launch note", "body": "Draft it."})
+    other = post(api, "tasks", {"owner": "ops", "title": "Write the other note", "body": "Draft it."})
+    thread = sql(api, "SELECT conversation_id FROM tasks WHERE id=?", (task["id"],))[0]["conversation_id"]
+    rule(api, {"kind": "internal", "text": COLOR, "who": EVERYONE, "where": [f"thread:{thread}"]})
+    held = post(api, f"tasks/{task['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")
+    assert held["held"], held
+    assert bodies(api, "favorite color is red") == []
+    post(api, f"tasks/{other['id']}/comments", {"text": "Our favorite color is red."}, token="ops-test")
+    assert len(bodies(api, "favorite color is red")) == 1          # the other task's thread is not the rule's
 
 
 def test_send_anyway_is_for_the_rule_author_and_refused_to_the_author_and_to_others(ruled):
