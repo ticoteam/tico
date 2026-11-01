@@ -45,4 +45,7 @@ def test_h1_a_demo_company_loads_every_row_of_its_files_and_its_documents(tmp_pa
         assert count(c, "fin_estimates") == len(doc.get("estimates", []))
         sidebar = c.execute("SELECT value_json FROM registry_metadata WHERE key='company-sidebar'").fetchone()[0]
         assert json.loads(sidebar)["business_type"] == BUSINESS[company]
+        # The company is set up from its files, so the owner is not sent through the first-run wizard (onboarding.needed).
+        onboarding = c.execute("SELECT value_json FROM registry_metadata WHERE key='onboarding'").fetchone()
+        assert onboarding is not None and json.loads(onboarding[0])["completed"]
     assert "not loaded" not in out
