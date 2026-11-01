@@ -122,6 +122,7 @@ function finBsTail() {
 }
 
 // ----------------------------------------------------------------- cards
+const FIN_CARD_RANK = {active: 0, frozen: 1, cancelled: 2};
 const FIN_CARD_STATUS = {active: ['ok', 'Active'], frozen: ['waiting', 'Frozen'], cancelled: ['idle', 'Cancelled']};
 function finCardsPage() {
   const caps = finCaps();
@@ -143,7 +144,9 @@ async function finCardsLoad(more) {
   try { d = await get('/v2/finance/cards' + qs + finAs(qs ? '&' : '?'), {fresh: true}); }
   catch (e) { if (FIN?.cards === state && $('#fin-cards')) $('#fin-cards').innerHTML = finFail(e); return; }
   if (FIN?.cards !== state || state.load !== load || !$('#fin-cards')) return;
-  state.rows = more ? [...state.rows, ...(d.cards || [])] : d.cards || [];
+  // Live cards first, then frozen, then cancelled; by name within each.
+  state.rows = (more ? [...state.rows, ...(d.cards || [])] : d.cards || [])
+    .sort((x, y) => (FIN_CARD_RANK[x.status] ?? 3) - (FIN_CARD_RANK[y.status] ?? 3) || finCardName(x).localeCompare(finCardName(y)));
   state.next = d.next || null;
   if (!state.rows.some(c => c.id === state.sel)) state.sel = state.rows[0]?.id || '';
   finCardsDraw(); finCardRail();
@@ -159,7 +162,7 @@ const FIN_CARD_APP = {mercury: 'https://app.mercury.com/cards'};
 function finCardsDraw() {
   const state = FIN.cards, box = $('#fin-cards'); if (!box) return;
   if (!state.rows.length) { box.innerHTML = finNote('No cards yet.'); return; }
-  box.innerHTML = `<table class="fin-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
+  box.innerHTML = `<table class="fin-t fin-card-t"><thead><tr><th>Card</th><th>Holder</th><th>Budget</th><th class="fin-n">Limit</th><th class="fin-n">Spent</th><th>Status</th></tr></thead><tbody>${state.rows.map(c => {
     const [cls, label] = finCardPill(c);
     return `<tr data-fin-card="${esc(c.id)}"${state.sel === c.id ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link">${esc(finCardName(c))}</button></td><td><span class="fin-who">${finAvatar(c.holder, 18)}${esc(finWho(c.holder))}</span></td>
       <td>${c.budget ? esc(c.budget.name) : '<span class="muted">—</span>'}</td><td class="fin-n">${c.limit == null ? '<span class="muted">—</span>' : finNum(c.limit)}</td><td class="fin-n">${finNum(c.spent)}</td>

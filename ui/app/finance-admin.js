@@ -65,7 +65,8 @@ function finSrcCols(r) {
   }
   else if (r.kind === 'entries') { has = n((r.manual || 0) + (r.import || 0), 'entry', 'entries'); how = 'By hand'; status = ['idle', '—']; }
   else {
-    if (r.kind === 'connection') has = r.provider || '';
+    // A connection has the money accounts it feeds (as its rail lists them), else nothing to count.
+    if (r.kind === 'connection') { const k = (FIN.src?.groups || []).flatMap(g => g.rows).filter(x => finSrcMoney(x) && x.sync?.connection_id === r.id).length; has = k ? n(k, 'account', 'accounts') : '—'; }
     else if (r.cards) has = n(sum(r.cards), 'card', 'cards');
     else has = finUsd(r.balance);
     feeds = r.account ? r.account.name : r.kind === 'connection' ? '' : 'Not mapped';
@@ -92,7 +93,7 @@ function finSrcDraw() {
     for (const r of rows) {
       const c = finSrcCols(r), k = finSrcKey(r);
       out.push(`<tr data-fin-src="${esc(k)}"${s.sel === k ? ' class="fin-on"' : ''}><td><button type="button" class="fin-link fin-src-name">${esc(r.name || r.provider || '')}${r.last4 ? ` <span class="muted">••${esc(r.last4)}</span>` : ''}</button></td>
-        <td>${esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap">${esc(c.last)}</td>
+        <td>${c.has === '—' || !c.has ? '<span class="muted">—</span>' : esc(c.has)}</td><td>${c.feeds === 'Not mapped' ? '<span class="muted">Not mapped</span>' : esc(c.feeds)}</td><td>${esc(c.how)}</td><td class="fin-nowrap">${esc(c.last)}</td>
         <td>${c.status[1] ? `<span class="pill ${c.status[0]}">${esc(c.status[1])}</span>` : ''}</td></tr>`);
     }
   }
