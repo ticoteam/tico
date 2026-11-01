@@ -45,11 +45,16 @@ def _columns(sql, n):
                 out[i] = f"{m.group(1)}.{c}"; i += 1
         return out
     return [None] * n
+_date = re.compile(r"\d{4}-\d{2}-\d{2}")
+_clock = re.compile(r"\d{2}:\d{2}")
 def _scan(sql, params):
     try:
         if not isinstance(params, (list, tuple)) or not re.search(r"\b(INSERT|UPDATE)\b", sql, re.I): return
         names = None
         for i, p in enumerate(params):
+            if isinstance(p, str) and (_date.fullmatch(p) or _clock.fullmatch(p)):
+                if names is None: names = _columns(sql, len(params))
+                if names[i]: _emit(("DATE" if _date.fullmatch(p) else "CLOCK") + "\t" + names[i])
             if isinstance(p, str) and len(p) > 1 and p[0] in "{[" and len(p) < 2_000_000:
                 try: doc = json.loads(p)
                 except ValueError: continue
@@ -57,7 +62,7 @@ def _scan(sql, params):
                 _walk(doc, "$", names[i] or ("?" + sql[:50].replace("\n", " ").replace("\t", " ")))
     except Exception:
         pass
-class ScanConn(sqlite3.Connection):
+class _Mixin:
     def execute(self, sql, *a):
         if a: _scan(sql, a[0])
         return super().execute(sql, *a)
@@ -66,7 +71,11 @@ class ScanConn(sqlite3.Connection):
         for p in seq[:50]: _scan(sql, p)
         return super().executemany(sql, seq)
 _real = sqlite3.connect
+_made = {}
 def connect(*a, **k):
-    k.setdefault("factory", ScanConn)
+    base = k.get("factory") or sqlite3.Connection
+    if not issubclass(base, _Mixin):
+        base = _made.setdefault(base, type("Scan" + base.__name__, (_Mixin, base), {}))
+    k["factory"] = base
     return _real(*a, **k)
 sqlite3.connect = connect
