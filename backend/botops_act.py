@@ -193,6 +193,17 @@ def _routes(*rows):
     return [(method, re.compile(API + path)) for method, path in rows]
 
 
+# Thread writes (docs/threads.md): posting, replying, editing, following, reading and managing members, as the person
+# who asked. The route checks that person's rights on the thread (backend/threads.py). `messages/` is in OWN for
+# BotOps' own messages, so `default_delegable` matches these routes before OWN.
+THREADS = _routes(
+    ("POST", r"threads"), ("PATCH", rf"threads/{_S}"),
+    ("POST", rf"threads/{_S}/(messages|read|read-all|members)"), ("DELETE", rf"threads/{_S}/members/{_S}"),
+    ("PUT", rf"threads/{_S}/follow"), ("DELETE", rf"threads/{_S}/follow"),
+    ("PATCH", rf"messages/{_S}"),
+)
+
+
 # Runs at once, as the person. Some of these keep their own "always a click" rule inside the route (adding someone
 # a role, a Computer that does not take members' bots): the route answers with the card.
 # A credential grant to a bot runs at once when the person is a credential administrator (or stored it, for a bot they
@@ -377,7 +388,7 @@ def classify(method, path, body=None, rules=None, to_bot=None):
         return "do" if to_bot and isinstance(body, dict) and to_bot(body.get("to")) else "confirm"
     if rules and not rules.get("botops_direct", True) and any(m == method and p.fullmatch(path) for m, p in TIGHTENED):
         return "confirm"
-    if any(m == method and p.fullmatch(path) for m, p in DO):
+    if any(m == method and p.fullmatch(path) for m, p in DO + THREADS):
         return "do"
     return None
 
@@ -575,6 +586,8 @@ def default_delegable(method, path, body=None, query=None):
     may do or propose for a person, and never its own plumbing or its own messages."""
     path = normalize(path)
     if path and str(method).upper() in ("GET", "POST") and re.fullmatch(API + rf"(?:runners|computers)/{_S}/logins(?:/{_S}(?:/cancel)?)?", path):
+        return classify(method, path, body) == "do"
+    if path and any(m == str(method).upper() and p.fullmatch(path) for m, p in THREADS):
         return classify(method, path, body) == "do"
     if not path or OWN.fullmatch(path):
         return False

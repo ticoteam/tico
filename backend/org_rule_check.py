@@ -1281,7 +1281,7 @@ def _replay_mail(c, bot, hold, replay, ingest, gate=None):
     return {"approved": True}
 
 
-THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments")
+THREAD_REPLAY = ("kind", "refs", "parent_message_id", "to_actor", "via", "origin", "attachments", "in_reply_to")
 
 
 @replayer("threads")

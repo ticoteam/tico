@@ -132,7 +132,7 @@ a Claude sign-in for Claude Code, or an API key ([Harnesses](harnesses.md)). No 
    ("Paused: over its daily limit") until the period turns over or someone raises it; a run already in progress finishes.
    Runs on a ChatGPT or Claude sign-in count toward a limit too, unless you turn off **Count subscription runs**.
 2. **Set up Content Marketer.** Open its page and press **Set up**. Paste the [sample answers](#sample-answers-for-content-marketer)
-   and answer anything else it asks. It posts a first draft in the same chat, labelled "First draft, not yet reviewed".
+   and answer anything else it asks. It posts a first draft in the same DM, labelled "First draft, not yet reviewed".
    Outbound sending stays off until you turn it on for that bot.
 3. **Give it one task.** On **Tasks > New task**, assign Content Marketer: “Draft a 200-word blog post introducing our example app to project teams from these facts:
    our example app keeps tasks and meeting notes together; readers can try it locally; use a plain, friendly voice and invent
@@ -151,7 +151,7 @@ summary with decisions and action items. Close that task the same way.
 
 ### Sample answers for Content Marketer
 
-Paste this into its Setup chat (or replace it with your own facts):
+Paste this into its Setup DM (or replace it with your own facts):
 
 > Our readers are project teams; the next step is to try our example app locally. Plan a weekly blog post and a short
 > social version; keep both as drafts for me. Two voice examples: “Keep the next task beside the meeting notes.” and
@@ -163,14 +163,14 @@ Paste this into its Setup chat (or replace it with your own facts):
 
 ### First-result recovery
 
-- **Add an AI provider**: when chat says "Saved — no AI provider is chosen", use its **Add an AI provider** link
+- **Add an AI provider**: when the DM says "Saved — no AI provider is chosen", use its **Add an AI provider** link
   to open **Settings > Models**, then select the bot's model in **Settings > Bots**. Your message stays saved.
 - **Offline** or **Missing bot repository or AGENT.md**: check **Settings > Computers** and keep the joined computer running;
   [Setup troubleshooting](onboarding.md#troubleshooting) explains repository and placement failures.
 - **Sign-in rejected**: Health names the credential source when the computer reports it. Replace a shared model key in
   **Tools > Credentials**; for a computer-local key or login, update it or use **Sign in** in **Settings > Computers**.
   Older computers show both paths. See [Harnesses](harnesses.md).
-- **Needs setup**: open the bot's chat and press **Set up**; tasks and routines wait until that conversation is finished.
+- **Needs setup**: open the bot's DM and press **Set up**; tasks and routines wait until that DM is finished.
 - **A missing Tool or Credential**: use the bot's card or [Connect tools](connect-tools.md) and grant the credential to that bot.
 
 [Set up your first bots](onboarding-guide.md) covers how to review and improve the result.

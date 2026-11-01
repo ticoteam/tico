@@ -77,6 +77,31 @@ def test_every_cli_command_has_a_tool_of_the_same_name():
     assert hubtools.SHELL_ONLY <= names
 
 
+THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_thread_members_list",
+                "hub_thread_home", "hub_thread_dm"}
+THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
+                 "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
+                 "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack"}
+
+
+def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
+    tools = {t["name"]: t for t in rpc(api, "tools/list")["result"]["tools"]}
+    assert THREAD_READS | THREAD_WRITES <= set(tools)
+    for name in THREAD_READS | THREAD_WRITES:
+        schema = tools[name]["inputSchema"]
+        assert schema["additionalProperties"] is False, name
+        assert set(schema.get("required", [])) <= set(schema["properties"]), name
+        assert ("operation_id" in schema["properties"]) == (name in THREAD_WRITES), name
+    assert tools["hub_thread_post"]["inputSchema"]["properties"]["kind"]["enum"] == ["say", "ask"]
+    assert tools["hub_thread_update"]["inputSchema"]["properties"]["audience"]["enum"] == ["members", "team", "company"]
+
+
+def test_link_slack_says_it_is_not_available_until_the_slack_bridge_lands(api):
+    isError, payload = call(api, "hub_thread_link_slack", {"thread": "t1", "channel": "#ops"})
+    assert isError is True
+    assert "not available" in json.dumps(payload)
+
+
 def test_task_update_status_choices_follow_the_api_and_bot_restrictions():
     from typing import Literal, get_args, get_origin
 

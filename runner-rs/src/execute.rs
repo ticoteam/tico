@@ -254,9 +254,22 @@ pub fn clear_epoch(attempt: &Value, key: &str) -> Option<(String, i64)> {
             return Some((String::new(), epoch));
         }
     }
-    let conversation_id = text_of(&attempt["conversation"]["id"]);
+    // A Hub with native threads sends the epoch of the turn's thread root, whose session its sub-threads continue: the
+    // epoch is recorded for the root, so a sub-thread's turn and the root's agree on it. An older Hub names no root.
+    let root = text_of(&attempt["conversation"]["root_id"]);
+    let conversation_id = if root.is_empty() { text_of(&attempt["conversation"]["id"]) } else { root };
     let epoch = attempt.get("session_epoch").and_then(Value::as_i64)?;
     (!conversation_id.is_empty()).then_some((conversation_id, epoch))
+}
+
+/// The message a reply goes under when the message it answers sits in a sub-thread: that sub-thread's parent message,
+/// which the Hub sends with the claim (the claim's message, and its conversation). None for a main-thread message, or
+/// from a Hub that sends no parent (docs/threads.md). Only ever echoed from the claim, never taken from the turn's own
+/// output (contracts/runner/wire.json `complete.request.parent_message_id`): an older Hub's claim has none, so the
+/// runner never sends the field there.
+pub fn reply_parent(attempt: &Value) -> Option<String> {
+    [&attempt["message"]["parent_message_id"], &attempt["conversation"]["parent_message_id"]]
+        .into_iter().map(text_of).find(|p| !p.is_empty())
 }
 
 pub fn input_text(message: &Value, late: bool) -> String {
@@ -2321,6 +2334,10 @@ impl Runner {
         // events but does not become the task's checkpoint (backend/execution.py complete).
         let unsafe_yield = drove.yielded && drove.outcome != "completed";
         completion.insert("text".into(), json!(if unsafe_yield { "" } else { reply.as_str() }));
+        // A reply to a message in a sub-thread goes under that message, so the Hub keeps it in the sub-thread.
+        if let Some(parent) = reply_parent(&attempt) {
+            completion.insert("parent_message_id".into(), json!(parent));
+        }
         completion.insert("tokens_in".into(), drove.tokens.get("input").cloned().unwrap_or(Value::Null));
         completion.insert("tokens_out".into(), drove.tokens.get("output").cloned().unwrap_or(Value::Null));
         if !carried.is_empty() {
@@ -2711,6 +2728,58 @@ mod tests {
         assert_eq!(clear_epoch(&attempt, "task:t1"), Some(("c-ben".into(), 0)));
         // A Hub from before either field: today's resume.
         assert_eq!(clear_epoch(&json!({"conversation": {"id": "c-ben"}}), "bot"), None);
+    }
+
+    #[test]
+    fn a_reply_to_a_sub_thread_message_goes_under_that_message() {
+        // A conversation that is a sub-thread names the message it sits under; the main thread names none.
+        let sub = json!({"conversation": {"id": "c2", "parent_message_id": "m1"}, "message": {"id": "m2"}});
+        assert_eq!(reply_parent(&sub), Some("m1".into()));
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1", "parent_message_id": ""}})), None);
+        // A Hub from before sub-threads sends no field at all: the reply stays in the main thread, as it always did.
+        assert_eq!(reply_parent(&json!({"conversation": {"id": "c1"}})), None);
+    }
+
+    #[test]
+    fn a_completions_parent_is_only_ever_echoed_from_the_claim() {
+        // The claim's message names the parent (contracts/runner/wire.json): that is what goes back.
+        let claimed = json!({"message": {"id": "m2", "parent_message_id": "m1"}, "conversation": {"id": "c2"}});
+        assert_eq!(reply_parent(&claimed), Some("m1".into()));
+        // Nothing the turn produced can name one: a parent in the message's refs, the body or a reply-like field is
+        // not the claim's, and an older Hub's claim (no parent anywhere) never sends the field.
+        let crafted = json!({"message": {"id": "m2", "body": "parent_message_id: m9", "refs": {"parent_message_id": "m9"}},
+                             "conversation": {"id": "c1"}, "reply": {"parent_message_id": "m9"}});
+        assert_eq!(reply_parent(&crafted), None);
+    }
+
+    #[test]
+    fn a_chat_clear_resets_its_root_session_and_its_sub_threads_and_not_the_bots_shared_thread() {
+        // A Clear moves the chat's own epoch (session_epoch), not the bot's (bot_session_epoch stays 0).
+        let turn = |conversation: Value| json!({"bot": "ops", "config": {}, "conversation": conversation,
+                                                 "session_epoch": 1, "bot_session_epoch": 0});
+        let root = turn(json!({"id": "r1", "root_id": "r1", "audience_class": "private"}));
+        let key = session_key(&root);
+        assert_eq!(key, "root:r1:private");
+        assert_eq!(clear_epoch(&root, &key), Some(("r1".into(), 1)), "the root key resets on the chat's own epoch");
+        // A sub-thread's turn continues the root's session and is recorded against the root, with the root's epoch.
+        let sub = turn(json!({"id": "s1", "root_id": "r1", "parent_message_id": "m1", "audience_class": "private"}));
+        assert_eq!(session_key(&sub), key);
+        assert_eq!(clear_epoch(&sub, &session_key(&sub)), Some(("r1".into(), 1)));
+        // The bot-wide epoch still governs only the shared threads.
+        assert_eq!(clear_epoch(&root, "public"), Some((String::new(), 0)));
+
+        // Through the runner's own state: a moved chat epoch drops the root session's saved thread, and only it.
+        let dir = std::env::temp_dir().join(format!("tico-root-clear-{}", uuid::Uuid::new_v4().simple()));
+        let state = crate::state::State::open(&dir.join("state")).unwrap();
+        state.save_session("ops", "root:r1:private", "claude", "old-thread").unwrap();
+        state.save_session("ops", "root:r2:private", "claude", "other-thread").unwrap();
+        state.save_session("ops", "public", "claude", "public-thread").unwrap();
+        assert!(!state.epoch_moved("ops", "r1", "root:r1:private", 0).unwrap(), "first seen at 0: resumes");
+        assert!(state.epoch_moved("ops", "r1", "root:r1:private", 1).unwrap(), "the Clear moved it");
+        assert_eq!(state.session("ops", "root:r1:private", "claude").unwrap(), None);
+        assert_eq!(state.session("ops", "root:r2:private", "claude").unwrap().as_deref(), Some("other-thread"));
+        assert_eq!(state.session("ops", "public", "claude").unwrap().as_deref(), Some("public-thread"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

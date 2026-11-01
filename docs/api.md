@@ -181,7 +181,7 @@ the task's comments as the task lists them. Neither wakes anyone or sends anythi
 
 - `404 not_found`: the comment is not on this task, or was already deleted.
 - `403`: the caller did not write it, or is acting for its author (BotOps, or the Assistant, which gets
-  `confirm_required`); or the message is a question, an answer, a notice or a chat line in a bot's room
+  `confirm_required`); or the message is a question, an answer, a notice or a message in a bot's thread
   rather than a comment.
 - An edit's text gets the checks a new comment's text gets (`422` when empty; a path it names is kept as
   written), and an edit needs what a new comment needs: Write on the bot on the other
@@ -227,6 +227,13 @@ New tasks and canonical chats to an original route to the caller's active branch
 Stored keys, room-mode `shared`, independent copy routes and older runner payloads keep their meanings.
 
 Public roadmap publication, requesters and anonymous endpoints are described in [Public roadmaps](roadmaps.md).
+
+## Threads
+
+Threads have their own routes under `/api/v2/threads`: list and search, create, read, timeline, post, members,
+follow and read marks, with `PATCH` and `DELETE` on `/api/v2/messages/{id}` for edits and deletes. Lists are paged by
+`cursor` and `limit` and capped in bytes. The audiences, the rules for who may read what, and the CLI and MCP tools are
+in [Threads](threads.md).
 
 ## Incoming webhooks
 

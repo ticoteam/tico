@@ -62,11 +62,11 @@ On Docs, matching internal, indexed external, linked and manual docs appear at o
 from search; choose **All docs**, **Team docs** or **Tico manual** to narrow the matches.
 The Librarian's answer then streams in with clickable citations. `POST /api/v2/docs/ask {question,
 conversation_id?, new_conversation?}` returns `{conversation_id, message_id, results}` and the answer arrives on
-`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the conversation's snapshot). Each human has one private docs conversation with the Librarian
-(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s room: only they can read it, and the owner and
-administrators cannot. **New chat** starts a fresh conversation, so the Librarian remembers only what is on screen.
-**Previous conversations** lists your saved Docs chats. Pick one to reopen it and continue where you left off;
-your current chat stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
+`GET /api/v2/events?topics=messages,runs&conversation={id}` (each change, then the DM's snapshot). Each human has one private docs DM with the Librarian
+(`scope: personal`, `room_key: docs`), like the [Assistant](assistant.md)'s DM: only they can read it, and the owner and
+administrators cannot. **New chat** starts a fresh DM, so the Librarian remembers only what is on screen.
+**Previous conversations** lists your saved Docs DMs. Pick one to reopen it and continue where you left off;
+your current DM stays in the list. Only you can list or reopen them, including when an owner or administrator asks.
 `GET /api/v2/librarian/conversations` lists them (`limit`, `offset`, `next_offset`), and
 `POST /api/v2/librarian/conversations/{id}/reopen {}` makes one current. Reopening waits until the current turn finishes.
 
@@ -87,7 +87,7 @@ The server MCP returns after at most 20 seconds: if pending, it returns
 `{timeout: true, conversation_id, message_id}`. Use `hub_doc_ask_status` with those ids (or
 `hub doc ask-status <conversation_id> <message_id> [--wait 20]`) to collect the same answer. Polling
 uses short requests and sends no new question. Local CLI asks can wait for the full requested duration.
-The Assistant asking for a human puts the question in that human's own docs conversation.
+The Assistant asking for a human puts the question in that human's own docs DM.
 
 The Librarian acts as itself, not as the human who asked. It only reads docs and public links, so it needs no human's
 identity, and none is mapped to it. Docs are team-wide, so what it can read is the same for every asker.

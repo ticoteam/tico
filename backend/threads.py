@@ -1327,7 +1327,7 @@ def remote_member(c, root, actor):
 
 
 def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message_id=None, to_actor=None, via=None,
-         origin=None, checked=None, attachments=None, as_actor=None):
+         origin=None, checked=None, attachments=None, as_actor=None, in_reply_to=None):
     """Write a message (contract §3.1). Inside the caller's write transaction; `checked` is the org-rule verdict its
     preflight returned outside it. `as_actor`: a remote author (federation, spec §7.2), only for the keeper writing
     `via="peer"`, and only in the signing install's namespace (`<kind>:<name>@<origin install>`)."""
@@ -1401,7 +1401,7 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
         from . import org_rule_check
         replay = {"thread_id": thread_id, "body": text, "kind": kind, "refs": given_refs or None,
                   "parent_message_id": parent_message_id, "to_actor": to_actor, "via": via, "origin": origin,
-                  "attachments": attachments}
+                  "attachments": attachments, "in_reply_to": in_reply_to}
         gate = org_rule_check.apply(c, checked, text, replay)
         if gate and gate.get("moved"):
             raise Problem("moved", "The thread changed while the message was checked; send it again", 409,
@@ -1414,11 +1414,11 @@ def post(c, principal, thread_id, body, *, kind="say", refs=None, parent_message
     token = POSTING.set({"origin": origin or {}, "attachments": bool(attachments), "via": via})
     try:
         if as_actor is not None:
-            message = H._write_message(c, as_actor, target, text, thread, kind, refs, None, None)
+            message = H._write_message(c, as_actor, target, text, thread, kind, refs, in_reply_to, None)
         elif target and not str(target).startswith(OUTSIDE_PREFIXES):
-            message = H.say(c, actor, target, text, thread["id"], kind, refs)
+            message = H.say(c, actor, target, text, thread["id"], kind, refs, in_reply_to=in_reply_to)
         else:
-            message = _write_open(c, actor, text, thread, kind, refs, target)
+            message = _write_open(c, actor, text, thread, kind, refs, target, in_reply_to)
     finally:
         POSTING.reset(token)
     _audit(c, actor, "message:" + message["id"], None, {"thread_id": thread["id"], "kind": kind}, via)
@@ -1440,13 +1440,13 @@ def _emit_message_held(c, thread, actor, verdict):
     return None
 
 
-def _write_open(c, actor, text, thread, kind, refs, target):
+def _write_open(c, actor, text, thread, kind, refs, target, in_reply_to=None):
     """A message addressed to nobody (or to an outside destination): the guards hubdb.say runs that do not need a
     recipient, then the same insert."""
     H._writer(c, actor)
     on_task = refs.get("task") or thread.get("task_id")
     H.path_mentioned(c, actor, "task note" if on_task else "message", text, on_task)
-    return H._write_message(c, actor, target, text, thread, kind, refs, None, None)
+    return H._write_message(c, actor, target, text, thread, kind, refs, in_reply_to, None)
 
 
 def _message_view(c, message, warnings=None):
