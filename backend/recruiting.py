@@ -246,7 +246,8 @@ def _title(title):
     words = {word for _, word in named}
     work = _work(title)
     pins = {PINS[word] for word in words if word in PINS}
-    kind_department = DEPARTMENT_WORDS.get(named[-1][1], "") if named else ""
+    kinds = [word for stem, word in named if stem not in RANKS]    # "Engineer II", "Engineers": the engineer
+    kind_department = (DEPARTMENT_WORDS.get(kinds[-1]) or DEPARTMENT_WORDS.get(kinds[-1].removesuffix("s"), "")) if kinds else ""
     if pins and kind_department:
         pins.add(kind_department)           # "Product Security Engineer" is an engineer: Engineering's cards may be it
     return {"words": R._words(title), "work": work, "specific": work - GENERIC, "stems": {s for s, _ in named} - RANKS,

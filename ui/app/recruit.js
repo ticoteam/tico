@@ -381,6 +381,8 @@ function recruitArrive(page, found) {
   let shown = 0, templates = 0, timer = 0, over = false;
   const land = (c, animate) => {
     ul.insertAdjacentHTML('beforeend', recruitItemRow(c, seat));
+    // A cloud agent landing while Templates is open stays out of it, as the tab's own switch leaves it.
+    if (c.source === 'cloud') ul.lastElementChild.hidden = page.querySelector('[data-recruit-tab="templates"]')?.getAttribute('aria-selected') === 'true';
     shown++;
     if (c.source !== 'cloud') templates++;
     counts.forEach(n => countSet(n, String(n.dataset.of === 'templates' ? templates : shown)));

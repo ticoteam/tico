@@ -174,7 +174,9 @@ def test_marketing_and_engineering_titles_draft_from_the_template_that_is_the_jo
                             ("Code Reviewer", "pr-reviewer"), ("Software Engineer", "pr-reviewer"),
                             ("Tax accountant", "tax"), ("Key account manager", "account-manager"),
                             ("Software Development Engineer", "pr-reviewer"), ("Code Review Engineer", "pr-reviewer"),
-                            ("Product Security Engineer", "security-engineer")):
+                            ("Product Security Engineer", "security-engineer"),
+                            ("Product Security Engineer II", "security-engineer"),
+                            ("Product Security Engineers", "security-engineer")):
         assert (recruiting._best_card(cards, title) or {}).get("template") == template, title
     for title in ("Influencer Marketing Manager", "Partner Marketing Manager", "Affiliate Marketing Manager",
                   "Marketing Coordinator", "Digital Marketing Manager", "Backend Engineer", "Go Developer",
