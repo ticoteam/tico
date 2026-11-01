@@ -1,4 +1,4 @@
-name,subject_type,subject,repeats,every_count,starts_on,lead_days
-CNC mill 1 service,equipment,CNC mill 1,quarterly,,2026-12-01,14
-Press brake 1 inspection,equipment,Press brake 1,yearly,,2027-01-10,30
-Forklift 1 certification,equipment,Forklift 1,every_months,6,2026-12-01,30
+name,subject_type,subject,repeats,every_count,starts_on,lead_days,assignee
+Plant fire extinguisher inspection,location,Acme Works - Plant,yearly,,2026-12-01,30,ana
+Warehouse racking inspection,location,Acme Works - Warehouse,yearly,,2027-01-10,30,ana
+Steel supply contract renewal,contact,Sample Steel Supply,yearly,,2027-01-15,60,ana

@@ -1,3 +1,6 @@
-name,kind,street,city,state,postal_code
-Acme Heating & Air - Main shop,store,100 Industrial Way,Springfield,IL,62701
-Acme Heating & Air - North shop,store,2400 Ridge Rd,Springfield,IL,62704
+name,kind,street,city,state,postal_code,customer
+Acme Heating & Air - Main shop,store,100 Industrial Way,Springfield,IL,62701,
+Acme Heating & Air - North shop,store,2400 Ridge Rd,Springfield,IL,62704,
+Dental office - Sample Dental Group,customer_site,310 Maple Ave,Springfield,IL,62704,Sample Dental Group
+Ridge Apartments - Building A,customer_site,88 Ridge Rd,Springfield,IL,62704,Sample Apartments Ridge
+Church Hall - Fellowship building,customer_site,17 Chapel St,Springfield,IL,62705,Sample Church Hall

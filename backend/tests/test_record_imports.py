@@ -1,7 +1,7 @@
 """CSV import of shared records (backend/finance/record_imports.py, backend/records/csvimport.py): a row is one Finance
 action, a file imported again creates nothing (X19), a bad row does not stop the rest, a likely duplicate waits for a
-person, and an imported item keeps what a person changed (M1). Equipment and due dates land on sibling branches; their
-cases skip until those kinds are on this install."""
+person, and an imported item keeps what a person changed (M1). Equipment's cases skip until equipment is on this
+install. A teammate who is not a company Admin lacks the records right: `api_settings` makes ben an Admin."""
 import pytest
 
 from backend.finance import actions as FA
@@ -18,8 +18,6 @@ LOCATIONS = "name,kind,street,city,state,postal_code\nAcme shop,store,12 Main St
 ITEMS = "name,sku,kind,unit,price\nAcme gasket,GSK-100,inventory,each,4.25\n"
 needs_equipment = pytest.mark.skipif("equipment_create" not in K.LIVE,
                                      reason="equipment_create lands with the equipment branch")
-needs_due_dates = pytest.mark.skipif("due_date_create" not in K.LIVE,
-                                     reason="due_date_create lands with the due dates branch")
 
 
 def sites(n: int = 40) -> str:
@@ -142,20 +140,15 @@ def test_m1_a_changed_row_for_an_existing_sku_waits_and_never_overwrites_the_ite
     assert out["summary"] == {"possible_duplicate": 1} and price == 425
 
 
-def test_a_teammate_needs_the_records_right_and_the_kinds_right_before_a_file_imports(books):
-    """Plan §3: the records right gates every import; the action's own right (finance.book for a location) still
-    applies on top, so a file is refused whole until both are held."""
+def test_a_teammate_needs_the_records_right_before_a_file_imports(books):
+    """Plan §3: the records right gates every import, and location, item and due date creates all need only that right,
+    so a file is refused whole until it is held."""
     with books.transaction() as c:
         with pytest.raises(FinanceError) as nothing:
-            RI.preview(c, "human:ben", "locations", LOCATIONS, {})
+            RI.preview(c, "human:eve", "locations", LOCATIONS, {})
         assert nothing.value.code == "denied"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": K.NEEDS["location_create"]}).status \
-            == "committed"
-        with pytest.raises(FinanceError) as no_records:
-            RI.preview(c, "human:ben", "locations", LOCATIONS, {})
-        assert no_records.value.code == "denied"
-        assert act(c, OWNER, "right_grant", {"teammate": "human:ben", "right": R.RECORDS}).status == "committed"
-        out = RI.preview(c, "human:ben", "locations", LOCATIONS, {})
+        assert act(c, OWNER, "right_grant", {"teammate": "human:eve", "right": R.RECORDS}).status == "committed"
+        out = RI.preview(c, "human:eve", "locations", LOCATIONS, {})
     assert out["summary"] == {"new": 2}
 
 
@@ -186,15 +179,39 @@ def test_x10f_150_equipment_rows_flag_a_repeated_serial_and_bulk_assign_a_locati
     assert out["summary"] == {"created": 150, "possible_duplicate": 1} and placed == 150
 
 
-@needs_due_dates
-def test_a_due_date_names_its_subject_and_an_unknown_subject_is_an_error(books):
-    text = ("name,subject_type,subject,repeats,starts_on\n"
-            "Change filter,location,Acme shop,monthly,2026-12-01\n"
-            "Boiler check,location,Nowhere,yearly,2026-12-01\n")
+def test_a_due_date_names_its_subject_and_assignee_and_a_bad_row_is_only_that_row(books):
+    """Equipment is missing until its table exists, so a due date on a van is a row error, not a crash."""
+    text = ("name,subject_type,subject,repeats,starts_on,assignee\n"
+            "Change filter,location,Acme shop,monthly,2026-12-01,ben\n"
+            "Boiler check,location,Nowhere,yearly,2026-12-01,ben\n"
+            "Van check,equipment,Van 1,yearly,2026-12-01,ben\n"
+            "Shop check,location,Acme shop,yearly,2026-12-01,nobody\n")
     with books.transaction() as c:
         act(c, OWNER, "location_create", {"name": "Acme shop", "kind": "store"})
         out = RI.preview(c, OWNER, "due_dates", text, {})
-    assert out["summary"] == {"new": 1, "error": 1}
+    assert out["summary"] == {"new": 1, "error": 3}
+
+
+def test_a_site_names_its_customer_and_a_bulk_assign_fills_the_rows_that_leave_it_out(books):
+    text = ("name,kind,customer\n"
+            "Dental roof,customer_site,Sample Dental Group\n"
+            "Dental annex,customer_site,Nobody Ltd\n"
+            "Ridge court,customer_site,\n")
+    with books.transaction() as c:
+        act(c, OWNER, "contact_create", {"name": "Sample Dental Group", "kind": "customer"})
+        dental = c.execute("SELECT id FROM fin_contacts WHERE name=?", ("Sample Dental Group",)).fetchone()[0]
+        out = RI.commit(c, OWNER, "locations", text, {"customer_id": dental}, frozenset())
+        owners = dict(c.execute("SELECT name, customer_id FROM locations WHERE archived_at IS NULL"))
+    assert out["summary"] == {"created": 2, "error": 1}
+    assert owners == {"Dental roof": dental, "Ridge court": dental}
+
+
+def test_an_item_row_keeps_its_description_and_taxable_flag(books):
+    text = "name,kind,price,description,taxable\nDuct cleaning,service,120,Whole-house duct clean,yes\n"
+    with books.transaction() as c:
+        out = RI.commit(c, OWNER, "items", text, {}, frozenset())
+        row = c.execute("SELECT description, taxable FROM items WHERE id=?", (out["lines"][0]["record_id"],)).fetchone()
+    assert out["summary"] == {"created": 1} and tuple(row) == ("Whole-house duct clean", 1)
 
 
 # HTTP case: the two routes, the rights refusal, the size refusal and the Idempotency-Key replay.
@@ -205,7 +222,7 @@ def test_the_import_routes_refuse_a_member_without_the_right_and_replay_a_retry_
         assert FA.ensure_setup(c, store.settings.owner_email)
     body = {"record_type": "locations", "csv": LOCATIONS}
     assert post(api, "imports/preview", body)["summary"] == {"new": 2}
-    post(api, "imports/preview", body, token="ben-test", expected=403)
+    post(api, "imports/preview", body, token="cara-test", expected=403)
     post(api, "imports/preview", {"record_type": "locations", "csv": "name\n" + "x" * 1_100_000}, expected=413)
     first = post(api, "imports/commit", body, key="import-once")
     assert first["summary"] == {"created": 2}

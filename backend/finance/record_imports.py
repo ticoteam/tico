@@ -15,7 +15,9 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from .. import due_date_flow as FLOW
 from ..records import csvimport as CI
+from ..records import due_dates as RDD
 from ..records import reads as RR
 from . import actions as finance
 from .context import Ctx, load
@@ -51,16 +53,20 @@ def _location(cells: Cells, names: "Names") -> dict[str, object]:
         payload["kind"] = cells["kind"]
     if cells["in_books"]:
         payload["in_books"] = CI.flag(cells["in_books"], "in_books")
+    if cells["customer"]:
+        payload["customer_id"] = names.find("customer", cells["customer"])
     return payload
 
 
 def _item(cells: Cells, names: "Names") -> dict[str, object]:
     payload: dict[str, object] = {"name": cells["name"], "kind": cells["kind"]}
-    for column in ("sku", "unit"):
+    for column in ("sku", "unit", "description"):
         if cells[column]:
             payload[column] = cells[column]
     if cells["price"]:
         payload["price"] = CI.money(cells["price"], "price")
+    if cells["taxable"]:
+        payload["taxable"] = CI.flag(cells["taxable"], "taxable")
     return payload
 
 
@@ -85,32 +91,36 @@ def _due_date(cells: Cells, names: "Names") -> dict[str, object]:
         raise CI.RowError("subject_type is location, equipment or contact")
     payload: dict[str, object] = {
         "name": cells["name"], "subject_type": subject_type, "subject_id": names.find(subject_type, cells["subject"]),
-        "repeats": cells["repeats"], "starts_on": CI.day(cells["starts_on"], "starts_on")}
+        "repeats": cells["repeats"], "starts_on": CI.day(cells["starts_on"], "starts_on"),
+        "assignee_id": names.assignee(cells["assignee"])}
     if cells["every_count"]:
-        payload["every_count"] = CI.whole(cells["every_count"], "every_count")
+        payload["every_count"] = CI.whole(cells["every_count"], "every_count", high=RDD.MAX_EVERY)
     if cells["lead_days"]:
-        payload["lead_days"] = CI.whole(cells["lead_days"], "lead_days", low=0, high=365)
+        payload["lead_days"] = CI.whole(cells["lead_days"], "lead_days", low=0, high=RDD.MAX_LEAD)
     return payload
 
 
 TYPES: dict[str, RecordType] = {
-    "locations": RecordType("location_create", ("name", "kind", "street", "city", "state", "postal_code", "in_books"),
-                            ("name",), {"location_id": "parent_id"}),
-    "items": RecordType("item_create", ("name", "sku", "kind", "unit", "price"), ("name", "kind"), {}),
+    "locations": RecordType("location_create",
+                            ("name", "kind", "street", "city", "state", "postal_code", "in_books", "customer"),
+                            ("name",), {"location_id": "parent_id", "customer_id": "customer_id"}),
+    "items": RecordType("item_create", ("name", "sku", "kind", "unit", "price", "description", "taxable"),
+                        ("name", "kind"), {}),
     "equipment": RecordType("equipment_create", ("name", "kind", "location", "customer", "make", "model", "serial",
                                                  "installed_on", "warranty_ends_on"), ("name", "kind"),
                             {"location_id": "location_id", "customer_id": "customer_id"}),
     "due_dates": RecordType("due_date_create", ("name", "subject_type", "subject", "repeats", "every_count",
-                                                "starts_on", "lead_days"),
-                            ("name", "subject_type", "subject", "repeats", "starts_on"), {}),
+                                                "starts_on", "lead_days", "assignee"),
+                            ("name", "subject_type", "subject", "repeats", "starts_on", "assignee"), {}),
 }
 CONVERT: dict[str, Callable[[Cells, "Names"], dict[str, object]]] = {
     "locations": _location, "items": _item, "equipment": _equipment, "due_dates": _due_date}
 
 
 class Names:
-    """What a row may name: a location, a customer, a contact or a piece of equipment, by its name. A name that two
-    records hold is refused, since the row would not say which one it means. Each list is read once per import."""
+    """What a row may name: a location, a customer, a contact or a piece of equipment, by its name, and a due date's
+    assignee by its teammate's name. A name that two records hold is refused, since the row would not say which one it
+    means. Each list is read once per import."""
 
     def __init__(self, c: sqlite3.Connection, book_id: str) -> None:
         self.c, self.book_id = c, book_id
@@ -141,6 +151,13 @@ class Names:
 
     def has(self, what: str, record_id: str) -> bool:
         return any(record_id in ids for ids in self._table(what).values())
+
+    def assignee(self, text: str) -> str:
+        """The actor a due date's assignee names: a teammate who can take work, the same check the planner makes."""
+        actor, why = FLOW.assignee(self.c, text)
+        if why:
+            raise CI.RowError(f"assignee {text} {why}")
+        return actor
 
 
 def natural_key(record_type: str, payload: Mapping[str, object]) -> str:

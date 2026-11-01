@@ -30,18 +30,20 @@ published port. Ordinary local installs still check their configured port.
 
 ## Other demo companies
 
-Three more fictional companies show Operations (locations, items, equipment and due dates). Each one's records
-come from CSV files in `backend/demo_data/<company>/`, through the same import a customer uses
-(`POST /api/v2/imports/commit`), so a row the import refuses shows up as a refused row:
+Three more fictional companies show Operations. Each one's records come from CSV files in
+`backend/demo_data/<company>/`, through the same import a customer uses (`POST /api/v2/imports/commit`), so a row the
+import refuses shows up as a refused row. Its contacts, projects, purchase orders and estimates come from
+`documents.json` in the same folder, made by the Finance actions a person would use:
 
 ```bash
-python3 -m backend.demo --company heating-air     # Acme Heating & Air: 2 shops, 3 vans, service items
-python3 -m backend.demo --company kitchen         # Acme Kitchen: 2 stores, menu items, health permits
-python3 -m backend.demo --company works           # Acme Works: plant and warehouse, raw materials, machines
+python3 -m backend.demo --company heating-air     # Acme Heating & Air: field service; 2 shops, customer sites, agreements, projects, POs, estimates
+python3 -m backend.demo --company kitchen         # Acme Kitchen: restaurant; 2 stores, menu items, health permits, food-vendor POs
+python3 -m backend.demo --company works           # Acme Works: manufacturer; plant and warehouse, raw materials, supplier POs
 ```
 
-Each one starts on its own, with Finance set up and Ana as owner. A file whose record type this build does
-not have yet is named in the startup output and not loaded.
+Each one starts on its own, with Finance set up, Ana as owner, and its business type set (Settings > General).
+A file whose record type this build does not have yet is named in the startup output and not loaded: equipment,
+and the due dates that sit on equipment (vans, machines, coolers), wait for it.
 
 ## It cannot be mistaken for a real install
 

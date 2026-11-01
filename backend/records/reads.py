@@ -58,5 +58,8 @@ def active_rows(c: sqlite3.Connection, table: str, columns: tuple[str, ...]) -> 
 
 
 def active_equipment(c: sqlite3.Connection) -> list[tuple[Any, ...]]:
-    """(id, name, serial) of the equipment not archived, for name and serial checks."""
+    """(id, name, serial) of the equipment not archived, for name and serial checks. None until the table exists, so a
+    due date on equipment is a row error on an install without it, not a crash."""
+    if c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='equipment'").fetchone() is None:
+        return []
     return c.execute("SELECT id, name, serial FROM equipment WHERE archived_at IS NULL").fetchall()

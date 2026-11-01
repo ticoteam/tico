@@ -1,0 +1,13 @@
+{
+  "purchase_orders": [
+    {"vendor": "Sample Produce Co", "po_date": "2026-10-27",
+     "memo": "Weekly produce order, Downtown and Harbor", "send": true,
+     "lines": [{"item": "Romaine hearts", "amount": 12800}, {"item": "Russet potatoes 50 lb", "amount": 9800}]},
+    {"vendor": "Sample Meat Wholesale", "po_date": "2026-10-28",
+     "memo": "Weekend protein order",
+     "lines": [{"item": "Chicken thigh (case)", "amount": 46000}, {"item": "Ground beef 80/20", "amount": 38500}]},
+    {"vendor": "Sample Meat Wholesale", "po_date": "2026-10-30",
+     "memo": "Salmon for the week of November 2",
+     "lines": [{"item": "Salmon fillet", "amount": 52000}]}
+  ]
+}

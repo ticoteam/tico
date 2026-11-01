@@ -1,4 +1,4 @@
-name,subject_type,subject,repeats,every_count,starts_on,lead_days
-Health permit renewal - Downtown,location,Acme Kitchen - Downtown,yearly,,2026-12-01,30
-Health permit renewal - Harbor,location,Acme Kitchen - Harbor,yearly,,2026-12-01,30
-Walk-in cooler service,equipment,Walk-in cooler - Downtown,quarterly,,2026-12-15,14
+name,subject_type,subject,repeats,every_count,starts_on,lead_days,assignee
+Health permit renewal - Downtown,location,Acme Kitchen - Downtown,yearly,,2026-12-01,30,ana
+Health permit renewal - Harbor,location,Acme Kitchen - Harbor,yearly,,2026-12-01,30,ana
+Produce contract renewal,contact,Sample Produce Co,yearly,,2027-01-15,30,ana
