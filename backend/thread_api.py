@@ -91,12 +91,6 @@ def _create_recipients(c, body):
     return sorted({m for m in body.members if m})
 
 
-def _thread_replay(thread_id, text, kind="say", refs=None, parent_message_id=None, to=None):
-    """What Send anyway needs to post a held message again: the `threads` replayer reads these keys (THREAD_REPLAY)."""
-    return {"thread_id": thread_id, "body": text, "kind": kind, "refs": refs or {},
-            "parent_message_id": parent_message_id, "to_actor": to, "via": None, "origin": None, "attachments": None}
-
-
 def _read_or_404(c, v, target):
     """Read on a teammate, or the same 404 whether they are missing or the viewer may not read them. A missing teammate
     passes this check and fails in threads.home with the same 404, so the two never differ."""
@@ -193,11 +187,10 @@ def install(app, store, auth, mutate, rule_check):
                                   parent_message_id=body.parent_message_id, task_id=body.task_id, kind=body.kind)
             if not body.body:
                 return made
-            gate = org_rule_check.apply(c, rc, body.body, _thread_replay(made["id"], body.body))
-            if gate and gate.get("held"):
-                return {**made, **org_rule_check.answer(gate)}      # the thread is made; its first message is the hold
-            posted = threads.post(c, v, made["id"], org_rule_check.warned_text(gate, body.body), checked=None)
-            return {**made, "message": _thread_message(posted), **org_rule_check.answer(gate)}
+            posted = threads.post(c, v, made["id"], body.body, checked=rc)
+            if "id" not in posted:          # held: the thread is made, its first message is the hold
+                return {**made, **posted}
+            return {**made, "message": _thread_message(posted)}
         return mutate(request, body, work)
 
     @app.patch("/api/v2/threads/{thread_id}")
@@ -221,14 +214,11 @@ def install(app, store, auth, mutate, rule_check):
         rc = check(who, thread_id, body)
 
         def work(c):
-            gate = org_rule_check.apply(c, rc, body.text, _thread_replay(
-                thread_id, body.text, body.kind, body.refs, body.parent_message_id, body.to))
-            if gate and gate.get("held"):
-                return org_rule_check.answer(gate)
-            message = threads.post(c, threads.viewer(auth, who), thread_id, org_rule_check.warned_text(gate, body.text),
-                                   kind=body.kind, refs=body.refs, parent_message_id=body.parent_message_id,
-                                   to_actor=body.to, checked=None)
-            return {**_thread_message(message), **org_rule_check.answer(gate)}
+            message = threads.post(c, threads.viewer(auth, who), thread_id, body.text, kind=body.kind, refs=body.refs,
+                                   parent_message_id=body.parent_message_id, to_actor=body.to, checked=rc)
+            if "id" not in message:         # held: post wrote nothing and answers with the hold
+                return message
+            return _thread_message(message)
         return mutate(request, body, work)
 
     @app.patch("/api/v2/messages/{message_id}")

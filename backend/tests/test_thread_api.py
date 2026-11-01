@@ -223,7 +223,7 @@ def test_a_warn_delivers_a_persons_thread_post_with_the_warning_on_it(ruled):
     rule(api, {"kind": "internal", "text": COLOR, "who": {"everyone": True}, "if_broken": "warn"})
     thread = new_thread(api, members=("human:cara",))
     got = api.post(f"/api/v2/threads/{thread['id']}/messages", json={"text": GOLD}, headers=headers("cara-test"))
-    assert got.status_code == 200 and "held" not in got.json() and got.json()["rule_warning"]
+    assert got.status_code == 200 and "held" not in got.json()
     delivered = [m for m in message_in(api, thread["id"]) if "favorite color is gold" in str(m.get("body"))]
     assert len(delivered) == 1 and delivered[0]["body"].startswith("Warning:")   # the warning heads the recipient's copy
 

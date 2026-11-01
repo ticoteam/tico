@@ -349,6 +349,9 @@ def prime_messages(c, messages):
 
 # Events whose target is a run and whose `tasks` the run took in: carried tasks, and the tasks
 # of an input that a later run took over after this one had already read it.
+# Message columns threads keeps for itself (backend/threads.py): never part of an API row. A page only holds live
+# messages, so `deleted_at` is always empty there.
+INTERNAL_MESSAGE_COLUMNS = frozenset({"restricted", "legacy_audience", "deleted_at"})
 INPUT_MOVED = "attempt.input.moved"
 RUN_TASK_EVENTS_SQL = "'task.next-run.carried','" + INPUT_MOVED + "'"
 
@@ -445,7 +448,8 @@ def page(c, who, cid, *, before=None, since=None, limit=200, task_id=None, max_b
                 return False
         except Problem:
             return False
-        message = {**stored, "refs": H._json(stored["refs_json"], {}) or {}}
+        message = {key: value for key, value in stored.items() if key not in INTERNAL_MESSAGE_COLUMNS}
+        message["refs"] = H._json(stored["refs_json"], {}) or {}
         if max_bytes and len(visible) < limit:
             size += len(json.dumps(message, default=str).encode())
             if visible and size > max_bytes:

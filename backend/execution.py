@@ -1240,6 +1240,16 @@ def source_continuation(c, job_id):
     return json.loads(row[0]).get('source_continuation') if row else None
 
 
+def thread_payload(c, conv, msg):
+    """The claim's conversation, with what keys the turn's session: its root (`root_id`) and whether the thread is
+    private or public (`audience_class`, backend/threads.py). A private thread's session never serves a public one."""
+    if not conv:
+        return conv
+    from . import threads
+    return {**conv, "root_id": conv.get("root_id") or conv.get("id"),
+            "audience_class": "private" if threads.private_task_thread(c, conv) else threads.audience_class(conv, msg)}
+
+
 def continuation_thread(c, job_id):
     """Require the saved provider session for capacity, quota or safe lease recovery."""
     source = source_continuation(c, job_id)
@@ -3705,7 +3715,12 @@ class Execution:
                             "generation": row["generation"], "lease_until": until,
                             **({"start_reservation_seconds": start_places.START_SECONDS} if body.start_places else {}),
                             "lease_seconds": self.store.settings.lease_seconds, "token": token,
-                            "message": msg, "conversation": conv, "task": task,
+                            # The thread's root and audience class key the turn's session (clients/sessions.py).
+                            # A message in a sub-thread names the message it hangs off: the runner sends it back
+                            # with the completion, and the reply lands in that sub-thread (threads.reply_destination).
+                            "message": ({**msg, "parent_message_id": (conv or {}).get("parent_message_id")}
+                                        if msg else msg),
+                            "conversation": thread_payload(c, conv, msg), "task": task,
                             **({"continue_thread": continue_thread} if continue_thread else {}),
                             **({"source_continuation": source} if source else {}),
                             # The task's set-up worktrees on this computer, added to its session (runner-rs/src/sessions.rs).
@@ -4681,7 +4696,10 @@ class Execution:
                                 sent = reply_answer(c, self.auth, Identity(actor, "bot", attempt_id=aid), msg,
                                                     asked_text, org_rule_check.warn_line(rule_gate))
                             else:
-                                sent = H.say(c, actor, target, text, conversation_id=conv["id"], in_reply_to=msg["id"],
+                                from . import threads
+                                dest = threads.reply_destination(c, actor, conv,
+                                                                 getattr(body, "parent_message_id", None))
+                                sent = H.say(c, actor, target, text, conversation_id=dest, in_reply_to=msg["id"],
                                              refs=refs)
                             if sent:
                                 self.stamp_reply(c, sent, row, aid, msg)
