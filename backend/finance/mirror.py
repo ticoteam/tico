@@ -26,6 +26,7 @@ from .core import ledger as L
 from .core import mirror as M
 from .core import qbo as Q
 from .core import validate as V
+from .core import xero as X
 from .core.errors import CONFLICT, NOT_AVAILABLE, NOT_FOUND, FinanceError, denied, invalid
 from .core.org import SYSTEM
 from .store import access as SA
@@ -992,7 +993,7 @@ def _document(c: sqlite3.Connection, ctx: Ctx, cid: str, d: M.Document, at: str)
     contact, job = _party_of(c, cid, d.party)
     rows = _doc_lines(c, ctx, cid, d)
     keys = _line_keys(d)
-    items = [_mapped(c, cid, "items", x) if x else "" for x in _line_items(d)]
+    items = [_line_item(c, cid, x) for x in _line_items(d)]
     dims = _provider_marks(c, cid, _line_tags(d), job)
     _write_document(c, ctx, cid, d, verdict, row, contact, rows, at, keys=keys, items=items, dims=dims)
 
@@ -1562,28 +1563,55 @@ def _need(key: str | None, what: str) -> str:
 
 def _item_code(c: sqlite3.Connection, local_id: str) -> str:
     """The code an item is held by at the provider, its SKU else its name, which is how a line names the item it sells
-    (Xero). Empty for no item, and while a change to the item waits to reach the provider: the code it holds is then
-    not known."""
+    (Xero). Empty for no item. The local row changes only when the provider confirms a change, so while a change to the
+    item waits, the row still holds the code the provider holds."""
     if not local_id:
         return ""
     item = RS.resolve(c, "items", local_id)
     row = c.execute("SELECT name, sku FROM items WHERE id=?", (item,)).fetchone()
-    if row is None or SK.record_write_open(c, "item.update", item):
+    return "" if row is None else str(row[1] or row[0])
+
+
+def _item_by_code(c: sqlite3.Connection, code: str) -> str:
+    """The local item the provider holds under a code (its SKU else its name), or "" when no item or more than one holds
+    it."""
+    rows = c.execute("SELECT id FROM items WHERE COALESCE(NULLIF(sku, ''), name) = ?", (code,)).fetchall()
+    return str(rows[0][0]) if len(rows) == 1 else ""
+
+
+def _line_item(c: sqlite3.Connection, cid: str, key: str) -> str:
+    """The local item a provider line sells: by its provider key, or for a Xero line by the code it names."""
+    if not key:
         return ""
-    return str(row[1] or row[0])
+    if key.startswith(X.ITEM_CODE_KEY):
+        return _item_by_code(c, key[len(X.ITEM_CODE_KEY):])
+    return _mapped(c, cid, "items", key)
 
 
-def _doc_out(c: sqlite3.Connection, cid: str, local: Mapping[str, Any]) -> dict[str, Any]:
+def _sold_as_item(c: sqlite3.Connection, op: str, line: Mapping[str, Any]) -> bool:
+    """Whether a line goes to the provider as its item. A bill or purchase order line posts to its item's expense
+    account there, so a line on another account goes as an account line: the item stays on the line here."""
+    item = str(line.get("item_id") or "")
+    if not item or op not in ("bill.create", "purchaseorder.create"):
+        return bool(item)
+    row = c.execute("SELECT expense_account_id FROM items WHERE id=?", (RS.resolve(c, "items", item),)).fetchone()
+    expense = str(row[0] or "") if row is not None else ""
+    account = RS.resolve(c, "fin_accounts", str(line["account_id"]))
+    return bool(expense) and RS.resolve(c, "fin_accounts", expense) == account
+
+
+def _doc_out(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any]) -> dict[str, Any]:
     """A bill, invoice, purchase order or estimate as the provider takes it: its party and each line's account by their
     provider keys. An invoice made from an estimate names that estimate."""
     lines: list[dict[str, Any]] = []
     for x in cast(list[dict[str, Any]], local["lines"]):
         tags = cast(dict[str, str], x.get("tags") or {})
+        sold = _sold_as_item(c, op, x)
         lines.append({
             "account": _need(_key(c, cid, "fin_accounts", str(x["account_id"])), f"account {x['account_id']}"),
             "amount": x["amount"], "description": x["description"],
-            "item": _tag_need(c, cid, "items", str(x.get("item_id") or "")),
-            "item_code": _item_code(c, str(x.get("item_id") or "")),
+            "item": _tag_need(c, cid, "items", str(x.get("item_id") or "")) if sold else "",
+            "item_code": _item_code(c, str(x.get("item_id") or "")) if sold else "",
             "location": _tag_need(c, cid, "locations", tags.get("location", "")),
             "class": _bare(_tag_need(c, cid, "fin_dimensions", tags.get("class", ""))),
             "project": _customer_key(_tag_need(c, cid, "projects", tags.get("project", "")))})
@@ -1784,7 +1812,7 @@ def _translate(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any
     write waits (_Missing) while an account or party it names is not in the provider yet; an export drops a contact
     the provider does not hold."""
     if op in ("bill.create", "invoice.create", *ORDER_TABLES):
-        return _doc_out(c, cid, local)
+        return _doc_out(c, cid, op, local)
     if op in RECORD_OPS:
         return _record_out(c, cid, op, local)
     if op in ("bill.void", "invoice.void"):
@@ -2412,6 +2440,8 @@ def mirror_tags(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     """Send tags to the provider as its classes. Off by default; the owner turns it on and maps each tag value."""
     V.only(p, ("enabled", "map"))
     enabled = V.flag(p, "enabled")
+    # A class sent is one the books hold as active (QuickBooks' Class:7, Xero's TrackingOption:category/option).
+    held = {str(row[0]) for row in ctx.c.execute("SELECT value FROM fin_dimensions WHERE kind='class' AND active=1")}
     mapping: dict[str, dict[str, str]] = {}
     for kind, values in V.obj(p.get("map") or {}, "map").items():
         if kind not in L.TAG_KINDS:
@@ -2419,6 +2449,8 @@ def mirror_tags(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
         for value, cls in V.obj(values, kind).items():
             if not isinstance(cls, str) or not cls or len(cls) > 80:
                 raise invalid("a provider class is a name or id up to 80 characters")
+            if kind == "class" and f"Class:{cls}" not in held and f"TrackingOption:{cls}" not in held:
+                raise invalid("a provider class is one the books hold as active")
             mapping.setdefault(kind, {})[str(value)] = cls
 
     def apply_tags(aid: str) -> handlers.Result:
@@ -2451,6 +2483,12 @@ def provider_takes_records(ctx: Ctx, what: str) -> None:
         raise invalid(f"{what} is written to QuickBooks only; add it in Xero")
 
 
+def item_archive_taken(ctx: Ctx) -> bool:
+    """Whether the provider takes an item's archive from here: QuickBooks takes its Active flag, and Xero's items take
+    none, so an archive is made in Xero."""
+    return _provider(ctx) != "xero"
+
+
 def _provider(ctx: Ctx) -> str:
     cid = _cid(ctx)
     return next((str(row[1]) for row in SX.books_connections(ctx.c) if row[0] == cid), "")
@@ -2461,6 +2499,20 @@ PLANNERS: dict[str, handlers.Planner] = {"mirror_start": mirror_start, "mirror_s
 
 
 # ------------------------------------------------------------------------------------------------ documents out
+# What QuickBooks takes once per transaction, as the writer sends it: a location on every document's header; a job on
+# an invoice's or estimate's header (its customer). A bill or purchase order takes a job on each line instead.
+_ONE_LOCATION = (("location", "location"),)
+_ONE_LOCATION_AND_JOB = (("location", "location"), ("project", "job"))
+
+
+def _one_per_transaction(lines: list, keys: tuple[tuple[str, str], ...]) -> None:
+    """Lines that name more than one location (or job, where the header takes one) are refused at plan time, before
+    anything is queued for the provider."""
+    for tag, what in keys:
+        if len({dict(x.tags).get(tag, "") for x in lines} - {""}) > 1:
+            raise invalid(f"the lines name more than one {what}; QuickBooks takes one per transaction")
+
+
 def _create_planner(kind: str) -> handlers.Planner:
     """A bill or invoice written to the provider first: QuickBooks posts it when it is saved, so the books take its entry
     when the provider confirms the write. Its lines are checked the way the native planner checks them."""
@@ -2478,8 +2530,6 @@ def _create_planner(kind: str) -> handlers.Planner:
         number = V.opt_text(p, "number", 80) or ("" if kind == "bill" else documents.next_number(ctx, str(contact["id"])))
         if len(number) > 21:
             raise invalid("a number is up to 21 characters (the provider's limit)")
-        if number and SAP.number_taken(ctx.c, kind, str(contact["id"]), number):
-            raise FinanceError(CONFLICT, f"{contact['name']} already has {kind} {number}")
         day = V.day(p, day_field)
         terms = V.integer(p, "terms_days", 0, AP.MAX_TERMS) if p.get("terms_days") is not None else None
         due = AP.due_date(day, V.opt_day(p, "due_date"), terms)
@@ -2487,6 +2537,13 @@ def _create_planner(kind: str) -> handlers.Planner:
         if kind == "bill":
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
+        # The number is checked after the lines, so a teammate who cannot see a line is refused as a missing line first.
+        if any(handlers.private_hidden(ctx, who, x.account_id) for x in lines):
+            raise FinanceError(NOT_FOUND, "no such line or account in your view")
+        if _provider(ctx) == "quickbooks":
+            _one_per_transaction(lines, _ONE_LOCATION if kind == "bill" else _ONE_LOCATION_AND_JOB)
+        if number and SAP.number_taken(ctx.c, kind, str(contact["id"]), number):
+            raise FinanceError(CONFLICT, f"{contact['name']} already has {kind} {number}")
         total = sum(x.amount for x in lines)
         body = {"party": str(contact["id"]), "number": number, "day": day, "due": due or "",
                 "memo": V.opt_text(p, "memo", 500) or "",
@@ -2684,6 +2741,8 @@ def _order_planner(kind: str) -> handlers.Planner:
             raise invalid("say which account each line posts to")
         if len({dict(x.tags).get("location", "") for x in lines} - {""}) > 1:
             raise invalid(f"a {word} is in one location: its lines name the same one")
+        if not po:
+            _one_per_transaction(lines, (("project", "job"),))
         number = V.opt_text(p, "number", 80) or SP.next_number(ctx.c, table, ctx.book.id, prefix)
         if SP.number_taken(ctx.c, table, ctx.book.id, number):
             raise FinanceError(CONFLICT, f"{word} {number} exists")
@@ -2738,6 +2797,11 @@ def _estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     if SK.outbox_by_key(ctx.c, key) is not None:
         raise FinanceError(CONFLICT, "that estimate's invoice is already on its way to the provider, or was refused")
     customer = documents.contact_of(ctx, str(est["customer_id"]), "invoice")
+    # An estimate the provider holds may name a job of another customer (its import does not check); the invoice would
+    # go to that job's customer, so it is refused as the estimate planner refuses it.
+    jobs = [RR.get(ctx.c, "projects", job) for job in {dict(x.tags).get("project", "") for x in lines} - {""}]
+    if any(job is not None and str(job["customer_id"] or "") not in ("", str(customer["id"])) for job in jobs):
+        raise invalid("that project belongs to another customer")
     body = {"by": who, "party": str(customer["id"]), "number": documents.next_number(ctx, str(customer["id"])),
             "day": ctx.today, "due": AP.due_date(ctx.today, None, None) or "", "memo": str(est["memo"] or ""),
             "estimate_id": eid,

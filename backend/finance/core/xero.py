@@ -155,17 +155,23 @@ def _tags(item: Mapping[str, Any], system: System | None) -> tuple[tuple[str, st
     return tuple(out)
 
 
+# A line's item as Xero names it (its ItemCode): the books find the item by that code.
+ITEM_CODE_KEY = "code:"
+
+
 def _lines(rows: object, inclusive: bool, sign: int = 1, party: str = "",
-           system: System | None = None) -> tuple[list[M.EntryLine], int]:
-    """A record's lines on their accounts (signed by `sign`) without their tax, and the tax they carry in all."""
+           system: System | None = None, codes: bool = False) -> tuple[list[M.EntryLine], int]:
+    """A record's lines on their accounts (signed by `sign`) without their tax, and the tax they carry in all. With
+    `codes`, a line that names an item carries it as ITEM_CODE_KEY plus its ItemCode."""
     lines: list[M.EntryLine] = []
     tax = 0
     for raw in as_list(rows):
         item = as_map(raw) or {}
         net, due = _net(item, inclusive)
         tax += due
+        code = str(item.get("ItemCode") or "") if codes else ""
         lines.append(M.EntryLine(_account(item), sign * net, party=party, description=str(item.get("Description") or ""),
-                                 tags=_tags(item, system)))
+                                 tags=_tags(item, system), item=f"{ITEM_CODE_KEY}{code}" if code else ""))
     return lines, tax
 
 
@@ -239,7 +245,8 @@ def document_record(j: Mapping[str, Any], system: System, credit: bool = False) 
     if _status(j) in ("", "DRAFT", "SUBMITTED"):
         return None
     try:
-        lines, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive", system=system)
+        lines, tax = _lines(j.get("LineItems"), str(j.get("LineAmountTypes") or "") == "Inclusive", system=system,
+                            codes=True)
         rounding_account = system("ROUNDING")
         lines = [replace(x, rounding=True) if rounding_account and x.account == rounding_account else x for x in lines]
         total = minor(j["Total"]) if j.get("Total") is not None else sum(x.amount for x in lines) + tax
