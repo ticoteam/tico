@@ -32,6 +32,7 @@ module.exports = async browser => {
     });
     await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/ui/app/icons.js'), 'utf8')});
     await page.addScriptTag({content: fs.readFileSync(path.resolve(__dirname, '../../../recorder/ui/app/app.js'), 'utf8')});
+    await page.evaluate(() => window.dispatchEvent(new Event('DOMContentLoaded')));
     await page.locator('.row[data-id="m1"]').click();
     await page.locator('[data-act="control-live"][data-action="pause"]').click();
     await page.locator('[data-act="control-live"][data-action="resume"]').waitFor();
