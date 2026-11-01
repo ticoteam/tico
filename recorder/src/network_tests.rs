@@ -1208,3 +1208,27 @@ fn meeting_notices_are_read_from_new_events_only() {
     worker.join().unwrap();
     tico.read_notices("live-events", 42).unwrap();
 }
+
+#[test]
+fn old_tico_refuses_private_connect_without_dropping_visibility() {
+    let directory = tempfile::tempdir().unwrap();
+    let store = Store::open(directory.path()).unwrap();
+    let record = store.create("Private synthetic replay").unwrap();
+    let (tico, seen, worker) = server(vec![
+        Some(json!({"status":422})),
+        Some(json!({"status":422})),
+    ]);
+    let error = tico
+        .connect(&store, &record.id, Some("private"))
+        .unwrap_err();
+    worker.join().unwrap();
+    assert!(error.to_string().contains("nothing was shared"));
+    assert!(store.context(&record.id).unwrap().live_id.is_empty());
+    let requests = seen.lock().unwrap();
+    assert_eq!(requests.len(), 2);
+    for (_, body, _) in requests.iter() {
+        assert_eq!(body["visibility"], "private");
+    }
+    assert_eq!(requests[0].1["client"], "tico-recorder");
+    assert!(requests[1].1.get("client").is_none());
+}
