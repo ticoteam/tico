@@ -34,7 +34,8 @@ RESTART_STUCK_MINUTES = 34
 SILENT_MINUTES = 10         # a computer this quiet while work is queued for it has stopped, not blinked
 NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
 # A backup location that stays behind the database is warned about and then marked bad (replication.behind_warn_seconds,
-# replication.BEHIND_BAD_MIN_S). More local files than this in Litestream's level-0 folder means uploads are not getting through.
+# replication.BEHIND_BAD_MIN_S). More local files than _unsent_limit() in Litestream's level-0 folder means uploads are not
+# getting through. The floor is for the default one-minute sync; a longer interval holds more files between uploads.
 BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
@@ -1149,6 +1150,12 @@ def _age_status(stamp):
     return "warn" if age > warn_after else "ok"
 
 
+def _unsent_limit():
+    """How many local level-0 files count as a pile-up. Litestream writes one local file a second on a busy database and
+    uploads once per sync interval, so two sync intervals' worth of files is normal; the floor is the one-minute default."""
+    return max(BACKUP_UNSENT_FILES, 2 * replication.sync_interval_seconds())
+
+
 def _backups(config, settings):
     backup = config.get("backup")
     fix = _fix("Backup settings", "https://github.com/ticoteam/tico/blob/main/docs/install.md#backups-and-restore")
@@ -1177,7 +1184,7 @@ def _backups(config, settings):
                       [fix])
     behind = _age_status(since) if mode == "remote" else "ok"
     unsent = backup.get("unsent_files") if isinstance(backup.get("unsent_files"), int) else 0
-    if unsent > BACKUP_UNSENT_FILES:
+    if unsent > _unsent_limit():
         return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
                       f"Backups are stuck: Litestream has {unsent:,} unsent files. Restart the server; if it continues, "
                       "see the backup docs.", [fix])

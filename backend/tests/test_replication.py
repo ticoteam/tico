@@ -1282,3 +1282,16 @@ def test_the_start_check_leaves_an_hourly_install_alone_that_the_one_minute_limi
     monkeypatch.setattr(replication.subprocess, "run", Listing(listing_at(REPLICA_STAMP)))
     assert replication.reset_stale_litestream(str(config), str(db), env=env, now=NOW) is None
     assert state.is_dir() and replica_url(config) == "file://" + str(backup)
+
+
+@pytest.mark.parametrize("locals_seen", [(100_000, 30), (50, 100, 60)])
+def test_local_txids_that_go_back_start_the_lag_over(tmp_path, locals_seen):
+    # A reset can write the new generation's cache while old local files are still there, so their high TXID becomes the
+    # pending one. Then the reset clears them and local falls back: below the pending TXID, or below the last local TXID.
+    # The replica stays at 29, so an interval kept from the old TXIDs would never end.
+    path, replica, start, gen = tmp_path / "status.json", ReplicaStub(29), 1_793_000_000.0, "gen-20261101T000000Z"
+    for round_no, local in enumerate(locals_seen):
+        replication.write_status(replica, path, local_txid=local, generation=gen, now=start + 60 * round_no)
+    saved = json.loads(path.read_text())
+    assert saved["behind_since"] == replication._stamp(start + 60 * (len(locals_seen) - 1))
+    assert saved["pending_txid"] == f"{locals_seen[-1]:016x}"
