@@ -302,6 +302,21 @@ warn_backups() {
   esac
 }
 
+# Moves the database's -wal and -shm to BASE-wal and BASE-shm, and moves nothing while a database file is at the path. A WAL
+# holds commits that may not be in the database file yet (hubdb.leave_wal_for_litestream), and SQLite applies a WAL at a
+# database's path to whatever file is there. So a WAL moves with the database it belongs to, and one left without its
+# database moves aside before a restore writes there. Nothing is deleted.
+move_sidecars_aside() {  # BASE: the name the database has once it is moved, or its orphan's name
+  local leftover
+  [ ! -e "$TICO_DB" ] || return 0
+  for leftover in "$TICO_DB-wal" "$TICO_DB-shm"; do
+    if [ -e "$leftover" ]; then
+      mv "$leftover" "$1${leftover#"$TICO_DB"}"
+      log "moved $(basename "$leftover") aside as $(basename "$1")${leftover#"$TICO_DB"}"
+    fi
+  done
+}
+
 # An empty volume never quietly becomes a new team when a team exists (or may exist) behind it. The restore
 # result is kept, not ignored; and markers outside the database (backend/replication.py) say what was here before.
 # --initialize-empty (or TICO_INITIALIZE_EMPTY=1) is the explicit way to start over.
@@ -309,19 +324,12 @@ seed() {
   local restore_failed=() guard=()
   case "${TICO_INITIALIZE_EMPTY:-}" in 1|true|yes) guard+=(--initialize-empty) ;; esac
   if [ ! -s "$TICO_DB" ]; then
-    # Connections leave the -wal on disk when they close (hubdb.leave_wal_for_litestream). With the database gone, one
-    # left beside it belongs to a database that no longer exists, and SQLite would apply it to the restored copy. It is
-    # moved aside, not deleted.
-    for leftover in "$TICO_DB-wal" "$TICO_DB-shm"; do
-      if [ -e "$leftover" ]; then
-        mv "$leftover" "$leftover.orphan-$(date -u +%Y%m%dT%H%M%SZ)"
-        log "moved aside $(basename "$leftover"), left from a database that is no longer there"
-      fi
-    done
+    move_sidecars_aside "$TICO_DB.orphan-$(date -u +%Y%m%dT%H%M%SZ)"
     if backup_configuration; then
       # The restore reads the generation the data is in, as environment.json names it now: a copy from another folder could be
-      # an older one. A generation that cannot be known fails the restore, as a restore that failed does.
-      if python -m backend.replication sync-generation "$LITESTREAM_CONFIG" "$TICO_DB"; then
+      # an older one. Strict: a generation that cannot be read fails the restore, as a restore that failed does; the cache is
+      # not a stand-in here.
+      if python -m backend.replication sync-generation --strict "$LITESTREAM_CONFIG" "$TICO_DB"; then
         log "restoring the database from its backup, if there is one"
         litestream restore -if-db-not-exists -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB" || restore_failed=(--restore-failed)
       else
@@ -548,7 +556,7 @@ PY
 # Rebuilds an empty data volume from the backup (the remote one, else the tico-backups volume). The install's
 # id is in the database, so it returns with it. A volume that already holds data is only replaced with --force.
 restore() {
-  local force=0
+  local force=0 aside
   case "${1:-}" in --force) force=1 ;; '') ;; *) die "usage: restore [--force]" ;; esac
   aws_identity  # before the backup or the credential key is read, or a database is moved aside
   export TICO_DB=$DATA/hub.sqlite TICO_BLOB_DIR=$DATA/blobs
@@ -556,14 +564,17 @@ restore() {
     [ "$force" = 1 ] || die "the data volume is not empty; restore would replace it. Re-run with --force to keep the current database aside and restore over it"
   fi
   backup_configuration || die "backups are off (TICO_BACKUP=off); there is nothing to restore from"
-  python -m backend.replication sync-generation "$LITESTREAM_CONFIG" "$TICO_DB" \
-    || die "could not find the backup generation the data is in, so the restore would read an older copy; try again when the backup location is reachable"
+  python -m backend.replication sync-generation --strict "$LITESTREAM_CONFIG" "$TICO_DB" \
+    || die "could not find the backup generation the data is in (see above), so nothing was restored; if the backup location cannot be read, try again when it is reachable"
+  # The current database moves aside with its WAL, so the kept copy opens with every commit it had. A WAL left without a
+  # database moves aside too, or SQLite would apply it to the restored copy.
   if [ -e "$TICO_DB" ]; then
-    local aside
     aside="$TICO_DB.before-restore.$(date +%s)"
     log "keeping the current database as $aside"
     mv "$TICO_DB" "$aside"
-    rm -f "$TICO_DB-wal" "$TICO_DB-shm"
+    move_sidecars_aside "$aside"
+  else
+    move_sidecars_aside "$TICO_DB.orphan-$(date -u +%Y%m%dT%H%M%SZ)"
   fi
   log "restoring from ${TICO_BACKUP_URL:-the tico-backups volume ($BACKUPS)}"
   litestream restore -if-replica-exists -config "$LITESTREAM_CONFIG" "$TICO_DB"

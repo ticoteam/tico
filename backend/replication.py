@@ -524,7 +524,7 @@ def replica_generation(mirror):
     when environment.json cannot be read or names a generation this version does not know, so no caller guesses a layout."""
     value = str(read_marker(mirror).get(GENERATION_FIELD) or "")
     if value and not GENERATION_PATTERN.fullmatch(value):
-        raise ValueError("environment.json names a backup generation this version does not know")
+        raise UnsupportedGeneration("environment.json names a backup generation this version does not know")
     return value
 
 
@@ -555,17 +555,21 @@ def _has_database(db):
         return False
 
 
-def sync_generation(config, db, env=None):
+def sync_generation(config, db, env=None, strict=False):
     """Makes the Litestream config and the data volume's cache name the backup generation that environment.json names. This
     is the start's one read of environment.json: backup_configuration reads only the cache, so a slow bucket cannot hold up
     the start, and the reset job (run before Litestream starts) corrects the config here.
 
-    Returns what it went on: "none" (no backup location); "read" (environment.json says which generation); "kept" (it could
-    not be read, or it lacks the generation while the cache names one, so the cache's generation is used: reading a marker
-    never moves a copy off its generation); or "root" (it could not be read, there is no cache, and the database exists).
-    The root case is for a database from before the cache: the cache and the database share the data volume, so a database
-    with no cache has no generation to lose. Raises GenerationUnknown when nothing says which generation the data is in, or
-    when the config names another location than the backup settings do: the config is then left as it is."""
+    Returns what it went on: "none" (no backup location); "read" (environment.json says which generation); "kept" (it lacks
+    the generation while the cache names one, or it could not be read and the cache names one: reading a marker never moves
+    a copy off its generation); or "root" (it could not be read, there is no cache, and the database exists). The root case
+    is for a database from before the cache: the cache and the database share the data volume, so a database with no cache
+    has no generation to lose.
+
+    strict is for a restore and a seed, which must not restore from a guess: environment.json has to be readable, and an
+    unreadable one raises GenerationUnknown with no use of the cache or the root. A generation this version does not know
+    raises in both modes. Raises GenerationUnknown when nothing says which generation the data is in, or when the config
+    names another location than the backup settings do: the config is then left as it is."""
     env = os.environ if env is None else env
     if no_mirror(env):
         return "none"
@@ -584,8 +588,13 @@ def sync_generation(config, db, env=None):
                                 + "; the config is left as it is")
     try:
         generation, outcome = replica_generation(mirror_from_env(env)), "read"
+    except UnsupportedGeneration as exc:
+        raise GenerationUnknown(str(exc)) from None
     except Exception as exc:
         reason = type(exc).__name__ + ": " + str(exc)[:160]
+        if strict:
+            raise GenerationUnknown("environment.json could not be read (" + reason + "), so the backup generation the data is "
+                                    "in is not known") from None
         if cached is not None:
             generation, outcome = cached, "kept"
             what = "keeping the backup generation the data volume names (" + (generation or "the root") + ")"
@@ -847,6 +856,10 @@ class GenerationRefused(Exception):
 class GenerationSwitchFailed(Exception):
     """A new backup generation broke off after environment.json may have named it. Litestream must not run until a start has
     read environment.json again and pointed its config at the same place."""
+
+
+class UnsupportedGeneration(ValueError):
+    """environment.json names a backup generation this version does not know. Nothing falls back on it, in any mode."""
 
 
 class GenerationUnknown(Exception):
@@ -1149,9 +1162,11 @@ def main(argv=None):
         except (OSError, ValueError) as exc:
             print("tico: error: the backup generation file cannot be used (" + str(exc)[:160] + ")", file=sys.stderr)
             return 2
-    elif command == "sync-generation":    # CONFIG DB: 0 when the generation is known, 5 for the root by fallback, 4 when unknown
+    elif command == "sync-generation":    # [--strict] CONFIG DB: 0 when the generation is known, 5 for the root by fallback
+                                          # (not with --strict), 4 when unknown
+        paths = [arg for arg in argv[1:] if arg != "--strict"]
         try:
-            outcome = sync_generation(argv[1], argv[2], env)
+            outcome = sync_generation(paths[0], paths[1], env, strict="--strict" in argv)
         except GenerationUnknown as exc:
             print("tico: error: " + str(exc), file=sys.stderr, flush=True)
             return 4
@@ -1171,7 +1186,7 @@ def main(argv=None):
         if message:
             print(message, flush=True)
     else:
-        print("usage: python -m backend.replication loop|restore-blobs|restore-credential-key|is-empty DIR|check-new-company DIR|mark-environment DIR ID|cached-generation DIR|sync-generation CONFIG DB|reset-stale-litestream CONFIG DB", file=sys.stderr)
+        print("usage: python -m backend.replication loop|restore-blobs|restore-credential-key|is-empty DIR|check-new-company DIR|mark-environment DIR ID|cached-generation DIR|sync-generation [--strict] CONFIG DB|reset-stale-litestream CONFIG DB", file=sys.stderr)
         return 2
     return 0
 

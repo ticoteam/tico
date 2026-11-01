@@ -13,6 +13,7 @@ import yaml
 
 from backend import replication
 from backend.config import ROOT
+from backend.hubdb import leave_wal_for_litestream
 
 ENTRYPOINT = ROOT / "docker/entrypoint.sh"
 
@@ -853,9 +854,14 @@ def test_the_runtime_check_waits_six_hours_after_a_heal_before_asking_again(tmp_
     assert check(6 * 60 + 21) is True and len(stops) == 1
 
 
-def test_a_restore_and_a_seed_refuse_to_read_a_backup_whose_generation_cannot_be_read(tmp_path):
+@pytest.mark.parametrize("cached", [False, True], ids=["no-cache", "cache"])
+def test_a_restore_and_a_seed_refuse_to_read_a_backup_whose_generation_cannot_be_read(tmp_path, cached):
+    """A cache naming the generation is no stand-in here: a restore or a seed never reads a guessed generation."""
     (tmp_path / "backups").mkdir()
     (tmp_path / "backups" / replication.MARKER).write_text("not json")
+    if cached:
+        (tmp_path / "data").mkdir(exist_ok=True)
+        replication.write_generation_cache(tmp_path / "data", GENERATION)
     restore = entrypoint(tmp_path, command="restore")
     assert restore.returncode != 0 and "backup generation" in restore.stderr
     seeded, data = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"))
@@ -982,3 +988,89 @@ def test_the_loop_reads_the_replica_position_from_the_generation_the_volume_name
     replication.loop(env, sleep=lambda s: None, rounds=1)
     saved = json.loads(Path(env["TICO_BACKUP_STATUS_FILE"]).read_text())
     assert saved["replica_txid"] == f"{1:016x}" and saved["behind_since"]
+
+
+@pytest.mark.parametrize("strict", [False, True], ids=["reset", "strict"])
+def test_a_generation_this_version_does_not_know_raises_in_every_mode(tmp_path, strict):
+    config, db, state, backup, env = backup_setup(tmp_path, environment='{"generation": "gen-someday"}')
+    replication.write_generation_cache(db.parent, GENERATION)
+    before = replica_url(config)
+    with pytest.raises(replication.GenerationUnknown):
+        replication.sync_generation(str(config), str(db), env, strict=strict)
+    assert replica_url(config) == before and replication.read_generation_cache(db.parent) == GENERATION
+
+
+def test_a_strict_sync_refuses_an_unreadable_environment_json_even_with_a_cache(tmp_path):
+    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
+    replication.write_generation_cache(db.parent, GENERATION)
+    before = replica_url(config)
+    with pytest.raises(replication.GenerationUnknown):
+        replication.sync_generation(str(config), str(db), env, strict=True)
+    assert replica_url(config) == before and replication.read_generation_cache(db.parent) == GENERATION
+
+
+def test_the_strict_sync_command_exits_4_where_the_plain_one_keeps_the_cache(tmp_path, monkeypatch):
+    config, db, state, backup, env = backup_setup(tmp_path, environment="not json")
+    replication.write_generation_cache(db.parent, GENERATION)
+    for name, value in env.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.delenv("TICO_BACKUP_URL", raising=False)
+    assert replication.main(["sync-generation", "--strict", str(config), str(db)]) == 4
+    assert replication.main(["sync-generation", str(config), str(db)]) == 0
+    assert replica_url(config) == "file://" + str(backup) + "/" + GENERATION
+
+
+def database_with_a_wal_only_commit(path):
+    """A WAL-mode database whose last commit is only in its -wal, as a running server leaves it (no checkpoint on close).
+    Returns the -wal's bytes."""
+    conn = leave_wal_for_litestream(sqlite3.connect(path, isolation_level=None))
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA wal_autocheckpoint=0")
+    conn.execute("CREATE TABLE rows(id INTEGER PRIMARY KEY)")
+    conn.execute("INSERT INTO rows VALUES(1)")
+    conn.close()
+    return path.with_name(path.name + "-wal").read_bytes()
+
+
+def test_a_forced_restore_keeps_the_current_database_with_the_wal_its_last_commit_is_in(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    wal = database_with_a_wal_only_commit(data / "hub.sqlite")
+    assert wal
+    result = entrypoint(tmp_path, "--force")
+    assert result.returncode == 0, result.stderr
+    kept = [p for p in data.glob("hub.sqlite.before-restore.*") if not p.name.endswith(("-wal", "-shm"))]
+    assert len(kept) == 1, result.stdout
+    aside = kept[0]
+    assert aside.with_name(aside.name + "-wal").read_bytes() == wal     # the WAL moved with the database
+    assert not (data / "hub.sqlite-wal").exists()
+    kept_copy = sqlite3.connect(aside)
+    try:
+        assert kept_copy.execute("SELECT id FROM rows").fetchall() == [(1,)]   # its last commit is still there
+    finally:
+        kept_copy.close()
+
+
+def test_a_wal_left_without_its_database_moves_aside_before_a_restore_writes_there(tmp_path):
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "hub.sqlite-wal").write_bytes(b"orphan commits")
+    result = entrypoint(tmp_path, "--force")
+    assert result.returncode == 0, result.stderr
+    assert not (data / "hub.sqlite-wal").exists()
+    (orphan,) = data.glob("hub.sqlite.orphan-*-wal")
+    assert orphan.read_bytes() == b"orphan commits"
+    assert sqlite3.connect(data / "hub.sqlite").execute("SELECT x FROM t").fetchone() == (1,)
+
+
+def test_a_seed_moves_a_wal_left_without_its_database_aside_before_it_restores(tmp_path):
+    (tmp_path / "data").mkdir()
+    (tmp_path / "data" / "hub.sqlite-wal").write_bytes(b"orphan commits")
+    with sqlite3.connect(tmp_path / "source.sqlite") as source:
+        source.execute("CREATE TABLE registry_metadata(key TEXT PRIMARY KEY, value_json TEXT)")
+    result, data = prepare(tmp_path, STUB_DB=str(tmp_path / "source.sqlite"))
+    assert result.returncode == 0, result.stderr
+    assert not (data / "hub.sqlite-wal").exists()
+    (orphan,) = data.glob("hub.sqlite.orphan-*-wal")
+    assert orphan.read_bytes() == b"orphan commits"
+
