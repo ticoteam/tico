@@ -1,25 +1,25 @@
-name,sku,kind,unit,price
-Steel bar 1 in,RM-100,raw_material,foot,3.20
-Aluminum sheet 4x8,RM-101,raw_material,sheet,85
-Hex bolt M8,RM-102,raw_material,each,0.35
-Hex nut M8,RM-103,raw_material,each,0.12
-Steel plate 1/4 in,RM-104,raw_material,sheet,140
-Copper wire 12 AWG,RM-105,raw_material,foot,0.85
-Bearing 6205,RM-106,raw_material,each,4.60
-Shaft 1 in ground,RM-107,raw_material,foot,11.80
-Gearbox housing casting,RM-108,raw_material,each,96
-Gearbox assembly,ASM-200,assembly,each,420
-Drive frame assembly,ASM-201,assembly,each,615
-Control panel assembly,ASM-202,assembly,each,780
-Motor mount assembly,ASM-203,assembly,each,165
-Conveyor section,ASM-204,assembly,each,1350
-Finished widget A,FG-300,inventory,each,120
-Finished widget B,FG-301,inventory,each,155
-Spare gearbox,FG-302,inventory,each,540
-Packaging crate,PKG-400,inventory,each,18
-Cutting oil 5 gal,CON-400,non_inventory,pail,64
-Cutting tool insert,CON-401,non_inventory,each,21.50
-Shop rag box,CON-402,non_inventory,box,31
-Machine maintenance service,SVC-500,service,hour,95
-Shipping labor,SVC-501,service,hour,70
-Forklift rental,SVC-502,service,day,180
+name,sku,kind,unit,price,description,taxable
+Steel bar 1 in,RM-100,raw_material,foot,3.20,,no
+Aluminum sheet 4x8,RM-101,raw_material,sheet,85,,no
+Hex bolt M8,RM-102,raw_material,each,0.35,,no
+Hex nut M8,RM-103,raw_material,each,0.12,,no
+Steel plate 1/4 in,RM-104,raw_material,sheet,140,Cut to size from plate stock,no
+Copper wire 12 AWG,RM-105,raw_material,foot,0.85,,no
+Bearing 6205,RM-106,raw_material,each,4.60,,no
+Shaft 1 in ground,RM-107,raw_material,foot,11.80,,no
+Gearbox housing casting,RM-108,raw_material,each,96,"Cast housing, machined in house",no
+Gearbox assembly,ASM-200,assembly,each,420,"Gearbox built from the machined housing, bearings and shafts",no
+Drive frame assembly,ASM-201,assembly,each,615,Welded frame with mounting plate,no
+Control panel assembly,ASM-202,assembly,each,780,Wired panel with operator controls,no
+Motor mount assembly,ASM-203,assembly,each,165,Welded mount with hardware,no
+Conveyor section,ASM-204,assembly,each,1350,One 6-foot conveyor section,no
+Finished widget A,FG-300,inventory,each,120,"Standard widget, model A",yes
+Finished widget B,FG-301,inventory,each,155,"Standard widget, model B",yes
+Spare gearbox,FG-302,inventory,each,540,Replacement gearbox for the drive line,yes
+Packaging crate,PKG-400,inventory,each,18,,yes
+Cutting oil 5 gal,CON-400,non_inventory,pail,64,,yes
+Cutting tool insert,CON-401,non_inventory,each,21.50,,yes
+Shop rag box,CON-402,non_inventory,box,31,,yes
+Machine maintenance service,SVC-500,service,hour,95,"On-site maintenance by a technician, per hour",no
+Shipping labor,SVC-501,service,hour,70,Loading and handling for outbound orders,no
+Forklift rental,SVC-502,service,day,180,"Forklift rental without operator, per day",no

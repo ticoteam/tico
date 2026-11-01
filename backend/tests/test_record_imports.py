@@ -1,14 +1,14 @@
 """CSV import of shared records (backend/finance/record_imports.py, backend/records/csvimport.py): a row is one Finance
 action, a file imported again creates nothing (X19), a bad row does not stop the rest, a likely duplicate waits for a
-person, and an imported item keeps what a person changed (M1). Equipment's cases skip until equipment is on this
-install. A teammate who is not a company Admin lacks the records right: `api_settings` makes ben an Admin."""
+person, and an imported item keeps what a person changed (M1). A teammate who is not a company Admin lacks the
+records right: `api_settings` makes ben an Admin."""
 import pytest
 
 from backend.finance import actions as FA
 from backend.finance import record_imports as RI
-from backend.finance.core import kinds as K
 from backend.finance.core import rights as R
 from backend.finance.core.errors import FinanceError
+from backend.finance.store import ledger as SL
 from backend.records import csvimport as CI
 from backend.tests.test_api import api, post  # noqa: F401
 from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_template, store  # noqa: F401
@@ -16,8 +16,6 @@ from backend.tests.test_finance_fixtures import AT, OWNER, act, books, finance_t
 LOCATIONS = "name,kind,street,city,state,postal_code\nAcme shop,store,12 Main St,Springfield,IL,62701\n" \
             "Acme depot,warehouse,40 Depot Rd,Springfield,IL,62702\n"
 ITEMS = "name,sku,kind,unit,price\nAcme gasket,GSK-100,inventory,each,4.25\n"
-needs_equipment = pytest.mark.skipif("equipment_create" not in K.LIVE,
-                                     reason="equipment_create lands with the equipment branch")
 
 
 def sites(n: int = 40) -> str:
@@ -168,7 +166,6 @@ def test_the_report_keeps_a_name_a_spreadsheet_would_run_as_text(books):
     assert "'=HYPERLINK" in out["report_csv"]
 
 
-@needs_equipment
 def test_x10f_150_equipment_rows_flag_a_repeated_serial_and_bulk_assign_a_location(books):
     rows = ["name,kind,serial,make", *[f"Van {i},owned,SN-{i:04d},Acme" for i in range(150)],
             "Van again,owned,SN-0007,Acme"]
@@ -202,8 +199,65 @@ def test_a_site_names_its_customer_and_a_bulk_assign_fills_the_rows_that_leave_i
         dental = c.execute("SELECT id FROM fin_contacts WHERE name=?", ("Sample Dental Group",)).fetchone()[0]
         out = RI.commit(c, OWNER, "locations", text, {"customer_id": dental}, frozenset())
         owners = dict(c.execute("SELECT name, customer_id FROM locations WHERE archived_at IS NULL"))
-    assert out["summary"] == {"created": 2, "error": 1}
-    assert owners == {"Dental roof": dental, "Ridge court": dental}
+        nobody = c.execute("SELECT id FROM fin_contacts WHERE name='Nobody Ltd'").fetchone()[0]
+    assert out["summary"] == {"created": 3} and out["new_customers"] == 1
+    assert owners == {"Dental roof": dental, "Dental annex": nobody, "Ridge court": dental}
+
+
+def test_a_customer_the_books_lack_is_added_once_and_a_second_import_adds_nothing(books):
+    text = ("name,kind,customer\n"
+            "Ridge court,customer_site,Ridge Apartments\n"
+            "Ridge annex,customer_site,ridge apartments\n")
+    with books.transaction() as c:
+        preview = RI.preview(c, OWNER, "locations", text, {})
+        assert preview["summary"] == {"new": 2} and preview["new_customers"] == 1
+        assert preview["lines"][0]["new_customer"] == "Ridge Apartments"
+        out = RI.commit(c, OWNER, "locations", text, {}, frozenset())
+        contacts = c.execute("SELECT count(*) FROM fin_contacts WHERE kind='customer' AND name='Ridge Apartments'")
+        made = contacts.fetchone()[0]
+        owners = {row[0] for row in c.execute("SELECT customer_id FROM locations WHERE archived_at IS NULL")}
+        again = RI.commit(c, OWNER, "locations", text, {}, frozenset())
+    assert out["summary"] == {"created": 2} and out["new_customers"] == 1
+    assert made == 1 and len(owners) == 1 and None not in owners
+    assert again["summary"] == {"already_there": 2}
+
+
+def test_a_customer_name_close_to_one_already_here_is_a_likely_duplicate_linked_only_when_its_line_is_named(books):
+    text = "name,kind,customer\nDental roof,customer_site,Sample Dental Grp\n"
+    with books.transaction() as c:
+        act(c, OWNER, "contact_create", {"name": "Sample Dental Group", "kind": "customer"})
+        dental = c.execute("SELECT id FROM fin_contacts WHERE name='Sample Dental Group'").fetchone()[0]
+        preview = RI.preview(c, OWNER, "locations", text, {})
+        held = RI.commit(c, OWNER, "locations", text, {}, frozenset())
+        assert count(c, "locations") == 0
+        added = RI.commit(c, OWNER, "locations", text, {}, frozenset({2}))
+        linked = c.execute("SELECT customer_id FROM locations WHERE name='Dental roof'").fetchone()[0]
+        customers = [row[0] for row in c.execute("SELECT name FROM fin_contacts WHERE kind='customer' ORDER BY name")]
+    line = preview["lines"][0]
+    assert preview["summary"] == {"possible_duplicate": 1} and line["matches"] == {"record_id": dental}
+    assert "close to Sample Dental Group" in line["reason"]
+    assert held["summary"] == {"possible_duplicate": 1}
+    assert added["summary"] == {"created": 1} and linked != dental
+    assert customers == ["Sample Dental Group", "Sample Dental Grp"]
+
+
+def test_a_teammate_without_receivables_gets_a_row_error_for_a_customer_it_would_add(books):
+    text = "name,kind,customer\nRidge court,customer_site,Ridge Apartments\n"
+    with books.transaction() as c:
+        assert act(c, OWNER, "right_grant", {"teammate": "human:eve", "right": R.RECORDS}).status == "committed"
+        out = RI.preview(c, "human:eve", "locations", text, {})
+    assert out["summary"] == {"error": 1} and out["new_customers"] == 0 and out["lines"][0]["reason"]
+
+
+def test_a_new_customer_in_a_mirrored_book_names_the_provider_that_holds_it(books):
+    text = "name,kind,customer\nRidge court,customer_site,Ridge Apartments\n"
+    with books.transaction() as c:
+        c.execute("INSERT INTO fin_connections(id, provider, purpose, created_at, created_by, name) "
+                  "VALUES(?,?,?,?,?,?)", ("conn-qb", "quickbooks", "books", AT, OWNER, "Acme books"))
+        SL.set_book_mode(c, SL.book(c).id, "mirror", "conn-qb")
+        out = RI.preview(c, OWNER, "locations", text, {})
+    assert out["summary"] == {"error": 1}
+    assert out["lines"][0]["reason"] == "Add this customer in QuickBooks first"
 
 
 def test_an_item_row_keeps_its_description_and_taxable_flag(books):

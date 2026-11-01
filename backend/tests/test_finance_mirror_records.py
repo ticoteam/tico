@@ -133,6 +133,30 @@ def test_an_invoice_or_estimate_line_on_another_customers_job_is_refused_and_one
                                                 "lines": line(kitchen)}).status == "committed"
 
 
+def test_a_quickbooks_invoice_or_estimate_line_on_another_account_than_its_items_is_refused_at_plan_time(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["accounts"].append(acct(4, "4100", "Services", "income"))
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        beta, item = _local(c, "Customer:4", "fin_contacts"), _local(c, "Item:5", "items")
+
+        def lines(account_id: str) -> list[dict[str, Any]]:
+            return [{"item_id": item, "account_id": account_id, "amount": 1500, "description": "seats"}]
+        outbox = c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0]
+        for op, day in (("invoice_create", "invoice_date"), ("estimate_create", "estimate_date")):
+            refused = act(c, OWNER, op, {"customer_id": beta, day: "2026-10-06", "lines": lines(account(c, "4100"))},
+                          dry_run=True)
+            assert (refused.status, refused.code) == ("failed", "invalid"), refused
+            assert refused.reason == ("QuickBooks posts this item to its own income account; "
+                                      "use that account or another item"), refused
+            assert act(c, OWNER, op, {"customer_id": beta, day: "2026-10-06", "lines": lines(account(c, "4000"))},
+                       dry_run=True).status == "committed"
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox").fetchone()[0] == outbox
+
+
 def test_a_renamed_or_deactivated_record_updates_in_location_and_reverses_nothing(books):
     fake = FakeBooks()
     _records(fake)

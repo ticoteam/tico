@@ -15,7 +15,7 @@ from typing import Any, Protocol, cast
 from ..records import core as RC
 from ..records import reads as RR
 from ..records import store as RS
-from . import banking, budgeting, documents, handlers, posting
+from . import banking, budgeting, documents, handlers, posting, shared
 from . import purchasing as PU
 from .context import Ctx, load
 from .core import ap as AP
@@ -2513,6 +2513,17 @@ def _one_per_transaction(lines: list, keys: tuple[tuple[str, str], ...]) -> None
             raise invalid(f"the lines name more than one {what}; QuickBooks takes one per transaction")
 
 
+def _quickbooks_item_accounts(ctx: Ctx, lines: Sequence[AP.DocLine]) -> None:
+    """QuickBooks posts an invoice or estimate line with an item to the item's income account and has no sales line on
+    another account, so a line that names one is refused at plan time, before anything is queued for the provider."""
+    for x in lines:
+        if not x.item_id or not x.account_id:
+            continue
+        income = str(shared.live_item(ctx, shared.canonical_item_id(ctx, x.item_id))["income_account_id"] or "")
+        if income and income != x.account_id:
+            raise invalid("QuickBooks posts this item to its own income account; use that account or another item")
+
+
 def _create_planner(kind: str) -> handlers.Planner:
     """A bill or invoice written to the provider first: QuickBooks posts it when it is saved, so the books take its entry
     when the provider confirms the write. Its lines are checked the way the native planner checks them."""
@@ -2536,6 +2547,8 @@ def _create_planner(kind: str) -> handlers.Planner:
         raw = AP.doc_lines(p.get("lines"))
         if kind == "bill":
             raw, _ = PU.link_bill_lines(ctx, who, str(contact["id"]), raw)
+        if kind == "invoice" and _provider(ctx) == "quickbooks":
+            _quickbooks_item_accounts(ctx, raw)
         lines, _ = documents.resolve_lines(ctx, who, kind, contact, raw)
         # The number is checked after the lines, so a teammate who cannot see a line is refused as a missing line first.
         if any(handlers.private_hidden(ctx, who, x.account_id) for x in lines):
@@ -2734,6 +2747,8 @@ def _order_planner(kind: str) -> handlers.Planner:
         lines = AP.doc_lines(p.get("lines"), invoice=not po)
         if any(x.po_line_id for x in lines):
             raise invalid("a line names a purchase order line only on a bill")
+        if not po:
+            _quickbooks_item_accounts(ctx, lines)
         lines, asked = documents.resolve_lines(ctx, who, "bill" if po else "invoice", contact, lines)
         if any(handlers.private_hidden(ctx, who, x.account_id) for x in lines):
             raise FinanceError(NOT_FOUND, "no such line or account in your view")
