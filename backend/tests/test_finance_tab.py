@@ -189,21 +189,27 @@ def test_access_shows_each_viewer_their_part_and_only_the_owner_views_as(books):
 
 
 def test_a_managers_default_names_the_one_top_team_it_covers(books):
-    """Access names a manager's default by its team ("Engineering expenses") when it covers exactly one top team: the
-    team they lead, or the single team their reports sit in. Several teams, or a report on no team, stay generic."""
+    """Access names a manager's default by its team ("Engineering expenses") only when it covers that whole team: the
+    team they lead, or the single team their reports sit in when they are everyone on it. Several teams, a report on no
+    team, or a team with people the manager doesn't see stay generic."""
     with books.transaction() as c:
         rows = {m["teammate"]: m for m in FR.access(c, OWNER, at=AT)["teammates"]}
     assert rows["human:ben"]["default_team"] == "eng"          # leads Engineering, Web under it, Cara reports to him
     assert rows["human:cara"]["default_team"] == "web" and rows["human:dan"]["default_team"] == "sales"
     assert rows["human:eve"]["default_team"] is None and rows["human:ana"]["default_team"] is None
-    teams = {"eng": Team("eng", "Engineering"), "web": Team("web", "Web", parent="eng"), "ops": Team("ops", "Ops"),
-             "sales": Team("sales", "Sales", lead="human:lea")}
-    team_of = {"human:a": "web", "human:b": "web", "human:c": "ops", "human:d": "", "human:e": "eng"}
-    org = Org(owner=OWNER, teams=teams, team_of=team_of, humans=frozenset([*team_of, "human:lea"]),
-              reports_to={"human:a": "human:solo", "human:b": "human:solo", "human:c": "human:wide",
-                          "human:e": "human:wide", "human:d": "human:loose", "human:x": "human:lea"})
-    assert TB.default_team(org, "human:solo") == "web"        # reports only, all in Web
-    assert TB.default_team(org, "human:wide") is None         # reports in Engineering and Ops
+    teams = {"eng": Team("eng", "Engineering"), "web": Team("web", "Web", parent="eng", lead="human:sub"),
+             "ops": Team("ops", "Ops"), "qa": Team("qa", "QA"), "sales": Team("sales", "Sales", lead="human:lea")}
+    team_of = {"human:a": "ops", "human:b": "ops", "human:c": "qa", "human:q": "qa", "human:d": "", "human:e": "eng",
+               "human:f": "eng", "human:w": "web", "human:sub": "web"}
+    reports_to = {"human:a": "human:solo", "human:b": "human:solo", "human:c": "human:part", "human:w": "human:sub",
+                  "human:e": "human:sub", "human:q": "human:wide", "human:f": "human:wide", "human:d": "human:loose",
+                  "human:x": "human:lea"}
+    org = Org(owner=OWNER, teams=teams, team_of=team_of, reports_to=reports_to,
+              humans=frozenset([*team_of, "human:solo", "human:part", "human:wide", "human:loose", "human:lea"]))
+    assert TB.default_team(org, "human:solo") == "ops"        # reports only, and they are everyone in Ops
+    assert TB.default_team(org, "human:part") is None         # reports in QA, but not everyone in QA
+    assert TB.default_team(org, "human:sub") is None          # leads Web; one report in Engineering, not all of it
+    assert TB.default_team(org, "human:wide") is None         # reports in Engineering and QA
     assert TB.default_team(org, "human:loose") is None        # a reporting line on no team
     assert TB.default_team(org, "human:lea") is None          # leads Sales, but a report sits on no team
 
