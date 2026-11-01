@@ -20,6 +20,8 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "backend/tests/fixtures/schema_pre_cleanup.sql"
+# Every table the commit before the renames can hold, with those made only on first use (gen_upgrade_fixture.py).
+EVERY_TABLE = ROOT / "backend/tests/fixtures/schema_old_main.sql"
 YAML_OUT = ROOT / "scripts/cleanup/renames.yaml"
 DATA_OUT = ROOT / "backend/migrations/renames_data.py"
 BASE = "29fcaaf6e"
@@ -168,7 +170,18 @@ API_FIELDS = {"attempt_id": "run_id", "attempt": "run"}
 
 
 def load_schema(sql_path):
-    """{table: [columns]} for real tables (FTS shadow tables and sqlite_* left out), plus the virtual tables."""
+    """{table: [columns]} for real tables (FTS shadow tables and sqlite_* left out), plus the virtual tables. The tables
+    made only on first use come from EVERY_TABLE: a dump of a fresh hub does not have them."""
+    tables, virtual = _one_schema(sql_path)
+    if EVERY_TABLE.exists():
+        every, every_virtual = _one_schema(EVERY_TABLE)
+        for name, cols in every.items():
+            tables.setdefault(name, cols)
+        virtual |= every_virtual
+    return tables, virtual
+
+
+def _one_schema(sql_path):
     with tempfile.TemporaryDirectory() as tmp:
         db = Path(tmp) / "schema.sqlite"
         conn = sqlite3.connect(db)

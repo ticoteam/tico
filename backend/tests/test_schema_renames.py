@@ -81,9 +81,12 @@ def upgraded(tmp_path_factory):
 
 
 def test_the_map_names_only_columns_the_old_schema_has():
-    conn = sqlite3.connect(":memory:")
-    conn.executescript(FIXTURE.read_text())
-    tables = {t: columns(conn, t) for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    tables = {}
+    for fixture in (FIXTURE, FIXTURE.with_name("schema_old_main.sql")):
+        conn = sqlite3.connect(":memory:")
+        conn.executescript(fixture.read_text())
+        for (t,) in conn.execute("SELECT name FROM sqlite_master WHERE type='table'"):
+            tables.setdefault(t, columns(conn, t))
     missing = [(t, old) for t, old, _new, _wave in COLUMNS if old not in tables.get(t, ())]
     clashes = [(t, old, n) for t, old, n, _wave in COLUMNS if n in tables.get(t, ())]
     assert not missing and not clashes, (missing[:5], clashes[:5])
