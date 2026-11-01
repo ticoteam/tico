@@ -10,11 +10,12 @@ import collections, json
 self_, incl, total = collections.Counter(), collections.Counter(), 0
 for line in open("/tmp/stacks.txt"):
     stack, _, n = line.rstrip().rpartition(" ")
-    n = int(n); total += n
+    n = int(n)
     frames = stack.split(";")
     if any(f.startswith(("stream ", "writer ", "slow_consumer ", "scenario ", "main (")) and "benchmark_threads" in f
            for f in frames):
         continue
+    total += n
     def name(f):
         f = f.split(" (")[0] + " " + f.split("/")[-1].rstrip(")") if "(" in f else f
         return f
