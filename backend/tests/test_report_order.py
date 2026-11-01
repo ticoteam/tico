@@ -4,8 +4,15 @@ from backend.tests.test_api import api, get, headers, post, put, setup_attempt  
 from backend.tests.test_org_chart import revision, roster
 
 
+def slugs(api):
+    """Bot id to slug: the order holds ids, these tests compare the slugs people see."""
+    with api.app.state.store.read() as c:
+        return {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}
+
+
 def order(api, manager, token="ana-test"):
-    return [r["id"] for r in get(api, "org/order/" + manager, token=token)["reports"]]
+    names = slugs(api)
+    return [names.get(r["id"], r["id"]) for r in get(api, "org/order/" + manager, token=token)["reports"]]
 
 
 def report_to(api, bot, boss, token="ana-test", expected=200):
@@ -98,7 +105,9 @@ def test_reports_that_join_go_last_in_the_order_they_came_whatever_their_names(a
     report_to(api, "zulu", "coo")
     assert order(api, "coo") == order(api, "coo", token="cara-test") == ["ops", "doc-updater", "finance", "alpha", "zulu"]
     coo = next(n for n in get(api, "updates/tree?scope=all")["roots"][0]["children"] if n["key"] == "b:coo")
-    assert [n["key"] for n in coo["children"]] == ["b:ops", "b:doc-updater", "b:finance", "b:alpha", "b:zulu"]
+    names = slugs(api)
+    assert [names.get(n["key"].removeprefix("b:"), n["key"]) for n in coo["children"]] == [
+        "ops", "doc-updater", "finance", "alpha", "zulu"]
     places = {e["name"]: e.get("report_position") for e in api.get("/api/employees", headers=headers("cara-test")).json()}
     assert sorted(("ops", "doc-updater", "finance", "alpha", "zulu"), key=places.get) == [
         "ops", "doc-updater", "finance", "alpha", "zulu"], "the chart reloads the same places"

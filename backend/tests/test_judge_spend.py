@@ -557,7 +557,7 @@ def test_a_live_meeting_passes_at_the_cap_and_its_audit_keeps_the_tokens_and_cos
                     "answers": {qid: {"type": "noul", "noul": 0.9} for qid in questions}}
     priced(api.app.state.store.settings)
     api.app.state.judge = Room()
-    bots = [{"slug": "ops", "name": "Ops"}]
+    bots = [{"id": "ops", "slug": "ops", "name": "Ops"}]          # the rows a meeting's decision input carries
     routed = LM._decision(api.app, {"source": {"kind": "chat"}}, bots, 0.5, "human:ana")
     assert routed["targets"] == ["ops"]
     assert routed["trace"]["audit"] == {"ms": 90, "model": "jev-1.14", "usage": {"input_tokens": 1_000_000,

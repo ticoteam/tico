@@ -1,4 +1,4 @@
-"""Stable bot ids: `bots.id` is the identity, `slug` a renameable label (hubdb BOT_IDS_SCHEMA, migrate_bot_ids).
+"""Stable bot ids: `bots.id` is the identity, `slug` a renameable label (hubdb BOT_IDS_SCHEMA, upgrade).
 
 The upgrade test builds a database the way main leaves one (bots keyed by slug, every bot reference naming
 bots(slug)), fills it, runs the real migration, and checks that nothing was lost or rewritten.
@@ -181,6 +181,33 @@ class Upgrade(unittest.TestCase):
         renamed = H.rename_bot(conn, "ops-lead", "ops-renamed")
         self.assertEqual(renamed["id"], "ops-lead")
         self.assertEqual(H.bot(conn, "ops-lead")["slug"], "ops-renamed")
+
+    def test_upgrade_called_again_on_an_upgraded_database_changes_nothing(self):
+        self.conn.close()
+        conn = H.connect(self.path)
+        self.addCleanup(conn.close)
+        schema = conn.execute("SELECT group_concat(sql) FROM sqlite_master").fetchone()[0]
+        principals = [tuple(r) for r in conn.execute("SELECT * FROM principals ORDER BY id")]
+        conn.execute("PRAGMA foreign_keys=OFF")
+        conn.execute("BEGIN")
+        H.upgrade(conn)
+        conn.execute("COMMIT")
+        self.assertEqual(conn.execute("SELECT group_concat(sql) FROM sqlite_master").fetchone()[0], schema)
+        self.assertEqual([tuple(r) for r in conn.execute("SELECT * FROM principals ORDER BY id")], principals)
+
+    def test_upgrade_runs_inside_the_callers_transaction_and_a_rollback_undoes_it(self):
+        """The caller owns the transaction: `upgrade` neither begins nor commits, so a rollback leaves the old shape."""
+        self.conn.execute("PRAGMA foreign_keys=OFF")
+        legacy_before = self.conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
+        columns_before = [row[1] for row in self.conn.execute("PRAGMA table_info(bots)")]
+        self.conn.execute("BEGIN")
+        H.upgrade(self.conn)
+        self.assertTrue(self.conn.in_transaction, "upgrade ended the caller's transaction")
+        self.assertIn("id", [row[1] for row in self.conn.execute("PRAGMA table_info(bots)")])
+        self.conn.execute("ROLLBACK")
+        self.assertEqual([row[1] for row in self.conn.execute("PRAGMA table_info(bots)")], columns_before)
+        self.assertEqual(sorted(H._slug_references(self.conn)), sorted(CHILD_TABLES))
+        self.assertEqual(self.conn.execute("PRAGMA legacy_alter_table").fetchone()[0], legacy_before)
 
 
 class Schema(_Case):

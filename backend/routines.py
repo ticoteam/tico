@@ -91,6 +91,7 @@ def _set_moved(c, actor, auto, enabled):
 def create(c, actor, bot, fields, *, key=None, at=None):
     """A new routine for `bot`. With `key`, the same key names the same routine: creating it
     again updates it in place (a bot that sets up its own routines every turn makes one)."""
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)        # a routine names its bot by id or slug
     at = _clock(at)
     entry = validate(fields)
     from . import strategy_acts

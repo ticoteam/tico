@@ -5,7 +5,14 @@ be a free help desk for every other bot in the company, but it must still be rea
 person, by its manager, and by anyone it asked something of.
 """
 
+from backend.store import H
 from backend.tests.test_api import api, get, headers, post  # noqa: F401
+
+
+def actor(api, slug):
+    """A bot's actor is `bot:<id>`: the id (not the slug) is what tasks, messages and chats are addressed to."""
+    with api.app.state.store.read() as c:
+        return H.bot_actor(H.resolve_bot(c, slug)["id"])
 
 
 def bot(api, slug, name, reports_to=None):
@@ -47,7 +54,7 @@ def test_an_unrelated_bot_cannot_chat_it_or_put_a_task_on_it(api):
     post(api, "tasks", {"owner": "analyst", "title": "Pull these numbers", "body": "Please."},
          token=stranger, expected=403)
     # And it is not a silent drop: nothing was written either way.
-    assert [t for t in get(api, "tasks")["tasks"] if t["owner"] == "bot:analyst"] == []
+    assert [t for t in get(api, "tasks")["tasks"] if t["owner"] == actor(api, "analyst")] == []
 
 
 # ---------- `tasks`: work arrives as a task and nothing else ----------
@@ -58,7 +65,7 @@ def notices_to(api, slug):
     import json
     with api.app.state.store.read() as c:
         rows = c.execute("SELECT body,refs_json FROM messages WHERE to_actor=? ORDER BY created",
-                         ("bot:" + slug,)).fetchall()
+                         (actor(api, slug),)).fetchall()
     return [(r["body"].split("\n")[0], bool((json.loads(r["refs_json"] or "{}")).get("quiet")))
             for r in rows]
 
@@ -75,7 +82,7 @@ def test_another_bot_may_file_work_and_do_nothing_else(api):
     _, _, stranger = tasks_only(api)
     filed = post(api, "tasks", {"owner": "analyst", "title": "Check the churned feeds",
                                 "body": "Two clients still syncing."}, token=stranger)
-    assert filed["owner"] == "bot:analyst"
+    assert filed["owner"] == actor(api, "analyst")
     refused = post(api, "chat/analyst", {"text": "Did you see my ticket?"}, token=stranger, expected=403)
     assert refused["error"]["code"] == "bot_contact"
     assert "takes work as a task and nothing else" in refused["error"]["detail"]

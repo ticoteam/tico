@@ -112,6 +112,7 @@ def test_high_load_average_with_cpu_to_spare_does_not_hold_starts(api):
 
 def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(world):
     from backend.repositories import save_metadata
+    from backend.store import H
     from backend.tests.test_bot_access import set_access
     from backend.tests.test_mcp import call
     api, tokens, _ = world
@@ -119,14 +120,16 @@ def test_new_bot_computer_visibility_keeps_hidden_bots_and_accounts_private(worl
     rid = r["runner_id"]
     set_access(api, see={"teams": ["legal"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     with api.app.state.store.transaction() as c:
+        counsel_id = H.resolve_bot(c, "counsel")["id"]
         c.execute("UPDATE runners SET accepts_member_bots=0,readiness_json=? WHERE id=?",
                   (json.dumps({"schema_version": 1, "recent_errors": ["private runner log"], "bots": {}}), rid))
         save_metadata(c, "computer-repositories:" + rid,
                       {"repositories": [{"full_name": "acme/private-repo", "error": "private clone error"}]})
-        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES('counsel',?,1,?,'human:ana')", (rid, P._iso(time.time())))
+        c.execute("INSERT INTO assignments(bot,runner_id,generation,updated,updated_by) VALUES(?,?,1,?,'human:ana')",
+                  (counsel_id, rid, P._iso(time.time())))
     failed, detail = call(api, "hub_computer_list", {"computer": rid}, token=tokens["stranger"])
     assert not failed, detail
-    assert "counsel" not in str(detail)
+    assert "counsel" not in str(detail) and counsel_id not in str(detail)
     assert detail["id"] == rid
     assert "repositories" not in detail and "recent_errors" not in detail.get("readiness", {})
     assert "operator" not in detail

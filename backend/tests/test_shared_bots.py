@@ -9,6 +9,12 @@ def revision(api, bot):
     return get(api, 'bots/' + bot)['revision']
 
 
+def bot_id(api, slug):
+    """The id a bot is stored under: actors, readiness reports, claims and most tables use it, not the slug."""
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)['id']
+
+
 def share(api, enabled=True):
     post(api, 'bots/cpo/definition', {'shared': enabled, 'expected_revision': revision(api, 'cpo')})
 
@@ -61,13 +67,14 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
         c.execute('UPDATE bot_config SET config_json=? WHERE bot=?', (json.dumps({**declared, **settings}), 'cpo'))
     assignment = get(api, 'runners/assignments', computer['token'])[0]
     assert all(assignment['config'][key] == value for key, value in settings.items())
-    ready(api, computer, ['cpo-cara'])
+    branch_id = bot_id(api, 'cpo-cara')
+    ready(api, computer, [branch_id])
     post(api, 'chat/cpo', {'text': 'Review this'}, 'cara-test')
-    attempt = claim(api, computer, 'cpo-cara')
+    attempt = claim(api, computer, branch_id)
     assert all(attempt['config'][key] == value for key, value in settings.items())
     post(api, f'attempts/{attempt["id"]}/started', {'thread_id': 'branch-thread'}, computer['token'])
     with api.app.state.store.read() as c:
-        session = c.execute("SELECT runtime,model FROM bot_sessions WHERE bot='cpo-cara'").fetchone()
+        session = c.execute("SELECT runtime,model FROM bot_sessions WHERE bot=?", (branch_id,)).fetchone()
         assert tuple(session) == ('fake', 'team-model')
     post(api, 'bots/cpo-cara/definition', {'description': 'Mine', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
     post(api, 'bots/cpo-cara/model', {'model': 'team-model', 'expected_revision': revision(api, 'cpo-cara')}, 'cara-test', expected=409)
@@ -78,17 +85,18 @@ def test_follows_model_session_fallback_and_refuses_definition_edits(api):
 def test_tasks_and_chat_route_only_to_an_active_branch_while_enabled(api):
     share(api)
     branch(api, runner(api, 'cara'))
+    branch_actor = H.bot_actor(bot_id(api, 'cpo-cara'))
     mine = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review design', 'body': 'Please review.'}, 'cara-test')
-    assert mine['owner'] == 'bot:cpo-cara'
+    assert mine['owner'] == branch_actor
     other = post(api, 'tasks', {'owner': 'cpo', 'title': 'Review another design', 'body': 'Please review.'})
     assert other['owner'] == 'bot:cpo'
     task_chat = post(api, f'tasks/{other["id"]}/chat', {'text': 'Discuss the design'}, 'cara-test')
-    assert task_chat['bot'] == 'cpo-cara'
-    assert task_chat['message']['to_actor'] == 'bot:cpo-cara'
+    assert task_chat['bot'] == bot_id(api, 'cpo-cara')
+    assert task_chat['message']['to_actor'] == branch_actor
     chat = post(api, 'chat/cpo', {'text': 'Hello'}, 'cara-test')
-    assert chat['to_actor'] == 'bot:cpo-cara'
+    assert chat['to_actor'] == branch_actor
     conversation = get(api, 'conversations?chat_with=cpo-cara', 'cara-test')['conversations'][0]
-    assert set(conversation['participants']) == {'human:cara', 'bot:cpo-cara'}
+    assert set(conversation['participants']) == {'human:cara', branch_actor}
     chats = get(api, 'conversations?chat_with=cpo', 'cara-test')
     assert chats['conversations'][0]['id'] == chat['conversation_id']
     new = post(api, 'conversations', {'participants': ['bot:cpo'], 'kind': 'chat'}, 'cara-test')
@@ -118,11 +126,12 @@ def test_archive_restores_branches_without_losing_their_work_or_assignment(api):
     computer = runner(api, 'cara')
     branch(api, computer)
     task = post(api, 'tasks', {'owner': 'cpo', 'title': 'Keep work', 'body': 'Please.'}, 'cara-test')
+    branch_id = bot_id(api, 'cpo-cara')
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
-        assert H.bot(c, 'cpo-cara')['state'] == 'archived'
-        assert H.task(c, task['id'])['owner'] == 'bot:cpo-cara'
-        assert c.execute('SELECT runner_id FROM assignments WHERE bot=?', ('cpo-cara',)).fetchone()[0] == computer['runner_id']
+        assert H.bot(c, branch_id)['state'] == 'archived'
+        assert H.task(c, task['id'])['owner'] == H.bot_actor(branch_id)
+        assert c.execute('SELECT runner_id FROM assignments WHERE bot=?', (branch_id,)).fetchone()[0] == computer['runner_id']
     # Restore uses upstream's activation check; the original was already active before archive.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',true) WHERE bot='cpo'")
@@ -142,17 +151,19 @@ def test_original_archive_preserves_paused_and_independently_archived_branches(a
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.materialize',true) WHERE bot='cpo'")
     post(api, 'bots/cpo/restore', {})
+    cara, ana = bot_id(api, 'cpo-cara'), bot_id(api, 'cpo-ana')
     with api.app.state.store.read() as c:
-        assert H.bot(c, 'cpo-cara')['state'] == 'paused'
-        assert H.bot(c, 'cpo-ana')['state'] == 'archived'
+        assert H.bot(c, cara)['state'] == 'paused'
+        assert H.bot(c, ana)['state'] == 'archived'
 
 
 def test_archiving_the_original_closes_a_parked_branch_setup_reminder(api):
     """A branch archived with its original no longer needs its setup finished, so its reminder leaves Needs you."""
     share(api)
     branch(api, runner(api, 'cara'))
+    branch_id = bot_id(api, 'cpo-cara')
     with api.app.state.store.transaction() as c:
-        reminder = H._setup_reminder(c, 'cpo-cara')
+        reminder = H._setup_reminder(c, branch_id)
     post(api, 'bots/cpo/archive', {'expected_revision': revision(api, 'cpo')})
     with api.app.state.store.read() as c:
         assert H.task(c, reminder['id'])['status'] == 'done'

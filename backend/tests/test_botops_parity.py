@@ -23,6 +23,12 @@ def act(api, attempt, method, path, body=None, ref="turn"):
     return getattr(api, method.lower())("/api/v2/" + path, **kwargs)
 
 
+def bot_id(api, slug):
+    """The id a bot is stored under (tables, actors and readiness reports use it; the slug is only its label)."""
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
+
+
 @pytest.mark.parametrize("requester", ["bot:finance"])
 def test_botops_records_its_own_blocker_without_borrowing_human_authority(api, botops, requester):
     from backend.tests.test_mcp import call as mcp
@@ -169,21 +175,22 @@ def test_an_active_bot_goes_on_the_only_computer_or_the_least_busy_one(api):
                        "model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None})
     with api.app.state.store.read() as c:
         where = dict(c.execute("SELECT bot,runner_id FROM assignments").fetchall())
-    assert where["writer"] == second["runner_id"]                  # the one with nothing on it
+    assert where[bot_id(api, "writer")] == second["runner_id"]     # the one with nothing on it
 
 
 def test_activating_or_resuming_places_a_bot_and_the_scheduler_places_the_rest(api):
     made = post(api, "bots", {"slug": "scribe", "display_name": "Scribe", "description": "Writes", "status": "planned",
                               "model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None})
     assert made["status"] == "planned" and made["assignment"] is None
+    scribe = bot_id(api, "scribe")
     machine = runner(api)
-    ready(api, machine, ["scribe"])
+    ready(api, machine, [scribe])
     post(api, "bots/scribe/definition", {"status": "active", "expected_revision": made["revision"]})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT runner_id FROM assignments WHERE bot='scribe'").fetchone()[0] == machine["runner_id"]
+        assert c.execute("SELECT runner_id FROM assignments WHERE bot=?", (scribe,)).fetchone()[0] == machine["runner_id"]
     # Active with nowhere to go says so, and is placed by the scheduler when a computer can take it.
     with api.app.state.store.transaction() as c:
-        c.execute("DELETE FROM assignments WHERE bot='scribe'")
+        c.execute("DELETE FROM assignments WHERE bot=?", (scribe,))
     from backend import placement
     with api.app.state.store.transaction() as c:
         assert [slug for slug, _ in placement.sweep(c, api.app.state.execution) if slug == "scribe"] == ["scribe"]
@@ -206,16 +213,17 @@ def test_go_live_places_activates_and_starts_setup_as_the_requester(api, botops)
     computer = open_computer(api)
     cara = turn(api, botops, person="cara-test", text="Make it live")
     register(api, cara, "jira-manager")
+    jira = bot_id(api, "jira-manager")
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot='jira-manager'")
+        c.execute("UPDATE bot_config SET onboarding_state='needs_setup' WHERE bot=?", (jira,))
     post(api, "bots/jira-manager/place", {"computer": computer["runner_id"]}, token="cara-test")
-    ready(api, computer, ["jira-manager"])
+    ready(api, computer, [jira])
     gone = act(api, cara, "POST", "bots/jira-manager/go-live", {})
     assert gone.status_code == 200, gone.text
     done = gone.json()
     assert (done["state"], done["placed"], done["activated"], done["setup_started"]) == ("active", False, True, True)
     with api.app.state.store.read() as c:
-        said = c.execute("SELECT from_actor,body FROM messages WHERE to_actor='bot:jira-manager'").fetchone()
+        said = c.execute("SELECT from_actor,body FROM messages WHERE to_actor=?", (H.bot_actor(jira),)).fetchone()
         assert (said["from_actor"], said["body"]) == ("human:cara", "Let's set you up.")
     assert act(api, cara, "POST", "bots/jira-manager/place", {}).json()["already"] is True
 
@@ -284,6 +292,7 @@ def test_a_member_stores_a_credential_for_their_own_bot_and_the_team_rule_turns_
     theirs = post(api, "credentials", {"name": "Shared Jira", "env": "JIRA_TOKEN", "secret": "admin-stored-value-123"})
     cara = turn(api, botops, person="cara-test", text="Connect my bot")
     register(api, cara, "jira-manager")
+    jira = bot_id(api, "jira-manager")
     card = call(api, "post", "credential-requests", cara["token"], {"env": "JIRA_TOKEN", "for_bot": "jira-manager", "on_behalf_of": "turn"}).json()
     assert get(api, f"credential-requests/{card['id']}", "cara-test")["can_save"] is True
     saved = post(api, f"credential-requests/{card['id']}/save", {"value": "member-token-value-123"}, "cara-test")
@@ -292,7 +301,7 @@ def test_a_member_stores_a_credential_for_their_own_bot_and_the_team_rule_turns_
         assert row["created_by"] == "human:cara" and row["id"] != theirs["id"]           # another's is never replaced
         assert c.execute("SELECT revision FROM credentials WHERE id=?", (theirs["id"],)).fetchone()[0] == 1
         assert c.execute("SELECT subject FROM credential_grants WHERE credential_id=? AND revoked IS NULL",
-                         (row["id"],)).fetchall()[0][0] == "bot:jira-manager"
+                         (row["id"],)).fetchall()[0][0] == H.bot_actor(jira)
     post(api, f"credentials/{row['id']}/reveal", {}, "cara-test", expected=403)
     # Not for a bot she does not manage, and not at all once the owner turns the rule off.
     assert call(api, "post", "credential-set", cara["token"], {"env": "OPS_TOKEN", "for_bot": "ops", "value": "v-123456789",
@@ -362,12 +371,13 @@ def test_generated_template_task_keeps_requester_rights_and_reaches_go_live(api,
     credentials = act(api, attempt, "GET", "credentials")
     assert credentials.status_code == (200 if person == "ana-test" else 403)
     from backend.tests.test_api import restrict
+    qa = bot_id(api, "qa-custom")
     with api.app.state.store.transaction() as c:
-        restrict(c, "qa-custom", people=["ana" if person == "ana-test" else "cara"])
+        restrict(c, qa, people=["ana" if person == "ana-test" else "cara"])
     err, status = mcp(api, "hub_tool_list", {"bot": "qa-custom"}, attempt["token"])
-    assert not err and status["bot"] == "qa-custom", status
+    assert not err and status["bot"] == qa, status
     assign(api, botops, "qa-custom")
-    ready(api, botops, ["botops", "qa-custom"])
+    ready(api, botops, ["botops", qa])
     result = act(api, attempt, "POST", "bots/qa-custom/go-live", {"setup": False})
     assert result.status_code == 200 and result.json()["state"] == "active", result.text
 

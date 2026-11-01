@@ -6,6 +6,7 @@ Ana owns the company (the base fixture). Nothing is saved in Settings > Computer
 import json
 
 from backend import gateway_tiers
+from backend.store import H
 from backend.tests.test_api import api, headers, post  # noqa: F401  (fixture)
 
 
@@ -21,7 +22,8 @@ def create(api, slug, model=None, expected=200):
 
 def model_of(api, slug):
     with api.app.state.store.read() as c:
-        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
+        # bot_config is keyed by the bot's id (its slug is only a label).
+        row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (H.resolve_bot(c, slug)["id"],)).fetchone()
     return json.loads(row[0])["model"]
 
 

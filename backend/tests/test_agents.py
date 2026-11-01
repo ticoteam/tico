@@ -20,6 +20,11 @@ def credential(api, slug="scout"):
     return post(api, "bots/" + slug + "/agent-credential", {})
 
 
+def bot_id(api, slug="scout"):
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]     # jobs, agents, health issues and actors are keyed by the id
+
+
 def beat(api, token, **fields):
     return post(api, "agents/heartbeat", {"version": "0.19.0", "platform": "darwin",
                                           "model": "gpt-5.6-luna", "provider": "openai-codex",
@@ -27,16 +32,18 @@ def beat(api, token, **fields):
 
 
 def issues(api, slug):
-    return [i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i["bot"] == slug]
+    bot = bot_id(api, slug)
+    return [i for i in api.get("/api/status", headers=headers()).json()["health_issues"] if i["bot"] == bot]
 
 
 def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over_mcp(api):
     hermes_bot(api)
+    scout = bot_id(api)
     token = credential(api)["token"]
     beat(api, token)
     msg = post(api, "chat/scout", {"text": "What did you find today?"})
     with api.app.state.store.read() as c:
-        assert c.execute("SELECT count(*) FROM jobs WHERE bot='scout'").fetchone()[0] == 0, "no runner will claim it"
+        assert c.execute("SELECT count(*) FROM jobs WHERE bot=?", (scout,)).fetchone()[0] == 0, "no runner will claim it"
     # The page has nothing to say about execution: no job, no machine to wait for.
     snapshot = api.get("/api/v2/conversations/" + msg["conversation_id"] + "/snapshot", headers=headers()).json()
     assert snapshot["execution"] is None
@@ -49,7 +56,7 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
     assert [m["body"] for m in page] == ["What did you find today?"]
     failed, sent = call(api, "hub_message_send", {"to": "ana", "text": "Three leads, all in Austin.",
                                           "conversation_id": msg["conversation_id"]}, token=token)
-    assert not failed and sent["from_actor"] == "bot:scout"
+    assert not failed and sent["from_actor"] == H.bot_actor(scout)
     failed, acked = call(api, "hub_message_mark_read", {"message_id": msg["id"]}, token=token)
     assert not failed and acked == {"read": True}
     assert call(api, "hub_message_list", token=token)[1]["messages"] == []
@@ -68,12 +75,13 @@ def test_a_message_to_a_hermes_bot_waits_in_its_inbox_and_the_agent_answers_over
 
 def test_agent_credentials_rotate_revoke_and_follow_the_bots_state(api):
     hermes_bot(api)
+    scout = bot_id(api)
     first = credential(api)["token"]
-    assert get(api, "me", token=first)["actor"] == "bot:scout"
+    assert get(api, "me", token=first)["actor"] == H.bot_actor(scout)
     second = credential(api)["token"]
     assert second != first
     assert api.get("/api/v2/me", headers=headers(first)).status_code == 401
-    assert get(api, "me", token=second)["actor"] == "bot:scout"
+    assert get(api, "me", token=second)["actor"] == H.bot_actor(scout)
     # A paused bot's credential stops working until a person reactivates it.
     post(api, "bots/scout/definition", {"status": "paused", "expected_revision":
          next(b for b in get(api, "bots") if b["slug"] == "scout")["revision"]})
@@ -81,8 +89,8 @@ def test_agent_credentials_rotate_revoke_and_follow_the_bots_state(api):
     assert r.status_code == 409 and "paused" in r.json()["error"]["detail"]
     post(api, "bots/scout/definition", {"status": "active", "expected_revision":
          next(b for b in get(api, "bots") if b["slug"] == "scout")["revision"]})
-    assert get(api, "me", token=second)["actor"] == "bot:scout"
-    assert post(api, "bots/scout/agent-credential/revoke", {}) == {"bot": "scout", "revoked": True}
+    assert get(api, "me", token=second)["actor"] == H.bot_actor(scout)
+    assert post(api, "bots/scout/agent-credential/revoke", {}) == {"bot": scout, "revoked": True}
     assert api.get("/api/v2/me", headers=headers(second)).status_code == 401
     assert api.post("/api/v2/bots/scout/agent-credential/revoke", json={}, headers=headers()).status_code == 404
     (issue,) = issues(api, "scout")
@@ -113,10 +121,11 @@ def test_agent_unread_inbox_is_privacy_checked_in_one_batch(api, monkeypatch):
     from backend import task_privacy as privacy
 
     hermes_bot(api)
+    scout = bot_id(api)
     token = credential(api)["token"]
     beat(api, token)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE agents SET last_seen=? WHERE bot='scout'", (H.shift(H.now(), seconds=-600),))
+        c.execute("UPDATE agents SET last_seen=? WHERE bot=?", (H.shift(H.now(), seconds=-600), scout))
     for i in range(12):
         post(api, "chat/scout", {"text": f"Note {i}"})
     calls = []
@@ -142,6 +151,7 @@ def test_agent_listing_reads_access_and_config_once(api, monkeypatch):
     credential(api, "scout")
     hermes_bot(api, slug="ranger", display_name="Ranger")
     post(api, "bots/ranger/agent-credential", {})
+    scout, ranger = bot_id(api, "scout"), bot_id(api, "ranger")
     access_calls, config_calls = [], []
     real_accesses = Auth.bot_accesses
     real_configs = read_cache.configs
@@ -160,6 +170,6 @@ def test_agent_listing_reads_access_and_config_once(api, monkeypatch):
     who = store.settings.test_identities["ana-test"]
     with store.read() as c:
         rows = agents.listing(c, who, auth)
-    assert {r["bot"] for r in rows} >= {"scout", "ranger"}
-    assert len(access_calls) == 1 and set(access_calls[0]) >= {"scout", "ranger"}
-    assert any(calls and set(calls) >= {"scout", "ranger"} for calls in config_calls)
+    assert {r["bot"] for r in rows} >= {scout, ranger}
+    assert len(access_calls) == 1 and set(access_calls[0]) >= {scout, ranger}
+    assert any(calls and set(calls) >= {scout, ranger} for calls in config_calls)

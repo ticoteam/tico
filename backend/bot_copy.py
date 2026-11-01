@@ -205,7 +205,8 @@ def install(app, store, auth, mutate, settings_admin, place_now):
         if not body.applied_sha:
             with store.read() as c:
                 config, source = origin(c, who, bot)
-                return {"bot": bot, "original": source["bot"], "base_sha": source.get("sha") or "",
+                original = H.bot(c, source["bot"])["slug"]       # the client names its folder and words by slug
+                return {"bot": bot, "original": original, "base_sha": source.get("sha") or "",
                         "repo": config["repo"] or "bot-" + H.bot(c, bot)["slug"],
                         "original_repo": (settings_admin._config(c, source["bot"])["repo"]
                                           or "emp-" + H.bot(c, source["bot"])["slug"])}
@@ -217,7 +218,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             c.execute("UPDATE bot_config SET config_json=? WHERE bot=?", (encode(declared), bot))
             H.event(c, who.actor, "bot.copy_updated", bot, {"from": source["bot"], "before": source.get("sha") or "",
                                                             "after": body.applied_sha})
-            return {"bot": bot, "original": source["bot"], "base_sha": body.applied_sha}
+            return {"bot": bot, "original": H.bot(c, source["bot"])["slug"], "base_sha": body.applied_sha}
         return mutate(request, body, work)
 
     def pull_request(service, repo, title, text, files, branch):
@@ -311,7 +312,7 @@ def install(app, store, auth, mutate, settings_admin, place_now):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
-            targets = []
+            targets, ids = [], []
             for slug in dict.fromkeys(body.to):
                 slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
                 row = H.bot(c, slug)
@@ -321,7 +322,9 @@ def install(app, store, auth, mutate, settings_admin, place_now):
                     raise Problem("not_found", f"No bot {slug} to copy to", 404)
                 auth.require_write(c, who, slug)
                 settings_admin._manager(c, who, slug)
-                targets.append({"bot": slug, "repo": settings_admin._config(c, slug)["repo"] or "emp-" + row["slug"]})
-            H.event(c, who.actor, "bot.skill_copy_requested", bot, {"skill": body.skill, "to": [t["bot"] for t in targets]})
+                # The answer names each target by slug: the client makes its folder from it. The audit names ids.
+                targets.append({"bot": row["slug"], "repo": settings_admin._config(c, slug)["repo"] or "emp-" + row["slug"]})
+                ids.append(slug)
+            H.event(c, who.actor, "bot.skill_copy_requested", bot, {"skill": body.skill, "to": ids})
             return {"skill": body.skill, "from": bot, "to": targets}
         return mutate(request, body, work)

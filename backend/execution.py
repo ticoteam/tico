@@ -2994,6 +2994,8 @@ class Execution:
         from .shared_bots import follow
         subscription_context = context(c)
         held_bots = set(body.busy_bots or ()) | busy_bots
+        # The runner may name its bot by id or slug, as everywhere a bot is named from outside.
+        only = (H.resolve_bot(c, body.bot) or {}).get("id", body.bot) if body.bot is not None else None
         bots = []
         # A selected-job recheck must not classify unrelated queued bots while
         # holding the writer. Resolve its current bot, state and hold here.
@@ -3003,7 +3005,7 @@ class Execution:
                              "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
                              f"AND {queued}",
-                             (who.runner_id, body.bot, body.bot, *((job_id,) if job_id is not None else ()))).fetchall():
+                             (who.runner_id, only, only, *((job_id,) if job_id is not None else ()))).fetchall():
             bot = row["bot"]
             if failed is not None and bot in failed.bots:
                 continue            # its check raised earlier in this claim: passed over for the rest of it

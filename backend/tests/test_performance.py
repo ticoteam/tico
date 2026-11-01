@@ -128,8 +128,10 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
     set_access(api, see={"teams": ["legal", "sales"]}, read={"teams": ["legal"]}, write={"teams": ["legal"]})
     start = (int(time.time()) // 60 - 12) * 60
     with api.app.state.store.transaction() as c:               # the Legal bot's turn ran on this computer
-        c.execute("UPDATE attempts SET bot=replace(bot,'ops','counsel'),created=? WHERE id=?", (P._iso(start - 60), attempt["id"]))
-        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,'bot:counsel','legal-model-x')", (attempt["id"],))
+        counsel = H.resolve_bot(c, "counsel")["id"]
+        c.execute("UPDATE attempts SET bot=?,created=? WHERE id=?", (counsel, P._iso(start - 60), attempt["id"]))
+        c.execute("INSERT OR REPLACE INTO turns(id,bot,model) VALUES(?,?,'legal-model-x')",
+                  (attempt["id"], "bot:" + counsel))
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     cara = get(api, f"computers/{rid}/performance?hours=1", token="cara-test")
     assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["attempt"] == attempt["id"]

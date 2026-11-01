@@ -40,42 +40,65 @@ def company(environment):
                                 "reports_to": boss} for slug, (template, boss) in TEAM.items()})
     build_team(api)
     # The team builder put the Heads and their reports in the Heads' department (Sales); the owner has a group too.
-    assert {g["id"]: g["bots"] for g in api.get("/api/v2/groups", headers=signed_in()).json()} == \
-        {"sales": ["eng-lead", "sales-lead", "support"]}
+    names = labels(api)
+    assert {g["id"]: sorted(names.get(bot, bot) for bot in g["bots"])
+            for g in api.get("/api/v2/groups", headers=signed_in()).json()} == {"sales": ["eng-lead", "sales-lead", "support"]}
     home = api.post("/api/v2/groups", json={"name": "Home", "add": {"people": ["morgan"], "bots": ["scribe"]}},
                     headers=signed_in())
     assert home.status_code == 200, home.text
     return api
 
 
+def labels(api):
+    """Bot id to slug. The chart, the groups and the stored `reports_to` hold ids; these tests compare the slugs people
+    see, so every reference read here is turned into its slug."""
+    with api.app.state.store.read() as c:
+        return {r["id"]: r["slug"] for r in c.execute("SELECT id,slug FROM bots")}
+
+
+def as_slug(names, ref):
+    """A reference (`b:<id>`, a bare bot id, or anything else) with the bot's slug in place of its id."""
+    if ref.startswith("b:"):
+        return "b:" + names.get(ref[2:], ref[2:])
+    return names.get(ref, ref)
+
+
 def chart(api, headers=None):
     view = api.get("/api/v2/org", headers=headers or signed_in()).json()
-    return {b["id"]: (b["org_parent"], b["reports_to"], b["display_name"]) for b in view["bots"]}
+    names = labels(api)
+    return {names.get(b["id"], b["id"]): (as_slug(names, b["org_parent"]), as_slug(names, b["reports_to"] or ""),
+                                          b["display_name"]) for b in view["bots"]}
 
 
 def groups(api, path="/api/v2/org"):
-    return {g["id"]: g["org_parent"] for g in api.get(path, headers=signed_in()).json()["org_groups"]}
+    names = labels(api)
+    return {g["id"]: as_slug(names, g["org_parent"]) for g in api.get(path, headers=signed_in()).json()["org_groups"]}
 
 
 def employees(api):
-    return {e["name"]: (e["org_parent"], e["display_name"]) for e in api.get("/api/employees", headers=signed_in()).json()}
+    names = labels(api)
+    return {e["name"]: (as_slug(names, e["org_parent"]), e["display_name"])
+            for e in api.get("/api/employees", headers=signed_in()).json()}
 
 
 def stored(api):
+    names = labels(api)
     with api.app.state.store.read() as c:
-        reports = {r["bot"]: r["reports_to"] for r in c.execute("SELECT bot,reports_to FROM bot_config")}
-        names = {r["slug"]: r["display_name"] for r in c.execute("SELECT slug,display_name FROM bots")}
-    return reports, names
+        reports = {names.get(r["bot"], r["bot"]): as_slug(names, r["reports_to"] or "")
+                   for r in c.execute("SELECT bot,reports_to FROM bot_config")}
+        display = {r["slug"]: r["display_name"] for r in c.execute("SELECT slug,display_name FROM bots")}
+    return reports, display
 
 
 def as_bot(api, slug):
     """The bot itself, as an agent credential (the way backend/tests/test_health.py signs one in)."""
     token = slug + "-test"
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        bot_id = (H.resolve_bot(c, slug) or {}).get("id", slug)
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot_id,))
         c.execute("INSERT OR IGNORE INTO agents(bot,harness,token_hash,created,created_by) "
-                  "VALUES(?,'hermes',?,?,'human:morgan')", (slug, "x-" + slug, H.now()))
-    api.app.state.store.settings.test_identities[token] = Identity("bot:" + slug, "bot", agent="hermes")
+                  "VALUES(?,'hermes',?,?,'human:morgan')", (bot_id, "x-" + bot_id, H.now()))
+    api.app.state.store.settings.test_identities[token] = Identity(H.bot_actor(bot_id), "bot", agent="hermes")
     return {"Authorization": "Bearer " + token, "Idempotency-Key": str(uuid.uuid4())}
 
 
@@ -120,10 +143,12 @@ def test_the_strategy_bot_gains_no_access(environment):
     access says."""
     api = company(environment)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE bot_config SET access_json=? WHERE bot='eng-lead'",
-                  ('{"see":{"everyone":true},"read":{"people":["morgan"]},"write":{"people":["morgan"]}}',))
+        c.execute("UPDATE bot_config SET access_json=? WHERE bot=?",
+                  ('{"see":{"everyone":true},"read":{"people":["morgan"]},"write":{"people":["morgan"]}}',
+                   H.resolve_bot(c, "eng-lead")["id"]))
     after = api.get("/api/v2/org", headers=as_bot(api, "goal-manager")).json()
-    access = {b["id"]: b["access"] for b in after["bots"]}
+    names = labels(api)
+    access = {names.get(b["id"], b["id"]): b["access"] for b in after["bots"]}
     assert access["eng-lead"]["write"] is False and access["eng-lead"]["read"] is False
 
 
@@ -234,10 +259,12 @@ def drawn(api, headers):
     parents beside them): the org chart API, the employee rows, the people chart."""
     org = api.get("/api/v2/org", headers=headers).json()
     humans = api.get("/api/humans", headers=headers).json()
-    return {"org": {b["id"]: (b["org_parent"], b["reports_to"]) for b in org["bots"]},
+    names = labels(api)
+    return {"org": {names.get(b["id"], b["id"]): (as_slug(names, b["org_parent"]), as_slug(names, b["reports_to"] or ""))
+                    for b in org["bots"]},
             "org_groups": {g["id"]: g["org_parent"] for g in org["org_groups"]},
             "org_seats": {s["id"]: s["org_parent"] for s in org["seats"]},
-            "employees": {name: (e["org_parent"], e.get("chart_hidden", False))
+            "employees": {name: (as_slug(names, e["org_parent"]), e.get("chart_hidden", False))
                           for name, e in rows(api, headers).items()},
             "humans_groups": {g["id"]: g["org_parent"] for g in humans["org_groups"]},
             "humans_seats": {s["id"]: s["org_parent"] for s in humans["seats"]},
@@ -271,9 +298,11 @@ def test_a_person_hides_the_strategy_bot_from_their_own_chart(environment):
     from backend import people as P
     with api.app.state.store.read() as c:
         from backend import views
-        archived = {r["slug"] for r in H.bots(c) if r.get("state") == "archived"}
+        archived = {r["id"] for r in H.bots(c) if r.get("state") == "archived"}
         unmoved = P.org_view(views.roster(c), views.entries(c), archived)
-    expected = {b["id"]: b["org_parent"] for b in unmoved["bots"] if b["id"] != "goal-manager"}
+    names = labels(api)
+    expected = {names.get(b["id"], b["id"]): as_slug(names, b["org_parent"]) for b in unmoved["bots"]
+                if names.get(b["id"]) != "goal-manager"}
     assert "goal-manager" not in mine["org"]
     assert {slug: parent for slug, (parent, _) in mine["org"].items()} == expected
     assert not any(parent == "b:goal-manager" for parent, _ in mine["org"].values())

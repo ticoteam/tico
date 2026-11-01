@@ -17,6 +17,11 @@ def poll(api, pairing, secret=None):
                    headers={"X-Pairing-Secret": secret if secret is not None else pairing["secret"]})
 
 
+def bot_id(api, slug="scout"):
+    with api.app.state.store.read() as c:
+        return H.resolve_bot(c, slug)["id"]
+
+
 def approve(api, code, bot="scout", token="ana-test"):
     return api.post("/api/v2/agents/pairings/approve", json={"code": code, "bot": bot}, headers=headers(token))
 
@@ -36,20 +41,21 @@ def test_the_pairing_lifecycle_hands_the_credential_over_once(api):
     # Approval needs a person's sign-in, and a code nobody asked for is a plain 404.
     assert api.post("/api/v2/agents/pairings/approve", json={"code": code, "bot": "scout"}).status_code == 401
     assert approve(api, "ZZZZ-ZZZZ").status_code == 404
+    scout = bot_id(api)
     done = approve(api, code.lower().replace("-", " "))
     assert done.status_code == 200, done.text
-    assert done.json() == {"bot": "scout", "profile": "scout", "host": "mac-mini"}
+    assert done.json() == {"bot": scout, "profile": "scout", "host": "mac-mini"}
     # A code is single use.
     assert approve(api, code).status_code == 404
     with api.app.state.store.read() as c:
         row = c.execute("SELECT * FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone()
         assert pairing["secret"] not in tuple(row) and code.replace("-", "") not in tuple(row)
     first = poll(api, pairing).json()
-    assert first["state"] == "approved" and first["bot"] == "scout" and first["token"].startswith("tico-agent-")
+    assert first["state"] == "approved" and first["bot"] == scout and first["token"].startswith("tico-agent-")
     assert first["url"] == api.app.state.store.settings.runner_url
-    assert get(api, "me", token=first["token"])["actor"] == "bot:scout"
+    assert get(api, "me", token=first["token"])["actor"] == H.bot_actor(scout)
     assert poll(api, pairing).json()["token"] == first["token"]  # installation can retry before a heartbeat
-    assert beat(api, first["token"])["bot"] == "scout"
+    assert beat(api, first["token"])["bot"] == scout
     assert next(bot for bot in get(api, "bots") if bot["slug"] == "scout")["state"] == "active"
     # The token is returned exactly once, and is gone from the row.
     assert poll(api, pairing).json() == {"state": "claimed"}
@@ -60,7 +66,7 @@ def test_the_pairing_lifecycle_hands_the_credential_over_once(api):
     assert approve(api, again["code"]).status_code == 200
     second = poll(api, again).json()["token"]
     assert api.get("/api/v2/me", headers=headers(first["token"])).status_code == 401
-    assert get(api, "me", token=second)["actor"] == "bot:scout"
+    assert get(api, "me", token=second)["actor"] == H.bot_actor(scout)
 
 
 def test_a_pairing_expires_and_can_be_declined(api):
@@ -134,8 +140,9 @@ def test_restore_brings_an_archived_bot_back_to_what_it_was(api):
     assert next(b for b in get(api, "bots") if b["slug"] == "scout")["state"] == "active"
     # A bot that was archived before the status was recorded comes back planned.
     post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
+    scout = bot_id(api)
     with api.app.state.store.transaction() as c:
-        c.execute("UPDATE events SET detail_json='{}' WHERE action='bot.archived' AND target='scout'")
+        c.execute("UPDATE events SET detail_json='{}' WHERE action='bot.archived' AND target=?", (scout,))
     assert post(api, "bots/scout/restore", {})["status"] == "planned"
     # Register says where an archived slug went.
     post(api, "bots/scout/archive", {"expected_revision": get(api, "bots/scout/access")["revision"]})
@@ -189,7 +196,7 @@ def test_pairing_preview_does_not_rotate_a_working_credential(api):
     shown = get(api, "agents/pairing-preview?code=" + made["code"])
     assert shown["profile"] == "scout" and shown["host"] == "mac-mini" and shown["harness"] == "hermes"
     assert "token" not in shown
-    assert get(api, "me", token=token)["actor"] == "bot:scout"
+    assert get(api, "me", token=token)["actor"] == H.bot_actor(bot_id(api))
     assert poll(api, made).json()["state"] == "pending"
 
 
@@ -200,7 +207,7 @@ def test_the_held_credential_is_sealed_with_the_profiles_secret_and_never_in_the
     with api.app.state.store.read() as c:
         row = dict(c.execute("SELECT * FROM agent_pairings WHERE id=?", (pairing["pairing_id"],)).fetchone())
     token = poll(api, pairing).json()["token"]
-    assert token.startswith("tico-agent-") and get(api, "me", token=token)["actor"] == "bot:scout"
+    assert token.startswith("tico-agent-") and get(api, "me", token=token)["actor"] == H.bot_actor(bot_id(api))
     # The row holds a sealed form only, and nothing in it is the token or the secret.
     flat = repr(row)
     assert row["token"] and token not in flat and "tico-agent-" not in flat and pairing["secret"] not in flat

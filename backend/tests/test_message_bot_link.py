@@ -4,7 +4,7 @@ That link is what lets the bot's runs ask a computer for a mail token (routines.
 the bot is made, and once at start for bots made before that when there is no doubt whose they are.
 """
 from backend import message_bots, routines
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, post  # noqa: F401  (fixture)
 
 MODEL = {"model": "gpt-6.1-sol", "effort": "high", "harness": None, "runner_id": None}
@@ -27,10 +27,12 @@ def add_from_template(api, slug, instructions, token="ana-test"):
 
 def test_adding_the_template_in_settings_links_the_person_the_mailbox_line_names(api):
     add_from_template(api, "ben-inbox", "# Inbox\n\nMailbox: ben@acme.example\n")
-    assert inbox_bot_of(api, "ben") == "ben-inbox" and inbox_bot_of(api, "ana") is None
-    assert mailbox_of(api, "ben-inbox") == "ben@acme.example"
     with api.app.state.store.read() as c:
-        assert routines.token_mailboxes(c, "ben-inbox")[0] == "ben@acme.example"
+        bot = H.resolve_bot(c, "ben-inbox")["id"]                 # the roster and the bot's config name the bot by id
+    assert inbox_bot_of(api, "ben") == bot and inbox_bot_of(api, "ana") is None
+    assert mailbox_of(api, bot) == "ben@acme.example"
+    with api.app.state.store.read() as c:
+        assert routines.token_mailboxes(c, bot)[0] == "ben@acme.example"
 
 
 # ------------------------------------------------------------------ start-up backfill

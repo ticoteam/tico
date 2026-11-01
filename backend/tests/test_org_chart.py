@@ -3,7 +3,7 @@ the one rule is that you may edit yourself and whatever reports up to you (backe
 `manages`, Ana 2026-09-18)."""
 import json
 
-from backend.store import encode
+from backend.store import H, encode
 from backend.tests.test_api import api, get, post  # noqa: F401
 
 
@@ -14,6 +14,7 @@ def roster(api, people):
 
 def revision(api, bot):
     with api.app.state.store.read() as c:
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return c.execute("SELECT revision FROM bot_config WHERE bot=?", (bot,)).fetchone()[0]
 
 

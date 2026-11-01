@@ -950,7 +950,7 @@ ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
 """
 
 
-# Stable bot ids (migrate_bot_ids): the table rebuild runs in Python, then this script adds the principals table and the
+# Stable bot ids (upgrade): the table rebuild runs in Python, then this script adds the principals table and the
 # triggers. A bot's id never changes and its slug is a label that may; no slug may name another bot's id, so a lookup
 # by id or slug is never ambiguous. A principal is an actor string's identity: `human:<id>`, `bot:<bot id>`, a system
 # actor. Its rows are kept with their humans and bots, and a deleted one keeps its row with deleted_at set.
@@ -980,7 +980,7 @@ CREATE TRIGGER IF NOT EXISTS principals_bot_delete AFTER DELETE ON bots BEGIN
 # Actors the code writes that are not people, bots or services. Each gets a `system` principal on upgrade.
 SYSTEM_ACTORS = (KEEPER, "system:company", "system:deploy", "system:finance", "system:gateway", "system:hosting",
                  "system:storage")
-# The step that rebuilds bots and its slug references (migrate_bot_ids). Its index in MIGRATIONS is the last one.
+# The step that rebuilds bots and its slug references (upgrade). Its index in MIGRATIONS is the last one.
 BOT_IDS_VERSION = 71
 
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
@@ -1402,11 +1402,17 @@ def _rebuild(conn, table, create, columns, copied):
         conn.execute(statement)
 
 
-def migrate_bot_ids(conn):
-    """Stable bot ids (BOT_IDS_SCHEMA). `bots` gains `id`, the primary key, and `slug` becomes a unique label. For every
-    existing bot id = slug, which freezes the current name as its id: no stored actor string, foreign key value,
-    history row or queued payload changes. Every table that referenced bots(slug) references bots(id) instead.
-    Runs inside the migration's transaction, with foreign keys off (migrate sets that before BEGIN)."""
+def upgrade(conn):
+    """The upgrade to stable bot ids (BOT_IDS_SCHEMA): the one entry point for this step, called by the migration
+    runner at BOT_IDS_VERSION.
+
+    `bots` gains `id`, the primary key, and `slug` becomes a unique label. For every existing bot id = slug, which
+    freezes the current name as its id: no stored actor string, foreign key value, history row or queued payload
+    changes. Every table that referenced bots(slug) references bots(id) instead, and the principals table is filled.
+
+    Contract: it does not BEGIN or COMMIT, so the caller owns the transaction and a failure rolls all of it back. It
+    expects foreign keys to be OFF (SQLite ignores that pragma inside a transaction, so the caller sets it before
+    BEGIN). It is idempotent: run on a database it has already upgraded, every step is a no-op."""
     prior = conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
     conn.execute("PRAGMA legacy_alter_table=ON")
     try:
@@ -1467,7 +1473,7 @@ def _run_migration(conn, i):
             _apply(conn, MIGRATIONS[i])
             RT.backfill(conn)
         elif i == BOT_IDS_VERSION:
-            migrate_bot_ids(conn)
+            upgrade(conn)
         else:
             _apply(conn, MIGRATIONS[i])
         conn.execute(f"PRAGMA user_version={i + 1}")

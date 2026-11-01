@@ -92,20 +92,22 @@ def test_someone_who_has_left_lends_no_authority(api, botops):
     assert register(api, attempt, "after-leaving").status_code == 403
 
 
-def weekly(bot):
-    """A bot's weekly report: what a routine was, as an automation the bot owns."""
-    return {"name": "Report", "owner": "bot:" + bot, "trigger": {"type": "schedule", "cron": "0 9 * * 1"},
+def weekly(api, bot):
+    """A bot's weekly report: what a routine was, as an automation the bot owns. Automations name a bot by its id."""
+    with api.app.state.store.read() as c:
+        bot = H.resolve_bot(c, bot)["id"]
+    return {"name": "Report", "owner": H.bot_actor(bot), "trigger": {"type": "schedule", "cron": "0 9 * * 1"},
             "steps": [{"id": "report", "type": "bot_turn", "bot": bot, "prompt": "Weekly"}]}
 
 
 def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages_the_bot(api, botops):
     attempt = turn(api, botops)                                         # Cara asked; ops is not hers
-    assert call(api, "post", "automations", attempt["token"], weekly("ops")).status_code == 403
+    assert call(api, "post", "automations", attempt["token"], weekly(api, "ops")).status_code == 403
     assert call(api, "post", "bots/ops/updates", attempt["token"], {"daily": False, "weekly": False}).status_code == 403
-    made = call(api, "post", "automations", "ana-test", weekly("ops")).json()["id"]
+    made = call(api, "post", "automations", "ana-test", weekly(api, "ops")).json()["id"]
     assert call(api, "patch", f"automations/{made}", attempt["token"], {"name": "Hijacked"}).status_code == 403
     register(api, attempt, "jira-manager")                              # her own bot, registered in this turn
-    assert call(api, "post", "automations", attempt["token"], weekly("jira-manager")).status_code == 200
+    assert call(api, "post", "automations", attempt["token"], weekly(api, "jira-manager")).status_code == 200
     with api.app.state.store.transaction() as c:
         H.quarantine(c, "ops", "refused task write")
     clear = "bots/ops/quarantine/clear"
@@ -118,8 +120,8 @@ def test_botops_changes_automations_and_quarantines_only_as_a_person_who_manages
     with api.app.state.store.transaction() as c:
         H.task_create(c, "human:ana", "Build the bot", "Please.", "bot:botops")
     setup = claim(api, botops, "botops")
-    assert call(api, "post", "automations", setup["token"], weekly("built")).status_code == 200
-    assert call(api, "post", "automations", setup["token"], weekly("ops")).status_code == 200
+    assert call(api, "post", "automations", setup["token"], weekly(api, "built")).status_code == 200
+    assert call(api, "post", "automations", setup["token"], weekly(api, "ops")).status_code == 200
 
 
 # ------------------------------------------------------------------ members' bots and computers
@@ -133,7 +135,7 @@ def test_a_members_bot_runs_on_their_own_or_an_admin_opened_computer_and_stays_t
     assert call(api, "post", "bots/dees/placement", "dee-test", {**place, "expected_revision": 1}).status_code == 403
     opened = runner(api, label="Open Mac")                                              # a new computer takes them
     with api.app.state.store.read() as c:
-        revision = c.execute("SELECT revision FROM bot_config WHERE bot='dees'").fetchone()[0]
+        revision = c.execute("SELECT revision FROM bot_config WHERE bot=?", (H.resolve_bot(c, "dees")["id"],)).fetchone()[0]
     moved = call(api, "post", "bots/dees/placement", "dee-test",
                  {"runner_id": opened["runner_id"], "expected_generation": 0, "expected_revision": revision})
     assert moved.status_code == 200 and moved.json()["operator"] == "dee"                   # not the computer's operator
@@ -169,7 +171,7 @@ def test_a_member_cannot_take_a_company_bot_name_and_an_admin_cannot_edit_a_buil
         revision = c.execute("SELECT revision FROM bot_config WHERE bot='botops'").fetchone()[0]
     edit = {"description": "steered", "expected_revision": revision}
     assert call(api, "post", "bots/botops/definition", "ben-test", edit).status_code == 403
-    assert call(api, "post", "automations", "ben-test", weekly("botops")).status_code == 403
+    assert call(api, "post", "automations", "ben-test", weekly(api, "botops")).status_code == 403
     assert call(api, "post", "bots/botops/definition", "ana-test", edit).status_code == 200
     assert call(api, "post", "bots/ops/goals", "ben-test", {"goals": "An ordinary bot is an Admin's"}).status_code == 200
 
