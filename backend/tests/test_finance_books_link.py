@@ -253,3 +253,171 @@ def test_sources_show_a_books_connection_with_its_mirror_state_and_outbox_counts
         SX.set_connection_status(c, cid, "reconnect", "reconnect_required", AT)
     accounting = next(g for g in get(api, "finance/sources")["groups"] if g["group"] == "accounting")
     assert [(r["mirror"], r["outbox"]["pending"]) for r in accounting["rows"]] == [("reconnect", 1)]
+
+
+# ------------------------------------------------------------------------------------------------ HQ's answers by code
+FAR = "2030-01-01T00:00:00Z"                  # a token not due for a refresh in any test
+
+
+class Wire:
+    """HQ's answers at the HTTP layer, so books_link._call reads them as it does in production: each endpoint
+    answers from its list in order, as (status, body). An error status raises as hook_relay.Link.call does, with
+    HQ's error code."""
+
+    def __init__(self, **answers: list[tuple[int, dict[str, Any]]]) -> None:
+        self.answers = answers
+        self.calls: list[tuple[str, dict[str, Any]]] = []
+
+    def call(self, method: str, path: str, body: Any = None, *, area: str = "") -> dict[str, Any]:
+        self.calls.append((path, dict(body or {})))
+        status, answer = self.answers[path.rsplit("/", 1)[1]].pop(0)
+        if status == 401:
+            raise hook_relay.Stop()
+        if status >= 400:
+            error = answer.get("error")
+            raise hook_relay.Failed(error if isinstance(error, str) else f"http_{status}", status, answer)
+        return dict(answer)
+
+
+def ok(answer: dict[str, Any]) -> tuple[int, dict[str, Any]]:
+    return 200, answer
+
+
+def err(status: int, code: str) -> tuple[int, dict[str, Any]]:
+    return status, {"error": code}
+
+
+def wired(monkeypatch: pytest.MonkeyPatch, **answers: list[tuple[int, dict[str, Any]]]) -> Wire:
+    wire = Wire(**answers)
+    monkeypatch.setattr(books_link, "root", lambda link: wire)
+    return wire
+
+
+def xero_tokens(access: str, refresh: str) -> dict[str, Any]:
+    return {**tokens(access, refresh, FAR), "realm_id": None, "tenant_id": "ten-1"}
+
+
+def _claimed_xero(books: Any, vault: object) -> str:
+    return books_link.connect_claim(books, vault, LINK, provider="xero", company_id=COMPANY, claim_id="clm_x",
+                                    name="Xero", by=OWNER, now=AT)
+
+
+def test_hq_codes_decide_what_a_refusal_means_for_the_install(monkeypatch):
+    wired(monkeypatch, disconnect=[err(409, "access_expired"), err(502, "revoke_failed")],
+          claim=[err(409, "connected_elsewhere")])
+    with pytest.raises(books_link.BrokerFailed) as expired:
+        books_link.revoke(LINK, "xero", COMPANY, "ref-1", "acc-1")
+    assert expired.value.code == "access_expired" and not isinstance(expired.value, books_link.ReconnectRequired)
+    with pytest.raises(books_link.BrokerFailed) as failed:
+        books_link.revoke(LINK, "xero", COMPANY, "ref-1", "acc-1")
+    assert failed.value.code == "revoke_failed"
+    with pytest.raises(books_link.BrokerFailed) as elsewhere:
+        books_link.claim(LINK, "xero", COMPANY, "clm_x")
+    assert elsewhere.value.code == "connected_elsewhere" and not isinstance(elsewhere.value,
+                                                                              books_link.ReconnectRequired)
+
+
+def test_a_xero_disconnect_sends_the_install_access_token_and_drops_its_own_connection(books, monkeypatch):
+    vault = T._VAULT[0]
+    wire = wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1"))],
+                 disconnect=[ok({"ok": True, "disconnected": True})])
+    cid = _claimed_xero(books, vault)
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert wire.calls[-1] == ("oauth/xero/disconnect", {"company_id": COMPANY, "refresh_token": "ref-1",
+                                                       "access_token": "acc-1"})
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "disconnected"
+
+
+def test_a_xero_disconnect_refused_as_access_expired_refreshes_once_and_asks_again(books, monkeypatch):
+    vault = T._VAULT[0]
+    wire = wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1"))],
+                 disconnect=[err(409, "access_expired"), ok({"ok": True, "disconnected": True})],
+                 refresh=[ok(xero_tokens("acc-2", "ref-2"))])
+    cid = _claimed_xero(books, vault)
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    sent = [body for path, body in wire.calls if path == "oauth/xero/disconnect"]
+    assert [(body["refresh_token"], body["access_token"]) for body in sent] == [("ref-1", "acc-1"), ("ref-2", "acc-2")]
+    assert [path for path, _ in wire.calls].count("oauth/xero/refresh") == 1
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "disconnected"
+
+
+def test_a_xero_disconnect_still_refused_as_access_expired_after_a_refresh_keeps_the_connection(books, monkeypatch):
+    vault = T._VAULT[0]
+    wire = wired(monkeypatch, claim=[ok(xero_tokens("acc-1", "ref-1"))],
+                 disconnect=[err(409, "access_expired"), err(409, "access_expired")],
+                 refresh=[ok(xero_tokens("acc-2", "ref-2"))])
+    cid = _claimed_xero(books, vault)
+    with pytest.raises(books_link.BrokerFailed) as refused:
+        books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert refused.value.code == "access_expired"
+    assert [path for path, _ in wire.calls].count("oauth/xero/disconnect") == 2
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_secret(c, vault, str(SX.books_settings(c, cid)["refresh"])) == "ref-2"
+
+
+def test_a_disconnect_HQ_cannot_finish_keeps_the_connection_and_a_second_try_takes_it_off(books, monkeypatch):
+    vault = T._VAULT[0]
+    wire = wired(monkeypatch, claim=[ok(tokens("acc-1", "ref-1"))],
+                 disconnect=[err(502, "revoke_failed"), ok({"ok": True, "disconnected": True})])
+    cid = _claimed(books, vault)
+    with pytest.raises(books_link.BrokerFailed) as failed:
+        books_link.drop(books, vault, LINK, cid, by=OWNER)
+    assert failed.value.code == "revoke_failed"
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "active"
+        assert T.credential_exists(c, str(SX.books_settings(c, cid)["refresh"]))
+    books_link.drop(books, vault, LINK, cid, by=OWNER)
+    with books.read() as c:
+        assert SX.books_status(c, cid) == "disconnected"
+    sent = [body for path, body in wire.calls if path == "oauth/quickbooks/disconnect"]
+    assert sent == [{"company_id": COMPANY, "refresh_token": "ref-1"}] * 2       # QuickBooks is sent no access token
+
+
+def test_a_consent_HQ_refuses_as_connected_elsewhere_makes_no_connection_and_says_why(books, monkeypatch):
+    wired(monkeypatch, claim=[err(409, "connected_elsewhere")])
+    with pytest.raises(books_link.BrokerFailed) as refused:
+        _claimed_xero(books, T._VAULT[0])
+    assert refused.value.code == "connected_elsewhere" and not isinstance(refused.value, books_link.ReconnectRequired)
+    with books.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_connections").fetchone()[0] == 0
+
+
+@pytest.fixture
+def wired_api(api, monkeypatch):
+    """This server as the owner's, linked to a fictional company; HQ's answers are wired per test with `wired`."""
+    store = api.app.state.store
+    with store.transaction() as c:
+        FA.ensure_setup(c, store.settings.owner_email)
+    monkeypatch.setattr(company_server, "view", lambda c: {"company": {"id": COMPANY, "name": "Acme", "slug": "acme"}})
+    monkeypatch.setattr(hook_relay, "link_of", lambda c, vault, settings: LINK)
+    return api
+
+
+def test_a_xero_consent_another_install_holds_says_so_on_the_return(wired_api, monkeypatch):
+    wire = wired(monkeypatch, connect=[ok({"url": CONSENT, "expires_in": 900})],
+                 claim=[err(409, "connected_elsewhere")])
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    r = wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_5", headers=headers(),
+                      follow_redirects=False)
+    assert r.status_code == 302
+    assert result_of(r.headers["location"]) == {"books": ["error"], "reason": ["connected_elsewhere"]}
+    with wired_api.app.state.store.read() as c:
+        assert c.execute("SELECT count(*) FROM fin_connections").fetchone()[0] == 0
+
+
+def test_a_disconnect_HQ_cannot_finish_answers_a_retryable_reason_and_keeps_the_connection(wired_api, monkeypatch):
+    store = wired_api.app.state.store
+    wire = wired(monkeypatch, connect=[ok({"url": CONSENT, "expires_in": 900})],
+                 claim=[ok(xero_tokens("acc-1", "ref-1"))], disconnect=[err(502, "revoke_failed")])
+    wired_api.post("/api/v2/finance/books/connect", json={"provider": "xero"}, headers=headers())
+    wired_api.get(return_path(wired_api, wire) + "?finance=connected&claim=clm_6", headers=headers(),
+                  follow_redirects=False)
+    with store.read() as c:
+        cid = str(SX.books_connections(c)[0][0])
+    r = wired_api.post(f"/api/v2/finance/books/{cid}/disconnect", headers=headers())
+    assert r.status_code == 502 and "revoke_failed" in r.text and "disconnect again" in r.text
+    with store.read() as c:
+        assert SX.books_status(c, cid) == "active"

@@ -6,9 +6,15 @@ Tico's credential vault. Only ids of those vault rows live in the connection's s
 HQ contract (the paths sit under the Gateway's API root, so `<root>/finance/oauth/...`):
   POST .../connect   {company_id, user_id, return_to} -> 201 {url, expires_in}
   POST .../claim     {company_id, claim}              -> {access_token, refresh_token, expires_at,
-                                                          refresh_expires_at|null, realm_id|null, tenant_id|null}
-  POST .../refresh   {company_id, refresh_token}      -> the same shape; 409 reconnect_required when it cannot be
-  POST .../disconnect {company_id, refresh_token}     -> {ok, disconnected}
+                                                          refresh_expires_at|null, realm_id|null, tenant_id|null};
+                                                          409 connected_elsewhere: another install holds that
+                                                          realm or tenant
+  POST .../refresh   {company_id, refresh_token}      -> the same shape; 409 reconnect_required when the grant is gone
+  POST .../disconnect {company_id, refresh_token[, access_token]} -> {ok, disconnected}. Xero also takes the install's
+                                                          current access_token and deletes only this company's
+                                                          connection. 409 access_expired: refresh, then disconnect
+                                                          once more. 502 revoke_failed: try later; the connection
+                                                          is kept.
 
 A refresh runs outside transactions, one at a time per connection, and the rotated pair is saved before the new access
 token is used (QuickBooks rotates refresh tokens). Tokens are never logged or returned by repr."""
@@ -34,6 +40,8 @@ FLOWS = "finance-books-flows"         # the consents this install started, by fl
 FLOW_S = 1800                         # seconds a started consent may wait for its return
 LABEL = {"quickbooks": "QuickBooks", "xero": "Xero"}
 REASON = re.compile(r"[a-z_]{1,40}")  # HQ's reason, kept only when it is a plain code
+# HQ answers these by code, and each is a reason the caller acts on or shows (a 409 is not always a reconnect).
+REASONS = ("access_expired", "connected_elsewhere", "revoke_failed")
 _locks: dict[str, threading.Lock] = {}
 _guard = threading.Lock()
 
@@ -101,6 +109,8 @@ def _call(link: Link, path: str, body: Mapping[str, object]) -> dict[str, Any]:
     try:
         return root(link).call("POST", path, dict(body), area=AREA)
     except Failed as e:
+        if e.code in REASONS:
+            raise BrokerFailed(e.code) from None
         if e.code == "reconnect_required" or e.status == 409:
             raise ReconnectRequired("reconnect_required") from None
         if e.code == "not_connected" or e.status == 404:
@@ -142,8 +152,13 @@ def refresh(link: Link, provider: str, company_id: str, refresh_token: str) -> T
                          {"company_id": company_id, "refresh_token": refresh_token}))
 
 
-def revoke(link: Link, provider: str, company_id: str, refresh_token: str) -> bool:
-    answer = _call(link, f"oauth/{provider}/disconnect", {"company_id": company_id, "refresh_token": refresh_token})
+def revoke(link: Link, provider: str, company_id: str, refresh_token: str, access_token: str = "") -> bool:
+    """HQ takes the company's connection off the provider. Xero deletes it with the install's current access
+    token, which HQ needs; QuickBooks is sent none."""
+    body: dict[str, object] = {"company_id": company_id, "refresh_token": refresh_token}
+    if access_token:
+        body["access_token"] = access_token
+    answer = _call(link, f"oauth/{provider}/disconnect", body)
     return answer.get("ok") is True
 
 
@@ -303,32 +318,61 @@ def connect_claim(store: Any, vault: object, link: Link, *, provider: str, compa
     raise ReconnectRequired("vault_write_failed")
 
 
-def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, state: _State) -> None:
-    """HQ drops the company's grant. When HQ holds no grant for the pair posted (not_connected), a newer pair the vault
-    holds is tried once; a grant HQ no longer holds has nothing to drop, so the caller may clean up."""
+def _drop_grant(store: Any, vault: object, link: Link, cid: str, provider: str, state: _State) -> None:
+    """HQ drops the company's grant for the pair posted. When HQ holds no grant for it (not_connected), a newer pair the
+    vault holds is tried once; a grant HQ no longer holds has nothing to drop, so the caller may clean up."""
     try:
-        ok = revoke(link, provider, state.company, state.refresh_token)
+        ok = revoke(link, provider, state.company, state.refresh_token, state.access if provider == "xero" else "")
     except NotConnected:
         current = _current(store, vault, cid)
         if not current.refresh_token or current.refresh_token == state.refresh_token:
             return
         try:
-            ok = revoke(link, provider, current.company, current.refresh_token)
+            ok = revoke(link, provider, current.company, current.refresh_token,
+                        current.access if provider == "xero" else "")
         except NotConnected:
             return
     if not ok:
         raise BrokerFailed("disconnect_refused")
 
 
+def _refresh_for_disconnect(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
+    """A fresh pair for a disconnect HQ is asked with, kept in the vault. Unlike a sync's refresh, a grant HQ no longer
+    holds is not marked for a reconnect here: the disconnect goes on and drops it."""
+    with _lock(cid):
+        state = _current(store, vault, cid)
+        if not state.refresh_token:
+            raise ReconnectRequired("no_refresh_token")
+        _keep_rotated(store, cid, _refreshed(store, vault, link, cid, provider, state), provider, now)
+
+
+def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
+    """HQ drops the company's grant. Xero deletes only this company's connection with the install's current
+    access token, so a usable one is refreshed first when there is none or it is due. HQ's access_expired
+    refreshes the pair once and asks again; any other refusal (revoke_failed, disconnect_refused) keeps the
+    connection."""
+    state = _current(store, vault, cid)
+    if provider == "xero" and (not state.access or _due(state.expires_at, now)):
+        _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
+        state = _current(store, vault, cid)
+    for attempt in (1, 2):
+        try:
+            return _drop_grant(store, vault, link, cid, provider, state)
+        except BrokerFailed as e:
+            if e.code != "access_expired" or attempt == 2:
+                raise
+        _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
+        state = _current(store, vault, cid)
+
+
 def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
     """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call keeps everything, so it
     can be run again. HQ answering reconnect_required means its grant is already gone, so only the local rows go."""
-    state = _current(store, vault, cid)
-    if state.refresh_token:
-        try:
-            _revoked(store, vault, link, cid, provider, state)
-        except ReconnectRequired:
-            pass
+    try:
+        if _current(store, vault, cid).refresh_token:
+            _revoked(store, vault, link, cid, provider, now=now)
+    except ReconnectRequired:
+        pass
     with store.transaction() as c:
         books = SX.books_settings(c, cid)
         for key in ("access", "refresh"):
