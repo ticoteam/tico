@@ -1,7 +1,7 @@
 """Purchase orders and estimates (spec §4.4, §4.5). An approved order's unbilled lines hold budget; a bill that
 bills one of its lines takes that part of the hold over; an accepted estimate becomes one invoice draft, once. Each
 planner checks the payload, the asker's view and the document's state; the writes run when the action commits."""
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import Any, cast
 
 from . import budgeting
@@ -123,14 +123,6 @@ def _restore(ctx: Ctx, who: str, line: Any, amount: int) -> None:
                                           "vendor": str(line["vendor_id"])},
                        amount=amount, currency=ctx.book.base_currency, source="purchase_order",
                        source_id=f"{line['po_id']}:{int(line['line_no'])}", expires_at=None, by=who)
-
-
-def restore_lines(ctx: Ctx, who: str, amounts: Mapping[str, int]) -> None:
-    """Order lines a bill billed less of, once the provider has changed it: each gets back the difference."""
-    for po_line_id, amount in amounts.items():
-        line = SP.po_line(ctx.c, po_line_id)
-        if line is not None and amount > 0:
-            _restore(ctx, who, line, amount)
 
 
 def give_back(ctx: Ctx, who: str, bill_id: str, *, posted: bool) -> None:

@@ -724,7 +724,7 @@ def test_a_bill_found_at_a_newer_revision_on_retry_takes_its_order_line_room_whe
                          (line,)).fetchone()[0] == 6_000
 
 
-def test_a_bill_the_provider_bills_for_less_gives_its_order_line_the_difference_back_past_a_full_budget(books):
+def test_a_bill_the_provider_bills_for_less_keeps_its_order_line_billed_until_the_bill_is_deleted(books):
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -743,15 +743,21 @@ def test_a_bill_the_provider_bills_for_less_gives_its_order_line_the_difference_
     with books.read() as c:
         assert c.execute("SELECT amount FROM fin_holds WHERE source='purchase_order' AND status='held' AND "
                          "source_id LIKE ?", (f"{po}:%",)).fetchone()[0] == 6_000
-    # The provider now holds the bill at 2,000: its 2,000 goes back to the line, so the line holds what is left to bill.
+    # The provider now holds the bill at 2,000, but a revision never gives room back: the line still holds 6,000 of
+    # its 10,000 until the bill is deleted.
     fake.changes = [M.Document(M.Ext("Bill", "88", "2"), party="Vendor:9", number="B-88", day="2026-10-05", due="",
                                total=2_000, lines=(M.EntryLine("Account:2", 2_000, description="seats", key="L1"),))]
     assert _drain(books, fake, cid, now=LATER3) == []
     with books.read() as c:
         assert c.execute("SELECT amount FROM fin_holds WHERE source='purchase_order' AND status='held' AND "
-                         "source_id LIKE ?", (f"{po}:%",)).fetchone()[0] == 8_000
+                         "source_id LIKE ?", (f"{po}:%",)).fetchone()[0] == 6_000
+        assert SP.billed(c, line) == 4_000
         assert c.execute("SELECT COALESCE(SUM(l.amount), 0) FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
                          "WHERE b.number='B-88'").fetchone()[0] == 2_000
+    fake.changes = [M.Ext("Bill", "88", "3", True)]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert SP.line_room(c, line) == 10_000
 
 
 def test_a_line_tagged_to_a_site_kept_in_tico_keeps_the_site_when_the_provider_revises_the_bill(books):
@@ -1106,6 +1112,150 @@ def test_a_bill_recovered_from_the_feed_keeps_each_line_by_its_provider_id_when_
         assert [tuple(r) for r in c.execute("SELECT l.po_line_id, l.external_line, l.amount FROM fin_bill_lines l "
                                             "JOIN fin_bills b ON b.id=l.bill_id WHERE b.number='B-106' "
                                             "ORDER BY l.amount")] == [(second, "L2", 4_000), (first, "L1", 6_000)]
+
+
+def test_a_matched_revision_after_a_split_keeps_the_order_line_billed_that_the_split_kept(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, 6_000, "B-108"),
+                      key="bill.create:kept-1", by=OWNER, at=AT)
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="108", revision="0", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2, passes=1) == []
+    split = (M.EntryLine("Account:2", 3_000, description="seats", key="A"),
+             M.EntryLine("Account:2", 3_000, description="seats", key="B"))
+    fake.changes = [M.Document(M.Ext("Bill", "108", "1"), party="Vendor:9", number="B-108", day="2026-10-05", due="",
+                               total=6_000, lines=split)]
+    assert _drain(books, fake, cid, now=LATER3, passes=1) == []
+    # The next revision names the same two lines and changes nothing: the order line keeps the 6,000 it billed.
+    fake.changes = [M.Document(M.Ext("Bill", "108", "2"), party="Vendor:9", number="B-108", day="2026-10-05", due="",
+                               total=6_000, lines=split)]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert SP.billed(c, line) == 6_000
+        assert SP.line_room(c, line) == 4_000
+
+
+def test_a_later_revision_that_bills_the_order_line_again_carries_what_the_bill_kept_into_the_new_link(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        made = act(c, OWNER, "budget_create", {"name": "Software", "account_id": _local(c, "Account:2", "fin_accounts"),
+                                               "amount": 10_000, "at_limit": "decline", "parent_id": None})
+        assert made.status == "committed", made
+    _, line = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=_bill_body(c, line, 6_000, "B-109"),
+                      key="bill.create:carry-1", by=OWNER, at=AT)
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="109", revision="0", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER2, passes=1) == []
+    split = (M.EntryLine("Account:2", 3_000, description="seats", key="A"),
+             M.EntryLine("Account:2", 3_000, description="seats", key="B"))
+    fake.changes = [M.Document(M.Ext("Bill", "109", "1"), party="Vendor:9", number="B-109", day="2026-10-05", due="",
+                               total=6_000, lines=split)]
+    assert _drain(books, fake, cid, now=LATER3, passes=1) == []
+    # The provider drops the first half, so the bill no longer names the order line, which keeps all 6,000 it billed.
+    fake.changes = [M.Document(M.Ext("Bill", "109", "2"), party="Vendor:9", number="B-109", day="2026-10-05", due="",
+                               total=3_000, lines=(M.EntryLine("Account:2", 3_000, description="seats", key="B"),))]
+    assert _drain(books, fake, cid, now="2026-10-15T16:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert SP.billed(c, line) == 6_000
+    # The provider adds a line, so the bill names the order line again: the 3,000 it kept there stays with that link.
+    fake.changes = [M.Document(M.Ext("Bill", "109", "3"), party="Vendor:9", number="B-109", day="2026-10-05", due="",
+                               total=6_000, lines=(M.EntryLine("Account:2", 3_000, description="seats", key="B"),
+                                                   M.EntryLine("Account:2", 3_000, description="seats", key="C")))]
+    assert _drain(books, fake, cid, now="2026-10-15T17:00:00.000000Z", passes=1) == []
+    with books.read() as c:
+        assert SP.billed(c, line) == 6_000
+        assert c.execute("SELECT l.amount FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
+                         "WHERE b.number='B-109' AND l.po_line_id=?", (line,)).fetchone()[0] == 3_000
+
+
+def test_a_bill_recovered_at_a_newer_revision_matches_provider_line_ids_by_content(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _, first = _approved_order(books, fake, cid, 10_000)
+    _, second = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        site = _local(c, "Department:3", "locations")
+        account = _local(c, "Account:2", "fin_accounts")
+        payload = {"party": _local(c, "Vendor:9", "fin_contacts"), "number": "B-110", "day": "2026-10-05", "due": "",
+                   "memo": "", "lines": [
+                       {"account_id": account, "amount": 6_000, "description": "seats", "item_id": None,
+                        "tags": {"location": site}, "po_line_id": first},
+                       {"account_id": account, "amount": 4_000, "description": "seats", "item_id": None,
+                        "tags": {}, "po_line_id": second}]}
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=payload,
+                      key="bill.create:newer-1", by=OWNER, at=AT)
+        ref = M.reference("bill.create:newer-1")
+    # The provider changed the bill before its answer was recorded, and it lists the two lines the other way round.
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="110", revision="0", lines=("L1", "L2"))]
+    fake.changes = [M.Document(M.Ext("Bill", "110", "1", reference=ref), party="Vendor:9", number="B-110",
+                               day="2026-10-05", due="", total=10_000,
+                               lines=(M.EntryLine("Account:2", 4_000, description="seats", key="L2"),
+                                      M.EntryLine("Account:2", 6_000, description="seats", key="L1",
+                                                  tags=(("location", "Department:3"),))))]
+    assert _drain(books, fake, cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert [tuple(r) for r in c.execute(
+            "SELECT l.po_line_id, l.external_line, l.amount FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
+            "WHERE b.number='B-110' ORDER BY l.amount")] == [(second, "L2", 4_000), (first, "L1", 6_000)]
+
+
+def test_a_bill_recovered_at_a_newer_revision_keeps_a_line_it_cannot_match_billed_until_the_next_revision(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    _, first = _approved_order(books, fake, cid, 10_000)
+    _, second = _approved_order(books, fake, cid, 10_000)
+    with books.transaction() as c:
+        account = _local(c, "Account:2", "fin_accounts")
+        payload = {"party": _local(c, "Vendor:9", "fin_contacts"), "number": "B-111", "day": "2026-10-05", "due": "",
+                   "memo": "", "lines": [
+                       {"account_id": account, "amount": 6_000, "description": "seats", "item_id": None,
+                        "tags": {}, "po_line_id": first},
+                       {"account_id": account, "amount": 4_000, "description": "seats", "item_id": None,
+                        "tags": {}, "po_line_id": second}]}
+        SK.outbox_add(c, connection_id=cid, action_id="", op="bill.create", payload=payload,
+                      key="bill.create:newer-2", by=OWNER, at=AT)
+        ref = M.reference("bill.create:newer-2")
+    # The provider changed the second line's amount and lists the two lines the other way round.
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="111", revision="0", lines=("L1", "L2"))]
+    fake.changes = [M.Document(M.Ext("Bill", "111", "1", reference=ref), party="Vendor:9", number="B-111",
+                               day="2026-10-05", due="", total=9_500,
+                               lines=(M.EntryLine("Account:2", 3_500, description="seats", key="L2"),
+                                      M.EntryLine("Account:2", 6_000, description="seats", key="L1")))]
+    assert _drain(books, fake, cid, now=LATER2, passes=1) == []
+    with books.read() as c:
+        assert SP.billed(c, first) == 6_000
+        assert SP.billed(c, second) == 4_000
+    # The next revision lists them in order: the second line keeps the 4,000 the bill billed on it.
+    fake.changes = [M.Document(M.Ext("Bill", "111", "2"), party="Vendor:9", number="B-111", day="2026-10-05", due="",
+                               total=9_500, lines=(M.EntryLine("Account:2", 6_000, description="seats", key="L1"),
+                                                   M.EntryLine("Account:2", 3_500, description="seats", key="L2")))]
+    assert _drain(books, fake, cid, now=LATER3, passes=1) == []
+    with books.read() as c:
+        assert SP.billed(c, first) == 6_000
+        assert SP.billed(c, second) == 4_000
+        assert [tuple(r) for r in c.execute(
+            "SELECT l.external_line, l.amount FROM fin_bill_lines l JOIN fin_bills b ON b.id=l.bill_id "
+            "WHERE b.number='B-111' ORDER BY l.amount")] == [("L2", 3_500), ("L1", 6_000)]
 
 
 def test_voiding_a_bill_made_here_gives_the_order_its_hold_and_its_status_back(books):
