@@ -73,17 +73,25 @@ def _covered(ctx: Ctx, who: str, lines: list[tuple[str, dict[str, str]]]) -> boo
 
 
 def _check_month(ctx: Ctx, who: str, month: str) -> None:
-    """A month is open, and empty of raw totals the caller may not see. Its entry's id is named only to a caller who
-    sees all of that entry's lines, so a scoped caller learns nothing from a refusal about a month."""
+    """A month is open, and empty of raw totals and of itemized transactions the caller may not see. An entry's id is
+    named only to a caller who sees all of that entry's lines, so a scoped caller learns nothing from a refusal about a
+    month."""
     end = RT.month_end(month)
     if SL.closed_on(ctx.c, ctx.book.id, end):
         raise FinanceError(PERIOD_CLOSED, f"{month} is closed: the owner reopens it before raw totals post")
-    held = SR.live_entry_in(ctx.c, ctx.book.id, f"{month}-01", end)
-    if held is None:
+    start = f"{month}-01"
+    held = SR.live_entry_in(ctx.c, ctx.book.id, start, end)
+    if held is not None:
+        if not _covered(ctx, who, SR.entry_lines(ctx.c, str(held["id"]))):
+            raise denied(OUTSIDE)
+        raise FinanceError(CONFLICT, f"{month} already has raw totals in entry {held['id']}: reverse it first")
+    itemized = SR.itemized_in(ctx.c, ctx.book.id, start, end)
+    if itemized is None:
         return
-    if not _covered(ctx, who, SR.entry_lines(ctx.c, str(held["id"]))):
+    if not _covered(ctx, who, SR.entry_lines(ctx.c, str(itemized["id"]))):
         raise denied(OUTSIDE)
-    raise FinanceError(CONFLICT, f"{month} already has raw totals in entry {held['id']}: reverse it first")
+    raise FinanceError(CONFLICT, f"{month} already has transactions in entry {itemized['id']}: raw totals post only "
+                                 "to months with none")
 
 
 def _again(row: Any) -> Plan:

@@ -11,7 +11,7 @@ from backend.finance import reads as FR
 from backend.finance.core import raw_totals as RT
 from backend.finance.core.errors import CONFLICT, DENIED, INVALID, PERIOD_CLOSED, FinanceError
 from backend.finance.raw_totals import OUTSIDE
-from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
+from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, spend, store  # noqa: F401
 
 CSV = (Path(__file__).parent / "fixtures" / "finance" / "raw_totals.csv").read_text()
 MAPPING = {"Software subscriptions": "6100", "Office rent": "6900", "Sales revenue": "4000", "Cash at bank": "1000"}
@@ -104,6 +104,21 @@ def test_reversed_months_post_the_file_again_once_all_are_reversed(books):
         imports = FR.raw_imports(c, OWNER, at=AT)["imports"]
         assert {i["batch_id"]: i["live"] for i in imports} == {first.result["batch_id"]: False,
                                                                again.result["batch_id"]: True}
+
+
+def test_a_month_with_transactions_takes_no_raw_totals(books):
+    with books.transaction() as c:
+        spend(c, "6100", 5000, day="2026-02-10")
+        before = _count(c, "fin_entries")
+        dry = act(c, OWNER, "import_raw_totals", _body(), dry_run=True)
+        assert dry.status == "failed" and dry.code == CONFLICT and "2026-02" in dry.reason
+        real = act(c, OWNER, "import_raw_totals", _body())
+        assert real.status == "failed" and real.code == CONFLICT
+        assert _count(c, "fin_entries") == before and _count(c, "fin_raw_imports") == 0
+        # Once the transaction is reversed the month is empty again, and the file posts.
+        usage = c.execute("SELECT id FROM fin_entries WHERE source='usage'").fetchone()[0]
+        assert act(c, OWNER, "journal", {"reverses": usage}).status == "committed"
+        assert act(c, OWNER, "import_raw_totals", _body()).status == "committed"
 
 
 def test_a_bad_sheet_is_refused_and_the_same_rows_hash_the_same():
