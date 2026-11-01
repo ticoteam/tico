@@ -133,5 +133,12 @@ button.ask-card-q[aria-expanded="true"]{display:block;-webkit-line-clamp:none}
   .ask-ib{width:44px;height:44px;flex-basis:44px}
   .ask-loop,.ask-requests{min-height:44px}
   .ask-loop-note.ask-on{display:block}
+  /* The name and the page's pill keep their room; the two links wrap to a second row when they need it. */
+  .ask-head{flex-wrap:wrap;row-gap:2px}
+  /* On the name's row: the name, the page's pill, Your requests, and the close mark at the far end; Loop in Support
+     takes the second row when the row is full. */
+  .ask-loop{order:1}
+  .ask-people{margin-right:0}
+  .ask-ib{margin-left:auto}
 }
 /* Opening and closing move in motion.css. */
