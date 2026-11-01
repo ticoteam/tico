@@ -1,4 +1,4 @@
-/* ui/app/growth-channels.js — Growth › Channels (#/strategy/growth/channels, growth spec §5): one month's unit economics
+/* ui/app/growth-channels.js — Growth › Channels (#/growth/channels, growth spec §5): one month's unit economics
    per channel from GET /api/v2/growth/economics (spend, bot time, new customers, CAC, kept at 30/90/180 days, LTV,
    LTV:CAC, payback, how good the data is), with Unknown as its own row and the total. Choosing a row opens the channel
    below: its guardrail, retention by month joined (GET /api/v2/growth/cohorts?channel=), where the numbers come from
@@ -25,7 +25,7 @@ async function gcRead(state) {
     [econ, ideas, chans, sources] = await Promise.all([get('/v2/growth/economics' + (state.month ? `?month=${encodeURIComponent(state.month)}` : ''), {fresh: true}),
       get('/v2/growth/ideas').then(r => r.ideas || []).catch(() => []), get('/v2/growth/channels').catch(() => ({})),
       get('/v2/growth/sources').then(r => r.sources || []).catch(() => [])]);
-  } catch (e) { if (GR === state) $('#gr-body').innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Channels') + grFail(e); return; }
+  } catch (e) { if (GR === state) $('#gr-body').innerHTML = grFail(e); return; }
   if (GR !== state) return;
   // may_edit on the channels read: the caller is the owner or an admin, who keeps settings and cohorts.
   state.data = {econ, ideas, chans: chans.channels || [], sources, may: chans.may_edit ?? grAdmin()};
@@ -55,7 +55,7 @@ function gcDraw(state) {
     <th scope="col" class="num">New</th><th scope="col" class="num">CAC</th><th scope="col">Kept 30 · 90 · 180</th><th scope="col" class="num">LTV</th><th scope="col" class="num">LTV:CAC</th>
     <th scope="col" class="num">Payback</th><th scope="col">Data</th></tr></thead><tbody>${rows.map(tr).join('')}</tbody>
     <tfoot><tr><th scope="row">All channels</th>${cell(t)}<td>${gcQuality(t.quality)}</td></tr></tfoot></table></div>` : '';
-  body.innerHTML = grCrumbs(GR_ROUTE, 'Growth', 'Channels', tools) + table + `<div id="gc-detail"></div>`;
+  body.innerHTML = grTools(tools) + table + `<div id="gc-detail"></div>`;
   const sel = body.querySelector('[data-gc-month]');
   if (sel) sel.onchange = () => { state.month = sel.value; history.replaceState(history.state, '', `${GR_CHANNELS}?m=${state.month}`); void gcRead(state); };
   const set = body.querySelector('[data-gc-settings]');
