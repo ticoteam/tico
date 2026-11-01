@@ -117,9 +117,11 @@ pub struct Capabilities {
     pub serial_cold_start: bool,
     /// A subscription login serves one turn at a time on this computer (crate::login_turns); a key login does not.
     pub one_turn_per_login: bool,
-    /// The CLI keeps no owner-only state shared across turns (a 0600 sign-in file in the bot's home), so a turn can
-    /// run as a leased per-turn OS user (crate::turn_users) and still sign in. Without it the turn runs as `bot`.
+    /// Sign-in works from a private home, with no shared owner-only credentials needed by the turn itself.
+    /// A turn can lease its own OS user (crate::turn_users); without it the turn runs as `bot`.
     pub isolated_user: bool,
+    /// Access-only subscription credentials for a leased turn; refresh stays in the supervisor's broker.
+    pub turn_sign_in: String,
     pub compaction: bool,
     /// The harness says in its stream when it compacts a session, so a resumed turn can leave out what it holds.
     pub compaction_events: bool,
@@ -159,6 +161,7 @@ impl Default for Capabilities {
             serial_cold_start: false,
             one_turn_per_login: false,
             isolated_user: false,
+            turn_sign_in: String::new(),
             compaction: false,
             compaction_events: false,
             resume_command: String::new(),
@@ -504,6 +507,7 @@ fn parse_capabilities(raw: Option<&toml::Value>, at: &str) -> Result<Capabilitie
             "serial_cold_start" => c.serial_cold_start = flag(k, v)?,
             "one_turn_per_login" => c.one_turn_per_login = flag(k, v)?,
             "isolated_user" => c.isolated_user = flag(k, v)?,
+            "turn_sign_in" => c.turn_sign_in = choice(k, v, &["", "claude-oauth", "codex-external"])?,
             "compaction" => c.compaction = flag(k, v)?,
             "compaction_events" => c.compaction_events = flag(k, v)?,
             "resume_command" => c.resume_command = text(k, v)?,

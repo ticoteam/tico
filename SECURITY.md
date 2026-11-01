@@ -122,9 +122,16 @@ work of any bot assigned to that computer, so code a bot runs must not be able t
     repository's config.
   - Shared base clones (`workspace/repos/<base>`), which every computer task worktree of that base uses.
   - Watchers and repository setup commands, which run as `bot`.
-  The follow-up that closes the sign-in item gives each turn its own sign-in: Claude Code through
-  `CLAUDE_CODE_OAUTH_TOKEN` and a per-turn `CLAUDE_CONFIG_DIR`, Codex through a per-turn `CODEX_HOME` whose
-  refreshed login is written back under a lock.
+  The brokered sign-in implementation is gated on the Docker isolation test before either Claude Code or Codex
+  advertises `isolated_user`; both remain in the residual list above until that gate passes. Its supervisor-owned,
+  per-login broker alone receives refresh credentials. Codex uses an ephemeral, access-token-only app-server login
+  in a private `CODEX_HOME`, with on-demand refresh through the broker. Claude Code receives
+  `CLAUDE_CODE_OAUTH_TOKEN` in a private `CLAUDE_CONFIG_DIR` only when its remaining lifetime covers the turn;
+  the runner ends the turn before that credential expires. Neither copies refresh credentials into a turn home.
+  Only refresh calls share a lock: subscription turns and API-key turns remain concurrent. Per-conversation
+  transcripts return through a bounded, link-refusing supervisor store; sign-in and configuration files are excluded.
+  The automatic capacity ceiling is 64, matching the leased-user pool; an explicit larger capacity queues for a user
+  rather than weakening isolation. Gemini CLI, Cursor, Grok, Muse Code and Antigravity remain on the shared bot user.
 - **Mac runner:** one user runs the runner and the bots, so the registration sits in the same account the
   bots run as: treat the Mac as one trust group. A second macOS account for the bots is possible by hand but
   not built in.

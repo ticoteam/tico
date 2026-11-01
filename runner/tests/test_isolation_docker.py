@@ -10,6 +10,7 @@ Inside, runner/tests/isolation/turn_side.py plays the supervisor and drops a tur
 the volume is used the way an older image (no capabilities, only uid 10002) would after a rolled-back
 update: it must still read its registration and state and run a harness, and `bot` must still not.
 """
+import base64
 import json
 import os
 import platform
@@ -257,11 +258,24 @@ class Stack:
         return self.must("run", "--rm", "-u", "0", "--network", self.name, "-v", f"{self.volume}:/home/runner",
                          "--entrypoint", "sh", image, "-c", "set -e; cd /home/runner\n" + script)
 
-    def start_runner(self, image, table):
+    def start_runner(self, image, table, brokered=False):
         spec = {h["executable"]: {"host": h["host"], "version_args": h["version_args"], "version": "9.9.9 (fake)",
                                   "status": h["status"]} for h in table}
         (self.tmp / "spec.json").write_text(json.dumps(spec))
-        mounts = [a for h in table for a in ("-v", f"{HERE / 'fake_cli.py'}:/usr/local/bin/{h['executable']}:ro")]
+        mounts = [a for executable in sorted({h["executable"] for h in table})
+                  for a in ("-v", f"{HERE / 'fake_cli.py'}:/usr/local/bin/{executable}:ro")]
+        if brokered:
+            # Exercise the candidate identity before enabling the production readiness promise.
+            manifests = self.tmp / "harnesses"
+            manifests.mkdir(exist_ok=True)
+            for source in HARNESSES.glob("*.toml"):
+                text = source.read_text()
+                if source.name in {"claude-code.toml", "codex.toml"}:
+                    assert "isolated_user" not in text or "isolated_user = true" in text
+                    if "isolated_user" not in text:
+                        text = text.replace("[capabilities]", "[capabilities]\nisolated_user = true")
+                (manifests / source.name).write_text(text)
+            mounts += ["-v", f"{manifests}:/opt/tico/runner/harnesses:ro"]
         docker("rm", "-f", self.runner)
         self.must("run", "-d", "--name", self.runner, "--network", self.name, "--user", "0", "--cap-drop", "ALL",
                   "--security-opt", "no-new-privileges:true", *CAPS, "-v", f"{self.volume}:/home/runner",
@@ -365,7 +379,17 @@ def probe_problems(table, done, logs):
                 "commit": "ok", "pull": "ok", "where": f"sessions > bot-{h['bot']} > t-{h['bot']}"}
         want.update({"sibling_enter": False, "sibling_write": False, "sibling_rename": False} if h["isolated"] else
                     {"uid": 10003, "sibling_enter": True, "sibling_write": True, "sibling_rename": True})
+        if h.get("credential_probe"):
+            want["credential_sibling_present"] = True
+        if h.get("credential_probe") or seen.get("credential_sibling_present"):
+            want.update({"sibling_granted_secret": not h["isolated"],
+                         "sibling_tico_token": not h["isolated"], "sibling_github_token": not h["isolated"]})
         wrong = {k: seen.get(k) for k, v in want.items() if seen.get(k) != v}
+        if h.get("credential_probe") and h["host"] == "codex":
+            if seen.get("parallel_login") is not True:
+                wrong["parallel_login"] = seen.get("parallel_login")
+        if h.get("credential_probe") and h["host"] in {"claude", "codex"} and seen.get("private_signin") is not True:
+            wrong["private_signin"] = seen.get("private_signin")
         if h["isolated"] and not 10100 <= int(seen.get("uid") or 0) <= 10163:
             wrong["uid"] = seen.get("uid")
         if not seen.get("siblings_seen"):
@@ -381,19 +405,52 @@ def test_every_harness_takes_task_turns_as_the_bot_user_and_the_session_stays_th
     # So: a task turn for every harness through the real runner (which adds the worktree as the bot user), a restart,
     # a second turn in the same worktrees, and then who owns the sessions and the runner's private files.
     table = harnesses()
+    for h in table:
+        if h["host"] in {"claude", "codex"}:
+            h["isolated"] = True  # Explicit requirement, independent of production readiness flag.
+        h["credential_probe"] = True
+    # A second Codex bot shares the same managed login. Both must be alive together after broker refresh.
+    sibling = next(h for h in table if h["host"] == "codex").copy()
+    sibling["bot"] += "-parallel"
+    table.append(sibling)
     bots = [h["bot"] for h in table]
     stack.start_hub(IMAGE, bots)
     stack.put("assignments.json", [{"bot": h["bot"], "config": {"runtime": h["runtime"], "harness": h["harness"]}}
                                    for h in table])
     stack.put("credentials.json", [{"id": "k-" + env, "env": env, "value": "acme-fake-key", "kind": "env"}
-                                   for env in sorted({h["key_env"] for h in table if h["key_env"]})])
-    stack.seed(IMAGE, registration(bots))
+                                   for env in sorted({h["key_env"] for h in table if h["key_env"] and h["host"] not in {"claude", "codex"}})])
+    # The two subscription harnesses must sign in without API-key stand-ins or copied refresh credentials.
+    payload = base64.urlsafe_b64encode(json.dumps({"exp": time.time() + 7200}).encode()).decode().rstrip("=")
+    access = "synthetic." + payload + ".fixture"
+    login = {"tokens": {"access_token": access, "refresh_token": "synthetic-refresh-never-in-turn",
+                        "id_token": "synthetic-identity", "account_id": "acme"}}
+    claude = {"claudeAiOauth": {"accessToken": "synthetic-claude-access", "refreshToken": "synthetic-refresh-never-in-turn",
+                               "expiresAt": (time.time() + 7200) * 1000, "scopes": ["user:inference"]}}
+    stack.seed(IMAGE, registration(bots) + "\nmkdir -p .codex .claude\n" +
+               "printf '%s' '" + json.dumps(login) + "' > .codex/auth.json\n" +
+               "printf '%s' '" + json.dumps(claude) + "' > .claude/.credentials.json\n" +
+               "chown -R 10003:10002 .codex .claude; chmod 700 .codex .claude; chmod 600 .codex/auth.json .claude/.credentials.json\n" +
+               "mkdir -p workspace/broker-overlap; chmod 1777 workspace/broker-overlap\n")
 
-    stack.start_runner(IMAGE, table)
+    stack.start_runner(IMAGE, table, brokered=True)
+    # An actual sibling bot process holds all three credential types. The shared-bot control can read
+    # them; every leased harness must be denied the same live PID and owner-only file.
+    holder = "import os,pathlib,time; p=pathlib.Path('/home/runner/workspace/credential-sibling'); p.mkdir(exist_ok=True); os.chmod(p,0o755); (p/'pid').write_text(str(os.getpid())); f=p/'granted-secret'; f.write_text('synthetic-granted-secret'); os.chmod(f,0o600); time.sleep(900)"
+    launch_holder = ("import subprocess,time,pathlib; p=subprocess.Popen(['python','-c'," + repr(holder) +
+                     "],stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,start_new_session=True); "
+                     "f=pathlib.Path('/home/runner/workspace/credential-sibling/pid'); deadline=time.monotonic()+3\n"
+                     "while (not f.exists() or f.read_text()!=str(p.pid)) and time.monotonic()<deadline: time.sleep(.01)\n"
+                     "assert f.read_text()==str(p.pid), 'credential fixture did not start'")
+    stack.must("exec", "-u", "10003:10002", "-e", "HUB_TOKEN=synthetic-sibling-tico", "-e",
+               "GH_TOKEN=synthetic-sibling-github", stack.runner, "python", "-c", launch_holder)
     problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
     assert not problems, "\n".join(problems)
 
+    stack.must("exec", "-u", "0", stack.runner, "python", "-c",
+               "from pathlib import Path; [p.unlink() for p in Path('/home/runner/workspace/broker-overlap').iterdir()]")
     stack.must("restart", "-t", "20", stack.runner)
+    stack.must("exec", "-u", "10003:10002", "-e", "HUB_TOKEN=synthetic-sibling-tico", "-e",
+               "GH_TOKEN=synthetic-sibling-github", stack.runner, "python", "-c", launch_holder)
     problems = probe_problems(table, stack.completions(stack.queue(table)), stack.logs())
     assert not problems, "the first round passed, then after a restart:\n" + "\n".join(problems)
 
