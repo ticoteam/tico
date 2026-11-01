@@ -38,6 +38,7 @@ The operation groups below are generated from the committed spec's tags. After r
 | Changelog | Shipped Tico releases, product announcements and the signed-in person's read state ([guide](updates.md)). |
 | Needs you | What is waiting on the signed-in person: questions, tasks, approvals. |
 | Meetings | Recorded meetings. |
+| Calls | Tico Meet calls ([guide](meet.md)): audio and screen share in a thread, a live transcript posted to it when it ends, and bots that listen. Joining hands back a token for audio and screen share only, never a camera. |
 | Files | What a bot creates, revises or delivers, listed on its page ([guide](files.md)). |
 | Pages | HTML pages bots publish and keep current ([guide](pages.md)): a file with a cadence, a data date and a status line. |
 | Docs | The team's docs ([guide](docs.md)): internal docs written or imported in Tico, with history and locks; external sources, including indexed public GitHub docs; and search across them. |
