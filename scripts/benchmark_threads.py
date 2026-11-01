@@ -15,7 +15,8 @@ targets are a write p95 of 150 ms, an event p95 of 1 s and a burst ready p95 of 
 
 The server runs in a child process (--serve), so the load generator's threads never share its interpreter lock: the
 latencies are the server's. BENCH_PROFILE=1 makes the server time its write and fan-out functions and print the totals
-when the run ends. Writer and viewers share one clock, so latencies are exact to the scheduler, not a network estimate.
+when the run ends; BENCH_SAMPLE=<file> (Python 3.15 and later) writes the server's stacks, sampled while they hold the
+interpreter lock, to <file> in collapsed form. Writer and viewers share one clock, so latencies are exact to the scheduler, not a network estimate.
 Run it on a clean VM with scripts/remote.py, not on a laptop, and keep the output with the commit it measured.
 """
 
@@ -388,7 +389,11 @@ def main():
         return serve()
     if min(args.seconds, args.viewers, args.writers, args.followers, args.burst) < 1 or args.rate <= 0:
         parser.error("counts and seconds must be positive")
-    child = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), "--serve"], cwd=str(ROOT),
+    command = [sys.executable, str(Path(__file__).resolve()), "--serve"]
+    if os.environ.get("BENCH_SAMPLE"):             # Python 3.15+: which code holds the interpreter lock, sampled
+        command[1:1] = ["-m", "profiling.sampling", "run", "-a", "--mode", "gil", "-r", "500", "--collapsed",
+                        "--no-summary", "-o", os.environ["BENCH_SAMPLE"]]
+    child = subprocess.Popen(command, cwd=str(ROOT),
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     ready = json.loads(child.stdout.readline() or "{}")
     if "port" not in ready:

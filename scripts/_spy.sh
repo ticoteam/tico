@@ -1,9 +1,8 @@
 #!/usr/bin/env bash
 # Temporary (threads/perf): sample the benchmark server's GIL holder with py-spy and print the top frames.
 set -u
-pip install -q py-spy >/dev/null 2>&1 || python3 -m pip install -q py-spy >/dev/null 2>&1
-"$(command -v py-spy)" record --subprocesses --gil --nonblocking --rate 100 --format raw -o /tmp/stacks.txt -- \
-  python3 scripts/benchmark_threads.py "$@" > /tmp/bench.json 2>/tmp/bench.err
+BENCH_SAMPLE=/tmp/stacks.txt python3 scripts/benchmark_threads.py "$@" > /tmp/bench.json 2>/tmp/bench.err
+head -c 600 /tmp/stacks.txt; echo
 tail -5 /tmp/bench.err
 python3 - <<'PY'
 import collections, json
@@ -12,13 +11,11 @@ for line in open("/tmp/stacks.txt"):
     stack, _, n = line.rstrip().rpartition(" ")
     n = int(n)
     frames = stack.split(";")
-    if any(f.startswith(("stream ", "writer ", "slow_consumer ", "scenario ", "main (")) and "benchmark_threads" in f
-           for f in frames):
+    if False:
         continue
     total += n
     def name(f):
-        f = f.split(" (")[0] + " " + f.split("/")[-1].rstrip(")") if "(" in f else f
-        return f
+        return f.replace("/home/runner/work/tico/tico/", "")
     names = [name(f) for f in frames]
     self_[names[-1]] += n
     for x in set(names):
