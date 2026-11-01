@@ -257,7 +257,7 @@ def test_a_late_limited_result_keeps_usage_without_reopening_the_dismissed_job(a
     r, _, attempt = finished_then_lapsed(api)
     aged(api, attempt["id"])
     post(api, f"jobs/{attempt['job_id']}/reconcile", {
-        "attempt_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
+        "run_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
         "acknowledge_uncertain_effects": True})
     result = post(api, f"attempts/{attempt['id']}/complete", {
         "outcome": "failed", "text": "Usage limit reached.", "last_seq": 3, "limited": True}, token=r["token"])
@@ -269,9 +269,9 @@ def test_a_late_completed_result_keeps_measured_usage_without_reopening_the_dism
     from backend.tests.test_execution_review import aged, finished_then_lapsed, settled
     r, _, attempt = finished_then_lapsed(api)
     aged(api, attempt["id"])
-    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     post(api, f"jobs/{attempt['job_id']}/reconcile", {
-        "attempt_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
+        "run_id": attempt["id"], "decision": "dismiss", "note": "Nothing left to send.",
         "acknowledge_uncertain_effects": True})
     result = post(api, f"attempts/{attempt['id']}/complete", {
         "outcome": "completed", "text": "Done.", "last_seq": 3,

@@ -204,7 +204,7 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | A bot's routines | `GET /api/v2/bots/{bot}/routines` | `{"routines": [{"id", "bot", "key", "title", "cron", "on", "kind": "cron"\|"event", "timezone", "enabled", "active", "text", "last_fired", "next_due", "deleted_at"}]}`. Needs Read on the bot (`403 forbidden` otherwise, `404` if the caller cannot see it); `?include_deleted=true` adds removed ones. |
 | Who can use a bot | `GET /api/v2/bots/{bot}/access` / `PUT` | `{"bot", "see": {"everyone": true, "people": [], "teams": [], "bots": []}, "read": {...}, "write": {...}, "revision", "you": {"see", "read", "write"}, "teams": [{"id", "name"}]}`. For the owner, bot administrators and the humans the bot reports up to; anyone else gets `403`. `PUT` takes `see`, `read`, `write` (each `{"everyone": true}` or lists of `people` ids, `teams` and `bots` slugs) and the `revision` you read; `409 version_conflict` if it moved. See [permissions.md](permissions.md). |
 | My chats | `GET /api/v2/conversations?chat_with=ops` | `{"conversations": [{"id", "participants", "last_message_at"}]}`: my open chat with that bot (none yet is an empty list). |
-| Messages | `GET /api/v2/conversations/{id}/messages` | `{"messages": [{"id", "from_actor": "human:ana", "from_name": "Ana", "to_actor": "bot:ops", "to_name": "Ops", "body", "created", "refs", "run": {"job_id", "attempt_id", "state": "started_run"\|"added_to_run"}}], "actors": {...}, "has_more", "next_before"}`. Oldest first, up to 200; `?before=<next_before>` pages back. `run` says which run took a message and is absent until one has; a bot's reply carries `run` and `answers` too ([below](#which-run-took-a-message)). |
+| Messages | `GET /api/v2/conversations/{id}/messages` | `{"messages": [{"id", "from_actor": "human:ana", "from_name": "Ana", "to_actor": "bot:ops", "to_name": "Ops", "body", "created", "refs", "run": {"job_id", "run_id", "state": "started_run"\|"added_to_run"}}], "actors": {...}, "has_more", "next_before"}`. Oldest first, up to 200; `?before=<next_before>` pages back. `run` says which run took a message and is absent until one has; a bot's reply carries `run` and `answers` too ([below](#which-run-took-a-message)). |
 | Send to a bot | `POST /api/v2/chat/ops` `{"text": "Hello"}` | `{"conversation": {"id"}, "message": {"id", "body"}}`. Opens the chat if needed; the reply arrives [live](#live-events). |
 | Send in a chat | `POST /api/v2/conversations/{id}/messages` `{"text": "Again"}` | `{"message": {...}}` |
 | Tasks | `GET /api/v2/tasks?status=open,doing&owner=human:ana&limit=100` | `{"tasks": [{"id", "title", "body", "owner", "owner_name", "requester", "requester_name", "status", "due", "version", "labels", "number", "step_rank"}], "actors": {...}, "next_offset": null}`. Statuses: `open doing waiting review ready done declined`. `?offset=` pages. `?type=` and `?step=` (ids or names) and `?number=` filter, and `?sort=step` lists a type's board in order ([tasks.md](tasks.md)). To poll, keep the largest `updated` you have seen and ask `?updated_since=<it, ISO 8601 with a timezone>`: only tasks changed after it come back, closed ones included. Closing, reopening, commenting, a question asked or answered on it, a link or an attachment added or removed, a linked pull request's state and any change to its fields all change `updated`. `?brief=true` leaves out each task's `body` and `acceptance_criteria`; read one task for them. |
@@ -219,7 +219,7 @@ routes. Every `POST` also needs an `Idempotency-Key` header. Answers below are t
 | Remove a tool | `DELETE /api/v2/bots/{bot}/tools/{id}` | `{"removal": true, "task_id"}`: a BotOps task to take a declared tool out of `bot.yaml` (the id is from the list; `model` and `repo` cannot be removed). A `pending-…` id withdraws a request instead: `{"cancelled": true}`. `POST /api/v2/bots/{bot}/tools/{id}/delete` does the same for clients that only send GET and POST (the `hub` CLI and MCP tools use it). |
 | Files | `GET /api/v2/bots/{bot}/files?limit=3&cursor=...` | `{"bot", "files": [{"id", "title", "kind", "locator", "scope", "version", "state", "synced", "open": {"type": "tico"\|"external", "url"}, "note", "task_title", "working", "github_url", "actor", "actor_name", "last_activity_at"}], "total", "next_cursor", "has_more", "can_manage"}`. Newest activity first; only what the caller may see, the total included. A stored file's `open.url` is a Tico route that needs the bearer; an `external` one opens at its provider. `PATCH /api/v2/files/{id}` with `{"promote": true}` or `{"archived": true}` (owner and bot administrators). See [files.md](files.md). |
 | Assistant | `GET /api/v2/assistant` | `{"available", "name", "can_turn_on", "room_id", "messages": [...], "execution", "actions": {...}, "pending": [...]}`: the caller's own private Assistant chat ([assistant.md](assistant.md)). `POST /api/v2/assistant/messages` `{"text"}` answers a lookup at once (`{"fast": true, "reply": {...}}`) or starts a bot run: poll `GET /api/v2/assistant` while `execution` is set (show "thinking"). A message with `refs.action` is a Confirm / Cancel card: `POST /api/v2/assistant/actions/{id}/confirm` or `/cancel` (the human's own session only). `POST /api/v2/assistant/turn-on` (owner) turns it on when `available` is false. Links in a reply are `[title](#/task/<id>)`-style in-app routes or `https:` links: map the `#/` ones to your own routes. |
-| Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval"\|"ask", "title", "first_line", "requester", ...}]}`. An `ask` is a question a bot asked outside any task: its `id` is the message, answered with `POST /api/v2/messages/{id}/answer` `{"text"}`. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
+| Needs you | `GET /api/v2/needs-you` | `{"actor", "items": [{"id", "kind": "task"\|"question"\|"declined"\|"approval"\|"ask", "title", "first_line", "requester", ...}]}`. Every item, whatever its kind, has `id`, `kind`, `title`, `body` (or `null`), `subject` (`{"type", "id"}`: the task, message or approval it is about, or `null` for a card that stands for several things or a setting), `created` and `actions` (the writes that settle it: `answer`, `update`, `decide`, `add_reading` or `open`; the `NeedsYouItem` schema in docs/openapi/v2.json); the rest are the fields its card reads. `GET /api/v2/goals/needs-you` items have the same fields. An `ask` is a question a bot asked outside any task: its `id` is the message, answered with `POST /api/v2/messages/{id}/answer` `{"text"}`. A `send` approval also has `attachment_files`: for each of its payload's `attachments`, `{"file_id", "version"}` of a stored version with the approved sha256 and size that you may open (`/api/v2/files/{file_id}?v={version}`), or `null`. `?count=true` gives `{"actor", "count"}` for a badge. `?limit=50` sends a page of the same list, in the same order, with `count` (the whole list), `next` (pass it as `?cursor=` for the next page; `null` on the last) and `bots` (each bot's count over the whole list); a cursor from an older `version` starts again from the top, with `"restart": true`. Without `limit` or `cursor`, the whole list. |
 | Answer a question | `POST /api/v2/messages/{message_id}/answer` `{"text": "Yes"}` | The question's `ask.id` on a `question` item is that message id. `{"text": "", "unknown": true}` says you do not know. |
 | Decide an approval | `POST /api/v2/approvals/{id}` `{"decision": "approved", "note": ""}` | `decision` is `approved` or `declined`. The item's `id` is the approval id. |
 | Meetings | `GET /api/v2/meetings/search?q=roadmap&limit=20` | `{"results": [{"id", "title", "created", "excerpt", "passages": [...]}], "next_offset"}`. No `q` lists the newest. `GET /api/v2/meetings/transcript?id=...` reads one. |
@@ -267,7 +267,7 @@ data: {"seq": 4120, "actor": "human:ben", "at": "2026-10-05T10:00:01.120Z", "id"
 
 id: 4121
 event: runs
-data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "output": {"kind": "delta", "payload": {"text": "Filed"}}}
+data: {"seq": 4121, "run_id": "a1", "conversation_id": "c1", "bot": "ops", "output": {"kind": "delta", "payload": {"text": "Filed"}}}
 
 : keepalive
 ```
@@ -276,7 +276,7 @@ data: {"seq": 4121, "attempt_id": "a1", "conversation_id": "c1", "bot": "ops", "
 |---|---|
 | `tasks` | `id` and `task`, or `gone: true` for a deleted task; `bulk: true` (no `id`) when one change touched more than 100 tasks, such as a type edit: read task lists in full |
 | `messages` | `id`, `conversation_id` and `message`, or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal` |
-| `runs` | `attempt_id`, `conversation_id`, `bot`, and `output` (one step of the run) or `state` (the job's or attempt's state) |
+| `runs` | `run_id`, `conversation_id`, `bot`, and `output` (one step of the run) or `state` (the job's state, or the run's: [Runs](status-and-state.md#runs)) |
 | `bots` | `bot` and `status`, as `GET /api/v2/status` lists it |
 | `needs` | your own Needs-you `count` and `items`, as `GET /api/v2/needs-you`, whenever anything on it may have moved |
 
@@ -337,18 +337,18 @@ added"). The messages say so themselves, on the routes that return them (`/messa
 ```json
 {"messages": [
   {"id": "m1", "from_actor": "human:ana", "body": "Draft the launch plan",
-   "run": {"job_id": "j1", "attempt_id": "a1", "state": "started_run"}},
+   "run": {"job_id": "j1", "run_id": "a1", "state": "started_run"}},
   {"id": "m2", "from_actor": "human:ana", "body": "Also cover pricing",
-   "run": {"job_id": "j1", "attempt_id": "a1", "state": "added_to_run"}},
+   "run": {"job_id": "j1", "run_id": "a1", "state": "added_to_run"}},
   {"id": "m3", "from_actor": "bot:ops", "in_reply_to": "m1", "body": "The plan is in the task.",
-   "run": {"job_id": "j1", "attempt_id": "a1", "did": [...], "steps": 4, "tool_calls": 2, "took_s": 38},
+   "run": {"job_id": "j1", "run_id": "a1", "did": [...], "steps": 4, "tool_calls": 2, "took_s": 38},
    "answers": ["m1", "m2"]}]}
 ```
 
 - A human's message that starts a run has `run.state` `started_run`; one delivered into a run that was already working
-  has `added_to_run`. Either way `job_id` and `attempt_id` name that run, so `m2` above belongs to the run of `m1`.
+  has `added_to_run`. Either way `job_id` and `run_id` name that run, so `m2` above belongs to the run of `m1`.
 - A message no run has taken yet (it is still queued) has no `run`. A reply written before this existed has `run` only when it was answering a run, and no `answers`.
-- The reply the run wrote carries `run` (the same `job_id` and `attempt_id`, with a summary of what it did) and `answers`,
+- The reply the run wrote carries `run` (the same `job_id` and `run_id`, with a summary of what it did) and `answers`,
   the ids of every message in that conversation the run handled: the one that started it first, then the ones folded in.
   Use it to show one reply under both messages, and to tell "answered" from "waiting for the next run".
 - These are stored with the run, so they are the same after a restart or a reconnect. If a run fails and its

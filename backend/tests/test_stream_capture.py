@@ -25,7 +25,7 @@ def test_a_captured_stream_is_kept_masked_and_read_only_by_owners_and_engineerin
     get(api, f"attempts/{a['id']}/capture", a["token"], expected=403)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
-    assert get(api, f"attempts/{a['id']}/capture", a["token"])["attempt"]["id"] == a["id"]
+    assert get(api, f"attempts/{a['id']}/capture", a["token"])["run"]["id"] == a["id"]
     post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "done", "last_seq": 0}, r["token"])
 
     # A secret taken out after the run leaves its raw stream too.
@@ -76,7 +76,7 @@ def test_a_hidden_run_is_refused_and_a_secret_removed_mid_run_or_capture_off_lea
 
 def test_a_fixture_is_written_in_three_parts(tmp_path):
     from clients.hubtools import write_fixture
-    found = {"attempt": {"id": "../a1"}, "provider": "Claude", "truncated": False, "dropped_bytes": 0,
+    found = {"run": {"id": "../a1"}, "provider": "Claude", "truncated": False, "dropped_bytes": 0,
              "captured": "2026-10-16T00:00:00Z", "input": {"message": {"body": "hi"}, "config": {}},
              "transcript": '{"dir":"out"}\n{"dir":"in"}', "output": {"events": [], "result": {}, "final_text": ""}}
     written = write_fixture(found, tmp_path)
@@ -135,5 +135,5 @@ def test_every_run_list_check_guards_the_export_and_a_bot_gets_metadata_only(api
     class Api:
         def get(self, path, **params):
             return api.get("/api/v2/" + path, params=params, headers=owner).json()
-    brief = run_export(Api(), {"attempt": a["id"]})
+    brief = run_export(Api(), {"run": a["id"]})
     assert "transcript" not in brief and "input" not in brief and brief["provider"] == "claude"

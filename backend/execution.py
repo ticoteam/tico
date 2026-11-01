@@ -14,7 +14,7 @@ from clients import gateway, sessions
 
 from . import auto_tasks, start_places, org_turns, app_delivery, check_models, learned, rooms, rules as wake_rule_engine, updates_chat, gateway_connection, inbox_isolation, login_holds, models_preset, providers, quiet_work, routines, run_triggers, runner_versions, screen, task_models, usage_limits, wake_presets, wake_rules
 from . import task_privacy as privacy
-from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, turn_budgets
+from . import browser_exit, claim_holds, cloud_access, cloud_machines, model_subscriptions, quarantine_stops, reconnects, run_backoff, runner_wire, runs, turn_budgets
 from .auth import Identity
 from .batch_work import isolated, report, shared_check, shared_scope, storage_error
 from .harnesses import bot_keyed, reports_tool_calls
@@ -4097,7 +4097,7 @@ class Execution:
         if len(rows) > 1:
             # A bot running several tasks at once: stopping one of them takes its attempt id.
             raise Problem("ambiguous", "This bot is running more than one turn; say which to stop", 409,
-                          extra={"attempts": [r["id"] for r in rows]})
+                          extra={"runs": [r["id"] for r in rows]})
         row = rows[0]
         if redirect:
             job = c.execute("SELECT j.id,j.state,m.from_actor FROM jobs j JOIN messages m ON m.id=j.message_id "
@@ -4768,7 +4768,7 @@ class Execution:
         # A provider limit inside any error is the usage limit's, whatever the runner flagged; a prompt too large to
         # send starts the next run in a fresh session (backend/run_backoff.py).
         if body.outcome == "failed" and not stopped:
-            H.hook(c, "bot.run_failed", row["bot"], lambda: {"bot": row["bot"], "attempt_id": aid,
+            H.hook(c, "bot.run_failed", row["bot"], lambda: {"bot": row["bot"], "run_id": aid,
                                                               "error_class": failure if isinstance(failure, str) else None},
                    H.KEEPER, revision=aid)
         limited = body.outcome != "completed" and body.limited and not stopped
@@ -5359,8 +5359,8 @@ class Execution:
                          'task':{'id':task['id'],'title':task['title'],'status':task['status'],'owner':task['owner'],
                                  'owner_name':owner_name(c, task['owner'])} if task and readable else None,
                          'request':message['body'] if readable else '',
-                         'attempt':(dict(attempt) if readable else
-                                    {**dict(attempt), 'final_text': ''}) if attempt else None,
+                         'run':{**dict(attempt), 'state': runs.state(attempt['state']),
+                                **({} if readable else {'final_text': ''})} if attempt else None,
                          'output':output if readable else [], 'tools':calls if readable else [], 'reason':reason,
                          # `acted` names tools only, as `reason` always has, so a reader of none of the run's words
                          # still sees why it is held.
@@ -5373,12 +5373,12 @@ class Execution:
         if not row or not self.reviewer(c, who, row['bot']):
             raise Problem("forbidden", "Only this bot's operator or BotOps can review interrupted work", 403)
         if (not body.acknowledge_uncertain_effects or row['state'] != 'uncertain'
-                or row['attempt_id'] != body.attempt_id):
+                or row['attempt_id'] != body.run_id):
             raise Problem("uncertain", "This run changed or its external effects have not been reviewed", 409)
         # A deferred choice keeps the job uncertain; state alone cannot fence another open dialog. Tico's own saved
         # choice for an update cut gives way to a person's.
         if c.execute("SELECT 1 FROM job_recovery WHERE job_id=? AND attempt_id=? AND actor<>?",
-                     (job_id, body.attempt_id, H.KEEPER)).fetchone():
+                     (job_id, body.run_id, H.KEEPER)).fetchone():
             raise Problem("uncertain", "A choice is already saved for this run. Refresh to see it.", 409)
         note = body.note.strip()
         if len(note) < 20:
@@ -5388,7 +5388,7 @@ class Execution:
         busy = c.execute("SELECT 1 FROM attempts WHERE bot=? AND state IN ('leased','running') AND lane="
                          "coalesce((SELECT lane FROM attempts WHERE id=?),'main')",
                          (row['bot'], row['attempt_id'])).fetchone()
-        result = self._decide(c, row, body.attempt_id, body.decision, note, who.actor, deferred=bool(busy))
+        result = self._decide(c, row, body.run_id, body.decision, note, who.actor, deferred=bool(busy))
         return result
 
     def _finish_recovery_review(self, c, bot):

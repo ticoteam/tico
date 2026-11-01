@@ -166,7 +166,7 @@ def test_other_interruptions_do_not_get_run_budget_recovery(api, reason):
 
 def test_person_stop_overrides_a_time_limit_diagnostic(api):
     machine, _, first = running(api)
-    post(api, 'bots/ops/stop', {'attempt_id': first['id']})
+    post(api, 'bots/ops/stop', {'run_id': first['id']})
     cut(api, machine, first)
     assert job_state(api, first['job_id']) == 'canceled'
 

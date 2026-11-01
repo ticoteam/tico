@@ -519,7 +519,7 @@ def test_delegated_botops_keeps_its_credential_and_intersects_private_participan
     api.app.router.routes.insert(0, api.app.router.routes.pop())
     assert act(api, attempt, "GET", "qa-delegated-credential").json() == {
         "actor": "human:ana", "task_actor": "bot:botops", "runner_id": botops["runner_id"],
-        "attempt_id": attempt["id"], "agent": "",
+        "run_id": attempt["id"], "agent": "",
     }
     shared = post(api, "tasks", {"owner": "botops", "title": "Review the private request", "body": "x", "private": True})
     other = post(api, "tasks", {"owner": "ops", "title": "Review another private request", "body": "x", "private": True})

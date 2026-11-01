@@ -34,7 +34,7 @@ def test_on_by_default_everyone_reads_it_and_only_the_operator_or_an_admin_switc
         seen = get(api, f"computers/{rid}/performance?hours=1", token=token)
         assert seen["performance"] == "on" and seen["points"] and seen["points"][0][1] == 20.0
         assert seen["scope"] == "container_cpu"
-        assert [x["attempt"] for x in seen["runs"]] == [attempt["id"]]    # the server's own record of what ran
+        assert [x["id"] for x in seen["runs"]] == [attempt["id"]]    # the server's own record of what ran
     post(api, f"computers/{rid}/performance", {"mode": "off"}, token="cara-test", expected=403)
     post(api, f"computers/{rid}/performance", {"mode": "off"}, token="ops-bot", expected=403)
     assert post(api, f"computers/{rid}/performance", {"mode": "off"}) == {"performance": "off"}
@@ -134,12 +134,12 @@ def test_a_bot_the_reader_may_not_see_is_unnamed_in_turns_overloads_and_the_summ
                   (attempt["id"], "bot:" + counsel))
     post(api, "runners/performance", {"samples": [sample(start + 60 * i, cpu=97.0) for i in range(10)]}, token=r["token"])
     cara = get(api, f"computers/{rid}/performance?hours=1", token="cara-test")
-    assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["attempt"] == attempt["id"]
+    assert cara["runs"][0]["bot"] == "counsel" and cara["runs"][0]["id"] == attempt["id"]
     assert cara["overloads"][0]["bots"][0]["bot"] == "counsel" and "counsel" in cara["summary"]
     dee = get(api, f"computers/{rid}/performance?hours=1", token=tokens["dee"])     # Sales sees the bot, cannot read it
-    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "attempt": None}
+    assert dee["runs"][0] == dee["runs"][0] | {"bot": "counsel", "model": "legal-model-x", "id": None}
     seen = get(api, f"computers/{rid}/performance?hours=1", token=tokens["stranger"])
-    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "attempt": None}
+    assert seen["runs"][0] == seen["runs"][0] | {"bot": "", "model": "", "id": None}
     assert seen["busiest"]["bots"] == [{"bot": "", "model": "", "runs": 1}]
     assert seen["overloads"][0]["bots"] == [{"bot": "", "model": "", "runs": 1}]
     assert "counsel" not in str(seen) and "legal-model-x" not in str(seen) and "another bot" in seen["summary"]

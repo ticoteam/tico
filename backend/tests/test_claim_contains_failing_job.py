@@ -178,7 +178,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
         H.task_comment(c, H.KEEPER, cpo_task, "The pricing numbers are in.")
     with store.read() as conn:
         read_deps.sweep(conn)
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {"attempt_id": attempt["id"], "decision": "resume",
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {"run_id": attempt["id"], "decision": "resume",
          "note": "Nothing was pushed yet; carry on from the build.", "acknowledge_uncertain_effects": True})
     assign(api, machine, "cpo")
     ready(api, machine, ["ops", "cpo"])

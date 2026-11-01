@@ -55,7 +55,7 @@ function messagingEvidence(data) {
 function messagingRuns(data) {
   return (data.slack_digests || []).map(d => `<div class="msg-run">
     <div class="msg-run-top"><strong>Slack channel check</strong><span class="spacer"></span><span class="muted">${esc(ago(d.created))}</span></div>
-    <div class="msg-run-meta"><span>${esc(d.channels.join(' · '))}</span><span>${d.count} message${d.count === 1 ? '' : 's'}</span>${d.skipped ? `<span>${d.skipped} skipped in high volume</span>` : ''}<span>${esc(d.attempt?.state || 'Queued')}</span></div>
+    <div class="msg-run-meta"><span>${esc(d.channels.join(' · '))}</span><span>${d.count} message${d.count === 1 ? '' : 's'}</span>${d.skipped ? `<span>${d.skipped} skipped in high volume</span>` : ''}<span>${esc(d.run?.state || 'Queued')}</span></div>
     <button class="ghost" type="button" data-msg-digest="${esc(d.id)}" style="margin-top:8px">View messages reviewed</button>
   </div>`).join('');
 }

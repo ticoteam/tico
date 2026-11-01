@@ -60,7 +60,7 @@ def test_fresh_renew_reads_through_a_write_and_rechecks_stop_lease_and_assignmen
     with store.transaction() as c:
         until = H.shift(now, seconds=store.settings.lease_seconds - 17)
         c.execute("UPDATE attempts SET lease_until=? WHERE id='attempt-0'", (until,))
-    post(api, "bots/ops/stop", {"attempt_id": "attempt-0"})
+    post(api, "bots/ops/stop", {"run_id": "attempt-0"})
     with store.read() as c:
         until = c.execute("SELECT lease_until FROM attempts WHERE id='attempt-0'").fetchone()[0]
     holder = sqlite3.connect(store.settings.db_path, isolation_level=None)

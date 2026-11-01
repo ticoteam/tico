@@ -9,7 +9,11 @@
     "count": 1,
     "items": [
       {
+        "actions": [
+          "decide"
+        ],
         "age_s": "<volatile>",
+        "body": null,
         "consumed_at": null,
         "conversation_id": "<id2>",
         "created": "<time>",
@@ -36,6 +40,10 @@
         "requested_by": "bot:ops",
         "requester": "bot:ops",
         "requester_name": "ops",
+        "subject": {
+          "id": "<pending_approval>",
+          "type": "approval"
+        },
         "task_id": "<open_task>",
         "tier": 2,
         "title": "Pay 9: Second test",

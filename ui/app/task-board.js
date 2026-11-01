@@ -43,7 +43,7 @@ function taskBlockedStrip(it) {
   const t = it.task;
   // A Blocked hold that is a bot's prerequisite is the bot's wait line, not a second line above it.
   const bot = taskBotWait(t);
-  const hold = t.blocked_since && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
+  const hold = taskBlockedHold(t) && !bot ? `<div class="bcard-blocked">${esc(taskBlockedLine(t))}</div>` : '';
   const open = taskOpenBlockers(t); if (!open.length) return hold;
   const first = open[0], name = first.title ? clipLine(first.title, 48) : '#' + (first.number ?? first.id);
   const all = open.map(r => r.title || '#' + (r.number ?? r.id)).join(', ');

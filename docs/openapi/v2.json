@@ -7508,7 +7508,7 @@
         ],
         "responses": {
           "200": {
-            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's or attempt's state).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
+            "description": "text/event-stream. Each change is `id: <change number>`, `event: <topic>` and JSON `data` with `seq`, `actor` (who made it, when the viewer may know) and `at`:\n- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or `state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` since `base` (null when more than 100 moved: read the list whole); read the changed items with `GET /api/v2/needs-you?ids=`, and the whole list (or its first pages) when the version held is not `base`. `ready` then carries `needs_version`.\nAlso `event: ready` (`seq`: where the log stands), `event: cursor` (the change number to resume from, past changes the viewer may not see), `event: reset` (the client was further behind than the log keeps, 24 hours: read in full), `event: expired` (sign-in no longer valid; sign in and reconnect), and a `: keepalive` comment every 15 seconds. Only what the viewer may read is sent. A stream ends after about fifteen minutes; reconnect with `after` (or the browser's own `Last-Event-ID`). People only: a bot is refused with 403.",
             "content": {
               "text/event-stream": {
                 "schema": {
@@ -37929,7 +37929,7 @@
           "bot": {
             "type": "string"
           },
-          "attempt_id": {
+          "run_id": {
             "type": [
               "string",
               "null"
@@ -37974,12 +37974,12 @@
           }
         },
         "required": [
-          "attempt_id",
           "bot",
           "job_id",
           "label",
           "message_id",
           "parts",
+          "run_id",
           "state",
           "text"
         ],
@@ -43196,10 +43196,19 @@
             "items": {
               "type": "object",
               "required": [
-                "kind"
+                "actions",
+                "body",
+                "created",
+                "id",
+                "kind",
+                "subject",
+                "title"
               ],
               "additionalProperties": true,
               "properties": {
+                "id": {
+                  "type": "string"
+                },
                 "kind": {
                   "enum": [
                     "vision",
@@ -43209,6 +43218,65 @@
                     "proposal",
                     "kpi_stale"
                   ]
+                },
+                "title": {
+                  "type": "string"
+                },
+                "body": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "subject": {
+                  "oneOf": [
+                    {
+                      "type": "object",
+                      "properties": {
+                        "type": {
+                          "enum": [
+                            "task",
+                            "message",
+                            "approval",
+                            "proposal",
+                            "kpi",
+                            "strategy"
+                          ]
+                        },
+                        "id": {
+                          "type": "string"
+                        }
+                      },
+                      "required": [
+                        "id",
+                        "type"
+                      ],
+                      "additionalProperties": true
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The one thing it is about; null for a card standing for several things or a setting"
+                },
+                "created": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "actions": {
+                  "type": "array",
+                  "items": {
+                    "enum": [
+                      "answer",
+                      "update",
+                      "decide",
+                      "add_reading",
+                      "open"
+                    ]
+                  },
+                  "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
                 },
                 "goal_id": {
                   "type": "string"
@@ -46410,12 +46478,12 @@
           },
           "run": {
             "type": "object",
-            "description": "The run that handled this message, once one has: on a person's message `{job_id, attempt_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` (it was folded into a run already working); on a bot's reply `{job_id, attempt_id}` (the run that wrote it, plus a summary of what it did). Absent until a run takes the message",
+            "description": "The run that handled this message, once one has: on a person's message `{job_id, run_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` (it was folded into a run already working); on a bot's reply `{job_id, run_id}` (the run that wrote it, plus a summary of what it did). Absent until a run takes the message",
             "properties": {
               "job_id": {
                 "type": "string"
               },
-              "attempt_id": {
+              "run_id": {
                 "type": "string"
               },
               "state": {
@@ -46896,29 +46964,7 @@
               "items": {
                 "type": "array",
                 "items": {
-                  "type": "object",
-                  "required": [
-                    "id",
-                    "kind",
-                    "title"
-                  ],
-                  "additionalProperties": true,
-                  "properties": {
-                    "id": {
-                      "type": "string"
-                    },
-                    "kind": {
-                      "enum": [
-                        "task",
-                        "question",
-                        "declined",
-                        "approval"
-                      ]
-                    },
-                    "title": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/NeedsYouItem"
                 }
               },
               "older": {
@@ -46980,6 +47026,87 @@
             "additionalProperties": true
           }
         ]
+      },
+      "NeedsYouItem": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "Needs you: task, question, waiting, declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, recovery, proposal, why. Each kind adds the fields its card reads"
+          },
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "subject": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "enum": [
+                      "task",
+                      "message",
+                      "approval",
+                      "proposal",
+                      "kpi",
+                      "strategy"
+                    ]
+                  },
+                  "id": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "id",
+                  "type"
+                ],
+                "additionalProperties": true
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The one thing it is about; null for a card standing for several things or a setting"
+          },
+          "created": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "answer",
+                "update",
+                "decide",
+                "add_reading",
+                "open"
+              ]
+            },
+            "description": "The writes that settle it: `answer` POST /api/v2/messages/{ask id}/answer: answer the question it carries; `update` POST /api/v2/tasks/{task id}: finish, decline, move or comment on the task; `decide` the subject's decision: POST /api/v2/approvals/{id}, /api/v2/proposals/{id}/decide, or /api/v2/stale-review/{row id} for each row; `add_reading` POST /api/v2/kpis/{kpi id}/readings; `open` nothing to send from the card: it opens its page (`link`, the subject, or the Goals page)"
+          }
+        },
+        "required": [
+          "actions",
+          "body",
+          "created",
+          "id",
+          "kind",
+          "subject",
+          "title"
+        ],
+        "additionalProperties": true
       },
       "NoticeList": {
         "type": "object",
@@ -52905,26 +53032,12 @@
             ],
             "description": "The one person a private task with no person on it reached: its owning bot's first subtask, question or wait for them made them its guest. They read the task as its requester and owner do, and nothing else of its tree"
           },
-          "snoozed_until": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Set aside until this moment (UTC): off lists and Needs you, and quiet, until then"
-          },
-          "snoozed_by": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "Who snoozed it"
-          },
-          "snoozed_note": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "description": "What to check when the snooze ends (sent in the owner's wake)"
+          "holds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/TaskHold"
+            },
+            "description": "What holds the task (docs/tasks.md, Holds): at most one per kind, empty when nothing does"
           },
           "roles": {
             "type": "object",
@@ -52977,6 +53090,7 @@
         "required": [
           "created",
           "due",
+          "holds",
           "id",
           "labels",
           "lane",
@@ -54422,6 +54536,61 @@
         "required": [
           "going",
           "waiting"
+        ],
+        "additionalProperties": true
+      },
+      "TaskHold": {
+        "type": "object",
+        "properties": {
+          "kind": {
+            "enum": [
+              "blocked",
+              "snoozed"
+            ]
+          },
+          "reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "since": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "until": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cause": {
+            "enum": [
+              "manual",
+              "dependency",
+              "stranded",
+              "gate",
+              "check",
+              "worktree",
+              null
+            ],
+            "description": "On a blocked hold: what holds it. manual is a person's or bot's move to Blocked; the others are Tico's own (docs/tasks.md, Holds)"
+          }
+        },
+        "required": [
+          "by",
+          "kind",
+          "reason",
+          "since",
+          "until"
         ],
         "additionalProperties": true
       },

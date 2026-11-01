@@ -5,6 +5,7 @@ import pytest
 
 from backend import hubdb as H, task_relations as TR
 from backend.tests.test_tasks_board import api, bot_token, get, headers, post  # noqa: F401
+from backend.tests.test_api import hold
 
 
 @pytest.fixture(params=['bot', 'person'])
@@ -176,8 +177,8 @@ def test_manager_snoozes_defers_asks_and_resolves_its_reports_question(api, mana
     token, actor = manager
     task = make(api)
     snoozed = post(api, 'tasks/' + task['id'] + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token)
-    assert snoozed['snoozed_by'] == actor
-    assert post(api, 'tasks/' + task['id'] + '/unsnooze', {}, token=token)['snoozed_until'] is None
+    assert hold(snoozed, 'snoozed')['by'] == actor
+    assert post(api, 'tasks/' + task['id'] + '/unsnooze', {}, token=token)['holds'] == []
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET next_run=1 WHERE id=?', (task['id'],))
     post(api, 'tasks/' + task['id'] + '/defer', {'at': '2027-01-01T00:00:00Z'}, token=token)
@@ -227,11 +228,11 @@ def test_role_holder_keeps_snooze_right_without_lending_it_to_manager(api, manag
     path = 'tasks/' + task['id']
     post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=token, expected=403)
     snoozed = post(api, path + '/snooze', {'until': '2027-01-01T00:00:00Z'}, token=report)
-    assert snoozed['snoozed_by'] == 'bot:ops'
+    assert hold(snoozed, 'snoozed')['by'] == 'bot:ops'
     post(api, path + '/unsnooze', {}, token=token, expected=403)
     with api.app.state.store.read() as c:
-        assert H.task(c, task['id'])['snoozed_until'] == snoozed['snoozed_until']
-    assert post(api, path + '/unsnooze', {}, token=report)['snoozed_until'] is None
+        assert H.task(c, task['id'])['snoozed_until'] == hold(snoozed, 'snoozed')['until']
+    assert post(api, path + '/unsnooze', {}, token=report)['holds'] == []
 
 
 def test_manager_run_now_and_waiting_person(api, manager):

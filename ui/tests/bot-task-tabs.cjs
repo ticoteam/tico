@@ -19,7 +19,7 @@ const task = (id, title, over = {}) => ({id, title, body: 'Details.', owner: 'bo
 const TASKS = [
   task('t-own', 'Ship the release notes'),
   task('t-waits', 'Turn on the screen default', {status: 'waiting', waiting_on: 'human:ana', created: ago(480)}),
-  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner: 'bot:qa', status: 'doing', direction: 'in'}]}, blocked_reason: 'Waiting for the test machine', blocked_since: ago(480)}),
+  task('t-bot-wait', 'Wait for QA', {status: 'waiting', waiting_on: null, note: 'Waiting for the test machine', relations: {blocks: [{id: 't-qa', title: 'Run the release check', owner: 'bot:qa', status: 'doing', direction: 'in'}]}, holds: [{kind: 'blocked', reason: 'Waiting for the test machine', since: ago(480), until: null, by: 'keeper', cause: 'dependency'}]}),
   task('t-roadmap', 'Plan the import page', {status: 'open', type_id: 'roadmap', created: ago(30)}),
   task('t-roadmap-done', 'Write the import spec', {status: 'done', type_id: 'roadmap', done_at: ago(1440), created: ago(3 * 1440)}),
   task('t-qa', 'Run the release check', {owner: 'bot:qa', requester: 'bot:lead'}),
@@ -46,7 +46,7 @@ const matches = (bot, tab, t) => (t.owner === 'bot:' + bot || t.requester === 'b
   if (field === 'waiting_on') {
     const blockers = (t.relations?.blocks || []).filter(r => r.direction === 'in' && !['done', 'closed', 'declined'].includes(r.status));
     const person = String(t.waiting_on || '').startsWith('human:');
-    const botWait = !person && !['gate', 'worktree'].includes(t.blocked_kind) && !t.ask?.to_actor?.startsWith('human:')
+    const botWait = !person && !['gate', 'worktree'].includes((t.holds || []).find(h => h.kind === 'blocked')?.cause) && !t.ask?.to_actor?.startsWith('human:')
       && !blockers.some(r => r.owner?.startsWith('human:')) && blockers[0]?.owner?.startsWith('bot:');
     return t.status === 'waiting' && (value === 'me' ? t.waiting_on === 'human:ana' : value === 'not_me' ? t.waiting_on !== 'human:ana'
       : value === 'person' ? person : value === 'bot' ? botWait : true);

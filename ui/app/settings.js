@@ -642,7 +642,7 @@ const STOPPED_NOTE = {
   dismiss: 'The human chose not to retry this delivery. Inspect the task separately.',
 };
 const reconcileStopped = (job, decision, detail = '') => post(`/v2/jobs/${encodeURIComponent(job.id)}/reconcile`, {
-  attempt_id: job.attempt_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
+  run_id: job.run_id, decision, note: detail ? `${STOPPED_NOTE[decision]} Details: ${detail}` : STOPPED_NOTE[decision],
   acknowledge_uncertain_effects: true
 });
 const stoppedOutcome = (decision, deferred) => decision === 'mixed'
@@ -663,13 +663,13 @@ async function executionReview(bot, after = () => $('#settings-tabs') && loadSet
   try {
     const {jobs} = await get(`/v2/bots/${encodeURIComponent(bot)}/execution-review`);
     host.innerHTML = jobs.length ? jobs.map(job => {
-      const saved = job.attempt?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
+      const saved = job.run?.final_text || job.output.map(event=>event.text).filter(Boolean).join('');
       const pick = STOPPED_PICK[job.stopped] || STOPPED_PICK.unknown, retry = pick.retry;
       const tools = (job.acted || []).join(', ');
       const button = (decision, label) => `<button type="submit" name="decision" value="${decision}"${(decision === 'resume') === retry ? '' : ' class="ghost"'}>${label}</button>`;
       return `<form data-job="${esc(job.id)}" class="stopped-run">
       <h3>${esc(job.task?.title || 'Interrupted conversation')}</h3>
-      <p data-stopped>Stopped ${esc(fmt(job.attempt?.started || job.attempt?.created))} ${esc(pick.what(tools))}.</p>
+      <p data-stopped>Stopped ${esc(fmt(job.run?.started || job.run?.created))} ${esc(pick.what(tools))}.</p>
       <p data-pick><strong>${esc(pick.say(tools))}</strong></p>
       <details data-details><summary>Details</summary>
         ${job.task ? `<p class="muted">Task ${esc(job.task.status)}${job.task.owner_name ? `, owner ${esc(job.task.owner_name)}` : ''}</p>` : ''}

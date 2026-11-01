@@ -37,6 +37,8 @@ from . import login_holds
 from . import cloud_access
 from . import counsel
 from . import step_age
+from . import task_holds
+from . import runs
 from . import bot_stops, turn_budgets, proposals, task_caps
 from . import (auto_tasks, check_models, profiles, run_triggers, task_models, task_run_models, team_rules, update_feeds,
                topic_change, usage_limits, bot_to_bot, wake_presets, visuals, wake_rules, quiet_work, milestone_waits)
@@ -1058,6 +1060,20 @@ def create_app(settings=None):
             response.headers["Content-Length"] = str(len(body))
         return response
 
+    def run_names(request, response):
+        """An answer's `attempt_id` keys read `run_id`: storage's attempt is the contract's run (backend/runs.py).
+        File downloads and other raw bytes keep theirs."""
+        body = getattr(response, "body", None)
+        if (not body or "content-disposition" in response.headers or "x-content-sha256" in response.headers
+                or "content-encoding" in response.headers
+                or "application/json" not in response.headers.get("content-type", "")):
+            return response
+        renamed = runs.public_json(body, request.url.path)
+        if renamed is not body:
+            response.body = renamed
+            response.headers["Content-Length"] = str(len(renamed))
+        return response
+
     class DisplayNameRoute(APIRoute):
         def __init__(self, path, endpoint, **options):
             # FastAPI calls the handler it was given; the JSON it answers is encoded by orjson (backend/fast_json.py).
@@ -1072,7 +1088,7 @@ def create_app(settings=None):
 
             async def named_response(request):
                 from .json_response import compress
-                return await compress(request, await display_names(request, await handler(request)))
+                return await compress(request, run_names(request, await display_names(request, await handler(request))))
             return named_response
 
     # HTTP middleware's call_next wraps every response as a stream, hiding its original
@@ -1122,7 +1138,7 @@ def create_app(settings=None):
             privacy.require_payload(c, request.state.identity, result)
         return result
 
-    def task_view(row, c=None, parts=None, pipelines=None, visible_sql="1", who=None):
+    def task_view(row, c=None, parts=None, pipelines=None, visible_sql="1", who=None, hold_marks=None):
         if c is not None:
             H.hydrate_task_tags(c, [row])
         value = {"id": row["id"], "short_id": row["id"][:8], **row, "acceptance_criteria": json.loads(row.get("acceptance", "[]")),
@@ -1136,8 +1152,13 @@ def create_app(settings=None):
             value["deferred"] = value["quiet"] = deferred
         # The stored condition is in `deferred.resume`; a board of 500 tasks does not carry the column besides.
         value.pop("resume", None)
-        if not value.get("snoozed_note"):
-            value.pop("snoozed_note", None)     # a null note is left out: a board of 500 tasks carries none
+        # A snooze and a move to Blocked read as one list of holds (task_holds.public); their columns stay the server's.
+        if c is not None and hold_marks is None:
+            hold_marks = task_holds.marks(c, [row])
+        value["holds"] = task_holds.public(row, (hold_marks or {}).get(row["id"]))
+        for field in ("snoozed_until", "snoozed_by", "snoozed_note", "blocked_since", "blocked_reason", "blocked_kind",
+                      "blocked_from_step", "blocked_from_status", "blocked_gate"):
+            value.pop(field, None)
         if not value.get("occurrence"):
             value.pop("occurrence", None)       # only a due-date routine's task has one: a board of 500 carries none
         value.pop("occurrence_step", None)      # the server's: which step made an occurrence's task (never in a view)
@@ -1145,15 +1166,8 @@ def create_app(settings=None):
         value.pop("checkpoint_state", None)     # wake_rules.state_of, for the server only
         value.pop("blocker_key", None)          # blocker_asks' match key, for the server only
         value.pop("holds_cleared_at", None)     # the stranded sweep's clock (task_holds), for the server only
-        hold_kind = value.pop("blocked_kind", None)
-        for field in ("blocked_from_step", "blocked_from_status", "blocked_gate"):
-            value.pop(field, None)
-        # A review-gate or worktree hold says its own why, so the screen never folds it into a bot wait's line
-        # (ui/app/tasks.js taskBotWait); other kinds stay server-only.
-        if hold_kind in ("gate", "worktree"):
-            value["blocked_kind"] = hold_kind
-        # Most list rows have no hold or accumulated clock; omit empty optional fields.
-        for field in ("blocked_since", "blocked_reason", "building_started_at", "building_seconds"):
+        # Most list rows have no accumulated clock; omit empty optional fields.
+        for field in ("building_started_at", "building_seconds"):
             if not value.get(field):
                 value.pop(field, None)
         if pipelines is None:
@@ -1295,9 +1309,10 @@ def create_app(settings=None):
         views.prime_list_origins(c, visible_sql, rows)
         quiet_work.prime(c, [row for row in rows if row.get("next_run")])
         step_since = step_age.since_map(c, rows)
+        hold_marks = task_holds.marks(c, rows)
         result = []
         for row in rows:
-            value = task_view(row, pipelines=pipelines)
+            value = task_view(row, pipelines=pipelines, hold_marks=hold_marks)
             value.pop("checkpoint", None)    # up to a page of text per task; the full task view carries it
             value.update({
                 "relations": relations[row["id"]],
@@ -3714,8 +3729,10 @@ def create_app(settings=None):
                                 row.pop(field, None)
                         if isinstance(row.get("step"), dict):
                             row["step"].pop("public_name", None)
-                        # A snooze's note is left out of a list row; the task's own view keeps it whole.
-                        row.pop("snoozed_note", None)
+                        # A snooze's note (up to 500 characters) is text too; the task's own read keeps it whole.
+                        for hold in row.get("holds") or ():
+                            if hold["kind"] == "snoozed":
+                                hold.pop("reason", None)
             if changed_after is not None:
                 found = reads.changed(c, changed_after, visible_sql)
                 ids = reads.around(c, found[0]) if found else []
@@ -7566,7 +7583,7 @@ def create_app(settings=None):
     def stop_turn(request: Request, bot: str, body: M.StopTurn):
         with store.read() as c:
             bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
-        return mutate(request, body, lambda c: execution.stop(c, request.state.identity, bot, body.attempt_id, body.redirect))
+        return mutate(request, body, lambda c: execution.stop(c, request.state.identity, bot, body.run_id, body.redirect))
 
     @app.get("/api/v2/bots/{bot}/pause-state")
     def bot_pause_state(request: Request, bot: str):

@@ -23,7 +23,7 @@ the bot on the org chart, as only a person decides one."""
 import logging
 
 from .batch_work import isolated
-from . import strategy_bot
+from . import needs_shape, strategy_bot
 from . import goals as G
 from . import kpis as K
 from . import strategy as S
@@ -449,8 +449,9 @@ def for_person(conn, actor, items):
             if room <= 0:
                 continue
             room -= 1
-        view = {k: v for k, v in item.items() if k not in ("ref", "owner", "measure_name", "private")}
+        view = {k: v for k, v in item.items() if k not in ("owner", "measure_name", "private")}
         if task:
             view["task"] = {"id": task["id"], "title": task["title"], "status": task["status"]}
-        out.append(view)
+        title, body = _ask(item, strategy_bot.name(conn))
+        out.append(needs_shape.goal_item(view, title, body, task["created"] if task else None))
     return out

@@ -31,7 +31,7 @@ const comments = [
     refs: {turn_id: 'a3'}, run: {steps: 1}},
 ];
 const events = [{id: 1, task_id: 't-docs', ts: at(35), actor: 'bot:botops', field: 'status', old: 'open', new: 'doing', note: ''}];
-const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', attempt_id: 'a2', state: 'running', label: 'Working', text: '',
+const execution = {job_id: 'j2', message_id: 'k2', bot: 'botops', run_id: 'a2', state: 'running', label: 'Working', text: '',
   parts: [{kind: 'progress', text: 'Checking the API page.', at: at(1)}, {kind: 'tool', text: 'Ran hub task create', at: at(1)}]};
 
 async function run(viewport, shot) {
@@ -116,7 +116,7 @@ async function run(viewport, shot) {
     assert.match(await live.innerText(), /Ran grep/, 'the redraw drew the new step');
     assert.equal(await live.locator('[data-task-stop]').innerText(), 'Stopping…');
     assert.ok(await live.locator('[data-task-stop]').isDisabled());
-    assert.deepEqual(stops, [{attempt_id: 'a2'}]);
+    assert.deepEqual(stops, [{run_id: 'a2'}]);
     running = false;
     await reread(page);
     await page.waitForFunction(() => !document.querySelector('#task-modal .task-live'));
@@ -151,10 +151,10 @@ async function answered(viewport, shot) {
     const said = [{id: 'q1', conversation_id: 'r-ask', from_actor: 'bot:lead', kind: 'say', body: 'Which app is still open?', created: at(20)}];
     const mine = {id: 'c2', conversation_id: 'r-ask', from_actor: 'human:ana', to_actor: 'bot:lead', kind: 'say', body: 'The billing one.', created: at(0)};
     const reply = {id: 'r3', conversation_id: 'r-ask', from_actor: 'bot:lead', kind: 'say', body: 'Thanks, closing it.', created: at(0)};
-    const run = {job_id: 'c2', message_id: 'c2', bot: 'lead', attempt_id: 'a9', from_person: true, text: '', parts: []};
+    const run = {job_id: 'c2', message_id: 'c2', bot: 'lead', run_id: 'a9', from_person: true, text: '', parts: []};
     const states = {
       idle: {comments: said, execution: null},
-      queued: {comments: [...said, mine], execution: {...run, attempt_id: null, state: 'queued', label: 'Saved — queued'}},
+      queued: {comments: [...said, mine], execution: {...run, run_id: null, state: 'queued', label: 'Saved — queued'}},
       running: {comments: [...said, mine], execution: {...run, state: 'running', label: 'Working', parts: [{kind: 'tool', text: 'Ran hub task show', at: at(0)}]}},
       replied: {comments: [...said, mine, reply], execution: {...run, state: 'completed', label: 'Complete'}},
       failed: {comments: [...said, mine], execution: {...run, state: 'uncertain', label: 'Reply failed — your message is saved'}},

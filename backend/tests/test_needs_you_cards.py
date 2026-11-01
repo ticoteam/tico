@@ -44,6 +44,13 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
     items = {i["id"]: i for i in page["items"]}
 
     assert items[send["id"]]["title"] == "Send: '$200 for each rental owner you introduce' to Jennie Ooten"
+    # One item shape whatever the kind (backend/needs_shape.py): what it is about and the writes that settle it.
+    common = {"id", "kind", "title", "body", "subject", "created", "actions"}
+    assert all(common <= set(i) and i["actions"] for i in page["items"])
+    assert (items[send["id"]]["subject"], items[send["id"]]["actions"]) == ({"type": "approval", "id": send["id"]},
+                                                                            ["decide"])
+    assert items[keys["id"]]["subject"] == {"type": "task", "id": keys["id"]} and "update" in items[keys["id"]]["actions"]
+    assert items[keys["id"]]["body"] == "Rotate them"
     assert items[merge["id"]]["title"] == "Merge: 'Referral deal for rental owners' (acme/site #12)"
     assert (items[send["id"]]["need"], items[merge["id"]]["need"], items[keys["id"]]["need"]) == ("review", "review",
                                                                                                     "connect")
@@ -53,6 +60,7 @@ def test_cards_are_titled_dated_grouped_and_one_per_blocker(api):
 
     card = items[pick["id"]]
     assert card["need"] == "decide" and card["recommend"]["do"] == "Gusto" and card["recommend"]["option"] == "Gusto"
+    assert card["actions"] == ["answer", "update"]
     assert vendor["id"] not in items and fix["id"] not in items
     assert {f["id"] for f in card["folded"]} == {vendor["id"], fix["id"]}
     # The walk-through and brief say the folded waits with the card.

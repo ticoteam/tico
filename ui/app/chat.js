@@ -423,7 +423,7 @@ function v2DeliveryHTML(m) {
   if (d.mode === 'redirect') return '<div class="chat-delivery">Stopping this turn; this message starts the next one</div>';
   const slug = String(m.to_actor || '').replace(/^bot:/, '');
   const can = m.from_actor === myActor() && settingsCanManageBot(botRow(slug));
-  return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-attempt="${esc(d.attempt_id)}">Stop and redirect</button>` : ''}</div>`;
+  return `<div class="chat-delivery">Queued for the next turn${can ? ` <button type="button" class="btn sm" data-redirect="${esc(m.id)}" data-redirect-bot="${esc(slug)}" data-redirect-run="${esc(d.run_id)}">Stop and redirect</button>` : ''}</div>`;
 }
 document.addEventListener('click', async ev => {
   const button = ev.target.closest('[data-redirect]'); if (!button) return;
@@ -431,7 +431,7 @@ document.addEventListener('click', async ev => {
   button.disabled = true;
   try {
     await post(`/v2/bots/${encodeURIComponent(button.dataset.redirectBot)}/stop`,
-      {attempt_id: button.dataset.redirectAttempt, redirect: button.dataset.redirect});
+      {run_id: button.dataset.redirectRun, redirect: button.dataset.redirect});
     button.closest('.chat-delivery').textContent = 'Stopping this turn; this message starts the next one';
   } catch (e) { button.disabled = false; toast(`Not redirected: ${e.message}`, true); }
 });
@@ -705,8 +705,8 @@ function chatStopSync(state) {
   if (!P || P.slug !== state.slug) return;
   const x = state.execution, own = ['leased', 'running'].includes(x?.state);
   const busy = own || x?.state === 'queued' && v2StatusOf(state.slug)?.state === 'running';
-  const running = busy && settingsCanManageBot(botRow(state.slug)) ? {attempt_id: own ? x.attempt_id : null} : null;
-  if (!running === !P.running && running?.attempt_id === P.running?.attempt_id) return;
+  const running = busy && settingsCanManageBot(botRow(state.slug)) ? {run_id: own ? x.run_id : null} : null;
+  if (!running === !P.running && running?.run_id === P.running?.run_id) return;
   P.running = running; P.stopping = false;
   pillButtons(P);
 }

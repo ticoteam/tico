@@ -64,6 +64,9 @@ def test_a_stale_kpi_is_one_task_for_its_owner_closed_by_a_fresh_reading(api):
     assert task["id"] in needs_tasks(api, "ana-test")
     [item] = [i for i in get(api, "goals/needs-you")["items"] if i.get("kpi_id") == kpi["id"]]
     assert item["kind"] == "kpi_stale" and item["task"]["id"] == task["id"]
+    assert (item["id"], item["subject"], item["actions"]) == (f"kpi_stale:{kpi['id']}", {"type": "kpi", "id": kpi["id"]},
+                                                              ["add_reading"])
+    assert item["title"] and "ref" not in item and item["created"]
     # Another write and the hourly pass ask nothing twice.
     post(api, "kpis", {"name": "Second measure", "owner": "me", "cadence": "weekly"})
     sync(api)
@@ -107,6 +110,7 @@ def test_a_proposal_asks_whoever_decides_it_and_closes_when_decided(api):
     assert task["title"] == "Use a new Activation target on Raise activation?"
     [item] = [i for i in get(api, "goals/needs-you", "ben-test")["items"] if i["kind"] == "proposal"]
     assert item["task"]["id"] == task["id"] and item["proposal"]["id"] == proposal["id"]
+    assert (item["subject"], item["actions"]) == ({"type": "proposal", "id": proposal["id"]}, ["decide"])
     # The environment owner may decide it too: it stays on their Goals page, without the task, which is Ben's.
     [theirs] = [i for i in get(api, "goals/needs-you")["items"] if i["kind"] == "proposal"]
     assert theirs["proposal"]["id"] == proposal["id"] and "task" not in theirs

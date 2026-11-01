@@ -343,7 +343,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       // a run that stopped partway is red, offers the one action that exists, and a click says what happened.
       const NOT_STARTED = "Last run didn't start in time. Nothing was lost; nothing is needed.";
       const soft = {bot: 'cmo', state: 'idle', bot_state: 'active', since: iso(-60e3), last_stop: {kind: 'not_started', tone: 'soft',
-        needs_person: false, action: null, at: iso(-60e3), attempt_id: 'a1', text: NOT_STARTED,
+        needs_person: false, action: null, at: iso(-60e3), run_id: 'a1', text: NOT_STARTED,
         reason: "Its computer took the run but didn't start it before its lease ran out. It is back in the queue and runs again shortly."}};
       let {page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: soft});
       await page.goto('https://tico-ui.test/#/bot/cmo');
@@ -362,7 +362,7 @@ const railOrder = page => page.evaluate(() => [...document.querySelectorAll('#pa
       assert.deepEqual(errors, [], 'soft last-run errors');
       await context.close();
       const stopped = {bot: 'cmo', state: 'crashed', bot_state: 'active', since: iso(-60e3), focus: 'One run stopped; saved for later',
-        last_stop: {kind: 'stopped', tone: 'alert', needs_person: true, action: 'review', at: iso(-60e3), attempt_id: 'a2',
+        last_stop: {kind: 'stopped', tone: 'alert', needs_person: true, action: 'review', at: iso(-60e3), run_id: 'a2',
           text: 'Last run stopped partway. Retry it or dismiss it.',
           reason: 'Its computer stopped answering while the run was going, so the run\'s lease ran out.'}};
       ({page, errors, context} = await open(browser, {width: 1440, height: 900}, {}, {status: stopped}));

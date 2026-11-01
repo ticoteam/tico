@@ -185,6 +185,27 @@ Transitions:
 
 Enforcement: trigger on insert and update of `state`. NOT NULL.
 
+### Runs
+
+API v2, the live events, webhooks, the MCP tools, the hub CLI and the web app call an attempt a run until Release 2
+moves the table: a field is `run_id` (the attempt's id), an object is `run`, a list is `runs`. `run.state` comes from
+`attempts.state` by one fixed map (`backend/runs.py`, `STATE`):
+
+| `attempts.state` | `run.state` | Meaning |
+|---|---|---|
+| `leased` | `leased` | a runner holds the lease and has not started the harness |
+| `running` | `running` | the harness is working |
+| `input` | `input` | paused for an answer it asked for |
+| `completed` | `completed` | finished with a result |
+| `failed` | `failed` | finished with an error it reported |
+| `interrupted` | `interrupted` | the runner reported that it stopped partway; it can resume |
+| `expired` | `expired` | the lease ran out with nothing reported, or the hub restarted mid-run |
+
+`expired` and `interrupted` stay apart: one is a report from the runner, the other a timeout that says nothing about
+what the run did. `leased`, `running` and `input` are live (`runs.LIVE`). A run with no attempt row yet has
+`state: null`. The runner's own wire (`/api/v2/runners/...`, `/api/v2/attempts/...`, `contracts/runner`) keeps the
+storage names.
+
 ### automation_runs.status (trigger)
 
 One run of an automation.

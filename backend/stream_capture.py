@@ -9,7 +9,7 @@ they may already see.
 import json
 import re
 
-from . import task_privacy as privacy
+from . import runs, task_privacy as privacy
 from .store import H, Problem
 
 KEEP_DAYS = 7
@@ -156,7 +156,7 @@ def export(c, who, auth, aid, full=True):
                                 "dropped_bytes": 0, "created": diagnostic['stderr_at']}
     diagnostics = run_diagnostics.metadata(c, aid)
     if not full:
-        return {"attempt": {"id": aid, "bot": attempt["bot"], "state": attempt["state"]}, "provider": cap["provider"],
+        return {"run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"])}, "provider": cap["provider"],
                 "bytes": cap["bytes"], "stderr_bytes": len((stderr or "").encode()), "stream_captured": stream_captured,
                 **diagnostics, "truncated": bool(cap["truncated"]), "captured": cap["created"],
                 "fixture": f"hub run export {aid} --fixture"}
@@ -170,8 +170,8 @@ def export(c, who, auth, aid, full=True):
                                  "LIMIT ?", (aid, MAX_EVENTS + 1))]
     result = json.loads(attempt["result"]) if attempt["result"] else {}
     return {
-        "attempt": {"id": aid, "bot": attempt["bot"], "state": attempt["state"], "created": attempt["created"],
-                    "started": attempt["started"], "finished": attempt["finished"], **diagnostics},
+        "run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"]), "created": attempt["created"],
+                "started": attempt["started"], "finished": attempt["finished"], **diagnostics},
         "provider": cap["provider"],
         "stream_captured": stream_captured,
         "stderr_tail": stderr or "",

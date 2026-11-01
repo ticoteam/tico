@@ -190,7 +190,7 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
 
     botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, H.now())
     [row] = stats(api)["queues"]["ops"]["decisions"]
-    assert (row["job"], row["attempt"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
+    assert (row["job"], row["run"], row["current"], row["state"], row["decision"], row["by"], row["by_kind"],
             row["note"]) == (attempt["job_id"], attempt["id"], True, "canceled", "dismiss", "bot:botops", "botops",
                              DEV_563_NOTE)
     assert row["label"].startswith("Cancelled: dismissed by BotOps at ") and row["label"].endswith("Z, " + DEV_563_NOTE)
@@ -213,7 +213,7 @@ def test_a_held_or_dismissed_run_lists_its_decision_beside_the_bots_queue(api):
     expire(api, again["id"])
     assert claim(api, machine) is None
     [row] = stats(api)["queues"]["ops"]["decisions"]
-    assert (row["attempt"], row["current"], row["state"]) == (attempt["id"], False, None)
+    assert (row["run"], row["current"], row["state"]) == (attempt["id"], False, None)
     assert row["label"].startswith("Resumed by ") and row["label"].endswith(", Run it again after all, please.")
 
     # Outside the window it is no longer listed; a reader who cannot read the bot never sees it.

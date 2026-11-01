@@ -175,7 +175,7 @@ def test_removed_bot_loses_retained_derived_history_and_run(live, derived):
     mid, attempt = derived
     msg, aid = attempt["message"], attempt["id"]
     assert get(live, f"messages/{msg['id']}", token="ops-live")["id"] == msg["id"]
-    assert get(live, f"attempts/{aid}/capture", token="ops-live")["attempt"]["id"] == aid
+    assert get(live, f"attempts/{aid}/capture", token="ops-live")["run"]["id"] == aid
     removed = live.request("DELETE", f"/api/v2/live-meetings/{mid}/bots/ops", json={}, headers=headers("ben-test"))
     assert removed.status_code == 200, removed.text
     get(live, f"conversations/{msg['conversation_id']}/messages", token="ops-live", expected=404)

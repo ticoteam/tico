@@ -1060,7 +1060,6 @@ export type EventTypeList = {
 };
 
 export type Execution = {
-  attempt_id: string | null;
   bot: string;
   job_id: string;
   label: string;
@@ -1070,6 +1069,7 @@ export type Execution = {
   kind: "progress" | "reply" | "tool";
   text: string;
 }>;
+  run_id: string | null;
   state: string;
   text: string;
 };
@@ -2138,21 +2138,30 @@ export type GoalWhy = {
 export type GoalsNeedsYou = {
   actor: string;
   items: Array<{
+  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  body: string | null;
+  created: string | null;
   freshness?: string;
   goal_id?: string;
   goal_title?: string | null;
   goals?: Array<Record<string, unknown>>;
+  id: string;
   kind: "vision" | "kpi_red" | "recovery" | "why" | "proposal" | "kpi_stale";
   kpi_id?: string;
   kpi_name?: string | null;
   options?: Array<Record<string, unknown>>;
   proposal?: Record<string, unknown>;
   reason?: string;
+  subject: {
+  id: string;
+  type: "task" | "message" | "approval" | "proposal" | "kpi" | "strategy";
+} | null;
   task?: {
   id: string;
   status?: string;
   title?: string;
 };
+  title: string;
 }>;
 };
 
@@ -2771,8 +2780,8 @@ export type Message = {
   kind: string;
   refs: Record<string, unknown>;
   run?: {
-  attempt_id?: string;
   job_id?: string;
+  run_id?: string;
   state?: "started_run" | "added_to_run";
 };
   sent_as?: SentAs;
@@ -2859,11 +2868,7 @@ export type NeedsYou = {
   actor: string;
   bots?: Record<string, number>;
   count?: number;
-  items: Array<{
-  id: string;
-  kind: "task" | "question" | "declined" | "approval";
-  title: string;
-}>;
+  items: Array<NeedsYouItem>;
   next?: string | null;
   older?: Array<Record<string, unknown>>;
   restart?: boolean;
@@ -2871,6 +2876,19 @@ export type NeedsYou = {
 } | {
   actor: string;
   count: number;
+};
+
+export type NeedsYouItem = {
+  actions: Array<"answer" | "update" | "decide" | "add_reading" | "open">;
+  body: string | null;
+  created: string | null;
+  id: string;
+  kind: string;
+  subject: {
+  id: string;
+  type: "task" | "message" | "approval" | "proposal" | "kpi" | "strategy";
+} | null;
+  title: string;
 };
 
 export type NoticeList = {
@@ -3977,6 +3995,7 @@ export type Task = {
   due: string | null;
   external_requesters?: number;
   guest?: string | null;
+  holds: Array<TaskHold>;
   id: string;
   important_requesters?: number;
   internal_requesters?: number;
@@ -4002,9 +4021,6 @@ export type Task = {
   requester_name?: string;
   roles?: Record<string, Array<string>>;
   size?: number | null;
-  snoozed_by?: string | null;
-  snoozed_note?: string | null;
-  snoozed_until?: string | null;
   status: string;
   step?: TaskStep | null;
   step_id?: string | null;
@@ -4250,6 +4266,15 @@ export type TaskFilter = {
 export type TaskFlow = {
   going: number;
   waiting: number;
+};
+
+export type TaskHold = {
+  by: string | null;
+  cause?: "manual" | "dependency" | "stranded" | "gate" | "check" | "worktree" | null;
+  kind: "blocked" | "snoozed";
+  reason: string | null;
+  since: string | null;
+  until: string | null;
 };
 
 export type TaskList = {

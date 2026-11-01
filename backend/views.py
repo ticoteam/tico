@@ -21,7 +21,7 @@ from . import bot_access as A
 from . import models as M
 from . import changelog as CL
 from . import visuals
-from . import app_delivery, login_holds, providers, runner_versions
+from . import app_delivery, login_holds, providers, runner_versions, runs
 from .harnesses import resolve_harness
 from . import personal_tokens, profiles, rooms, team_rules, turns, wake_presets
 from . import auto_tasks, bot_stops, pipeline_stats, run_triggers
@@ -87,11 +87,14 @@ def prime_attempt_details(c, ids):
 
 
 def attempt_details(c, turn):
+    """What a run's attempt row adds to its turn: `state` (run.state, backend/runs.py; None for a turn with no attempt
+    row), its diagnostics and load, and why it failed."""
     attempt = read_cache.one(c, ATTEMPT_DETAIL_SQL, (turn["id"],))
     failed = bool(attempt and attempt["state"] in ("failed", "expired"))
     from .run_diagnostics import metadata
     from .performance import attempt_snapshots
-    details = {"record_kind": "attempt" if failed else "run", "attempt_id": turn["id"], **metadata(c, turn["id"]), **attempt_snapshots(c, turn["id"])}
+    details = {"state": runs.state(attempt["state"]) if attempt else None, **metadata(c, turn["id"]),
+               **attempt_snapshots(c, turn["id"])}
     if failed:
         try:
             result = json.loads(attempt["result"] or "{}")
@@ -136,10 +139,9 @@ def failed_attempts(c, who, auth, bot=None, since=None, limit=200):
             result = {}
         reason = (login_holds.failure_line(result) or result.get("error") or result.get("reason") or result.get("message")
                   or ("Lease expired before completion" if row["state"] == "expired" else "Attempt failed before completion"))
-        rows.append({"id": row["id"], "attempt_id": row["id"], "bot": row["bot"],
+        rows.append({"id": row["id"], "bot": row["bot"],
                      "started": row["started"] or row["created"], "finished": row["finished"],
-                     "exit": row["state"], "message_id": row["message_id"],
-                     "record_kind": "attempt", "failure_reason": str(reason),
+                     "exit": row["state"], "message_id": row["message_id"], "failure_reason": str(reason),
                      **attempt_details(c, {"id": row["id"], "finished": row["finished"]})})
     return rows
 
@@ -1694,6 +1696,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     from . import reconnects
     reconnect_cards = reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]], who.actor)
     items = []
+    from . import task_holds
+    hold_marks = task_holds.marks(c, [row for kind in ("tasks", "waiting", "declined") for row in raw[kind]])
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
             if row["id"] not in can_see:
@@ -1703,7 +1707,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             if ask and (ask.get("refs") or {}).get("if_no_answer"):
                 ask["goes_ahead_at"] = ask_deadlines.deadline(ask, rules)     # when the bot's default goes ahead
             typ = next((t for t in pipelines if t["id"] == (row.get("type_id") or H.GENERAL_TYPE)), None) or {}
-            item = {**task_view(row, pipelines=pipelines),
+            item = {**task_view(row, pipelines=pipelines, hold_marks=hold_marks),
                     "kind": kind if kind in ("declined", "waiting") else "question" if ask else "task",
                     # Finished and reopened only by a step move (the Product roadmap): no Done, Reopen or Close on it.
                     "steps_only": bool(typ.get("steps_only")),
@@ -1774,6 +1778,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
+    from . import needs_shape
+    items = [needs_shape.needs_item(x, who.actor) for x in items]      # one shape whatever the kind (NeedsYouItem)
     readable_memo = {}      # a blocker or ancestor shared by many cards is checked once in this snapshot
 
     def readable(tid):
@@ -1939,7 +1945,7 @@ def fleet_snapshot(c, auth, identity, task_view):
             # A bot the person may only send requests to: its name and that it exists, not its work.
             bots.append({"id": slug, "slug": row["slug"], "name": row["display_name"], "state": row["state"], "focus": "",
                          "task_id": None, "online": None, "ready": None, "queued": None,
-                         "active_attempt": None, "active_attempts": 0})
+                         "active_run": None, "active_runs": 0})
             continue
         # Fleet only exposes focus/task identity, so counters/approval scans are unnecessary.
         source = {k: v for k, v in statuses.get(slug, {}).items() if k not in ("open_tasks", "needs_human")}
@@ -1953,8 +1959,9 @@ def fleet_snapshot(c, auth, identity, task_view):
                      "focus": status.get("focus") or "", "task_id": status.get("task_id"),
                      "online": location["online"], "ready": location["ready"],
                      "queued": queued.get(slug, 0),
-                     "active_attempt": {k: attempt[k] for k in ("id", "state", "started", "lease_until")} if attempt else None,
-                     "active_attempts": len(active)})
+                     "active_run": {"id": attempt["id"], "state": runs.state(attempt["state"]), "started": attempt["started"],
+                                    "lease_until": attempt["lease_until"]} if attempt else None,
+                     "active_runs": len(active)})
     tasks = []
     for row in H.tasks(c, status=H.ACTIVE_STATUSES + ("declined",), visible=auth.task_sql(c, principal)):
         actors = (row["owner"], row["requester"])
@@ -2006,9 +2013,8 @@ def install_views(app, store, auth, mutate, task_view):
         success = turn.get("exit") == "completed"
         if made is None and c is not None:
             made = ran_on(c, [turn["id"]])[turn["id"]]
-        return {"run": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
-                "record_kind": turn.get("record_kind", "run"), "attempt_id": turn["id"],
-                "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
+        return {"id": turn["id"], "bot": turn["bot"], "employee": turn["bot"], "issue": None,
+                "state": turn.get("state"), "outcome": turn.get("exit"), "failure_reason": turn.get("failure_reason") or "",
                 **{k: turn.get(k) for k in ("end_reason", "ended_at", "last_event", "last_event_at", "stalled", "stalled_at")},
                 "finished": turn.get("finished") or turn.get("started"),
                 "exit": 0 if success else 1, "duration_s": duration,

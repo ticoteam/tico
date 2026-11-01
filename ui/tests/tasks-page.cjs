@@ -158,7 +158,7 @@ async function open(browser, {viewport = {width: 1440, height: 900}, theme = 'da
     if (snooze && method === 'POST') {
       const task = tasks.find(x => x.id === decodeURIComponent(snooze[1])), body = req.postDataJSON();
       posts.push({p, body});
-      Object.assign(task, {snoozed_until: snooze[2] === 'snooze' ? body.until : null, snoozed_by: snooze[2] === 'snooze' ? 'human:ana' : null});
+      Object.assign(task, {holds: snooze[2] === 'snooze' ? [{kind: 'snoozed', reason: null, since: null, until: body.until, by: 'human:ana'}] : []});
       return json({task: withRelations(task, tasks)});
     }
     const one = p.match(/^\/api\/v2\/tasks\/([^/]+)$/);
@@ -921,9 +921,9 @@ async function wakeNotes(browser) {
     sentence: 'waits for PR #943 to merge', ...(note ? {note} : {})});
   const long = 'Check the deploy finished on <b>staging</b> and the migration ran, then ask Sam to QA the checkout flow';
   const {page, errors} = await open(browser, {extraTasks: [
-    {...base, id: 't-noted', title: 'Noted snooze', snoozed_until: inDays(3), snoozed_by: 'human:ana', snoozed_note: long,
+    {...base, id: 't-noted', title: 'Noted snooze', holds: [{kind: 'snoozed', reason: long, since: null, until: inDays(3), by: 'human:ana'}],
       milestone_waits: [wait('Check the migration')]},
-    {...base, id: 't-bare', title: 'Bare snooze', snoozed_until: inDays(3), snoozed_by: 'human:ana', milestone_waits: [wait()]}]});
+    {...base, id: 't-bare', title: 'Bare snooze', holds: [{kind: 'snoozed', reason: null, since: null, until: inDays(3), by: 'human:ana'}], milestone_waits: [wait()]}]});
   await page.locator('#task-view [data-view="snoozed"]').click();
   const chips = async (key, title) => {
     await page.locator(`#task-body [data-task-key="${key}"] [data-open-task]`).click();
@@ -933,7 +933,7 @@ async function wakeNotes(browser) {
       milestoneTitle: await milestone.getAttribute('title'), notes: await page.locator('#task-peek .tchip-note').count(),
       bold: await page.locator('#task-peek .tmodal-head b').count()};
   };
-  const day = await page.evaluate(at => snoozeDay({snoozed_until: at}), inDays(3));
+  const day = await page.evaluate(at => snoozeDay({holds: [{kind: 'snoozed', until: at}]}), inDays(3));
   const noted = await chips('tt-noted', 'Noted snooze');
   assert.equal(noted.snooze, `Snoozed to ${day} · ${long}`);
   assert.match(noted.snoozeTitle, new RegExp(` · ${long.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\. Click to bring it back now$`));

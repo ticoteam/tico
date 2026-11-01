@@ -44,6 +44,7 @@ import time
 from fastapi import Request
 from fastapi.responses import StreamingResponse
 
+from . import runs
 from . import visuals as V
 from .store import H, Problem, encode
 
@@ -907,7 +908,7 @@ def _runs(view, rows):
                 readable[aid] = privacy.attempt_readable(c, view.principal, aid)
             if not readable[aid]:
                 continue
-        entry = {"attempt_id": aid, "conversation_id": cid, "bot": bot}
+        entry = {"run_id": aid, "conversation_id": cid, "bot": bot}
         if row["kind"] == "output":
             event = outputs.get(str(row["ref"]))
             if event is None:
@@ -929,12 +930,12 @@ def _runs(view, rows):
                             "WHERE j.message_id=? ORDER BY j.created DESC LIMIT 1", (row["ref"],)).fetchone()
             if job is None or not privacy.message_readable(c, view.principal, H.message(c, job["message_id"])):
                 continue
-            entry.update(job_id=job["id"], message_id=job["message_id"], state=job["state"], attempt_id=job["attempt_id"])
+            entry.update(job_id=job["id"], message_id=job["message_id"], state=job["state"], run_id=job["attempt_id"])
         else:
             attempt = c.execute("SELECT state, job_id FROM attempts WHERE id=?", (aid,)).fetchone()
             if attempt is None:
                 continue
-            entry.update(job_id=attempt["job_id"], state=attempt["state"])
+            entry.update(job_id=attempt["job_id"], state=runs.state(attempt["state"]))
         out.append((row, entry))
     return out
 
@@ -1045,7 +1046,8 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
 
 
 def _frame(seq, topic, data):
-    return (f"id: {seq}\n" if seq is not None else "") + f"event: {topic}\ndata: {encode(data)}\n\n"
+    # A task's or message's own attempt_id keys read run_id here too, as in every answer (backend/runs.py).
+    return (f"id: {seq}\n" if seq is not None else "") + f"event: {topic}\ndata: {runs.public_json(encode(data))}\n\n"
 
 
 def _list(value, name):

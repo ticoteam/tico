@@ -807,8 +807,8 @@ const UNREACHABLE = 'Not sent. Could not reach Tico support. Try again in a mome
       bad: hlCheckHtml({id: 'computers', label: 'Computers', status: 'bad', summary: 'None online', fixes: []}).includes('data-report-this'),
       ok: hlCheckHtml({id: 'version', label: 'Version', status: 'ok', summary: 'Current', fixes: []}).includes('data-report-this'),
       stuck: hlStuckHtml([{bot: 'ops', name: 'Ops', why: 'No computer', reason: 'offline'}]).includes('data-report-this'),
-      failed: runAttemptHTML({run: 'r1', state: 'failed', reason: 'exit 2', try: 1, tries: 1}, true).includes('data-report-this'),
-      done: runAttemptHTML({run: 'r2', state: 'completed', try: 1, tries: 1}, true).includes('data-report-this')}));
+      failed: runAttemptHTML({id: 'r1', state: 'failed', reason: 'exit 2', try: 1, tries: 1}, true).includes('data-report-this'),
+      done: runAttemptHTML({id: 'r2', state: 'completed', try: 1, tries: 1}, true).includes('data-report-this')}));
     assert.deepEqual(offered, {bad: true, ok: false, stuck: true, failed: true, done: false});
     // A manager sees refused words in Health, but those private words never enter support diagnostics.
     const refused = 'Private launch plan: move the acquisition budget';

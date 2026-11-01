@@ -15,6 +15,8 @@ import json
 import sys
 from pathlib import Path
 
+from . import needs_shape
+
 VERSION = "2.0.0"
 COPY = Path(__file__).resolve().parents[1] / "docs" / "openapi" / "v2.json"
 
@@ -54,8 +56,8 @@ EVENTS_DESCRIPTION = (
     "- `tasks`: `id` and `task` (as `GET /api/v2/tasks` shows it to the viewer), or `gone: true` for a deleted task.\n"
     "- `messages`: `id`, `conversation_id` and `message` (as a conversation page shows it), or `deleted: true`; "
     "a chat goal set, paused, met or stopped is `goal_id` and `goal`.\n"
-    "- `runs`: `attempt_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
-    "`state` (`job_id`, and the job's or attempt's state).\n"
+    "- `runs`: `run_id`, `conversation_id`, `bot`, and either `output` (one step of the run: `kind`, `payload`) or "
+    "`state` (`job_id`, and the job's state or the run's `state`: docs/status-and-state.md, Runs).\n"
     "- `bots`: `bot` and `status` (as `GET /api/v2/status` lists it).\n"
     "- `needs`: the viewer's own Needs-you `count` and `items` (as `GET /api/v2/needs-you`), whenever anything on it may have moved. "
     "With `needs=changes`: `count`, `version`, each bot's count (`bots`), and the ids `changed` and `removed` "
@@ -658,6 +660,20 @@ ref = lambda name: {"$ref": "#/components/schemas/" + name}   # noqa: E731
 ACTORS = {"type": "object", "additionalProperties": {"type": "string"},
           "description": "On reads: display names for every actor id in the answer, {\"human:ana\": \"Ana Alvarez\"}"}
 
+# One item of a person's Needs you, whatever its kind (backend/needs_shape.py).
+NEEDS_ITEM = obj({"id": "s", "kind": {"type": "string", "description": "Needs you: task, question, waiting, "
+                                             "declined, ask, approval, stale, setup. Goals: vision, kpi_red, kpi_stale, "
+                                             "recovery, proposal, why. Each kind adds the fields its card reads"},
+                         "title": "s", "body": "n",
+                         "subject": {"oneOf": [obj({"type": {"enum": ["task", "message", "approval", "proposal", "kpi",
+                                                                      "strategy"]}, "id": "s"}), {"type": "null"}],
+                                     "description": "The one thing it is about; null for a card standing for several "
+                                                    "things or a setting"},
+                         "created": "n",
+                         "actions": items({"enum": list(needs_shape.ACTIONS)}) | {
+                             "description": "The writes that settle it: " + "; ".join(
+                                 f"`{k}` {v}" for k, v in needs_shape.ACTIONS.items())}})
+
 SCHEMAS = {
     "SubscriptionList": obj({"profiles_by_computer": items(obj({"runner_id": "s", "label": "s", "profiles": items(
         obj({"name": "s", "id": "s", "display_name": "s", "runtimes": "o"}))}))}),
@@ -684,10 +700,10 @@ SCHEMAS = {
                    deleted_at={"type": ["string", "null"], "description": "When the author deleted a task comment. A delete or "
                                "retry acknowledgment can include a tombstone with an empty body; deleted comments are never listed"},
                    run={"type": "object", "description": "The run that handled this message, once one has: on a person's message "
-                        "`{job_id, attempt_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` "
-                        "(it was folded into a run already working); on a bot's reply `{job_id, attempt_id}` (the run that "
+                        "`{job_id, run_id, state}` where `state` is `started_run` (it started the run) or `added_to_run` "
+                        "(it was folded into a run already working); on a bot's reply `{job_id, run_id}` (the run that "
                         "wrote it, plus a summary of what it did). Absent until a run takes the message",
-                        "properties": {"job_id": {"type": "string"}, "attempt_id": {"type": "string"},
+                        "properties": {"job_id": {"type": "string"}, "run_id": {"type": "string"},
                                        "state": {"enum": ["started_run", "added_to_run"]}}},
                    ask=ref("TaskReviewAskView"),
                    answer=ref("ReviewAnswer"),
@@ -698,8 +714,13 @@ SCHEMAS = {
                          "run, and how to wake it now (backend/bot_to_bot.py)"},
                    sent_as=ref("SentAs") | {"description": "On a send to a bot: the way it went (steer, queue or defer) "
                                             "and a defer's deadline (backend/delivery.py)"}),
-    "Execution": obj({"job_id": "s", "message_id": "s", "bot": "s", "attempt_id": "n", "state": "s", "label": "s", "text": "s"},
-                     required=["job_id", "message_id", "bot", "attempt_id", "state", "label", "text", "parts"],
+    "TaskHold": obj({"kind": {"enum": ["blocked", "snoozed"]}, "reason": "n", "since": "n", "until": "n", "by": "n"},
+                    required=["kind", "reason", "since", "until", "by"],
+                    cause={"enum": ["manual", "dependency", "stranded", "gate", "check", "worktree", None],
+                           "description": "On a blocked hold: what holds it. manual is a person's or bot's move to "
+                                          "Blocked; the others are Tico's own (docs/tasks.md, Holds)"}),
+    "Execution": obj({"job_id": "s", "message_id": "s", "bot": "s", "run_id": "n", "state": "s", "label": "s", "text": "s"},
+                     required=["job_id", "message_id", "bot", "run_id", "state", "label", "text", "parts"],
                      parts=items(obj({"kind": {"enum": ["progress", "reply", "tool"]}, "text": "s", "at": "s"})) | {
                          "description": "The run's pieces so far, in order, while it is leased or running (empty otherwise). "
                                         "`reply` and `progress` are what the bot wrote (`progress` when a tool call follows it); "
@@ -722,7 +743,7 @@ SCHEMAS = {
                  "updated": "s", "due": "n", "version": "i", "lane": "s", "labels": items({"type": "string"}),
                  "acceptance_criteria": items({"type": "string"}),
                  "occurrence": {"type": ["string", "null"], "description": "A due-date routine's occurrence, \"<automation_id>:<due_on>\", on the task it opened: the due is its deadline, not a wake date."}},
-                required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels"],
+                required=["id", "title", "requester", "owner", "status", "created", "updated", "due", "version", "lane", "labels", "holds"],
                 owner_name={"type": "string", "description": "Display name of owner (`owner` stays the actor id)"},
                 requester_name={"type": "string", "description": "Display name of requester"},
                 cover={"oneOf": [obj({"url": "s", "width": {"type": ["integer", "null"]},
@@ -749,10 +770,8 @@ SCHEMAS = {
                 guest={"type": ["string", "null"], "description": "The one person a private task with no person on "
                        "it reached: its owning bot's first subtask, question or wait for them made them its guest. "
                        "They read the task as its requester and owner do, and nothing else of its tree"},
-                snoozed_until={"type": ["string", "null"], "description": "Set aside until this moment (UTC): "
-                               "off lists and Needs you, and quiet, until then"},
-                snoozed_by={"type": ["string", "null"], "description": "Who snoozed it"},
-                snoozed_note={"type": ["string", "null"], "description": "What to check when the snooze ends (sent in the owner's wake)"},
+                holds=items(ref("TaskHold")) | {"description": "What holds the task (docs/tasks.md, Holds): at most one "
+                                                "per kind, empty when nothing does"},
                 roles={"type": "object", "description": "Who is on the task, by role: each role a short name the team "
                        "chooses (developer, reviewer, qa ...) with its actors in the order they were added; a role nobody "
                        "holds is absent, and one actor may hold several roles. Tico gives roles no meaning or rights. Task "
@@ -969,10 +988,8 @@ SCHEMAS = {
                           "next_offset": {"type": ["integer", "null"]}, "drafts": "a", "can_review": "b", "can_add": "b"}),
     "ChangelogReadResult": obj({"unread_count": "i"}),
     "Unread": obj({"unread": "i"}, meetings_pending={"type": "integer", "description": "Pending meetings filed for the caller; never part of Needs you"}),
-    "NeedsYou": {"oneOf": [obj({"actor": "s", "items": items({
-        "type": "object", "required": ["id", "kind", "title"], "additionalProperties": True,
-        "properties": {"id": {"type": "string"}, "kind": {"enum": ["task", "question", "declined", "approval"]},
-                       "title": {"type": "string"}}})}, required=["actor", "items"],
+    "NeedsYouItem": NEEDS_ITEM,
+    "NeedsYou": {"oneOf": [obj({"actor": "s", "items": items(ref("NeedsYouItem"))}, required=["actor", "items"],
         older={"type": "array", "items": {"type": "object", "additionalProperties": True},
                "description": "Tasks there only for a question older than three days, out of the queue and its count"},
         went_away={"type": "object", "additionalProperties": True,
@@ -1233,8 +1250,8 @@ SCHEMAS = {
                               "originals": items(obj({"task_id": "s", "title": "s", "asker": "s", "asker_name": "s",
                                                       "state": "s", "note": "s"}, required=["task_id", "asker", "state"]))}),
     "GoalsNeedsYou": obj({"actor": "s", "items": items({
-        "type": "object", "required": ["kind"], "additionalProperties": True,
-        "properties": {"kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
+        "type": "object", "required": NEEDS_ITEM["required"], "additionalProperties": True,
+        "properties": {**NEEDS_ITEM["properties"], "kind": {"enum": ["vision", "kpi_red", "recovery", "why", "proposal", "kpi_stale"]},
                        "goal_id": {"type": "string"},
                        "options": {"type": "array", "description": "kind recovery: each option in plain words, "
                                    "{label, pick, actions: [{text, note}]}", "items": {"type": "object"}},

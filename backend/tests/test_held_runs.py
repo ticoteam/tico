@@ -63,7 +63,7 @@ def test_a_held_run_whose_review_task_was_closed_reopens_it_on_the_next_sweep(ap
     assert 'merge pull request' in second['body']
     assert message['body'] not in second['body']                # the request's words stay in their own chat
     # Decided: nothing is held, so a closed review stays closed.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
         H.task_close(c, H.KEEPER, second['id'], 'Settled.', quiet=True)
@@ -152,7 +152,7 @@ def test_the_stall_check_does_not_close_a_review_while_its_runs_are_still_held(a
         assert [k[0] for k in kept] == ['runs still held']
     # Its positive twin: once the run is decided, the review is finished at save time, and the stall check leaves
     # it be: nothing is held, so nothing keeps it open.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
         c.execute("DELETE FROM events WHERE action='task.stall_escalated' AND target=?", (review['id'],))
@@ -199,7 +199,7 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
         c.execute("DELETE FROM bots WHERE slug='decoy'")
         c.execute("UPDATE bots SET display_name=? WHERE slug='ops'", (display_name,))
     # A safe decision ends the held run, so the same stall check can close the review as usual.
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The operator checked the request and it should not be repeated.',
          'acknowledge_uncertain_effects': True})
     with api.app.state.store.transaction() as c:
@@ -241,7 +241,7 @@ def test_a_held_run_left_two_hours_without_a_decision_is_on_health_and_its_opera
     assert ben['title'] == 'ops has 1 stopped run waiting 2 h' and ben['needs_person'] is False
     assert [ch for ch in get(api, 'health', token='ben-test')['checks'] if ch['id'] == 'stopped_runs']
     # A saved decision is a review: it is no longer "nobody decided".
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The report was already sent; nothing to repeat.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
     assert not [ch for ch in get(api, 'health')['checks'] if ch['id'] == 'stopped_runs']
@@ -251,7 +251,7 @@ def test_a_saved_choice_waiting_for_a_live_lane_is_not_counted_as_unreviewed(api
     """A deferred resume/dismiss is already reviewed even while its job remains uncertain (Dev 545 boundary)."""
     machine, message, attempt = interrupted(api)
     other = rival(api, machine, attempt)
-    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                   'note': 'Reviewed; continue after the other run ends.', 'acknowledge_uncertain_effects': True})
     assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
     assert job_state(api, attempt['job_id']) == 'uncertain'
@@ -270,7 +270,7 @@ def test_a_saved_task_choice_with_queued_work_waits_for_the_live_lane_without_as
 
     machine, attempt, task_id, _ = task_held(api)
     rival(api, machine, attempt)
-    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    result = post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                   'note': 'Reviewed; continue after the other run ends.', 'acknowledge_uncertain_effects': True})
     assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
     assert len([job for job in queued_on(api, task_id) if job['id'] != attempt['job_id']]) == 1
@@ -345,7 +345,7 @@ def test_queued_work_behind_a_held_run_joins_its_resumed_turn(api, monkeypatch, 
     machine, attempt, task_id, other_id = task_held_many(api, count)
     assert len([j for j in queued_on(api, task_id) if j['id'] != attempt['job_id']]) == count
     ready(api, machine, ['ops'])
-    resumed = post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    resumed = post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                    'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
     assert resumed['state'] == 'queued'
     turn = claim(api, machine)
@@ -385,7 +385,7 @@ def test_a_resumed_turn_takes_an_input_its_held_run_read_after_the_history_sweep
     with api.app.state.store.read() as conn:
         read_deps.sweep(conn)
     ready(api, machine, ['ops'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
          'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
     turn = claim(api, machine)
     assert 'VERDICT: changes PR #12' in turn['message']['body']
@@ -402,7 +402,7 @@ def test_a_folded_input_another_run_already_read_keeps_that_runs_task(api):
                             "AND j.state='queued' AND m.body LIKE 'VERDICT:%'").fetchone()[0]
         c.execute("INSERT INTO attempt_inputs VALUES(?,?,?)", (attempt['id'], verdict, H.now()))
     ready(api, machine, ['ops'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
          'note': 'Nothing was pushed yet; carry on from the build.', 'acknowledge_uncertain_effects': True})
     turn = claim(api, machine)
     assert turn['id'] != attempt['id'] and 'VERDICT: changes PR #12' in turn['message']['body']
@@ -419,7 +419,7 @@ def test_two_requests_folded_into_one_stopped_run_are_one_run_on_needs_you_and_h
     count wherever runs are counted (Needs you, the two-hour check on Health)."""
     from backend.tests.test_execution_review import busy_folded_run, stopped_issue
     jobs = busy_folded_run(api)
-    [attempt_id] = {job['attempt_id'] for job in jobs}
+    [attempt_id] = {job['run_id'] for job in jobs}
     issue = stopped_issue(api)
     assert issue['title'].endswith('has 1 stopped run holding up work')
     [run] = issue['runs']

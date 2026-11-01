@@ -292,12 +292,12 @@ def test_a_message_says_whether_it_steers_the_running_turn_and_stop_and_redirect
     redirect = post(api, "chat/ops", {"text": "Stop that; do the April numbers instead"})
     page = get(api, f"conversations/{origin['conversation_id']}/snapshot")
     delivery = {m["id"]: m.get("delivery") for m in page["messages"]}
-    assert delivery[redirect["id"]] == {"attempt_id": active["id"], "mode": "next_turn"}
+    assert delivery[redirect["id"]] == {"run_id": active["id"], "mode": "next_turn"}
     assert page["execution"]["label"] == "Saved — queued for the next turn"
     # Only the sender's own queued message redirects.
-    post(api, "bots/ops/stop", {"attempt_id": active["id"], "redirect": redirect["id"]}, token="ben-test", expected=404)
-    stopped = post(api, "bots/ops/stop", {"attempt_id": active["id"], "redirect": redirect["id"]})
-    assert stopped == {"attempt_id": active["id"], "stopping": True, "redirect": redirect["id"]}
+    post(api, "bots/ops/stop", {"run_id": active["id"], "redirect": redirect["id"]}, token="ben-test", expected=404)
+    stopped = post(api, "bots/ops/stop", {"run_id": active["id"], "redirect": redirect["id"]})
+    assert stopped == {"run_id": active["id"], "stopping": True, "redirect": redirect["id"]}
     page = get(api, f"conversations/{origin['conversation_id']}/snapshot")
     assert {m["id"]: m.get("delivery") for m in page["messages"]}[redirect["id"]]["mode"] == "redirect"
     # A steering host never folds the redirect into the turn it replaces.

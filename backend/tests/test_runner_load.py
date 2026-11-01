@@ -45,7 +45,7 @@ def test_attempt_stores_fresh_start_and_end_snapshots_visible_in_run_list(api):
     post(api, f"attempts/{a['id']}/complete", body, token=r["token"])
     run = next(x for x in get(api, "bots/ops/turns") if x["id"] == a["id"])
     assert run["load_start"] == start and run["load_end"] == end
-    summary = next(x for x in api.get("/api/runs", headers=headers()).json() if x["run"] == a["id"])
+    summary = next(x for x in api.get("/api/runs", headers=headers()).json() if x["id"] == a["id"])
     assert summary["load_start"] == start and summary["load_end"] == end
     assert summary["output_tokens"] == 20 and summary["cost_usd"] == run["est_cost_usd"] > 0
     assert run["end_reason"] == "Finished" and run["ended_at"]

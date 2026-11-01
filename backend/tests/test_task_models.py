@@ -94,7 +94,7 @@ def test_a_task_runs_on_the_task_model_while_chat_stays_on_the_bots_and_history_
     assert runs[0]["ran_on"]["task_model"] == {"source": "task", "note": "Ran on the bot's task model "
                                                                          "claude-haiku-5-5 (low)"}
     view = get(api, f"tasks/{task['id']}/run-view")
-    assert view["attempts"][0]["ran_on"]["task_model"]["source"] == "task"
+    assert view["runs"][0]["ran_on"]["task_model"]["source"] == "task"
     # A person's chat with the bot, outside any task, stays on the bot's own model.
     post(api, "messages", {"to": "ops", "text": "What are you on today?"})
     chat = claim(api, machine)

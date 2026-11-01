@@ -117,11 +117,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": "<id5>",
         "bot": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
+        "run_id": "<id5>",
         "seq": 4,
         "state": "completed"
       },
@@ -166,11 +166,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<reply_message>",
         "message_id": "<reply_message>",
+        "run_id": null,
         "seq": 6,
         "state": "queued"
       },
@@ -215,11 +215,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<direct_message>",
         "message_id": "<direct_message>",
+        "run_id": null,
         "seq": 8,
         "state": "queued"
       },
@@ -304,11 +304,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<id6>",
         "job_id": "<id8>",
         "message_id": "<id8>",
+        "run_id": null,
         "seq": 23,
         "state": "queued"
       },
@@ -357,11 +357,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<id6>",
         "job_id": "<id9>",
         "message_id": "<id9>",
+        "run_id": null,
         "seq": 43,
         "state": "queued"
       },
@@ -446,11 +446,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<id6>",
         "job_id": "<id11>",
         "message_id": "<id11>",
+        "run_id": null,
         "seq": 56,
         "state": "queued"
       },
@@ -494,6 +494,7 @@
           "from_person": "human:ana",
           "goal_id": null,
           "guest": null,
+          "holds": [],
           "id": "<task>",
           "important_requesters": 0,
           "internal_requesters": 0,
@@ -523,8 +524,6 @@
           "roles": {},
           "short_id": "<task-short>",
           "size": null,
-          "snoozed_by": null,
-          "snoozed_until": null,
           "stale_asked_at": null,
           "status": "closed",
           "step": {
@@ -633,11 +632,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<id13>",
         "job_id": "<id14>",
         "message_id": "<id14>",
+        "run_id": null,
         "seq": 69,
         "state": "queued"
       },
@@ -680,6 +679,7 @@
           "from_person": "human:ana",
           "goal_id": null,
           "guest": null,
+          "holds": [],
           "id": "<open_task>",
           "important_requesters": 0,
           "internal_requesters": 0,
@@ -709,8 +709,6 @@
           "roles": {},
           "short_id": "<open_task-short>",
           "size": null,
-          "snoozed_by": null,
-          "snoozed_until": null,
           "stale_asked_at": null,
           "status": "open",
           "step": {
@@ -779,11 +777,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<id15>",
         "message_id": "<id15>",
+        "run_id": null,
         "seq": 76,
         "state": "queued"
       },
@@ -865,11 +863,11 @@
       "data": {
         "actor": "human:ana",
         "at": "<time>",
-        "attempt_id": null,
         "bot": "ops",
         "conversation_id": "<id16>",
         "job_id": "<id18>",
         "message_id": "<id18>",
+        "run_id": null,
         "seq": 85,
         "state": "queued"
       },
@@ -883,7 +881,11 @@
         "count": 1,
         "items": [
           {
+            "actions": [
+              "decide"
+            ],
             "age_s": "<volatile>",
+            "body": null,
             "consumed_at": null,
             "conversation_id": "<id16>",
             "created": "<time>",
@@ -909,6 +911,10 @@
             "ready_since": "<time>",
             "requested_by": "bot:ops",
             "requester": "bot:ops",
+            "subject": {
+              "id": "<pending_approval>",
+              "type": "approval"
+            },
             "task_id": "<open_task>",
             "tier": 2,
             "title": "Pay 9: Second test",
@@ -989,8 +995,8 @@
               "<chat_message>"
             ],
             "run": {
-              "attempt_id": "<id5>",
-              "job_id": "<chat_message>"
+              "job_id": "<chat_message>",
+              "run_id": "<id5>"
             },
             "turn_id": "<id5>"
           },
@@ -1007,10 +1013,10 @@
       "data": {
         "actor": "runner:<id20>",
         "at": "<time>",
-        "attempt_id": "<id5>",
         "bot": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
+        "run_id": "<id5>",
         "seq": 95,
         "state": "completed"
       },
@@ -1021,11 +1027,11 @@
       "data": {
         "actor": "runner:<id20>",
         "at": "<time>",
-        "attempt_id": "<id5>",
         "bot": "ops",
         "conversation_id": "<conversation>",
         "job_id": "<chat_message>",
         "message_id": "<chat_message>",
+        "run_id": "<id5>",
         "seq": 96,
         "state": "completed"
       },

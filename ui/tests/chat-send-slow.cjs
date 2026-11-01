@@ -508,7 +508,7 @@ async function check(engine) {
     let stopped; stopHold = new Promise(done => stopped = done);
     const stop = page.locator('#chat-composer .p-stop');
     // Read in the same task as the click: the fixture's run is not in its snapshots, so a late snapshot redraw clears it.
-    assert.deepEqual(await stop.evaluate(b => { BOT_PILL.running = {attempt_id: 'a1'}; pillButtons(BOT_PILL); b.click();
+    assert.deepEqual(await stop.evaluate(b => { BOT_PILL.running = {run_id: 'a1'}; pillButtons(BOT_PILL); b.click();
       return [b.disabled, b.title, document.getElementById(b.getAttribute('aria-describedby'))?.textContent]; }),
       [true, 'Stopping…', 'Stopping…']);
     stopped();

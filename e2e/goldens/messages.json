@@ -47,8 +47,8 @@
           "rule": "person_message"
         },
         "run": {
-          "attempt_id": "<id1>",
           "job_id": "<chat_message>",
+          "run_id": "<id1>",
           "state": "started_run"
         },
         "superseded_at": null,
@@ -224,15 +224,15 @@
             "<chat_message>"
           ],
           "run": {
-            "attempt_id": "<id1>",
-            "job_id": "<chat_message>"
+            "job_id": "<chat_message>",
+            "run_id": "<id1>"
           },
           "turn_id": "<id1>"
         },
         "run": {
-          "attempt_id": "<id1>",
           "did": [],
           "job_id": "<chat_message>",
+          "run_id": "<id1>",
           "steps": 0,
           "took_s": "<volatile>",
           "tool_calls": 0

@@ -9,6 +9,7 @@ import pytest
 from backend import hubdb as H, task_blocked
 from backend.tests.test_github import api, headers, hook, post, pr_event, PR  # noqa: F401
 from backend.tests.test_review_gate import HEAD, OLD, BASE, ticket, get, move
+from backend.tests.test_api import hold
 
 STALE = f'Tests: head {OLD}: 9 passed, 0 failed'
 GREEN = {f'check {i}': 'success' for i in range(16)}
@@ -81,7 +82,7 @@ def test_renamed_review_step_reads_fresh_ci_before_refusing_move(api, monkeypatc
     assert response.status_code == 422 and 'CI failing at head ' + HEAD in response.text, response.text
     assert 'python' in response.text
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and 'CI failing' in current['blocked_reason']
+    assert current['step']['name'] == 'In Progress' and 'CI failing' in hold(current)['reason']
 
 
 def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_head(api, monkeypatch):
@@ -97,7 +98,7 @@ def test_review_question_is_filed_when_every_hosted_check_passes_at_the_current_
     with api.app.state.store.transaction() as c:
         task_blocked.sweep(c, H.now())
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
+    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
 
 
 def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypatch):
@@ -112,11 +113,11 @@ def test_fresh_green_checks_do_not_clear_a_waiting_reviewers_hold(api, monkeypat
         since = held_row['blocked_since']
     assert task_blocked.fresh(api.app.state.github_app, force=True) == []
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and current['blocked_since'] == since
+    assert current['step']['name'] == 'In Progress' and hold(current)['since'] == since
     with api.app.state.store.transaction() as c:
         H.task_update(c, 'bot:cmo', check['id'], status='doing')
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
+    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
 
 
 @pytest.mark.parametrize('result,refusal', [('failure', 'CI failing at head ' + HEAD),
@@ -140,7 +141,7 @@ def test_a_question_titled_otherwise_reads_no_github(api, monkeypatch):
 
 def test_blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch):
     task = ticket(api, STALE)
-    hold = held(api, task)
+    parked = held(api, task)
     service = api.app.state.github_app
     with api.app.state.store.transaction() as c:
         task_blocked.reconcile(c, task['id'])
@@ -149,8 +150,8 @@ def test_blocked_gate_hold_clears_on_a_fresh_all_green_read(api, monkeypatch):
     assert task_blocked.fresh(service, force=True) == [task['id']]
     assert any('/commits/' + HEAD + '/check-runs' in p for p in reads)
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step']['name'] == 'In Progress' and not current.get('blocked_since')
-    assert current['version'] > hold['version']
+    assert current['step']['name'] == 'In Progress' and not hold(current).get('since')
+    assert current['version'] > parked['version']
 
 
 @pytest.mark.parametrize('result', ['failure', None])

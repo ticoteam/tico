@@ -20,7 +20,7 @@ def test_stop_settles_a_login_wait_without_starting_or_retrying(api, outcome):
     post(api, f"attempts/{attempt['id']}/events", {"events": [{"seq": 1, "kind": "status", "payload": {
         "waiting": "Waiting for this computer's ChatGPT login to be free", "login": "ChatGPT", "position": 1}}]},
         machine["token"])
-    post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+    post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     assert post(api, f"attempts/{attempt['id']}/renew", {}, machine["token"])["stop"] is True
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": outcome, "last_seq": 1}, machine["token"])
     with api.app.state.store.read() as c:
@@ -55,7 +55,7 @@ def test_expiry_cancels_stopped_or_finished_work_and_preserves_normal_retry(api,
     if started:
         post(api, f"attempts/{attempt['id']}/started", {"thread_id": "thread"}, machine["token"])
     if cause == "stop":
-        post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+        post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     elif cause != "open":
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET status=? WHERE id=?", (cause, task["id"]))
@@ -159,7 +159,7 @@ def test_expiry_judges_folded_inputs_by_their_own_task(api, cause):
                        conversation_id=task["conversation_id"], refs={"task": other["id"]})
     assert follow["id"] in [m["id"] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine["token"])["messages"]]
     if cause == "stop":
-        post(api, "bots/ops/stop", {"attempt_id": attempt["id"]})
+        post(api, "bots/ops/stop", {"run_id": attempt["id"]})
     else:
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE tasks SET status=? WHERE id=?", (cause, task["id"]))

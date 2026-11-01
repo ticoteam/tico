@@ -94,7 +94,7 @@ def test_a_finished_lane_leaves_the_bot_running_and_stop_names_the_turn(api):
     # Two turns out: a stop without the attempt would be a guess.
     refused = post(api, "bots/ops/stop", {}, expected=409)
     assert refused["error"]["code"] == "ambiguous"
-    post(api, "bots/ops/stop", {"attempt_id": two["id"]})
+    post(api, "bots/ops/stop", {"run_id": two["id"]})
     post(api, f"attempts/{one['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Done."},
          machine["token"])
     with api.app.state.store.read() as c:

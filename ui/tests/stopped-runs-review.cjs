@@ -20,7 +20,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     // Now one line per run, each with its own two buttons; a message folded into a run rides on its row.
     const stoppedRun = (title, retry, jobs) => ({title, cause: 'interrupted', why: 'Interrupted on its computer',
       routine: true, retry,
-      at: '2026-10-26T05:39:09Z', jobs: jobs.map(id => ({id, attempt_id: `a-${jobs[0]}`}))});
+      at: '2026-10-26T05:39:09Z', jobs: jobs.map(id => ({id, run_id: `a-${jobs[0]}`}))});
     const holding = {kind: 'uncertain_work', title: 'Builder has 2 stopped runs holding up work', bot: 'builder',
       detail: 'Its computer interrupted these runs at 05:39 UTC, usually for a restart or update, not a bug. ' +
         '3 queued requests wait until you decide.',
@@ -36,14 +36,14 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     let refusal = false, deferred = false;
     const extra = [];
     // Keep a safe default first, with supporting evidence folded.
-    const job = (id, title, stopped, acted, tools) => ({id, attempt_id: `a-${id}`, readable: true, stopped, acted,
+    const job = (id, title, stopped, acted, tools) => ({id, run_id: `a-${id}`, readable: true, stopped, acted,
       task: {id: `t-${id}`, title, status: 'doing', owner: 'bot:builder', owner_name: 'Builder'},
-      request: 'Ship Billing 3/5.', attempt: {started: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
+      request: 'Ship Billing 3/5.', run: {started: '2026-10-22T08:12:00Z', final_text: 'Merged #25; deploying next.'},
       output: [], tools: tools.map(tool => ({tool, summary: '', status: 'completed'})),
       reason: 'The run stopped after using a tool that can change things (Bash). Tico cannot tell whether it finished.'});
     const jobs = {builder: [job('j1', 'Billing 3/5', 'changed', ['Bash'], ['Read', 'Bash'])],
       writer: [job('j2', 'Weekly digest', 'read', [], ['Read'])]};
-    jobs.writer[0].attempt.final_text = '';
+    jobs.writer[0].run.final_text = '';
     jobs.writer[0].output = ['The ', 'saved ', 'answer ', 'is ', 'one paragraph.\n\nA second paragraph.'].map(text => ({kind: 'message', text}));
     // Builder's work behind its stopped runs is Health's Stuck row too, its queue split as Pipeline splits it.
     const health = {audience: 'owner', attention: 0, checks: [], computers: [], waiting: [], slow: [], failures: [],
@@ -145,7 +145,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     decisions.length = 0;
     await lines.nth(0).locator('[data-run-decision=resume]').click();
     await lines.nth(0).locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
-    assert.deepEqual(decisions.map(d => [d.id, d.attempt_id, d.decision, d.acknowledge_uncertain_effects]),
+    assert.deepEqual(decisions.map(d => [d.id, d.run_id, d.decision, d.acknowledge_uncertain_effects]),
       [['r1b', 'a-r1', 'resume', true]]);
     assert.equal(await lines.nth(0).locator('button:enabled').count(), 0);
     await lines.nth(1).locator('[data-run-decision=dismiss]').click();
@@ -182,7 +182,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await card.locator('button[value=dismiss]').click();
     await card.locator('[data-result]', {hasText: 'Dismissed.'}).waitFor();
     assert.equal(decisions[0].decision, 'dismiss');
-    assert.equal(decisions[0].attempt_id, 'a-j1');
+    assert.equal(decisions[0].run_id, 'a-j1');
     assert.equal(decisions[0].acknowledge_uncertain_effects, true);
     assert.equal(await card.locator('button:enabled').count(), 0);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
@@ -231,7 +231,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await read.locator('button[value=resume]').click();
     await result.filter({hasText: 'Queued to try again.'}).waitFor();
     assert.equal(decisions.at(-1).decision, 'resume');
-    assert.equal(decisions.at(-1).attempt_id, 'a-j2');
+    assert.equal(decisions.at(-1).run_id, 'a-j2');
     assert.doesNotMatch(decisions.at(-1).note, /no outside action completed/, 'retry records a choice, not an unasked confirmation');
     assert.equal(await read.locator('button:enabled').count(), 0);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
@@ -259,19 +259,19 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     assert.deepEqual(await timed.locator('.stopped-run-actions .row button').allInnerTexts(), ['Try again', 'Don’t retry']);
     await timed.locator('button[value=resume]').click();
     await timed.locator('[data-result]', {hasText: 'Queued to try again.'}).waitFor();
-    assert.equal(decisions.at(-1).attempt_id, 'a-j2');
+    assert.equal(decisions.at(-1).run_id, 'a-j2');
     assert.equal(decisions.at(-1).acknowledge_uncertain_effects, true);
     await page.locator('dialog.stopped-runs-dialog [data-close]').click();
 
     // Dev 561: after a refresh, a run whose choice was saved while the bot was busy (stopped_rows `decided`) says what
     // Tico will do and offers no second choice; one with a folded request saved offers only that choice, for the rest.
     holding.runs = [{...stoppedRun('Billing 3/5', true, ['r2']), decided: 'resume',
-      jobs: [{id: 'r2', attempt_id: 'a-r2', decided: 'resume'}]},
+      jobs: [{id: 'r2', run_id: 'a-r2', decided: 'resume'}]},
     {...stoppedRun('Review move demands a typed test receipt even when GitHub is green', false, ['r1', 'r1b']),
-      decided: null, jobs: [{id: 'r1', attempt_id: 'a-r1', decided: 'dismiss'}, {id: 'r1b', attempt_id: 'a-r1'}]},
+      decided: null, jobs: [{id: 'r1', run_id: 'a-r1', decided: 'dismiss'}, {id: 'r1b', run_id: 'a-r1'}]},
     // The Details card decided each folded request on its own, differently: the line is settled all the same.
     {...stoppedRun('Rotate the deploy keys', false, ['r3', 'r3b']), decided: 'mixed',
-      jobs: [{id: 'r3', attempt_id: 'a-r3', decided: 'resume'}, {id: 'r3b', attempt_id: 'a-r3', decided: 'dismiss'}]},
+      jobs: [{id: 'r3', run_id: 'a-r3', decided: 'resume'}, {id: 'r3b', run_id: 'a-r3', decided: 'dismiss'}]},
     {...stoppedRun('Weekly digest', true, ['r4']), decided: null}];
     // A reader who is not the bot's operator (can_review false) gets the lines without handles: no decision buttons.
     extra.push({...holding, bot: 'legal', title: 'Legal has 2 stopped runs holding up work', can_review: false,

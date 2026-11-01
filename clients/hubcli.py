@@ -2744,7 +2744,7 @@ def parser():
     s.add_argument("--since")
     s.set_defaults(fn="run list")
     s = runs.add_parser("export", help="a run's captured provider stream (owners and engineering bots)")
-    s.add_argument("attempt", help="the attempt id, from hub run list")
+    s.add_argument("run", help="the run id, from hub run list")
     s.add_argument("--fixture", action="store_true",
                    help="write input.json, <provider>_transcript.ndjson and output.json to a folder")
     s.add_argument("--out", help="with --fixture: the parent folder (default: the current one)")

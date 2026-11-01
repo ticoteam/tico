@@ -94,7 +94,7 @@ const launch = () => process.env.TICO_UI_ENGINE === 'webkit' ? webkit.launch({he
     await page.evaluate(() => document.querySelectorAll('.toast').forEach(t => t.remove()));
     await box.fill('');
     const stop = page.locator('#chat-composer .p-stop');
-    await page.evaluate(() => { BOT_PILL.running = {attempt_id:'fixture'}; pillButtons(BOT_PILL); });
+    await page.evaluate(() => { BOT_PILL.running = {run_id:'fixture'}; pillButtons(BOT_PILL); });
     assert.equal(await stop.isVisible(), true);
     assert.equal((await rect(stop)).width, 44);
     await stop.dispatchEvent('pointerdown', {button:0});

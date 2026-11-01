@@ -313,3 +313,49 @@ def backfill(conn, at=None):
     result = {"fixed": fixed, "opened": sum(len(r) for r in opened.values()), "woken": len(opened)}
     H.event(conn, H.KEEPER, BACKFILL, "", result)
     return result
+
+
+# The holds a task's API view lists (docs/tasks.md, Holds): one per kind, from the task's own columns. A blocked hold
+# is Tico's or an owner's move to Blocked (`blocked_*`), a snoozed one a snooze (`snoozed_*`); the waits a hold is
+# made of (`waiting_on`, `worktree_waits`, `check_waits`, `milestone_waits`, `deferred`) keep their own fields.
+HOLD_KINDS = ("blocked", "snoozed")
+
+
+def marks(conn, rows):
+    """Who set each held task's hold and when a snooze began, for `public`: two reads for a whole page, none when
+    no row is snoozed or blocked by hand."""
+    from . import hubdb as H
+    snoozed = [r["id"] for r in rows if r.get("snoozed_until")]
+    manual = [r["id"] for r in rows if r.get("blocked_since") and r.get("blocked_kind") == "manual"]
+    found = {}
+    for chunk in (snoozed[i:i + 500] for i in range(0, len(snoozed), 500)):
+        for e in conn.execute(
+                f"SELECT task_id,max(ts) ts FROM task_events WHERE field='snoozed_until' AND new IS NOT NULL "
+                f"AND task_id IN ({','.join('?' * len(chunk))}) GROUP BY task_id", chunk):
+            found.setdefault(e["task_id"], {})["snoozed_since"] = e["ts"]
+    for chunk in (manual[i:i + 500] for i in range(0, len(manual), 500)):
+        # An owner's hold is the latest move a person or bot made into it: the move to Blocked, or a step move that
+        # declared the hold over one Tico found (task_blocked.transition).
+        for e in conn.execute(
+                f"SELECT task_id,actor,max(ts) ts FROM task_events WHERE field IN ('status','step') AND actor<>? "
+                f"AND task_id IN ({','.join('?' * len(chunk))}) GROUP BY task_id", (H.KEEPER, *chunk)):
+            found.setdefault(e["task_id"], {})["blocked_by"] = e["actor"]
+    return found
+
+
+def public(row, mark=None):
+    """The task's holds as API v2 shows them: `[{kind, reason, since, until, by}]`, kind unique, `until` null when
+    open-ended, `by` the actor who set it; a blocked hold says its `cause` (manual, dependency, stranded, gate, check,
+    worktree). `mark` is this task's entry from `marks`."""
+    from . import hubdb as H
+    mark = mark or {}
+    found = []
+    if row.get("blocked_since"):
+        cause = row.get("blocked_kind")
+        found.append({"kind": "blocked", "reason": row.get("blocked_reason"), "since": row["blocked_since"],
+                      "until": None, "by": mark.get("blocked_by") if cause == "manual" else H.KEEPER,
+                      "cause": cause})
+    if row.get("snoozed_until"):
+        found.append({"kind": "snoozed", "reason": row.get("snoozed_note"), "since": mark.get("snoozed_since"),
+                      "until": row["snoozed_until"], "by": row.get("snoozed_by")})
+    return found

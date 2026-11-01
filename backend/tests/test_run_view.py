@@ -48,8 +48,8 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
         ("tool", {"tool": "Bash", "status": "backgrounded", "item_id": "s2", "parent_id": None, "background": True})])
     view = get(api, f"tasks/{tid}/run-view")
     assert secret not in json.dumps(view)
-    [run] = view["attempts"]
-    assert (run["run"], run["state"], run["try"], run["tries"], run["next"]) == (aid, "running", 1, 1, None)
+    [run] = view["runs"]
+    assert (run["id"], run["state"], run["try"], run["tries"], run["next"]) == (aid, "running", 1, 1, None)
     assert [(s["tool"], s["summary"], s["running"]) for s in run["background"]] == [
         ("Bash", "sleep", True), ("Monitor", "tail", False), ("Bash", "", True)]
     [sub] = run["subagents"]
@@ -63,7 +63,7 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "last_seq": 11, "text": "Counted: 1 word."},
          machine["token"])
     view = get(api, f"tasks/{tid}/run-view")
-    [shell, _, moved] = view["attempts"][0]["background"]
+    [shell, _, moved] = view["runs"][0]["background"]
     assert (shell["running"], shell["status"]) == (False, "no end reported") == (moved["running"], moved["status"])
     assert view["checkpoint"]["text"] == "Counted: 1 word." and view["checkpoint"]["by"] == "bot:ops"
     # A long list keeps a call still running, however early it started.
@@ -75,8 +75,8 @@ def test_a_run_shows_its_subagent_and_the_background_command_it_left_running(api
     hidden = post(api, "tasks", {"owner": "ops", "title": "Private", "body": "Only Ana.", "private": True})
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET carried_by=? WHERE id=?", (aid, hidden["id"]))
-    assert get(api, f"tasks/{tid}/run-view", token="cara-test")["attempts"] == []
-    assert [r["run"] for r in get(api, f"tasks/{tid}/run-view")["attempts"]] == [aid]
+    assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
+    assert [r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]] == [aid]
 
 
 def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
@@ -90,27 +90,27 @@ def test_a_retried_run_shows_both_attempts_and_the_decision_between_them(api):
     expire(api, first["id"])
     assert claim(api, machine) is None
     view = get(api, f"tasks/{tid}/run-view")
-    assert view["attempts"][0]["next"]["kind"] == "waiting"
-    assert view["attempts"][0]["reason"] == "Computer lost or heartbeat stopped (attempt lease expired)"
+    assert view["runs"][0]["next"]["kind"] == "waiting"
+    assert view["runs"][0]["reason"] == "Computer lost or heartbeat stopped (attempt lease expired)"
     aged(api, first["id"], grace=True)
     assert [d["state"] for d in sweep(api)] == ["queued"]
     ready(api, machine, ["ops"])
     second = claim(api, machine)
     assert second["job_id"] == first["job_id"]
-    later, earlier = get(api, f"tasks/{tid}/run-view")["attempts"]
+    later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
     with api.app.state.store.read() as c:
         from backend.run_view import RECOVERY_SQL
         plan = " ".join(r[-1] for r in c.execute(f"EXPLAIN QUERY PLAN SELECT ts FROM events WHERE {RECOVERY_SQL} "
                                                  "AND target IN (?,?)", ("j", "a")))
     assert "events_action_target" in plan, plan
-    assert (earlier["run"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
+    assert (earlier["id"], earlier["try"], earlier["tries"], earlier["state"]) == (first["id"], 1, 2, "expired")
     assert earlier["next"]["kind"] == "resumed" and earlier["next"]["by"] == H.KEEPER
     assert earlier["next"]["note"].startswith("Resumed automatically: the interrupted run only read (Read)")
     assert "Archived one bot" not in json.dumps(earlier), "the hub's own words, never what the stopped run saved"
     # A resume recorded before the hub kept a line for people still shows only its first paragraph.
     from backend.run_view import decision_note
     assert decision_note(H.KEEPER, {"note": "Check first.\n\nWhat the stopped run saved:\nArchived"}) == "Check first."
-    assert (later["run"], later["try"], later["tries"], later["next"]) == (second["id"], 2, 2, None)
+    assert (later["id"], later["try"], later["tries"], later["next"]) == (second["id"], 2, 2, None)
 
 
 def test_a_persons_retry_and_dismissal_name_them(api):
@@ -121,16 +121,16 @@ def test_a_persons_retry_and_dismissal_name_them(api):
     expire(api, first["id"])
     assert claim(api, machine) is None
     post(api, f"jobs/{first['job_id']}/retry", {"acknowledge_uncertain_effects": True})
-    queued = get(api, f"tasks/{tid}/run-view")["attempts"][0]["next"]
+    queued = get(api, f"tasks/{tid}/run-view")["runs"][0]["next"]
     assert (queued["kind"], queued["by"], queued["note"]) == ("queued", "human:ana", "Queued to run again by hand.")
     second = claim(api, machine)
     post(api, f"attempts/{second['id']}/started", {"thread_id": "again"}, machine["token"])
     expire(api, second["id"])
     assert claim(api, machine) is None
-    post(api, f"jobs/{first['job_id']}/reconcile", {"attempt_id": second["id"], "decision": "dismiss",
+    post(api, f"jobs/{first['job_id']}/reconcile", {"run_id": second["id"], "decision": "dismiss",
                                                     "note": "Renamed by hand; nothing left to do.",
                                                     "acknowledge_uncertain_effects": True})
-    later, earlier = get(api, f"tasks/{tid}/run-view")["attempts"]
+    later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
     assert (earlier["next"]["kind"], earlier["next"]["by"], earlier["next"]["note"]) == (
         "retried", "human:ana", "Run again by hand.")
     assert (later["next"]["kind"], later["next"]["by"], later["next"]["note"]) == (
@@ -154,17 +154,17 @@ def test_a_run_from_a_conversation_the_reader_cannot_open_stays_out(api, monkeyp
                                                   "summary": "payroll-export.sh", "parent_id": None, "background": True})])
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE turns SET task_id=? WHERE id=?", (tid, direct["id"]))
-    assert {r["run"] for r in get(api, f"tasks/{tid}/run-view")["attempts"]} == {shared["id"], direct["id"]}
+    assert {r["id"] for r in get(api, f"tasks/{tid}/run-view")["runs"]} == {shared["id"], direct["id"]}
     monkeypatch.setattr("backend.run_view.ATTEMPT_LIMIT", 1)
     seen = get(api, f"tasks/{tid}/run-view", token="cara-test")
-    assert [r["run"] for r in seen["attempts"]] == [shared["id"]] and "payroll" not in json.dumps(seen)
+    assert [r["id"] for r in seen["runs"]] == [shared["id"]] and "payroll" not in json.dumps(seen)
     access = get(api, "bots/ops/access")
     put(api, "bots/ops/access", {"see": access["see"], "read": {"people": ["ana"]}, "write": access["write"],
                                  "revision": access["revision"]})
     # The task moved to a person: Cara still reads it, and still none of the bot's runs on it.
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET owner='human:ana', requester='human:ana' WHERE id=?", (tid,))
-    assert get(api, f"tasks/{tid}/run-view", token="cara-test")["attempts"] == []
+    assert get(api, f"tasks/{tid}/run-view", token="cara-test")["runs"] == []
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE tasks SET checkpoint_blocked=1 WHERE id=?", (tid,))
     assert get(api, f"tasks/{tid}/run-view")["checkpoint"] is None
@@ -181,7 +181,7 @@ def test_the_task_page_follows_its_session_live_and_each_reply_keeps_its_steps(a
     events(api, machine, aid, [("tool", {"tool": "mcp__hub__task_create", "status": "started", "item_id": "c1"}),
                                ("tool", {"tool": "mcp__hub__task_create", "status": "completed", "item_id": "c1"})])
     live = get(api, f"tasks/{tid}")["execution"]
-    assert (live["state"], live["attempt_id"], live["bot"]) == ("running", aid, "ops")
+    assert (live["state"], live["run_id"], live["bot"]) == ("running", aid, "ops")
     assert live["parts"][-1] == {**live["parts"][-1], "kind": "tool", "text": "Ran hub task create"}
     events(api, machine, aid, [("message", {"text": "Counted: 42 words.", "final": True})], first=3)
     post(api, f"attempts/{aid}/complete", {"outcome": "completed", "text": "Counted: 42 words.", "last_seq": 3},
@@ -221,7 +221,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     assign(api, machine, "ops")
     ready(api, machine, ["ops"])
     tid, attempt = task_attempt(api, machine)
-    assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"]
+    assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"]
     post(api, f"attempts/{attempt['id']}/complete", {"outcome": "completed", "text": "Counted.", "last_seq": 0},
          machine["token"])
     with api.app.state.store.transaction() as c:
@@ -229,7 +229,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
         c.execute("INSERT INTO messages(id,conversation_id,from_actor,to_actor,kind,body,refs,created) "
                   "VALUES('msg-coo',?,'bot:ops','bot:coo','chat','Over to you','{}',?)", (cid, H.now()))
         assert c.execute("SELECT bot FROM jobs WHERE message_id='msg-coo'").fetchone()["bot"] == "coo"
-    assert get(api, f"tasks/{tid}")["execution"]["attempt_id"] == attempt["id"], "a bot's message to a bot is not it"
+    assert get(api, f"tasks/{tid}")["execution"]["run_id"] == attempt["id"], "a bot's message to a bot is not it"
     # A person owns the task and the bot that asked it answers them. A plain comment there is deferred a day
     # (backend/delivery.py); one that names the bot wakes it.
     with api.app.state.store.transaction() as c:
@@ -242,7 +242,7 @@ def test_the_working_line_follows_whichever_bot_a_persons_message_went_to(api):
     turn = claim(api, machine)
     post(api, f"attempts/{turn['id']}/started", {"thread_id": "answer"}, machine["token"])
     working = get(api, f"tasks/{tid}")["execution"]
-    assert (working["attempt_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
+    assert (working["run_id"], working["state"], working["bot"]) == (turn["id"], "running", "ops")
     # The next plain comment waits for the bot; the box offers @ops to wake it.
     assert get(api, f"tasks/{tid}")["comment_to"] == {"bot": "ops", "wakes": False, "mention": ["ops"]}
     # Someone who neither owns, asked nor may move it is saved for the bot's next run, and no @mention changes that:
@@ -274,9 +274,9 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
     aid = attempt["id"]
     line = "Waiting for this computer's ChatGPT login to be free (busy with finance)"
     events(api, machine, aid, [("status", {"waiting": line, "login": "this computer's ChatGPT login", "holder": "finance"})])
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert (run["state"], run["waiting"], run["moved"]) == ("running", line, None)
-    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["runs"]
     assert run["waiting"] == "Waiting for this computer's ChatGPT login to be free (busy with another bot)"
     # A runner that knows the queue names the holder's run, since when, and the place. The holder's task is looked up
     # from its run, only for a reader who may read that run, and is never stored with the wait: every event goes out
@@ -290,16 +290,16 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
     place = {"waiting": worded, "login": "this computer's ChatGPT login", "holder": "finance", "holder_attempt": aid,
              "holder_task": held, "since": 1_760_900_760, "position": 2}
     events(api, machine, aid, [("status", place)], first=2)
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert run["waiting"] == worded
-    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["runs"]
     assert run["waiting"] == "Waiting for this computer's ChatGPT login (held by another bot since 19:06Z; position 2)"
     with api.app.state.store.read() as c:
         kept = " ".join(r[0] for r in c.execute("SELECT payload FROM attempt_events WHERE attempt_id=?", (aid,)))
     assert "Close the books" not in kept and "held by" not in kept
     # Held by another turn of the same bot: a reader who may see that run still learns its task.
     events(api, machine, aid, [("status", {**place, "holder": "ops"})], first=3)
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert run["waiting"] == worded.replace("held by finance", "held by another turn of this bot")
     events(api, machine, aid, [("status", place)], first=4)
     with api.app.state.store.read() as c:
@@ -317,9 +317,9 @@ def test_an_opt_in_login_queue_names_the_holder_only_to_who_may_see_it(api, queu
                                                "fallback": "claude",
                                                "busy": {"login": "this computer's ChatGPT login", "holder": "finance"}})],
            first=6)
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert (run["waiting"], run["moved"]) == (None, "ChatGPT login busy with finance; ran this turn on claude")
-    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view", "ben-test")["runs"]
     assert run["moved"] == "ChatGPT login busy with another bot; ran this turn on claude"
 
 
@@ -354,7 +354,7 @@ def test_codex_ignores_old_login_wait_events_in_tasks_chat_status_and_health(api
     with api.app.state.store.read() as c:
         assert login_waits.wait(c, aid) is None
         assert not login_waits.unknown_holder(c, aid)
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert run["waiting"] is None and run["state"] == "running"
     execution = get(api, f"tasks/{tid}")["execution"]
     assert "waiting" not in execution and "Waiting for" not in execution["label"]
@@ -379,7 +379,7 @@ def botops_decides(api, job_id, attempt_id, decision, note, at):
         if not H.bot(c, H.FLEET_MAINTAINER):
             c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')", (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
         api.app.state.execution.reconcile_job(c, Identity("bot:" + H.FLEET_MAINTAINER, "bot"), job_id, SimpleNamespace(
-            attempt_id=attempt_id, decision=decision, note=note, acknowledge_uncertain_effects=True))
+            run_id=attempt_id, decision=decision, note=note, acknowledge_uncertain_effects=True))
         c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (at, job_id))
 
 
@@ -396,14 +396,14 @@ def held_run(api, title):
 
 def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(api):
     _, tid, attempt = held_run(api, "Build the QA waiver")
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     # No recovery decision yet: no decision label.
     assert (run["job_state"], run["decision"]) == ("uncertain", None)
 
     botops_decides(api, attempt["job_id"], attempt["id"], "dismiss", DEV_563_NOTE, "2026-10-26T09:50:45.103088Z")
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert run["job_state"] == "canceled"
-    assert run["decision"] == {"decision": "dismiss", "attempt_id": attempt["id"], "current": True,
+    assert run["decision"] == {"decision": "dismiss", "run_id": attempt["id"], "current": True,
                                "state": "canceled", "by": "bot:botops", "by_kind": "botops",
                                "at": "2026-10-26T09:50:45.103088Z", "note": DEV_563_NOTE}
     from backend.run_view import decision_label
@@ -414,17 +414,17 @@ def test_a_held_runs_decision_shows_beside_its_state_with_who_when_and_the_note(
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE job_recovery SET decision='resume', actor='human:ana', note=?, created=? WHERE job_id=?",
                   ("Ana wants it run again after all.", "2026-10-26T10:02:00Z", attempt["job_id"]))
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert (run["decision"]["decision"], run["decision"]["by"], run["decision"]["by_kind"], run["decision"]["note"]) == (
         "resume", "human:ana", "person", "Ana wants it run again after all.")
 
 
 def test_a_persons_resume_with_a_note_names_them_and_a_run_without_one_has_no_label(api):
     machine, tid, attempt = held_run(api, "Rename the folders")
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {"attempt_id": attempt["id"], "decision": "resume",
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {"run_id": attempt["id"], "decision": "resume",
                                                       "note": "Nothing was renamed yet; run it again.",
                                                       "acknowledge_uncertain_effects": True})
-    [run] = get(api, f"tasks/{tid}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{tid}/run-view")["runs"]
     assert run["job_state"] == "queued"
     assert (run["decision"]["decision"], run["decision"]["by"], run["decision"]["by_kind"], run["decision"]["note"],
             run["decision"]["state"]) == ("resume", "human:ana", "person", "Nothing was renamed yet; run it again.",
@@ -433,14 +433,14 @@ def test_a_persons_resume_with_a_note_names_them_and_a_run_without_one_has_no_la
     ready(api, machine, ["ops"])
     again = claim(api, machine)
     post(api, f"attempts/{again['id']}/started", {"thread_id": "again"}, machine["token"])
-    later, earlier = get(api, f"tasks/{tid}/run-view")["attempts"]
-    assert (later["run"], later["decision"]) == (again["id"], None)
+    later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
+    assert (later["id"], later["decision"]) == (again["id"], None)
     assert earlier["decision"]["by"] == "human:ana"
     # The new try stops too and nobody has decided it: the job is held again, but the earlier resume is history, not
     # a saved choice for this stop. It says only what was decided; the new stop carries no label.
     expire(api, again["id"])
     assert claim(api, machine) is None
-    later, earlier = get(api, f"tasks/{tid}/run-view")["attempts"]
+    later, earlier = get(api, f"tasks/{tid}/run-view")["runs"]
     assert later["job_state"] == "uncertain" and later["decision"] is None
     assert (earlier["decision"]["current"], earlier["decision"]["state"]) == (False, None)
     from backend.run_view import decided_by, decision_label

@@ -16,6 +16,7 @@ import time
 
 from fastapi import Request
 
+from .runs import state as run_state
 from .store import H, Problem
 
 SCHEMA = """
@@ -444,9 +445,9 @@ def view(c, runner_id, hours, now=None, label=lambda b: b, access=None):
     for r in _runs(c, runner_id, since, now + 1):
         slug = r["bot"].removeprefix("bot:")
         shown = seen(slug)
-        runs.append({"attempt": r["id"] if seen(slug, "read") else None, "bot": label(slug) if shown else "",
+        runs.append({"id": r["id"] if seen(slug, "read") else None, "bot": label(slug) if shown else "",
                      "model": (r["model"] or "") if shown else "", "started": r["started"], "finished": r["finished"],
-                     "state": r["state"]})
+                     "state": run_state(r["state"])})
     name = lambda b: label(b) if b else ""
     bots = [b | {"bot": name(b["bot"])} for b in _shown(ran(c, runner_id, since, now + 1), access, 20)]
     procs = []

@@ -252,7 +252,7 @@ def decisions_report(c, auth, who, bots, since):
                 d = {**d, "note": None}
             # A decision about an earlier try is history: no state of the job's later try is put beside it.
             state = d["state"] and ("held" if d["state"] == "uncertain" else d["state"])
-            out[r["job_bot"]].append({"job": r["job_id"], "attempt": d["attempt_id"], "current": d["current"],
+            out[r["job_bot"]].append({"job": r["job_id"], "run": d["attempt_id"], "current": d["current"],
                                       "state": state, "decision": d["decision"], "by": d["by"],
                                       "by_kind": d["by_kind"], "at": d["at"], "note": d["note"],
                                       "label": decision_label(d, lambda a: owner_name(c, a))})

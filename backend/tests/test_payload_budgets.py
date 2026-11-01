@@ -248,6 +248,6 @@ def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
     board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
     rows = board.json()["tasks"]
     assert len(rows) == 500
-    assert all("snoozed_note" not in r for r in rows), "a list row carries no snooze note"
+    assert all("reason" not in h for r in rows for h in r["holds"]), "a list row carries no snooze note"
     whole = get(api, "tasks/" + task["id"])["task"]
-    assert whole["snoozed_note"] == note, "the task's own view keeps the note whole"
+    assert whole["holds"][0]["reason"] == note, "the task's own view keeps the note whole"
