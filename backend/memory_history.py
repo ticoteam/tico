@@ -84,6 +84,17 @@ def _run_of(c, bot, attempt):
     return attempt if row and row["bot"] in family(c, bot) else ""
 
 
+def changed_since(c, bot, since, pass_tasks=()):
+    """Whether `bot`'s memory/ or knowledge/ has a commit after `since` that its nightly memory tidy pass did not make.
+    `pass_tasks` are the pass's own tasks (its parent and its check subtasks): the runs of those are the pass and the
+    ordinary turn it caused (the wake turn, which runs on the parent), and their commits do not count. Any other commit
+    counts, and so does one whose run is unknown (spec criterion 2)."""
+    from .learnings import run_attempts
+    own = {run for task in pass_tasks for run in run_attempts(c, task)}
+    rows = c.execute("SELECT attempt_id FROM bot_memory_updates WHERE bot=? AND committed>?", (bot, since)).fetchall()
+    return any((row[0] or "") not in own for row in rows)
+
+
 def record(c, who, bot, report):
     """Store what a computer reported for a bot assigned to it. Returns how many commits were new or changed."""
     if not c.execute("SELECT 1 FROM assignments WHERE bot=? AND runner_id=?", (bot, who.runner_id)).fetchone():
