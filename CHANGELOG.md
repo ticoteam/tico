@@ -10,6 +10,8 @@ below word for word as its notes.
 
 ## [0.4.15] - 2026-10-27
 
+Desktop app: the 0.4.3 build, unchanged in this release.
+
 ### Fixed
 - **SQL queries run at normal speed again.** In v0.4.14, `hub sql` and the SQL API could take many minutes and slow every other request. This release restores the earlier query path and reverts the v0.4.14 change to message searches. Results and access rules are unchanged ([Querying Tico with SQL](docs/hub-sql.md)).
 - **Desktop app sign-in shows its instructions.** On macOS, the model sign-in dialog could open with an empty body, hiding the provider link and code, so Claude Code and Codex could not sign in from the desktop app. The instructions now show ([Add a connection](docs/computers.md#add-one)).
@@ -68,6 +70,8 @@ Desktop app: the 0.4.3 build, unchanged in this release.
 - **Late Dev-ticket notices are reliable.** A notice is recorded only after a manager who can read the ticket receives it, so a ticket with no readable manager is told on a later pass. One ticket that fails no longer stops the rest of the sweep ([Waiting work](docs/tasks.md#work-that-is-waiting)).
 
 ## [0.4.12] - 2026-10-26
+
+Desktop app: the 0.4.3 build, unchanged in this release.
 
 ### Added
 - **Set a bot's task effort and context length.** Each starts as **Same as bot** and can be set without a task model, so a longer context can run with the bot's own model. Chat keeps the bot's own settings ([Task settings](docs/harnesses.md#run-a-bots-tasks-on-another-model)).
@@ -151,6 +155,8 @@ Desktop app: the 0.4.3 build, unchanged in this release.
 
 ## [0.4.9] - 2026-10-25
 
+Desktop app: the 0.4.3 build, unchanged in this release.
+
 ### Fixed
 - **Setup recovers from interrupted research.** After a server restart, the strategy step shows a form instead of waiting for research that can no longer finish ([Setup](docs/strategy.md#setup)).
 - **Late research leaves your strategy draft alone.** Research that runs past 10 minutes shows as failed. A late answer no longer fills the draft after the form has returned ([Setup](docs/strategy.md#setup)).
@@ -164,6 +170,8 @@ Desktop app: the 0.4.3 build, unchanged in this release.
 - **SQL reads show the team's current vision.** The company profile follows the vision visible to the team, including after upgrades and the first strategy publication ([Strategy](docs/strategy.md#what-bots-see)).
 
 ## [0.4.8] - 2026-10-25
+
+Desktop app: the 0.4.3 build, unchanged in this release.
 
 ### Added
 - **Write and publish your team's strategy.** Owners can draft a summary, vision, bets and four strategy sections, then publish numbered versions with a note. The draft stays private to the owner. Bots read the published summary on each run; the CEO Bot proposes changes for the owner to confirm ([Strategy](docs/strategy.md)).
@@ -200,6 +208,8 @@ Desktop app: the 0.4.3 build, unchanged in this release.
 - **Docker Gateway turns use separate Linux users.** Gateway and isolation-capable harness turns receive private credentials and homes, with processes and temporary files cleaned before reuse. Checkout groups restrict access to sibling workspaces. Shared-login harnesses still run as the shared bot user, and base clones and runner operations remain shared. Update the Docker runner for this protection ([Isolation limits](SECURITY.md), [Computers](docs/computers.md)).
 
 ## [0.4.7] - 2026-10-25
+
+Desktop app: the 0.4.3 build, unchanged in this release.
 
 ### Added
 - **The CEO Bot acts on goals at level 3.** At **Acts on its own**, it creates or reorders bot tasks to recover red or stalled goals and settles competing work between Heads. It records each decision with a reason and an **Undo**, and explains each goal recovery in a comment. Work reserved for the owner stays a proposal ([Your CEO Bot](docs/ceo-bot.md#the-three-levels)).
