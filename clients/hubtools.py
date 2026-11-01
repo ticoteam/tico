@@ -53,7 +53,7 @@ APPROVAL_KINDS = ("send", "spend", "publish", "merge", "support", "task_cap", "s
 GOAL_STATUSES = ("red", "yellow", "green", "done", "dropped")     # what a person or bot sets by hand
 GOAL_FILTERS = GOAL_STATUSES + ("gray",)                        # gray is the automatic "no data"
 PROPOSAL_KINDS = ("goal_wording", "goal_kpi", "kpi_definition", "kpi_target", "flag", "goal_why", "recovery",
-                  "strategy_draft")
+                  "strategy_draft", "brand_draft", "gtm_draft")
 
 # What an agent reads on connect: the hub in one line, then the skill a person's own agent
 # follows to work their bots (clients/agent_skill.py). Bots ignore the skill; it is for people.
@@ -1663,7 +1663,9 @@ def kpi_log(api, args):
       "summary, vision, sections {serve, sell, know, not, extra: {key: {title, body}}}, bets [{id?, statement, why, "
       "rules_out, wrong_if, cites, status}], each optional; a bet with an id changes only the fields sent, one "
       "without is new; source bet_tripped when a tripped bet prompted it; confirmed, the owner's draft and bets "
-      "change, nothing is published). goal_wording may be only {bet_id} to link a goal to a bet. The Strategy Bot "
+      "change, nothing is published), or a change to the brand or go-to-market draft (brand_draft, gtm_draft: payload "
+      "{sections: {name: value or null}}; confirmed by an admin, merged into the draft, never published). "
+      "goal_wording may be only {bet_id} to link a goal to a bet. The Strategy Bot "
       "cannot change a definition or a target it is judged against without one.",
       {"kind": {"type": "string", "enum": list(PROPOSAL_KINDS)}, "goal_id": _s("The goal it is about"),
        "kpi_id": _s("The KPI it is about"), "payload": {"type": "object", "description": "The proposed change"},

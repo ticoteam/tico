@@ -143,6 +143,9 @@ KEEP = frozenset((
     "fin_settlements", "fin_cash_rollups", "fin_vendor_aliases", "fin_vendor_labels", "fin_vendor_legacy",
     "fin_view_defaults", "fin_view_grants", "fin_view_versions",
     "fin_raw_imports", "fin_close_snapshots", "fin_tax_jurisdictions", "fin_tax_seeds",
+    # Growth, brand and go-to-market (backend/growth.py, backend/brand_gtm.py)
+    "brand_drafts", "brand_versions", "gtm_drafts", "gtm_versions", "gtm_sources", "growth_channels", "growth_ideas",
+    "growth_idea_channels", "growth_cohorts", "growth_settings",
 ))
 # Work still to do: a job or attempt in any other state is finished and kept as history.
 # Rows that belong to their attempt: they go with it and never hold an old attempt back.

@@ -18,6 +18,8 @@ the others, so no entry's words are in the audit log.
 
 Unversioned and idempotent, like the task tabs (backend/bot_task_tabs.py): an older release never reads the table."""
 
+import logging
+
 from fastapi import Request
 
 from . import strategy_bot, rooms
@@ -25,6 +27,8 @@ from . import goals as G
 from . import company as C
 from . import models as M
 from .store import H, Problem
+
+log = logging.getLogger("tico.learned")
 
 TEXT_MAX = 280            # one short line
 LAYER_MAX = 100           # entries in one layer: every turn in the chat is handed all of them
@@ -103,7 +107,38 @@ def for_turn(c, settings, conversation, bot):
     text = strategy.summary_text(c)
     if text:
         layers = {**(layers or {}), "strategy": text}
+    if growth_facing(c, bot):
+        # The brand and the go-to-market, for the bots whose words and plans reach customers (backend/brand_gtm.py).
+        from . import brand_gtm
+        for kind in brand_gtm.KINDS:
+            text = brand_gtm.summary_text(c, kind)
+            if text:
+                layers = {**(layers or {}), kind: text}
     return layers
+
+
+GROWTH_TEAMS = ("market", "sales", "growth", "partner")
+
+
+def growth_facing(c, bot):
+    """Whether a bot faces customers: it, or a team it sits in (up the team tree), is named for marketing, sales,
+    growth or partnerships."""
+    try:
+        from . import people, views
+        if any(word in str(bot or "").lower() for word in GROWTH_TEAMS):
+            return True
+        roster = views.roster(c)
+        groups = (roster or {}).get("org_groups") or {}
+        gid, seen = people.team_of(bot, views.entries(c), roster), set()
+        while gid and gid not in seen:
+            seen.add(gid)
+            group = groups.get(gid) or {}
+            if any(word in f"{gid} {group.get('name') or ''}".lower() for word in GROWTH_TEAMS):
+                return True
+            gid = group.get("parent")
+    except Exception:
+        log.warning("growth-facing check failed for %s", bot, exc_info=True)
+    return False
 
 
 def _layers(c, settings, conversation, bot):
