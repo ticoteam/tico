@@ -41,13 +41,16 @@ const taskParent = t => taskRels(t, 'parent', 'out')[0] || null;
 const taskParentId = t => taskParent(t)?.id ? String(taskParent(t).id) : '';
 const taskBlockers = t => taskRels(t, 'blocks', 'in');
 // The related count a board card shows: everything but its parent (subtasks have their own ring).
+// What holds a task, by kind (docs/tasks.md, Holds): `blocked` (cause manual, dependency, gate…) or `snoozed`.
+const taskHold = (t, kind) => (t?.holds || []).find(h => h.kind === kind);
+const taskBlockedHold = t => taskHold(t, 'blocked');
 const taskRelCount = t => Object.entries(t?.relations || {}).reduce((n, [kind, rows]) => n + (kind === 'parent' ? 0 : rows.length), 0);
 function taskBlockedReason(t, source = document.activeElement) {
   return new Promise(resolve => {
     const opener = source, dialog = document.createElement('dialog');
     dialog.className = 'tmodal task-block-reason';
     dialog.innerHTML = `<form class="tmodal-body"><h2>Block task</h2>
-      <label>What is it waiting for?<textarea name="reason" required maxlength="1000" rows="3">${esc(t.blocked_reason || '')}</textarea></label>
+      <label>What is it waiting for?<textarea name="reason" required maxlength="1000" rows="3">${esc(taskBlockedHold(t)?.reason || '')}</textarea></label>
       <div class="row"><button type="button" data-cancel>Cancel</button><button class="primary" type="submit">Block</button></div></form>`;
     let value = null;
     dialog.querySelector('form').onsubmit = event => {
@@ -63,9 +66,10 @@ function taskBlockedReason(t, source = document.activeElement) {
 }
 function taskBlockedLine(t) {
   const blocker = taskBlockers(t).find(b => !['done', 'closed', 'declined'].includes(b.status));
-  const reason = t.blocked_reason === 'Waiting on a dependency' && blocker?.title
-    ? `Waiting for ${blocker.title}` : t.blocked_reason || 'Waiting on a hold';
-  return `${reason} · since ${fmt(t.blocked_since)}`;
+  const hold = taskBlockedHold(t);
+  const reason = hold?.reason === 'Waiting on a dependency' && blocker?.title
+    ? `Waiting for ${blocker.title}` : hold?.reason || 'Waiting on a hold';
+  return `${reason} · since ${fmt(hold?.since)}`;
 }
 // A waiting task held by a bot doing prerequisite work: a bot owns its first open blocker, the one `--on bot:<slug>`
 // must name (backend/hubdb.py _waiting_bot). Its reason is the owner's note, else what the blocker is. A task only
@@ -76,18 +80,18 @@ function taskBlockedLine(t) {
 // Blocked hold, so it carries the hold's age; a review-gate or worktree hold is something else and says its own why.
 function taskBotWait(t) {
   const open = r => !['done', 'closed', 'declined'].includes(String(r.status || ''));
-  if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(t.blocked_kind) || actorPerson(t.waiting_on)
+  if (t?.status !== 'waiting' || ['gate', 'worktree'].includes(taskBlockedHold(t)?.cause) || actorPerson(t.waiting_on)
       || taskAskToPerson(t) || taskBlockers(t).some(r => open(r) && actorPerson(r.owner))) return null;
   const b = taskBlockers(t).find(open);
   if (!b || !actorSlug(b.owner)) return null;
   const note = String(t.note || '').split('\n').map(s => s.trim()).find(Boolean) || '';
   return {name: actorLabel(b.owner), reason: note || b.title || '', blocker: b,
-    since: t.blocked_since ? ` · since ${fmt(t.blocked_since)}` : ''};
+    since: taskBlockedHold(t) ? ` · since ${fmt(taskBlockedHold(t).since)}` : ''};
 }
 function taskWaitLine(t) {
   const bot = taskBotWait(t);
   if (bot) return `Waiting on ${bot.name}${bot.reason ? `: ${bot.reason}` : ''}${bot.since}`;
-  if (t?.blocked_since) return taskBlockedLine(t);
+  if (taskBlockedHold(t)) return taskBlockedLine(t);
   const blocker = taskBlockers(t)[0];
   if (blocker?.title) return `Blocked by: ${blocker.title}`;
   const ask = String(t?.ask?.body || '').split('\n').map(s => s.trim()).find(Boolean);
@@ -193,7 +197,7 @@ function taskWaitingOn(t) {
 // The name of a task's status: its step when its type has steps, else the status (Open, Doing, Waiting, In review…).
 function taskStatusLabel(t) {
   if (!t) return '';
-  if (t.blocked_since) return 'Blocked';
+  if (taskBlockedHold(t)) return 'Blocked';
   if (t.step?.name && pipelineTypeId(t) !== 'general') return t.step.name;
   return STATUS_WORD[t.status] || String(t.status || '');
 }
@@ -288,13 +292,14 @@ function taskDueInfo(t) {
 }
 // Set aside until a date (backend/task_snooze.py): only the Snoozed view shows it until then.
 function taskSnoozed(t) {
-  return !!t?.snoozed_until && !taskFinished(t) && parseServerTime(t.snoozed_until) > Date.now();
+  const until = taskHold(t, 'snoozed')?.until;
+  return !!until && !taskFinished(t) && parseServerTime(until) > Date.now();
 }
 function snoozeDay(t) {
-  return new Date(parseServerTime(t.snoozed_until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
+  return new Date(parseServerTime(taskHold(t, 'snoozed')?.until)).toLocaleDateString(undefined, {month: 'short', day: 'numeric'});
 }
 function snoozeChip(t) {
-  return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(t.snoozed_until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
+  return taskSnoozed(t) ? `<span class="tl-due wake" title="Snoozed until ${esc(fmt(taskHold(t, 'snoozed').until))}">Snoozed to ${esc(snoozeDay(t))}</span>` : '';
 }
 function dueChip(t) {
   const due = taskDueInfo(t); if (!due) return '';

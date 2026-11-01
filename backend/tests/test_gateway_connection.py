@@ -840,7 +840,7 @@ def test_a_tico_model_on_a_runner_that_runs_bots_as_itself_says_so_once_and_is_n
     status, job = ended(api, attempt)
     assert status["focus"] == error.removesuffix(" (not_isolated)") + ". This run is saved for later", status["focus"]
     stop = get(api, "status?bot=ops")["status"]["last_stop"]
-    assert stop["attempt_id"] == attempt["id"] and stop["action"] == "review"
+    assert stop["run_id"] == attempt["id"] and stop["action"] == "review"
     assert "never started" in stop["text"] and "changed something" not in stop["reason"]
     assert "pick another model or move the bot" in stop["reason"]
     assert job == "uncertain" and claim(api, machine, "ops") is None

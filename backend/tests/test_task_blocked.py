@@ -3,9 +3,10 @@ import json
 
 import pytest
 
-from backend import hubdb as H
+from backend import hubdb as H, task_snooze as TS
 from backend.tests.test_review_gate import api, ticket, move, HEAD, get
 from backend.tests.test_github import post
+from backend.tests.test_api import hold
 
 
 def _team_blocked(api, task):
@@ -13,6 +14,25 @@ def _team_blocked(api, task):
     with api.app.state.store.transaction() as c:
         typ = H.type_get(c, task['type_id'])
         H.type_update(c, H.KEEPER, typ['id'], steps=[*typ['steps'], {'name': 'Blocked', 'status': 'waiting'}])
+
+
+def test_task_view_lists_a_block_and_a_snooze_as_holds(api):
+    """The API shows a hold per kind with who set it and since when (docs/tasks.md, Holds), on a task's read and a list."""
+    task = ticket(api)
+    _team_blocked(api, task)
+    with api.app.state.store.transaction() as c:
+        H.task_update(c, task['owner'], task['id'], step='Blocked', note='Waiting for the test machine')
+        row = H.task(c, task['id'])
+        TS.snooze(c, task['owner'], task['id'], H.shift(H.now(), days=3)[:10], note='Check the machine')
+    view = get(api, 'tasks/' + task['id'])['task']
+    assert {h['kind'] for h in view['holds']} == {'blocked', 'snoozed'} and len(view['holds']) == 2
+    assert hold(view) == {'kind': 'blocked', 'reason': 'Waiting for the test machine', 'since': row['blocked_since'],
+                          'until': None, 'by': task['owner'], 'cause': 'manual'}
+    snoozed = hold(view, 'snoozed')
+    assert (snoozed['reason'], snoozed['by']) == ('Check the machine', task['owner']) and snoozed['until'] > snoozed['since']
+    assert not any(k.startswith(('blocked_', 'snoozed_')) for k in view)
+    listed = get(api, 'tasks?snoozed=only')
+    assert [t['holds'] for t in listed['tasks'] if t['id'] == task['id']] == [view['holds']]
 
 
 def test_restart_adds_no_blocked_step_and_a_deleted_one_stays_deleted(api):
@@ -99,9 +119,9 @@ def test_gate_refusal_commits_block_without_advancing_review(api):
     # The hold is a mark on the ticket: it stays in the step it was at, and the refused move is not made.
     assert current['step']['name'] == 'In Progress'
     assert current['status'] == 'waiting'
-    assert 'receipt' in current['blocked_reason']
+    assert 'receipt' in hold(current)['reason'] and hold(current)['by'] == 'keeper'
     # The screen keeps a gate hold's own line instead of a bot wait's (ui/app/tasks.js taskBotWait).
-    assert current['blocked_kind'] == 'gate'
+    assert hold(current)['cause'] == 'gate'
     assert current['version'] > task['version']
     with api.app.state.store.transaction() as c:
         from backend import task_blocked
@@ -223,7 +243,7 @@ def test_stranded_sweep_leaves_gate_and_worktree_holds_to_reconciliation(api, ki
         after = H.task(c, task['id'])
         assert (after['status'], after['note'], after['blocked_kind'], after['blocked_since']) == (
             'waiting', held['note'], kind, held['blocked_since'])
-    assert get(api, 'tasks/' + task['id'])['task']['blocked_kind'] == kind
+    assert hold(get(api, 'tasks/' + task['id'])['task'])['cause'] == kind
 
 
 def test_stranded_sweep_preserves_general_worktree_hold(api):

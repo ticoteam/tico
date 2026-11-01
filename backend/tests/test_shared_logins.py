@@ -164,7 +164,7 @@ def test_a_person_stopping_a_turn_before_it_started_ends_it_unstarted(api):
     ready(api, r, ["ops"])
     post(api, "tasks", {"owner": "ops", "title": "Count the words", "body": "Count them."})
     a = claim(api, r)
-    post(api, "bots/ops/stop", {"attempt_id": a["id"]})
+    post(api, "bots/ops/stop", {"run_id": a["id"]})
     assert post(api, f"attempts/{a['id']}/renew", {}, r["token"])["stop"] is True
     # The runner stops before it acknowledges the start (waiting for its login, or preparing): nothing ran.
     post(api, f"attempts/{a['id']}/complete", {"outcome": "interrupted", "last_seq": 0}, r["token"])

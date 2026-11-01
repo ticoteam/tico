@@ -159,9 +159,9 @@ def test_the_writes_a_failing_job_made_before_its_error_are_rolled_back(api, mon
         assert c.execute("SELECT count(*) FROM attempts WHERE bot='ops'").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM turns WHERE bot='ops'").fetchone()[0] == 0
     [bad] = jobs_of(api, "ops")
-    assert (bad["state"], bad["attempt_id"], bad["held"]) == ("queued", None, 1)
+    assert (bad["state"], bad["run_id"], bad["held"]) == ("queued", None, 1)
     [good] = jobs_of(api, "cpo")
-    assert (good["state"], good["attempt_id"]) == ("leased", turn["id"])
+    assert (good["state"], good["run_id"]) == ("leased", turn["id"])
 
 
 def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_still_claim(api, monkeypatch):
@@ -178,7 +178,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
         H.task_comment(c, H.KEEPER, cpo_task, "The pricing numbers are in.")
     with store.read() as conn:
         read_deps.sweep(conn)
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {"attempt_id": attempt["id"], "decision": "resume",
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {"run_id": attempt["id"], "decision": "resume",
          "note": "Nothing was pushed yet; carry on from the build.", "acknowledge_uncertain_effects": True})
     assign(api, machine, "cpo")
     ready(api, machine, ["ops", "cpo"])
@@ -198,7 +198,7 @@ def test_a_moved_input_that_failed_on_the_old_upsert_is_held_and_other_bots_stil
     assert (claim(api, machine) or {}).get("bot") == "cpo"
     [held] = [j for j in jobs_of(api, "ops") if j["id"] == attempt["job_id"]]
     assert (held["held"], held["hold_reason"], held["state"]) == (1, claim_holds.REASON, "queued")
-    assert held["attempt_id"] == attempt["id"]
+    assert held["run_id"] == attempt["id"]
     with store.read() as c:
         error = c.execute("SELECT detail_json FROM events WHERE action='job.claim_failed' AND target=?",
                           (attempt["job_id"],)).fetchone()

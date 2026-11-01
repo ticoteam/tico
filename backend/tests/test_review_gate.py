@@ -6,6 +6,7 @@ import pytest
 
 from backend import hubdb as H, review_gate, qa_defaults, test_receipts
 from backend.tests.test_github import api, get, headers, post, hook, pr_event, PR
+from backend.tests.test_api import hold
 
 HEAD, OLD, BASE = 'a' * 40, 'b' * 40, 'c' * 40
 
@@ -157,7 +158,7 @@ def test_destination_board_review_preflight_uses_fresh_github_and_refuses_atomic
     assert refused.status_code == 422 and OLD in refused.text and 'python' in refused.text, refused.text
     current = get(api, 'tasks/' + task['id'])['task']
     assert current['type_id'] == task['type_id'] and current['status'] == 'waiting'
-    assert current['blocked_since'] and 'CI failing' in current['blocked_reason']
+    assert hold(current)['since'] and 'CI failing' in hold(current)['reason']
     assert current['version'] > task['version']
     with api.app.state.store.read() as c:
         assert not c.execute("SELECT 1 FROM jobs WHERE bot='cmo'").fetchone()
@@ -168,7 +169,7 @@ def test_destination_board_review_preflight_uses_fresh_github_and_refuses_atomic
     assert allowed.status_code == 200, allowed.text
     resumed = allowed.json()['task']
     assert resumed['step']['name'] in ('Review 1', 'Review 2')
-    assert not resumed.get('blocked_since') and not resumed.get('blocked_reason')
+    assert not hold(resumed).get('since') and not hold(resumed).get('reason')
 
 
 def test_fresh_github_snapshot_head_and_checks_are_used_and_races_refuse(api, monkeypatch):
@@ -366,7 +367,7 @@ def test_github_errors_and_head_changes_during_collection_refuse(api, monkeypatc
     monkeypatch.setattr(service, '_call', fetch)
     assert move(api, task).status_code == 422
     current = get(api, 'tasks/' + task['id'])['task']
-    assert current['step_id'] == task['step_id'] and not current.get('blocked_since')
+    assert current['step_id'] == task['step_id'] and not hold(current).get('since')
 
 
 def test_author_labels_override_pr_path_default(api):

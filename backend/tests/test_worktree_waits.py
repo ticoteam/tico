@@ -292,7 +292,7 @@ def test_close_reassign_revoke_and_stop_end_the_wait_without_touching_other_task
     with api.app_state.store.transaction() as c:
         c.execute("UPDATE task_links SET state='present' WHERE id=?", (links[0],))
     assert 'wait' in post(api, f'tasks/{fifth}/worktrees', {'repo': 'Acme/product'}, 'bot-test').json()['error']
-    stop = api.post('/api/v2/bots/cmo/stop', json={'attempt_id': 'a1'}, headers={**auth(), 'Idempotency-Key': uuid.uuid4().hex})
+    stop = api.post('/api/v2/bots/cmo/stop', json={'run_id': 'a1'}, headers={**auth(), 'Idempotency-Key': uuid.uuid4().hex})
     assert stop.status_code == 200, stop.text
     done = api.post('/api/v2/attempts/a1/complete', json={'outcome': 'interrupted', 'last_seq': 0},
                     headers={**auth('runner-test'), 'Idempotency-Key': uuid.uuid4().hex})

@@ -170,7 +170,7 @@ def test_overload_holds_only_new_starts_and_calm_load_resumes_them(api, cpu, mem
 def test_stop_on_waiter_is_final_even_after_capacity_returns(api):
     """Spec 12 on the candidate: Stop still wins when a waiter releases its computer place."""
     computer = waiters(api, n=1, running=0)
-    post(api, 'bots/ops/stop', {'attempt_id': 'attempt-0'})
+    post(api, 'bots/ops/stop', {'run_id': 'attempt-0'})
     answer = post(api, 'attempts/attempt-0/renew', {}, computer['token'])
     assert answer['stop'] is True
     denied = post(api, 'attempts/attempt-0/start-place', {}, computer['token'])

@@ -253,7 +253,7 @@ def test_a_quarantine_after_the_lease_already_lapsed_is_still_a_lost_computer(ap
 
 def test_a_person_stop_is_unchanged(api):
     machine, message, attempt = working(api)
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     renewed = post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
     assert renewed['stop'] is True and 'stop_reason' not in renewed
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 3}, machine['token'])

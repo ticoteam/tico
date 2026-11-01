@@ -171,7 +171,7 @@ def export(c, who, auth, aid, full=True):
     result = json.loads(attempt["result_json"]) if attempt["result_json"] else {}
     return {
         "run": {"id": aid, "bot": attempt["bot"], "state": runs.state(attempt["state"]), "created": attempt["created"],
-                    "started": attempt["started"], "finished": attempt["finished"], **diagnostics},
+                "started": attempt["started"], "finished": attempt["finished"], **diagnostics},
         "provider": cap["provider"],
         "stream_captured": stream_captured,
         "stderr_tail": stderr or "",

@@ -245,17 +245,17 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     await peek.locator('[data-modal-close]').click();
     await peek.waitFor({state: 'hidden'});
     // Its Blocked hold is that wait: one line on the card, with the hold's age. A review-gate hold says its own why.
-    Object.assign(brief, {blocked_since: '2026-10-02T10:00:00Z', blocked_reason: 'Needs the launch plan reviewed first.'});
+    Object.assign(brief, {holds: [{kind: 'blocked', reason: 'Needs the launch plan reviewed first.', since: '2026-10-02T10:00:00Z', until: null, by: 'keeper', cause: 'dependency'}]});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => /· since/.test(document.querySelector('#task-body [data-board-blocked="tbrief"]')?.title || ''));
     assert.equal(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').count(), 1);
     assert.match(await page.locator('#task-body [data-board-blocked="tbrief"]').getAttribute('title'),
       /^Waiting on Ops: Needs the launch plan reviewed first\. · since .+\nBlocked by Plan the launch$/);
-    Object.assign(brief, {blocked_kind: 'gate', blocked_reason: 'Review 1 has no verdict yet'});
+    Object.assign(brief.holds[0], {cause: 'gate', reason: 'Review 1 has no verdict yet'});
     await page.evaluate(() => tasksLoad(TASKS_ST));
     await page.waitForFunction(() => document.querySelector('#task-body [data-board-blocked="tbrief"] span')?.innerText === 'Blocked by Plan the launch');
     assert.match(await page.locator('#task-body [data-task-key="tbrief"] .bcard-blocked').first().innerText(), /^Review 1 has no verdict yet · since/);
-    Object.assign(brief, {blocked_since: null, blocked_kind: null, blocked_reason: null});
+    Object.assign(brief, {holds: []});
     // Only the first open blocker's owner is named: a person's task linked ahead of the bot's reads "Blocked by".
     const opsBlocker = brief.relations.blocks[0];
     brief.relations = {blocks: [{id: 'legal-review', title: 'Legal review', status: 'doing', owner: 'human:ana', direction: 'in'}, opsBlocker]};
@@ -373,7 +373,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
     ].map((step, position) => ({...step, position, type_id: dev.id}));
     const held = {...tasks[0], id: 'dev-held', title: 'Build the export', type_id: dev.id,
       type: {id: dev.id, name: dev.name}, step_id: 'dev-blocked', step: dev.steps[1], status: 'waiting',
-      blocked_reason: 'Waiting for a test machine <script>', blocked_since: '2026-10-02T10:00:00Z'};
+      holds: [{kind: 'blocked', reason: 'Waiting for a test machine <script>', since: '2026-10-02T10:00:00Z', until: null, by: 'human:ana', cause: 'manual'}]};
     tasks.push(held);
     for (const width of [1200, 375]) {
       await page.setViewportSize({width, height: 900});
@@ -401,7 +401,7 @@ const {t} = (() => { try { return require('./support/load.cjs'); } catch { retur
       getComputedStyle(document.documentElement).getPropertyValue('--rail-left').trim() ===
         Math.round(Math.max(RAILS.left.min, Math.min(railsWant('left'), railsMax('left')))) + 'px');
     // Owner reason entry is cancellable and sends the reason with the step move.
-    Object.assign(held, {step_id: 'dev-building', step: dev.steps[2], status: 'doing', blocked_since: null, blocked_reason: null});
+    Object.assign(held, {step_id: 'dev-building', step: dev.steps[2], status: 'doing', holds: []});
     await page.evaluate(task => {
       TASKS_ST.tasks = TASKS_ST.tasks.map(t => t.id === task.id ? task : t);
       tasksRender(TASKS_ST);

@@ -6,6 +6,7 @@ import pytest
 from backend import hubdb as H, move_retry
 from backend.tests.test_github import api, get, headers  # noqa: F401
 from backend.tests.test_review_gate import ticket, move, HEAD, BASE
+from backend.tests.test_api import hold
 
 RECEIPT = f'Tests: base {BASE} head {HEAD}: 9 passed, 0 failed'
 
@@ -490,13 +491,13 @@ def test_a_refused_move_onto_another_board_is_retried_onto_that_board(api, revie
     task = general(api, ticket(api))
     assert cross_move(api, task, review_step).status_code == 422
     held = get(api, 'tasks/' + task['id'])['task']
-    assert held['type_id'] == H.GENERAL_TYPE and held['blocked_since']
+    assert held['type_id'] == H.GENERAL_TYPE and hold(held)['since']
     with api.app.state.store.transaction() as c:
         c.execute('UPDATE tasks SET note=? WHERE id=?', (RECEIPT, task['id']))
     assert tick(api) == [task['id']]
     moved = get(api, 'tasks/' + task['id'])['task']
     assert moved['type_id'] == task_type(api) and moved['step']['name'] == review_step
-    assert not moved.get('blocked_since')
+    assert not hold(moved)
 
 
 def task_type(api):
@@ -518,4 +519,4 @@ def test_the_stranded_sweep_releases_another_boards_gate_hold_only_once_no_retry
                   "WHERE task_id=? AND field='move_retry'", (task['id'],))
         assert H.sweep_stranded(c, stamp) == [(task['id'], 'open')]
     released = get(api, 'tasks/' + task['id'])['task']
-    assert released['status'] == 'open' and not released.get('blocked_since')
+    assert released['status'] == 'open' and not hold(released)

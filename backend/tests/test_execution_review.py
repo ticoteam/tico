@@ -50,7 +50,7 @@ def test_review_is_private_and_exposes_saved_output_without_credentials(api):
     assert result['output'][0]['text'] == 'Saved report; email already sent.'
     assert result['reason'].startswith('The run stopped before it returned an answer.')
     assert result['stopped'] == 'unknown' and result['acted'] == []             # the card leads with "don't retry"
-    assert 'token_hash' not in result['attempt'] and 'token' not in result['attempt']
+    assert 'token_hash' not in result['run'] and 'token' not in result['run']
 
 
 def limited_turn(api, machine, attempt):
@@ -405,7 +405,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     assert review['output'][-1]['text'] == 'Archived both bots; telling Priya next.'
     assert [t['tool'] for t in review['tools']] == ['shell'] and 'shell' in review['reason']
     assert review['stopped'] == 'changed' and review['acted'] == ['shell']      # named on the card's one line
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
          'note': 'Nothing was archived yet; run it again.', 'acknowledge_uncertain_effects': True})
     ready(api, machine, ['ops'])
     again = claim(api, machine)
@@ -713,7 +713,7 @@ def test_tico_s_saved_choice_for_an_update_cut_is_judged_again_when_its_lane_fre
     from backend.store import H
     machine, message, attempt = cut_behind_live_work(api)
     if since == 'stop':
-        post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+        post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     with api.app.state.store.transaction() as c:
         if since == 'stale':
             for table, col, where in (('events', 'ts', "action LIKE 'system.update.%'"), ('attempts', 'finished', 'id=?')):
@@ -849,7 +849,7 @@ def test_a_held_run_on_a_private_task_is_not_handed_to_botops(api):
     attempt = claim(api, machine)
     for run in (attempt, None):
         if run is None:
-            post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+            post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
                  'note': 'Nothing happened yet; run it again.', 'acknowledge_uncertain_effects': True})
             ready(api, machine, ['ops'])
             run = claim(api, machine)
@@ -1010,7 +1010,7 @@ def test_a_model_at_capacity_after_the_bot_acted_continues_its_thread_once(api, 
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
         assert execution.H.status(c, 'ops')['state'] == 'crashed'
-    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
+    assert [j['run_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
     assert claim_at(api, monkeypatch, machine, at(600)) is None
 
 
@@ -1026,7 +1026,7 @@ def test_a_capacity_continuation_with_a_missing_session_is_held_without_a_silent
     post(api, f"attempts/{following['id']}/complete", {'outcome': 'failed', 'last_seq': 1, 'text': ''}, machine['token'])
     with api.app.state.store.read() as c:
         assert c.execute('SELECT state FROM jobs WHERE id=?', (attempt['job_id'],)).fetchone()[0] == 'uncertain'
-    assert [j['attempt_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
+    assert [j['run_id'] for j in get(api, 'bots/ops/execution-review')['jobs']] == [following['id']]
     assert claim_at(api, monkeypatch, machine, at(600)) is None
 
 
@@ -1066,8 +1066,8 @@ def test_a_person_who_manages_the_bot_stops_its_turn_and_the_next_message_runs(a
     machine, message, attempt = setup_attempt(api)
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'held'}, machine['token'])
     assert 'stop' not in post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']}, token='cara-test', expected=403)
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']}, token='cara-test', expected=403)
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     assert post(api, f"attempts/{attempt['id']}/renew", {}, machine['token'])['stop'] is True
     post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'interrupted', 'last_seq': 0}, machine['token'])
     with api.app.state.store.read() as c:
@@ -1199,7 +1199,7 @@ def finished_then_lapsed(api, machine=None, bot='ops', text='Please summarize th
         {'seq': 2, 'kind': 'message', 'payload': {'text': 'Done: the summary is in the room.', 'final': True}},
         {'seq': 3, 'kind': 'status', 'payload': {'state': 'idle'}}]}, machine['token'])
     if stopped:
-        post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})       # never carried by a renewal
+        post(api, f'bots/{bot}/stop', {'run_id': attempt['id']})       # never carried by a renewal
     expire(api, attempt['id'])
     assert claim(api, machine) is None
     assert job_state(api, attempt['job_id']) == ('canceled' if stopped else 'uncertain')
@@ -1250,7 +1250,7 @@ def test_a_finished_turn_whose_job_a_person_dismissed_first_still_ends_completed
     """9026151f, 38131cc0: the job was let go before the result came; the answer still reaches the room."""
     machine, message, attempt = finished_then_lapsed(api)
     aged(api, attempt['id'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
     assert job_state(api, attempt['job_id']) == 'canceled'
     done = hand_in(api, machine, attempt)
@@ -1269,7 +1269,7 @@ def test_finished_turns_that_come_back_in_a_burst_after_a_runner_wide_stall_all_
     first = finished_then_lapsed(api, machine, 'ops')[2]
     message, second = finished_then_lapsed(api, machine, 'finance')[1:]
     aged(api, first['id'])
-    post(api, f"jobs/{first['job_id']}/reconcile", {'attempt_id': first['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{first['job_id']}/reconcile", {'run_id': first['id'], 'decision': 'dismiss',
          'note': 'Stopped; nothing more to send for it.', 'acknowledge_uncertain_effects': True})
     hand_in(api, machine, first)
     hand_in(api, machine, second, text='Finance summary.')
@@ -1319,7 +1319,7 @@ def test_a_finished_turn_never_settles_a_job_a_later_run_took_even_once_that_run
     expire(api, second['id'])
     assert claim(api, machine) is None and job_state(api, second['job_id']) == 'uncertain'
     aged(api, second['id'])
-    post(api, f"jobs/{second['job_id']}/reconcile", {'attempt_id': second['id'], 'decision': decision,
+    post(api, f"jobs/{second['job_id']}/reconcile", {'run_id': second['id'], 'decision': decision,
          'note': 'The second run stopped.', 'acknowledge_uncertain_effects': True})
     with api.app.state.store.read() as c:
         before = tuple(c.execute("SELECT state,attempt_id FROM jobs WHERE id=?", (first['job_id'],)).fetchone())
@@ -1344,8 +1344,8 @@ def test_a_stop_the_runner_never_heard_still_stands_over_the_answer_it_finished_
         machine, message, attempt = finished_then_lapsed(api, machine, bot, stopped=not dismissed)
         aged(api, attempt['id'])
         if dismissed:
-            post(api, f'bots/{bot}/stop', {'attempt_id': attempt['id']})
-            post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+            post(api, f'bots/{bot}/stop', {'run_id': attempt['id']})
+            post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
                  'note': 'Stopped; nothing left to send.', 'acknowledge_uncertain_effects': True})
         filed = hand_in(api, machine, attempt)
         assert filed['filed'] is True and filed['message'] is None
@@ -1368,8 +1368,8 @@ def test_a_stop_pressed_after_the_lease_lapsed_is_recorded_and_the_late_answer_i
     on the lapsed turn it names, and the late answer is filed on its run; the job ends as a stopped one does."""
     from backend.store import H
     machine, message, attempt = finished_then_lapsed(api)
-    stopping = post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
-    assert stopping == {'attempt_id': attempt['id'], 'stopping': True}
+    stopping = post(api, 'bots/ops/stop', {'run_id': attempt['id']})
+    assert stopping == {'run_id': attempt['id'], 'stopping': True}
     # Nothing the runner reports brings the stopped turn back, within STALL_MAX or not.
     post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'], expected=409)
     filed = hand_in(api, machine, attempt)
@@ -1395,27 +1395,27 @@ def test_a_stop_after_the_lease_lapsed_takes_the_turns_id_and_a_job_still_on_it(
     aged(api, held['id'])
     assert sweep(api) == [] and job_state(api, held['job_id']) == 'uncertain'
     post(api, 'bots/ops/stop', {}, expected=409)
-    post(api, 'bots/ops/stop', {'attempt_id': held['id']}, expected=409)  # left to its review
+    post(api, 'bots/ops/stop', {'run_id': held['id']}, expected=409)  # left to its review
     assert sweep(api) == [] and job_state(api, held['job_id']) == 'uncertain'
-    post(api, f"jobs/{held['job_id']}/reconcile", {'attempt_id': held['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{held['job_id']}/reconcile", {'run_id': held['id'], 'decision': 'dismiss',
          'note': 'Checked what it did; nothing left to send here.', 'acknowledge_uncertain_effects': True})
-    post(api, 'bots/ops/stop', {'attempt_id': held['id']})             # reviewed and let go: a Stop files its answer
+    post(api, 'bots/ops/stop', {'run_id': held['id']})             # reviewed and let go: a Stop files its answer
     machine, message, attempt = finished_then_lapsed(api, machine)
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']}, token='cara-test', expected=403)
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']}, token='cara-test', expected=403)
     aged(api, attempt['id'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})          # let go: its late answer is filed, not posted
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})          # let go: its late answer is filed, not posted
     assert hand_in(api, machine, attempt)['filed'] is True and bot_replies(api, message) == []
     assert settled(api, attempt) == ('expired', 'canceled')
     tool_reporting(api)
     machine, message, first = finished_then_lapsed(api, machine, text='Another summary.')
     aged(api, first['id'], grace=True)
     assert [d['state'] for d in sweep(api)] == ['queued']
-    post(api, 'bots/ops/stop', {'attempt_id': first['id']}, expected=409)  # queued to run again
+    post(api, 'bots/ops/stop', {'run_id': first['id']}, expected=409)  # queued to run again
     ready(api, machine, ['ops'])
     assert claim(api, machine)['job_id'] == first['job_id']
-    post(api, 'bots/ops/stop', {'attempt_id': first['id']}, expected=409)  # a later run took it
+    post(api, 'bots/ops/stop', {'run_id': first['id']}, expected=409)  # a later run took it
 
 
 def rival(api, machine, attempt, bot='ops'):
@@ -1439,13 +1439,13 @@ def test_a_late_answer_filed_for_a_stop_leaves_a_job_this_run_no_longer_speaks_f
     the bot is assigned to, with no other run live in its lane. A job moved to another computer, queued by a decision,
     or behind a live run is left as it was."""
     machine, message, attempt = finished_then_lapsed(api)
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     if shape == 'transferred':
         with api.app.state.store.transaction() as c:
             c.execute("UPDATE assignments SET generation=generation+1 WHERE bot='ops'")
     elif shape == 'resumed':
         aged(api, attempt['id'])
-        post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'resume',
+        post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'resume',
              'note': 'The run only read; run it again.', 'acknowledge_uncertain_effects': True})
     else:
         rival(api, machine, attempt)
@@ -1462,7 +1462,7 @@ def test_a_stopped_run_whose_computer_never_reported_back_is_dismissed_not_resum
     read would be resumed past RESULT_GRACE; a stopped one is let go by the person's choice instead."""
     tool_reporting(api)
     machine, message, attempt = finished_then_lapsed(api)
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     aged(api, attempt['id'], grace=True)
     assert [d['state'] for d in sweep(api)] == ['canceled']
     with api.app.state.store.read() as c:
@@ -1478,7 +1478,7 @@ def test_a_late_result_that_did_not_finish_after_a_dismissal_is_only_filed(api):
     """Only a finished turn settles a job that was let go: an interrupted one stays on its own run."""
     machine, message, attempt = finished_then_lapsed(api)
     aged(api, attempt['id'])
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'Looks stuck; nothing left to send here.', 'acknowledge_uncertain_effects': True})
     filed = hand_in(api, machine, attempt, text='Runner restarted during execution', outcome='interrupted')
     assert filed['filed'] is True and settled(api, attempt) == ('expired', 'canceled')
@@ -1517,9 +1517,9 @@ def test_a_stopped_run_that_holds_queued_work_needs_a_person_and_says_what_waits
                                '2 queued requests wait until you decide.')
     assert issue['runs'] == [{'title': 'Archive the old bots', 'cause': 'timeout', 'why': 'Computer stopped answering',
                               'routine': True, 'retry': False, 'at': issue['runs'][0]['at'],
-                              'jobs': [{'id': attempt['job_id'], 'attempt_id': attempt['id']}], 'decided': None}]
+                              'jobs': [{'id': attempt['job_id'], 'run_id': attempt['id']}], 'decided': None}]
     assert issue['runs'][0]['at'] and issue['more_runs'] == 0 and issue['can_review'] is True
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {'attempt_id': attempt['id'], 'decision': 'dismiss',
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {'run_id': attempt['id'], 'decision': 'dismiss',
          'note': 'The archive already ran; do not repeat it.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
     assert claim(api, machine)                             # reviewed: the waiting work runs
@@ -1561,7 +1561,7 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     assert (line['title'], line['cause'], line['why'], line['routine']) == (
         'Ship the receipts fix', 'interrupted', 'Interrupted on its computer', True)
     assert sorted(j['id'] for j in line['jobs']) == sorted(jobs)
-    assert {j['attempt_id'] for j in line['jobs']} == {attempt['id']}
+    assert {j['run_id'] for j in line['jobs']} == {attempt['id']}
     # A run past the listed ones may have stopped some other way: the shared "not a bug" line needs every run shown.
     from backend import execution
     listed = execution.stopped_rows
@@ -1573,7 +1573,7 @@ def test_stopped_runs_in_needs_you_are_one_line_per_run_and_a_restart_says_it_is
     assert issue['more_runs'] == 1 and issue['detail'] == '1 queued request waits until you decide.'
     monkeypatch.setattr(execution, 'stopped_rows', listed)
     for job in line['jobs']:
-        post(api, f"jobs/{job['id']}/reconcile", {'attempt_id': job['attempt_id'], 'decision': 'resume',
+        post(api, f"jobs/{job['id']}/reconcile", {'run_id': job['run_id'], 'decision': 'resume',
              'note': 'Check what already happened, then continue.', 'acknowledge_uncertain_effects': True})
     assert not [i for i in get(api, 'operations')['issues'] if i['kind'] == 'uncertain_work']
 
@@ -1633,13 +1633,13 @@ def test_a_choice_saved_while_the_bot_is_busy_shows_on_its_stopped_run_line(api,
     first, second = busy_folded_run(api)
     body = {'decision': 'resume', 'note': 'Check what already happened, then continue.',
             'acknowledge_uncertain_effects': True}
-    assert post(api, f"jobs/{first['id']}/reconcile", {**body, 'attempt_id': first['attempt_id']})['deferred'] is True
+    assert post(api, f"jobs/{first['id']}/reconcile", {**body, 'run_id': first['run_id']})['deferred'] is True
     # Partway: the saved request says so, the other is still to decide, so the line still offers its choice.
     issue = stopped_issue(api)
     print("ISSUE", issue)
     [line] = issue["runs"]
     assert [j.get('decided') for j in line['jobs']] == ['resume', None] and line['decided'] is None
-    assert post(api, f"jobs/{second['id']}/reconcile", {**body, 'attempt_id': second['attempt_id']})['deferred'] is True
+    assert post(api, f"jobs/{second['id']}/reconcile", {**body, 'run_id': second['run_id']})['deferred'] is True
     assert 'runs' not in stopped_issue(api)
     beside_open_work(monkeypatch)
     issue = stopped_issue(api)
@@ -1658,7 +1658,7 @@ def test_a_run_whose_folded_requests_got_different_saved_choices_is_settled(api,
     body = {'note': 'Each request was decided on its own.', 'acknowledge_uncertain_effects': True}
     for job, decision in ((first, 'resume'), (second, 'dismiss')):
         assert post(api, f"jobs/{job['id']}/reconcile",
-                    {**body, 'decision': decision, 'attempt_id': job['attempt_id']})['deferred'] is True
+                    {**body, 'decision': decision, 'run_id': job['run_id']})['deferred'] is True
     beside_open_work(monkeypatch)
     issue = stopped_issue(api)
     print("ISSUE", issue)
@@ -1709,7 +1709,7 @@ def test_held_work_is_counted_and_named_only_for_who_may_read_it(api):
     stop_partway(api, machine, first, 'twice')
     aged(api, first['id'])
     assert sweep(api) == []
-    post(api, f"jobs/{first['job_id']}/reconcile", {'attempt_id': first['id'], 'decision': 'resume',
+    post(api, f"jobs/{first['job_id']}/reconcile", {'run_id': first['id'], 'decision': 'resume',
          'note': 'Nothing happened yet; run it again.', 'acknowledge_uncertain_effects': True})
     ready(api, machine, ['ops'])
     again = claim(api, machine)
@@ -1769,7 +1769,7 @@ def test_a_run_carried_on_a_stopped_run_the_keeper_settled_is_left_for_a_person(
     assert claim(api, machine) is None
     aged(api, first['id'])
     assert sweep(api) == []
-    post(api, f"jobs/{first['job_id']}/reconcile", {'attempt_id': first['id'], 'decision': 'resume',
+    post(api, f"jobs/{first['job_id']}/reconcile", {'run_id': first['id'], 'decision': 'resume',
          'note': 'Nothing was archived yet; run it again.', 'acknowledge_uncertain_effects': True})
     ready(api, machine, ['ops'])
     again = claim(api, machine)
@@ -1807,7 +1807,7 @@ def test_a_stop_on_a_lapsed_turn_ends_only_its_request_not_a_message_folded_into
     assert [m['id'] for m in post(api, f"attempts/{attempt['id']}/inputs", {}, machine['token'])['messages']] == [follow['id']]
     expire(api, attempt['id'])
     assert claim(api, machine) is None
-    post(api, 'bots/ops/stop', {'attempt_id': attempt['id']})
+    post(api, 'bots/ops/stop', {'run_id': attempt['id']})
     if reported:
         filed = post(api, f"attempts/{attempt['id']}/complete", {'outcome': 'completed', 'last_seq': 1,
                      'text': 'Done.', 'undelivered': [follow['id']]}, machine['token'])
@@ -1826,10 +1826,10 @@ def test_review_choice_survives_a_busy_lane_and_applies_once_idle(api, decision,
     """The operator's explicit choice is durable, fences late output and waits only for its own lane."""
     machine, message, attempt = interrupted(api)
     other = rival(api, machine, attempt)
-    body = {'attempt_id': attempt['id'], 'decision': decision,
+    body = {'run_id': attempt['id'], 'decision': decision,
             'note': 'Reviewed outside effects; apply this choice.', 'acknowledge_uncertain_effects': True}
     post(api, f"jobs/{attempt['job_id']}/reconcile", body, token=machine['token'], expected=403)
-    post(api, f"jobs/{attempt['job_id']}/reconcile", {**body, 'attempt_id': other['id']}, expected=409)
+    post(api, f"jobs/{attempt['job_id']}/reconcile", {**body, 'run_id': other['id']}, expected=409)
     path = f"jobs/{attempt['job_id']}/reconcile"
     result = post(api, path, body, key='first-choice')
     assert result == {'job_id': attempt['job_id'], 'state': 'uncertain', 'deferred': True}
@@ -2045,7 +2045,7 @@ def test_saved_dismiss_finishes_review_before_main_lane_frees_and_preserves_save
         c.execute("UPDATE attempts SET lane='main' WHERE id IN (?,?)", (attempt['id'], other['id']))
     saved_at = H.now()
     result = post(api, f"jobs/{attempt['job_id']}/reconcile", {
-        'attempt_id': attempt['id'], 'decision': 'dismiss',
+        'run_id': attempt['id'], 'decision': 'dismiss',
         'note': 'The work landed already. Dismiss this stopped request.', 'acknowledge_uncertain_effects': True})
     assert result['deferred'] is True
     with api.app.state.store.read() as c:
@@ -2221,7 +2221,7 @@ def test_saved_resume_applies_when_main_lane_frees(api, monkeypatch):
         c.execute("UPDATE attempts SET lane='main' WHERE id IN (?,?)", (attempt['id'], other['id']))
     saved_at = H.now()
     result = post(api, f"jobs/{attempt['job_id']}/reconcile", {
-        'attempt_id': attempt['id'], 'decision': 'resume',
+        'run_id': attempt['id'], 'decision': 'resume',
         'note': 'The work has not landed yet. Run it again when the lane is free.',
         'acknowledge_uncertain_effects': True})
     assert result['deferred'] is True

@@ -25,7 +25,7 @@ def test_a_captured_stream_is_kept_masked_and_read_only_by_owners_and_engineerin
     get(api, f"attempts/{a['id']}/capture", a["token"], expected=403)
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE bot_config SET team='engineering' WHERE bot='ops'")
-    assert get(api, f"attempts/{a['id']}/capture", a["token"])["attempt"]["id"] == a["id"]
+    assert get(api, f"attempts/{a['id']}/capture", a["token"])["run"]["id"] == a["id"]
     post(api, f"attempts/{a['id']}/complete", {"outcome": "completed", "text": "done", "last_seq": 0}, r["token"])
 
     # A secret taken out after the run leaves its raw stream too.

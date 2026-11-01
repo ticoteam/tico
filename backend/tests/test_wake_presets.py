@@ -263,7 +263,7 @@ def test_a_turn_records_its_wake_and_the_measures_count_it_by_preset(api):
     since = H.shift(H.now(), minutes=-1)
     task = new_task(api, "measured")
     assert claim(api, machine)
-    [run] = get(api, f"tasks/{task['id']}/run-view")["attempts"]
+    [run] = get(api, f"tasks/{task['id']}/run-view")["runs"]
     assert run["wake"]["class"] == "assignment" and run["wake"]["preset_label"] == "Token saver"
     assert run["wake"]["profile"] == "doer" and run["wake"]["profile_label"] == "Doer"   # what the run page shows
     measures = {p["preset"]: p for p in get(api, "wake-presets/measures?since=" + since)["presets"]}

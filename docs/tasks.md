@@ -203,6 +203,36 @@ hub task relate <task> <blocker> --kind blocked_by
 hub task update <task> --status waiting --note "Needs the build environment"
 ```
 
+### Holds
+
+A task's API view (`GET /api/v2/tasks`, a task's read, the `tasks` live event, Needs you, the MCP tools and the hub
+CLI) lists what holds it in `holds`, empty when nothing does:
+
+```json
+"holds": [{"kind": "blocked", "reason": "Needs the build environment", "since": "2026-11-01T17:02:11.204Z",
+           "until": null, "by": "human:ana", "cause": "manual"},
+          {"kind": "snoozed", "reason": "Check the staging deploy", "since": "2026-11-01T17:05:40.118Z",
+           "until": "2026-11-03T08:00:00.000000Z", "by": "human:ana"}]
+```
+
+- `kind` is `blocked` or `snoozed`, at most one hold of each kind on a task.
+- `blocked` is set when the task moves to a waiting step or status: by a person or bot (`hub task update --status
+  waiting --note ...`, a move to **Blocked** on the board), or by Tico when what it waits on is tracked (a blocker,
+  a subtask, a question, an approval, a review gate). It clears when the task moves on to a working step, or when its
+  last tracked wait clears. `cause` says which: `manual` (a person's or bot's move; `reason` is its note's first
+  line), `dependency`, `stranded`, `gate`, `check` or `worktree` (Tico's own). `by` is the actor who moved it there
+  for `manual`, else `keeper` (Tico). `until` is null: a block lasts until it clears.
+- `snoozed` is set by a snooze ([Snoozing a task](#snoozing-a-task): `POST /api/v2/tasks/{id}/snooze`,
+  `hub_task_snooze`, `hub task snooze`) and cleared by an unsnooze, its date passing, or the task finishing.
+  `reason` is the snoozer's note (left out of a `brief=true` list row), `until` its date, `by` the snoozer, `since` when it was last set.
+- `since` is when the hold began; `by` is an actor id (`human:<id>`, `bot:<slug>` or `keeper`); `reason` and `until`
+  are null when there is none.
+
+The holds are read-only on a task: the moves and endpoints above set and clear them. What a hold is made of keeps its
+own field: `waiting_on` (the person it waits on), `relations.blocks`, `worktree_waits`, `check_waits`,
+`milestone_waits` and `deferred`. Task list filters are unchanged: `?snoozed=only|all` lists snoozed tasks, and a
+blocked task is a `waiting` one (`?status=waiting`).
+
 ### Waiting for a milestone, not the whole task
 
 Often what a task needs is an earlier milestone of another task, not that task being done: a pull request merged
@@ -704,9 +734,9 @@ before then. Its requester, its owner, their managers, anyone on it by role, or 
 `hub task snooze <id> --until 2026-11-02`, `hub_task_snooze` or `POST /api/v2/tasks/{id}/snooze`
 with `{"until": ...}`. A bare date means the start of that day, Pacific; a date-time with a zone is
 taken as it is. Snoozing again moves the date. The task keeps its status, owner, goal and place;
-`snoozed_until` and `snoozed_by` say until when and who. A snoozed task still counts toward its goal.
+its `snoozed` hold ([Holds](#holds)) says until when and who. A snoozed task still counts toward its goal.
 The snoozer may leave a **note** (`--note`, `note` on the API, `hub_task_snooze`): what to check when it ends.
-It goes in the **Snooze over** wake, as `Your note:`, and is shown on the task as `snoozed_note` until then
+It goes in the **Snooze over** wake, as `Your note:`, and is the snoozed hold's `reason` until then
 (at most 500 characters; a longer one is refused).
 When someone other than its requester snoozes a task, the requester is told. A role holder's
 manager gains no snooze permission unless they also manage the owner or requester.

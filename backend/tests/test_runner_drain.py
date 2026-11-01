@@ -64,7 +64,7 @@ def test_a_capped_turn_resumes_its_session_without_checkpointing_partial_output_
         assert not c.execute("SELECT checkpoint FROM tasks WHERE id=?", (task["id"],)).fetchone()[0]
         saved = c.execute("SELECT thread_id,final_text FROM attempts WHERE id=?", (attempt["id"],)).fetchone()
         assert tuple(saved) == ("saved-thread", "")
-    post(api, "bots/ops/stop", {"attempt_id": again["id"]})
+    post(api, "bots/ops/stop", {"run_id": again["id"]})
     post(api, f"attempts/{again['id']}/complete", {"outcome": "interrupted", "yielded": True,
          "last_seq": 0}, machine["token"])
     with api.app.state.store.read() as c:

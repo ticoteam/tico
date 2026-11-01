@@ -9,6 +9,7 @@ from jwt.exceptions import InvalidKeyError
 from backend import github_app, review_gate
 from backend.store import Problem
 from backend.tests.test_review_gate import api, get, HEAD, move, ticket
+from backend.tests.test_api import hold
 
 
 @pytest.mark.parametrize('exc,cause,retryable,auth', [
@@ -143,7 +144,7 @@ def test_real_mint_failure_reaches_review_refusal(api, monkeypatch, failure, cau
         assert 'HTTP' not in error['detail']
     current = get(api, 'tasks/' + task['id'])['task']
     assert current['step_id'] == task['step_id'] and current['version'] == task['version']
-    assert not current.get('blocked_since') and not current.get('blocked_gate_json')
+    assert not hold(current).get('since') and not current.get('blocked_gate_json')
     with api.app.state.store.read() as c:
         assert c.execute('SELECT count(*) FROM tasks').fetchone()[0] == 1
         assert not c.execute("SELECT 1 FROM jobs WHERE state='uncertain'").fetchone()

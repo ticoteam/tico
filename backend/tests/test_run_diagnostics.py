@@ -142,7 +142,7 @@ def test_stderr_export_is_capped_redacted_private_and_survives_missing_stream(ap
 def test_finished_restart_and_cancelled_reasons(api, outcome, text, stopped, expected):
     machine, _, a = start(api)
     if stopped:
-        post(api, 'bots/ops/stop', {'attempt_id': a['id']})
+        post(api, 'bots/ops/stop', {'run_id': a['id']})
     post(api, f"attempts/{a['id']}/complete", {'outcome': outcome, 'text': text, 'last_seq': 0}, machine['token'])
     assert listed(api, a['id'])['end_reason'] == expected
 

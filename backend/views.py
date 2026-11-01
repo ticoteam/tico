@@ -1696,6 +1696,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     from . import reconnects
     reconnect_cards = reconnects.for_tasks(c, [r["id"] for r in raw["waiting"]], who.actor)
     items = []
+    from . import task_holds
+    hold_marks = task_holds.marks(c, [row for kind in ("tasks", "waiting", "declined") for row in raw[kind]])
     for kind in ("tasks", "waiting", "declined"):
         for row in raw[kind]:
             if row["id"] not in can_see:
@@ -1705,7 +1707,7 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
             if ask and (ask.get("refs") or {}).get("if_no_answer"):
                 ask["goes_ahead_at"] = ask_deadlines.deadline(ask, rules)     # when the bot's default goes ahead
             typ = next((t for t in pipelines if t["id"] == (row.get("type_id") or H.GENERAL_TYPE)), None) or {}
-            item = {**task_view(row, pipelines=pipelines),
+            item = {**task_view(row, pipelines=pipelines, hold_marks=hold_marks),
                     "kind": kind if kind in ("declined", "waiting") else "question" if ask else "task",
                     # Finished and reopened only by a step move (the Product roadmap): no Done, Reopen or Close on it.
                     "steps_only": bool(typ.get("steps_only")),
@@ -1776,6 +1778,8 @@ def needs_items(c, auth, who, task_view, older=None, count_only=False):
     items = fold_reconnects(fold_related(items, c, who.actor))
     if count_only:
         return items
+    from . import needs_shape
+    items = [needs_shape.needs_item(x, who.actor) for x in items]      # one shape whatever the kind (NeedsYouItem)
     readable_memo = {}      # a blocker or ancestor shared by many cards is checked once in this snapshot
 
     def readable(tid):

@@ -114,6 +114,11 @@ def post(api, path, body, token="ana-test", key=None, expected=200):
     return data
 
 
+def hold(task, kind="blocked"):
+    """A task view's hold of one kind (docs/tasks.md, Holds), or {} when it has none."""
+    return next((h for h in task.get("holds") or () if h["kind"] == kind), {})
+
+
 def get(api, path, token="ana-test", expected=200):
     r = api.get("/api/v2/" + path, headers=headers(token))
     assert r.status_code == expected, r.text
@@ -365,14 +370,14 @@ def test_run_windows_include_failed_attempts_without_turns_and_hide_private_room
         H.status_set(c, "bot:ops", "ops", "idle")
     rows = get(api, "bots/ops/turns?since=24h")
     failed = next(row for row in rows if row["id"] == attempt["id"])
-    assert failed["record_kind"] == "attempt" and failed["exit"] == "expired"
+    assert failed["state"] == failed["exit"] == "expired"
     assert failed["failure_reason"] and "token_hash" not in failed
     assert get(api, "bots/ops/history?since=24h")
     assert get(api, "bots/ops/turns?since=not-a-window", expected=422)["error"]["code"] == "date"
     assert get(api, "bots/ops/history?since=not-a-window", expected=422)["error"]["code"] == "date"
     assert get(api, "bots/ops/turns?since=24h", token="ben-test") == []
-    run = next(r for r in api.get("/api/runs", headers=headers()).json() if r["run"] == attempt["id"])
-    assert run["record_kind"] == "attempt" and run["attempt_id"] == attempt["id"]
+    run = next(r for r in api.get("/api/runs", headers=headers()).json() if r["id"] == attempt["id"])
+    assert run["state"] == "expired" and "attempt_id" not in run
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers()).status_code == 200
     assert api.get("/api/runs/" + attempt["id"] + "/log", headers=headers("ben-test")).status_code == 404
     issue = next(i for i in get(api, "fleet/check")["issues"] if i["kind"] == "failing_runs")

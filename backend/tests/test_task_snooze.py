@@ -5,7 +5,7 @@ from datetime import timedelta
 from backend import still_wanted
 from backend.scheduler import Scheduler
 from backend.store import H
-from backend.tests.test_api import api, get, post  # noqa: F401
+from backend.tests.test_api import api, get, hold, post  # noqa: F401
 
 
 def ahead(days):
@@ -35,18 +35,18 @@ def test_a_snoozed_task_leaves_lists_and_needs_you_for_the_people_on_it_only(api
     day = ahead(30)[:10]
     snoozed = post(api, f"tasks/{bots['id']}/snooze", {"until": day}, token="ben-test")
     # A bare date is the start of that day in the team's zone.
-    assert snoozed["snoozed_until"][:10] == day and snoozed["snoozed_until"][11:13] in ("07", "08")
-    assert snoozed["snoozed_by"] == "human:ben"
+    assert hold(snoozed, "snoozed")["until"][:10] == day and hold(snoozed, "snoozed")["until"][11:13] in ("07", "08")
+    assert hold(snoozed, "snoozed")["by"] == "human:ben" and hold(snoozed, "snoozed")["since"]
     post(api, f"tasks/{mine['id']}/snooze", {"until": ahead(-1)}, expected=422)      # the past
     post(api, f"tasks/{mine['id']}/snooze", {"until": ahead(3)})
     assert {mine["id"], bots["id"]}.isdisjoint(listed(api))
     assert {mine["id"], bots["id"]} <= listed(api, query="&snoozed=only") <= listed(api, query="&snoozed=all")
-    assert get(api, "tasks/" + bots["id"])["task"]["snoozed_until"]                     # by id, still there
+    assert hold(get(api, "tasks/" + bots["id"])["task"], "snoozed")["until"]                     # by id, still there
     assert mine["id"] not in {i.get("id") for i in get(api, "needs-you")["items"]}
     # Finishing it ends the snooze: there is nothing left to wait for.
     done = post(api, f"tasks/{mine['id']}", {"version": get(api, "tasks/" + mine["id"])["task"]["version"],
                                               "status": "done"})
-    assert done["snoozed_until"] is None
+    assert done["holds"] == []
 
 
 def test_nothing_automatic_wakes_a_snoozed_task_but_a_person_still_reaches_it(api):
@@ -90,7 +90,7 @@ def test_unsnoozing_early_brings_it_back_now_and_wakes_its_bot(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE bot='ops'")
     back = post(api, f"tasks/{task['id']}/unsnooze", {})
-    assert back["snoozed_until"] is None and task["id"] in listed(api)
+    assert back["holds"] == [] and task["id"] in listed(api)
     with api.app.state.store.read() as c:
         assert notices(c, task["id"], "Unsnoozed") == 1 and jobs(c) == 1
 
@@ -146,16 +146,16 @@ def test_a_note_is_cleared_by_unsnoozing_and_by_finishing_and_refused_when_long(
     task = post(api, "tasks", {"owner": "ops", "title": "Renew the certificate", "body": "x"})
     post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "x" * 501}, expected=422)
     shown = post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "  Ask the vendor  "})
-    assert shown["snoozed_note"] == "Ask the vendor"
+    assert hold(shown, "snoozed")["reason"] == "Ask the vendor"
     back = post(api, f"tasks/{task['id']}/unsnooze", {})
-    assert back.get("snoozed_note") is None      # a cleared note is left out of the view
+    assert back["holds"] == []
     with store.read() as c:
         woken = snooze_wakes(c, task["id"], "Unsnoozed")
         assert len(woken) == 1 and woken[0][0].endswith("\nYour note: Ask the vendor")
     post(api, f"tasks/{task['id']}/snooze", {"until": ahead(30), "note": "Check the vendor"})
     done = post(api, f"tasks/{task['id']}", {"version": get(api, "tasks/" + task["id"])["task"]["version"],
                                               "status": "done"})
-    assert done["snoozed_until"] is None and done.get("snoozed_note") is None
+    assert done["holds"] == []
 
 
 def snooze_comments(c, task_id):
@@ -170,7 +170,7 @@ def test_a_snooze_that_changes_bumps_the_version_and_the_same_one_again_does_not
     first = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord"})
     assert first["version"] == task["version"] + 1
     moved = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord by mail"})
-    assert moved["version"] == first["version"] + 1 and moved["snoozed_note"] == "Ask the landlord by mail"
+    assert moved["version"] == first["version"] + 1 and hold(moved, "snoozed")["reason"] == "Ask the landlord by mail"
     same = post(api, f"tasks/{task['id']}/snooze", {"until": day, "note": "Ask the landlord by mail"})
     assert same["version"] == moved["version"], "the same date and note again change nothing"
     back = post(api, f"tasks/{task['id']}/unsnooze", {})
