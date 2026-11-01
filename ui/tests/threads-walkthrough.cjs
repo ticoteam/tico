@@ -147,7 +147,7 @@ const shell = (page, route, waitFor = '#main') => async () => {
       S.teamThread = await api(hub, 'dana', 'POST', '/v2/threads', {title: 'Engineering standup', audience: 'team',
         audience_group_id: S.eng.id, members: [], body: 'Standup notes go here.'});
     }
-    S.dm = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['priya'], body: 'Can you take the pricing deck?'});
+    S.dm = await api(hub, 'dana', 'POST', '/v2/threads/dm', {members: ['human:priya'], body: 'Can you take the pricing deck?'});
     await api(hub, 'priya', 'POST', `/v2/threads/${S.plan.id}/messages`, {text: 'Omar, can you check the risks list before Tuesday?', kind: 'say'});
     const priyaHome = await api(hub, 'priya', 'GET', '/v2/threads/home/' + encodeURIComponent('human:priya'));
     await api(hub, 'priya', 'POST', `/v2/threads/${priyaHome.id}/messages`, {text: HOME_NOTE, kind: 'say'});
