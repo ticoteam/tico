@@ -120,6 +120,8 @@ def test_thread_commands_reach_their_routes_with_their_flags(monkeypatch):
         (["thread", "react", "m7", ":+1:"], ("PUT", "messages/m7/reactions/:+1:", None)),
         (["thread", "unreact", "m7", ":+1:"], ("DELETE", "messages/m7/reactions/:+1:", None)),
         (["thread", "open-earlier", "th1"], ("POST", "threads/th1/open-earlier", {})),
+        (["thread", "task", "m7", "--title", "Ship it", "--owner", "bot:ops"],
+         ("POST", "threads/messages/m7/task", {"title": "Ship it", "owner": "bot:ops"})),
     ]
     for words, expected in runs:
         calls.clear()

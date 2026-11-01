@@ -82,7 +82,7 @@ THREAD_READS = {"hub_thread_list", "hub_thread_show", "hub_thread_search", "hub_
 THREAD_WRITES = {"hub_thread_create", "hub_thread_post", "hub_thread_reply", "hub_thread_edit", "hub_thread_sub",
                  "hub_thread_follow", "hub_thread_unfollow", "hub_thread_read", "hub_thread_members_add",
                  "hub_thread_members_remove", "hub_thread_update", "hub_thread_link_slack", "hub_thread_dm_group",
-                 "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier"}
+                 "hub_thread_react", "hub_thread_unreact", "hub_thread_open_earlier", "hub_thread_task"}
 
 
 def test_every_thread_tool_is_listed_with_a_schema_a_caller_can_check(api):
@@ -132,6 +132,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
     run("hub_thread_react", {"message_id": "m7", "emoji": ":+1:"})
     run("hub_thread_unreact", {"message_id": "m7", "emoji": ":+1:"})
     run("hub_thread_open_earlier", {"thread_id": "th1"})
+    run("hub_thread_task", {"message_id": "m7", "title": "Ship it", "owner": "bot:ops", "operation_id": "op1"})
     assert recorder.calls == [
         ("GET", "threads/home/bot:ops", {}),
         ("GET", "threads", {"with": "human:ben", "limit": 5}),
@@ -140,6 +141,7 @@ def test_thread_tools_reach_the_routes_of_the_contract():
         ("PUT", "messages/m7/reactions/:+1:", None),
         ("DELETE", "messages/m7/reactions/:+1:", None),
         ("POST", "threads/th1/open-earlier", {}),
+        ("POST", "threads/messages/m7/task", {"title": "Ship it", "owner": "bot:ops"}),
     ]
 
 

@@ -5866,6 +5866,16 @@ def thread_open_earlier(api, args):
     return api.post(_thread_path(args["thread_id"], "open-earlier"), {}, key=_key(args))
 
 
+@tool("hub_thread_task", "Make a task from a thread message you can read. The server copies the message and a link "
+      "back, and the task is private unless the thread is company-wide.",
+      {"message_id": _s("The message id from hub_thread_show"), "title": _s("Task title"),
+       "owner": _s("Who does it: a bot slug, a person id, or `me`")},
+      required=("message_id", "title", "owner"), writes=True)
+def thread_task(api, args):
+    return api.post("threads/messages/" + quote(args["message_id"], safe="") + "/task",
+                    {"title": args["title"], "owner": _target(api, args["owner"])}, key=_key(args))
+
+
 @tool("hub_thread_link_slack", "Link a Slack channel to a thread, both ways, or unlink it with off. Not available in "
       "this build yet: the Slack bridge is not released.",
       {"thread": THREAD_ID, "channel": _s("The Slack channel: its id or name"),
