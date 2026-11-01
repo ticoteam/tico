@@ -1215,6 +1215,7 @@ fn old_tico_refuses_private_connect_without_dropping_visibility() {
     let store = Store::open(directory.path()).unwrap();
     let record = store.create("Private synthetic replay").unwrap();
     let (tico, seen, worker) = server(vec![
+        Some(json!({"actor":"human:test"})),
         Some(json!({"status":422})),
         Some(json!({"status":422})),
     ]);
@@ -1225,10 +1226,12 @@ fn old_tico_refuses_private_connect_without_dropping_visibility() {
     assert!(error.to_string().contains("nothing was shared"));
     assert!(store.context(&record.id).unwrap().live_id.is_empty());
     let requests = seen.lock().unwrap();
-    assert_eq!(requests.len(), 2);
-    for (_, body, _) in requests.iter() {
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].0.starts_with("GET /api/v2/me "));
+    for (request, body, _) in requests.iter().skip(1) {
+        assert!(request.starts_with("POST /api/v2/live-meetings "));
         assert_eq!(body["visibility"], "private");
     }
-    assert_eq!(requests[0].1["client"], "tico-recorder");
-    assert!(requests[1].1.get("client").is_none());
+    assert_eq!(requests[1].1["client"], "tico-recorder");
+    assert!(requests[2].1.get("client").is_none());
 }
