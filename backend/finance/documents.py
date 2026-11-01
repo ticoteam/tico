@@ -1011,11 +1011,11 @@ def may_wait(ctx: Ctx, row: Any, money: Any) -> bool:
     account: expected_match leaves such a row to a person (feed_match), so it may neither pay another document nor be
     posted as a bank line of its own (categorize). True when a payment waits for its gross (alone, or in a set that sums
     to it), or the search could not look at every candidate.
-    A booked row is never held back."""
+    A booked row, or a transfer between accounts, is never held back."""
     from .banking import provider_fee
     gross = abs(int(row["amount"])) + provider_fee(row, money)
-    if row["entry_id"] or not gross:
-        return False
+    if row["entry_id"] or not gross or str(row["kind"] or "") in F.TRANSFER_KINDS:
+        return False                # a transfer is never matched to payments at ingest either
     kind = "bill" if int(row["amount"]) < 0 else "invoice"
     start, end = _window(str(row["txn_date"]))
     exact, cut = _waiting(ctx, kind, money, gross, start, end)

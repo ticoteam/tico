@@ -141,6 +141,16 @@ def test_categorizing_an_unclear_row_is_refused_while_marked_payments_wait_for_i
         assert _unbooked(c, row) and _money(c) == before
 
 
+def test_a_transfer_row_of_that_amount_is_still_categorized_while_payments_wait(books):  # noqa: F811
+    connect(books, FakeMercury())
+    with books.transaction() as c:
+        _unclear_row(c, "MERCURY ACH")
+        # A move between our own accounts is never matched to payments at ingest, so it is not held back either.
+        move = _ingest(c, _txn("txn-move", -50.0, who="Savings", kind="internalTransfer"))
+        assert _unbooked(c, move)
+        tagged = act(c, OWNER, "categorize", {"feed_id": move, "account_id": account(c, "6900")})
+        assert tagged.status == "committed", tagged
+
 def _paid_from_the_account_while_its_row_is_unclear(c, payment: dict[str, object]) -> None:
     """A bill paid from the account waits as an outstanding payment instead of taking the unclear row: the bank moves
     once for the payment, the row stays new, and a person links it (feed_match) to the payment it is."""
