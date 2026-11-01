@@ -100,8 +100,13 @@ def test_a_draft_is_the_job_the_title_names_or_written_from_the_title_never_anot
     # A title that is a template's job drafts from that template at once, without the model, two-letter work included.
     _, cards = recruiting._recruitable(api.app.state.onboarding)
     for title, template in (("QA engineer", "issue-triage"), ("Security engineer", "security-engineer"),
-                            ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead")):
+                            ("Marketing manager", "marketing-lead"), ("Customer support lead", "support-lead"),
+                            ("Head of People", "people-lead"), ("Developer Advocates", "developer-advocate")):
         assert recruiting._best_card(cards, title)["template"] == template
+    # Every template's own name, and its plural, is that template's job.
+    misses = [card["name"] for card in cards for title in (card["name"], card["name"] + "s")
+              if (recruiting._best_card(cards, title) or {}).get("template") != card["template"]]
+    assert misses == []
     asked.clear()
     assert post(api, "seats/draft", {"title": "QA engineer"})["source"] == "catalog" and asked == []
     monkeypatch.setattr(recruiting, "_rewrite_call", lambda *_: (_ for _ in ()).throw(TimeoutError("slow")))

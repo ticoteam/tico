@@ -54,10 +54,22 @@ administrators agent agents assistant assistants rep reps representative represe
 consultant consultants writer writers designer designers producer producers accountant accountants""".split())
 
 
+# The only small words a job's name holds that say nothing: "Head of People" keeps "People", which the recommender's
+# stop words drop from free text.
+NAME_STOP = frozenset("of and the for to in on at with by a an".split())
+
+
+def _name_stem(word):
+    """A plural is its singular first ("Advocates" is "Advocate"), so both read the same to the recommender's stem."""
+    if len(word) > 3 and word.endswith("s") and not word.endswith("ss"):
+        word = word[:-1]
+    return R._stem(word)
+
+
 def _name_words(text):
     """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
     words = re.findall(r"[a-z0-9]+", str(text or "").lower().replace("'", ""))
-    return [(R._stem(word), word) for word in words if len(word) > 1 and word not in R.STOP_WORDS]
+    return [(_name_stem(word), word) for word in words if len(word) > 1 and word not in NAME_STOP]
 
 
 def _work(title):
