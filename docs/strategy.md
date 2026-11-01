@@ -30,11 +30,12 @@ The page is cards, in this order: the summary on top; **Where we play** beside t
 **Related news**; then the sections. The owner edits each in place; a × on hover (always shown on a touch screen)
 removes a thing.
 
-- **Brand and GTM.** Two cards beside the Summary: the Brand strip (positioning, colours, voice, never-say) and the
+- **Brand and GTM.** Two cards beside the Summary: the Brand strip (name, positioning, colours, voice, never-say) and the
   Go-to-market card (motion, buyer, channels, North Star and target). Each opens its full page, is versioned on its own,
   and is published by the owner. See [Growth](growth.md#brand-and-gtm-cards).
-- **Growth.** The Growth tab (`#/strategy/growth`) beside Market: ideas, tests, verdicts, channel economics and the
-  frameworks. See [Growth](growth.md).
+- **Growth.** Its own section under Strategy in the sidebar (`#/growth`; the old `#/strategy/growth` and
+  `#/strategy/gtm` addresses redirect): ideas, tests, verdicts, channel economics, the frameworks and the Go-to-market
+  page. See [Growth](growth.md).
 - **Summary.** At most 400 characters, drafted from the bets and edited by the owner. It is the one line on top and the
   text every bot gets in its run context.
 - **Vision.** Stored, not shown on the page. The Goals page reads it from here and, when it is empty, reads the
@@ -296,7 +297,7 @@ Every command has an MCP tool of the same name and arguments (`hub_strategy_show
 
 A bet's `wrong_if` is `{kind: kpi|thesis|text, kpi_id?, direction?, threshold?, market_id?, text?, check_by}`. The
 `strategy_draft` proposal's payload is partial `{summary?, vision?, sections?, bets?: [{id?, statement, why?,
-rules_out?, wrong_if?, cites?, status?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
+rules_out?, wrong_if?, cites?, status?, ideas?}], source?, lens?}` (the server sets `source: "lens"` and `lens` for a lens run). A bet's `ideas` are growth idea task ids that serve it; confirming links each idea to that bet. Goals take `bet_id` on `POST /goals` and `POST /goals/{id}` and return
 it in `GET /goals` and `/goals/tree` ([Goals and KPIs](goals-and-kpis.md#hub-and-the-api)); goal proposals carry it
 too. Every change is a row in `strategy_events`, like `market_events`.
 

@@ -1,4 +1,4 @@
-/* ui/app/gtm-page.js — The Go-to-market page (#/strategy/gtm[/tab], brand-and-gtm spec §5) and its card on the Strategy
+/* ui/app/gtm-page.js — The Go-to-market page (#/growth/gtm[/tab], brand-and-gtm spec §5) and its card on the Strategy
    page. Tabs: Motion, Buyer and Wishes edit the GTM draft (published with a note, like Brand; the draft pieces are in
    brand-page.js); Channels and Sources are rows that change without a publish (/api/v2/growth/channels, /sources, one
    source per kind of truth, two flagged); Model is the KPI tree from /api/v2/growth/kpis, whose place in the tree the
@@ -72,7 +72,7 @@ function pageGtm() {
     chMay: keep.chMay, srcMay: keep.srcMay};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
-  main.innerHTML = redesignStrategyHead('gtm') + `<div id="gr-body" class="gr-body">${GT.data ? '' : skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = growthHead('gtm') + `<div id="gr-body" class="gr-body">${GT.data ? '' : skelRows(6, {dot: false})}</div>`;
   if (GT.data) { gtmDraw(); GT.drawn = true; }
   void gtmRead(GT);
 }
@@ -95,9 +95,11 @@ function gtmDraw() {
   const d = state.data, doc = ['motion', 'buyer', 'wishes'].includes(state.tab);
   const tabs = `<nav class="gr-tabs gt-tabs" aria-label="Go-to-market">${GT_TABS.map(([k, label]) =>
     `<a href="${GTM_ROUTE}${k === 'motion' ? '' : '/' + k}"${state.tab === k ? ' aria-current="page"' : ''}>${esc(label)}</a>`).join('')}</nav>`;
-  body.innerHTML = grCrumbs('#/strategy', 'Strategy', 'Go-to-market', grDocToolsHtml(d, state)) + (state.publishing ? grDocPublishHtml() : '') + tabs
+  // The draft's tools sit in the section head, beside the Growth tabs.
+  patchHTML($('#strat-actions'), grDocToolsHtml(d, state));
+  body.innerHTML = (state.publishing ? grDocPublishHtml() : '') + tabs
     + `<div class="gt-pane">${({motion: gtMotionHtml, buyer: gtBuyerHtml, wishes: gtWishesHtml, channels: gtChannelsHtml, sources: gtSourcesHtml, model: gtModelHtml})[state.tab](state)}</div>`;
-  grDocBind(body, '/v2/gtm', state, gtmDraw, gtmBookHtml);
+  grDocBind($('#main'), '/v2/gtm', state, gtmDraw, gtmBookHtml);
   if (doc) gtDocBind(state); else if (state.tab === 'channels') gtChannelsBind(state); else if (state.tab === 'sources') gtSourcesBind(state); else gtModelBind(state);
 }
 const gtBody = state => (grDocMay(state.data) ? state.data.draft?.body || state.data.published?.body : state.data.published?.body) || {};

@@ -91,6 +91,13 @@ def add_routine(api, due, key="r1"):
                   (scheduler.stamp(sleep_idle.datetime.fromtimestamp(due, sleep_idle.timezone.utc)), aid))
 
 
+def quiet_routines(api):
+    """Switch off every schedule automation. Setting up a runner seeds the Librarian's built-in schedules, due at the
+    next :00 or :30, so a test that expects busy() to be "" would fail within fifteen minutes of either."""
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE automations SET enabled=0 WHERE enabled=1 AND deleted_at IS NULL AND next_due IS NOT NULL")
+
+
 def quiet(api, minutes=60):
     with api.app.state.store.read() as c:
         return service(api).quiet(c, minutes, sleep_idle.now())
@@ -454,6 +461,7 @@ def test_an_online_bot_computer_keeps_a_cell_company_up_until_it_goes_quiet(api,
     turn_on(api, 1)
     r = runner(api, "ana")
     ready(api, r, [])                        # the computer reports in now
+    quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == "computer_online"
     tick(api)
@@ -489,6 +497,7 @@ def test_tico_updates_alone_asks_hq_with_runners_and_no_computer_blocker(api, hq
     assert (state["minutes"], state["source"], state["managed"], state["active"]) == (60, "owner", False, True)
     r = runner(api, "ana")
     ready(api, r, [])                        # an online bot computer: only a cell counts it as a blocker
+    quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""
     tick(api)
@@ -503,5 +512,6 @@ def test_outside_a_cell_nothing_is_defaulted_and_an_online_computer_does_not_blo
     assert (get(api, "sleep")["sleep"]["minutes"], get(api, "sleep")["sleep"]["source"]) == (120, "owner")
     r = runner(api, "ana")
     ready(api, r, [])
+    quiet_routines(api)
     with api.app.state.store.read() as c:
         assert sleep_idle.busy(c, hq.clock[0]) == ""

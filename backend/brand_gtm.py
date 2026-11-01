@@ -26,12 +26,13 @@ from .store import Problem
 
 KINDS = ("brand", "gtm")
 SECTIONS = {
-    "brand": ("positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples"),
+    "brand": ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples"),
     "gtm": ("motion", "buyer", "wishes", "playbooks"),
 }
 BODIES = {"brand": M.BrandBody, "gtm": M.GtmBody}
 TITLES = {"brand": "brand", "gtm": "go-to-market"}
 SUMMARY_MAX = 300
+AVOID_CHARS = 110
 VERSIONS_SHOWN = 50
 
 
@@ -89,6 +90,24 @@ def _names(items, key, limit):
     return [str(i.get(key) or "").strip() for i in (items or [])[:limit] if str(i.get(key) or "").strip()]
 
 
+def _clip(text, limit, first=False):
+    """Free text as one line: its first sentence when `first` (split on "; ", a newline, or ". " before a capital
+    when the dot ends a word, so "U.S." and "Dr." stay), cut to `limit` characters at a word boundary with "…"."""
+    text = str(text or "").strip()
+    if first:
+        text = re.split(r"(?<=[a-z0-9)]{2})\. (?=[A-Z])|; |\n", text, maxsplit=1)[0]
+    text = " ".join(text.split())
+    if len(text) <= limit:
+        return text
+    head = text[:limit - 1]
+    return (head.rsplit(" ", 1)[0] if " " in head else head).rstrip(" ,;:-") + "…"
+
+
+def _end(text):
+    """The sentence with a full stop, unless it already ends in punctuation or an ellipsis."""
+    return text if not text or text[-1] in ".!?…" else text + "."
+
+
 def summary_text(c, kind, current=None, hidden=None):
     """About 300 characters a growth-facing bot reads on every run, or "" before the first version. `hidden`: the KPI
     owners the reader may not see (None hides every bot's KPI, the safe default)."""
@@ -97,16 +116,25 @@ def summary_text(c, kind, current=None, hidden=None):
         return ""
     body, n = current["body"], current["n"]
     if kind == "brand":
-        parts = [f"Brand v{n}."]
-        if body.get("positioning"):
-            parts.append(str(body["positioning"]).rstrip(".") + ".")
+        name = str(body.get("name") or "").strip()
+        parts = [f"Brand v{n}: {name.rstrip('.')}." if name else f"Brand v{n}."]
+        positioning = _clip(body.get("positioning"), 120, first=True)
+        if positioning:
+            parts.append(_end(positioning))
         traits = _names(body.get("voice"), "trait", 4)
         if traits:
             parts.append("Voice: " + ", ".join(traits) + ".")
-        avoid = sorted((body.get("words") or {}).get("avoid") or [], key=lambda w: w.get("level") != "block")
-        words = _names(avoid, "word", 6)
-        if words:
-            parts.append("Avoid: " + ", ".join(words) + ".")
+        # Avoided words, block-level first; a word that would push the part past AVOID_CHARS, or the summary past
+        # SUMMARY_MAX, is dropped with the rest, so no avoided word is ever cut.
+        room = min(AVOID_CHARS, SUMMARY_MAX - len(" ".join(parts)) - 1)
+        avoid = []
+        ranked = sorted((body.get("words") or {}).get("avoid") or [], key=lambda w: w.get("level") != "block")
+        for word in _names(ranked, "word", None):
+            if len("Avoid: " + ", ".join(avoid + [word]) + ".") > room:
+                break
+            avoid.append(word)
+        if avoid:
+            parts.append("Avoid: " + ", ".join(avoid) + ".")
     else:
         parts = [f"GTM v{n}."]
         motion = body.get("motion") or {}
@@ -114,10 +142,12 @@ def summary_text(c, kind, current=None, hidden=None):
             parts.append("Motion: " + motion["primary"].replace("_", " ")
                          + (f" (then {motion['secondary'].replace('_', ' ')})" if motion.get("secondary") else "") + ".")
         buyer = body.get("buyer") or {}
-        if buyer.get("who_buys"):
-            parts.append("Buyer: " + buyer["who_buys"] + (f", {buyer['deal_size']}" if buyer.get("deal_size") else "") + ".")
-        parts += _channels_line(c)
+        who = _clip(buyer.get("who_buys"), 90, first=True)
+        if who:
+            deal = _clip(buyer.get("deal_size"), 50, first=True)
+            parts.append(_end("Buyer: " + who.rstrip(".") + (f", {deal}" if deal else "")))
         parts += _north_star_line(c, hidden)
+        parts += _channels_line(c)
     text = " ".join(parts)
     return text if len(text) <= SUMMARY_MAX else text[:SUMMARY_MAX - 1].rstrip() + "…"
 

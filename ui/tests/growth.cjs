@@ -89,10 +89,17 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await flat(page, `${tag}: Strategy, nothing set up`);
   await snap(page, `${tag}-00a-strategy-empty`);
 
+  // Growth is its own section: Strategy's tabs no longer hold it, and the sidebar's Growth opens it.
+  assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Org', 'Goals', 'Budget'], `${tag}: the Strategy tabs`);
   const refs = await seedBase(page);
+  if (phone) await page.locator('#mobile-more').click();
+  await page.locator('#side a[data-nav="growth"]').click();
+  await page.waitForFunction(() => location.hash === '#/growth', null, {timeout: t(5000)});
+  await page.waitForFunction(() => document.querySelector('#side a[data-nav="growth"]')?.getAttribute('aria-current') === 'page', null, {timeout: t(5000)})
+    .catch(() => assert.fail(`${tag}: Growth is current`));
+  assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Overview', 'This week', 'Channels', 'Learning', 'Go-to-market'], `${tag}: the Growth tabs`);
 
   // Growth with no ideas still draws the framework over the KPI tree.
-  await go(page, '#/strategy/growth');
   await page.locator('#gr-view .gr-ns').waitFor({timeout: t(10000)});
   assert.ok(await page.locator('#gr-view .gr-col').count() >= 1, `${tag}: the input column`);
   await page.locator('[data-gr-seg="fw"] [data-v="experiments"]').click();
@@ -114,7 +121,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(filed?.prediction, 'New bookings 54 to 70 by 2026-12-31', `${tag}: the prediction saved`);
 
   // Channels with no month of numbers: every channel and Unknown, blank, and + Month enters the first.
-  await go(page, '#/strategy/growth/channels');
+  await go(page, '#/growth/channels');
   await page.locator('[data-gc-row="unknown"]').waitFor({timeout: t(10000)});
   const blank = page.locator('tr:has([data-gc-row="google-ads"]) td').nth(3);
   assert.equal((await blank.innerText()).trim(), '—', `${tag}: a blank CAC`);
@@ -149,6 +156,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const pos = page.locator('form[data-sec="positioning"] input[name="positioning"]');
   await pos.waitFor({timeout: t(10000)});
   await pos.fill('Home cleaning you never have to think about');
+  await page.locator('form[data-sec="positioning"] input[name="name"]').fill('Acme Clean');
   await page.locator('form[data-sec="positioning"] [type=submit]').click();
   await page.waitForFunction(() => document.querySelector('.br-subs [data-sub="positioning"] .gr-dot'), null, {timeout: t(10000)})
     .catch(async () => assert.fail(`${tag}: the section saved (${await page.locator('.toast').allInnerTexts()} ${JSON.stringify(page.errors)})`));
@@ -170,25 +178,47 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const brand = await ok(page, 'GET', 'brand');
   assert.equal(brand.published.n, 2, `${tag}: published v2`);
   assert.equal(brand.published.body.positioning, 'Home cleaning you never have to think about', `${tag}: the saved section`);
+  assert.equal(brand.published.body.name, 'Acme Clean', `${tag}: the brand name saves with Positioning`);
 
   // Go-to-market: Motion, then Sources flags the revenue clash.
-  await go(page, '#/strategy/gtm');
+  await go(page, '#/growth/gtm');
   await page.locator('.gt-mo.gt-on').first().waitFor({timeout: t(10000)});
   assert.equal(await page.locator('.gt-mo.gt-on').count(), 2, `${tag}: primary and secondary`);
   await snap(page, `${tag}-04-gtm-motion`);
-  await go(page, '#/strategy/gtm/sources');
+  await go(page, '#/growth/gtm/sources');
   await page.locator('[data-clash]').waitFor({timeout: t(10000)});
   await flat(page, `${tag}: Sources`);
   await snap(page, `${tag}-05-gtm-sources`);
-  await go(page, '#/strategy/gtm/model');
+  await go(page, '#/growth/gtm/model');
   await page.locator('.gt-model .gt-nsr').waitFor({timeout: t(10000)});
   await snap(page, `${tag}-06-gtm-model`);
-  await go(page, '#/strategy/gtm/channels');
+  await go(page, '#/growth/gtm/channels');
   await page.locator('[data-ch-edit="google-ads"]').waitFor({timeout: t(10000)});
   await snap(page, `${tag}-07-gtm-channels`);
 
+  // Old addresses under Strategy land on Growth's, query and all.
+  for (const [from, to] of [['#/strategy/growth', '#/growth'], ['#/strategy/growth/channels?x=1', '#/growth/channels?x=1'],
+    ['#/strategy/gtm', '#/growth/gtm'], ['#/strategy/gtm/sources', '#/growth/gtm/sources']]) {
+    await page.evaluate(h => { location.hash = h; }, from);
+    await page.waitForFunction(w => location.hash === w, to, {timeout: t(5000)}).catch(async () =>
+      assert.fail(`${tag}: ${from} lands on ${to} (${await page.evaluate(() => location.hash)})`));
+  }
+  assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Go-to-market', `${tag}: Go-to-market is a Growth tab`);
+
+  // A late This week answer never draws over Go-to-market, which sits under #/growth.
+  let release;
+  const held = new Promise(r => { release = r; });
+  await page.route('**/api/v2/growth/week*', async route => { await held; await route.continue(); });
+  await page.evaluate(() => { location.hash = '#/growth/week'; });
+  await go(page, '#/growth/gtm/model');
+  await page.locator('.gt-model .gt-nsr').waitFor({timeout: t(10000)});
+  release();
+  await page.waitForTimeout(500);
+  await page.unroute('**/api/v2/growth/week*');
+  assert.ok(await page.locator('.gt-model .gt-nsr').count(), `${tag}: Go-to-market stays after a late This week answer`);
+
   // Growth: every framework draws the ideas.
-  await go(page, '#/strategy/growth');
+  await go(page, '#/growth');
   await page.locator('#gr-view .gr-ic').first().waitFor({timeout: t(10000)});
   for (const fw of ['north_star', 'loops', 'journey', 'bets_channels', 'experiments']) {
     await page.locator(`[data-gr-seg="fw"] [data-v="${fw}"]`).click();
@@ -201,7 +231,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await page.locator('[data-gr-seg="fw"] [data-v="north_star"]').click();
 
   // Channels: Unknown is its own row, and Google Ads has a CAC ($1,260 / 12).
-  await go(page, '#/strategy/growth/channels');
+  await go(page, '#/growth/channels');
   await page.locator('[data-gc-row="unknown"]').waitFor({timeout: t(10000)});
   const cac = await page.locator('tr:has([data-gc-row="google-ads"]) td').nth(3).innerText();
   assert.match(cac, /\$\d/, `${tag}: a CAC (${cac})`);
@@ -233,10 +263,10 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(judged.status || judged.idea?.status, 'won', `${tag}: the verdict saved`);
 
   // Learning and This week draw.
-  await go(page, '#/strategy/growth/learning');
+  await go(page, '#/growth/learning');
   await page.locator('.gl-node').first().waitFor({timeout: t(10000)});
   await snap(page, `${tag}-11-learning`);
-  await go(page, '#/strategy/growth/week');
+  await go(page, '#/growth/week');
   await page.locator('.gr-week').waitFor({timeout: t(10000)});
   await flat(page, `${tag}: This week`);
   await snap(page, `${tag}-12-week`);

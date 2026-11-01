@@ -465,6 +465,8 @@ function renderSettingsMachines() {
       } catch (error) { toast(error.message, true); choice.checked = !choice.checked; choice.disabled = false; }
       return;
     }
+    const exit = event.target.closest('[data-browser-exit], [data-browser-exit-bots] input, [data-browser-exit-cap]');
+    if (exit) { await machineBrowserExitSave(exit); return; }
     const perf = event.target.closest('[data-performance-mode]');
     if (perf) {
       perf.disabled = true;

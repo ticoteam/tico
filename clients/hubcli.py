@@ -1924,7 +1924,7 @@ def parser():
         s.add_argument("--json", action="store_true", help="print the API response as JSON")
         return s
 
-    brand_sections = ("positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
+    brand_sections = ("name", "positioning", "voice", "tone", "words", "naming", "visual", "claims", "examples")
     gtm_sections = ("motion", "buyer", "wishes", "playbooks")
     for kind, title, sections in (("brand", "the brand: voice, words, names, claims", brand_sections),
                                   ("gtm", "the go-to-market: motion, buyer, wishes, playbooks", gtm_sections)):
@@ -3055,6 +3055,11 @@ def parser():
     s.add_argument("bot")
     s.add_argument("limit", nargs="?", type=lambda v: None if v == 'unlimited' else int(v), default=argparse.SUPPRESS)
     s.set_defaults(fn="bot turns-at-once")
+    s = bot.add_parser("browser-exit",
+                       help="read or set the computer a bot browses the web through: a computer id, or none for its own")
+    s.add_argument("bot")
+    s.add_argument("computer", nargs="?", type=lambda v: None if v == "none" else v, default=argparse.SUPPRESS)
+    s.set_defaults(fn="bot browser-exit")
     s = bot.add_parser("budget", help="read or set a bot's runs per hour and per day, or release it from a hold")
     s.add_argument("bot")
     s.add_argument("action", nargs="?", choices=["release"], help="release the bot from a hold instead of changing a budget")
@@ -3245,6 +3250,14 @@ def parser():
     s.add_argument("computer", help="the computer's id")
     s.add_argument("limit", type=lambda v: None if v == "automatic" else int(v), help="N (1 to 256), or automatic")
     s.set_defaults(fn="computer turns-at-once")
+    s = comp.add_parser("browser-exit", help="read or set whether a computer shares its internet with bots: on or off")
+    s.add_argument("computer", help="the computer's id")
+    s.add_argument("sharing", nargs="?", choices=["on", "off"], default=argparse.SUPPRESS)
+    s.add_argument("--bots", type=lambda v: [b.strip() for b in v.split(",") if b.strip()],
+                   help="comma-separated bot slugs it shares with")
+    s.add_argument("--cap-gb", dest="daily_cap_gb", type=float, help="the daily cap in GB (default 5)")
+    s.add_argument("--usage", action="store_true", default=None, help="also show the last 7 days of what went through it")
+    s.set_defaults(fn="computer browser-exit")
     cred = sub.add_parser("credential", help="ask for a credential in the chat, store one, list them").add_subparsers(dest="sub")
     s = cred.add_parser("request", help="open a card in the chat for the person to type the credential into")
     s.add_argument("env", help="the variable's name, like JIRA_BASIC_AUTH")
@@ -3506,6 +3519,17 @@ RENAMED.sort(key=lambda rule: -len(rule[0]))
 NOTICE_COMMANDS = ("list",)                             # the subcommands `hub notice` has now
 
 
+def parse(p, argv):
+    """`p.parse_args(argv)`, except that a `--json` no command on the line takes is ignored, so a bot that adds it out of
+    habit gets the command's normal answer instead of a usage error. One parse: a value read from standard input is read
+    once, a `--json` after `--` stays a value, and a command with its own `--json` (`hub tool list`) still gets it."""
+    args, extra = p.parse_known_args(argv)
+    left = [a for a in extra if a != "--json"]
+    if left:
+        p.error("unrecognized arguments: " + " ".join(left))
+    return args
+
+
 def rename_argv(argv):
     """`argv` for the new spelling of an old command line, and the notice to print (or None when nothing was renamed)."""
     argv = list(argv)
@@ -3556,7 +3580,7 @@ def main(argv):
         print(f"hub: {renamed}; the old name stops working in the next release", file=sys.stderr)
     p = parser()
     try:
-        args = p.parse_args(argv)
+        args = parse(p, argv)
     except SystemExit as e:                 # argparse already said what was wrong, or printed help
         return 0 if not e.code else 1
     if not getattr(args, "fn", None):
