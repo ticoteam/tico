@@ -1,11 +1,14 @@
 """Reads of the locations, items and projects tables on the caller's connection. Rows only: who may see them is the
 caller's question."""
 import sqlite3
+from collections.abc import Mapping
 from typing import Any
 
 from .store import ROW_TABLES, resolve
 
 SEARCH_COLUMNS = {"locations": ("name",), "items": ("name", "sku"), "projects": ("name",)}
+# The columns a list can be narrowed to by equality (the list's own filters, in SQL, so a page is filtered whole).
+EQUAL_COLUMNS = {"locations": ("kind", "customer_id"), "items": ("kind",), "projects": ("status", "customer_id")}
 
 
 def get(c: sqlite3.Connection, table: str, row_id: str) -> Any:
@@ -33,9 +36,10 @@ def names(c: sqlite3.Connection, table: str) -> dict[str, str]:
 
 
 def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | None = True,
-           after: tuple[str, str] | None = None, most: int = 200) -> list[Any]:
+           after: tuple[str, str] | None = None, most: int = 200,
+           equal: Mapping[str, str] | None = None) -> list[Any]:
     """Rows whose name (or sku, for items) contains the text, by name then id, past the cursor `after`. `active` None
-    lists archived rows too; an empty text lists every row."""
+    lists archived rows too; an empty text lists every row. `equal` keeps rows whose columns hold the given values."""
     assert table in ROW_TABLES
     columns = SEARCH_COLUMNS[table]
     needle = text.strip().lower()
@@ -47,5 +51,9 @@ def search(c: sqlite3.Connection, table: str, text: str = "", *, active: bool | 
     if after is not None:
         where += " AND (name, id) > (?, ?)"
         args += list(after)
+    for column, value in (equal or {}).items():
+        assert column in EQUAL_COLUMNS[table], column
+        where += f" AND {column}=?"
+        args.append(value)
     args.append(most)
     return c.execute(f"SELECT * FROM {table} WHERE {where} ORDER BY name, id LIMIT ?", args).fetchall()

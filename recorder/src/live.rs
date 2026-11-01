@@ -6,9 +6,9 @@ use crate::{
 use anyhow::{Context, Result, ensure};
 use serde_json::{Value, json};
 use std::{
-    collections::{BTreeMap, HashMap, HashSet},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, MutexGuard,
         atomic::{AtomicBool, Ordering},
     },
     time::Duration,
@@ -376,7 +376,16 @@ impl Tico {
         }) {
             return Ok(());
         }
+        // Edits for this meeting are refused from here until Send ends or fails, so the final
+        // pass below carries every edit that will be filed.
+        let _fence = fence_send(id);
         self.sync_live(store, id)?;
+        // An edit reaches Tico only while the meeting is live or paused; one still unsent would be missing from the filed transcript.
+        let unsent = pending_edits(&*store.db()?, id, &self.destination.id)?;
+        ensure!(
+            unsent == 0,
+            "{unsent} edited line(s) did not reach Tico because the meeting ended there. Nothing was filed."
+        );
         let prefix = format!("/api/v2/live-meetings/{}", context.live_id);
         if context.live_state != "ended" {
             self.call(
@@ -871,6 +880,13 @@ impl<'a> Queue<'a> {
             }
         }
         let words = transcript::chunk_words(record);
+        // A line a person edited keeps their text: finished words no longer correct it.
+        let mut query = transaction
+            .prepare("SELECT seq FROM live_edits WHERE recording_id=? AND destination_id=?")?;
+        let edited: HashSet<i64> = query
+            .query_map([self.id, self.destination], |row| row.get(0))?
+            .collect::<std::result::Result<_, _>>()?;
+        drop(query);
         for channel in ["me", "them"] {
             let mut spans: Vec<Span> = self
                 .spans
@@ -896,6 +912,9 @@ impl<'a> Queue<'a> {
                 .cloned()
                 .collect();
             for (span, words) in spans.iter().zip(assign(&spans, &heard)) {
+                if edited.contains(&span.seq) {
+                    continue;
+                }
                 let Some((shown, revision)) = sent.get(&span.seq) else {
                     continue;
                 };
@@ -922,4 +941,244 @@ impl<'a> Queue<'a> {
         }
         Ok(())
     }
+}
+
+/// Meetings whose Send is under way. Edits to them are refused, so the final pass sends every edit
+/// Tico will file.
+static SENDING: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn sending_lock() -> MutexGuard<'static, BTreeSet<String>> {
+    SENDING.lock().unwrap_or_else(|error| error.into_inner())
+}
+
+/// Keeps a meeting fenced while Send runs; the fence lifts when Send returns, successful or not.
+struct SendFence(String);
+
+impl Drop for SendFence {
+    fn drop(&mut self) {
+        sending_lock().remove(&self.0);
+    }
+}
+
+fn fence_send(id: &str) -> SendFence {
+    sending_lock().insert(id.to_owned());
+    SendFence(id.to_owned())
+}
+
+/// Whether Send is running for this meeting, so its lines show no edit controls.
+pub fn is_sending(id: &str) -> bool {
+    sending_lock().contains(id)
+}
+
+/// What a removed line says in Tico: the line stays in place and reads this instead of its text.
+pub const REMOVED: &str = "[removed]";
+
+/// One line shared live, as Tico holds it: the text of its latest revision sent, or of its first.
+#[derive(Debug, Clone, PartialEq)]
+pub struct SharedLine {
+    pub seq: i64,
+    pub speaker: String,
+    pub start_ms: u64,
+    pub end_ms: u64,
+    pub text: String,
+    /// Tico has the line (its chunk was accepted); only such a line can be edited.
+    pub acknowledged: bool,
+    /// A person changed or removed it; automatic corrections leave it alone.
+    pub edited: bool,
+}
+
+/// Every line shared live for this meeting, in sequence, at its latest revision queued for Tico (a
+/// queued revision may not have reached Tico yet). A refused revision is not shown.
+pub fn shared_lines(store: &Store, id: &str, destination: &str) -> Result<Vec<SharedLine>> {
+    let db = store.db()?;
+    let mut query = db.prepare(
+        "SELECT seq,payload_json,acknowledged FROM live_outbox WHERE recording_id=? AND destination_id=? ORDER BY seq",
+    )?;
+    let sent = query
+        .query_map([id, destination], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+            ))
+        })?
+        .collect::<std::result::Result<Vec<_>, _>>()?;
+    drop(query);
+    let mut latest: HashMap<i64, Value> = HashMap::new();
+    let mut query = db.prepare(
+        "SELECT seq,payload_json FROM live_corrections WHERE recording_id=? AND destination_id=? AND state<>2 ORDER BY rowid",
+    )?;
+    for row in query.query_map([id, destination], |row| {
+        Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+    })? {
+        let (seq, text) = row?;
+        latest.insert(seq, serde_json::from_str(&text)?);
+    }
+    drop(query);
+    let edited = edited_seqs(&db, id, destination)?;
+    sent.into_iter()
+        .map(|(seq, text, acknowledged)| {
+            let payload = match latest.remove(&seq) {
+                Some(payload) => payload,
+                None => serde_json::from_str(&text)?,
+            };
+            Ok(SharedLine {
+                seq,
+                speaker: payload["speaker"].as_str().unwrap_or_default().into(),
+                start_ms: payload["start_ms"].as_u64().unwrap_or(0),
+                end_ms: payload["end_ms"].as_u64().unwrap_or(0),
+                text: payload["text"].as_str().unwrap_or_default().into(),
+                acknowledged: acknowledged == 1,
+                edited: edited.contains(&seq),
+            })
+        })
+        .collect()
+}
+
+fn edited_seqs(db: &rusqlite::Connection, id: &str, destination: &str) -> Result<HashSet<i64>> {
+    let mut query =
+        db.prepare("SELECT seq FROM live_edits WHERE recording_id=? AND destination_id=?")?;
+    let seqs = query
+        .query_map([id, destination], |row| row.get(0))?
+        .collect::<std::result::Result<_, _>>()?;
+    Ok(seqs)
+}
+
+/// Edits a person made that no pass has sent to Tico yet.
+fn pending_edits(db: &rusqlite::Connection, id: &str, destination: &str) -> Result<i64> {
+    Ok(db.query_row(
+        "SELECT COUNT(*) FROM live_corrections c JOIN live_edits e
+         ON e.recording_id=c.recording_id AND e.destination_id=c.destination_id AND e.seq=c.seq
+         WHERE c.recording_id=? AND c.destination_id=? AND c.state=0",
+        [id, destination],
+        |row| row.get(0),
+    )?)
+}
+
+/// A person's edit of a line already shared live: its new text, or `None` to remove it. Tico takes
+/// it as the line's next revision, sent by the next pass; the line keeps its speaker and times.
+/// Tico accepts corrections while a meeting is live or paused, so this works during the meeting
+/// and after Stop, until Send ends the meeting there.
+pub fn edit_shared(store: &Store, id: &str, seq: i64, text: Option<&str>) -> Result<()> {
+    // Held for the whole edit, so Send's fence either sees this edit committed or refuses it.
+    let sending = sending_lock();
+    ensure!(
+        !sending.contains(id),
+        "This meeting is being sent to Tico. Edits can't be saved until it finishes."
+    );
+    let context = store.context(id)?;
+    ensure!(
+        !context.live_id.is_empty() && !context.live_destination.is_empty(),
+        "This transcript is not shared live"
+    );
+    ensure!(
+        ["live", "paused"].contains(&context.live_state.as_str()),
+        "This meeting has ended in Tico. Edit it there."
+    );
+    let text = match text {
+        Some(text) => {
+            let text = text.trim();
+            ensure!(
+                !text.is_empty(),
+                "A line cannot be empty. Remove it instead."
+            );
+            ensure!(
+                text.chars().count() <= 10_000,
+                "This line is too long for Tico"
+            );
+            text.to_owned()
+        }
+        None => REMOVED.to_owned(),
+    };
+    let destination = context.live_destination;
+    let mut db = store.db()?;
+    let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+    let (acknowledged, sent): (i64, String) = transaction
+        .query_row(
+            "SELECT acknowledged,payload_json FROM live_outbox WHERE recording_id=? AND destination_id=? AND seq=?",
+            rusqlite::params![id, destination, seq],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .context("This line was not shared live")?;
+    ensure!(
+        acknowledged == 1,
+        "This line is still on its way to Tico. Edit it once it arrives."
+    );
+    // The text on screen: the latest revision sent (not refused), else the line as first sent.
+    let mut query = transaction.prepare(
+        "SELECT payload_json FROM live_corrections WHERE recording_id=? AND destination_id=? AND seq=? AND state<>2 ORDER BY rowid DESC LIMIT 1",
+    )?;
+    let shown: Value = match query.query_row(rusqlite::params![id, destination, seq], |row| {
+        row.get::<_, String>(0)
+    }) {
+        Ok(text) => serde_json::from_str(&text)?,
+        Err(rusqlite::Error::QueryReturnedNoRows) => serde_json::from_str(&sent)?,
+        Err(error) => return Err(error.into()),
+    };
+    drop(query);
+    // Keeping the text on screen is still a choice: the line is marked edited even when no revision
+    // is needed, so a later automatic correction leaves it alone.
+    if shown["text"].as_str() != Some(text.as_str()) {
+        let revision: i64 = transaction.query_row(
+            "SELECT COALESCE(MAX(revision),1)+1 FROM live_corrections WHERE recording_id=? AND destination_id=? AND seq=? AND state<>2",
+            rusqlite::params![id, destination, seq],
+            |row| row.get(0),
+        )?;
+        let payload = json!({
+            "revision": revision,
+            "speaker": shown["speaker"],
+            "start_ms": shown["start_ms"],
+            "end_ms": shown["end_ms"],
+            "text": text,
+        });
+        transaction.execute(
+            "INSERT INTO live_corrections(recording_id,destination_id,seq,revision,payload_json) VALUES(?,?,?,?,?)",
+            rusqlite::params![id, destination, seq, revision, serde_json::to_string(&payload)?],
+        )?;
+    }
+    transaction.execute(
+        "INSERT OR IGNORE INTO live_edits(recording_id,destination_id,seq) VALUES(?,?,?)",
+        rusqlite::params![id, destination, seq],
+    )?;
+    transaction.commit()?;
+    Ok(())
+}
+
+/// The transcript of a meeting shared live, as the window shows it: each line as Tico holds it, with
+/// edit controls only where an edit can reach Tico, then the speech not yet sent. Speech that starts
+/// before the last queued line waits until that line is queued, so the list never shows one line
+/// twice; words still being spoken that overlap it wait with it. None when the meeting is not shared.
+pub fn shared_transcript(store: &Store, record: &Recording, recording: bool) -> Option<Value> {
+    let context = store.context(&record.id).ok()?;
+    if context.live_id.is_empty() || context.live_destination.is_empty() {
+        return None;
+    }
+    let lines = shared_lines(store, &record.id, &context.live_destination).ok()?;
+    let open = ["live", "paused"].contains(&context.live_state.as_str()) && !is_sending(&record.id);
+    let queued_until = lines.iter().map(|line| line.end_ms).max();
+    let mut blocks: Vec<Value> = lines
+        .iter()
+        .map(|line| {
+            let removed = line.edited && line.text == REMOVED;
+            json!({"speaker":line.speaker,"me":line.speaker == "Me","start_ms":line.start_ms,
+                "paragraphs":[line.text],"partial":false,"streamed":false,"seq":line.seq,
+                "edited":line.edited,"removed":removed,
+                // A removed line stays editable, so a removal can be undone.
+                "editable":open && line.acknowledged})
+        })
+        .collect();
+    if let Ok(turns) = crate::stream::live_turns(store, &record.id) {
+        blocks.extend(
+            turns
+                .iter()
+                .filter(|turn| !turn.text.trim().is_empty())
+                .filter(|turn| queued_until.is_none_or(|end| turn.start_ms >= end))
+                .map(|turn| {
+                    json!({"speaker":turn.speaker,"me":turn.me,"start_ms":turn.start_ms,
+                        "paragraphs":[turn.text.trim()],"partial":turn.partial,
+                        "streamed":turn.streamed,"seq":null,"editable":false})
+                }),
+        );
+    }
+    Some(json!({"id": record.id, "live": recording, "shared": true, "blocks": blocks}))
 }

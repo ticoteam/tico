@@ -21,6 +21,7 @@ from dataclasses import replace
 from datetime import timedelta
 from typing import Any, cast
 
+from ..records import reads as RR
 from . import budgeting, posting, shared
 from .context import Ctx
 from .core import ap as AP
@@ -269,7 +270,7 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
         rule = first_for(ctx, {"kind": "bill", "amount": x.amount, "counterparty": str(contact["name"]),
                                "description": x.description, "contact.id": str(contact["id"]), "direction": "out"})
         if rule is not None and rule.then.outcome == "post":
-            out += [AP.DocLine(account, amount, x.description, {**x.tags, **tags})
+            out += [replace(x, account_id=account, amount=amount, tags={**x.tags, **tags})
                     for account, amount, tags in AP.split_amounts(x.amount, rule.then)]
             continue
         default = str(contact["default_account_id"] or "")
@@ -291,6 +292,9 @@ def resolve_lines(ctx: Ctx, who: str, kind: str, contact: Any,
         tags = shared.check_tags(ctx, posting.with_team(ctx, x.tags))
         if not may_write(ctx, who, account.id, tags):
             raise denied("a line's account or tags are outside your view")
+        job = RR.get(ctx.c, "projects", tags["project"]) if kind == "invoice" and tags.get("project") else None
+        if job is not None and str(job["customer_id"] or "") not in ("", str(contact["id"])):
+            raise invalid("that project belongs to another customer")
         checked.append(replace(x, tags=tags))
     return checked, asked
 
