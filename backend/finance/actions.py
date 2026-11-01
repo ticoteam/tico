@@ -211,7 +211,9 @@ def _plan(ctx: Ctx, p: O.Principal, kind: str, payload: Mapping[str, object],
     """The right check first (a missing right is a denial, or for budgets a request to the asker's manager), then the
     kind's own checks and default gate, then the gate rules (§6.3), which run again whenever this does: at consume."""
     if ctx.book.mode == "mirror" and kind in mirror.REFUSED:
-        raise FinanceError(NOT_AVAILABLE, f"{kind} is not available while the books are a provider's (mirror mode)")
+        reason = ("Delete it in QuickBooks; it voids here." if kind == "po_void"
+                  else f"{kind} is not available while the books are a provider's (mirror mode)")
+        raise FinanceError(NOT_AVAILABLE, reason)
     by_right = K.authority(ctx.org, p.who, kind, ctx.rights(p.who))
     if by_right is not None and by_right.outcome == "deny":
         raise FinanceError(DENIED, f"{kind} needs {by_right.rule.removeprefix('right:')}")

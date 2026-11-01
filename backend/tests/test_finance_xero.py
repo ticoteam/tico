@@ -2182,3 +2182,21 @@ def test_a_location_or_job_made_here_in_a_xero_book_is_refused_since_xero_keeps_
         assert act(c, OWNER, "location_create", {"name": "Dallas"}).code == "invalid"
         customer = _local(c, "Contact:contact-1", "fin_contacts")
         assert act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer}).code == "invalid"
+
+
+def test_a_job_updated_in_a_xero_book_says_xero_has_no_jobs_not_that_the_job_is_missing(books):
+    """A job that predates the mirror cannot be written to Xero, and the refusal says so (it is not a missing job)."""
+    xbooks = XeroBooks()
+    _tracked_chart(xbooks)
+    cid = _connection(books)
+    with books.transaction() as c:
+        contact = act(c, OWNER, "contact_create", {"name": "Acme Retail", "kind": "customer"})
+        customer = str(contact.result["contact_id"])
+        made = act(c, OWNER, "project_create", {"name": "Deck", "customer_id": customer})
+        assert made.status == "committed", made
+        project = str(made.result["project_id"])
+    _mirror(books, cid)
+    assert _drain(books, _client(xbooks), cid) == []
+    with books.transaction() as c:
+        refused = act(c, OWNER, "project_update", {"project_id": project, "name": "Deck 2"})
+        assert refused.code == "invalid" and "written to QuickBooks only" in str(refused.reason), refused

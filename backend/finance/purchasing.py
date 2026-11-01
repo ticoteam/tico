@@ -10,6 +10,7 @@ from .context import Ctx
 from .core import ap as AP
 from .core import budgets as B
 from .core import kinds as K
+from .core import mirror as M
 from .core import validate as V
 from .core.errors import CONFLICT, NOT_FOUND, FinanceError, denied, invalid
 from .handlers import Plan, Planner, Result, may_write, private_hidden
@@ -85,8 +86,14 @@ def _release(ctx: Ctx, po_id: str, lines: Sequence[Any]) -> None:
 
 
 def _owed(ctx: Ctx, lines: Sequence[Any]) -> list[tuple[Any, int]]:
-    """Each order line with what is still unbilled on it."""
-    return [(line, int(line["amount"]) - SP.billed(ctx.c, str(line["id"]))) for line in lines]
+    """Each order line with what is still unbilled on it. A provider order's tax line owes nothing: a bill bills the
+    lines it names, and tax is not one of them, so the tax line would otherwise keep the order open."""
+    out: list[tuple[Any, int]] = []
+    for line in lines:
+        account = ctx.accounts.get(str(line["account_id"] or ""))
+        taxed = account is not None and account.subtype == M.SALES_TAX
+        out.append((line, 0 if taxed else int(line["amount"]) - SP.billed(ctx.c, str(line["id"]))))
+    return out
 
 
 def _place_holds(ctx: Ctx, who: str, po: Any, owed: Sequence[tuple[Any, int]],

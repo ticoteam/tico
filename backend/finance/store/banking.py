@@ -701,8 +701,9 @@ def outbox_add(c: sqlite3.Connection, *, connection_id: str | None, action_id: s
 # A record's update waits behind an older update of the same record that is still pending (out at the provider, or to be
 # tried again): the updates of one record reach the provider in the order they were made, so a retry never sends a
 # change back over a later one.
-RECORD_UPDATE_OPS = ("item.update", "location.update")
-IN_ORDER = ("NOT (op IN ('item.update','location.update') AND EXISTS (SELECT 1 FROM fin_outbox o WHERE "
+RECORD_UPDATE_OPS = ("item.update", "location.update", "project.update")
+IN_ORDER = ("NOT (op IN ('item.update','location.update','project.update') AND "
+            "EXISTS (SELECT 1 FROM fin_outbox o WHERE "
             "o.status='pending' AND o.op=fin_outbox.op AND o.rowid<fin_outbox.rowid AND "
             "json_extract(o.payload_json, '$.local_id')=json_extract(fin_outbox.payload_json, '$.local_id')))")
 

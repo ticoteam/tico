@@ -200,7 +200,10 @@ def item_create(ctx: Ctx, who: str, p: V.Payload) -> Plan:
 
 
 def _books_kind_change(old: str, new: str) -> None:
-    """Refuses a kind change that crosses the item type the books hold, since the books keep an item's type."""
+    """Refuses a kind change that crosses the item type the books hold, since the books keep an item's type. A raw
+    material or an assembly is a Tico label on an inventory item, so a change between one and inventory stays here."""
+    if {old, new} <= {"inventory", *RC.TICO_ONLY_ITEM_KINDS}:
+        return
     held = mirror.books_item_type(old)
     if held != mirror.books_item_type(new):
         raise invalid(f"an item the books hold as {held} cannot change to {mirror.books_item_type(new)}: "
@@ -293,6 +296,11 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such project")
     project_id = str(old["id"])
     f = _shape(lambda: _project_fields(ctx, who, p, create=False))
+    if _mirrored(ctx):
+        mirror.provider_takes_records(ctx, "a job")  # Xero has no jobs: say so, not that the job is not in the provider
+        mirror.record_in_provider(ctx, "projects", project_id)
+        if "customer_id" in f and not f["customer_id"]:
+            raise invalid("a job in a mirrored book sits under a customer")
 
     def apply(aid: str) -> Result:
         return _update(ctx, who, aid, "project.update", "projects", project_id, f, "project_id",

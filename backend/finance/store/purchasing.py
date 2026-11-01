@@ -55,6 +55,14 @@ def get(c: sqlite3.Connection, table: str, row_id: str) -> Any:
     return c.execute(f"SELECT * FROM {table} WHERE id=?", (row_id,)).fetchone()
 
 
+def delete_lines(c: sqlite3.Connection, kind: str, parent_id: str) -> None:
+    """Drop an order's lines, to be written again from the provider's revision (the caller checks nothing bills them)."""
+    if kind == "po":
+        c.execute("DELETE FROM fin_po_lines WHERE po_id=?", (parent_id,))
+    else:
+        c.execute("DELETE FROM fin_estimate_lines WHERE estimate_id=?", (parent_id,))
+
+
 def insert_lines(c: sqlite3.Connection, kind: str, parent_id: str, rows: Sequence[Mapping[str, object]]) -> None:
     table, key = LINES[kind]
     for n, r in enumerate(rows):
