@@ -123,6 +123,12 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
             return c.execute("SELECT COUNT(*) FROM message_deliveries WHERE root_id=? AND recipient='bot:ops' "
                              "AND state='capped'", (t["id"],)).fetchone()[0]
 
+    def deliveries():
+        with api.app.state.store.read() as c:
+            return [tuple(r) for r in c.execute("SELECT mode, reason, state, cause FROM message_deliveries "
+                                                "WHERE root_id=? AND recipient='bot:ops' ORDER BY created_at",
+                                                (t["id"],)).fetchall()]
+
     for n in range(1, 7):
         say(api, "ana-test", t["id"], f"@cpo round {n}")
         turn = claim(api, peer, "cpo")
@@ -133,9 +139,14 @@ def test_the_loop_guard_holds_a_bots_wakes_and_a_persons_message_resumes_them(ap
         post(api, f"threads/{t['id']}/messages", {"text": f"@ops ping {n}", "kind": "say",
                                                   "refs": {"needs_action": True}}, token=turn["token"])
         finish(api, peer, turn, "")
-        until(lambda: started() > before or held() > 0, f"round {n}: ops runs, or its wake is held")
+        try:
+            until(lambda: started() > before or held() > 0, f"round {n}: ops runs, or its wake is held")
+        except AssertionError as error:
+            raise AssertionError(f"{error}; ops deliveries {deliveries()}, runs {started()}") from error
         if held():
             break
+        # A wake that lands while ops is still in its last turn is steered into that turn, not a new run: let it finish.
+        until(lambda: finished(computer) == started(), f"round {n}: ops ends its turn before the next wake")
     assert held() >= 1, "past the guard the bot's wake is held as capped, never dropped"
     stopped = started()
     time.sleep(2)

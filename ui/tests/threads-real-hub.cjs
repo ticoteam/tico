@@ -79,7 +79,7 @@ async function restrictPerson(hub) {
     await head.click();
     await dana.waitForURL(new RegExp('#/thread/' + risks.thread_id), {timeout: t(15000)});
     await dana.locator('.thv-composer .p-text').waitFor({timeout: t(15000)});
-    assert.ok((await dana.content()).includes(RISKS), 'the opened sub-thread shows its own message');
+    await dana.getByText(RISKS).waitFor({timeout: t(15000)});
     await dana.context().close();
 
     // Dana: the bot page's Home and DM are two tabs, and each one selects on its own.
