@@ -46,7 +46,7 @@ function liveFollowThread(id) {
   id = String(id);
   const had = LIVE.threads.has(id);
   LIVE.threads.set(id, (LIVE.threads.get(id) || 0) + 1);
-  if (!had) liveRestart();
+  if (!had) { if (LIVE.started) liveRestart(); else liveStart(); }
   let released = false;
   return () => {
     if (released) return;
@@ -61,7 +61,8 @@ function liveFollowThread(id) {
 function liveTopicAdd(topic) {
   if (LIVE_TOPICS.includes(topic)) return;
   LIVE_TOPICS.push(topic);
-  liveRestart();
+  // Threads keep the sidebar live on every install, cloud or not.
+  if (LIVE.started) liveRestart(); else liveStart();
 }
 // Only where the stream cannot run: the poll it replaced. Returns the timer (0 when the stream carries it).
 // A hidden tab does not poll: goals / task modal / Updates fell back every few seconds across background tabs
