@@ -362,7 +362,11 @@ def clear_chat_session(c, settings, actor, bot, conversation_id, detail=None):
     # This chat's turns continue the bot's thread every direct chat shares: the next turn of any of them
     # starts a new one, while each other chat keeps its own history.
     from .shared_bots import follow
-    if sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id) == sessions.BOT_THREAD:
+    from . import threads
+    room = threads.thread_row(c, conversation_id) or {}
+    key = sessions.session_key(follow(c, bot, cfg), bot, None, conversation_id, room.get("root_id") or conversation_id,
+                               "private" if threads.private_task_thread(c, room) else threads.audience_class(room))
+    if key in (sessions.BOT_THREAD, sessions.PUBLIC_THREAD):
         bump_bot_session_epoch(c, bot)
     H.event(c, actor, "session.clear", conversation_id, detail)
     # A new session is said in the task's history: a task room's own, or the task of the run that failed (run_triggers).
