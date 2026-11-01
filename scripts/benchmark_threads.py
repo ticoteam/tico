@@ -262,6 +262,23 @@ def seed_followers(db, thread_id, count):
                       [(uuid.uuid4().hex, thread_id, f"human:member-{i:04d}", now, now) for i in range(count)])
 
 
+def db_counts(db):
+    """Rows the run left behind: `changes` per topic (each row can wake every stream that reads it), and table counts.
+    A table this branch does not have is left out."""
+    out = {}
+    with contextlib.closing(sqlite3.connect(str(db), timeout=60)) as c:
+        for name, sql in (("changes_by_topic", "SELECT topic, COUNT(*) FROM changes GROUP BY topic"),
+                          ("messages", "SELECT COUNT(*) FROM messages"),
+                          ("message_deliveries", "SELECT COUNT(*) FROM message_deliveries"),
+                          ("thread_followers", "SELECT COUNT(*) FROM thread_followers")):
+            try:
+                found = c.execute(sql).fetchall()
+            except sqlite3.OperationalError:
+                continue
+            out[name] = dict(found) if name == "changes_by_topic" else found[0][0]
+    return out
+
+
 def hang_up(state):
     """Closes one stream's socket, which ends a read that is blocked on the server."""
     try:
@@ -387,6 +404,7 @@ def main():
         raise SystemExit("the server process did not start")
     try:
         result = scenario(args, ready["port"], ready["db"])
+        result["db_rows"] = db_counts(ready["db"])
     finally:
         child.stdin.close()
         tail = child.stdout.read()
