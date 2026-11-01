@@ -8,7 +8,7 @@ from urllib.parse import quote
 
 from fastapi import Query, Request
 
-from . import documents, market, media, meetings
+from . import documents, market, media, meetings, thread_search, threads
 from .store import Problem
 from . import task_privacy as privacy
 
@@ -54,7 +54,7 @@ def transcript_text(row):
 def install_context_search(app, store, auth):
     @app.get("/api/v2/context/search")
     def search(request: Request, q: str = Query(min_length=1, max_length=500),
-               source: Literal["all", "docs", "market"] = "all",
+               source: Literal["all", "docs", "market", "threads"] = "all",
                limit: int = Query(default=20, ge=1, le=50)):
         who = request.state.identity
         auth.domain(who)
@@ -62,7 +62,18 @@ def install_context_search(app, store, auth):
         if not words:
             raise Problem("query", "Search needs at least one word", 422)
         found = []
+        index = getattr(app.state, "thread_index", None)     # the thread search index, made on first use
+        if index and source in ("all", "threads"):
+            index()
         with store.read() as c:
+            if source in ("all", "threads"):
+                # Thread messages the viewer may read: C1 as SQL, so a thread they may not read is never a hit.
+                v = threads.viewer(auth, who)
+                for hit in thread_search.search(c, q, thread_sql=threads.readable_sql(c, v, "cv"),
+                                                message_sql=threads.message_sql(c, v, "m"), limit=limit)["hits"]:
+                    found.append({"kind": "thread_message", "id": hit["message_id"], "title": hit["title"] or "",
+                                  "thread_id": hit["thread_id"], "excerpt": hit["excerpt"],
+                                  "url": "#/thread/" + quote(hit["thread_id"], safe=""), "score": len(words)})
             if source in ("all", "docs"):
                 # The company's own docs: internal ones (written or imported in Tico) and linked ones.
                 for hit in app.state.docs.find(c, q, limit):

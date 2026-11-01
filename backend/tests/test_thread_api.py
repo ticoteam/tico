@@ -108,3 +108,18 @@ def test_edit_and_delete_leave_the_index_and_the_timeline_agree(api):
     assert search(api, "pricing", "ben-test")["hits"]
     assert api.delete(f"/api/v2/messages/{message_id}", headers=headers("ana-test")).status_code == 200
     assert search(api, "pricing", "ben-test")["hits"] == []
+
+
+def test_context_search_finds_a_thread_message_the_viewer_may_read_and_never_a_hidden_one(api):
+    new_thread(api, title="Budget", body="Quarterly budget review moved to Friday")
+    new_thread(api, title="Launch", members=(), body="Launch secret for the board")
+
+    def context(query, token):
+        response = api.get("/api/v2/context/search", params={"q": query, "source": "threads"}, headers=headers(token))
+        assert response.status_code == 200, response.text
+        return response.json()["results"]
+
+    hits = context("budget", "ben-test")
+    assert [h["kind"] for h in hits] == ["thread_message"] and hits[0]["url"].startswith("#/thread/")
+    assert context("secret", "cara-test") == [] and context("secret", "ben-test") == []
+    assert context("secret", "ana-test")

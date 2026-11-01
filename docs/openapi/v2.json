@@ -5628,7 +5628,8 @@
               "enum": [
                 "all",
                 "docs",
-                "market"
+                "market",
+                "threads"
               ],
               "type": "string",
               "default": "all",
