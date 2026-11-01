@@ -479,3 +479,83 @@ def test_held_totals_match_each_computers_held_counts(api):
         totals = start_places.held_totals(c)
         for rid in (first['runner_id'], second['runner_id']):
             assert totals.get(rid, 0) == sum(start_places.held(c, rid).values())
+
+
+def memory(api, computer, mem, at=None):
+    """One synthetic sample at this minute (or at `at`), memory at `mem` of the computer's total."""
+    import time
+    at = at or int(time.time()) // 60 * 60
+    post(api, 'runners/performance', {'samples': [point(at, cpu=20, mem=mem)]}, computer['token'])
+
+
+def waits_of(api, computer):
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
+    return machine['turn_counts']['waits']
+
+
+def bot_waiting_for_finance(api, sender='bot:ops'):
+    computer = fleet(api, attempts=1, trees=0)
+    assign(api, computer, 'finance')
+    ready(api, computer, ['ops', 'finance'])
+    sent_by(api, post(api, 'chat/finance', {'text': 'New work'})['id'], sender)
+    return computer
+
+
+def test_memory_at_85_holds_new_starts_and_they_start_again_below_80(api):
+    """Memory at 85% or more holds a bot's new start; between 80 and 85 the hold stays while a start waits on it."""
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .86)
+    assert claim(api, computer, 'finance') is None
+    assert any(w['reason'] == 'computer busy: memory' for w in waits_of(api, computer))
+    memory(api, computer, .82)
+    assert claim(api, computer, 'finance') is None
+    memory(api, computer, .79)
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_memory_between_80_and_85_admits_a_start_when_none_waits(api):
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .82)
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_hold_words_name_the_memory_percent_and_the_stale_sample(api):
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .86)
+    from backend.start_places import computer_hold
+    with api.app.state.store.read() as c:
+        assert computer_hold(c, computer['runner_id']) == ('computer busy: memory', 'computer busy: memory 86%')
+    with api.app.state.store.transaction() as c:
+        c.execute('UPDATE runner_load_samples SET ts=ts-300,sampled_at=sampled_at-300 WHERE runner_id=?',
+                  (computer['runner_id'],))
+    with api.app.state.store.read() as c:
+        assert computer_hold(c, computer['runner_id']) == ('computer not reporting', 'computer not reporting')
+
+
+def test_a_computer_whose_sample_is_stale_refuses_bot_starts_and_admits_a_persons_message(api):
+    """A frozen computer stops sampling; with diagnostics on its last sample is old and it admits no bot's start."""
+    import time
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3, at=int(time.time()) // 60 * 60 - 300)
+    assert claim(api, computer, 'finance') is None
+    machine = next(m for m in get(api, 'operations')['machines'] if m['id'] == computer['runner_id'])
+    assert any(w['reason'] == 'computer not reporting' for w in machine['turn_counts']['waits'])
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE messages SET from_actor='human:chris' WHERE from_actor='bot:ops'")
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_stale_sample_admits_again_once_diagnostics_are_off(api):
+    """Diagnostics off keeps the start rules as they were: a stale sample holds nothing."""
+    import time
+    computer = bot_waiting_for_finance(api)
+    memory(api, computer, .3, at=int(time.time()) // 60 * 60 - 300)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE runners SET performance='off' WHERE id=?", (computer['runner_id'],))
+    assert claim(api, computer, 'finance') is not None
+
+
+def test_a_computer_that_never_reported_is_not_held(api):
+    """Older runners never sent samples; holding them for silence would stop every start on them."""
+    computer = bot_waiting_for_finance(api)
+    assert claim(api, computer, 'finance') is not None

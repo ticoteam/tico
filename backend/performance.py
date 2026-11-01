@@ -96,12 +96,13 @@ def ingest(c, runner_id, samples, now=None):
     """Store a batch of samples; returns the number kept. A sample from more than a day away is dropped, and one
     ahead of the server's clock counts as now, so a computer's fast clock cannot hold back the minutes after it."""
     now = int(now or time.time())
-    kept, minutes = 0, []
+    kept, minutes, newest = 0, [], None
     for s in sorted(samples, key=lambda s: s.at):
         at = min(int(s.at), now)
         if now - at > 86400:
             continue
         kept += 1
+        newest = (at, s)
         ts = at // MINUTE * MINUTE
         if not minutes or minutes[-1] != ts:
             minutes.append(ts)
@@ -138,6 +139,14 @@ def ingest(c, runner_id, samples, now=None):
                        s.swap_used if s.swap_total else None, s.swap_total or None, free, total, s.active))
         for p in s.procs:
             _add_usage(c, runner_id, MINUTE, ts, "proc", p.name, "", "", s.interval_s // SAMPLE_S, p.cpu, p.cpu, p.mem, p.mem)
+    if newest:
+        # The newest reading sets the computer's memory hold (start_places.computer_hold): at 85% or more it holds,
+        # below 80% it clears, and in between it keeps its state. Only a reading that is still the newest one counts.
+        mem = _pct(newest[1].mem_used, newest[1].mem_total)
+        if mem is not None and (mem >= MEM_HOLD_AT or mem < MEM_HOLD_CLEAR):
+            c.execute("UPDATE runners SET memory_hold=? WHERE id=? AND ? >= coalesce((SELECT max(sampled_at) FROM "
+                      "runner_load_samples WHERE runner_id=?),0)",
+                      (int(mem >= MEM_HOLD_AT), runner_id, newest[0], runner_id))
     for ts in sorted(set(minutes)):    # each minute in turn: a backlog's calm minute ends an overload
         detect(c, runner_id, ts)
     c.execute("DELETE FROM runner_load_samples WHERE runner_id=? AND ts<?", (runner_id, now - 48 * 3600))
@@ -162,6 +171,7 @@ def _add_usage(c, runner_id, span, ts, kind, key, bot, harness, n, cpu, cpu_max,
 
 # ------------------------------------------------------------------------------------------------ simple load
 LOAD_FRESH_S = 120
+MEM_HOLD_AT, MEM_HOLD_CLEAR = 85.0, 80.0     # new starts wait at this memory, and start again below the lower one
 
 
 def load_status(c, runner_id, now=None):
