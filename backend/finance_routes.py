@@ -73,9 +73,13 @@ def books_problem(e: books_link.BrokerFailed) -> Problem:
     if e.code == "revoke_failed":      # HQ kept the connection: a disconnect asked again is the retry
         return Problem("revoke_failed", "HQ could not take the books connection off yet, so it is kept: disconnect "
                        "again in a moment", 502, retryable=True)
-    if e.code == "vault_write_failed":  # the connection is kept: a disconnect asked again is the retry
-        return Problem("vault_write_failed", "Tico could not save the books grant while taking it off, so the "
-                       "connection is kept: disconnect again in a moment", 502, retryable=True)
+    if e.code == "vault_write_failed":  # HQ's grant stands and Tico could not keep the rotated pair: connect again
+        return Problem(
+            "vault_write_failed",
+            "Tico could not keep the books grant while taking it off, so the connection is kept: "
+            "connect the books again in Finance, then disconnect",
+            502, retryable=True, extra={"reason": "reconnect_required"},
+        )
     return Problem("books_unavailable", "HQ could not finish that books step: try again in a moment", 502)
 
 

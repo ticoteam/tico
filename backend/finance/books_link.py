@@ -223,18 +223,25 @@ def _refreshed(store: Any, vault: object, link: Link, cid: str, provider: str, s
         raise ReconnectRequired("not_connected") from None
 
 
+def _save_rotated(store: Any, cid: str, fresh: Tokens, now: str, *, tries: int = VAULT_TRIES) -> bool:
+    """Writes a rotated pair to the vault, up to `tries` times. True when one write lands."""
+    for attempt in range(1, tries + 1):
+        try:
+            with store.transaction() as c:
+                save(c, cid, fresh, by=SYSTEM, at=now)
+            return True
+        except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the rotated pair must not be lost
+            log.warning("Books connection %s: vault write try %d of %d failed after a refresh", cid, attempt, tries,
+                        exc_info=True)
+    return False
+
+
 def _keep_rotated(store: Any, cid: str, fresh: Tokens, provider: str, now: str) -> None:
     """The pair a refresh rotated, into the vault. QuickBooks has already retired the old refresh token, so the new pair
     is held here while the write is tried VAULT_TRIES times; when every try fails the connection asks for a reconnect
     and ReconnectRequired is raised, as connect_claim does."""
-    for attempt in range(1, VAULT_TRIES + 1):
-        try:
-            with store.transaction() as c:
-                save(c, cid, fresh, by=SYSTEM, at=now)
-            return
-        except Exception:  # noqa: BLE001 - any failure of the vault write is retried; the rotated pair must not be lost
-            log.warning("Books connection %s: vault write try %d of %d failed after a refresh", cid, attempt, VAULT_TRIES,
-                        exc_info=True)
+    if _save_rotated(store, cid, fresh, now):
+        return
     with store.transaction() as c:
         SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
         tico.needs_you(c, SX.connection_owner(c, cid), f"Connect {provider} again",
@@ -336,46 +343,66 @@ def _drop_grant(store: Any, vault: object, link: Link, cid: str, provider: str, 
         raise BrokerFailed("disconnect_refused")
 
 
-def _refresh_for_disconnect(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
-    """A fresh pair for a disconnect HQ is asked with, kept in the vault. Unlike a sync's refresh, a grant HQ no longer
-    holds is not marked for a reconnect here: the disconnect goes on and drops it."""
+def _refresh_for_disconnect(store: Any, vault: object, link: Link, cid: str, provider: str, *,
+                            now: str) -> tuple[_State, Tokens | None]:
+    """A fresh pair for a disconnect HQ is asked with, kept in the vault. When the write does not land, the pair still
+    goes to HQ, since it can take the grant off with it: the second value is that pair, for the caller to keep if HQ
+    refuses. Unlike a sync's refresh, a grant HQ no longer holds is not marked for a reconnect here."""
     with _lock(cid):
         state = _current(store, vault, cid)
         if not state.refresh_token:
             raise ReconnectRequired("no_refresh_token")
-        _keep_rotated(store, cid, _refreshed(store, vault, link, cid, provider, state), provider, now)
+        fresh = _refreshed(store, vault, link, cid, provider, state)
+        unkept = None if _save_rotated(store, cid, fresh, now) else fresh
+    held = _State(access=fresh.access_token, refresh_token=fresh.refresh_token, expires_at=fresh.expires_at,
+                  company=state.company, realm=state.realm)
+    return held, unkept
+
+
+def _keep_unkept(store: Any, cid: str, fresh: Tokens, provider: str, *, now: str) -> None:
+    """HQ refused a disconnect while the rotated pair is still only in memory: the write is tried once more. When it
+    lands the connection stays with its pair. When it does not, the connection asks for a reconnect and the caller
+    gets a retryable error saying so."""
+    if _save_rotated(store, cid, fresh, now, tries=1):
+        return
+    with store.transaction() as c:
+        SX.set_connection_status(c, cid, "reconnect", "vault_write_failed", now)
+        tico.needs_you(c, SX.connection_owner(c, cid), f"Connect {provider} again",
+                       "Tico could not keep the grant for this books connection. Connect it again in Finance.")
+    raise BrokerFailed("vault_write_failed")
 
 
 def _revoked(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
-    """HQ drops the company's grant. Xero deletes only this company's connection with the install's current
-    access token, so a usable one is refreshed first when there is none or it is due. HQ's access_expired
-    refreshes the pair once and asks again; any other refusal (revoke_failed, disconnect_refused) keeps the
-    connection."""
+    """HQ drops the company's grant. Xero deletes only this company's connection with the install's current access
+    token, so a usable one is refreshed first when there is none or it is due. HQ's access_expired refreshes the pair
+    once and asks again. A rotated pair the vault does not keep is still what HQ is asked with; if HQ refuses, the
+    vault write is tried once more before the refusal goes on."""
     state = _current(store, vault, cid)
+    unkept: Tokens | None = None
     if provider == "xero" and (not state.access or _due(state.expires_at, now)):
-        _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
-        state = _current(store, vault, cid)
-    for attempt in (1, 2):
+        state, unkept = _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
+    retried = False
+    while True:
         try:
             return _drop_grant(store, vault, link, cid, provider, state)
         except BrokerFailed as e:
-            if e.code != "access_expired" or attempt == 2:
-                raise
-        _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
-        state = _current(store, vault, cid)
+            if e.code == "access_expired" and not retried:
+                retried = True
+                state, unkept = _refresh_for_disconnect(store, vault, link, cid, provider, now=now)
+                continue
+            if unkept is not None:
+                _keep_unkept(store, cid, unkept, provider, now=now)
+            raise
 
 
 def disconnect_books(store: Any, vault: object, link: Link, cid: str, provider: str, *, now: str) -> None:
-    """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call, or a vault write that
-    fails on the way, keeps everything, so it can be run again. HQ answering reconnect_required means its grant is
-    already gone, so only the local rows go."""
+    """HQ drops the grant, then the vault rows and the connection's ids go. A failed HQ call keeps everything, so it can
+    be run again. HQ answering reconnect_required means its grant is already gone, so only the local rows go."""
     try:
         if _current(store, vault, cid).refresh_token:
             _revoked(store, vault, link, cid, provider, now=now)
-    except ReconnectRequired as e:
-        if e.code == "vault_write_failed":      # the rotated pair was not kept, so HQ's grant stands: drop nothing
-            raise BrokerFailed("vault_write_failed") from e
-        # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token): the local rows go
+    except ReconnectRequired:
+        pass    # HQ holds no grant to take off (reconnect_required, not_connected, no_refresh_token): the local rows go
     with store.transaction() as c:
         books = SX.books_settings(c, cid)
         for key in ("access", "refresh"):
