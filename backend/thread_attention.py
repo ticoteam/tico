@@ -5,7 +5,8 @@ row checked against the per-message rule (`threads.readable`) before it is liste
 does, not by a click:
 - a mention or an ask is open until the person posts in its thread after it (or it is deleted);
 - an unread DM is open until the person reads past its last message from a person or one addressed to them;
-- a write held for review is open until its reviewer releases it (the hold leaves `held`);
+- a write held for review is open until it is decided: its reviewer releases or keeps it, or the person it is held for
+  withdraws it (the hold leaves `held`);
 - a capped thread (the loop guard, spec 4.5) is open until its capped deliveries resume.
 A bot's mention of the person and a bot's ask are the thread's questions to the person and count; a bot's post that
 names nobody is activity, not attention.
@@ -46,9 +47,9 @@ def items(c, auth, who, skip=()):
     for row in _unread_dms(c, viewer, me):
         out.append(_item("thread_dm", row["id"], row["id"], _clip(row["subject"] or "Direct message"),
                          row["created"], row["from_actor"]))
-    for row in _holds(c, me):
-        out.append(_item("thread_held", row["id"], None, "A message is held for your review", row["created"],
-                         row["author"]))
+    for row in _holds(c, who):
+        title = "A message is held for your review" if row["role"] == "reviewer" else "A message of yours is held"
+        out.append(_item("thread_held", row["id"], None, title, row["created"], row["author"]))
     for row in _capped(c):
         root = c.execute("SELECT * FROM conversations WHERE id=?", (row["root_id"],)).fetchone()
         if root and threads.readable(c, viewer, dict(root)) and threads.can_manage(c, viewer, dict(root)):
@@ -98,12 +99,11 @@ def _unread_dms(c, viewer, me):
     return out
 
 
-def _holds(c, me):
-    """Writes held for review that this person reviews. Only the reviewer reads a hold (org_rule_check._reader), so
-    the item is listed to the reviewer alone, and it clears when the hold is decided."""
-    return [dict(r) for r in c.execute(
-        "SELECT id, author, created FROM org_rule_holds WHERE state='held' AND reviewer=? AND operation IN (?,?) "
-        "ORDER BY created, id", (me, *HELD_OPERATIONS)).fetchall()]
+def _holds(c, who):
+    """Writes held for review that this person reads: the ones they review, and the ones held for them (the person
+    their bot reports up to, org_rule_check.represented). The item clears when the hold is decided."""
+    from . import org_rule_check
+    return org_rule_check.held_for(c, who, HELD_OPERATIONS)
 
 
 def _capped(c):

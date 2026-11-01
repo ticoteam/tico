@@ -52,6 +52,7 @@ async function ruleHoldRedraw(slot, id, card) {
 function ruleHoldHTML(h) {
   const [word, cls] = RH_OUTCOME[h.outcome] || RH_OUTCOME.blocked;
   const rules = (h.rules || []).map(r => `<div class="rh-rule">${esc(r.text)}</div>`).join('');
+  // The reviewer releases or keeps a hold; the person it is held for may only withdraw it (keep it blocked).
   const reviewer = !!h.nonce || h.can_send;
   const decided = h.state === 'sent' ? `Sent anyway${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}`
     : h.state === 'kept' ? `Kept blocked${h.decided_by ? ' by ' + esc(actorLabel(h.decided_by)) : ''}` : '';
@@ -62,10 +63,10 @@ function ruleHoldHTML(h) {
     <div><div class="rh-lbl">Tried to send</div><div class="rh-msg">${esc(h.text || '')}${h.text_cut ? '…' : ''}</div></div>
     <div><div class="rh-lbl">Rule</div>${rules || '<div class="rh-rule muted">A rule that no longer exists</div>'}</div>
     ${h.why ? `<div><div class="rh-lbl">Appeal</div><div class="rh-why">${esc(h.why)}</div></div>` : ''}
-    ${decided ? `<p class="muted rh-done">${decided}</p>` : reviewer ? `<div class="rh-acts">
-      ${rule ? `<a class="ghost small rh-btn" href="${esc(ruHref(rule.kind, {rule: rule.id}))}">Edit rule</a>` : ''}
+    ${decided ? `<p class="muted rh-done">${decided}</p>` : h.can_withdraw ? `<div class="rh-acts">
+      ${reviewer && rule ? `<a class="ghost small rh-btn" href="${esc(ruHref(rule.kind, {rule: rule.id}))}">Edit rule</a>` : ''}
       ${h.can_send ? `<button class="ghost small" type="button" data-hold-send="${esc(h.nonce || '')}">Send anyway</button>` : ''}
-      <span class="spacer"></span><button class="primary small" type="button" data-hold-keep>Keep blocked</button></div>` : ''}
+      <span class="spacer"></span><button class="primary small" type="button" data-hold-keep>${reviewer ? 'Keep blocked' : 'Withdraw'}</button></div>` : ''}
     <p class="rh-err" role="status" hidden></p>
   </article>`;
 }

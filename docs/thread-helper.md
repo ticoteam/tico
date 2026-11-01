@@ -12,16 +12,16 @@ Threads that need the person sit in the same **Needs you** list as their tasks, 
 | **Question** | A bot or a person asked them something in a thread, and they have not answered it | They post in that thread after the ask, or the ask is answered or deleted |
 | **Mention** | Someone @mentioned them (a bot's mention counts too), or addressed a message to them | They post in that thread after it, or it is deleted |
 | **Direct message** | A DM (a one-to-one or a migrated group DM) has a message past their read point that they may read, from a person or addressed to them | They read the DM |
-| **Held** | A write held for review (org rules, `org_rule_holds`) that they are the reviewer of | It is sent or kept |
+| **Held** | A write held for review (org rules, `org_rule_holds`) that they review, or that their bot posted for them (the person its bot reports up to) | The reviewer sends or keeps it; the person withdraws it (keeps it blocked) |
 | **Paused** | A thread's bot replies were held back by the loop guard (`TICO_THREAD_LOOP_GUARD`, 6 an hour by default) | Its held replies resume, when a person posts in the thread or the hour passes |
 
 Bot posts that name nobody are activity, not attention. A paused thread is listed once, to the people who can manage
 it. Items the Needs you list already shows (a bot's question outside any task) are not listed twice.
 
 The thread items are not cut from the list: they page with the rest of Needs you, in the same order. A held item is
-listed to its reviewer alone, with the same card as a task's held write (Send anyway, Keep blocked). A write held for a
-person whom a bot reports to, but who is not its reviewer, is not listed: only the reviewer may read a hold
-(`org_rule_check`), and widening that is a permission change.
+listed to its reviewer and to the person its author bot reports up to. The reviewer sees the card with Send anyway and Keep
+blocked. The person sees the text and Withdraw, which keeps the write blocked, and cannot release it. A peer does not
+see it. Only the first person up the bot's chain reads its holds, not everyone above them (`org_rule_check.represented`).
 
 The list moves live. A delivery to the person, a change in its state, their read point in a thread, and a hold created
 or decided each write a change, so the list is read again.
@@ -84,5 +84,6 @@ The card is posted as the author, so a bot's card in its own Home does not wake 
 - Needs attention: the person sees their own items only.
 - Follow-ups: the watcher posts as Tico; the nudge goes to the person who was asked.
 - Catch up: a person, for their own threads. Bots and other callers get a 403.
-- Held writes: only the reviewer sees the held item and its card.
+- Held writes: the reviewer and the person their bot reports to see the held item and its card. Only the reviewer
+  sends one; the person may withdraw it.
 - Update cards: the author's Home audience decides who reads them.

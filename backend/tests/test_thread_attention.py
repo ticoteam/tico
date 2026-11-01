@@ -5,7 +5,7 @@ the people who can manage it."""
 from backend import threads
 from backend.auth import Identity
 from backend import hubdb as H
-from backend.tests.test_api import api, as_member, get, setup_attempt  # noqa: F401
+from backend.tests.test_api import api, as_member, get, post, setup_attempt  # noqa: F401
 
 
 def members_thread(api, members=("human:ana",), title="Launch"):
@@ -77,6 +77,17 @@ def test_a_held_message_is_listed_to_its_reviewer_until_it_is_released(api):
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE org_rule_holds SET state='sent' WHERE id=?", (hid,))
     assert needs(api, "thread_held") == []
+
+
+def test_a_held_post_is_listed_to_the_person_its_bot_reports_to_until_they_withdraw_it(api):
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE bot_config SET reports_to='human:ben' WHERE bot='finance'")
+    hid = hold(api, reviewer="human:ana", author="bot:finance")
+    assert [i["id"] for i in needs(api, "thread_held", token="ben-test")] == [hid]
+    assert needs(api, "thread_held", token="cara-test") == []             # a peer does not see it
+    assert [i["id"] for i in needs(api, "thread_held")] == [hid]          # the reviewer does
+    post(api, f"rule-holds/{hid}/keep", {}, token="ben-test")
+    assert needs(api, "thread_held", token="ben-test") == []
 
 
 def test_a_held_message_outside_a_thread_write_is_not_listed(api):
