@@ -22,8 +22,9 @@ signed-in person as they commit, filtered to what that person may read:
   before, so an older page keeps working.
 
 `after` (or the browser's `Last-Event-ID`) resumes from the last change number seen, so a
-reconnect misses nothing; a client further behind than the log keeps (24 h) is sent `reset` and
-reads its page in full.
+reconnect misses nothing; a client further behind than the log keeps (24 h), or more than BACKLOG_MAX changes behind
+(a slow consumer), is sent `reset` and reads its page in full. One read sends at most READ_BYTES of events and leaves
+the rest for the next read, so one poll's work and its payload stay bounded however busy the team is.
 
 Delivery has no per-client polling. `Store.mutate` and `Store.write` ring an in-process doorbell
 after a write that logged changes commits; one shared reader per event loop also looks for
@@ -51,6 +52,8 @@ TOPICS = ("tasks", "messages", "runs", "bots", "needs")
 KEEP_HOURS = 24           # a client away longer than this reads in full
 FALLBACK_SECONDS = 1.5    # the shared look for changes another process wrote
 RUNNER_FALLBACK_SECONDS = 5  # the same for computers' streams: work another process queued waits this long at most
+BACKLOG_MAX = 5000        # changes a stream may fall behind before it is reset rather than replayed (a slow consumer)
+READ_BYTES = 256 * 1024   # event bytes one read sends; the rest of its changes wait for the next read
 LIFETIME_SECONDS = 900    # bounded; each read and keepalive re-checks the sign-in, so this only caps stale state
 RUNNER_LIFETIME_SECONDS = 300
 KEEPALIVE_SECONDS = 15    # under the proxies' idle timeouts; TICO_STREAM_KEEPALIVE_SECONDS replaces it
@@ -994,7 +997,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
         newest = latest(c)
         first = oldest(c)
         floor = (first - 1) if first is not None else newest
-        if after > newest or after < floor:
+        if after > newest or after < floor or newest - after > BACKLOG_MAX:
             return [], newest, True, False
         clauses, args = ["seq>?", "topic IN (%s)" % ",".join("?" * len(topics))], [after, *topics]
         if conversations:
@@ -1033,10 +1036,15 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             picked += [("bots", r, e) for r, e in _bots(view, by_topic["bots"])]
         if by_topic.get("needs"):
             picked += [("needs", r, e) for r, e in _needs_list(view, by_topic["needs"], task_view, needs_held)]
-        events = []
+        events, size = [], 0
         for topic, row, entry in sorted(picked, key=lambda item: item[1]["seq"]):
             actor = None if view.hidden_actor(row["actor"]) else row["actor"]
-            events.append((row["seq"], topic, {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}))
+            data = {"seq": row["seq"], "actor": actor, "at": row["at"], **entry}
+            # The first event always goes, however large; the rest wait for the next read once the budget is spent.
+            size += len(encode(data))
+            if events and size > READ_BYTES:
+                return events, events[-1][0], False, True
+            events.append((row["seq"], topic, data))
         return events, cursor, False, more
     finally:
         if c.in_transaction:
