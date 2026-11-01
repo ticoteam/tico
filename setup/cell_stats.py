@@ -791,9 +791,11 @@ def db_block(box: Box, root: Path, slug: str, cache: dict, now: float, server: s
 
 
 def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
-    """The newest copy in the replica, as the server's own backup loop last saw it (/tmp/tico-backup-status.json in the
-    server container, read through /proc/<pid>/root: no docker exec). `unsent_files` is the local pile-up. With no copy
-    from level 0 or 1 `age_s` is null and `stale` is true: a stuck backup, not an unknown one."""
+    """The backup as the server's own backup loop last saw it (/tmp/tico-backup-status.json in the server container, read
+    through /proc/<pid>/root: no docker exec). `age_s` is the newest copy's age, for display. `behind_s` is how long the
+    backup location has been behind the database, null when caught up, and `stale` says it is past the warning time the
+    server wrote (`warn_after_s`, ten sync intervals at least ten minutes). `unsent_files` is the local pile-up. A quiet
+    database is never stale, whatever its copy's age: it has nothing new to send."""
     if not pid:
         return None
     try:
@@ -804,9 +806,11 @@ def backup_block(box: Box, pid: int | None, now: float) -> dict | None:
         return None
     unsent = saved.get("unsent_files") if isinstance(saved.get("unsent_files"), int) else None
     at = parse_iso(saved.get("last_replicated_at"))
-    if at is None:
-        return {"age_s": None, "stale": True, "unsent_files": unsent, "detail": "litestream"}
-    return {"age_s": max(0, int(now - at)), "unsent_files": unsent, "detail": "litestream"}
+    since = parse_iso(saved.get("behind_since"))
+    warn_after = saved["warn_after_s"] if isinstance(saved.get("warn_after_s"), int) else 600
+    behind = None if since is None else max(0, int(now - since))
+    return {"age_s": None if at is None else max(0, int(now - at)), "behind_s": behind,
+            "stale": behind is not None and behind > warn_after, "unsent_files": unsent, "detail": "litestream"}
 
 
 FLIGHT = "data/flight"      # under the company's folder

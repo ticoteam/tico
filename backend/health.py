@@ -13,7 +13,8 @@ import shlex
 from datetime import datetime, timezone
 
 from . import (access, billing_check, blob_s3, gateway_connection, hook_relay, hosted_updates, inbox_isolation, model_login,
-               pipeline_stats, providers, releases, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits, watchers)
+               pipeline_stats, providers, releases, replication, roadmaps, runner_versions, setup_stuck, sleep_idle, usage_limits,
+               watchers)
 from .batch_work import report, storage_error
 from .getting_started import _online_runners, _signed_in_runtime, _wanted_runtimes, _person
 
@@ -32,11 +33,8 @@ PERSON_QUEUE_MINUTES = 2    # a person's own message, sooner: someone is sitting
 RESTART_STUCK_MINUTES = 34
 SILENT_MINUTES = 10         # a computer this quiet while work is queued for it has stopped, not blinked
 NEEDS_YOU_MINUTES = 30      # this quiet, its owner is asked to bring it back
-# The newest copy is warned about past the longer of 10 minutes and 10 sync intervals, and is bad past an hour (or
-# that warning time, when it is later). Litestream sends a copy every sync interval, so an older one means it stopped.
-BACKUP_WARN_MIN_S = 600
-BACKUP_BAD_MIN_S = 3600
-# More local files than this in Litestream's level-0 folder means its uploads are not getting through.
+# A backup location that stays behind the database is warned about and then marked bad (replication.behind_warn_seconds,
+# replication.BEHIND_BAD_MIN_S). More local files than this in Litestream's level-0 folder means uploads are not getting through.
 BACKUP_UNSENT_FILES = 1000
 RECENT_HOURS = 24
 GITHUB_HEALTH = "github:token"
@@ -1134,16 +1132,19 @@ def _slack(c):
     return _check("slack", "Slack", "bad", "Slack is disconnected" + (": " + state["message"] if state["message"] else "."), [fix])
 
 
-def _copy_age(last):
-    """The status of the newest copy by its age: "ok", "warn" or "bad" (see BACKUP_WARN_MIN_S). The warning waits for ten
-    sync intervals, so a longer interval (replication.sync_interval_seconds) gets a longer grace."""
-    from . import replication
-    at = H.parse_ts(last)
+def _behind_age(since):
+    """Whether the backup location is ok, warn or bad for how long it has been behind the database (since is
+    replication.write_status's behind_since). It is timed from when it fell behind, never from the age of the last copy:
+    a quiet database writes nothing new and is not behind, however old its copy. Bad once it is past an hour, or past
+    the warning time when that is later."""
+    if not since:
+        return "ok"
+    at = H.parse_ts(since)
     if at is None:
         return "warn"
     age = (H.parse_ts(H.now()) - at).total_seconds()
-    warn_after = max(BACKUP_WARN_MIN_S, 10 * replication.sync_interval_seconds())
-    if age > max(BACKUP_BAD_MIN_S, warn_after):
+    warn_after = replication.behind_warn_seconds()
+    if age > max(replication.BEHIND_BAD_MIN_S, warn_after):
         return "bad"
     return "warn" if age > warn_after else "ok"
 
@@ -1155,6 +1156,7 @@ def _backups(config, settings):
         return _check("backups", "Backups", "unknown", "This server does not report its backup state.")
     mode = str(backup["mode"]).replace("_", "-")
     last = backup.get("last_replicated_at") or ""
+    since = backup.get("behind_since") or ""
     target = str(backup.get("target_kind") or "")
     key = backup.get("credential_key") if isinstance(backup.get("credential_key"), dict) else {}
     key_here = bool(key.get("present"))                  # a local credential key (/data/credential.key) is in use
@@ -1166,10 +1168,10 @@ def _backups(config, settings):
     if mode == "off":
         return _check("backups", "Backups", "bad",
                       "Backups are off." + (KEY_LOST if key_here else ""), [fix])
+    behind = _behind_age(since) if mode == "remote" else "ok"
     unsent = backup.get("unsent_files") if isinstance(backup.get("unsent_files"), int) else 0
     if unsent > BACKUP_UNSENT_FILES:
-        age = _copy_age(last) if mode == "remote" and last else "warn"
-        return _check("backups", "Backups", "bad" if age == "bad" else "warn",
+        return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
                       f"Backups are stuck: Litestream has {unsent:,} unsent files. Restart the server; if it continues, "
                       "see the backup docs.", [fix])
     if mode in ("local-only", "local"):
@@ -1185,12 +1187,13 @@ def _backups(config, settings):
                           [fix])
         return _check("backups", "Backups", "warn",
                       "Copies stay on this server only. A lost disk loses everything." + note, [fix])
-    if not last:    # `reason` says why no recent copy exists (replication.NO_RECENT_COPY)
-        return _check("backups", "Backups", "warn",
+    if not last:    # `reason` says why there is no copy at all (replication.NO_RECENT_COPY)
+        return _check("backups", "Backups", "bad" if behind == "bad" else "warn",
                       backup.get("reason") or "Set up, but nothing has been copied yet.", [fix])
-    age = _copy_age(last)
-    if age != "ok":
-        return _check("backups", "Backups", age, f"Last copy to {target or 'the remote'} was {last}.", [fix])
+    if behind != "ok":
+        return _check("backups", "Backups", behind,
+                      f"Copies to {target or 'the remote'} have been behind the database since {since}. The newest copy is from "
+                      f"{last}.", [fix])
     if key_here and not key_copied:
         return _check("backups", "Backups", "warn",
                       f"The database is copied to {target or 'a remote'}, but the credential key has not been. A database restored "

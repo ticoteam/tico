@@ -490,70 +490,113 @@ def test_the_backup_status_lists_only_the_newest_level(tmp_path):
     assert local.newest(replication.DB_LEVELS) == 50
 
 
-def add_copy(kind, store, level, seconds_ago=0, replica=""):
-    """A replica file at a Litestream level (0000/ on S3, ltx/0 in a file replica), dated that long ago. `store` is the
-    FakeS3 or the backup folder; `replica` is the folder of the replica under the backup location."""
+def add_copy(kind, store, level, txid, seconds_ago=0, replica=""):
+    """A replica file at a Litestream level (0000/ on S3, ltx/0 in a file replica), named for the TXID it ends at and
+    dated that long ago. `store` is the FakeS3 or the backup folder; `replica` is the folder of the replica under it."""
     when = time.time() - seconds_ago
+    name = f"{txid:016x}-{txid:016x}.ltx"
     if kind == "s3":
-        key = "/".join(part for part in ("tico", replica, f"{level:04d}", f"{seconds_ago}.ltx") if part)
+        key = "/".join(part for part in ("tico", replica, f"{level:04d}", name) if part)
         store.objects[key] = b""
         store.modified[key] = datetime.fromtimestamp(when, timezone.utc)
     else:
-        path = store / replica / f"ltx/{level}" / f"{seconds_ago}.ltx"
+        path = store / replica / f"ltx/{level}" / name
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"")
         os.utime(path, (when, when))
 
 
-@pytest.mark.parametrize("kind", ["local", "s3"])
-def test_a_recent_copy_is_level_zero_then_level_one_and_snapshots_never_count(tmp_path, kind):
+def mirror_pair(kind, tmp_path):
     fake = FakeS3()
     store = fake if kind == "s3" else tmp_path / "backups"
     mirror = replication.S3Mirror(fake, "bucket", "tico") if kind == "s3" else replication.LocalMirror(store)
+    return store, mirror
+
+
+@pytest.mark.parametrize("kind", ["local", "s3"])
+def test_the_copy_time_and_txid_come_from_the_first_replica_level_that_has_a_file(tmp_path, kind):
+    store, mirror = mirror_pair(kind, tmp_path)
     now = time.time()
-    add_copy(kind, store, 9, seconds_ago=60)        # a daily snapshot, however new, is not a copy
-    assert mirror.newest(replication.FRESH_LEVELS) is None
-    add_copy(kind, store, 1, seconds_ago=120)       # level 1 counts while level 0 is empty
-    assert mirror.newest(replication.FRESH_LEVELS) == pytest.approx(now - 120, abs=5)
-    add_copy(kind, store, 0, seconds_ago=30)        # and level 0 wins whenever it has a file
-    assert mirror.newest(replication.FRESH_LEVELS) == pytest.approx(now - 30, abs=5)
+    add_copy(kind, store, 9, 5, seconds_ago=86400)   # only a daily snapshot: still a time, not nothing
+    assert mirror.latest(replication.DB_LEVELS) == (pytest.approx(now - 86400, abs=5), 5)
+    add_copy(kind, store, 2, 7, seconds_ago=900)     # level 2 is first with files once 0 and 1 are empty
+    assert mirror.latest(replication.DB_LEVELS) == (pytest.approx(now - 900, abs=5), 7)
+    add_copy(kind, store, 1, 8, seconds_ago=60)
+    assert mirror.latest(replication.DB_LEVELS) == (pytest.approx(now - 60, abs=5), 8)
+    add_copy(kind, store, 0, 9, seconds_ago=30)
+    assert mirror.latest(replication.DB_LEVELS) == (pytest.approx(now - 30, abs=5), 9)
 
 
 @pytest.mark.parametrize("kind", ["local", "s3"])
-def test_the_freshness_listing_reads_only_the_replica_folder_it_is_given(tmp_path, kind):
-    fake = FakeS3()
-    store = fake if kind == "s3" else tmp_path / "backups"
-    mirror = replication.S3Mirror(fake, "bucket", "tico") if kind == "s3" else replication.LocalMirror(store)
+def test_the_replica_position_is_read_only_from_the_replica_folder_it_is_given(tmp_path, kind):
+    store, mirror = mirror_pair(kind, tmp_path)
     now, generation = time.time(), "gen-20261101T000000Z"
-    add_copy(kind, store, 0, seconds_ago=30)
-    assert mirror.newest(replication.FRESH_LEVELS, replica=generation) is None
-    add_copy(kind, store, 0, seconds_ago=10, replica=generation)
-    assert mirror.newest(replication.FRESH_LEVELS, replica=generation) == pytest.approx(now - 10, abs=5)
-    assert mirror.newest(replication.FRESH_LEVELS) == pytest.approx(now - 30, abs=5)
+    add_copy(kind, store, 0, 3, seconds_ago=30)
+    assert mirror.latest(replication.DB_LEVELS, replica=generation) == (None, None)
+    add_copy(kind, store, 0, 4, seconds_ago=10, replica=generation)
+    assert mirror.latest(replication.DB_LEVELS, replica=generation) == (pytest.approx(now - 10, abs=5), 4)
+    assert mirror.latest(replication.DB_LEVELS)[1] == 3
 
 
-def test_the_status_says_null_and_why_when_only_snapshots_reached_the_backup_location(tmp_path):
-    env = key_env(tmp_path)
-    add_copy("local", tmp_path / "backups", 9, seconds_ago=60)
-    replication.loop(env, sleep=lambda s: None, rounds=1)
-    stuck = replication.status(env)
-    assert stuck["last_replicated_at"] is None and stuck["reason"] == replication.NO_RECENT_COPY
-    add_copy("local", tmp_path / "backups", 0, seconds_ago=5)
-    replication.loop(env, sleep=lambda s: None, rounds=1)
-    fresh = replication.status(env)
-    assert fresh["last_replicated_at"] and fresh["reason"] is None
+def test_the_ltx_names_give_their_txid_range_and_other_names_give_none():
+    assert replication.ltx_range("000000000000000a-00000000000000ff.ltx") == (10, 255)
+    assert replication.ltx_range("0000000000000001-0000000000000005.ltx.part") is None
+    assert replication.ltx_range("1-5.ltx") is None
+    assert replication.max_txid(["0000000000000001-0000000000000005.ltx", "0000000000000006-000000000000000a.ltx",
+                                 "x.ltx"]) == 10
+    assert replication.max_txid(["x.ltx"]) is None and replication.max_txid([]) is None
 
 
-def test_the_status_counts_the_local_level_zero_files_by_name(tmp_path):
-    env = key_env(tmp_path)
-    level = replication.litestream_state_dir(tmp_path / "data" / "hub.sqlite") / "ltx" / "0"
+def test_the_local_level_zero_is_counted_and_its_top_txid_read_from_the_names(tmp_path):
+    db = tmp_path / "data" / "hub.sqlite"
+    level = replication.litestream_state_dir(db) / "ltx" / "0"
     level.mkdir(parents=True)
     for txid in (1, 2, 3):
         (level / f"{txid:016x}-{txid:016x}.ltx").write_bytes(b"x")
-    assert replication.unsent_files(tmp_path / "data" / "hub.sqlite") == 3
-    assert replication.unsent_files(tmp_path / "nowhere" / "hub.sqlite") == 0
+    assert replication.local_level_zero(db) == (3, 3)
+    assert replication.local_level_zero(tmp_path / "nowhere" / "hub.sqlite") == (0, None)
+
+
+def test_the_status_has_a_time_for_an_idle_replica_and_says_why_only_when_no_database_file_is_there(tmp_path):
+    env = key_env(tmp_path)
     replication.loop(env, sleep=lambda s: None, rounds=1)
-    assert replication.status(env)["unsent_files"] == 3
+    empty = replication.status(env)
+    assert empty["last_replicated_at"] is None and empty["reason"] == replication.NO_RECENT_COPY
+    add_copy("local", tmp_path / "backups", 9, 5, seconds_ago=3 * 86400)   # idle: its snapshot is days old
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    idle = replication.status(env)
+    assert idle["last_replicated_at"] and idle["reason"] is None and idle["behind_since"] is None
+
+
+def test_lag_is_timed_from_when_the_backup_fell_behind_and_clears_once_it_catches_up(tmp_path):
+    env = key_env(tmp_path)
+    level = replication.litestream_state_dir(Path(env["TICO_DB"])) / "ltx" / "0"
+    level.mkdir(parents=True)
+    for txid in range(1, 8):
+        (level / f"{txid:016x}-{txid:016x}.ltx").write_bytes(b"x")
+    add_copy("local", tmp_path / "backups", 9, 3, seconds_ago=86400)   # the replica holds TXIDs up to 3, as a snapshot
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    stuck = replication.status(env)
+    saved = json.loads(Path(env["TICO_BACKUP_STATUS_FILE"]).read_text())
+    assert stuck["behind_since"] and stuck["last_replicated_at"]
+    assert saved["local_txid"] == f"{7:016x}" and saved["replica_txid"] == f"{3:016x}"
+    # Still behind a round later: the time it fell behind is kept, not moved on.
+    Path(env["TICO_BACKUP_STATUS_FILE"]).write_text(json.dumps({**saved, "behind_since": "2026-10-31T00:00:00Z"}))
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert replication.status(env)["behind_since"] == "2026-10-31T00:00:00Z"
+    # Caught up: the replica holds the local TXID, even in a copy three days old. Nothing is behind, so it is cleared.
+    add_copy("local", tmp_path / "backups", 0, 7, seconds_ago=3 * 86400)
+    replication.loop(env, sleep=lambda s: None, rounds=1)
+    assert replication.status(env)["behind_since"] is None
+
+
+def test_the_status_without_a_mirror_keeps_what_the_last_round_saw(tmp_path):
+    path = tmp_path / "status.json"
+    path.write_text(json.dumps({"last_replicated_at": "2026-10-30T11:59:51Z", "behind_since": "2026-10-30T11:00:00Z"}))
+    replication.write_status(None, path, unsent=4)
+    saved = json.loads(path.read_text())
+    assert saved["last_replicated_at"] == "2026-10-30T11:59:51Z" and saved["behind_since"] == "2026-10-30T11:00:00Z"
+    assert saved["unsent_files"] == 4
 
 
 @pytest.mark.parametrize(("value", "seconds"), [(None, 60), ("30s", 30), ("10m", 600), ("2h", 60)])
