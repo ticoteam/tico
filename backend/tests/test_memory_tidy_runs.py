@@ -18,9 +18,9 @@ def setup(api):
     return api.app.state.store
 
 
-def commit(c, subject='ordinary', files=None, attempt='', shared=True, committed='2026-11-02T10:00:00Z'):
+def commit(c, subject='ordinary', files=None, attempt='', shared=True, committed='2026-11-02T10:00:00Z', bot='ops'):
     c.execute('INSERT INTO bot_memory_updates(bot,sha,subject,author,committed,files_json,attempt_id,shared,runner_id,reported) '
-              'VALUES(?,?,?,?,?,?,?,?,?,?)', ('ops', H.new_id(), subject, 'ops', committed,
+              'VALUES(?,?,?,?,?,?,?,?,?,?)', (bot, H.new_id(), subject, 'ops', committed,
               json.dumps(files if files is not None else ['memory/learnings.md']), attempt, int(shared), 'fixture', committed))
 
 
@@ -87,7 +87,7 @@ def test_stop_precedes_every_other_skip_and_sends_one_product_report(api, monkey
         last(c, cost=total)
         # No memory change: the spend stop must still win.
         runs.admit(c, store.settings, AT)
-        assert reasons(c) == ['skipped: pilot spend stop']
+        assert reasons(c) == ['skipped: spend stop']
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:product-lead'").fetchone()[0] == 1
         runs.admit(c, store.settings, AT)
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:product-lead'").fetchone()[0] == 1
@@ -198,3 +198,88 @@ def test_cancelled_child_cannot_leave_partial_card(api, monkeypatch):
             conflict_check=None, memory_commit='a' * 40, reviewer='human:ana') is None
         assert c.execute('SELECT count(*) FROM memory_tidy_cards').fetchone()[0] == 0
         assert c.execute('SELECT reason FROM memory_tidy_passes').fetchone()[0] == 'skipped: model unavailable'
+
+
+def test_global_slot_survives_deadline_until_usage_is_reconciled(api):
+    store = setup(api)
+    with store.transaction() as c:
+        last(c, status='filed', cost=49)
+        child = H.task_create(c, H.KEEPER, 'Synthetic overdue check', '', 'bot:ops',
+                              private=True, quiet_notice=True, lint=False)
+        c.execute('UPDATE memory_tidy_passes SET check_task_id=?', (child['id'],))
+        c.execute("INSERT INTO turns(id,bot,task_id,started,model) VALUES(?,?,?,?,?)",
+                  ('pending-turn', 'ops', child['id'], '2026-11-01T12:59:00Z', 'gpt-6.1-sol'))
+        # The deadline closes the task but its running model is not yet settled.
+        runs.sweep(c, AT)
+        assert runs.unsettled(c)
+        c.execute("UPDATE turns SET finished=?,usage_reason='no_result'", (runs.stamp(AT),))
+        assert runs.unsettled(c), 'an expired lease with missing usage is not a free pass'
+        c.execute("UPDATE turns SET input_tokens=1000000,output_tokens=100000,usage_reason=NULL")
+        assert not runs.unsettled(c)
+        # The historical estimate never decreases; reconcile a cost past the stop.
+        c.execute("UPDATE memory_tidy_passes SET cost_usd=51")
+        H.sync_registry(c, {'product-lead': {'name': 'Product', 'status': 'active', 'runtime': 'fake'}}, {})
+        commit(c)
+        runs.admit(c, store.settings, AT)
+        assert reasons(c) == ['skipped: spend stop']
+        report = c.execute("SELECT body FROM tasks WHERE owner='bot:product-lead'").fetchone()[0]
+        assert '$51.00' in report and '$1.00' in report
+
+
+def test_one_filed_check_holds_the_next_nights_admission(api, monkeypatch):
+    store = setup(api)
+    with store.transaction() as c:
+        commit(c)
+        last(c, status='filed')
+        monkeypatch.setattr(runs.check_models, 'choose', lambda *a, **kw: pytest.fail('second pass admitted'))
+        # Retain a live slot across a new nightly date; night uniqueness is insufficient.
+        c.execute("UPDATE memory_tidy_passes SET deadline='2026-11-03T13:00:00.000000Z'")
+        assert runs.admit(c, store.settings, AT) == []
+        assert c.execute('SELECT count(*) FROM memory_tidy_passes').fetchone()[0] == 1
+
+
+def test_claim_rechecks_changed_model_without_fallback_or_parent_wake(api):
+    store = setup(api)
+    with store.transaction() as c:
+        parent = H.task_create(c, H.KEEPER, 'Synthetic container', '', 'bot:ops',
+                               private=True, quiet_notice=True, lint=False)
+        child = H.task_create(c, H.KEEPER, 'Synthetic child', '', 'bot:ops',
+                              parent_id=parent['id'], private=True, quiet_notice=True, lint=False)
+        last(c, status='filed')
+        c.execute("UPDATE memory_tidy_passes SET parent_task_id=?,check_task_id=?,deadline=?",
+                  (parent['id'], child['id'], '2026-11-03T13:00:00.000000Z'))
+        before = c.execute('SELECT count(*) FROM jobs').fetchone()[0]
+        # A model change after filing cannot run the old model or its substitute.
+        c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',
+                  (json.dumps([entry(model='claude:claude-sonnet-5-5')]), runs.controls.PILOTS_KEY))
+        assert not runs.before_start(c, store.settings, child['id'], AT)
+        assert c.execute('SELECT reason FROM memory_tidy_passes').fetchone()[0] == 'skipped: model unavailable'
+        assert c.execute('SELECT count(*) FROM jobs').fetchone()[0] == before
+        assert H.task(c, child['id'])['status'] == H.task(c, parent['id'])['status'] == 'closed'
+
+
+def test_two_eligible_bots_serialize_and_next_admission_uses_first_cost(api, monkeypatch):
+    store = setup(api)
+    put(api, 'system-routines/memory_tidy', {'pilots': [entry(), entry(bot='coo')]})
+    filed = []
+    monkeypatch.setattr(runs.check_models, 'choose', lambda *a, **kw: {})
+    monkeypatch.setattr(runs.check_models, 'file_pass', lambda c, settings, task, model: filed.append(task))
+    with store.transaction() as c:
+        H.sync_registry(c, {'product-lead': {'name': 'Product', 'status': 'active', 'runtime': 'fake'}}, {})
+        commit(c)
+        commit(c, bot='coo')
+        last(c, cost=49)
+        first = runs.admit(c, store.settings, AT)
+        assert len(first) == len(filed) == 1
+        assert runs.admit(c, store.settings, AT) == []
+        assert len(filed) == 1
+        # Completion and reconciled subscription usage release the global slot.
+        c.execute("INSERT INTO turns(id,bot,task_id,started,finished,model,input_tokens,output_tokens,billing) "
+                  "VALUES(?,?,?,?,?,?,?,?,?)", ('turn-first', 'ops', filed[0], runs.stamp(AT), runs.stamp(AT),
+                                               'gpt-6.1-sol', 1000000, 100000, 'subscription'))
+        c.execute("UPDATE memory_tidy_passes SET status='no_change' WHERE id=?", (first[0],))
+        second = runs.admit(c, store.settings, AT)
+        assert len(second) == 1 and len(filed) == 1
+        assert c.execute('SELECT reason FROM memory_tidy_passes WHERE id=?', (second[0],)).fetchone()[0] == 'skipped: spend stop'
+        assert runs.refresh_costs(c) == pytest.approx(52)
+        assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:product-lead'").fetchone()[0] == 1

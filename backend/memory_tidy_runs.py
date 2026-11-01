@@ -69,6 +69,7 @@ def report_stop(c, total):
         return
     report = H.task_create(c, H.KEEPER, 'Nightly memory tidy: pilot spend stop',
         f'Pilot estimated usage has reached ${total:.2f}, including subscription usage. '
+        f'The amount past $50 is ${max(0, total - STOP):.2f}. '
         'No further passes may start. This is a stop report, not approval for more spend.',
         'bot:product-lead', private=True, lint=False, deduplicate=False)
     c.execute("INSERT INTO registry_metadata VALUES(?,?)", (key, json.dumps({'task': report['id'], 'total': total})))
@@ -93,16 +94,65 @@ def sweep(c, at):
         close_pass(c, row, 'skipped: not finished')
 
 
+def settle_terminal(c):
+    # Runtime model-unavailable skips close only their check. Retire the private
+    # container as well, then let the usage settlement guard release the slot.
+    for row in c.execute("SELECT p.* FROM memory_tidy_passes p JOIN tasks t ON t.id=p.check_task_id "
+                         "WHERE p.status='filed' AND t.status IN ('declined','closed')").fetchall():
+        close_pass(c, row, 'skipped: model unavailable')
+
+
+def unsettled(c):
+    """Keep the global slot until both execution and its accounting have settled.
+
+    Closing a deadline task requests cancellation; it does not prove the runner has
+    stopped. Unknown usage likewise cannot release a slot as a free pass.
+    """
+    if c.execute("SELECT 1 FROM memory_tidy_passes WHERE status='filed' LIMIT 1").fetchone():
+        return True
+    return c.execute(
+        "SELECT 1 FROM memory_tidy_passes p JOIN turns t ON t.task_id=p.check_task_id "
+        "WHERE t.finished IS NULL OR (t.usage_reason IS NOT NULL AND "
+        "NOT EXISTS(SELECT 1 FROM turn_usage_segments s WHERE s.turn_id=t.id) "
+        "AND coalesce(t.input_tokens,0)+coalesce(t.output_tokens,0)=0) LIMIT 1").fetchone() is not None
+
+
+def before_start(c, settings, task_id, at):
+    """Recheck admission under the claim lock, before a runner gets a model call."""
+    row = c.execute('SELECT * FROM memory_tidy_passes WHERE check_task_id=?', (task_id,)).fetchone()
+    if not row:
+        return True
+    if row['status'] != 'filed':
+        return False
+    total = refresh_costs(c)
+    selected = controls.eligible(c, settings, row['bot'])
+    reason = ('skipped: spend stop' if total >= STOP else
+              'skipped: not finished' if stamp(at) >= row['deadline'] else
+              'skipped: model unavailable' if not selected or selected['model'] != row['model'] else
+              'skipped: spend limit' if usage_limits.blocked(c, row['bot'], at) else '')
+    if reason:
+        close_pass(c, row, reason)
+        if total >= STOP:
+            report_stop(c, total)
+        return False
+    return True
+
+
 def admit(c, settings, at):
     """One nightly admission transaction; all skips precede task creation/model dispatch."""
     sweep(c, at)
+    settle_terminal(c)
     sync_decisions(c)
+    total = refresh_costs(c)
+    # The store's write transaction is the admission lock. Never admit against
+    # an earlier pass's incomplete cost, including after deadline cancellation.
+    if unsettled(c):
+        return []
     if not SR.config_of(c, controls.KEY)['on']:
         return []
     local = at.astimezone(ZONE)
     night = local.date().isoformat()
     deadline = datetime.combine(local.date(), time(5), ZONE)
-    total = refresh_costs(c)
     stopped = total >= STOP
     if stopped:
         report_stop(c, total)
@@ -114,7 +164,7 @@ def admit(c, settings, at):
         prior = c.execute("SELECT baseline FROM memory_tidy_passes WHERE bot=? AND status IN ('kept','discarded') "
                            "ORDER BY started DESC LIMIT 1", (bot,)).fetchone()
         since = prior['baseline'] if prior else ''
-        reason = ('skipped: pilot spend stop' if stopped else
+        reason = ('skipped: spend stop' if stopped else
                   'skipped: no change' if not changed(c, bot, since) else
                   'skipped: model floor' if 'haiku' in model.lower() else
                   'skipped: spend limit' if usage_limits.blocked(c, bot, at) else
@@ -152,6 +202,8 @@ def admit(c, settings, at):
                       (parent['id'], child['id'], ident))
             log(c, bot, 'filed: ' + model)
         rows.append(ident)
+        if not reason:
+            break
     return rows
 
 
@@ -173,9 +225,7 @@ def deliver(c, pass_id, *, snapshot, raw, checkout_before, checkout_after,
     if not child or child['status'] in ('declined', 'closed'):
         close_pass(c, row, 'skipped: model unavailable')
         return None
-    total = refresh_costs(c)
-    if total >= STOP:
-        report_stop(c, total)
+    refresh_costs(c)
     row = c.execute('SELECT * FROM memory_tidy_passes WHERE id=?', (pass_id,)).fetchone()
     result = memory_tidy.evaluate(snapshot, raw, since=since, today=H.parse_ts(H.now()).astimezone(ZONE).date(),
                                   checkout_before=checkout_before,
