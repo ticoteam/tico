@@ -185,9 +185,10 @@ const grTools = (tools = '') => tools ? `<div class="gr-crumbs"><span class="spa
 window.growthStop = function growthStop() {
   const r = S.route || '';
   const off = base => !rdUnder(r, base);
-  if (!(GR && off(GR_ROUTE)) && !(BR && off(BRAND_ROUTE)) && !(GT && off(GTM_ROUTE))) return;
+  const offGrowth = off(GR_ROUTE) || !off(GTM_ROUTE);   // Go-to-market sits under #/growth but is its own page
+  if (!(GR && offGrowth) && !(BR && off(BRAND_ROUTE)) && !(GT && off(GTM_ROUTE))) return;
   GR_LOAD++;
-  if (off(GR_ROUTE)) GR = null;
+  if (offGrowth) GR = null;
   if (off(BRAND_ROUTE)) BR = null;
   if (off(GTM_ROUTE)) GT = null;
   if ([GR_ROUTE, BRAND_ROUTE, GTM_ROUTE].every(off)) document.querySelectorAll('dialog.gr-dlg').forEach(d => d.close());

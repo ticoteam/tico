@@ -205,6 +205,18 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   }
   assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Go-to-market', `${tag}: Go-to-market is a Growth tab`);
 
+  // A late This week answer never draws over Go-to-market, which sits under #/growth.
+  let release;
+  const held = new Promise(r => { release = r; });
+  await page.route('**/api/v2/growth/week*', async route => { await held; await route.continue(); });
+  await page.evaluate(() => { location.hash = '#/growth/week'; });
+  await go(page, '#/growth/gtm/model');
+  await page.locator('.gt-model .gt-nsr').waitFor({timeout: t(10000)});
+  release();
+  await page.waitForTimeout(500);
+  await page.unroute('**/api/v2/growth/week*');
+  assert.ok(await page.locator('.gt-model .gt-nsr').count(), `${tag}: Go-to-market stays after a late This week answer`);
+
   // Growth: every framework draws the ideas.
   await go(page, '#/growth');
   await page.locator('#gr-view .gr-ic').first().waitFor({timeout: t(10000)});
