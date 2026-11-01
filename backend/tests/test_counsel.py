@@ -13,6 +13,7 @@ from backend import audit_log, counsel, screening
 from backend import assistant as A
 from backend import files as F
 from backend import org_rules as O
+from backend import shared_bots as SB
 from backend.auth import Identity
 from backend.blobs import register
 from backend.store import H
@@ -186,6 +187,23 @@ def test_counsel_has_no_credentials_and_sends_nothing(api):
     counsel_on(api)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM credential_grants WHERE subject='bot:tico-counsel'").fetchone()[0] == 0
+
+
+def test_a_branch_of_a_stateless_bot_is_stateless_too():
+    branch = SB.follow(None, "counsel-acme", {"shared_from": "tico-counsel"},
+                       rows=lambda slug: {"config_json": json.dumps({"template": "tico-counsel", "shared": True}), "repo": "emp-counsel"})
+    assert branch["stateless"] is True
+    plain = SB.follow(None, "ops-acme", {"shared_from": "ops"},
+                      rows=lambda slug: {"config_json": json.dumps({"shared": True, "model": "m1"}), "repo": "emp-ops"})
+    assert "stateless" not in plain
+
+
+def test_counsel_is_stateless_by_its_template_and_an_explicit_flag_wins():
+    card = Path(counsel.__file__).resolve().parents[1] / "templates" / "catalog" / "tico-counsel" / "bot.yaml"
+    assert yaml.safe_load(card.read_text())["stateless"] is True
+    assert H.stateless({"template": "tico-counsel"}) and H.stateless({"stateless": True})
+    assert not H.stateless({"template": "ops"}) and not H.stateless(None)
+    assert not H.stateless({"template": "tico-counsel", "stateless": False})
 
 
 def test_a_reader_without_the_file_sees_the_sentence_but_not_the_quote(api, monkeypatch):
@@ -1224,3 +1242,29 @@ def test_two_people_reading_one_version_each_suggest_and_each_finish(api):
                    text="Delete raw logs after 30 days.").status_code == 200
     finish(api, r, attempt)
     assert task_state(api, first["task_id"])["status"] == task_state(api, second["task_id"])["status"] == "done"
+
+
+def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on_session_bot(api):
+    """`session: bot` keys a turn on the bot's one thread, but a stateless bot's task keeps its own session: the server
+    gives the turn its task's lane, links its session and accepts its checkpoint, as the runner keys it."""
+    from backend.tests.test_api import assign, claim, runner
+    with api.app.state.store.transaction() as c:
+        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('tico-counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('tico-counsel', ?, '', 'ana')",
+                  (json.dumps({"template": "tico-counsel", "session": "bot"}),))
+        task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",
+                             "bot:tico-counsel", lint=False)["id"]
+    r = runner(api)
+    with api.app.state.store.read() as c:       # the assignment may already exist (a transfer names its generation)
+        found = c.execute("SELECT generation FROM assignments WHERE bot='tico-counsel'").fetchone()
+    assign(api, r, "tico-counsel", generation=found[0] if found else 0)
+    post(api, "runners/heartbeat", {"version": "test", "platform": "test", "readiness": {"tico-counsel": True},
+                                    "capabilities": ["task_lanes_v2", "session_roots_v1"]}, token=r["token"])
+    turn = claim(api, r, "tico-counsel")
+    assert (turn["lane"], turn["task"]["session_task_id"]) == ("task:" + task, task)
+    post(api, f"attempts/{turn['id']}/started", {"thread_id": "t-counsel"}, token=r["token"])
+    post(api, f"attempts/{turn['id']}/complete", {"outcome": "completed", "last_seq": 0, "text": "Read the clauses."},
+         token=r["token"])
+    assert get(api, "tasks/" + task)["task"]["checkpoint"] == "Read the clauses."
+    with api.app.state.store.read() as c:
+        assert [link["url"] for link in H.task_links(c, task) if link["kind"] == "session"] == ["session:tico-counsel/t-counsel"]

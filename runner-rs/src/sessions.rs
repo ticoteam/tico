@@ -172,13 +172,25 @@ pub fn local_path(config: &crate::config::Config, bot: &str, bot_config: &Value)
 
 pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
     let source = text_of(&config["shared_from"]);
-    let mut lines = vec!["Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string()];
+    // A stateless bot keeps no memory, so the shared memory and lessons lines are not its: it keeps its identity as a
+    // branch, and a sync problem is still its own to resolve (crate::continuity::stateless).
+    let stateless = crate::continuity::stateless(config);
+    let mut lines = Vec::new();
+    if !stateless {
+        lines.push("Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string());
+    }
     if !source.is_empty() {
         lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in hub commands about your own work."));
     }
-    lines.push("Save only lessons about the code, designs and work to the repository, never who asked or one person's preferences, messages or attachments. Commit lessons, then `git pull --rebase` and `git push`, keeping both sides' lessons on a conflict.".into());
+    if !stateless {
+        lines.push("Save only lessons about the code, designs and work to the repository, never who asked or one person's preferences, messages or attachments. Commit lessons, then `git pull --rebase` and `git push`, keeping both sides' lessons on a conflict.".into());
+    }
     if !problem.is_empty() {
-        lines.push(format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts keeping both sides' lessons, and push before reading AGENT.md and memory."));
+        lines.push(if stateless {
+            format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts, and push before doing the work.")
+        } else {
+            format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts keeping both sides' lessons, and push before reading AGENT.md and memory.")
+        });
     }
     lines
 }
@@ -190,7 +202,7 @@ pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
     let problem = text_of(&attempt["branch_sync_problem"]);
     if is_shared(config) {
         let shared = shared_lines(&text_of(&attempt["bot"]), config, &problem);
-        let last = shared.len() - 1;
+        let last = shared.len().saturating_sub(1);
         let mut head: Vec<(Part, String)> = shared
             .into_iter()
             .enumerate()
@@ -208,8 +220,10 @@ pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
             text_of(&session["path"])
         )));
     } else if session.is_object() {
+        // A stateless bot's memory/ and knowledge/ are not committed for it (`finish`), so the line does not say they are.
+        let kept = if crate::continuity::stateless(config) { "" } else { " What you leave uncommitted in memory/ or knowledge/ is committed for you when the turn ends." };
         let mut line = format!(
-            "This task has its own checkout of your repository, `{}` on branch `{}`; your other tasks run at the same time in theirs. Commit here, then `git pull --rebase` and `git push`, which sends to `{}`. What you leave uncommitted in memory/ or knowledge/ is committed for you when the turn ends.",
+            "This task has its own checkout of your repository, `{}` on branch `{}`; your other tasks run at the same time in theirs. Commit here, then `git pull --rebase` and `git push`, which sends to `{}`.{kept}",
             text_of(&session["path"]),
             text_of(&session["branch"]),
             text_of(&session["upstream"])
@@ -419,13 +433,14 @@ pub async fn ensure(main: &Path, path: &Path, task: &str, turn: &Env) -> (String
     made.unwrap_or_else(|f| (String::new(), fault_name(&f)))
 }
 
-/// After a completed turn: commit memory/ and knowledge/ (not `skip`), stamp this lane's unpushed commits with
-/// the run and rebase them onto the upstream. "" or the problem; on a problem the commits stay for the next turn.
-pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String]) -> String {
+/// After a completed turn: commit memory/ and knowledge/ (not `skip`, and only when `memory` is set: a stateless bot's are
+/// left as they are), stamp this lane's unpushed commits with the run and rebase them onto the upstream. "" or the
+/// problem; on a problem the commits stay for the next turn.
+pub async fn finish(path: &Path, aid: &str, turn: &Env, skip: &[String], memory: bool) -> String {
     let env = crate::safegit::committing_environment(turn);
     let timeout = 45;
     let done: Result<String, Fault> = async {
-        let folders: Vec<&str> = MEMORY_FOLDERS.iter().copied().filter(|f| path.join(f).is_dir()).collect();
+        let folders: Vec<&str> = MEMORY_FOLDERS.iter().copied().filter(|f| memory && path.join(f).is_dir()).collect();
         if !folders.is_empty() {
             let mut add = vec!["add", "-A", "--"];
             add.extend(folders.iter());
@@ -1156,7 +1171,7 @@ impl Runner {
         };
         !secret && {
             let _git = self.lanes.git_lock(&place.main_path).lock_owned().await;
-            let problem = finish(session, &aid, env, skipped).await;
+            let problem = finish(session, &aid, env, skipped, !crate::continuity::stateless(&attempt["config"])).await;
             if !problem.is_empty() {
                 log(&format!("Tico runner: {}: task {}'s commits stay in {} ({problem})", place.bot, place.task, session.display()));
             }
