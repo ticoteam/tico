@@ -38,6 +38,7 @@
         "from_person": "human:ana",
         "goal_id": null,
         "guest": null,
+        "holds": [],
         "id": "<task>",
         "important_requesters": 0,
         "internal_requesters": 0,
@@ -69,8 +70,6 @@
         "roles": {},
         "short_id": "<task-short>",
         "size": null,
-        "snoozed_by": null,
-        "snoozed_until": null,
         "stale_asked_at": null,
         "status": "closed",
         "step": {
@@ -127,6 +126,7 @@
         "from_person": "human:ana",
         "goal_id": null,
         "guest": null,
+        "holds": [],
         "id": "<open_task>",
         "important_requesters": 0,
         "internal_requesters": 0,
@@ -158,8 +158,6 @@
         "roles": {},
         "short_id": "<open_task-short>",
         "size": null,
-        "snoozed_by": null,
-        "snoozed_until": null,
         "stale_asked_at": null,
         "status": "open",
         "step": {
