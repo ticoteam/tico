@@ -249,16 +249,30 @@ def _reported(c, prefix, limit=200):
 def harness_denies(c, settings):
     """(bot, command, repositories) for each GitHub write a bot's access allows on a repository other than its own
     but its Claude Code settings deny. Its own repository is left out, so a bot that only reads keeps its denies."""
-    from .bot_tools import listing
+    from .bot_tools import listing, prime_state
     from .github_app import repo_of
+    from .repositories import Reads
+    reported = _reported(c, DENIES_WARNING, limit=500)
+    bots = sorted({bot for bot, _ in reported})
+    # Every bot's configuration, computer, pending requests and tool access, read once for all of them. A failure
+    # here falls back to the per-bot path, where each bot's own failure is skipped as it was before.
+    try:
+        prime_state(c, bots)
+        reads = Reads(c, bots)
+    except Exception:
+        reads = None
+    configs = {}
+    for part in H.chunks(bots):
+        configs.update((r["bot"], r) for r in c.execute(
+            f"SELECT bot,repo,config_json FROM bot_config WHERE bot IN ({','.join('?' * len(part))})", part))
     out = []
-    for bot, rest in _reported(c, DENIES_WARNING, limit=500):
+    for bot, rest in reported:
         prefixes = [p.strip() for p in rest.split(",") if p.strip()]
         try:
-            tools = listing(c, settings, bot)["tools"]
+            tools = listing(c, settings, bot, reads=reads)["tools"]
         except Exception:
             continue
-        row = c.execute("SELECT repo,config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
+        row = configs.get(bot)
         own = str(repo_of((row["repo"] if row else "") or "bot-" + bot, "owner") or "").split("/")[-1].lower()
         mode = H._json(row["config_json"] if row else None, {}).get("repo_access_mode", "own")
         github = [t for t in tools if str(t.get("service") or "").lower() in ("github", "github-app")
