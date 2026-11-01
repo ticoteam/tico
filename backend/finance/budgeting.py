@@ -248,17 +248,26 @@ def _amount(ctx: Ctx, b: B.Budget, versions: Sequence[B.Version], period: tuple[
     return base + B.carry(history)
 
 
+def _precedes(x: B.Budget, y: B.Budget) -> bool:
+    """Whether budget x takes posted lines that x and y could both carry, before y: an active budget before an ended one,
+    then the newer. A replacement takes the spend its ended predecessor used to carry."""
+    return (x.active, x.created_at, x.id) > (y.active, y.created_at, y.id)
+
+
 def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Netted | None = None,
              overlay: tuple[str, str, str, int] | None = None) -> list[tuple[str, str, int]]:
     """What allocations on these budgets still reserve, as (budget id, target, amount): each one's amount less what its
     target used under it, never below zero. A target's use (its holds, settled holds, for a teammate their posted
     lines, for a card its entries in the ledger) draws down only the nearest allocation for that target above it,
-    never every one up the tree. `overlay` (budget id, target kind, target id, amount) reads one allocation as it would
-    stand: it replaces the stored row or adds one, and 0 is no row (reserve_growth)."""
+    never every one up the tree. Two allocations for one teammate whose scopes overlap without nesting can carry the
+    same posted lines: the one that takes precedence (`_precedes`) draws them and the other draws only the rest, so a
+    line is drawn once. Those rivals can sit outside `budget_ids`, so every allocation is read. `overlay` (budget id,
+    target kind, target id, amount) reads one allocation as it would stand: it replaces the stored row or adds one, and
+    0 is no row (reserve_growth)."""
     budgets = ctx.budgets()
     allocs = [(str(r["budget_id"]), str(r["target_kind"]), str(r["target_id"]), int(r["amount"]))
-              for r in SB.allocations(ctx.c, budget_ids)]
-    if overlay is not None and overlay[0] in budget_ids:
+              for r in SB.allocations(ctx.c, list(budgets))]
+    if overlay is not None:
         allocs = [r for r in allocs if r[:3] != overlay[:3]] + ([overlay] if overlay[3] > 0 else [])
     by_target: dict[str, list[tuple[str, int]]] = {}
     for bid, kind, tid, amount in allocs:
@@ -266,11 +275,23 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
         # are lowered or cancelled (spec 4.4). Only a new set-aside on an ended budget is refused (allocation_plan).
         if bid in budgets:
             by_target.setdefault(f"{kind}:{tid}", []).append((bid, amount))
+    wanted = set(budget_ids)
     out: list[tuple[str, str, int]] = []
     for target, rows in by_target.items():
+        if not any(bid in wanted for bid, _ in rows):
+            continue
         kind, _, tid = target.partition(":")
         on = {bid for bid, _ in rows}
         used: dict[str, int] = {}
+
+        def rivals(bid: str, on: set[str] = on, kind: str = kind) -> list[str]:
+            """The other allocations for this teammate that can carry `bid`'s posted lines: scopes that overlap, neither
+            nested in the other (nesting is the nearest-allocation rule), and taking precedence over `bid`."""
+            if kind != "teammate":
+                return []
+            mine = budgets[bid]
+            return [r for r in on if r != bid and _precedes(budgets[r], mine) and r not in subtree(ctx, bid)
+                    and bid not in subtree(ctx, r) and B.overlaps(budgets[r], mine, ctx.accounts, ctx.org)]
 
         def usage(bid: str, used: dict[str, int] = used, target: str = target, kind: str = kind, tid: str = tid) -> int:
             if bid not in used:
@@ -278,10 +299,18 @@ def _reserve(ctx: Ctx, budget_ids: Sequence[str], start: str, end: str, read: Ne
                 total = SB.target_used(ctx.c, tree, start, end, target, absorbed=kind != "teammate")
                 if read is not None:
                     total -= settled_used(ctx, read, tree, start, end, target, absorbed=kind != "teammate")
-                used[bid] = total + (actual(ctx, budgets[bid], start, end, teammate=tid, read=read)
-                                     if kind == "teammate" else 0)
+                if kind == "teammate":
+                    own = actual(ctx, budgets[bid], start, end, teammate=tid, read=read)
+                    taken = rivals(bid)
+                    if taken:
+                        drawn = sum(actual(ctx, budgets[r], start, end, teammate=tid, read=read) for r in taken)
+                        own = max(0, own - drawn)
+                    total += own
+                used[bid] = total
             return used[bid]
         for bid, amount in rows:
+            if bid not in wanted:
+                continue
             under = [x for x in subtree(ctx, bid)[1:] if x in on]
             nearest = [x for x in under if not any(y != x and x in subtree(ctx, y) for y in under)]
             out.append((bid, target, max(0, amount - usage(bid) + sum(usage(x) for x in nearest))))

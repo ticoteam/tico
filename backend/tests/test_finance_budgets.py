@@ -606,3 +606,21 @@ def test_a_set_aside_on_a_parent_counts_a_child_hold_once(books):
         assert (s.held, s.remaining) == (7_000, 3_000), s
         over = act(c, OWNER, "allocation_set", {**ask, "amount": 10_001}, dry_run=True)
         assert over.code == "invalid" and "3000 left" in over.reason, over
+
+
+def test_one_expense_draws_one_allocation_when_a_child_is_replaced(books):
+    """Eve has 5,000 set aside on Software's Web child; that child ends and a replacement Web child sets aside 5,000 for her
+    too. Her 5,000 Web expense is one spend, so it draws one of the two set-asides: Software has 0 left (10,000 = 5,000
+    spent + 5,000 set aside). It used to draw both, and Software showed 5,000 left."""
+    with books.transaction() as c:
+        pid, kids = _tree(c, 10_000, (("web", 5_000),))
+        assert act(c, OWNER, "allocation_set", {"budget_id": kids["web"], "target_kind": "teammate",
+                                                 "target_id": "human:eve", "amount": 5_000}).status == "committed"
+        assert act(c, OWNER, "budget_update", {"budget_id": kids["web"], "active": False}).status == "committed"
+        new = act(c, OWNER, "budget_create", {"name": "Software web", "account_id": account(c, "6100"), "amount": 5_000,
+                                               "team": "web", "parent_id": pid, "at_limit": "decline"})
+        assert new.status == "committed", new
+        assert act(c, OWNER, "allocation_set", {"budget_id": str(new.result["budget_id"]), "target_kind": "teammate",
+                                                 "target_id": "human:eve", "amount": 5_000}).status == "committed"
+        spend(c, "6100", 5_000, team="web", teammate="human:eve")
+        assert FA.budget_state(c, pid, AT).remaining == 0
