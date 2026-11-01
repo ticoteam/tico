@@ -126,7 +126,7 @@ def _location_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str
         out["parent_id"] = RS.resolve(ctx.c, "locations", parent) if parent else None
     if create or "customer_id" in p:
         customer = V.opt_text(p, "customer_id", 80) or ""
-        out["customer_id"] = record_customer(ctx, who, customer) if customer else None
+        out["customer_id"] = record_customer(ctx, who, customer, holder=who in ctx.org.bots) if customer else None
     if create or "address" in p:
         address = V.obj(p.get("address") or {}, "an address")
         if any(not isinstance(v, str) or len(v) > 200 for v in address.values()) or len(address) > 10:
@@ -145,7 +145,7 @@ def _project_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str,
         out["status"] = RC.choice(V.opt_text(p, "status", 20) or "open", RC.PROJECT_STATUSES, "a project status")
     if create or "customer_id" in p:
         customer = V.opt_text(p, "customer_id", 80) or ""
-        out["customer_id"] = record_customer(ctx, who, customer) if customer else None
+        out["customer_id"] = record_customer(ctx, who, customer, holder=who in ctx.org.bots) if customer else None
     if not create:
         out.update(_archive_flag(ctx, p))
     return out
@@ -153,14 +153,6 @@ def _project_fields(ctx: Ctx, who: str, p: V.Payload, create: bool) -> dict[str,
 
 def _mirrored(ctx: Ctx) -> bool:
     return ctx.book.mode == "mirror"
-
-
-def _hides_item(ctx: Ctx, who: str, item: Any) -> bool:
-    """Whether the item names an account the asker's view does not cover. Its price and accounts are then not theirs to
-    see, so the item is not found to them, as a missing one is, whatever they ask to change."""
-    view = ctx.view(who)
-    return any(account is not None and not view.sees_account(account) for account in
-               (ctx.accounts.get(str(item[key] or "")) for key, _ in mirror.ITEM_ACCOUNTS))
 
 
 def _create(ctx: Ctx, who: str, aid: str, op: str, table: str, record_id: str, fields: dict[str, object],
@@ -214,7 +206,7 @@ def _books_kind_change(old: str, new: str) -> None:
 def item_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
     V.only(p, ("item_id", *ITEM_FIELDS, "active"))
     old = RR.get(ctx.c, "items", V.text(p, "item_id", 80))
-    if old is None or _hides_item(ctx, who, old):
+    if old is None:
         raise FinanceError(NOT_FOUND, "no such item")
     if who in ctx.org.bots and old["archived_at"] is not None:
         raise invalid("a bot cannot change an archived item: a person unarchives it first")

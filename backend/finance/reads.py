@@ -1623,7 +1623,7 @@ def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at:
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
     source = SM.record_providers(c, RECORD_TABLE[kind], [str(row["id"])]).get(str(row["id"]), "tico")
-    due = RD.next_due_for(c, "equipment", [str(row["id"])]) if kind == "equipment" else {}
+    due = RD.next_due_for(c, kind, [str(row["id"])]) if kind in ("location", "equipment") else {}
     return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]), due=due)}
 
 
