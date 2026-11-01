@@ -1001,6 +1001,16 @@ def synchronous(default):
 WAL_SIZE_LIMIT = 64 * 1024 * 1024
 
 
+def leave_wal_for_litestream(conn):
+    """Keep the -wal file on disk when this connection closes, instead of folding it into the database and deleting it.
+
+    SQLite's last close normally checkpoints and deletes the WAL. Litestream resumes from its place in that file, so
+    a WAL deleted on every stop makes every start upload the whole database. Checkpoints while the server runs still
+    keep the WAL small (journal_size_limit). Explicit `PRAGMA wal_checkpoint` calls are unaffected. Needs Python 3.12+."""
+    conn.setconfig(sqlite3.SQLITE_DBCONFIG_NO_CKPT_ON_CLOSE, True)
+    return conn
+
+
 def connect(path=None, adopt_legacy=False):
     """Open (and if need be create) hub.db. WAL, foreign keys on, migrations applied.
 
@@ -1015,7 +1025,7 @@ def connect(path=None, adopt_legacy=False):
     # the sweeps' freed pages can go back to the disk (store.reclaim_free_pages). An existing file keeps its mode;
     # changing that needs a VACUUM.
     fresh = str(target) == ":memory:" or not target.exists() or target.stat().st_size == 0
-    conn = sqlite3.connect(str(target), timeout=30, isolation_level=None)
+    conn = leave_wal_for_litestream(sqlite3.connect(str(target), timeout=30, isolation_level=None))
     conn.row_factory = sqlite3.Row
     if fresh:
         conn.execute("PRAGMA auto_vacuum=INCREMENTAL")

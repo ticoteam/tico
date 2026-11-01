@@ -1084,6 +1084,7 @@ class Store:
     def connect(self, factory=None, check_same_thread=True):
         c = sqlite3.connect(str(self.settings.db_path), timeout=WRITE_WAIT, isolation_level=None,
                             factory=factory or self.factory, check_same_thread=check_same_thread)
+        H.leave_wal_for_litestream(c)
         c.row_factory = sqlite3.Row
         c.execute("PRAGMA foreign_keys=ON")
         # A writer waits out a backup checkpoint or another process's pass, but not so long that requests pile up
