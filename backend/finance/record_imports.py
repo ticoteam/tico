@@ -25,10 +25,10 @@ from ..records import csvimport as CI
 from ..records import due_dates as RDD
 from ..records import reads as RR
 from . import actions as finance
+from . import tab_ap as TAP
 from .books_link import LABEL
 from .context import Ctx, load
 from .core import kinds as K
-from .core import rights as R
 from .core.errors import DENIED, INVALID, NOT_AVAILABLE, NOT_FOUND, FinanceError
 from .store import actions as SX
 from .store import ap as SAP
@@ -136,8 +136,8 @@ class Names:
     assignee by its teammate's name. A name that two records hold is refused, since the row would not say which one it
     means. Each list is read once per import."""
 
-    def __init__(self, c: sqlite3.Connection, book_id: str) -> None:
-        self.c, self.book_id = c, book_id
+    def __init__(self, c: sqlite3.Connection, ctx: Ctx, actor: str) -> None:
+        self.c, self.ctx, self.book_id, self.view = c, ctx, ctx.book.id, ctx.view(actor)
         self._by_name: dict[str, dict[str, list[str]]] = {}
         self._labels: dict[str, str] = {}                  # record id -> its name, for the names a row is close to
         self._added: dict[str, tuple[int, str]] = {}       # match key -> (line, name) of a customer this file adds
@@ -149,7 +149,7 @@ class Names:
             elif what == "equipment":
                 pairs = [(str(r[0]), str(r[1])) for r in RR.active_equipment(self.c)]
             else:
-                kinds = ("customer", "both") if what == "customer" else ("vendor", "customer", "both")
+                kinds = ("customer", "both") if what == "customer" else self._contact_kinds()
                 pairs = [(str(r[0]), str(r[1])) for r in SAP.active_contacts(self.c, self.book_id, kinds)]
             table: dict[str, list[str]] = {}
             for record_id, name in pairs:
@@ -157,6 +157,13 @@ class Names:
                 table.setdefault(CI.match_key(name), []).append(record_id)
             self._by_name[what] = table
         return self._by_name[what]
+
+    def _contact_kinds(self) -> tuple[str, ...]:
+        """The contact kinds a row may name. A vendor is named only to a viewer who sees bills (tab_ap), so a row close to
+        a vendor's name is never told which vendor it is. Any records holder names a customer (catalog.record_customer)."""
+        if TAP.sees_contact_kind(self.ctx, self.view, "vendor"):
+            return ("vendor", "customer", "both")
+        return ("customer", "both")
 
     def find(self, what: str, text: str) -> str:
         hits = self._table(what).get(CI.match_key(text), [])
@@ -283,12 +290,10 @@ def _id_in(result: Mapping[str, Any]) -> str:
 
 
 def _available(ctx: Ctx, actor: str, record_type: str, kind: str) -> None:
-    """Refuses the whole file when its action is not on this install or the teammate lacks the records right (plan §3)
-    or the action's own right."""
+    """Refuses the whole file when its action is not on this install, or the teammate may not ask for it (plan §3). A
+    bot without the right is not refused: its rows wait for an approval, as its hand entry does (test_x13)."""
     if kind not in K.LIVE:
         raise FinanceError(NOT_AVAILABLE, f"importing {record_type} is not available on this install yet")
-    if not R.has(ctx.org, actor, R.RECORDS, ctx.rights(actor)):
-        raise FinanceError(DENIED, "importing records needs finance.records")
     gate = K.authority(ctx.org, actor, kind, ctx.rights(actor))
     if gate is not None and gate.outcome == "deny":
         raise FinanceError(DENIED, f"importing {record_type} needs {gate.rule.removeprefix('right:')}")
@@ -346,6 +351,25 @@ def _books_name(c: sqlite3.Connection, ctx: Ctx) -> str:
     return LABEL.get(str(row[0]), "your books") if row else "your books"
 
 
+STAGE = "import_stage"          # the savepoint a preview adds a new customer in, then undoes
+
+
+def _check(c: sqlite3.Connection, actor: str, kind: str, payload: Mapping[str, object], key: str,
+           adds: str) -> finance.ActionResult:
+    """The row's dry run. A customer the row adds is added for real inside a savepoint, so the row's own checks see its
+    id; the savepoint is then undone, so a preview writes nothing and fires no after-commit hook."""
+    if not adds:
+        return finance.act(c, actor, kind, payload, key, dry_run=True)
+    mark = finance.savepoint(c, STAGE)
+    try:
+        staged = finance.act(c, actor, "contact_create", {"name": adds, "kind": "customer"}, _customer_key(adds))
+        if staged.status == "committed":
+            payload = {**payload, "customer_id": _id_in(staged.result)}
+        return finance.act(c, actor, kind, payload, key, dry_run=True)
+    finally:
+        finance.undo(c, STAGE, mark)
+
+
 def _line(c: sqlite3.Connection, ctx: Ctx, actor: str, record_type: str, spec: RecordType, row: CI.Row, names: Names,
           keys: Keys, fill: Mapping[str, str]) -> Line:
     name = row.cells.get("name", "")
@@ -377,7 +401,7 @@ def _line(c: sqlite3.Connection, ctx: Ctx, actor: str, record_type: str, spec: R
                            dry_run=True)
         if made.status != "committed":
             return Line(row.line, name, "error", made.reason or _customer_waits(adds), key=key)
-    checked = finance.act(c, actor, spec.kind, payload, key, dry_run=True)
+    checked = _check(c, actor, spec.kind, payload, key, adds)
     if checked.status in ("denied", "failed"):
         return Line(row.line, name, "denied" if checked.status == "denied" else "error", checked.reason)
     natural = natural_key(record_type, payload)
@@ -391,6 +415,9 @@ def _line(c: sqlite3.Connection, ctx: Ctx, actor: str, record_type: str, spec: R
                     f"customer {customer.name} is close to {customer.near_name}: a person decides",
                     matches=customer.near, payload=payload, key=key, new_customer=adds)
     keys.take(natural, row.line)
+    if checked.status == "needs_approval":
+        return Line(row.line, name, "needs_approval", reason="needs an approval first", payload=payload, key=key,
+                    new_customer=adds)
     if adds:
         names.added(adds, row.line)
         return Line(row.line, name, "new", reason=f"adds customer {adds}", payload=payload, key=key, new_customer=adds)
@@ -405,7 +432,7 @@ def _classify(c: sqlite3.Connection, actor: str, record_type: str, text: str,
         raise FinanceError(INVALID, "a record type is locations, items, equipment or due_dates")
     ctx = load(c)
     _available(ctx, actor, record_type, spec.kind)
-    names = Names(c, ctx.book.id)
+    names = Names(c, ctx, actor)
     fill = _assignment(record_type, spec, names, assign)
     rows, ignored = CI.read(text, spec.columns, spec.required)
     keys = Keys(c, record_type)
@@ -435,11 +462,13 @@ def preview(c: sqlite3.Connection, actor: str, record_type: str, text: str, assi
 
 def commit(c: sqlite3.Connection, actor: str, record_type: str, text: str, assign: Mapping[str, str],
            include: frozenset[int]) -> dict[str, Any]:
-    """Import the file. Each new line, and each possible duplicate named in `include`, becomes one Finance action."""
+    """Import the file. Each new line, each line a preview held for approval, and each possible duplicate named in
+    `include` becomes one Finance action."""
     spec, lines, ignored = _classify(c, actor, record_type, text, assign)
     made: dict[str, str] = {}                       # match key -> the customer id this file added for it
     for line in lines:
-        if line.status == "new" or (line.status == "possible_duplicate" and line.line in include):
+        held = line.status == "needs_approval" and line.payload is not None      # a stored line carries no payload
+        if line.status == "new" or held or (line.status == "possible_duplicate" and line.line in include):
             _commit(c, actor, spec, line, made)
     return _answer(record_type, spec.kind, lines, ignored)
 
