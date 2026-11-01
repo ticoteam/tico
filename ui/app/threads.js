@@ -12,6 +12,8 @@ const THREADS_SIDE_MAX = 10;
 const THREADS = {on: null, attention: [], threads: [], dms: [], loading: null, wired: false};
 
 const threadHref = t => THREAD_ROUTE + encodeURIComponent(typeof t === 'string' ? t : t?.id || '');
+// Other pages link a thread by this (a top-level const is not a window property; the dashboard's cards look for it there).
+window.threadHref = threadHref;
 const threadIsDm = t => t?.audience === 'personal' || t?.audience === 'participants';
 const threadPrivate = t => ['members', 'personal', 'participants', 'meeting'].includes(t?.audience);
 // The other members of a DM, newest server first; the viewer is left out.
