@@ -356,6 +356,7 @@ async function pageBot(slug, tab) {
   const work = botTabs(slug).filter(t => BOT_WORK_TABS.includes(t));
   const base = `#/bot/${encodeURIComponent(slug)}`;
   const tabsShown = [...work, 'info'];
+  const talkTabs = work.filter(t => t === 'home' || t === 'dm');
   // The goal leads the page; chat and tasks sit side by side under it on a
   // desktop. Narrower, the top line holds the bot and Chat · Tasks · Info; configuration has its own tabs.
   // On a phone the goal and the extra controls move into Info (placeBotHead). A status shows
@@ -381,7 +382,9 @@ async function pageBot(slug, tab) {
 
   <div class="bot-work" id="bot-work">
   <div id="pane-chat" hidden>
-    ${limited ? '' : `<a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a>`}
+    ${limited ? '' : `<div class="bot-talk-bar">${talkTabs.length > 1 ? `<div class="bot-talk-switch" role="tablist" aria-label="Home or DM">${talkTabs.map(t =>
+      `<button type="button" role="tab" data-talk="${t}">${BOT_TAB_LABELS[t]}</button>`).join('')}</div>` : ''}<span class="spacer"></span>
+      <a class="bot-threads-link" href="${THREADS_ROUTE}?with=${encodeURIComponent('bot:' + slug)}">Threads with ${esc(e.display_name || slug)}</a></div>`}
     <div class="bot-thread" id="bot-thread"></div>
   </div>
 
@@ -494,6 +497,12 @@ async function pageBot(slug, tab) {
   $('#btabs').onclick = ev => {
     const b = ev.target.closest('[data-bt]'); if (!b) return;
     location.hash = b.dataset.bt === work[0] ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.bt}`;
+  };
+  // Wide, the top tabs give way to Home and DM beside Tasks; this switch picks which one the left side shows.
+  const talk = $('#pane-chat .bot-talk-switch');
+  if (talk) talk.onclick = ev => {
+    const b = ev.target.closest('[data-talk]'); if (!b) return;
+    location.hash = b.dataset.talk === work[0] ? `#/bot/${slug}` : `#/bot/${slug}/${b.dataset.talk}`;
   };
   // "The back arrow in a bot should always go back to home. Not previous page."
   $('#bot-back-arrow').onclick = () => { location.hash = UPDATES; };   // home
@@ -658,6 +667,7 @@ function showBotTab(tab) {
   // Home or DM on the left: the one asked for, else (Tasks beside it) the last one shown, else the first.
   if (chat) botThreadShow(view === 'home' || view === 'dm' ? view : talk.includes(BOT.thread?.kind) ? BOT.thread.kind : talk[0]);
   else botThreadStop();
+  $('#pane-chat').querySelectorAll('[data-talk]').forEach(b => { const on = b.dataset.talk === BOT.thread?.kind; b.classList.toggle('cur', on); b.setAttribute('aria-selected', String(on)); });
   const once = (key, fn) => { if (!BOT.loaded.has(key)) { BOT.loaded.add(key); fn(BOT.slug); } };
   if (split || view === 'tasks') {
     once('tasks', isKeeper(BOT.slug) ? loadBotTasksV2 : loadBotIssues);

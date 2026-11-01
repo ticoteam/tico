@@ -53,7 +53,7 @@ const timeline = {
 const homes = {'bot:ops': 'h-ops', 'human:bea': 'h-bea', 'group:ops': ''};
 
 async function open(browser, who, {phone = false} = {}) {
-  const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block',
+  const page = await browser.newPage({viewport: phone ? {width: 390, height: 844} : {width: 1300, height: 860}, serviceWorkers: 'block', reducedMotion: 'reduce',
     ...(phone ? {isMobile: true, hasTouch: true} : {})});
   const seen = {errors: [], posts: [], reads: [], homes: []};
   page.on('pageerror', e => seen.errors.push(e.message));
@@ -171,8 +171,12 @@ async function shot(page, name) {
     assert.ok(!tabs.includes('chat'));
     assert.equal(await page.locator('.bot-threads-link').getAttribute('href'), '#/threads?with=bot%3Aops');
     await shot(page, 'bot-home-desktop');
-    await page.locator('#btabs [data-bt="dm"]').click();
+    // Wide, the top tabs give way to Tasks beside the thread; the switch above the thread picks Home or DM.
+    assert.equal(await page.locator('#pane-chat [data-talk="home"]').getAttribute('aria-selected'), 'true');
+    await page.locator('#pane-chat [data-talk="dm"]').click();
+    await page.waitForFunction(() => location.hash === '#/bot/ops/dm');
     await page.locator('#bot-thread .thv-composer .p-text').waitFor();
+    assert.equal(await page.locator('#pane-chat [data-talk="dm"]').getAttribute('aria-selected'), 'true');
     await shot(page, 'bot-dm-desktop');
 
     // A person's Home under their profile, with the update card.
@@ -204,6 +208,7 @@ async function shot(page, name) {
     assert.ok(!tabs.includes('home'), 'no Home without Read: ' + tabs);
     assert.ok(!tabs.includes('dm'), 'no DM without Write: ' + tabs);
     assert.equal(await page.locator('.bot-threads-link').count(), 0);
+    assert.equal(await page.locator('#pane-chat [data-talk]').count(), 0);
     assert.ok(!seen.homes.includes('bot:ops'), 'the Home is never asked for');
     await shot(page, 'bob-bot-desktop');
     assert.deepEqual(seen.errors, []);

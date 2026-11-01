@@ -135,8 +135,14 @@ a.th-who:hover{text-decoration:underline}
 
 /* the bot page: Home and DM fill the pane; the link to every thread with the bot sits quietly above */
 #main.bot-chat-layout #pane-chat>.bot-thread{display:flex;flex:1;flex-direction:column;min-height:0;width:100%;max-width:var(--read-width);margin:0 auto}
-.bot-threads-link{align-self:flex-end;margin:0 0 4px;color:var(--muted);font-size:var(--t-sm)}
-#main.bot-chat-layout #pane-chat>.bot-threads-link{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto;text-align:right}
+.bot-talk-bar{display:flex;align-items:center;gap:8px;margin:0 0 4px}
+.bot-talk-bar .spacer{flex:1}
+#main.bot-chat-layout #pane-chat>.bot-talk-bar{width:100%;max-width:var(--read-width);margin-left:auto;margin-right:auto}
+.bot-talk-switch{display:none;gap:2px;padding:2px;border:1px solid var(--line);border-radius:9px;background:var(--surface2)}
+.bot-talk-switch button{border:0;border-radius:7px;background:none;padding:3px 10px;color:var(--muted);font-weight:600;font-size:var(--t-sm);cursor:pointer}
+.bot-talk-switch button.cur{background:var(--raised);color:var(--ink);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+@media (min-width:1100px){.bot-talk-switch{display:flex}}
+.bot-threads-link{color:var(--muted);font-size:var(--t-sm)}
 .bot-threads-link:hover{color:var(--ink)}
 
 /* a person's or a team's Home */
