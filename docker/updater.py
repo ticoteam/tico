@@ -198,6 +198,29 @@ class Unsettled(RuntimeError):
     already accepted (an accepted stop runs to its end), so what that command does to the containers is unknown."""
 
 
+def timed_out(exc):
+    """A Docker call that ran past its limit, or a changing command that did (Unsettled wraps that timeout)."""
+    return isinstance(exc, Stalled) or isinstance(exc.__cause__, Stalled)
+
+
+def kept_note(what, exc):
+    """The note for a start after the new version is healthy that did not finish. Docker may still act on a command
+    that did not report back, so an Unsettled start says so."""
+    return "Updated, but %s: %s.%s" % (what, exc, " It may still start." if isinstance(exc, Unsettled) else "")
+
+
+def start_after_healthy(notes, what, name, action, *args):
+    """Starts a front door or tunnel once the new version is healthy. A timeout is kept and named in notes: a rollback
+    would put back the database snapshot and lose what was written since the update. Any other failure still rolls back."""
+    try:
+        with step(name):
+            action(*args)
+    except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+        if not timed_out(exc):
+            raise
+        notes.append(kept_note(what, exc))
+
+
 def compose(*args, tag=None, timeout=600, extra_env=None):
     env = {**os.environ, **({"TICO_TAG": tag} if tag else {}), **(extra_env or {})}
     files = ["-f", os.path.join(PROJECT, COMPOSE_FILE)] if COMPOSE_FILE else []
@@ -487,11 +510,9 @@ def restore_bundle():
 
 
 def other_services():
-    """Services of the (new) compose file that follow the release, except the one being moved and this updater."""
-    try:
-        names = compose("config", "--services").split()
-    except RuntimeError:
-        return []
+    """Services of the (new) compose file that follow the release, except the one being moved and this updater.
+    A call that runs over raises, so the update names it instead of starting nothing without a word."""
+    names = compose("config", "--services").split()
     return [n for n in names if n not in (SERVICE, "updater")]
 
 
@@ -700,8 +721,9 @@ sync_dir(folder)
 def database_note():
     """The note ' on a N GB database' for a status message, from the live database; '' when Docker cannot say."""
     try:
-        size = int(compose("exec", "-T", SERVICE, "python", "-c", "import os; print(os.path.getsize('/data/hub.sqlite'))",
-                           timeout=INSPECT_SECONDS).strip())
+        size = int(compose("exec", "-T", SERVICE, "python", "-c",
+                           "import os; p = '/data/hub.sqlite'; print(sum(os.path.getsize(f) for f in (p, p + '-wal') if os.path.exists(f)))",
+                           timeout=INSPECT_SECONDS).strip())   # the write-ahead log is part of what the snapshot copies
     except (RuntimeError, OSError, ValueError, subprocess.SubprocessError):
         return ""
     return " on a %.1f GB database" % (size / 1024 ** 3)
@@ -1079,12 +1101,11 @@ def update(version, running=""):
                 raise RuntimeError(("the runner" if MODE == "runner" else "the server") + " did not come up healthy within %d seconds" % HEALTH_SECONDS)
             with step("Checking the new version"):
                 check_switched(version, target)
+            notes = []   # the new version is healthy from here: what fails after this is named, and a timeout is kept
             if caddy:
-                with step("Starting the front door"):
-                    reconcile_caddy(version)
+                start_after_healthy(notes, "the front door did not start", "Starting the front door", reconcile_caddy, version)
             if tunnel:
-                with step("Starting the tunnel"):
-                    reconcile_tunnel(version)
+                start_after_healthy(notes, "the tunnel did not start", "Starting the tunnel", reconcile_tunnel, version)
         except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
             unsettled = isinstance(exc, Unsettled)
             restoring = False
@@ -1132,7 +1153,6 @@ def update(version, running=""):
             return
         # The new version is up and healthy from here on: a step that fails is said, never rolled back.
         remember(version)
-        notes = []
         try:
             with step("Removing old images"):
                 prune_images(keep={version, previous, release_name(version), release_name(previous)}, keep_ids={image_id})
@@ -1140,14 +1160,20 @@ def update(version, running=""):
             notes.append("Updated, but old images were not removed: %s." % exc)
         if bundled and MODE == "server":
             # Slack, the front door and anything new follow the new compose file; the updater itself stays put.
-            for name in other_services():
+            try:
+                with step("Reading the server's services"):
+                    names = other_services()
+            except (RuntimeError, OSError, subprocess.SubprocessError) as exc:
+                notes.append(kept_note("the other services did not start", exc))
+                names = []
+            for name in names:
                 if name == "caddy" or name in tunnel:   # front doors were reconciled above; do not enable another profile
                     continue
                 try:
                     with step("Starting %s" % name):
                         compose("up", "-d", "--no-deps", name, tag=version)
                 except RuntimeError as exc:
-                    notes.append("Updated, but %s did not restart: %s." % (name, exc))
+                    notes.append(kept_note("%s did not restart" % name, exc))
         message = " ".join(notes)
         set_status(state="healthy", message=message, settle_tag="", settle_outcome="", settle_caddy=False, settle_tunnel=False)
         save_status()

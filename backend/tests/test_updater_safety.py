@@ -534,6 +534,52 @@ def test_a_service_that_does_not_restart_after_a_healthy_update_is_named_and_the
     monkeypatch.setattr(updater, "docker_run", stall)
     updater.update("v0.2.0")
     assert updater.status["state"] == "healthy"
-    assert updater.status["message"] == "Updated, but slack did not restart: Starting slack exceeded 600 seconds."
+    assert updater.status["message"] == "Updated, but slack did not restart: Starting slack exceeded 600 seconds. It may still start."
     assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]     # the new version is still running
 
+
+def test_a_service_list_that_runs_over_after_a_healthy_update_is_named_and_the_update_is_kept(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "selected_caddy", lambda: False)
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "--services" in argv:
+            raise updater.Stalled(argv, timeout)   # the service list read after the switch, not the one before it
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    assert updater.status["message"] == "Updated, but the other services did not start: Reading the server's services exceeded 600 seconds."
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
+
+
+def test_a_front_door_start_that_runs_over_after_a_healthy_update_is_named_and_the_snapshot_is_not_restored(monkeypatch, tmp_path):
+    updater = load(monkeypatch, "", tmp_path)
+    docker = Moby(updater, monkeypatch, lambda argv, tag, n: False)
+    monkeypatch.setattr(updater, "healthy", lambda seconds: True)
+    monkeypatch.setattr(updater, "BUNDLE", "always")
+    monkeypatch.setattr(updater, "fetch_bundle", lambda release, into: {})
+    monkeypatch.setattr(updater, "tunnel_services", lambda: [])
+    monkeypatch.setattr(updater, "selected_caddy", lambda: True)
+    monkeypatch.setattr(updater, "other_services", lambda: [])
+    monkeypatch.setattr(updater, "containers_of_service", lambda service: {})
+    run = docker.run
+
+    def stall(argv, env=None, timeout=None, **kw):
+        if "--force-recreate" in argv:
+            raise updater.Stalled(argv, timeout)   # the front door's recreate runs past its limit
+        return run(argv, env=env, timeout=timeout, **kw)
+    monkeypatch.setattr(updater, "docker_run", stall)
+    updater.update("v0.2.0")
+    assert updater.status["state"] == "healthy"
+    limit = updater.HEALTH_SECONDS + updater.INSPECT_SECONDS   # the front door's recreate limit
+    assert updater.status["message"] == ("Updated, but the front door did not start: Starting the front door exceeded %d seconds."
+                                         " It may still start." % limit)
+    assert updater.status["restored"] is False and docker.restored == []   # no rollback, so no snapshot restore
+    assert [docker.containers[c]["tag"] for c in docker.live()] == ["v0.2.0"]
