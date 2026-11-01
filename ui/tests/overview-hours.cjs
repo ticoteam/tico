@@ -44,9 +44,12 @@ const answer = (over = {}) => ({zone: 'America/Los_Angeles', now: '2026-10-14T19
     });
     await page.goto('http://tico-ui.test/');
     await page.waitForFunction(() => location.hash === '#/updates');
-    await page.evaluate(() => location.hash = '#/overview');
+    await page.evaluate(() => location.hash = '#/overview/campus');
     const card = page.locator('#overview-hours');
     await card.locator('.ovh-plot').waitFor();
+    // A pointer moved while the page change still fades (150 ms) reaches the page when the fade ends; these hovers
+    // read the tip at once, so they start after it.
+    await page.waitForFunction(() => !document.querySelector(':root:active-view-transition'));
 
     // The headline, one decimal below 10; the Parity line dashed at 1×; the current week dotted, a hollow point.
     assert.equal(await card.locator('.ovh-head').innerText(), '6.1× bot hours per human hour · last 7 days');

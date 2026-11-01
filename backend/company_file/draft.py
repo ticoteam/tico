@@ -27,6 +27,9 @@ TEMPLATES = {role["slug"] for role in ROLES}
 # Seats the company models place before Tico has a template for them: "No bot yet", and a person can hold one.
 SEATS = _load("seats.json")["seats"]
 OPEN_SEATS = {seat["slug"] for seat in SEATS}
+# Retired templates a saved draft may still name. The built-in that replaced each one comes with every install, so a seat
+# for it that is not built yet leaves the draft quietly instead of refusing the whole draft (`check`).
+RETIRED = {"bookkeeping"}
 # The company models a chart starts from (model_<key>.json), in the order the setup chat tries them: the first whose
 # `picks_when` signal the company has, else Everything. On-site work comes before services, so a cleaning company that
 # also sells its hours is a local service business.
@@ -59,7 +62,9 @@ URL = re.compile(r"https?://\S+", re.I)
 YEARS = (1990, 2100)
 BOT_FIELDS = ("id", "template", "title", "dept", "lead", "core", "reason", "start", "routine", "tools", "about", "runtime",
               "existing")
-BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person")
+# `team` is the name of the group a bot or seat goes in when the file is imported (backend/company_import.py). Absent or
+# blank, the group is the one its template belongs to, as it always was.
+BOT_OPTIONAL = ("isNew", "reports_to", "first_job", "person", "team")
 PERSON_FIELDS = ("id", "name", "role", "dept", "owner")
 # A goal's measure, as the page keeps it (format 0.2): up or down toward a target by a deadline, or a range to stay in.
 # `measure` "" is not set yet.
@@ -253,6 +258,10 @@ def _bot(raw, at):
         bot["person"] = _id(raw["person"], field + ".person")
     if raw.get("first_job") and not bot["existing"]:
         bot["first_job"] = _text(raw["first_job"], field + ".first_job", LIMITS["first_job"])
+    if raw.get("team") is not None:
+        team = _text(raw["team"], field + ".team", LIMITS["team"]).strip()
+        if team:
+            bot["team"] = team
     if bot["existing"]:
         # An agent the visitor already runs keeps its own schedule and work: the file holds no start, routine, tools
         # or first job for it, so the draft doesn't either.
@@ -507,7 +516,9 @@ def check(raw, snapshot=False):
                     "about": _text(company["about"], "company.about", LIMITS["about"]),
                     "signals": _choices(company["signals"], "company.signals", SIGNALS)},
         "people": [_person(p, i) for i, p in enumerate(_list(raw["people"], "people", LIMITS["people"]))],
-        "bots": [_bot(b, i) for i, b in enumerate(_list(raw["bots"], "bots", LIMITS["bots"]))],
+        "bots": [_bot(b, i) for i, b in enumerate(b for b in _list(raw["bots"], "bots", LIMITS["bots"])
+                                                   if not (isinstance(b, dict) and b.get("template") in RETIRED
+                                                           and not b.get("existing")))],
         "goals": [_goal(g, i) for i, g in enumerate(_list(raw["goals"], "goals", LIMITS["goals"]))],
         "rules": {"mode": rules["mode"], "never": [r for r in RULES if r in _choices(rules["never"], "rules.never", RULES)],
                   "review": rules["review"]},

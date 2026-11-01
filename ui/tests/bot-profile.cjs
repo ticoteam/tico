@@ -78,7 +78,7 @@ const picker = page => page.locator('[data-bot-profile]');
       // The choices come from the server, with the bot's own profile picked.
       await page.waitForFunction(() => document.querySelectorAll('[data-bot-profile] option').length === 6);
       assert.equal(await picker(page).inputValue(), 'custom');
-      assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/settings/rules?bot=ops');
+      assert.equal(await page.locator('[data-profile-rules]').getAttribute('href'), '#/automations?q=Ops');
       const until = async (test, what) => { for (let i = 0; i < 100 && !test(); i++) await page.waitForTimeout(50); assert.ok(test(), what); };
       const save = () => page.locator('#bot-editor button[type=submit]').click();
       const ask = page.locator('dialog.settings-confirm');
@@ -89,6 +89,8 @@ const picker = page => page.locator('[data-bot-profile]');
       await save();
       await until(() => posts.length === 1, 'Save bot sends the profile');
       assert.deepEqual(posts[0], {profile: 'custom', takes: 'review', expected_revision: 6});
+      // The save ends by redrawing the editor; a pick made before that redraw would be wiped.
+      await page.waitForFunction(() => document.querySelector('#bot-editor [data-bot-status]')?.textContent === 'Saved');
       // Leaving Custom: Save bot asks first, naming the rules; declined, nothing more is sent and the editor says so.
       await page.waitForFunction(() => document.querySelector('[data-profile-key="takes"]')?.value === 'review');
       await picker(page).selectOption('doer');

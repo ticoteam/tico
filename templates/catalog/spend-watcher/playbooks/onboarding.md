@@ -1,7 +1,7 @@
 # Setup
 
-Runs once, on the first message or task you receive, while `state.md` says onboarding has not
-finished. Budget 25 minutes. The outcome is six recorded answers, a real spend report drafted from the
+Runs once, on the first message or task you receive, while `state.md` says setup has not
+finished. Budget 25 minutes. The outcome is five recorded answers, a real spend report drafted from the
 exports, and the first routine checked.
 
 ---
@@ -28,12 +28,12 @@ Numbered, each with its one-line why. Offer a default so a human can answer "fin
 1. Where does spend show up (card, bank, cloud invoices, a subscription sheet)? Can you attach last
    month's exports now?
 2. Who owns software or cloud spending, and who should own each vendor by default?
-3. What counts as a spike? (Default: up 20 percent and at least 200 in a month.)
+3. What counts as a spike, and what variance against budget matters: a percentage and an amount for
+   each? (Defaults: spike up 20 percent and at least 200 in a month; variance 10 percent and 2,000 a
+   month.) Attach this year's budget if there is one. Without one I compare with last month only.
 4. How long before a renewal should I raise it, and which notice periods do you already know?
    (Default: brief at 60 days, alert at 90.)
-5. Is there a budget for this year? Attach it, and say what variance matters. (Default: 10 percent
-   and 2,000 a month.) Without one I compare with last month only.
-6. Who receives the Monday report and at what hour? (Default: you, Mondays at 09:00.)
+5. Who receives the Monday report and at what hour? (Default: you, Mondays at 09:00.)
 
 ## 4. Record
 
@@ -49,13 +49,13 @@ Nothing is cancelled, paid or sent.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you this report every Monday at 09:00, and a human acts on it." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you this report every Monday at 09:00, and a human acts on it." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

@@ -3,7 +3,7 @@
 // it; a run asks the steps one at a time (a list adds rows on Enter, the scores grid is built from the earlier answers,
 // Back keeps what was typed, a skipped step is left out of the answers) and goes to the run page, which polls until done and
 // draws the value curve (Us thick and in the accent, end labels that never overlap, a legend), the 2x2, the tables and the
-// cascade; Add to draft sends the draft's revision and a 409 reloads the run; Ask the Librarian files once; a draft run
+// cascade; Add to draft sends the draft's revision and a 409 reloads the run; Ask (to sharpen a finding) files once; a draft run
 // carries its chip, and a member cannot see one; failed, no-model and nothing-published runs say so; no page scrolls sideways
 // at 400px.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
@@ -27,7 +27,7 @@ const shot = async (page, name, themes = ['dark', 'light']) => {
 const PHONE = {width: 400, height: 844}, DESKTOP = {width: 1280, height: 900};
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
-const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''), bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''})];
+const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''), bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''})];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money.', why: '', rules_out: 'Premium add-ons.',
    wrong_if: {kind: 'text', text: 'Margin under 25%', check_by: '2027-01-31'}, cites: [], status: 'active', rank: 0, since_n: 1, until_n: null},
@@ -75,6 +75,8 @@ const done = (id, lens, over = {}, result = {}) => ({id, lens, name: LENSES.find
 
 async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewport = DESKTOP, published = true, runs = [], noPublished = false, slow = false} = {}) {
   const page = await browser.newPage({viewport, serviceWorkers: 'block', locale: 'en-GB'});
+  // The clock is fixed in October: a run the stub starts is stamped with it, and the page shows its date ("27 Oct").
+  await page.clock.install({time: new Date('2026-10-27T12:00:00Z')});
   const errors = [], sent = [];
   page.on('pageerror', e => errors.push(e.message));
   const owner = role === 'owner';
@@ -117,7 +119,7 @@ async function open(browser, {role = 'owner', route = '#/strategy/lenses', viewp
       if (body.on === 'published' && (!published || noPublished)) return json({error: {code: 'no_published', detail: 'Nothing is published'}}, 422);
       const lens = LENSES.find(l => l.id === start[1]);
       const run = {id: 'r-new' + st.runs.length, lens: lens.id, name: lens.name, applies_to: lens.applies_to, on_draft: body.on === 'draft', strategy_n: body.on === 'draft' ? null : 1,
-        status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created: new Date().toISOString(), finished: null, error: null};
+        status: slow ? 'no_model' : 'running', answers: body.answers, result: null, applied: [], sharpen_tasks: {}, proposal_id: null, created_by: 'human:ana', created: '2026-10-27T12:00:00.000Z', finished: null, error: null};
       st.runs.unshift(run);
       return json(run, 202);
     }
@@ -160,8 +162,9 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const {page, errors} = await open(browser, {runs: PAST});
       await page.locator('[data-lens="blue-ocean"]').waitFor();
       assert.equal(await page.locator('#main h1').innerText(), 'Strategy');
-      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Strategy', 'Lenses', 'Market']);
-      assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Lenses');
+      assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Market', 'Strategy', 'Org', 'Goals', 'Budget']);
+      assert.equal(await page.locator('.strat-tabs a.cur').innerText(), 'Strategy', 'Lenses are a view of the Strategy tab');
+      assert.equal(await page.locator('.strat-sub').innerText(), 'Strategy', 'the way back to the strategy');
       assert.equal(await page.locator('#side [data-nav="strategy"]').getAttribute('aria-current'), 'page');
       assert.deepEqual(await page.locator('[data-lens-group="strategy"] .lens-name').allInnerTexts(), ['Playing to Win', 'Blue Ocean', 'Scenarios']);
       assert.deepEqual(await page.locator('[data-lens-group="market"] .lens-name').allInnerTexts(), ['Where to play']);
@@ -237,7 +240,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.equal(await dlg.locator('[data-lens-next]').innerText(), 'Run');
       assert.deepEqual(await dlg.locator('[data-lens-on]').allInnerTexts(), ['Published', 'Draft']);
       assert.equal(await dlg.locator('[data-lens-on="published"]').getAttribute('aria-pressed'), 'true');
-      assert.equal(await dlg.locator('[data-lens-skip]').innerText(), 'Skip, let the CEO Bot assume');
+      assert.equal(await dlg.locator('[data-lens-skip]').innerText(), 'Skip, let the Assistant assume');
       await dlg.locator('.lens-pill', {hasText: 'Three years'}).click();
       await dlg.locator('[data-lens-back]').click();
       await dlg.locator('[data-lens-skip]').click();     // skips Scores: the grid's answer is dropped
@@ -308,7 +311,7 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual([...errors, ...racy.errors], []);
       await racy.page.close();
     }
-    // The value curve and its run page; Add to draft with a 409; Ask the Librarian once.
+    // The value curve and its run page; Add to draft with a 409; Ask once.
     {
       const {page, errors, sent} = await open(browser, {runs: PAST, route: '#/strategy/lenses/r-blue'});
       await page.locator('.lens-curve').waitFor();
@@ -351,7 +354,8 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       assert.deepEqual(sent.filter(x => x[1] === '/apply')[1], ['POST', '/apply', {index: 0, revision: 8}]);
       assert.equal(await page.locator('[data-lens-change="0"] [data-lens-apply]').count(), 0);
       assert.equal(await page.locator('[data-lens-apply="1"]').count(), 1, 'the other change is still open');
-      // Ask the Librarian: once.
+      // Ask: once, and the button reads Ask (no helper named).
+      assert.equal(await page.locator('[data-lens-sharpen="0"]').innerText(), 'Ask');
       await page.locator('[data-lens-sharpen="0"]').click();
       const asked = page.locator('[data-lens-sharpen-row="0"] .lens-done');
       await asked.waitFor();
@@ -370,9 +374,9 @@ const PAST = [done('r-blue', 'blue-ocean'), done('r-draft', 'scenarios', {on_dra
       const {page, errors} = await open(browser, {runs, route: '#/strategy/lenses/r-draft'});
       await page.locator('[data-lens-chart="matrix_2x2"]').waitFor();
       assert.match(await page.locator('.lens-meta').innerText(), /^draft\s+\d+ Oct/);
-      assert.match(await page.locator('.lens-meta').innerText(), /CEO Bot/);
+      assert.match(await page.locator('.lens-meta').innerText(), /Strategy Bot/);
       assert.match(await page.locator('[data-lens-proposal]').innerText(), /^Sent to you as a proposal/);
-      assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/decide');
+      assert.equal(await page.locator('[data-lens-proposal] a').getAttribute('href'), '#/tasks?view=foryou');
       assert.equal(await page.locator('[data-lens-change]').count(), 2);
       assert.equal(await page.locator('[data-lens-apply]').count(), 0, 'a proposed run is decided on its card');
       assert.deepEqual(await page.locator('.lens-quad').evaluateAll(a => a.map(e => [e.dataset.q, e.querySelector('b').textContent])),

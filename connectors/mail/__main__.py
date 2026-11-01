@@ -41,7 +41,7 @@ reason attached, exit 0. Every write command takes --dry-run.
 Exit codes: 0 ok, 1 failure (missing key, network, Google said no), 2 policy refusal.
 """
 
-import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, weakref
+import argparse, fnmatch, hashlib, json, mimetypes, os, shlex, sys, uuid, weakref
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -1856,6 +1856,24 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
                   {"reason": review_note, "approval": appr["issue"], "to": to, "cc": cc})
         base["review_advisory"] = review_note
 
+    # The org rules that apply to this bot, checked by Tico before the send's own gates: held, it stays a draft and
+    # the bot is told the rule and whom to appeal to. A failed check lets it through, as every check failure does,
+    # logged and named in the answer.
+    check_id = str(uuid.uuid4())                        # the check's Idempotency-Key, and its miss's id if it fails
+    ruled = pl.rule_check(ctx.slug, to, cc, subject, body, key=check_id)
+    if ruled and not ruled.get("failed") and not ctx.dry:
+        # Tico answers again: the sends whose check it never answered are told to it now, forgotten once it took them.
+        db.drop_mail_check_misses(ctx.conn, pl.report_misses(ctx.slug, db.mail_check_misses(ctx.conn, ctx.slug)))
+    if ruled and ruled.get("failed"):
+        ctx.audit("rule-check-failed", draft_id or thread_id, {"reason": ruled["failed"], "to": to, "cc": cc})
+        base["rule_check"] = "unchecked: the org rule check failed (" + str(ruled["failed"]) + ")"
+    if ruled and ruled.get("outcome") == "held":
+        return downgrade((ruled.get("held") or {}).get("text") or "held by an org rule", "rules")
+    warning_line = ""
+    if ruled and ruled.get("outcome") == "warn":
+        base["rule_warning"] = (ruled.get("rule_warning") or {}).get("text") or ""
+        warning_line = str(ruled.get("warning_line") or "")
+
     decision = pl.check_send(ctx.policy, ctx.slug, ctx.mailbox, to, cc,
                              attachments=files, draft=draft_id, thread_id=thread_id,
                              approval=approval, verbs=None, conn=ctx.conn, body=body,
@@ -1866,6 +1884,11 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         return dict(base, sent=False, would_send=True, checks=decision["checks"],
                     reason="", note="dry run: every gate passed, nothing was sent.")
 
+    if warning_line and draft_id:
+        # A Warn rule: the warning line goes on the recipient's copy, written onto the draft just before it is sent.
+        ctx.gmail.update_draft(draft_id, compose.with_warning(ctx.gmail.get_draft_raw(draft_id), warning_line),
+                               thread_id)
+        ctx.audit("rule-warning", draft_id, {"to": to, "cc": cc})
     key = compose.send_key(ctx.slug, ctx.issue, draft_id)
     day = datetime.now(zone(DEFAULT_TZ)).strftime("%Y-%m-%d")
     row, claimed = db.claim_send(ctx.conn, key, ctx.slug, ctx.mailbox, ctx.issue, to, subject,
@@ -1881,7 +1904,9 @@ def attempt_send(ctx, draft_id, to, cc, subject, thread_id, msgs, verdict, appro
         raise
     message_id = res.get("id", "")
     thread_id = res.get("threadId") or thread_id
-    db.finish_send(ctx.conn, key, message_id, "sent")
+    # Out with no verdict: the check's id is kept with the finished send, for Tico to hear of once it answers again.
+    db.finish_send(ctx.conn, key, message_id, "sent",
+                   miss=(ctx.slug, check_id) if ruled and ruled.get("failed") else None)
     handled = lb.handled(ctx.slug)
     label_thread(ctx, handled, msgs, [message_id])
     ctx.audit("send", message_id or draft_id,
@@ -2432,6 +2457,35 @@ def cmd_connector_event(args):
                provider_id + "\n")
 
 
+def cmd_mail_action(args):
+    """Carry out one mail action a Tico automation queued, read from stdin (connectors/mail/actions.py).
+
+    The runner claims it from the hub and reports what this prints: always one JSON object with `ok`, `detail` and
+    `retry` (false when trying again cannot help: a refusal, a message that is gone)."""
+    from . import actions
+    try:
+        request = json.load(sys.stdin)
+    except (ValueError, TypeError):
+        request = None
+    if not isinstance(request, dict) or not all(str(request.get(k) or "").strip() for k in ("id", "mailbox", "action")):
+        print(json.dumps({"ok": False, "retry": False, "detail": "the mail action is not an object with id, "
+                                                                 "mailbox and action"}))
+        return 2
+    try:
+        ctx = Ctx(args, actions.verb(request["action"]), mailbox=str(request["mailbox"]).strip().lower())
+        result = actions.perform(ctx, request)
+    except Refused as e:
+        print(json.dumps({"ok": False, "retry": False, "detail": e.msg[:900]}))
+        return 2
+    except Failure as e:
+        print(json.dumps({"ok": False, "retry": True, "detail": e.msg[:900]}))
+        return 1
+    ctx.audit("automation-" + request["action"], str(request.get("msg_id") or ""),
+              {"action": request["id"], **{k: result[k] for k in ("detail", "draft", "message") if result.get(k)}})
+    print(json.dumps(result, default=str))
+    return 0
+
+
 # ---------------------------------------------------------------- local persist (inbox bots phase 1)
 
 def sync_targets(args):
@@ -2973,6 +3027,8 @@ def build_parser():
 
     ce = base(sub.add_parser("connector-event", help=argparse.SUPPRESS), mailbox=False)
     ce.set_defaults(func=cmd_connector_event)
+    ma = base(sub.add_parser("mail-action", help=argparse.SUPPRESS), mailbox=False)
+    ma.set_defaults(func=cmd_mail_action)
 
     au = sub.add_parser("audit", help="print the mail audit log")
     au.add_argument("--since", default=None)

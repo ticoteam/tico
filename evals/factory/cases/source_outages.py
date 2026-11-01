@@ -101,7 +101,6 @@ def bulk_setup(run, w, team):
 
 def server_setup(run, w, team):
     from backend.store import Problem
-    from evals.factory.world import Refusal
     attempt = probe(w)
     execution = w.app.state.execution
     execution.served_at = None
@@ -113,12 +112,12 @@ def server_setup(run, w, team):
     try:
         for _ in range(20):
             w.clock.shift(60)
-            try:
-                w.post(f"attempts/{attempt['id']}/renew", {}, w.runner['token'])
-            except Refusal as exc:
-                assert exc.status == 503
-            else:
-                raise AssertionError('the blocked renewal unexpectedly wrote')
+            # World.call answers None for a 5xx and records it as a finding; the busy lock is the outage itself, so its
+            # 503 is read here and taken back out of the findings.
+            status, _ = w.request("post", f"attempts/{attempt['id']}/renew", {}, w.runner['token'])
+            if status != 503:
+                raise AssertionError(f'the blocked renewal answered {status}, not the busy lock')
+            w.server_errors.pop()
             with w.store.transaction() as c:
                 execution.expire(c)
                 running &= c.execute('SELECT state FROM attempts WHERE id=?', (attempt['id'],)).fetchone()[0] == 'running'

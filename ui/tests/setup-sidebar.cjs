@@ -128,7 +128,7 @@ async function wizard(browser, theme) {
   // Leaving setup restores the bar and makes the normal drawer reachable again.
   await phone.page.evaluate(() => { location.hash = '#/tasks'; });
   await phone.page.locator('#mobile-nav').waitFor({state: 'visible'});
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
   await phone.page.locator('#mobile-more').click();
   await phone.page.locator('#tree').waitFor();
   assert.ok((await shown(phone.page, '#side .side-scroll > .nav-link')).includes('tasks'));
@@ -170,7 +170,9 @@ async function created(browser, theme) {
   assert.ok((await shown(page, '#side .side-scroll > .nav-link')).includes('tasks'));
   await expand(page);
   const team = await rows(page);
-  assert.equal(team.length, TEAM.length);
+  // Bookkeeper is a built-in helper, off the Team tree (it opens from Finance).
+  assert.equal(team.length, TEAM.length - 1);
+  assert.ok(!team.some(row => row.name === 'Bookkeeper'));
   readable(team, 'at desktop width');
   const heads = team.filter(row => row.name.startsWith('Head of '));
   assert.deepEqual(heads.map(row => row.name), ['Head of Engineering', 'Head of Finance', 'Head of Marketing', 'Head of Product']);
@@ -184,7 +186,7 @@ async function created(browser, theme) {
   const phone = await open(browser, {theme, phone: true, needed: false, team: true, route: '#/welcome'});
   await phone.page.locator('#onb-bots').getByText('Customer Insights Analyst').waitFor();
   assert.equal(await phone.page.locator('#mobile-nav').isVisible(), true, 'phone navigation returns after Create');
-  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'tasks', 'updates', 'mobile-support', 'more']);
+  assert.deepEqual(await shown(phone.page, '#mobile-nav > *'), ['org', 'search', 'mobile-ask', 'tasks', 'updates', 'more']);
   await noNotice(phone);
   await shot(phone.page, `created-phone-screen-${theme}`);
   await phone.page.locator('#mobile-more').click();

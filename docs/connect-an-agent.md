@@ -8,8 +8,8 @@ This page covers an agent outside Tico that comes in to use it. When a bot in Ti
 elsewhere, such as a cleaning company's MCP server, give the bot a Tool instead:
 [Work with a specialist outside Tico](connect-tools.md#work-with-a-specialist-outside-tico).
 
-**Connect an external agent** is the plug button beside your email (and a step in Finish setup). Until one of your
-tokens has reached Tico, your own row on the team chart also shows **Connect**, which opens the same dialog. Any human can
+**Connect an external agent** opens from **Add existing bot** in the **+** menu beside **Team** or on any group (and
+is a step in Finish setup). Any human can
 make a personal token, and it sees what they see; the owner may limit tokens to admins (Settings > People).
 
 1. Pick the agent.
@@ -40,7 +40,7 @@ delete meetings, and run Routines now.
 
 `hub_api` supports bodyless writes, including DELETE. A file read returns its content type and
 either `text` or `base64`, with `bytes` and `truncated`; at most 1 MiB is returned. A human may close
-any task they can edit with `hub_task_close`; `quiet: true` closes without waking a bot. BotOps uses
+any task they can edit with `hub_task_close`; `wake: false` closes without waking a bot. BotOps uses
 the requester's rights for that tool. `hub_bot_model` accepts a `harness` from the model's list.
 For a correction to your active BotOps request, send `hub_message_send` with `in_reply_to` set to
 the original message id, or `steer: true` in the same conversation. The message stays queued until

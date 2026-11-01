@@ -8,7 +8,7 @@ from backend import hubdb as H, meetings
 from backend.tests.test_api import api, as_member, get, headers, post, restrict, runner, setup_attempt  # noqa: F401
 from backend.tests.test_mcp import call
 from backend.tests.test_member_bots import botops, turn  # noqa: F401
-from backend.tests.test_routines import DEBRIEF, create, setup
+from backend.tests.test_lifecycle import debrief
 
 
 def imported(api, token='ben-test', **fields):
@@ -60,8 +60,7 @@ def test_manual_and_explicit_live_human_imports_but_machine_cannot_bypass(api):
 
 
 def test_approve_emits_once_and_reimports_never_undo_review_privacy(api):
-    setup(api)
-    create(api, 'ops', DEBRIEF)
+    debrief(api)
     made = imported(api, token='ana-test', send_to='coo')
     assert not get(api, 'tasks')['tasks']
     approved = review(api, made['id'], token='ana-test', private=False)

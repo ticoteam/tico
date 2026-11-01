@@ -46,7 +46,10 @@ class BotRows:
             for task in H._rows(c.execute("SELECT * FROM tasks WHERE owner IN (" + ','.join('?' * len(part)) +
                                           ") AND status IN ('open','doing')", ['bot:' + slug for slug in part])):
                 tasks.setdefault(H.actor_id(task['owner']), []).append(task)
-        self.task_flow = {slug: auto_tasks.counts(c, slug, who, tasks.get(slug, [])) for slug in read}
+        # Every task the rows below look at is read once, with its tags, so each privacy check and lookup of it reads none.
+        H.prime_tasks(c, [t['id'] for ts in [*tasks.values(), *self.next_run.values()] for t in ts]
+                      + list(self.scopes.values()))
+        self.task_flow = auto_tasks.counts_many(c, {slug: tasks.get(slug, []) for slug in read}, who)
         self.goals = {}
         for part in H.chunks(slugs):
             for row in c.execute("SELECT bot,conversation_id FROM chat_goals WHERE status='active' AND bot IN "

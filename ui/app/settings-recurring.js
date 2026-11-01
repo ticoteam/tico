@@ -1,54 +1,8 @@
-/* ui/app/settings-recurring.js — Settings > Rules: routines
+/* ui/app/settings-recurring.js — Settings > System: what Tico runs on its own, and task rules
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-// One place to see every routine on every bot, searchable and filtered by bot,
-// by computer (including "my computer"), kind and state. Rows are the same blocks as the Tasks
-// view, so Edit, Pause and Delete work here too.
-const SETTINGS_RECURRING = {q: '', bot: '', computer: '', kind: 'all', armed: 'all'};
-function settingsRoutineRows() {
-  const byBot = new Map((S.emps || []).map(e => [e.name, e]));
-  return (S.status?.schedules || []).map(s => ({...s, _bot: byBot.get(s.employee || s.bot)}));
-}
-function settingsRoutineComputer(r) {
-  const m = r._bot?.machine;
-  return m ? m.runner_id : 'none';
-}
-function renderSettingsRecurring() {
-  const el = $('#set-recurring'); if (!el) return;
-  const f = SETTINGS_RECURRING, all = settingsRoutineRows();
-  const computers = new Map();
-  all.forEach(r => { const m = r._bot?.machine; const k = settingsRoutineComputer(r);
-    if (!computers.has(k)) computers.set(k, m ? `${m.label}${m.operator ? ' · ' + settingsPersonName(m.operator) : ''}` : 'No computer'); });
-  const bots = [...new Set(all.map(r => r.employee || r.bot))].sort((a, b) => empName(a).localeCompare(empName(b)));
-  const rows = all.filter(r => routineMatches(r, f)
-    && (!f.computer || (f.computer === 'mine' ? r._bot?.machine?.operator === S.me?.id : settingsRoutineComputer(r) === f.computer))
-    && (!f.q || searchIncludes([r.title, cadenceWords(r), empName(r.employee || r.bot), r.employee || r.bot], f.q)))
-    .sort((a, b) => (a.active ? 0 : 1) - (b.active ? 0 : 1) || String(a.next || '~').localeCompare(String(b.next || '~')) || a.title.localeCompare(b.title));
-  const opt = (v, label, cur) => `<option value="${esc(v)}" ${v === cur ? 'selected' : ''}>${esc(label)}</option>`;
-  const sel = (name, label, options) => `<select class="settings-inline-select" data-recurring-filter="${name}" aria-label="${label}">${options}</select>`;
-  const add = (S.emps || []).some(e => routineMayEdit({bot: e.name}))
-    ? '<button class="primary" type="button" data-new-routine="">New routine</button>' : '';
-  el.innerHTML = `${add}<div class="settings-bots-filters">
-      <input class="settings-filter-search" type="search" autocomplete="off" data-recurring-filter="q" value="${esc(f.q)}" placeholder="Search routines" aria-label="Search routines">
-      ${sel('bot', 'Bot', opt('', 'All bots', f.bot) + bots.map(b => opt(b, empName(b), f.bot)).join(''))}
-      ${sel('computer', 'Computer', opt('', 'All computers', f.computer) + opt('mine', 'My computer', f.computer) + [...computers].sort((a, b) => a[1].localeCompare(b[1])).map(([k, v]) => opt(k, v, f.computer)).join(''))}
-      ${sel('kind', 'Kind', [['all', 'Any kind'], ['cron', 'On a schedule'], ['event', 'On an event'], ['inbox', 'On a message']].map(([k, v]) => opt(k, v, f.kind)).join(''))}
-      ${sel('armed', 'State', [['all', 'Any state'], ['armed', 'On'], ['idle', 'Off']].map(([k, v]) => opt(k, v, f.armed)).join(''))}
-      <span class="settings-bots-count" data-recurring-count>${rows.length === all.length ? `${all.length} routines` : `${rows.length} of ${all.length} routines`}</span></div>
-    ${rows.length ? `<div class="rlist">${rows.map(r => routineBlockHTML(r, {actions: true})).join('')}</div>` : `<div class="empty">${all.length ? 'No routines match these filters.' : 'No routines yet.'}</div>`}`;
-  bindRoutineExpand(el);
-  el.oninput = el.onchange = ev => {
-    const input = ev.target.closest('[data-recurring-filter]'); if (!input) return;
-    if (ev.type === 'input' && input.tagName !== 'INPUT') return;
-    SETTINGS_RECURRING[input.dataset.recurringFilter] = input.value;
-    const focus = input.tagName === 'INPUT' ? input.selectionStart : null;
-    renderSettingsRecurring();
-    if (focus != null) { const box = el.querySelector('input[data-recurring-filter="q"]'); box.focus(); box.setSelectionRange(focus, focus); }
-  };
-}
-
-// "What Tico runs on its own", above the wake rules and the bot routines: every job Tico runs on its own (backend/system_routines.py) in one flat list,
+// "What Tico runs on its own": every job Tico runs on its own (backend/system_routines.py) in one flat list,
 // no group headings, with a search box that matches name, trigger, action, department tag and group word. Each row reads
 // WHEN <trigger> THEN <action>, with its department tag, schedule, last and next run and, for a job that asks Decide,
 // which route answered and this month's spend. An owner or admin switches the six AI/people jobs (and Topic changed),
@@ -79,10 +33,10 @@ const systemRoutineHours = text => String(text || '').replace(/(\d\d:\d\d) to (\
 function systemRoutineScheduleHTML(j) {
   const busy = SYSTEM_ROUTINE_BUSY.has(j.key);
   if (!(j.presets || []).length || !j.can_change) return `<span data-sysr-schedule>${esc(systemRoutineHours(j.schedule))}</span>`;
-  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (j.key === 'learnings' ? 'Nightly at' : 'Daily at') : systemRoutineHours(p.label))}</option>`).join('');
+  const options = j.presets.map(p => `<option value="${esc(p.key)}"${p.key === j.preset ? ' selected' : ''}>${esc(p.key === 'daily' ? (['learnings', 'memory_tidy'].includes(j.key) ? 'Nightly at' : 'Daily at') : systemRoutineHours(p.label))}</option>`).join('');
   // One choice is no choice: its words alone (Nightly at with the time box, or Weekly).
   const one = j.presets[0], pick = j.presets.length === 1
-    ? `<span>${esc(one.key !== 'daily' ? systemRoutineHours(one.label) : j.key === 'learnings' ? 'Nightly at' : 'Daily at')}</span>`
+    ? `<span>${esc(one.key !== 'daily' ? systemRoutineHours(one.label) : ['learnings', 'memory_tidy'].includes(j.key) ? 'Nightly at' : 'Daily at')}</span>`
     : `<select class="settings-inline-select" data-sysr-preset aria-label="${esc(j.name)} schedule"${busy ? ' disabled' : ''}>${options}</select>`;
   return `${pick}
     ${j.preset === 'daily' ? `<input type="time" step="60" data-sysr-at value="${esc(j.at || '')}" aria-label="${esc(j.name)} time (Pacific)" title="Pacific time"${busy ? ' disabled' : ''}>` : ''}`;
@@ -96,7 +50,7 @@ function systemRoutineControlHTML(j) {
   }
   return `<label class="sysr-switch">${peopleSwitch('data-sysr-on', j.on, busy, j.name)}<span>${j.on ? 'On' : 'Off'}</span></label>
     ${j.kind === 'task_rule' ? `<button type="button" class="ghost" data-task-rule-edit${busy ? ' disabled' : ''}>Edit</button>` : ''}
-    ${j.controllable && !SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? `<button type="button" class="ghost" data-sysr-run${busy || !j.on ? ' disabled' : ''}${j.on ? '' : ' title="Switch it on to run it"'}>${busy ? 'Running…' : 'Run now'}</button>` : ''}`;
+    ${j.controllable && !SYSTEM_ROUTINE_ON_EVENT.has(j.key) ? `<button type="button" class="ghost" data-sysr-run${busy || !j.on || j.run_unavailable ? ' disabled' : ''}${j.run_unavailable ? ` title="${esc(j.run_unavailable)}"` : j.on ? '' : ' title="Switch it on to run it"'}>${busy ? 'Running…' : 'Run now'}</button>${j.run_unavailable ? `<span class="muted">${esc(j.run_unavailable)}</span>` : ''}` : ''}`;
 }
 function systemRoutineRowHTML(j) {
   return `<div class="sysr-row" data-system-routine="${esc(j.key)}">
@@ -105,16 +59,16 @@ function systemRoutineRowHTML(j) {
     <div class="sysr-schedule"><span class="sysr-label">Schedule</span>${systemRoutineScheduleHTML(j)}</div>
     <div class="sysr-last"><span class="sysr-label">Last run</span>${systemRoutineLastHTML(j)}</div>
     <div class="sysr-next"><span class="sysr-label">Next run</span>${j.next ? `<span class="tnum" title="${esc(fmt(j.next))}" data-sysr-next>${esc(until(j.next))}</span>` : `<span class="muted">${j.switch && !j.on ? 'Off' : '—'}</span>`}</div>
-    <div class="sysr-ctl">${systemRoutineControlHTML(j)}<p class="settings-cell-note" role="status" data-sysr-status></p></div>
+    <div class="sysr-ctl">${systemRoutineControlHTML(j)}${j.key === 'memory_tidy' && j.can_change ? '<button type="button" class="ghost" data-memory-tidy-edit>Pilot list</button>' : ''}<p class="settings-cell-note" role="status" data-sysr-status></p></div>
   </div>`;
 }
 function systemRoutineRowsHTML(data) {
   const jobs = (data.jobs || []).filter(j => !SYSTEM_ROUTINES_Q || searchIncludes([j.search, j.name], SYSTEM_ROUTINES_Q));
-  return jobs.length ? jobs.map(systemRoutineRowHTML).join('') : '<div class="empty" data-sysr-none>No routine matches.</div>';
+  return jobs.length ? jobs.map(systemRoutineRowHTML).join('') : '<div class="empty" data-sysr-none>No job matches.</div>';
 }
 function systemRoutinesHTML(data) {
   return `<div class="settings-bots-filters">${data.can_create_task_rule ? '<button type="button" class="primary" data-task-rule-new>New task rule</button>' : ''}<input class="settings-filter-search sysr-search" type="search" autocomplete="off" data-sysr-search
-      value="${esc(SYSTEM_ROUTINES_Q)}" placeholder="Search by name, when, then or department" aria-label="Search routines"></div>
+      value="${esc(SYSTEM_ROUTINES_Q)}" placeholder="Search jobs" aria-label="Search jobs"></div>
     <div class="sysr-list" data-sysr-list>${systemRoutineRowsHTML(data)}</div>`;
 }
 function systemRoutinesPaint() {
@@ -137,7 +91,6 @@ async function systemRoutineWrite(key, send, status) {
   try {
     const out = await send();
     systemRoutineReplace(out.job);
-    taskSettingsChanged();
     note = out.running ? 'Running…' : '';
     if (!out.running) toast('Saved');
     again = !!out.running;
@@ -192,6 +145,8 @@ function systemRoutinesBind(el) {
   }
   list.onkeydown = ev => { if (ev.key === 'Enter' && ev.target.matches('[data-sysr-at]')) ev.target.blur(); };
   list.onclick = ev => {
+    const pilot = ev.target.closest('[data-memory-tidy-edit]');
+    if (pilot) { memoryTidyEditor(SYSTEM_ROUTINES.jobs.find(j => j.key === 'memory_tidy')); return; }
     const edit = ev.target.closest('[data-task-rule-edit]');
     if (edit && !edit.disabled) { taskRuleEditor(SYSTEM_ROUTINES.jobs.find(j => j.key === edit.closest('[data-system-routine]').dataset.systemRoutine)); return; }
     const run = ev.target.closest('[data-sysr-run]'); if (!run || run.disabled) return;
@@ -205,8 +160,7 @@ async function renderSystemRoutines(force) {
   if (!force && SYSTEM_ROUTINES && Date.now() - SYSTEM_ROUTINES_AT < 60000) return;
   SYSTEM_ROUTINES_AT = Date.now();
   try { SYSTEM_ROUTINES = await get('/v2/system-routines'); }
-  catch (e) { if (!SYSTEM_ROUTINES) el.innerHTML = `<div class="empty">Couldn't load the routines: ${esc(e.message || 'try again')}</div>`; return; }
-  if (RULES && !RULES_BUSY.size) rulesPaint();   // the wake rules name departments from this answer
+  catch (e) { if (!SYSTEM_ROUTINES) el.innerHTML = `<div class="empty">Couldn't load the jobs: ${esc(e.message || 'try again')}</div>`; return; }
   if (SYSTEM_ROUTINE_BUSY.size || formBusy(el.querySelector('[data-sysr-list]'))) return;
   systemRoutinesPaint();
 }
@@ -236,9 +190,46 @@ function taskRuleEditor(job) {
     try {
       const out = job ? await put('/v2/task-rules/' + encodeURIComponent(job.key), body) : await post('/v2/task-rules', body);
       if (job) systemRoutineReplace(out.job); else SYSTEM_ROUTINES.jobs.push(out.job);
-      dialog.close(); systemRoutinesPaint(); toast('Saved'); taskSettingsChanged();
+      dialog.close(); systemRoutinesPaint(); toast('Saved');
     } catch (e) { dialog.querySelector('[data-task-rule-error]').textContent = e.message || 'Could not save the rule'; }
     finally { button.disabled = false; }
   };
   document.body.appendChild(dialog); dialog.showModal(); form.elements.ruleName.focus();
+}
+
+
+function memoryTidyEditor(job) {
+  const dialog = document.createElement('dialog');
+  dialog.className = 'tmodal task-rule-dialog';
+  const choices = job.pilot_models || [];
+  dialog.innerHTML = `<form class="task-rule-form"><header><h2>Nightly memory tidy pilot</h2><button type="button" class="ghost" data-close>Cancel</button></header>
+    <p>Up to three bots. Use each bot's slug. These models apply only to the tidy pass. The pilot stops at $50.</p>
+    <p class="muted">Only models enabled in Settings > Computers > Models are offered. Haiku-tier models cannot be used.</p>
+    <div data-pilot-rows></div><button type="button" class="ghost" data-add>Add bot</button>
+    <p class="err" role="status" data-error></p><footer><button type="submit" class="primary">Save pilot list</button></footer></form>`;
+  const rows = dialog.querySelector('[data-pilot-rows]'), add = dialog.querySelector('[data-add]');
+  const addRow = (entry = {}) => {
+    const row = document.createElement('div'); row.dataset.pilotRow = '';
+    row.innerHTML = `<label>Bot slug<input data-bot required maxlength="100" value="${esc(entry.bot || '')}"></label>
+      <label>Pass model<select data-model required><option value="">Choose a model</option>${choices.map(c => `<option value="${esc(c.model)}"${c.model === entry.model ? ' selected' : ''}>${esc(c.label)}</option>`).join('')}
+      ${entry.model && !choices.some(c => c.model === entry.model) ? `<option value="${esc(entry.model)}" selected disabled>${esc(entry.model)} (unavailable)</option>` : ''}</select></label>
+      <label>Reasoning effort<select data-effort><option value="low">low</option></select></label><button type="button" class="ghost" data-remove>Remove bot</button>`;
+    row.querySelector('[data-remove]').onclick = () => { row.remove(); add.disabled = false; };
+    rows.appendChild(row); add.disabled = rows.children.length >= 3;
+  };
+  (job.pilots || []).forEach(addRow);
+  add.onclick = () => { if (rows.children.length < 3) addRow(); };
+  dialog.querySelector('[data-close]').onclick = () => dialog.close();
+  dialog.addEventListener('close', () => dialog.remove());
+  dialog.querySelector('form').onsubmit = async ev => {
+    ev.preventDefault(); const button = dialog.querySelector('[type="submit"]'); button.disabled = true;
+    const pilots = Array.from(rows.children).map(row => ({bot: row.querySelector('[data-bot]').value.trim(),
+      model: row.querySelector('[data-model]').value, effort: row.querySelector('[data-effort]').value}));
+    try {
+      const out = await put('/v2/system-routines/memory_tidy', {pilots});
+      systemRoutineReplace(out.job); dialog.close(); systemRoutinesPaint(); toast('Saved');
+    } catch (e) { dialog.querySelector('[data-error]').textContent = e.message || 'Could not save the pilot list'; }
+    finally { button.disabled = false; }
+  };
+  document.body.appendChild(dialog); dialog.showModal(); add.focus();
 }

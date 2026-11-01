@@ -10,23 +10,48 @@ notification such as `notifications/initialized` is accepted with 202 and no bod
 """
 import asyncio
 import base64
+import hashlib
 import json
+import os
 import time
 from email.message import Message
 from pathlib import PurePosixPath
+from urllib.parse import parse_qsl
 
 import httpx
 from fastapi import Request
 from fastapi.responses import JSONResponse, Response
 
 from clients import hubtools
-from clients.tico import inbound_wait_timeout
+from clients.tico import STREAM_WAIT, MultipartBody, inbound_wait_timeout
 from .store import Problem
 
 PATH = "/api/v2/mcp"
 INTERNAL_TIMEOUT_S = 60
 FUTURE_MARGIN_S = 5
 MAX_CONTENT_BYTES = 1024 * 1024
+RAW_BLOCK_BYTES = 1024 * 1024
+
+
+def raw_body(raw):
+    """(the request's content, its headers) for `raw` as `Client.request` sends it: a file or a MultipartBody streamed a
+    block at a time with its size up front, anything else as bytes. A seekable file is rewound first, so it is sent
+    whole, as its size says."""
+    content_type = getattr(raw, "content_type", "application/octet-stream")
+    if isinstance(raw, MultipartBody):
+        return raw_blocks(raw), {"Content-Type": content_type, "Content-Length": str(raw.size)}
+    if hasattr(raw, "read"):
+        if hasattr(raw, "seek"):
+            raw.seek(0)
+        return raw_blocks(raw), {"Content-Type": content_type, "Content-Length": str(os.fstat(raw.fileno()).st_size)}
+    return bytes(raw), {"Content-Type": content_type}
+
+
+async def raw_blocks(source):
+    """`source` read a block at a time, each read off the event loop, so the body is never held whole."""
+    blocks = iter(lambda: source.read(RAW_BLOCK_BYTES), b"") if hasattr(source, "read") else iter(source)
+    while (block := await asyncio.to_thread(next, blocks, None)) is not None:
+        yield block
 
 
 def response_content(response):
@@ -55,7 +80,7 @@ class ApiProblem(Exception):
 
 
 class InProcessApi:
-    """`api.get` / `api.post` / `api.patch` for `hubtools`, answered by this application in-process.
+    """`api.get` / `api.post` / `api.patch` / `api.request` for `hubtools`, answered by this application in-process.
 
     Runs on a worker thread; each call is a coroutine handed to the server's event loop.
     """
@@ -67,19 +92,26 @@ class InProcessApi:
         self.headers = {"Authorization": authorization, "Accept": "application/json",
                         "User-Agent": "Tico-MCP/" + hubtools.SERVER_INFO["version"]}
 
-    def _run(self, method, path, body=None, key=None, query=None, delegate=False):
+    def _send(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
+        """One request through the app (its middleware and routes, with the caller's own Authorization), as a response.
+        `raw` (bytes, a file or a MultipartBody) is the body as it is, never JSON."""
+        if raw is not None and body is not None:
+            raise ValueError("Send either a JSON body or opaque bytes, not both")
         path = "/api/v2/" + path.replace("#", "%23")
         timeout = inbound_wait_timeout(method, path, body, INTERNAL_TIMEOUT_S, query=query)
+        content, raw_headers = raw_body(raw) if raw is not None else (None, {})
+        if raw is not None and hasattr(raw, "read"):
+            timeout = max(timeout, STREAM_WAIT)      # a file streamed from disk: stored after its last block
         async def go():
             transport = httpx.ASGITransport(app=self.app)
             async with httpx.AsyncClient(transport=transport, base_url=self.base_url,
                                          timeout=timeout) as client:
-                headers = dict(self.headers)
+                headers = {**self.headers, **raw_headers}
                 if delegate:
                     headers["X-Tico-On-Behalf-Of"] = delegate if isinstance(delegate, str) else "turn"
-                if method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
+                if raw is not None or method.upper() in ("POST", "PUT", "PATCH", "DELETE"):
                     headers["Idempotency-Key"] = key or hubtools_key()
-                return await client.request(method, path, json=body,
+                return await client.request(method, path, json=body, content=content,
                                             headers=headers, params=query or None)
         future = asyncio.run_coroutine_threadsafe(go(), self.loop)
         try:
@@ -88,6 +120,10 @@ class InProcessApi:
             future.cancel()
             raise ApiProblem("unavailable", "Tico did not answer before the request deadline", 504,
                              retryable=True, operation_id=key) from None
+        return response
+
+    def _run(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
+        response = self._send(method, path, body, key, query, delegate, raw)
         if response.headers.get("content-disposition"):
             payload = response_content(response)
         else:
@@ -96,15 +132,35 @@ class InProcessApi:
             except ValueError:
                 payload = response_content(response)
         if response.status_code >= 400:
-            error = payload.get("error", {}) if isinstance(payload, dict) else {}
-            if not isinstance(error, dict):
-                error = {}
-            raise ApiProblem(error.get("code", "http_error"), error.get("detail") or f"HTTP {response.status_code}",
-                             response.status_code, response.status_code == 429 or response.status_code >= 500,
-                             key)
+            raise problem(payload, response.status_code, key)
         return payload
 
-    def get(self, path, **query):
+    def request(self, method, path, body=None, key=None, binary=False, delegate=False, raw=None):
+        """`Client.request` (clients/tico.py) for a tool that needs it: a file's bytes (`binary`, hub_file_read), a JSON
+        call on a full /api/v2/ path, or an opaque body (`raw`: bytes, a file or a MultipartBody, sent as it is),
+        answered through the same app and middleware as every other call here."""
+        if not path.startswith("/api/v2/"):
+            raise ValueError("Use a versioned Tico API path")
+        path, _, query = path[len("/api/v2/"):].partition("?")
+        if not binary:
+            return self.call(method, path, body, key, dict(parse_qsl(query)), delegate, raw=raw)
+        response = self._send(method.upper(), path, body, key, dict(parse_qsl(query)) or None, delegate, raw=raw)
+        if response.status_code >= 400:
+            try:
+                payload = response.json()
+            except ValueError:
+                payload = {}
+            raise problem(payload, response.status_code, key)
+        if response.status_code != 200:
+            # A picture, video or audio file sent on a link to Tico file hosting (file_delivery.serve): not text.
+            raise ApiProblem("file_integrity", "This file is a picture, video or audio file: it is not read as text",
+                             415)
+        data = response.content
+        if len(data) > 20_000_000 or hashlib.sha256(data).hexdigest() != response.headers.get("X-Content-SHA256"):
+            raise ApiProblem("file_integrity", "Tico file response failed its size or integrity check", 502)
+        return data
+
+    def get(self, path, /, **query):
         return self._run("GET", path, query={k: v for k, v in query.items() if v is not None})
 
     def post(self, path, body=None, key=None):
@@ -113,16 +169,27 @@ class InProcessApi:
     def patch(self, path, body=None, key=None):
         return self._run("PATCH", path, body=body if body is not None else {}, key=key)
 
-    def call(self, method, path, body=None, key=None, query=None, delegate=False):
+    def call(self, method, path, body=None, key=None, query=None, delegate=False, raw=None):
         method = method.upper()
         return self._run(method, path.lstrip("/"), body=body if body is not None or method != "GET" else None,
-                         key=key, query={k: v for k, v in (query or {}).items() if v is not None}, delegate=delegate)
+                         key=key, query={k: v for k, v in (query or {}).items() if v is not None}, delegate=delegate,
+                         raw=raw)
+
+
+def problem(payload, status, key):
+    """An error response's body as an ApiProblem."""
+    error = payload.get("error", {}) if isinstance(payload, dict) else {}
+    if not isinstance(error, dict):
+        error = {}
+    return ApiProblem(error.get("code", "http_error"), error.get("detail") or f"HTTP {status}", status,
+                      status == 429 or status >= 500, key)
 
 
 def caller_kind(auth, who):
     """What kind of caller this is, for the tools it is offered (`hubtools.KINDS`): a human as owner, admin or member,
     a bot, BotOps, an external agent run by a bot (a Hermes profile), or the Assistant working in a human's private room.
-    The checks are the server's own: `auth.bot_admin`, `Identity.agent`, `Identity.via`."""
+    Counsel is `counsel`: its own tool list (`hubtools.COUNSEL_TOOLS`). The checks are the server's own: `auth.bot_admin`,
+    `Identity.agent`, `Identity.via`."""
     from . import hubdb as H
     if who.via == "assistant":
         return "assistant"
@@ -131,7 +198,8 @@ def caller_kind(auth, who):
     if who.role == "human":
         return "admin" if auth.bot_admin(who) else "member"
     if who.role == "bot":
-        return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else "bot"
+        return "agent" if who.agent else "botops" if who.actor == H.bot_actor(H.FLEET_MAINTAINER) else \
+            "counsel" if who.actor == "bot:" + H.COUNSEL else "bot"
     return None
 
 

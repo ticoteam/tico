@@ -16,7 +16,7 @@ counsel can settle. You never send either and never sign.
   Equity Manager's change log shows are missing (grants, issuances) and anything investors must consent to under `knowledge/board.md`.
 - **Papers**: ask each author on the task for their paper by 7 days before; list what is missing.
 - **Notice**: the date the notice must go under the bylaws, and a draft notice for the chair.
-Save `reports/packs/YYYY-MM-DD-<entity>-board.md`, mark it **Draft for counsel**, `hub file publish` it and share it with the chair within the requested work. Board messages to outsiders stay drafts until a person turns mail sending on in Tico.
+Save `reports/packs/YYYY-MM-DD-<entity>-board.md`, mark it **Draft for counsel**, `hub file publish` it and put it on the task for the chair. Board messages to outsiders stay drafts until a person turns mail sending on in Tico.
 
 ## 2. The minutes
 
@@ -34,3 +34,8 @@ Record decisions, not discussion. Never add what was not said. A point you could
 Save `reports/minutes/YYYY-MM-DD-<entity>-board.md`, headed **Draft for counsel. Summary for a human, not legal
 advice.**, publish it, and put it on the task for the lawyer named at setup. Add it to `knowledge/minute-book.md`
 as "draft". It becomes "approved" only when the signed copy arrives on a task.
+
+## Done when
+- The pack is saved in `reports/packs/`, headed **Draft for counsel**, published, and on the task for the chair.
+- Minutes are saved in `reports/minutes/`, headed for counsel, and listed in `knowledge/minute-book.md` as draft.
+- Every missing paper or unconfirmed point is listed with its owner.

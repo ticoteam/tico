@@ -66,13 +66,14 @@ function taskPropsHTML(t, opts = {}) {
     rows.push(`<div class="prop" data-prop-row="publication"><span class="prop-k">Public</span><span class="prop-vwrap"><label class="prop-v prop-check"><input type="checkbox" aria-label="Public" data-task-public ${t.visibility === 'public' ? 'checked' : ''} ${r.reopen && !t.private ? '' : 'disabled'}><span class="prop-txt">${t.visibility === 'public' ? 'Shown on the public roadmap' : 'Team only'}</span></label></span></div>`);
     rows.push(`<div class="prop" data-prop-row="size"><span class="prop-k">Size</span><span class="prop-vwrap"><input class="roadmap-size" type="number" aria-label="Size" data-task-size min="0" step="any" value="${esc(t.size ?? '')}" ${r.reopen ? '' : 'disabled'}></span></div>`);
   }
-  // Due: a person's deadline (red once passed), or when a bot's parked task wakes (muted "Wakes Oct 2")
+  // Due: a deadline (red once passed; taskDueInfo), or when a bot's parked task wakes (muted "Wakes Oct 2")
   const dueAt = parseServerTime(t.due);
   const info = taskDueInfo(t);
-  const dueDay = dueAt ? new Date(dueAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
+  const dueDayAt = occurrenceDay(t) || dueAt;   // an occurrence's calendar day is its routine's, not the viewer's zone
+  const dueDay = dueAt ? new Date(dueDayAt).toLocaleDateString(undefined, {weekday: 'short', month: 'short', day: 'numeric'}) : '';
   const dueWords = !dueAt ? '' : info?.kind === 'wake' ? `${info.words.split(' ')[0]} ${dueDay}` : dueDay;
   const dueLate = !!info?.late;
-  const dueISO = dueAt ? new Date(dueAt - new Date(dueAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
+  const dueISO = dueAt ? new Date(dueDayAt - new Date(dueDayAt).getTimezoneOffset() * 60000).toISOString().slice(0, 10) : '';
   rows.push(row('due', 'Due', `<span class="prop-ic${dueLate ? ' late' : ''}">${PROP_ICON.due}</span>` + (dueAt ? `<span class="prop-txt${dueLate ? ' late' : ''}${info?.kind === 'wake' ? ' wake' : ''}">${esc(dueWords)}</span>` : txt('Add due date')),
     {edit: r.edit, empty: !dueAt, popup: 'dialog', words: dueWords || 'none',
       extra: (r.edit ? `<input type="date" class="prop-date" data-prop-date tabindex="-1" aria-hidden="true" value="${esc(dueISO)}">` : '')
@@ -104,37 +105,7 @@ function taskPropsHTML(t, opts = {}) {
   const waiver = (t.qa_waivers || []).at(-1);
   if (waiver) rows.push(row('qa-waiver', 'QA', taskQaWaiverHTML(waiver), {words: `waived on ${String(waiver.head).slice(0, 7)}, not a QA pass`,
     extra: `<small>${esc(actorLabel(waiver.actor))}: ${esc(waiver.reason || '')}</small>`}));
-  if (S.me?.cloud && t.id) rows.push(taskWakeRulesRowHTML(t));
   return `<div class="props">${rows.join('')}</div><div class="props-msg" data-props-msg role="status" aria-live="polite"></div>`;
-}
-// Wake rules: the rules set on this task alone (backend/rules.py, scope task), which beat the bot, department, type and
-// team ones. Read once a minute per task, not on each of the modal's redraws; the link opens Settings > Rules narrowed
-// to this task, where its parties and movers add or change one.
-const TASK_WAKE_RULES = new Map();   // task id -> {rules, at}
-function taskWakeRulesWords(id) {
-  const seen = TASK_WAKE_RULES.get(id);
-  if (!seen) return '…';
-  if (!seen.rules.length) return 'Defaults';
-  const then = r => r.then === 'action' ? (RULE_ACTIONS[r.params?.action] || 'action') : (RULE_OUTCOMES[r.then] || r.then);
-  return seen.rules.map(r => `${r.event === '*' ? 'anything' : r.event.replace(/_/g, ' ')}: ${then(r)}${r.enabled ? '' : ' (off)'}`).join('; ');
-}
-function taskWakeRulesRowHTML(t) {
-  return `<div class="prop" data-prop-row="wake-rules"><span class="prop-k" aria-hidden="true">Wake rules</span><span class="prop-vwrap">`
-    + `<a class="prop-v" href="#/settings/rules?task=${encodeURIComponent(t.id)}" data-wake-rules aria-label="Wake rules: ${esc(taskWakeRulesWords(t.id))}">`
-    + `<span class="prop-txt" data-wake-rules-words>${esc(taskWakeRulesWords(t.id))}</span></a></span></div>`;
-}
-async function taskWakeRulesFill(d, id) {
-  const seen = TASK_WAKE_RULES.get(id);
-  if (!seen || Date.now() - seen.at > 60000) {
-    try {
-      const data = await get(`/v2/rules?scope_kind=task&scope_id=${encodeURIComponent(id)}`);
-      TASK_WAKE_RULES.set(id, {rules: (data.rules || []).filter(r => !r.built_in), at: Date.now()});
-    } catch { if (!seen) TASK_WAKE_RULES.set(id, {rules: [], at: Date.now(), failed: true}); }
-  }
-  const words = $('[data-wake-rules-words]', d);
-  if (!words) return;
-  const text = TASK_WAKE_RULES.get(id)?.failed ? 'See rules' : taskWakeRulesWords(id);
-  words.textContent = text; words.closest('[data-wake-rules]').setAttribute('aria-label', 'Wake rules: ' + text);
 }
 // A refused save's reason stays under the properties until that property saves (several: one line each, named).
 const PROP_WORDS = {status: 'Status', owner: 'Owner', due: 'Due', tags: 'Tags', parent: 'Part of', type: 'Type', step: 'Step', people: 'People', publication: 'Public', size: 'Size'};
@@ -258,7 +229,6 @@ function taskPropLoops(t, key, rows) {
 function taskPropsBind(d, task, change) {
   const box = $('[data-task-props]', d); if (!box) return;
   taskPropsMsgPaint(d);
-  if (task?.id && $('[data-wake-rules]', box)) void taskWakeRulesFill(d, task.id);
   const save = (key, body) => { d.focusProp = key; return change(body); };
   const type = pipelineType(task), typed = !!type && pipelineTypeId(task) !== 'general';
   box.onclick = async ev => {
@@ -283,7 +253,7 @@ function taskPropsBind(d, task, change) {
         propMenu(d, b, {label: 'Status', items: stepItems(task, type).slice(1), onPick: async it => {
           if (it.value === task.step_id) return;
           const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-          if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+          if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
           void save('status', body);
         }});
         return;
@@ -295,7 +265,7 @@ function taskPropsBind(d, task, change) {
       propMenu(d, b, {label: 'Step', items: stepItems(task, type), onPick: async it => {
         if (it.value === (task.step_id || '')) return;
         const body = {step: it.value, ...(it.step?.status === 'done' ? {status: 'done'} : {})};
-        if (it.step?.name === 'Blocked') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
+        if (it.step?.status === 'waiting') { const reason = await taskBlockedReason(task); if (reason === null) return; body.note = reason; }
         void save('step', body);
       }});
     } else if (key === 'type') {

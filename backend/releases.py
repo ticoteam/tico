@@ -6,7 +6,10 @@ GitHub's public API, at most once per `TTL`, and never on a request's path: a re
 cached and, when that is stale, starts one background refresh. Any failure keeps the last answer.
 
 Applying an update is the job of a separate updater service (`TICO_UPDATER_URL`); this process
-never restarts itself. Without one the owner is told the command to run by hand.
+never restarts itself. Without one the owner is told the command to run by hand. With `TICO_UPDATES=tico` Tico runs
+every update from outside: the notice says `managed`, the app offers no Update now, and an update asked for here is
+refused with `managed_update`. A cloud company on Tico's shared host is not that: it has an updater of its own
+(setup/cell_updater.py, docs/cell.md), which this module calls as it calls the sidecar.
 
 The check asks Tico HQ first (`GET <TICO_HQ_URL>/v1/latest`), which is also how an install is counted anonymously
 (backend/census.py, PRIVACY.md). With counting off, with `TICO_RELEASES_URL` set (a mirror), or when HQ does not
@@ -260,8 +263,13 @@ class Checker:
 CHECKER = Checker()
 
 
+def managed():
+    """Tico updates this server from outside (TICO_UPDATES=tico): there is nothing for the owner to run."""
+    return os.environ.get("TICO_UPDATES", "").strip().lower() == "tico"
+
+
 def notice():
-    return CHECKER.view(version())
+    return {**CHECKER.view(version()), "managed": managed()}
 
 
 def check_now():
@@ -288,7 +296,27 @@ def _call(method, path, body=None):
                       retryable=True, extra={"command": MANUAL_COMMAND}) from None
 
 
+def updater_answer(method, path, body=None):
+    """The updater's status and answer, for a caller that tells its refusals apart (sleep's 409 busy is not an outage).
+    Status 0 when it did not answer. `_call` is for the calls where any refusal is a failure."""
+    url, token = _updater()
+    if not url:
+        return 0, {}
+    try:
+        with _client(10) as http:
+            r = http.request(method, url + path, json=body, headers={"Authorization": "Bearer " + token})
+    except httpx.HTTPError:
+        return 0, {}
+    try:
+        answer = r.json()
+    except ValueError:
+        answer = {}
+    return r.status_code, answer if isinstance(answer, dict) else {}
+
+
 def status():
+    if managed():
+        return {"configured": False, "state": "unavailable", "managed": True}
     if not _updater()[0]:
         return {"configured": False, "state": "unavailable", "command": MANUAL_COMMAND}
     data = _call("GET", "/status")
@@ -300,6 +328,8 @@ def status():
 def start(target):
     if parse(target) is None:
         raise Problem("invalid_version", "That is not a release version", 422)
+    if managed():
+        raise Problem("managed_update", "Tico updates this server. There is nothing to run here.", 409)
     if not _updater()[0]:
         raise Problem("manual_update", "This installation has no updater. Run this on the server: " + MANUAL_COMMAND,
                       409, extra={"command": MANUAL_COMMAND})

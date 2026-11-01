@@ -2,7 +2,7 @@
 
 The Tico AI Gateway is Tico's own model service. With a gateway key from Tico, your bots can run on a **pick**: a
 department, a level (Low, Medium or High), Fast or not, and a version. Decide asks the Gateway with the same key. You
-connect it once, in **Settings → Computers → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
+connect it once, in **Settings → Models**; **Settings → Gateway** shows what is in use. How runs reach the Gateway, for developers, is in
 [Harnesses](harnesses.md#the-tico-ai-gateway).
 
 ## The picks
@@ -35,7 +35,11 @@ new can pick them.
 
 ## Choose how bots get their models
 
-At the top of **Settings → Computers → Models**, and in the first step of setup, the owner picks one of four choices:
+In the first step of setup the owner picks one of four choices. Later, **Settings → Models → Tico Gateway** keeps one
+switch, **Use when a computer has no subscription, or a plan runs out**: on is the first choice (or Tico Gateway only,
+when that was picked), off is the second (or your company's plans or API keys).
+
+The four choices:
 
 - **Your Claude and ChatGPT subscriptions, plus Tico Gateway** (recommended). Bots do their main work on your Claude
   and ChatGPT subscriptions. Personal plans are fine. Sign in with your own Claude and ChatGPT accounts in
@@ -56,7 +60,7 @@ until the owner saves another one here.
 While the recommended choice waits for a sign-in, the owner sees one **Needs you** item, "Sign in to Claude and
 ChatGPT, or add API keys", with **Open Settings → Computers**. It goes away by itself once both are signed in on a
 computer. Gateway work runs only on a computer that runs bots as their own user (Tico's Docker runner, see
-[below](#pick-a-tico-model-for-a-bot)). When no computer here can, the item also says "This computer can't run Gateway
+[below](#pick-a-tico-model-for-a-bot)) or on a Tico cloud machine (docs/cloud-machines.md). When no computer here can, the item also says "This computer can't run Gateway
 work without the Docker runner; sign in to Claude and ChatGPT or add API keys", and bots wait for a sign-in instead of
 running on the Gateway. They never fail for it. The missing sign-in is the only thing the Gateway stands in for: a bot
 whose checkout is missing, whose settings differ from the server's, or whose computer doesn't have pi waits as before,
@@ -71,7 +75,7 @@ its monthly cap, the Gateway work stops and Health says **Gateway cap reached** 
 
 Only the owner can do this.
 
-1. Open **Settings → Computers → Models**. The **Tico AI Gateway** card is under the providers.
+1. Open **Settings → Models**. The **Tico AI Gateway** card is under the providers.
 2. Paste the key Tico gave you in **Gateway key**.
 3. Leave **Gateway URL** empty to use the default, `https://updates.tico.team/v1/gateway`. Enter another only if Tico gave
    you one; it starts with `https://` (plain `http://` only for `localhost`). A URL set in the server's environment
@@ -119,7 +123,7 @@ Sign in directly as an owner or admin to link the server:
 The card shows your company and its credit. For example, connecting to Acme shows **Acme** and that company's balance.
 With automatic connection enabled, the server asks for a Gateway key immediately, then retries hourly while it has none.
 Gateway use spends that company's credit.
-The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Computers → Models** once it has the key.
+The owner sees **Tico AI Gateway: connected automatically** on the card in **Settings → Models** once it has the key.
 
 If linking fails, check the error beside the form. Tico must be able to reach your server's
 [connection proof](install.md#cloudflare-tunnel). If the Gateway remains disconnected, check **Settings → Health**;
@@ -181,14 +185,15 @@ A bot on the Gateway with no model of its own, for example one that waits for a 
 pick at the current version. A template can start a bot on another level: its `bot.yaml` may hold
 `gateway: {level: low, fast: true}` ([Creating bots](creating-bots.md#7-harness-model-effort-and-fallback)).
 
-**Settings → Computers → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
+**Settings → Models** has **Decisions**, the level Decide runs at: Low (the default, the fast and cheap
 `tico-decide-1.0`), Medium or High (`tico-decide-medium-1.0`, `tico-decide-high-1.0`: Claude Sonnet 5.5 at $2.50 / $12.50 and Claude Opus 5.5 at $5 / $25 per 1M, with up to 30
 seconds per try instead of 8). Higher costs more per question and answers slower.
 
 No bot ever holds the gateway key. For a bot on a Tico model, or with a Tico model as its own fallback, the computer
 running it fetches the key and passes the bot's model calls on to the Gateway. The bot gets a pass that works only for
 that run and only for model calls. That is why Tico models need a computer that runs bots as their own user: Tico's
-Docker runner does, and says so when it checks in. On the current Docker runner, every Tico model turn (including
+Docker runner does, and says so when it checks in. So does a Tico cloud machine, where all of one company's bots run as
+one user: there a Gateway turn gets the same pass with no separate user (docs/cloud-machines.md). On the current Docker runner, every Tico model turn (including
 a fallback to a Tico model) gets a separate OS user from a pool of 64. Other bots cannot read its live environment,
 open file descriptors or private temporary files, or use its Gateway connection, and it can enter only the checkouts
 its turn runs in. Workspace files remain shared through the bot group; subscription sign-ins and turns on other providers keep their existing boundary. At turn
@@ -246,13 +251,34 @@ saying the Tico AI Gateway cut the reply off.
 One flat page for the owner and admins: a line saying whether the Gateway is connected and this month's spend against its
 cap; **Picks in use** (name, model, version or Auto, number of bots, price); and **Services**, with each service's status
 (Live, On request, Coming soon), price and the tools that use it. The key and the connect controls stay in
-**Settings → Computers → Models**, one link away.
+**Settings → Models**, one link away.
 
 Services today: **Decide** and **Classify** (live), **Inbox** email addresses (live) and numbers (on request), **Search** and **Fetch**
 (live), with transcription, sending email, enrichment, voice and physical mail coming soon. Bots and agents read
 the same list with the `hub_gateway_catalog` tool and search the web with `hub_gateway_search` (`hub gateway catalog [query]`,
 `hub gateway search QUERY`, `hub gateway fetch URL`); search is billed like Low tokens plus $0.00875 per answered search, from the same cap. `hub_gateway_fetch` reads a page or PDF by URL, billed like Low tokens plus $0.00125 per page. The
 skill is `skills/gateway/SKILL.md`.
+
+## Images
+
+`hub gateway image PROMPT --category C --out PATH` makes an image through the Gateway and saves it. The categories:
+
+- **storyboard**: a fast model that keeps people and places from `--ref` images, for frames (about 4 to 8 US cents an image).
+- **photo**: for photographic images.
+- **character**: keeps a person or character from the `--ref` files (up to 4, PNG, JPEG or WebP, 2 MiB each).
+- **graphic**: best for text and layout.
+
+`--size WxH` asks for the nearest aspect ratio, `--count N` makes up to 4 images. The first image is saved to `PATH`, the
+others beside it as `name-2.png`, `name-3.png`. Each image gets a sidecar `PATH.json` with its prompt, category, model,
+cost, the reference names and their sha256. An existing file is never overwritten.
+
+Each image is billed at what the image model costs plus 25%, from the same cap as the other Gateway services; the price
+varies with the model and size, so it is not one number. The catalog lists the service (`hub gateway catalog images`).
+Bots use the same thing with the `hub_gateway_image` tool, which runs on the computer and answers the saved paths, never
+the image bytes.
+When the Finance budget for Video production refuses at its limit and is used up for whoever asks (a bot or a person,
+by the team they are in), new images are refused with `video_budget_reached` until the budget is raised or its period
+ends.
 
 ## Webhooks through the Gateway
 

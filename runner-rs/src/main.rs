@@ -4,13 +4,31 @@
 
 // A turn's failure carries its whole report, and the caches key on tuples: both read better as they are.
 #![allow(clippy::result_large_err, clippy::type_complexity)]
+// baseline, remove as fixed
+#![allow(clippy::await_holding_lock)]
+#![allow(clippy::assertions_on_constants)]
+#![allow(clippy::bool_assert_comparison)]
+#![allow(clippy::cloned_ref_to_slice_refs)]
+#![allow(clippy::collapsible_if)]
+#![allow(clippy::manual_contains)]
+#![allow(clippy::manual_unwrap_or_default)]
+#![allow(clippy::nonminimal_bool)]
+#![allow(clippy::needless_borrow)]
+#![allow(clippy::single_match)]
+#![allow(clippy::too_many_arguments)]
+#![allow(clippy::unnecessary_cast)]
+#![allow(clippy::unnecessary_lazy_evaluations)]
+#![allow(clippy::useless_conversion)]
+#![allow(clippy::useless_format)]
 
 mod accounts;
 mod afterwatch;
 mod appdriver;
 mod backlog;
+mod browser_exit;
 mod capture;
 mod client;
+mod cloud_machine;
 mod commands;
 mod config;
 mod credential_imports;
@@ -48,6 +66,7 @@ mod mail_key;
 mod manifest;
 mod memory_history;
 mod mcp;
+mod model_subscriptions;
 mod op;
 mod panics;
 mod perbot;
@@ -78,6 +97,7 @@ mod subscription_refresh;
 mod watchers;
 mod util;
 mod warm;
+mod wire;
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -287,6 +307,11 @@ fn main() {
     if argv.get(1).is_some_and(|a| a == reap::FLAG) {
         std::process::exit(reap::main(&argv[2..]));
     }
+    if argv.get(1).is_some_and(|a| a == "--release") {
+        // The release this binary was built for (build.rs; "dev" for a source build). `--version` stays the protocol version.
+        println!("{}", runner::RUNNER_RELEASE);
+        std::process::exit(0);
+    }
     if argv.get(1).is_some_and(|a| a == "--build-id") {
         // The source fingerprint build.rs stamped in: runner/engine.py rebuilds when the checkout's differs.
         println!("{}", BUILD_ID);
@@ -397,6 +422,9 @@ async fn start(command: Command, config: config::Config) -> i32 {
     flight::init(&state_dir);
     panics::install();
     let state = state::State::open(&state_dir).unwrap_or_else(|e| fail(&e));
+    // No turn runs yet: a company subscription's sign-in file left from one that was cut off goes.
+    model_subscriptions::sweep(&state_dir);
+    gateway_relay::sweep(&config.projects_dir());
     follow::record_revision(&state_dir);
     follow::init(&config.data, &state_dir);
     if isolation::enabled() {
@@ -431,11 +459,12 @@ async fn start(command: Command, config: config::Config) -> i32 {
         stopper.stop.store(true, std::sync::atomic::Ordering::SeqCst);
         stopper.events.wake.notify_one();
     });
-    util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_VERSION, service.config.runner_id()));
+    util::log(&format!("Tico runner {} (rust) started for {}", runner::RUNNER_RELEASE, service.config.runner_id()));
     tls::announce(util::log);
     // No launchd here (TICO_SIDE_JOBS=1): the runner also supervises importers, close-calls and connectors.
     let side = sidejobs::start(&service.config);
     screen::start(service.config.path.clone(), client.clone());
+    browser_exit::start(client.clone());
     service.run().await;
     screen::shutdown().await;
     if let Some((task, stop)) = side {

@@ -102,3 +102,152 @@ def test_payloads_stay_under_their_budgets(api):
     # Tool output is in no list (the whole Needs-you list above included).
     lists = [opened, board, status, api.get("/api/v2/conversations", headers=headers())]
     assert not [r.request.url for r in lists if MARKER in r.text] and MARKER not in encode([whole, changes])
+
+
+def test_a_settings_history_page_is_byte_capped(api):
+    # 200 changes each carrying a 38 KB description: the page stops at its byte budget and names the next page.
+    text = {"display_name": "Ops", "description": "A long description. " * 2000}
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
+                        H.shift(H.now(), seconds=i), None) for i in range(200)])
+    opened = api.get("/api/v2/settings/history?limit=200", headers=headers())
+    page = opened.json()
+    assert 0 < len(page["changes"]) < 200 and page["next_before"]
+    assert len(opened.content) <= 300 * KB
+
+
+def test_a_settings_history_page_counts_utf8_bytes_not_characters(api):
+    # 200 changes whose descriptions are the 2,000 characters a description may hold, all emoji (four bytes each):
+    # a page counted in characters would send four times its budget.
+    text = {"display_name": "Ops", "description": "🙂" * 2000}
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
+                        H.shift(H.now(), seconds=i), None) for i in range(200)])
+    opened = api.get("/api/v2/settings/history?limit=200", headers=headers())
+    page = opened.json()
+    assert 0 < len(page["changes"]) < 200 and page["next_before"]
+    assert size(page["changes"]) <= 256 * KB and len(opened.content) <= 257 * KB
+
+
+def test_a_settings_change_bigger_than_a_page_comes_without_its_values_and_paging_passes_it(api):
+    # The owner's list of 40,000 people (about 900 KB of JSON) between two small changes.
+    ids = [H.new_id() for _ in range(3)]
+    people = [f"human:person-{i:05d}" for i in range(40000)]
+    values = [(["human:ana"], ["human:ana", "human:ben"]), ([], people), ([], ["human:ana"])]
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(ids[i], "ops", "owners", encode(before), encode(after), "human:ana", None,
+                        H.shift(H.now(), seconds=-i), None) for i, (before, after) in enumerate(values)])
+    first = api.get("/api/v2/settings/history?limit=2", headers=headers()).json()
+    assert [row["id"] for row in first["changes"]] == ids[:2] and first["next_before"] == ids[1]
+    big = first["changes"][1]
+    assert big["truncated"] is True and big["before"] is None and big["after"] is None
+    assert size(first["changes"]) <= 256 * KB
+    rest = api.get(f"/api/v2/settings/history?limit=2&before={ids[1]}", headers=headers()).json()
+    assert [row["id"] for row in rest["changes"]] == [ids[2]] and rest["next_before"] is None
+    # A page whose first change is the big one sends it the same way, and the next page starts past it.
+    alone = api.get(f"/api/v2/settings/history?limit=1&before={ids[0]}", headers=headers()).json()
+    assert [row["id"] for row in alone["changes"]] == [ids[1]] and alone["next_before"] == ids[1]
+    assert alone["changes"][0]["truncated"] is True
+    past = api.get(f"/api/v2/settings/history?limit=1&before={ids[1]}", headers=headers()).json()
+    assert [row["id"] for row in past["changes"]] == [ids[2]] and past["changes"][0]["truncated"] is False
+
+
+def prepared_transitions(api, cid, count, text):
+    """`count` prepared transitions of ops, newest first, each with a checkpoint of `text` in the chat `cid` (the table
+    gives every checkpoint a message of its own, so each one is a copy of the chat's first message)."""
+    stamp = H.now()
+    with api.app.state.store.transaction() as c:
+        first = dict(c.execute(
+            "SELECT * FROM messages WHERE conversation_id=? ORDER BY rowid LIMIT 1", (cid,)).fetchone())
+        clone(c, "messages", {**first, "from_actor": "bot:ops", "to_actor": "human:ana"}, count,
+              created=lambda i: H.shift(first["created"], seconds=-i - 1))
+        messages = [row[0] for row in c.execute(
+            "SELECT id FROM messages WHERE conversation_id=? ORDER BY rowid DESC LIMIT ?", (cid, count)).fetchall()]
+        for i, message in enumerate(messages):
+            tid = H.new_id()
+            c.execute("INSERT INTO bot_transitions(id,bot,kind,target_json,requested_by,expected_revision,state,"
+                      "created,updated) VALUES(?,?,?,?,?,?,?,?,?)",
+                      (tid, "ops", "model", encode({"model": "fake-model"}), "human:ana", 1, "prepared",
+                       H.shift(stamp, seconds=-i), stamp))
+            c.execute("INSERT INTO bot_transition_checkpoints(transition_id,conversation_id,message_id,state,"
+                      "checkpoint_json) VALUES(?,?,?,?,?)",
+                      (tid, cid, message, "prepared",
+                       encode({"current_objective": text,
+                               "next_recommended_action": "Ask Ana", "open_decisions": []})))
+
+
+def test_a_settings_history_first_page_with_transitions_stays_within_its_bytes(api):
+    # Three prepared changes with a checkpoint of about 20 KB each, and a page of changes that fills what they leave.
+    # The 120 people who made the changes have long names: the page sends each name beside its id.
+    _, msg, _ = setup_attempt(api)
+    prepared_transitions(api, msg["conversation_id"], 3, "A checkpoint of the chat's objective. " * 550)
+    text = {"display_name": "Ops", "description": "A long description. " * 80}
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO humans(id,name,email,slack_id,teams_json) VALUES(?,?,?,?,?)",
+                      [(f"person-{i:03d}", f"Person {i:03d} " + "with a long name " * 6, None, None, None)
+                       for i in range(120)])
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "ops", "definition", encode(text), encode(text), f"human:person-{i:03d}", None,
+                        H.shift(H.now(), seconds=-i), None) for i in range(120)])
+    opened = api.get("/api/v2/settings/history?limit=100", headers=headers())
+    page = opened.json()
+    assert len(opened.content) <= 256 * KB
+    assert len(page["transitions"]) == 3 and page["transitions_truncated"] is False
+    assert len(page["changes"]) >= 40 and page["next_before"]
+
+
+def test_a_settings_history_first_page_leaves_out_the_oldest_transitions_its_bytes_cannot_hold(api):
+    # Twelve prepared changes of about 45 KB each are more than a page. The newest that fit are sent and flagged, and
+    # the page still takes its changes.
+    _, msg, _ = setup_attempt(api)
+    prepared_transitions(api, msg["conversation_id"], 12, "A checkpoint of the chat's objective. " * 1200)
+    text = {"display_name": "Ops", "description": "A long description. " * 80}
+    with api.app.state.store.transaction() as c:
+        c.executemany("INSERT INTO settings_changes(id,bot,field,before_json,after_json,actor,transition_id,created,"
+                      "via) VALUES(?,?,?,?,?,?,?,?,?)",
+                      [(H.new_id(), "ops", "definition", encode(text), encode(text), "human:ana", None,
+                        H.shift(H.now(), seconds=-i), None) for i in range(5)])
+    opened = api.get("/api/v2/settings/history?limit=100", headers=headers())
+    page = opened.json()
+    assert len(opened.content) <= 256 * KB
+    with api.app.state.store.read() as c:
+        newest = [row[0] for row in c.execute("SELECT id FROM bot_transitions ORDER BY created DESC")]
+    kept = [row["id"] for row in page["transitions"]]
+    assert page["transitions_truncated"] is True and 0 < len(kept) < 12 and kept == newest[:len(kept)]
+    assert len(page["changes"]) >= 1
+
+
+def test_a_settings_history_first_page_flags_the_transitions_past_its_limit(api):
+    # Four small prepared changes on a page of three: the bytes hold them all, but the oldest is left out and flagged.
+    _, msg, _ = setup_attempt(api)
+    prepared_transitions(api, msg["conversation_id"], 4, "A short objective.")
+    page = api.get("/api/v2/settings/history?limit=3", headers=headers()).json()
+    with api.app.state.store.read() as c:
+        newest = [row[0] for row in c.execute("SELECT id FROM bot_transitions ORDER BY created DESC")]
+    assert [row["id"] for row in page["transitions"]] == newest[:3] and page["transitions_truncated"] is True
+    page = api.get("/api/v2/settings/history?limit=4", headers=headers()).json()
+    assert len(page["transitions"]) == 4 and page["transitions_truncated"] is False
+
+
+def test_snoozed_notes_stay_out_of_the_board_and_the_task_keeps_its_note(api):
+    store = api.app.state.store
+    task = post(api, "tasks", {"owner": "human:ana", "title": "Snoozed 0", "body": "x"})
+    note = "🔔" * 500                                   # 500 characters, 2,000 bytes each
+    with store.transaction() as c:
+        row = dict(c.execute("SELECT * FROM tasks WHERE id=?", (task["id"],)).fetchone())
+        clone(c, "tasks", row, 499, title=lambda i: f"Snoozed {i}")
+        c.execute("UPDATE tasks SET snoozed_until=?, snoozed_note=? WHERE title LIKE 'Snoozed %'",
+                  (H.shift(H.now(), days=5), note))
+    board = api.get("/api/v2/tasks?brief=1&limit=500&snoozed=only", headers=headers())
+    rows = board.json()["tasks"]
+    assert len(rows) == 500
+    assert all("snoozed_note" not in r for r in rows), "a list row carries no snooze note"
+    whole = get(api, "tasks/" + task["id"])["task"]
+    assert whole["snoozed_note"] == note, "the task's own view keeps the note whole"

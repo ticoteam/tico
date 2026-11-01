@@ -100,14 +100,14 @@ def test_reopening_with_auto_puts_back_the_colour_it_had_and_undo_gives_none_whe
     back = post(api, f"goals/{sub['id']}/reopen", {"status": "green", "note": "Back on", "undo": True},
                 token="ben-test")["goal"]
     assert back["status"] is None and back["status_source"] == "auto"
-    # A goal the CEO Bot coloured gets that colour back when the arithmetic has nothing new to say.
+    # A goal the Strategy Bot coloured gets that colour back when the arithmetic has nothing new to say.
     post(api, f"goals/{sub['id']}/status", {"status": "green", "note": "Set by hand."})
     post(api, f"goals/{sub['id']}/status/auto", {})
     post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
     auto = post(api, f"goals/{sub['id']}/reopen", {"status": "auto", "note": "Removed by mistake"},
                 token="ben-test")["goal"]
     assert auto["status_source"] == "auto" and auto["status"] is not None and auto["status"] != "dropped"
-    # A colour handed back to the CEO Bot before the removal comes back automatic, not as the hand-set one.
+    # A colour handed back to the Strategy Bot before the removal comes back automatic, not as the hand-set one.
     post(api, f"goals/{sub['id']}/status", {"status": "dropped", "note": ""}, token="ben-test")
     undone = post(api, f"goals/{sub['id']}/reopen", {"undo": True}, token="ben-test")["goal"]
     assert (undone["status"], undone["status_source"]) == (auto["status"], "auto")

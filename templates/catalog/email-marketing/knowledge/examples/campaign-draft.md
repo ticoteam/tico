@@ -34,8 +34,8 @@ The Acme team
 - [ ] Audience is "customers", who agreed to product news on signup (`knowledge/segments.md`)
 - [ ] Unsubscribe link and Acme's postal address in the footer
 - [ ] Plain-text version (attached below) reads well; links work
-- [ ] Sending domain authenticated; complaint rate under 0.3 percent in the sending tool
+- [ ] Sending domain authenticated (SPF, DKIM, DMARC); one-click unsubscribe header on marketing mail; complaint rate under 0.3 percent in the sending tool
 
 ## Sources
-- Launch brief task, 2026-09-28; `knowledge/voice.md`; `knowledge/results.md` (September newsletter: 41 percent opens, 2026-09-10)
+- Launch brief task, 2026-09-28; `knowledge/voice.md`; `knowledge/results.md` (September newsletter: 9 percent clicks, 2026-09-10; opens not used)
 ```

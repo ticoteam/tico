@@ -1,11 +1,13 @@
-// A send approval in Needs you: recipients, subject, draft and each attached file readable (name, size, short hash),
+// A send approval in Needs you: one line in the list, and its card (a tap on the line) shows recipients, subject,
+// draft and each attached file readable (name, size, short hash),
 // the exact payload folds under Details, and a payload value is only ever text. A file links only to the version the
 // server verified (`attachment_files`), pinned with ?v=, and opens that version in the viewer; a payload file_id the
 // server did not verify is no link and says so. A Support reply to publish, on a 390px phone, says which ticket and
-// shows its whole text wrapped (in Needs you and in Decide), its HTML-looking text stays text, and the exact payload
+// shows its whole text wrapped on its card, its HTML-looking text stays text, and the exact payload
 // (with the content hash) folds under Exact payload. A field the facts list does not name gets its own row, and a
 // publish without its text says so. A bot's report to Tico support reads "Send this to Tico support?" in both places,
-// with where it goes, what goes with it and its whole message wrapped as text. An approval says how long its exact
+// with where it goes, what goes with it and its whole message wrapped as text. A task cap and a spend limit read as
+// facts with names, not ids. An approval says how long its exact
 // payload has been ready and whose decision it is ("Ready 2 h 10 min, waiting on you", or the person's name).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -34,11 +36,11 @@ async function phonePublish(browser) {
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [publish]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
   await page.locator('#task-view [data-view="foryou"]').click();
-  const card = page.locator('[data-group="approvals"] details.req');
-  // How long its exact payload has been ready, and whose decision it is: on the row, and in the card on both pages.
-  assert.match(await card.locator('> summary .req-meta').textContent(), /ready 2 h 10 min$/);
-  await card.locator('> summary').click();
-  // Readable, whole and inside the phone's width, in Needs you and then on Decide's card.
+  const row = page.locator('[data-need-card="approval:ap-pub"]');
+  assert.equal(await row.locator('.tl-age').textContent(), '2h');
+  await row.click();
+  const card = page.locator('#need-card .dc-card');
+  // How long its exact payload has been ready, and whose decision it is; readable, whole and inside the phone's width.
   const check = async (box, where, minutes = 10) => {
     assert.equal(await box.locator('.approval-ready').textContent(), `Ready 2 h ${minutes} min, waiting on you`, where);
     const facts = await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent));
@@ -60,27 +62,23 @@ async function phonePublish(browser) {
     const pre = await raw.locator('pre').evaluate(el => ({wraps: el.scrollWidth <= el.clientWidth, right: el.getBoundingClientRect().right}));
     assert.ok(pre.wraps && pre.right <= 390, `${where}: the exact payload wraps at 390px`);
   };
-  await check(card.locator('.approval-payload'), 'Needs you');
-  // A minute on, the card still open: its row and its line move on where they stand, and an ordinary refresh keeps
-  // them (and the card open) rather than putting back the first age.
+  const dc = card;
+  assert.equal(await dc.locator('.dc-q').textContent(), 'Publish this?');
+  await check(dc.locator('.approval-payload'), 'card');
+  // A minute on, the card still open: its line moves on where it stands, and an ordinary refresh keeps it (and the card
+  // open) rather than putting back the first age.
   const ready = () => card.locator('.approval-payload .approval-ready').textContent();
   await page.clock.runFor(60000);
-  assert.match(await card.locator('> summary .req-meta').textContent(), /ready 2 h 11 min$/);
   assert.equal(await ready(), 'Ready 2 h 11 min, waiting on you');
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
   assert.equal(await ready(), 'Ready 2 h 11 min, waiting on you');
-  assert.equal(await card.evaluate(d => d.open), true, 'the card stays open');
-  await page.evaluate(() => { location.hash = '#/decide'; });
-  const dc = page.locator('.decide .dc-card');
-  await dc.waitFor();
-  assert.equal(await dc.locator('.dc-q').textContent(), 'Publish this?');
-  await check(dc.locator('.approval-payload'), 'Decide', 11);
-  await page.clock.runFor(60000);                                    // Decide left open: its card moves on too
+  assert.equal(await page.locator('#need-card').evaluate(d => d.open), true, 'the card stays open');
+  await page.clock.runFor(60000);
   assert.equal(await dc.locator('.approval-ready').textContent(), 'Ready 2 h 12 min, waiting on you');
   if (process.env.APPROVAL_SHOT) await dc.screenshot({path: process.env.APPROVAL_SHOT.replace(/(\.png)?$/, '-publish.png')});
   // A web address is a link only when it is http(s); a spend and a merge show their fields; a field the list does not
   // name gets a row of its own (an object or array as its JSON); a publish without its text (or with only whitespace)
-  // says only its hash came; any other kind shows its JSON. Each is drawn on Decide's card at 390px and stays inside it.
+  // says only its hash came; any other kind shows its JSON. Each is drawn on the card at 390px and stays inside it.
   const NO_TEXT = 'not included; only a hash of it is in the payload';
   const shown = await page.evaluate(() => [
     {what: 'publish', payload: {url: 'https://acme.example/blog/launch', content_sha256: 'f'.repeat(64)}},
@@ -124,9 +122,9 @@ async function phoneSupport(browser) {
   await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items: [report]})}));
   await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
   await page.locator('#task-view [data-view="foryou"]').click();
-  const card = page.locator('[data-group="approvals"] details.req');
-  assert.match(await card.locator('> summary .req-text').textContent(), /Send this to Tico support\?/);
-  await card.locator('> summary').click();
+  const row = page.locator('[data-need-card="approval:ap-sup"]');
+  assert.match(await row.locator('.tl-title').textContent(), /^Support: Send this to Tico support\?$/);
+  await row.click();
   const facts = ['To', 'Tico support (updates.tico.team)', 'With it', "The Tico version and this install's ID", 'Message', REPORT];
   const check = async (box, where) => {
     assert.deepEqual(await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent)), facts, where);
@@ -137,17 +135,44 @@ async function phoneSupport(browser) {
     assert.deepEqual(fit, {inside: true, wraps: true}, `${where}: the message wraps inside 390px`);
     assert.equal(await box.locator('script, img').count(), 0, `${where}: the message stays text`);
   };
-  await check(card.locator('.approval-payload'), 'Needs you');
-  await page.evaluate(() => { location.hash = '#/decide'; });
-  const dc = page.locator('.decide .dc-card');
-  await dc.waitFor();
+  const dc = page.locator('#need-card .dc-card');
   assert.equal(await dc.locator('.dc-q').textContent(), 'Send this to Tico support?');
-  await check(dc.locator('.approval-payload'), 'Decide');
+  await check(dc.locator('.approval-payload'), 'card');
   // Without the IDs, the card says only the message goes.
   const bare = await page.evaluate(r => [...approvalPayloadNode({...r, payload: {...r.payload, include_ids: false}})
     .querySelectorAll('.approval-facts > *')].map(x => x.textContent), report);
   assert.deepEqual(bare, ['To', 'Tico support (updates.tico.team)', 'With it', 'Nothing else: only the message', 'Message', REPORT]);
   assert.equal(await page.evaluate(() => window.pwned), undefined);
+  assert.deepEqual(errors, []);
+  await page.close();
+}
+// The redesign's approvals (CONTRACT §5: task_cap, spend_limit) read as facts with names, the exact payload folded, and
+// fit a 390px phone; neither falls back to the bare JSON. ‹ and › walk from one card to the next.
+async function phoneRedesignKinds(browser) {
+  const {page, errors} = await open(browser, {viewport: {width: 390, height: 844}, hash: '#/tasks'});
+  const at = new Date().toISOString(), ap = (id, what, payload) => ({id, kind: 'approval', what, title: 'Approve this ' + what,
+    requester: 'bot:analyst', requested_by: 'bot:analyst', created: at, payload});
+  const items = [ap('ap-cap', 'task_cap', {sender: 'bot:engineer', receiver: 'bot:support', per_day: 40}),
+    ap('ap-lim', 'spend_limit', {bot: 'bot:engineer', daily_usd: 25, monthly_usd: 400})];
+  await page.route('**/api/v2/needs-you*', route => route.fulfill({contentType: 'application/json', body: JSON.stringify({items})}));
+  await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
+  await page.locator('#task-view [data-view="foryou"]').click();
+  const want = {'ap-cap': ['Task cap: Engineer → Support', ['From', 'To', 'Per day']], 'ap-lim': ['Spend limit: Engineer', ['For', 'Day', 'Month']]};
+  assert.deepEqual(await page.locator('[data-need-card] .tl-title').allTextContents(), Object.values(want).map(([t]) => 'Analyst: ' + t),
+    'a title that names it');
+  await page.locator('[data-need-card="approval:ap-cap"]').click();
+  for (const [id, [, labels]] of Object.entries(want)) {
+    const card = page.locator(`#need-card .dc-card[data-key="approval:${id}"]`);
+    await card.waitFor();
+    assert.deepEqual(await card.locator('.approval-facts dt').allTextContents(), labels, id + ': its facts');
+    assert.match(await card.locator('.approval-facts').textContent(), /Engineer/, id + ': names, not ids');
+    assert.equal(await card.locator('details.approval-raw').evaluate(d => d.open), false, id + ': the payload folded');
+    const fits = el => el.getBoundingClientRect().right <= innerWidth && el.scrollWidth <= el.clientWidth + 1;
+    assert.equal(await card.evaluate(fits), true, id + ': fits 390px');
+    await page.waitForFunction(() => DEC && !DEC.busy && performance.now() >= (DEC.lockUntil || 0));
+    if (id === 'ap-cap') await page.locator('#need-card [data-dc="next"]').click();
+  }
+  assert.equal(await page.locator('#need-card [data-dc="next"]').isDisabled(), true, 'the last card has no next');
   assert.deepEqual(errors, []);
   await page.close();
 }
@@ -165,8 +190,13 @@ async function phoneSupport(browser) {
     await page.route('**/api/v2/approvals/ap-1', route => { decided.push(route.request().postDataJSON()); return route.fulfill({contentType: 'application/json', body: '{}'}); });
     await page.evaluate(async () => { await v2Refresh(); tasksRender(TASKS_ST); });
     await page.locator('#task-view [data-view="foryou"]').click();
-    const card = page.locator('[data-group="approvals"] details.req');
-    await card.locator('> summary').click();
+    // One line in the list; nothing unfolds there. A tap opens its card, a modal on a wide screen.
+    const row = page.locator('[data-group="asks"] [data-need-card="approval:ap-1"]');
+    assert.equal(await page.locator('#task-body details.req').count(), 0, 'no dropdown rows');
+    await row.click();
+    const card = page.locator('#need-card .dc-card');
+    const size = await page.locator('#need-card').evaluate(d => { const r = d.getBoundingClientRect(); return {w: r.width, h: r.height, modal: d.matches(':modal')}; });
+    assert.ok(size.modal && size.w <= 480 && size.h < 900, `a modal on a wide screen: ${JSON.stringify(size)}`);
     const box = card.locator('.approval-payload');
     const facts = await box.locator('.approval-facts').evaluate(dl => [...dl.children].map(x => x.textContent));
     assert.deepEqual(facts, ['From', 'ana@acme.example', 'To', 'ava@creator.example',
@@ -193,13 +223,17 @@ async function phoneSupport(browser) {
     assert.equal(await page.locator('#doc-viewer h2').textContent(), 'chart.png');
     assert.deepEqual([...new Set(fetched)], ['/api/v2/files/f-chart-0001?v=1'], 'the viewer opens the verified version only');
     await page.keyboard.press('Escape');
-    await card.locator('[data-v2-approval="ap-1"][data-v2-decision="approved"]').click();
-    for (let i = 0; i < 50 && !decided.length; i++) await page.waitForTimeout(20);
+    await page.locator('#need-card [data-dc="yes"]').click();
+    // Answered: out of the list at once, and sent when its Undo runs out (or the card closes).
+    await row.waitFor({state: 'detached'});
+    await page.locator('#need-card [data-dc="close"]').click();
+    for (let i = 0; i < 100 && !decided.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(decided, [{decision: 'approved'}]);
     assert.deepEqual(errors, []);
     await page.close();
     await phonePublish(browser);
     await phoneSupport(browser);
-    console.log('Needs you approvals: send payload readable, files open, HTML stays text, Approve posts; publish and support readable at 390px');
+    await phoneRedesignKinds(browser);
+    console.log('Needs you approvals: one line each; the card shows the send payload readable, files open, HTML stays text, Approve posts; publish, support, task cap and spend limit readable at 390px');
   } finally { await browser.close(); }
 })().catch(e => {console.error(e); process.exit(1);});

@@ -25,6 +25,12 @@ function billingStatus(v) {
   if (v.state === 'low') return ['warn', `Low balance: Tico models stop when your balance reaches ${min}`];
   return ['ok', 'Active'];
 }
+function billingCloudStatus(cloud) {
+  if (cloud.access === 'locked') return ['bad', cloud.reason === 'unpaid' ? 'Locked: payment failed' : 'Locked: trial ended'];
+  if (cloud.access === 'frozen') return ['bad', 'Out of credit: Tico models and routines paused'];
+  if (cloud.plan === 'trial') return ['ok', cloud.trial_days_left === 1 ? 'Trial · 1 day left' : `Trial · ${cloud.trial_days_left ?? 0} days left`];
+  return ['ok', cloud.plan === 'starter' ? 'Starter' : 'Active'];
+}
 // Hours inside a day, split the same way as the day: by product, then model.
 function billingSplit(lines) {
   const rows = new Map();
@@ -79,11 +85,14 @@ async function renderSettingsBilling() {
       <div class="row">${talk(v.booking_url)}</div></div>`;
     return;
   }
-  const [tone, line] = billingStatus(v);
+  // A Tico Cloud company (backend/cloud_access.py): its plan and access, and its own billing page in place of Talk to us.
+  const cloud = v.cloud, pay = cloud ? cloudPayUrl(cloud.billing_url) : '';
+  const [tone, line] = cloud ? billingCloudStatus(cloud) : billingStatus(v);
+  const action = !cloud ? talk(v.booking_url) : pay ? `<a class="primary btn" href="${esc(pay)}" target="_blank" rel="noopener noreferrer" data-billing-cloud>${cloud.access === 'frozen' ? 'Add credit' : cloud.access === 'locked' ? 'Pay to continue' : 'Manage billing'}</a>` : '';
   host.innerHTML = `<div class="billing-head"><div><div class="billing-balance">${billingCents(v.balance_micros)}</div>
       <p class="billing-status" data-tone="${tone}" role="status">${esc(line)}</p>
-      ${v.record_only ? '<p class="muted">Usage is recorded but not charged yet.</p>' : ''}</div>
-      <div class="row">${talk(v.booking_url)}</div></div>
+      ${v.record_only && !cloud ? '<p class="muted">Usage is recorded but not charged yet.</p>' : ''}</div>
+      <div class="row">${action}</div></div>
     <h3>Credits</h3>${v.credits.length ? billingCredits(v.credits) : `<p class="billing-empty">${BILLING_NO_CREDIT}</p>`}
     ${billingUsageHTML(v)}`;
   billingBind(host, v);

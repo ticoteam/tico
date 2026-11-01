@@ -149,7 +149,10 @@ def pending(c, at=None):
         if failed and at - failed < OUTAGE_EVERY:
             continue                # a retry that raised waits, whatever refused the move
         if detail.get("outage"):
-            if at - H.parse_ts(detail.get("at") or last["ts"]) < OUTAGE_EVERY:
+            tried = H.parse_ts(detail.get("at") or last["ts"])
+            if tried is None:
+                raise ValueError(f"unreadable retry time: {detail.get('at') or last['ts']!r}")
+            if at - tried < OUTAGE_EVERY:
                 continue
         elif fingerprint(c, row) == detail.get("seen"):
             continue
@@ -189,8 +192,9 @@ def retry(store, service, row, detail):
             return False
         moved = H.task(c, row["id"])
         landed = H._one(c, "SELECT name FROM task_steps WHERE id=?", (moved.get("step_id"),)) if moved else None
-        if (landed or {}).get("name") != detail["step"]:
-            # Another wait beside a gate hold keeps the ticket on Blocked (hubdb._task_state): no move was made.
+        held = H.wait_detail(c, moved) if moved else None
+        if (landed or {}).get("name") != detail["step"] or held:
+            # Another wait beside a gate hold keeps the ticket where it is, held (hubdb._task_state): no move was made.
             # Undo the no-op, say nothing, and wait for the next change.
             c.execute("ROLLBACK TO move_retry")
             c.execute("RELEASE move_retry")

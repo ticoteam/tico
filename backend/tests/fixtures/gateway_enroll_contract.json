@@ -48,7 +48,7 @@
   "key": {
     "method": "GET",
     "path": "/v1/gateway/key",
-    "fields": ["status", "month", "cap_usd", "spent_usd", "used", "warning", "cap_reached", "rpm", "tpm", "source", "rotate_after"],
+    "fields": ["status", "month", "cap_usd", "self_cap_usd", "effective_cap_usd", "spent_usd", "used", "warning", "cap_reached", "rpm", "tpm", "source", "rotate_after"],
     "sources": ["enrolled", "issued"],
     "refused": {"unknown_key": 401, "revoked_key": 401}
   },

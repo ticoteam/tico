@@ -3,18 +3,18 @@
 /* The wordmark: the reversed one on the dark default, dark ink when the theme is light (ui/theme.js). */
 .brand-logo{display:block;height:30px;width:auto}
 .brand-logo.on-light{display:none}
-.brand-name{font-size:var(--t-xl);font-weight:700;letter-spacing:-.01em}
+.brand-name{font-size:var(--t-xl);font-weight:700;letter-spacing:var(--track-tight)}
 :root[data-theme="light"] .brand-logo.on-light{display:block}
 :root[data-theme="light"] .brand-logo.on-dark{display:none}
 @media (prefers-color-scheme:light){:root[data-theme="system"] .brand-logo.on-light{display:block}:root[data-theme="system"] .brand-logo.on-dark{display:none}}
-.onb-head h1{font-size:var(--t-2xl);line-height:1.2;letter-spacing:-.015em;margin:6px 0 4px}
+.onb-head h1{font-size:var(--t-2xl);line-height:var(--lh-tight);letter-spacing:var(--track-tight);margin:6px 0 4px}
 .onb-head p{margin:0;color:var(--muted);font-size:var(--t-base)}
 .onb-progress{display:flex;align-items:center;gap:var(--s2) var(--s3);flex-wrap:nowrap;margin:0 0 var(--s4);padding:0;list-style:none}
 .onb-progress li{display:flex;align-items:center;gap:6px;font-size:var(--t-sm);color:var(--muted);white-space:nowrap}
 .onb-progress li::before{content:"";width:8px;height:8px;border-radius:50%;background:var(--idle-bg);border:1px solid var(--line)}
 .onb-progress li.done::before{background:var(--ok);border-color:var(--ok)}
 .onb-progress li.cur{color:var(--ink);font-weight:600}
-.onb-progress li.cur::before{background:var(--accent);border-color:var(--accent)}
+.onb-progress li.cur::before{background:var(--ink);border-color:var(--ink)}
 /* "Step 4 of 7" is for screen readers: the row already shows where you are */
 .onb-count{margin:0}
 /* the form steps wear the team chart's card (ui/styles/first-run.css .ob-card), so the flow reads as one product */
@@ -31,7 +31,7 @@
 .allow-chips{list-style:none;margin:0 0 var(--s3);padding:0;display:flex;flex-wrap:wrap;gap:6px}
 .allow-chip{display:inline-flex;align-items:center;gap:6px;padding:2px 9px;border:1px solid var(--line);border-radius:12px;background:var(--surface);font-size:var(--t-sm);overflow-wrap:anywhere}
 .allow-chip .k{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);color:var(--muted);font-weight:600}
-.allow-chip[data-allow-kind=domain]{border-color:var(--accent)}
+.allow-chip[data-allow-kind=domain]{border-color:var(--ink)}
 .onb-choices label{display:flex;align-items:center;gap:6px;font-size:var(--t-base)}
 .onb-choices input{flex:none}
 .onb-actions{display:flex;align-items:center;gap:var(--s2);flex-wrap:wrap;margin-top:var(--s4)}
@@ -48,18 +48,18 @@
 .onb-steps>li{counter-increment:onb-step;position:relative;min-width:0;margin:0 0 var(--s4);padding-left:32px}
 .onb-steps>li::before{content:counter(onb-step);position:absolute;left:0;top:0;width:22px;height:22px;border-radius:50%;border:1px solid var(--line);
   display:grid;place-items:center;font-size:var(--t-sm);color:var(--muted)}
-.onb-cmd-step>.k{display:block;font-size:var(--t-base);font-weight:500;line-height:1.4}
+.onb-cmd-step>.k{display:block;font-size:var(--t-base);font-weight:500;line-height:var(--lh)}
 .onb-hint{display:block;color:var(--muted);font-size:var(--t-sm);margin-top:2px}
 .onb-cmd{display:flex;align-items:flex-start;gap:var(--s2);min-width:0;margin-top:6px;padding:6px 6px 6px 10px;border-radius:6px;background:var(--surface2)}
-.onb-cmd code{flex:1 1 auto;min-width:0;padding:3px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--t-sm)/1.5 var(--mono)}
+.onb-cmd code{flex:1 1 auto;min-width:0;padding:3px 0;white-space:pre-wrap;overflow-wrap:anywhere;font:var(--t-sm)/var(--lh) var(--mono)}
 .onb-cmd button{flex:none;padding:2px 10px;font-size:var(--t-sm)}
 .onb-enroll-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2) var(--s3);margin-top:6px}
 .onb-enroll-row small{color:var(--muted);font-size:var(--t-sm)}
-.onb-code{margin-top:var(--s3);padding:var(--s3) var(--s4);border:1px solid var(--accent);border-radius:var(--radius)}
+.onb-code{margin-top:var(--s3);padding:var(--s3) var(--s4);border:1px solid var(--ink);border-radius:var(--radius)}
 .onb-code>.k{display:block;font-size:var(--t-sm);color:var(--muted)}
 .onb-code>small{display:block;color:var(--muted);font-size:var(--t-sm)}
 .onb-code-row{display:flex;align-items:center;flex-wrap:wrap;gap:var(--s2) var(--s3);margin:4px 0}
-.onb-code-value{flex:1 1 220px;min-width:0;font:600 26px/1.3 var(--mono);letter-spacing:.02em;overflow-wrap:anywhere;user-select:all}
+.onb-code-value{flex:1 1 220px;min-width:0;font:600 26px/var(--lh-tight) var(--mono);letter-spacing:.02em;overflow-wrap:anywhere;user-select:all}
 .onb-file{margin:var(--s2) 0 0;font-size:var(--t-base);overflow-wrap:anywhere}
 .onb-other{margin:0 0 var(--s4)}
 .onb-other>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm)}
@@ -68,7 +68,7 @@
 .onb-machine{font-size:var(--t-base);margin:0}
 .cat-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(290px,1fr));gap:var(--s3);align-items:start}
 .cat-card{border:1px solid var(--line);border-radius:var(--radius);background:var(--surface);padding:var(--s3);min-width:0}
-.cat-card.on{border-color:var(--accent);box-shadow:inset 0 0 0 1px var(--accent)}
+.cat-card.on{border-color:var(--ink);box-shadow:inset 0 0 0 1px var(--ink)}
 .cat-pick{display:flex;align-items:center;gap:var(--s2);margin-bottom:6px}
 .cat-pick input[type=checkbox]{flex:none}
 .cat-name{flex:1;min-width:0;font-weight:600}
@@ -79,7 +79,7 @@
 .cat-list .k{font-size:var(--t-label);text-transform:uppercase;letter-spacing:var(--track-caps);font-weight:600}
 .cat-meta{margin:6px 0 0;color:var(--muted)}
 .cat-instructions{margin-top:8px;font-size:var(--t-sm)}
-.cat-instructions textarea{margin-top:6px;resize:vertical;font:var(--t-base)/1.5 var(--mono)}
+.cat-instructions textarea{margin-top:6px;resize:vertical;font:var(--t-base)/var(--lh) var(--mono)}
 .cat-mailbox{display:grid;gap:4px;margin-top:10px;font-size:var(--t-sm);color:var(--muted)}
 .cat-mailbox select{width:100%;font-size:var(--t-base)}
 /* After Create: the one next step on top, then the bots in the chart's groups, one status each. */
@@ -90,7 +90,7 @@
 .onb-group:last-child .onb-bot:last-child{border-bottom:0}
 .onb-bot-name{flex:1;min-width:0;overflow-wrap:anywhere}
 .onb-bot-actions{display:flex;gap:var(--s2);align-items:center;flex:none}
-@media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary>div{grid-template-columns:100px minmax(0,1fr)}.onb{max-width:none}.onb-code-value{font-size:20px}
+@media (max-width:760px){.cat-grid{grid-template-columns:minmax(0,1fr)}.onb-summary>div{grid-template-columns:100px minmax(0,1fr)}.onb{max-width:none}.onb-code-value{font-size:var(--t-xl)}
   /* a phone: the dots, and the current step's name only */
   .onb-head h1{font-size:var(--t-xl)}
   .onb-progress{gap:var(--s2)}

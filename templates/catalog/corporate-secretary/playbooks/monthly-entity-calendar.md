@@ -35,3 +35,8 @@ last month with no matching approval in the minute book goes on the list for the
 `reports/YYYY-MM-DD-entity-board-calendar.md` in the shape of `knowledge/examples/entity-board-calendar.md`,
 ending with the not-legal-advice line. `hub file publish` it, commit, and `hub task update <id> --status done
 --note` with the nearest deadline first.
+
+## Done when
+- Every meeting in the next 90 days has its notice date, pack due date and pack status, or is listed as missing from the calendar.
+- Every cap table change since last month has a matching approval, or is on the list as "none found".
+- The calendar is published, and the task is closed with the nearest deadline first.

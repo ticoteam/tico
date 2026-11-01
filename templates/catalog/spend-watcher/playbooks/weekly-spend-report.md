@@ -3,6 +3,10 @@
 Schedule: Mondays at 09:00 team time (routine `weekly-spend-report`), after setup. Also run by hand on request. Budget 35 minutes. The outcome is one page for the requester:
 what changed, what needs a human, and what renews soon. Nothing is cancelled, paid or sent.
 
+Inputs: this period's and last period's exports (card, bank, cloud, billing), `knowledge/thresholds.md`, `knowledge/vendors.md`, `knowledge/renewals.md` and last week's report.
+
+Done when: the report is published with a source on every number, every source that failed is under "Could not read", renewals inside 14 days are on the first page, and the task is closed with the total and its change.
+
 ---
 
 ## 1. Read where things stand
@@ -46,7 +50,7 @@ headline, anomalies, movers, new, overlaps, renewals, could not read, sources. T
 
     hub file publish reports/YYYY-MM-DD-spend-report.md
 
-Share within the requested work and intended audience with your Tools; messages to outsiders stay drafts until a person turns mail sending on in Tico.
+Sharing the report with finance is within the requested work. Any message to a person outside finance stays a draft until a person turns mail sending on in Tico.
 
 ## 7. Finish
 

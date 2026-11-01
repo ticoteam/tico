@@ -4,6 +4,8 @@
 //! runner sent KEEP: then it kills Claude outright, which runs none of its cleanup, and stays to reap its shells.
 //! The status file's first line is `claude <pid>`; then each status it reaps is one line, `<pid> <code>` (minus the
 //! signal for a killed one).
+//! It leads the process group the runner starts it in (hosts::new_group), which Claude and all it starts share: a stop
+//! reaches every one of them, while KEEP comes to this process alone.
 
 use std::io::Write;
 use std::sync::atomic::{AtomicBool, AtomicI32, Ordering};
@@ -149,6 +151,7 @@ pub fn statuses(path: &std::path::Path) -> std::collections::HashMap<u32, i32> {
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    #[cfg(target_os = "linux")]
     use std::time::{Duration, Instant};
 
     pub const ARGS: &str = "TICO_REAP_TEST_ARGS";

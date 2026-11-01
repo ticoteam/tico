@@ -71,6 +71,7 @@ COPY --from=dockercli /usr/local/libexec/docker/cli-plugins/docker-compose /usr/
 COPY LICENSE NOTICE /usr/share/doc/tico/
 COPY licenses/Apache-2.0.txt /usr/share/doc/tico/licenses/
 COPY docker/updater.py /usr/local/bin/tico-updater
+COPY docker/runner-memory.sh /usr/local/bin/tico-runner-memory
 ARG TICO_VERSION=dev
 ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 LABEL org.opencontainers.image.version=${TICO_VERSION} \
@@ -115,6 +116,8 @@ RUN --mount=type=bind,from=venv,source=/opt/tico/.venv,target=/opt/tico/.venv \
 # The Rust runner (runner-rs/), built on the same Debian release as the runner image so it
 # links against the same glibc. Only its sources are copied, so a change elsewhere reuses this layer.
 FROM rust:1.92.0-slim-trixie@sha256:bf3368a992915f128293ac76917ab6e561e4dda883273c8f5c9f6f8ea37a378e AS runner-bin-compiled
+# The release this binary reports (runner-rs/build.rs). A release build must say its own version: checked below.
+ARG TICO_VERSION=dev
 WORKDIR /src/runner-rs
 COPY runner-rs/Cargo.toml runner-rs/Cargo.lock runner-rs/build.rs ./
 COPY runner-rs/src ./src
@@ -122,7 +125,8 @@ COPY runner-rs/src ./src
 # the source fingerprint (build.rs, `tico-runner --build-id`).
 COPY runner/harnesses /src/runner/harnesses
 COPY LICENSE /src/LICENSE
-RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner
+RUN cargo build --release --locked && install -D -m 0755 target/release/tico-runner /out/tico-runner \
+    && { [ "$TICO_VERSION" = dev ] || [ "$(/out/tico-runner --release)" = "${TICO_VERSION#v}" ]; }
 
 FROM scratch AS runner-bin-prebuilt
 ARG TARGETARCH
@@ -136,6 +140,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
       libasound2t64 libatk-bridge2.0-0t64 libatk1.0-0t64 libatspi2.0-0t64 libcairo2 libcups2t64 libdbus-1-3 libdrm2 libgbm1 \
       libglib2.0-0t64 libnspr4 libnss3 libpango-1.0-0 libx11-6 libxcb1 libxcomposite1 libxdamage1 libxext6 \
       libxfixes3 libxkbcommon0 libxrandr2 libfontconfig1 fonts-liberation \
+      ffmpeg fonts-noto-core fonts-noto-color-emoji \
       xvfb x11vnc matchbox-window-manager \
     && mkdir -p /tmp/.X11-unix && chmod 1777 /tmp/.X11-unix \
     && rm -rf /var/lib/apt/lists/* \
@@ -224,6 +229,8 @@ ARG TICO_COMMIT
 WORKDIR /opt/tico
 ENV PATH=/opt/tico/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1 TICO_VERSION=${TICO_VERSION} TICO_RELEASE=${TICO_VERSION}
+# Threaded Python on a small host: glibc's per-thread malloc arenas fragmented until a 3.8 GB host was OOM-killed.
+ENV MALLOC_ARENA_MAX=2
 LABEL org.opencontainers.image.version=${TICO_VERSION} \
       org.opencontainers.image.revision=${TICO_COMMIT} \
       org.opencontainers.image.source=https://github.com/ticoteam/tico \

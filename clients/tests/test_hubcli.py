@@ -22,10 +22,10 @@ import pytest
 from clients import hubcli
 
 HUB = Path(__file__).resolve().parents[2] / "scripts" / "hub"
-SUBCOMMANDS = ["whoami", "inbound", "meeting", "message", "conversation", "question", "note", "file", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
-               "proposal", "strategy", "lens", "market", "listening", "tool", "routine", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
+SUBCOMMANDS = ["whoami", "inbound", "mail", "meeting", "message", "conversation", "question", "note", "file", "page", "card", "pin", "doc", "chat", "assistant", "tag", "task", "replay", "goal", "kpi",
+               "proposal", "rules", "strategy", "brand", "gtm", "growth", "lens", "market", "listening", "tool", "automation", "audit", "event-types", "trigger", "relay", "sleep", "notice", "settings", "release", "approval", "webhook", "pipeline", "brief", "mcp", "needs-you", "run", "team", "seat", "org", "health",
                "changelog", "update", "grokbot", "external", "calendar", "sql", "db", "classify", "gateway", "decision", "template", "bot", "repo", "skill", "agent", "human", "group", "api", "computer",
-               "credential", "slack", "support", "health-monitor", "task-manager", "stall-triage", "roadmap", "rule", "service-key"]
+               "credential", "slack", "support", "health-monitor", "finance", "task-manager", "stall-triage", "roadmap", "service-key"]
 
 
 def run_hub(*args, env=None):
@@ -264,7 +264,8 @@ class Stub(BaseHTTPRequestHandler):
             return self.reply(200, {"id": "ap-1", "kind": body.get("kind"), "decision": None})
         if self.path == "/api/v2/support/tickets/from-approval":
             return self.reply(200, {"ticket": {"id": "sup_1"}, "approval": body.get("approval"), "again": False})
-        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings")):
+        if any(part in self.path for part in ("/requesters", "/publication-preview", "/moderate", "/roadmaps/settings",
+                                              "/waits", "/snooze")):
             return self.reply(200, {"ok": True})
         self.reply(422, {"error": {"code": "refused", "detail": "rule 2: not on the roster"}})
 
@@ -361,6 +362,19 @@ class AgainstAStub(unittest.TestCase):
         posted = next(b for m, p, _, b in Stub.seen if m == "POST" and p == "/api/v2/support/tickets/from-approval")
         self.assertEqual(posted, {"approval": "ap-1"})
 
+    def test_task_wait_and_snooze_send_their_note(self):
+        def last(method, path):
+            return [b for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
+        pr = "pr:https://github.com/acme/app/pull/9"
+        self.assertEqual(run_hub("task", "wait", "T1", "--on", pr, "--note", "Check the migration", env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/waits"),
+                         {"on": pr, "remove": False, "note": "Check the migration"})
+        self.assertEqual(run_hub("task", "wait", "T1", "--on", "release:v0.3.64", env=self.env)[0], 0)
+        self.assertNotIn("note", last("POST", "/api/v2/tasks/T1/waits"), "no note is sent when none is given")
+        self.assertEqual(run_hub("task", "snooze", "T1", "--until", "2026-11-02", "--note", "Ask the landlord",
+                                 env=self.env)[0], 0)
+        self.assertEqual(last("POST", "/api/v2/tasks/T1/snooze"), {"until": "2026-11-02", "note": "Ask the landlord"})
+
     def test_roadmap_commands_send_what_their_tools_send(self):
         def last(method, path):
             return [(p, b) for m, p, _, b in Stub.seen if m == method and p.split("?")[0] == path][-1]
@@ -438,12 +452,14 @@ class BotSetup(unittest.TestCase):
                 if self.github:
                     raise self.github
                 return {"repository": "Acme/bot-" + body["slug"], "empty": True}
-            return {"routine": {"id": path.split("/")[1] + ":" + body["key"]}}
+            return {"id": "auto_" + body["name"]}
 
         def get(self, path, **query):
             self.seen.append(path)
             if path == "config":
                 return dict(NAMES)
+            if path == "me":            # BotOps; a person's turn seeds the template's automations as that person
+                return {"actor": "bot:botops", "kind": "botops"}
             if path == "setup":
                 return json.loads(json.dumps(self.record))
             if path == "templates" and self.cards is not None:
@@ -570,6 +586,44 @@ def test_keep_tasks_going_cli_preserves_explicit_unlimited(monkeypatch):
     assert [row['limit'] for row in sent[1:]] == [None, 0, 3]
 
 
+def test_turns_at_once_cli_preserves_explicit_unlimited(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_bot_turns_at_once'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'turns-at-once', 'ops'], ['bot', 'turns-at-once', 'ops', 'unlimited'],
+                 ['bot', 'turns-at-once', 'ops', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert 'limit' not in sent[0]
+    assert [row['limit'] for row in sent[1:]] == [None, 3]
+
+
+def test_computer_turns_at_once_cli_sends_automatic_as_null(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    monkeypatch.setitem(BY_NAME['hub_computer_turns_at_once'], 'fn', lambda api, args: sent.append(args))
+    for argv in (['computer', 'turns-at-once', 'rig-1', 'automatic'], ['computer', 'turns-at-once', 'rig-1', '3']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert [row['limit'] for row in sent] == [None, 3]
+    assert all(row['computer'] == 'rig-1' for row in sent)
+
+
+def test_browser_exit_cli_sends_none_as_null_and_on_off_as_booleans(monkeypatch):
+    from clients import remotecli
+    from clients.hubtools import BY_NAME
+    sent = []
+    for name in ('hub_bot_browser_exit', 'hub_computer_browser_exit'):
+        monkeypatch.setitem(BY_NAME[name], 'fn', lambda api, args: sent.append(args))
+    for argv in (['bot', 'browser-exit', 'ops'], ['bot', 'browser-exit', 'ops', 'none'],
+                 ['bot', 'browser-exit', 'ops', 'rig-1'], ['computer', 'browser-exit', 'rig-1', 'on', '--bots', 'ops,cpo'],
+                 ['computer', 'browser-exit', 'rig-1']):
+        remotecli.via_tool(None, hubcli.parser().parse_args(argv))
+    assert ['computer' in row for row in sent[:3]] == [False, True, True]
+    assert [row.get('computer') for row in sent[1:3]] == [None, 'rig-1']
+    assert (sent[3]['sharing'], sent[3]['bots']) == (True, ['ops', 'cpo']) and 'sharing' not in sent[4]
+
+
 def test_market_watch_and_briefing_commands_reach_their_routes(monkeypatch, tmp_path):
     from clients import remotecli
     calls = []
@@ -611,11 +665,6 @@ WEBHOOK_LEAVES = [  # every leaf of the command table in docs/webhooks.md, with 
     ["trigger", "replay", "orders", "d1"], ["trigger", "recover", "orders", "--since", "6"],
     ["trigger", "relay", "create", "orders"], ["trigger", "relay", "rotate", "orders"], ["trigger", "relay", "delete", "orders"],
     ["relay", "status"], ["relay", "set", "orders", "--wake", "off"],
-    ["rule", "list", "--scope-kind", "team"],
-    ["rule", "set", "--scope-kind", "team", "--event", "webhook.received", "--then", "wake",
-     "--params", '{"bot":"ops","text":"x"}'],
-    ["rule", "update", "rul_1", "--then", "note", "--expected-revision", "2"], ["rule", "delete", "rul_1"],
-    ["rule", "suggestions"], ["rule", "apply", "sug_1"], ["rule", "dismiss", "sug_1"],
     ["webhook", "list"], ["webhook", "create", "--name", "A", "--url", "https://hooks.example.com/x"],
     ["webhook", "show", "a"], ["webhook", "update", "a", "--name", "B"], ["webhook", "rotate", "a"],
     ["webhook", "pause", "a"], ["webhook", "resume", "a"], ["webhook", "delete", "a"],
@@ -757,3 +806,98 @@ def test_a_plain_webhook_header_sends_no_secret_key():
     from clients import hubtools
     fields = hubtools.webhook_options({"header": ["X-Team: acme"], "secret_header": ["X-Key: k"]})
     assert fields["headers"] == [{"name": "X-Team", "value": "acme"}, {"name": "X-Key", "secret": True, "value": "k"}]
+
+
+def test_file_approved_by_path_asks_with_the_path_and_digest_as_query_fields(tmp_path, monkeypatch):
+    """`hub file approved <path>` sends the path and digest as query fields, not as the client's own path argument."""
+    import hashlib
+    from urllib.parse import parse_qs, urlsplit
+    from clients import hubtools, remotecli, tico
+    sent = []
+    monkeypatch.setattr(tico.Client, "request", lambda self, method, path, *a, **kw: sent.append((method, path)) or {"approved": True})
+    monkeypatch.setenv("HUB_API_URL", "https://tico.acme.example")
+    monkeypatch.setenv("HUB_TOKEN", "bot-token")
+    monkeypatch.chdir(tmp_path)
+    (tmp_path / "brief.md").write_bytes(b"# Brief\n")
+    assert remotecli.main(hubcli.parser().parse_args(["file", "approved", "brief.md", "--by", "human"])) == 0
+    (method, url), = sent
+    parts = urlsplit(url)
+    assert (method, parts.path) == ("GET", "/api/v2/file-approvals")
+    assert parse_qs(parts.query) == {"path": ["brief.md"], "digest": [hashlib.sha256(b"# Brief\n").hexdigest()], "by": ["human"]}
+    assert hubtools.files_approved(tico.Client("https://tico.acme.example", "bot-token"), {"target": "brief.md"}) == {"approved": True}
+
+
+def test_growth_cli_flags_become_the_api_bodies_the_playbooks_rely_on(monkeypatch):
+    """The playbooks call these exact flags; each must land in the API field it names."""
+    from clients import remotecli
+    sent = []
+
+    class Client:
+        def __init__(self, *args, **kwargs):
+            self.__dict__["_tico_is_botops"] = False
+
+        def get(self, path, **query):
+            return {"actor": "bot:growth", "kind": "bot"}
+
+        def call(self, method, path, body=None, key=None, query=None, delegate=False):
+            sent.append((method, path, body))
+            return {"idea": {}, "kpi": {}, "segment": {}}
+
+        def post(self, path, body=None, key=None):
+            return self.call("POST", path, body)
+
+        def patch(self, path, body=None, key=None):
+            return self.call("PATCH", path, body)
+    monkeypatch.setattr(remotecli, "Client", Client)
+    monkeypatch.setenv("HUB_API_URL", "https://hub.example.test")
+
+    def run(*argv):
+        remotecli.run(hubcli.parser().parse_args(list(argv)))
+        return sent[-1]
+    assert run("growth", "idea", "create", "--title", "Referral card", "--bet", "b1", "--kpi", "k1", "--channel",
+               "referral", "--channel", "door", "--i", "7", "--c", "5", "--e", "8", "--source-kind", "lost_test",
+               "--follow-up-of", "t9", "--assignee", "me") == ("POST", "growth/ideas", {
+        "title": "Referral card", "bet_id": "b1", "kpi_id": "k1", "channels": ["referral", "door"], "source_kind": "lost_test",
+        "ice_i": 7, "ice_c": 5, "ice_e": 8, "follow_up_of": "t9", "assignee": "bot:growth"})
+    assert run("growth", "idea", "start", "t1", "--from", "2026-10-01", "--to", "2026-10-15", "--change", "New card",
+               "--stop-if", "CAC over 80", "--judged-kpi", "k2", "--min-events", "30", "--audience", "Austin")[2] == {
+        "test_from": "2026-10-01", "test_to": "2026-10-15", "change": "New card", "stop_if": "CAC over 80",
+        "judged_kpi_id": "k2", "min_events": 30, "audience": "Austin"}
+    assert run("growth", "idea", "verdict", "t1", "--status", "lost", "--bet-effect", "weakens",
+               "--confidence", "high")[1:] == ("growth/ideas/t1/verdict", {"status": "lost", "bet_effect": "weakens",
+                                                                           "confidence": "high"})
+    assert run("growth", "idea", "score", "t1", "--i", "3", "--c", "4", "--e", "5")[2] == {"i": 3, "c": 4, "e": 5}
+    assert run("growth", "cohort", "set", "--channel", "unknown", "--month", "2026-10", "--new", "18",
+               "--source", "new_customers=Stripe") == ("PUT", "growth/cohorts", {
+        "channel": "unknown", "month": "2026-10", "new_customers": 18, "sources": {"new_customers": "Stripe"}})
+    assert run("growth", "segment", "create", "--name", "Property managers", "--why", "Big portfolios") == (
+        "POST", "growth/segments", {"name": "Property managers", "why": "Big portfolios", "status": "testing"})
+    assert run("growth", "segment", "update", "segment/property-managers", "--status", "serving", "--motion",
+               "sales_led", "--who-buys", "Ops lead", "--owner", "me")[1:] == (
+        "growth/segments/segment/property-managers", {"status": "serving", "motion": "sales_led", "who_buys": "Ops lead",
+                                                      "owner_ref": "bot:growth"})
+    assert run("growth", "idea", "update", "t1", "--segment", "s1", "--segment", "s2")[2] == {"segments": ["s1", "s2"]}
+    assert run("growth", "channel", "update", "door", "--segment", "")[2] == {"segments": []}       # "" clears
+    assert run("growth", "cohort", "set", "--channel", "door", "--month", "2026-10", "--segment", "s1",
+               "--new", "4")[2] == {"channel": "door", "month": "2026-10", "segment_id": "s1", "new_customers": 4}
+    kpi = run("kpi", "update", "k1", "--parent", "k0", "--role", "north_star", "--loop", "referral:2")[2]
+    assert (kpi["parent_kpi_id"], kpi["growth_role"], kpi["loop_name"], kpi["loop_step"]) == ("k0", "north_star", "referral", 2)
+    assert "stage" not in kpi
+    assert run("brand", "draft", "--section", "positioning", "--body", '"Acme cleans homes"')[1:] == (
+        "brand/draft", {"sections": {"positioning": "Acme cleans homes"}})
+
+
+def test_a_json_flag_no_command_takes_is_ignored(monkeypatch, capsys):
+    p = hubcli.parser()
+    assert hubcli.parse(p, ["task", "show", "t_1", "--json"]).id == ["t_1"]
+    assert hubcli.parse(p, ["tool", "list", "--json"]).json is True                  # its own flag
+    assert hubcli.parse(p, ["--json", "tool", "list", "--json"]).json is True
+    assert hubcli.parse(p, ["meeting", "search", "--", "--json"]).q == "--json"       # a value stays a value
+    for wrong in (["task", "get", "t_1", "--json"], ["task", "show", "t_1", "--json", "--bogus"]):
+        with pytest.raises(SystemExit) as e:
+            hubcli.parse(p, wrong)
+        assert e.value.code == 2
+    assert "--bogus" in capsys.readouterr().err
+    monkeypatch.setattr(sys, "stdin", io.StringIO('{"vendor": "v_1"}'))                # stdin is read once
+    args = hubcli.parse(p, ["finance", "act", "bill_create", "--payload", "-", "--json"])
+    assert args.payload == {"vendor": "v_1"}

@@ -1,0 +1,10 @@
+{
+ "answer": {
+  "started": true
+ },
+ "endpoint": "started",
+ "request": {
+  "thread_id": "thread-1"
+ },
+ "status": 200
+}

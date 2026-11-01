@@ -4,6 +4,10 @@ Six tables in the hub database. A reporter files prose.
 The Librarian (`bot:librarian`) curates: it and the company owner are the only actors who change an
 entity, an edge, a piece of evidence, or a market page. Nothing is deleted: an edge is ended, an entity is
 retired or merged, and every changed field is a `market_events` row.
+
+With the redesign on, a change made in a bot turn an automation started (a listening match's Market listening, the
+daily briefing) also names that turn and what started it (`market_turn_sources`), and the graph shows it as each
+entity's or edge's `source`: the match reaches the graph only through the Librarian's turn, and the graph says so.
 """
 
 import hashlib
@@ -127,6 +131,8 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
                  (eid, kind, subject, H.now(), actor, field,
                   None if old is None else str(old), None if new is None else str(new),
                   insight_id, note or ""))
+    if H.RUN.get():
+        _from_turn(conn, eid, kind, subject)
     if actor != SEED_ACTOR and trip:
         # The strategy's fit check: a change to an entity or page a bet cites may show the bet is wrong.
         from . import strategy
@@ -135,6 +141,43 @@ def _event(conn, kind, subject, actor, field, old, new, insight_id=None, note=""
             with isolated(conn, "strategy_watch", subject):
                 strategy.watch(conn, market_id=subject)
     return eid
+
+
+TURN_SCHEMA = (
+    "CREATE TABLE IF NOT EXISTS market_turn_sources (event_id TEXT PRIMARY KEY, subject_kind TEXT NOT NULL, "
+    "subject_id TEXT NOT NULL, source TEXT NOT NULL, at TEXT NOT NULL)",
+    "CREATE INDEX IF NOT EXISTS market_turn_sources_of ON market_turn_sources(subject_kind, subject_id, at)",
+)
+
+
+def ensure_turn_sources(c):
+    for statement in TURN_SCHEMA:
+        c.execute(statement)
+
+
+def _from_turn(conn, eid, kind, subject):
+    """A change made in an automation's bot turn names the turn and what started it (backend/automations.py)."""
+    from . import automations
+    source = automations.turn_source(conn)
+    if source:
+        conn.execute("INSERT OR IGNORE INTO market_turn_sources (event_id, subject_kind, subject_id, source, at) "
+                     "VALUES (?,?,?,?,?)", (eid, kind, subject, dumps(source), H.now()))
+
+
+def with_turn_sources(conn, view):
+    """The graph with each entity's and edge's newest turn source as `source`, where an automation's turn changed
+    it. Redesign only: the caller checks the setting."""
+    for kind, rows in (("entity", view.get("entities") or []), ("edge", view.get("edges") or [])):
+        ids = [row["id"] for row in rows]
+        if not ids:
+            continue
+        found = dict(conn.execute(
+            "SELECT subject_id, source FROM market_turn_sources WHERE subject_kind=? AND subject_id IN (SELECT value "
+            "FROM json_each(?)) ORDER BY at, rowid", (kind, dumps(ids))).fetchall())
+        for row in rows:
+            if row["id"] in found:
+                row["source"] = loads(found[row["id"]], {})
+    return view
 
 
 def _entity_row(row):
@@ -545,6 +588,16 @@ def _resolve_existing(conn, name, aliases, external_ids):
             and _keys(item["name"], item["aliases"], item["external_ids"]) & keys]
 
 
+def _growth_follows(conn, actor, segment_id):
+    """A segment's Us edge or Next flag moved: its Growth row follows (backend/strategy_market.py)."""
+    from . import strategy_market
+    strategy_market.follow_graph(conn, actor, segment_id)
+
+
+def _plays_in(row):
+    return row and row["rel"] == "operates_in" and row["src"] == OWN_COMPANY_ID
+
+
 def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, tier=None, summary="",
                   properties=None, last_verified=None, evidence_ids=None, force=False, insight_id=None,
                   entity_id=None):
@@ -580,6 +633,8 @@ def create_entity(conn, actor, *, type, name, aliases=None, external_ids=None, t
     events = [_event(conn, "entity", eid, actor, "created", None, name, insight_id)]
     if ids:
         _cite(conn, actor, "entity", eid, ids, insight_id)
+    if type == "segment" and (properties or {}).get("next"):
+        _growth_follows(conn, actor, eid)
     return entity(conn, eid), events
 
 
@@ -633,6 +688,9 @@ def update_entity(conn, actor, entity_id, *, name=None, aliases=None, external_i
     conn.execute(f"UPDATE market_entities SET {', '.join(assignments)}, updated=:updated WHERE id=:id", args)
     if ids and actor != SEED_ACTOR:
         _cite(conn, actor, "entity", entity_id, ids, insight_id)
+    if row["type"] == "segment" and ("status" in changes or (
+            "properties" in changes and bool(changes["properties"].get("next")) != bool(row["properties"].get("next")))):
+        _growth_follows(conn, actor, entity_id)
     return entity(conn, entity_id), events
 
 
@@ -668,6 +726,8 @@ def create_edge(conn, actor, *, src, rel, dst, since=None, until=None, confidenc
     events = [_event(conn, "edge", eid, actor, "created", None, f"{src} {rel} {dst}", insight_id)]
     if ids:
         _cite(conn, actor, "edge", eid, ids, insight_id)
+    if _plays_in(row):
+        _growth_follows(conn, actor, dst)
     return edge(conn, eid), events
 
 
@@ -720,7 +780,10 @@ def update_edge(conn, actor, edge_id, *, since=None, until=None, confidence=None
     conn.execute(f"UPDATE market_edges SET {sets}, updated=:updated WHERE id=:id", args)
     if ids:
         _cite(conn, actor, "edge", edge_id, ids, insight_id)
-    return edge(conn, edge_id), events
+    after = edge(conn, edge_id)
+    if _plays_in(row) or _plays_in(after):
+        _growth_follows(conn, actor, row["dst"])
+    return after, events
 
 
 def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
@@ -752,6 +815,9 @@ def merge_entities(conn, actor, entity_id, into_id, insight_id=None):
                  (into_id, H.now(), entity_id))
     _event(conn, "entity", entity_id, actor, "status", src["status"], "merged", insight_id)
     _event(conn, "entity", entity_id, actor, "merged_into", src["merged_into"], into_id, insight_id)
+    if src["type"] == "segment" and dst["type"] == "segment":
+        from . import strategy_market
+        strategy_market.follow_merge(conn, actor, entity_id, into_id)
     return entity(conn, entity_id)
 
 
@@ -813,10 +879,6 @@ def report(conn, actor, *, kind, about, claim, source_url="", quote="", confiden
                  "(:id,:reported_by,:reported_at,:kind,:about,:claim,:source_url,:quote,:confidence,:urgent,"
                  ":status,:resolution,:applied_events,:resolved_at,:resolved_by,:source_ref)", row)
     if urgent:
-        from . import routines
-        routines.emit(conn, "market.insight.urgent", row["id"],
-                      {"about": row["about"], "claim": row["claim"], "reported_by": actor},
-                      title=row["about"] or row["claim"][:80])
         H.hook(conn, "market.insight.urgent", row["id"], lambda: {"id": row["id"], "about": row["about"],
                                                                   "reported_by": actor}, actor, revision=0)
     return insight(conn, row["id"])
@@ -1673,7 +1735,8 @@ def install(app, store, auth, mutate):
                    include: list[str] | None = Query(None)):
         auth.domain(request.state.identity)
         with store.read() as c:
-            return graph(c, focus, limit, as_of, focus == OWN_COMPANY_ID if fill is None else fill, include)
+            view = graph(c, focus, limit, as_of, focus == OWN_COMPANY_ID if fill is None else fill, include)
+            return with_turn_sources(c, view)
 
     @app.get("/api/v2/market/entities/{rest:path}")
     def entity_show(rest: str, request: Request, names: bool = False):

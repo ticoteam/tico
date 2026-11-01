@@ -389,7 +389,7 @@ class FileDownload(FakeSlack):
             slack.FILES_DIR = real
 
     def test_a_long_or_odd_name_is_trimmed_and_saved(self):
-        for name, want in (("é" * 300 + ".png", ".png"), ("bad\x00na\x1bme‮.txt", "F0SHOT1-badname.txt"),
+        for name, want in (("é" * 300 + ".png", ".png"), ("bad\x00na\x1bme\u202e.txt", "F0SHOT1-badname.txt"),
                            ("x" * 400, "F0SHOT1-x")):
             rc, out, _ = self.fetch({**SHOT, "name": name})
             self.assertEqual(rc, 0, out)

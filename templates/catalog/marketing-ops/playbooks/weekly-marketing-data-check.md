@@ -15,7 +15,7 @@ Check whether last week's fixes were made.
 
 ## 2. Tagging
 
-From last week's traffic-by-source export: values that break the convention (capitals, spaces, a
+Read `skills/check-campaign-tagging/SKILL.md` first. From last week's traffic-by-source export: values that break the convention (capitals, spaces, a
 medium the analytics tool does not recognise, the same source spelled two ways), campaign traffic
 landing as "direct" or "unassigned" where a live campaign should have tagged it, and any parameter
 holding a name or an email address (a privacy problem: first line of the report). Map each error to
@@ -28,7 +28,7 @@ and the forms or imports that produced the ones without. A form with no hidden s
 
 ## 4. Handoff
 
-For leads that met the ready-for-sales rule last week: time from ready to first sales touch, median
+Read `skills/measure-lead-handoff-delay/SKILL.md` first. For leads that met the ready-for-sales rule last week: time from ready to first sales touch, median
 and slowest, against the target in `knowledge/handoff.md`; leads still untouched; leads handed to
 nobody. Report the queue, never a seller's name.
 
@@ -38,3 +38,6 @@ Write `reports/YYYY-MM-DD-marketing-data.md` in the shape of `knowledge/examples
 the three shares first, then fixes (what, where, should be, owner), then the four-week trend. Then
 `hub file publish reports/YYYY-MM-DD-marketing-data.md`. Ask once with `hub task ask <id>` whether to
 create the fix tasks. Commit, and `hub task update <id> --status done --note`.
+
+Done when: the report is published with the three shares, every error has an owner, the four-week trend is in,
+and each source you could not read is named as unknown.

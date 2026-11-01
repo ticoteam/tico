@@ -71,14 +71,14 @@ def test_a_question_closes_with_its_own_task_and_outlives_a_task_above_it(api):
         assert approval_expiry.sweep(c)["asks"] == []
 
 
-def test_a_chat_reply_answers_a_pick_question_and_wakes_its_bot_once(api):
+def test_a_chat_note_keeps_a_pick_question_open_and_wakes_its_bot_once(api):
     with api.app.state.store.transaction() as c:
         work = H.task_create(c, ANA, "Draft the board report", "x", OPS)
         asked = pick(c, work["id"])
         reply = H.say(c, ANA, OPS, "Use August, it has the full close.", conversation_id=work["conversation_id"],
                       refs={"task": work["id"]})
-        assert H.message(c, asked["id"])["answered_by"] == reply["id"]       # the reply is recorded as the answer
-        assert not listed(c, work["id"]) and wakes(c, reply["id"]) == 1
+        assert H.message(c, asked["id"])["answered_by"] is None
+        assert listed(c, work["id"]) and wakes(c, reply["id"]) == 1
 
 
 def test_a_question_closes_on_its_fallback_date_even_when_its_fallback_waits(api):

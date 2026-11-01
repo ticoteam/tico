@@ -234,7 +234,8 @@ def test_tico_models_are_on_only_while_a_key_is_set(api, monkeypatch):
         put(api, "providers", {"enabled": ["anthropic"], "model": "tico-general-medium-1.0", "expected_revision": view["revision"]})
         view = get(api, "providers")
         assert view["default"] == {"runtime": "pi", "model": "tico-general-medium-1.0"} and "tico" in view["enabled"]
-        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")}
+        rows = {m["id"]: m for m in get(api, "models")["models"] if m["provider"] == "tico" and not m.get("deprecated")
+                and not m.get("meeting")}
         assert len(rows) == 60 and all(m.endswith("-1.0") for m in rows)
         assert (rows["tico-general-medium-1.0"]["label"], rows["tico-general-medium-1.0"]["description"]) == (
             "General · Medium 1.0", "Claude Sonnet 5.5 underneath")
@@ -639,7 +640,16 @@ def finish(api, machine, attempt, error, **result):
          machine["token"])
 
 
-def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch):
+@pytest.mark.parametrize("at, retry_after", [
+    # Mid-month: the cap lifts at the next month's start, far beyond the 30-minute minimum wait.
+    ("2026-10-15T12:00:00.000000Z", "2026-11-01 00:00 UTC"),
+    # Last minutes of the month: the next month's start is 10 minutes off, so the minimum wait (LIMIT_COOLDOWN,
+    # 30 minutes, execution.reset_cooldown) is what holds the bot, and the retry lands at 00:20.
+    ("2026-10-31T23:50:00.000000Z", "2026-11-01 00:20 UTC"),
+])
+def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch, at, retry_after):
+    # The clock is pinned so the retry time does not depend on when the suite runs.
+    monkeypatch.setattr(H, "now", lambda: at)
     setup(api, monkeypatch)
     put_bot_on(api, "ops", "tico-mid-1.0")
     machine = runner(api)
@@ -655,9 +665,8 @@ def test_at_the_cap_the_bot_says_gateway_cap_reached(api, monkeypatch):
         status = H.status(c, "ops")
     assert status["state"] == "limited" and status["focus"].startswith("Gateway cap reached at ")
     assert "usage limit" not in status["focus"]
-    # No retry this UTC month: the bot waits for the next one.
-    month = G.month_after(H.parse_ts(H.now()))
-    assert status["focus"].endswith(f"retrying after {month:%Y-%m-%d} 00:00 UTC"), status["focus"]
+    # No retry this UTC month: the bot waits for the next one, or the minimum wait if that is sooner.
+    assert status["focus"].endswith(f"retrying after {retry_after}"), status["focus"]
     assert claim(api, machine, "ops") is None
 
 
