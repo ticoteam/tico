@@ -6650,6 +6650,13 @@ export type GetThreadParams = {
 export type GetThreadBody = never;
 export type GetThreadResponse = ThreadView;
 
+/** GET /api/v2/threads/home */
+export type GetThreadHomeParams = {
+  actor: string;
+};
+export type GetThreadHomeBody = never;
+export type GetThreadHomeResponse = ThreadView;
+
 /** GET /api/v2/threads/{thread_id}/timeline */
 export type GetThreadTimelineParams = {
   cursor?: string | null;
@@ -7703,6 +7710,13 @@ export type ModerateTaskCommentParams = {
 };
 export type ModerateTaskCommentBody = Moderate;
 export type ModerateTaskCommentResponse = unknown;
+
+/** GET /api/v2/threads/dm */
+export type OpenThreadDmParams = {
+  with: string;
+};
+export type OpenThreadDmBody = never;
+export type OpenThreadDmResponse = ThreadView;
 
 /** POST /api/v2/places/{place}/order */
 export type OrderPlaceParams = {

@@ -2404,6 +2404,12 @@ STABLE.extend([
      "its first message is posted too", "ThreadView"),
     ("/api/v2/threads/search", "get", "Threads", "searchThreads",
      "Messages whose text matches every word of `q`, newest first, only in threads and messages the viewer may read", "ThreadSearch"),
+    ("/api/v2/threads/home", "get", "Threads", "getThreadHome",
+     "A teammate's Home (`actor`: bot:<slug>, human:<id> or group:<id>), made on first use; needs Read on that teammate, "
+     "else the same 404 whether or not they exist", "ThreadView"),
+    ("/api/v2/threads/dm", "get", "Threads", "openThreadDm",
+     "My DM with `with`: the open one with exactly those two, or a new one; needs Write on them (the reply-back rule "
+     "applies)", "ThreadView"),
     ("/api/v2/threads/{thread_id}", "get", "Threads", "getThread",
      "A thread as the viewer sees it: its unread count, read mark and what they may do", "ThreadView"),
     ("/api/v2/threads/{thread_id}", "patch", "Threads", "updateThread",
