@@ -1,18 +1,18 @@
 /* ui/app/growth-page.js — The Growth section (#/growth, docs: the growth spec §4): its head and tabs; a framework picker
    (North Star · Loops · Journey · Bets × Channels · Experiments), each a view over the same ideas, KPIs, channels and bets;
-   Working now; + Idea; This week (#/growth/week). Channels and Learning are their own files
-   (growth-channels.js, growth-learning.js); the Idea panel on a task is growth-idea.js; Brand and Go-to-market are
+   Working now; + Idea; This week (#/growth/week). Segments, Channels and Learning are their own files
+   (growth-segments.js, growth-channels.js, growth-learning.js); the Idea panel on a task is growth-idea.js; Brand and Go-to-market are
    brand-page.js and gtm-page.js. Also what those files share: formats, chips, idea cards, a small dialog, the lists
-   the forms pick from. Reads GET /api/v2/growth/{ideas,kpis,channels,settings,working,week} and GET /api/v2/strategy (bets).
+   the forms pick from. Reads GET /api/v2/growth/{ideas,kpis,channels,segments,settings,working,week} and GET /api/v2/strategy (bets).
    Every write is the server's to allow; edit controls show to the owner.
    Classic script: its globals are shared with the other files under ui/app/, loaded in the order index.html lists them. */
 'use strict';
 
-const GR_ROUTE = '#/growth', GR_WEEK = GR_ROUTE + '/week', GR_CHANNELS = GR_ROUTE + '/channels',
+const GR_ROUTE = '#/growth', GR_WEEK = GR_ROUTE + '/week', GR_SEGMENTS = GR_ROUTE + '/segments', GR_CHANNELS = GR_ROUTE + '/channels',
   GR_LEARNING = GR_ROUTE + '/learning', BRAND_ROUTE = '#/strategy/brand', GTM_ROUTE = GR_ROUTE + '/gtm';
 // Where Growth and Go-to-market lived, under Strategy: redesignRoute sends them here.
 const GR_OLD_ROUTE = '#/strategy/growth', GTM_OLD_ROUTE = '#/strategy/gtm';
-const GR_TABS = [['', GR_ROUTE, 'Overview'], ['week', GR_WEEK, 'This week'], ['channels', GR_CHANNELS, 'Channels'],
+const GR_TABS = [['', GR_ROUTE, 'Overview'], ['segments', GR_SEGMENTS, 'Segments'], ['week', GR_WEEK, 'This week'], ['channels', GR_CHANNELS, 'Channels'],
   ['learning', GR_LEARNING, 'Learning'], ['gtm', GTM_ROUTE, 'Go-to-market']];
 let GR = null;            // the open Growth page: {load, sub, data, fw}
 let GR_LOAD = 0;
@@ -73,12 +73,12 @@ function grBetsOf(s) {
   return ((owner ? s.bets : s.current?.bets) || []).filter(b => b.status !== 'retired')
     .sort((a, b) => (a.rank ?? 1e9) - (b.rank ?? 1e9)).map((b, n) => ({...b, n: n + 1}));
 }
-// What the forms pick from: KPIs, channels and bets, read together.
+// What the forms pick from: KPIs, channels, segments and bets, read together.
 async function grRefs(fresh = false) {
   const opts = fresh ? {fresh: true} : undefined;
-  const [k, c, s] = await Promise.all([get('/v2/growth/kpis', opts).catch(() => null), get('/v2/growth/channels', opts).catch(() => null),
-    get('/v2/strategy', opts).catch(() => null)]);
-  return {kpis: k?.kpis || [], channels: c?.channels || [], bets: grBetsOf(s), failed: !k || !c || !s};
+  const [k, c, s, g] = await Promise.all([get('/v2/growth/kpis', opts).catch(() => null), get('/v2/growth/channels', opts).catch(() => null),
+    get('/v2/strategy', opts).catch(() => null), gsRead(fresh)]);
+  return {kpis: k?.kpis || [], channels: c?.channels || [], segments: g, bets: grBetsOf(s), failed: !k || !c || !s};
 }
 
 // A small dialog: a title, a form, Cancel and the primary button. `onSave(form)` throws to show an error.
@@ -126,7 +126,8 @@ function grIdeaFields(refs, i = {}) {
     ${grField('Prediction', `<input name="prediction" maxlength="500" value="${esc(i.prediction || '')}">`)}
     ${grField('Bet', `<select name="bet_id">${grOpts(bets, i.bet_id)}</select>`)}
     ${grField('KPI', `<select name="kpi_id">${grOpts(kpis, i.kpi_id)}</select>`)}
-    ${chans.length ? `<fieldset class="gr-fs"><legend>Channels</legend>${grChecks('channels', chans, i.channels || [])}</fieldset>` : ''}`;
+    ${chans.length ? `<fieldset class="gr-fs"><legend>Channels</legend>${grChecks('channels', chans, i.channels || [])}</fieldset>` : ''}
+    ${gsChecks(refs.segments, i.segments || [])}`;
 }
 // The form as a body; given the idea it edits, only the fields that changed.
 function grIdeaBody(form, was = null) {
@@ -134,6 +135,8 @@ function grIdeaBody(form, was = null) {
   const body = {title: v('title'), hypothesis: v('hypothesis'), bet_id: v('bet_id') || null, kpi_id: v('kpi_id') || null,
     channels: grChecked(form, 'channels')};
   if (form.elements.prediction) body.prediction = v('prediction');
+  const segs = gsPicked(form);
+  if (segs) body.segments = segs;
   if (!body.title) throw new Error('A title');
   if (!was) return body;
   const same = (a, b) => Array.isArray(a) ? [...a].sort().join('\n') === [...(b || [])].sort().join('\n') : (a ?? '') === (b ?? '');
@@ -201,7 +204,8 @@ function pageGrowth() {
   GR = {load, sub, data: null, fw: ''};
   const main = $('#main');
   main.classList.add('strategy-layout', 'growth-layout');
-  main.innerHTML = growthHead(['channels', 'learning', 'week'].includes(sub) ? sub : '') + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  main.innerHTML = growthHead(['segments', 'channels', 'learning', 'week'].includes(sub) ? sub : '') + `<div id="gr-body" class="gr-body">${skelRows(6, {dot: false})}</div>`;
+  if (sub === 'segments') return pageGrowthSegments(GR);
   if (sub === 'channels') return pageGrowthChannels(GR);
   if (sub === 'learning') return pageGrowthLearning(GR);
   if (sub === 'week') return void growthWeek(GR);

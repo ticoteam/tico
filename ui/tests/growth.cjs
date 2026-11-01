@@ -2,9 +2,10 @@
 // the Strategy page's setup row, the Growth tab with no ideas (+ Idea with a prediction) and Channels with no month of
 // numbers (+ Month enters the first). Then Dana, Acme's owner, has a
 // published brand and go-to-market, two channels, two sources for revenue (a clash), a North Star with an input, a
-// month of channel numbers with an Unknown row, and three ideas, all seeded through the API. The Strategy page shows the
-// Brand strip; Brand's Edit saves a section and publishes it; Channels shows Unknown and a CAC; each Growth framework
-// draws the ideas; an Idea task shows its panel, starts a test and takes a verdict. Phone, then desktop.
+// month of channel numbers with an Unknown row, three ideas and four customer segments, all seeded through the API. The
+// Strategy page shows the Brand strip; Brand's Edit saves a section and publishes it; Channels shows Unknown and a CAC;
+// each Growth framework draws the ideas; Segments groups by status, adds one and moves one, which Where we play follows;
+// Channels narrows to one segment; an Idea task picks a segment, starts a test and takes a verdict. Phone, then desktop.
 const assert = require('node:assert/strict');
 const {run, open, go, ok, sideways, shot, t} = require('./support/redesign-e2e.cjs');
 
@@ -77,6 +78,22 @@ async function seed(page, {nsId, inpId}) {
   return {ideaId: idea.task_id || idea.idea?.task_id || idea.id};
 }
 
+// Four segments (two served, one tested, one next), Google Ads reaching the first, and a month of its numbers split
+// out for property managers.
+async function seedSegments(page) {
+  const id = r => r.segment?.id || r.id;
+  const homes = id(await ok(page, 'POST', 'growth/segments', {name: 'Homeowners', status: 'serving', motion: 'local', who_buys: 'Homeowners in Austin',
+    deal_size: '$90 a month', why: 'Most of our bookings'}));
+  const pms = id(await ok(page, 'POST', 'growth/segments', {name: 'Property managers', status: 'serving', motion: 'sales_led', who_buys: 'Operations lead',
+    deal_size: '$1,200 a month'}));
+  const hosts = id(await ok(page, 'POST', 'growth/segments', {name: 'Rental hosts', status: 'testing', motion: 'self_serve', who_buys: 'Hosts with 1-3 homes'}));
+  await ok(page, 'POST', 'growth/segments', {name: 'Offices', status: 'next', motion: 'sales_led'});
+  await ok(page, 'PATCH', 'growth/channels/google-ads', {segments: [homes, pms]});
+  await ok(page, 'PATCH', 'growth/channels/referrals', {segments: [homes]});
+  await ok(page, 'PUT', 'growth/cohorts', {channel: 'google-ads', month: MONTH, segment_id: pms, spend: 400, new_customers: 2, kept_d30: 100, quality: 'actual'});
+  return {homes, pms, hosts};
+}
+
 run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   const page = await open(browser, hub, 'dana', {phone});
   const noErrors = where => assert.deepEqual(page.errors, [], `${tag}: ${where} without page errors`);
@@ -97,7 +114,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await page.waitForFunction(() => location.hash === '#/growth', null, {timeout: t(5000)});
   await page.waitForFunction(() => document.querySelector('#side a[data-nav="growth"]')?.getAttribute('aria-current') === 'page', null, {timeout: t(5000)})
     .catch(() => assert.fail(`${tag}: Growth is current`));
-  assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Overview', 'This week', 'Channels', 'Learning', 'Go-to-market'], `${tag}: the Growth tabs`);
+  assert.deepEqual(await page.locator('.strat-tabs a').allInnerTexts(), ['Overview', 'Segments', 'This week', 'Channels', 'Learning', 'Go-to-market'], `${tag}: the Growth tabs`);
 
   // Growth with no ideas still draws the framework over the KPI tree.
   await page.locator('#gr-view .gr-ns').waitFor({timeout: t(10000)});
@@ -137,6 +154,7 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await page.waitForFunction(() => /\$\d/.test(document.querySelectorAll('tr:has([data-gc-row="google-ads"]) td')[3]?.textContent || ''), null, {timeout: t(10000)});
 
   const {ideaId} = await seed(page, refs);
+  const segs = await seedSegments(page);
 
   // Strategy: the Brand strip and the Go-to-market card.
   await go(page, '#/strategy');
@@ -240,11 +258,72 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   await flat(page, `${tag}: Channels`);
   await snap(page, `${tag}-09-channels`);
 
-  // The Idea panel: start a test, then a verdict.
+  // Segments: grouped Serving, Testing, Next, each row with its motion, buyer and channels.
+  await go(page, '#/growth/segments');
+  const group = st => page.locator(`[data-gs-group="${st}"] tbody tr`);
+  await group('next').first().waitFor({timeout: t(10000)});
+  assert.deepEqual([await group('serving').count(), await group('testing').count(), await group('next').count()], [2, 1, 1], `${tag}: segments by status`);
+  assert.deepEqual(await page.locator('[data-gs-group]').evaluateAll(els => els.map(e => e.dataset.gsGroup)), ['serving', 'testing', 'next'], `${tag}: the group order`);
+  const homesRow = page.locator(`tr[data-gs-row="${segs.homes}"]`);
+  assert.deepEqual(await homesRow.locator('.gr-tag').allInnerTexts(), ['Google Ads', 'Referrals'], `${tag}: the channels reaching Homeowners`);
+  assert.equal(await homesRow.locator('[data-gs-f="who_buys"]').inputValue(), 'Homeowners in Austin', `${tag}: the buyer`);
+  await flat(page, `${tag}: Segments`);
+  await snap(page, `${tag}-09a-segments`);
+  // + Segment adds a new one, testing by default.
+  await page.locator('#strat-actions [data-gs-new]').click();
+  const sd = page.locator('dialog.gr-dlg');
+  await sd.locator('[name="name"]').fill('Move-out cleans');
+  assert.equal(await sd.locator('[name="status"]').inputValue(), 'testing', `${tag}: a new segment is tested first`);
+  await sd.locator('[name="who_buys"]').fill('Renters moving out');
+  await sd.locator('[type=submit]').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-gs-group="testing"] tbody tr').length === 2, null, {timeout: t(10000)})
+    .catch(async () => assert.fail(`${tag}: the new segment shows (${await page.locator('.toast').allInnerTexts()})`));
+  const made = (await ok(page, 'GET', 'growth/segments')).segments.find(x => x.name === 'Move-out cleans');
+  assert.deepEqual([made?.status, made?.who_buys], ['testing', 'Renters moving out'], `${tag}: the new segment saved`);
+  // Its status select moves Rental hosts to Serving, and Where we play marks it Us beside the other two.
+  await page.locator(`tr[data-gs-row="${segs.hosts}"] [data-gs-f="status"]`).selectOption('serving');
+  await page.waitForFunction(() => document.querySelectorAll('[data-gs-group="serving"] tbody tr').length === 3, null, {timeout: t(10000)})
+    .catch(async () => assert.fail(`${tag}: the row moves to Serving (${await page.locator('.toast').allInnerTexts()})`));
+  assert.equal((await ok(page, 'GET', 'growth/segments')).segments.find(x => x.id === segs.hosts)?.status, 'serving', `${tag}: the status saved`);
+  await go(page, '#/strategy');
+  await page.waitForFunction(() => document.querySelectorAll('#strat-where .strat-tm.ours').length === 3, null, {timeout: t(15000)})
+    .catch(async () => assert.fail(`${tag}: three Us (${await page.locator('#strat-where').innerText()})`));
+  assert.equal(await page.locator('#strat-where .strat-tm.next').count(), 1, `${tag}: one Next`);
+  await page.locator('#strat-where').scrollIntoViewIfNeeded();
+  await flat(page, `${tag}: Where we play`);
+  await snap(page, `${tag}-09b-where-we-play`);
+
+  // Channels narrowed to property managers: only their split-out month counts (2 new against 14 in all).
+  await go(page, '#/growth/channels');
+  const newCell = () => page.locator('tr:has([data-gc-row="google-ads"]) td').nth(2).innerText();
+  await page.locator('[data-gc-seg]').waitFor({timeout: t(10000)});
+  assert.equal((await newCell()).trim(), '14', `${tag}: every row counts with All segments`);
+  await page.locator('[data-gc-seg]').selectOption(segs.pms);
+  await page.waitForFunction(() => location.hash.includes('s=') && document.querySelectorAll('tr:has([data-gc-row="google-ads"]) td')[2]?.textContent.trim() === '2',
+    null, {timeout: t(10000)}).catch(async () => assert.fail(`${tag}: one segment's numbers (${await newCell()})`));
+  await page.locator('[data-gc-row="google-ads"]').click();
+  await page.locator('.gc-detail .gc-heat').waitFor({timeout: t(10000)});
+  assert.equal(await page.locator('.gc-detail .gc-heat tbody tr').count(), 1, `${tag}: the segment's own month`);
+  await flat(page, `${tag}: Channels by segment`);
+  await snap(page, `${tag}-09c-channels-segment`);
+  // + Month starts in the picked segment.
+  await page.locator('[data-gc-month-add]').click();
+  assert.equal(await page.locator('dialog.gr-dlg [name="segment_id"]').inputValue(), segs.pms, `${tag}: + Month in the picked segment`);
+  await page.locator('dialog.gr-dlg [data-close]').first().click();
+
+  // The Idea panel: pick a segment, start a test, then a verdict.
   await go(page, '#/task/' + encodeURIComponent(ideaId));
   const panel = page.locator('[data-growth-idea]:not([hidden])');
   await panel.locator('.gi-head').waitFor({timeout: t(15000)});
   assert.equal(await page.locator('.tmodal-main > .tdesc.md:not([hidden])').count(), 0, `${tag}: the hypothesis shows once`);
+  await panel.locator('[data-gi-edit]').click();
+  const ed = page.locator('dialog.gr-dlg');
+  await ed.locator(`[data-gs-pick] input[value="${segs.homes}"]`).check();
+  await ed.locator('[type=submit]').click();
+  await panel.locator('.gs-tag').waitFor({timeout: t(10000)});
+  assert.equal(await panel.locator('.gs-tag').innerText(), 'Homeowners', `${tag}: the panel shows the segment`);
+  const picked = await ok(page, 'GET', 'growth/ideas/' + encodeURIComponent(ideaId));
+  assert.deepEqual((picked.segments || picked.idea?.segments || []).map(x => x === segs.homes || x === 'segment/homeowners'), [true], `${tag}: the segment saved`);
   await panel.locator('[data-gi-start]').click();
   const start = page.locator('dialog.gr-dlg');
   await start.locator('[name="change"]').fill('Credit goes from $100 to $200');
