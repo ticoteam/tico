@@ -77,6 +77,8 @@ async function assistantSend(P, text) {
   btn.disabled = true; pillBtnSay(btn, 'Sending…');
   try {
     const r = await cloudCompose('/v2/assistant/messages', {text: text || 'Attached files.'}, files);
+    // A 200 without the message (a sign-in page from a proxy) did not send: the draft stays.
+    if (!r?.message) throw new Error('Not sent. Try again.');
     pillAcknowledge(P, text, files, scope);
     if (state && V2C === state) {
       // Your words show at once; a lookup's answer comes with them, a bot turn streams in like any reply.

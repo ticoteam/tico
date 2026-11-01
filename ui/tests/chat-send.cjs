@@ -1,5 +1,5 @@
 // Offline browser regression: the Assistant's Send never does nothing (ui/app/assistant-page.js). A send the server
-// refuses says so and keeps the draft; text that arrived without an
+// refuses, or answers without a message (a sign-in page), says so and keeps the draft; text that arrived without an
 // input event (autofill, a tool filling the box) still sends on a click and shows in the thread. The bot chat's retry,
 // slow-send line and Return-during-a-send queue went with its composer; a bot's DM composer is in threads.cjs.
 const {chromium} = require('playwright');
@@ -34,6 +34,7 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
       if (p === '/api/v2/assistant/messages') {
         const text = route.request().postDataJSON().text;
         if (answer === 'error') return json({error: {code: 'internal', detail: 'Server error'}}, 500);
+        if (answer === 'html') return route.fulfill({contentType: 'text/html', body: '<!doctype html><title>Sign in</title>'});
         sends.push(text);
         const message = {id: 'm' + sends.length, from_actor: 'human:ana', body: text, created: new Date().toISOString()};
         thread.push(message);
@@ -53,6 +54,14 @@ const launch = () => chromium.launch({headless: true, channel: process.env.TICO_
     await box.fill('Refused by the server'); await page.keyboard.press('Enter');
     await page.waitForFunction(() => document.querySelector('.toast.err'));
     assert.equal(await value(), 'Refused by the server', 'a refused send keeps the draft');
+    await clearToasts();
+
+    // A 200 that created nothing (a sign-in page in front of the API) is not a send either.
+    answer = 'html';
+    await box.fill('Answered by a sign-in page'); await page.click('#chat-composer .p-send');
+    await page.waitForFunction(() => document.querySelector('.toast.err'));
+    assert.equal(await value(), 'Answered by a sign-in page', 'the draft stays');
+    assert.deepEqual(sends, []);
     await clearToasts();
 
     // Text put in the box without an input event still sends on a click.
