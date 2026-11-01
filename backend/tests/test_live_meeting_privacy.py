@@ -225,7 +225,7 @@ def test_message_references_cannot_grant_membership_of_an_unrelated_room(live):
         message = H.say(c, "human:ana", "bot:ops", "Synthetic personal chat", conversation_id=conv["id"])
         c.execute("UPDATE messages SET refs_json=? WHERE id=?", (encode({"live_meeting": {"meeting_id": mid}}), message["id"]))
     cid = message["conversation_id"]
-    assert get(live, f"conversations/{cid}/messages", token="cara-test", expected=403)
+    assert get(live, f"conversations/{cid}/messages", token="cara-test", expected=404)
     assert query(live, "SELECT id FROM conversations WHERE id=?", token="cara-test", params=[cid])["rows"] == []
 
 

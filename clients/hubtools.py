@@ -6734,6 +6734,9 @@ def _present(values):
 
 
 RULE_VERSION = {"type": "integer", "minimum": 1, "description": "The rule's version as you read it"}
+RULE_WHERE = {"type": "array", "maxItems": 20, "items": {"type": "string"}, "description": "Where it applies, any of: "
+              "thread:<id> (a conversation), team:<group>, kind:dm (a direct chat), has_outside_members. Empty or left "
+              "out: everywhere"}
 
 
 @tool("hub_rules_list", "The org rules in force, newest first, paged: internal (between teammates) and external "
@@ -6807,11 +6810,11 @@ def rules_ask(api, args):
                                "section": _s("The section it is in"), "quote": _s("The exact words")},
                 "required": ["file_id", "quote"]},
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]},
-       "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
+       "where": RULE_WHERE, "reviewer": _s("A person who reviews outputs under it"), "on_behalf_of": ASKED},
       required=("kind", "text"), writes=True)
 def rules_add(api, args):
-    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "source_id", "cite",
-                                              "if_broken", "reviewer")})
+    body = _present({k: args.get(k) for k in ("kind", "text", "description", "who", "with", "where", "source_id",
+                                              "cite", "if_broken", "reviewer")})
     who = _asked(api, args) if args.get("on_behalf_of") else _as_person(api)
     return who.post("rules", body, key=_key(args))
 
@@ -6819,11 +6822,11 @@ def rules_add(api, args):
 @tool("hub_rules_edit", "Edit an org rule: only the fields sent, against the version you read. A bot cannot edit.",
       {"id": _s("The rule's id"), "version": RULE_VERSION, "text": _s("The rule in one sentence"),
        "description": _s("Longer text"), "who": _rule_scope("Who follows it"), "with": _rule_scope("Internal: with whom"),
-       "source_id": _s("External: the From, by name or id"),
+       "source_id": _s("External: the From, by name or id"), "where": RULE_WHERE,
        "if_broken": {"type": "string", "enum": ["block", "escalate", "warn"]}, "reviewer": _s("A reviewer")},
       required=("id", "version"), writes=True)
 def rules_edit(api, args):
-    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "source_id",
+    body = _present({k: args.get(k) for k in ("version", "text", "description", "who", "with", "where", "source_id",
                                               "if_broken", "reviewer")})
     return _as_person(api).post(f"rules/{args['id']}", body, key=_key(args))
 
