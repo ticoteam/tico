@@ -305,9 +305,10 @@ site name and how many bytes, never the pages.
 What the sharing computer allows:
 
 - Ports 80 and 443 only.
-- Public internet addresses only. The sharing computer looks the name up itself and refuses its own addresses, its
-  home network (`10.*`, `172.16-31.*`, `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast and private IPv6,
-  and checks the address it actually connects to.
+- Public internet addresses only. The sharing computer looks the name up itself and refuses its own addresses
+  (including its home's public address, as Tico's relay sees it), its home network (`10.*`, `172.16-31.*`,
+  `192.168.*`), loopback, link-local, `100.64.0.0/10`, multicast, private IPv6 and the other special-purpose ranges
+  IANA lists, and checks the address it actually connects to.
 - Up to the daily cap. Crossing it closes that day's connections through it until midnight UTC.
 
 When the computer is offline, stops sharing with the bot, was removed or reached its cap, the bot's browser connection
@@ -321,7 +322,15 @@ computer's operator and admins see it.
 In turns of a bot with **Browse through** set, the runner sets `TICO_BROWSER_PROXY` (a proxy on `127.0.0.1` for that
 bot), adds `--proxy-server` to `CHROMIUM_FLAGS`, and puts `google-chrome`, `chromium` and their usual names first on
 `PATH` so a browser started by name goes through it. A browser started another way takes the proxy itself, for example
-Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`.
+Playwright's `chromium.launch({proxy: {server: process.env.TICO_BROWSER_PROXY}})`. A browser started by name gets
+the bot's own profile (`~/.tico/browser-exit/<bot>` unless `--user-data-dir` is given), and refuses to start when a
+browser not started through the proxy is open on that profile or when a flag would skip the proxy. `localhost` stays
+local: the browser reaches the bot's own computer directly, never through the exit.
+
+The proxy asks for no password, because a browser can't send one for every connection. Under turn isolation (Linux
+runners with `TICO_RUNNER_BOT_UID`), it takes connections only from the OS users that bot's turns run as. Without
+isolation, as on a Mac or a cloud machine, bots on one computer share one OS user and are one trust group: any of them
+can use another's proxy.
 
 API: `GET/POST /api/v2/computers/{id}/browser-exit`, `GET /api/v2/computers/{id}/browser-exit/usage`,
 `GET/POST /api/v2/bots/{bot}/browser-exit` ([OpenAPI](openapi/v2.json)). Hub: `hub computer browser-exit` and

@@ -3,18 +3,74 @@
 # puts this directory first on PATH only for a bot with an exit, so the proxy flag is never left off by a bot that
 # starts Chrome by name. Without TICO_BROWSER_PROXY the browser does not start: a bot with an exit never browses
 # from this computer's own address.
+#
+# Chrome hands a launch to a Chrome already running on the same profile (user data directory), which keeps its own
+# proxy settings. So the browser gets a profile of the bot's own, and when a Chrome is already running on it, the
+# launch goes ahead only if that Chrome was started through this same proxy; flags that would take the browser
+# around the proxy are refused.
 name="$1"
 shift
 if [ -z "$TICO_BROWSER_PROXY" ]; then
   echo "$name: this bot's browser exit is not set up on this computer" >&2
   exit 1
 fi
-here=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+proxy_flag="--proxy-server=$TICO_BROWSER_PROXY"
+profile=""
+for arg in "$@"; do
+  case "$arg" in
+    --user-data-dir=*) profile="${arg#--user-data-dir=}" ;;
+    "$proxy_flag" | "--proxy-bypass-list=<-loopback>") ;;
+    --proxy-server* | --no-proxy-server | --proxy-pac-url* | --proxy-auto-detect | --proxy-bypass-list* | --winhttp-proxy-resolver)
+      echo "$name: $arg would take this bot's browser around its browser exit" >&2
+      exit 1
+      ;;
+  esac
+done
+if [ -z "$profile" ]; then
+  if [ -z "$HOME" ]; then
+    echo "$name: no HOME for this bot's browser profile" >&2
+    exit 1
+  fi
+  profile="$HOME/.tico/browser-exit/${HUB_BOT:-bot}"
+  if ! mkdir -p "$profile"; then
+    echo "$name: can't make this bot's browser profile at $profile" >&2
+    exit 1
+  fi
+  set -- "$@" "--user-data-dir=$profile"
+fi
+# SingletonLock names the Chrome holding the profile as host-pid.
+lock="$profile/SingletonLock"
+if [ -L "$lock" ]; then
+  owner=$(readlink "$lock")
+  pid=${owner##*-}
+  host=${owner%-*}
+  alive=""
+  if [ "$host" = "$(uname -n)" ] && [ -n "$pid" ]; then
+    if [ -d "/proc/$pid" ] || kill -0 "$pid" 2>/dev/null || ps -p "$pid" >/dev/null 2>&1; then
+      alive=1
+    fi
+  fi
+  if [ -n "$alive" ]; then
+    if [ -r "/proc/$pid/cmdline" ]; then
+      running=$(tr '\000' ' ' <"/proc/$pid/cmdline")
+    else
+      running=$(ps -ww -o command= -p "$pid" 2>/dev/null)
+    fi
+    case " $running " in
+      *" $proxy_flag "*) ;;
+      *)
+        echo "$name: a browser not started through this bot's browser exit is open on $profile; close it first" >&2
+        exit 1
+        ;;
+    esac
+  fi
+fi
+# The real browser: the first on PATH that is not one of these shims (however this directory is spelled there).
 rest=""
 old_ifs=$IFS
 IFS=:
 for dir in $PATH; do
-  [ "$dir" = "$here" ] && continue
+  [ -e "$dir/launch-through-exit" ] && continue
   rest="${rest:+$rest:}$dir"
 done
 IFS=$old_ifs
@@ -23,4 +79,5 @@ if [ -z "$real" ]; then
   echo "$name: not installed" >&2
   exit 127
 fi
-exec "$real" --proxy-server="$TICO_BROWSER_PROXY" --force-webrtc-ip-handling-policy=disable_non_proxied_udp "$@"
+# The proxy flags last: a repeated Chrome switch takes its last value.
+exec "$real" "$@" "$proxy_flag" --force-webrtc-ip-handling-policy=disable_non_proxied_udp

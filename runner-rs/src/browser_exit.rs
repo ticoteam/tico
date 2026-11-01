@@ -41,6 +41,10 @@ const ANSWER: Duration = Duration::from_secs(25);
 const HEAD_BYTES: usize = 16 * 1024;
 const CHUNK: usize = 64 * 1024;
 const EXIT_TUNNELS: usize = 256;
+/// One bot's proxy takes this many connections at once (a browser opens a few dozen).
+const PROXY_CONNECTIONS: usize = 256;
+/// How long a browser has to send its request head.
+const HEAD_TIME: Duration = Duration::from_secs(10);
 const LINK_BACKOFF_MAX: Duration = Duration::from_secs(60);
 /// The bot's proxy ports are picked from here first, by bot, so a browser left running finds its proxy again after
 /// the runner restarts. Below the usual ephemeral ranges (Linux 32768+, macOS 49152+).
@@ -479,20 +483,85 @@ async fn serve(client: &Client, open: Open, room: bool) {
 
 // ------------------------------------------------------------------------------------------ the bot's side
 
-/// One bot's proxy: its port, and what its last tunnel came to (the proxy's own page says it).
+/// One bot's proxy: its port, what its last tunnel came to (the proxy's own page says it), and who may use it.
 struct Proxy {
     port: u16,
     exit: Mutex<String>,
     last_error: Mutex<Option<String>>,
+    /// Under isolation (crate::isolation), the OS users whose connections it takes: a leased turn user while a turn
+    /// of this bot runs as it (counted per turn), the shared bot user for good once a turn runs as that (every bot
+    /// running as it is one trust group). Without isolation every process is the runner's own user and none is
+    /// checked.
+    users: Mutex<HashMap<u32, usize>>,
+    /// Connections open at once; the accept loop waits for room before taking another.
+    room: Arc<Semaphore>,
+    task: Mutex<Option<tokio::task::AbortHandle>>,
 }
 
+const ALWAYS: usize = usize::MAX;
+
 impl Proxy {
+    fn new(port: u16, exit: String) -> Proxy {
+        Proxy {
+            port,
+            exit: Mutex::new(exit),
+            last_error: Mutex::new(None),
+            users: Mutex::new(HashMap::new()),
+            room: Arc::new(Semaphore::new(PROXY_CONNECTIONS)),
+            task: Mutex::new(None),
+        }
+    }
+
     fn note(&self, bot: &str, error: Option<String>) {
         let mut last = self.last_error.lock().unwrap();
         if let Some(e) = error.as_ref().filter(|e| last.as_ref() != Some(*e)) {
             log(&format!("Tico runner: {bot}'s browser exit refused a connection: {e}"));
         }
         *last = error;
+    }
+
+    /// Whether a connection from `peer_uid` may use this proxy.
+    fn admits(&self, peer_uid: Option<u32>, isolation: bool) -> bool {
+        !isolation || peer_uid.is_some_and(|uid| self.users.lock().unwrap().get(&uid).is_some_and(|n| *n > 0))
+    }
+}
+
+/// A turn's hold on its bot's proxy: the URL its browser goes through, and the OS users it lets in until the turn
+/// ends (env.rs keeps it in the turn's vault).
+pub struct Admission {
+    proxy: Arc<Proxy>,
+    leased: Vec<u32>,
+    pub url: String,
+}
+
+impl Admission {
+    /// Let `uid`, the user this turn's processes run as, use the proxy while the turn lasts.
+    pub fn allow(&mut self, uid: u32) {
+        let mut users = self.proxy.users.lock().unwrap();
+        let n = users.entry(uid).or_insert(0);
+        if *n != ALWAYS {
+            *n += 1;
+            self.leased.push(uid);
+        }
+    }
+
+    /// The shared bot user: every bot running as it can already reach the others' files, so it stays let in.
+    pub fn allow_always(&mut self, uid: u32) {
+        self.proxy.users.lock().unwrap().insert(uid, ALWAYS);
+    }
+}
+
+impl Drop for Admission {
+    fn drop(&mut self) {
+        let mut users = self.proxy.users.lock().unwrap();
+        for uid in self.leased.drain(..) {
+            if let Some(n) = users.get_mut(&uid).filter(|n| **n != ALWAYS) {
+                *n -= 1;
+                if *n == 0 {
+                    users.remove(&uid);
+                }
+            }
+        }
     }
 }
 
@@ -501,50 +570,111 @@ fn proxies() -> &'static Mutex<HashMap<String, Arc<Proxy>>> {
     PROXIES.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
+/// Stop a bot's proxy (`only`: if it is still that one): it has no exit any more. Connections already open end when
+/// the relay closes their tunnels.
+fn drop_proxy(bot: &str, only: Option<&Arc<Proxy>>) {
+    let mut all = proxies().lock().unwrap();
+    if only.is_some_and(|p| !all.get(bot).is_some_and(|kept| Arc::ptr_eq(kept, p))) {
+        return;
+    }
+    if let Some(proxy) = all.remove(bot) {
+        if let Some(task) = proxy.task.lock().unwrap().take() {
+            task.abort();
+        }
+    }
+}
+
 fn preferred_port(bot: &str) -> u16 {
     use sha2::{Digest, Sha256};
     let digest = Sha256::digest(bot.as_bytes());
     PORT_BASE + u16::from_be_bytes([digest[0], digest[1]]) % PORT_SPAN
 }
 
-/// The proxy URL a turn's browser goes through, when the turn names a browser exit (`attempt.browser_exit`, from
-/// backend/browser_exit.py). The proxy outlives the turn: a browser the bot left open keeps using it.
-pub async fn turn_proxy(bot: &str, attempt: &Value) -> Option<String> {
-    let exit = &attempt["browser_exit"];
-    if !exit.is_object() {
-        return None;
-    }
-    let name = text_of(&exit["name"]);
-    let client = CLIENT.get()?.clone();
+/// The proxy a turn's browser goes through, when the turn names a browser exit (`attempt.browser_exit`, from
+/// backend/browser_exit.py): None when it names none (a claimed turn's null stops the bot's proxy). A named exit whose
+/// proxy can't be set up is an error, and the turn fails: it never runs without the proxy. The proxy outlives the
+/// turn: a browser the bot left open keeps using it.
+pub async fn turn_proxy(bot: &str, attempt: &Value) -> Result<Option<Admission>, String> {
+    let exit = match attempt.get("browser_exit") {
+        Some(exit) if exit.is_object() => exit,
+        // A claimed turn always says (null: none, so a proxy left from an earlier exit stops); a watcher's run says
+        // nothing and leaves the proxy alone.
+        Some(_) => {
+            drop_proxy(bot, None);
+            return Ok(None);
+        }
+        None => return Ok(None),
+    };
+    let name = Some(text_of(&exit["name"])).filter(|n| !n.is_empty()).unwrap_or_else(|| "its exit computer".into());
+    let failed = |why: String| format!("This bot browses through {name}, but its browser proxy could not start: {why}");
+    let client = CLIENT.get().ok_or_else(|| failed("the runner is still starting".into()))?.clone();
     let existing = proxies().lock().unwrap().get(bot).cloned();
     let proxy = match existing {
         Some(p) => p,
         None => {
             let listener = match TcpListener::bind(("127.0.0.1", preferred_port(bot))).await {
                 Ok(l) => l,
-                Err(_) => TcpListener::bind(("127.0.0.1", 0)).await.ok()?,
+                Err(_) => TcpListener::bind(("127.0.0.1", 0)).await.map_err(|e| failed(e.to_string()))?,
             };
-            let port = listener.local_addr().ok()?.port();
-            let proxy = Arc::new(Proxy { port, exit: Mutex::new(name.clone()), last_error: Mutex::new(None) });
+            let port = listener.local_addr().map_err(|e| failed(e.to_string()))?.port();
+            let proxy = Arc::new(Proxy::new(port, name.clone()));
             let kept = proxies().lock().unwrap().entry(bot.to_string()).or_insert_with(|| proxy.clone()).clone();
             if Arc::ptr_eq(&kept, &proxy) {
-                tokio::spawn(serve_proxy(listener, bot.to_string(), proxy.clone(), client));
+                let task = tokio::spawn(serve_proxy(listener, bot.to_string(), proxy.clone(), client));
+                *proxy.task.lock().unwrap() = Some(task.abort_handle());
             }
             kept
         }
     };
     *proxy.exit.lock().unwrap() = name;
-    Some(format!("http://127.0.0.1:{}", proxy.port))
+    let url = format!("http://127.0.0.1:{}", proxy.port);
+    Ok(Some(Admission { proxy, leased: Vec::new(), url }))
 }
 
 async fn serve_proxy(listener: TcpListener, bot: String, proxy: Arc<Proxy>, client: Client) {
     loop {
-        let Ok((conn, _)) = listener.accept().await else {
+        let Ok(permit) = proxy.room.clone().acquire_owned().await else { return };
+        let Ok((conn, peer)) = listener.accept().await else {
             tokio::time::sleep(Duration::from_millis(100)).await;
             continue;
         };
-        tokio::spawn(handle(conn, bot.clone(), proxy.clone(), client.clone()));
+        let local = conn.local_addr().ok();
+        let (bot, proxy, client) = (bot.clone(), proxy.clone(), client.clone());
+        tokio::spawn(async move {
+            let isolation = crate::isolation::enabled();
+            let uid = if isolation { local.and_then(|local| peer_uid(local, peer)) } else { None };
+            if proxy.admits(uid, isolation) {
+                handle(conn, bot, proxy, client).await;
+            } else {
+                let mut conn = conn;
+                reply(&mut conn, 403, &format!("This is {bot}'s browser exit; only its own turns may use it")).await;
+            }
+            drop(permit);
+        });
     }
+}
+
+/// The OS user that owns the other end of a loopback TCP connection: the line in /proc/net/tcp whose local end is
+/// the peer and whose remote end is this listener. TCP sockets carry no SO_PEERCRED, but the kernel lists each
+/// socket's owner there. None off Linux (isolation is Linux only) or when it can't be found.
+fn peer_uid(local: SocketAddr, peer: SocketAddr) -> Option<u32> {
+    if !cfg!(target_os = "linux") {
+        return None;
+    }
+    let table = std::fs::read_to_string("/proc/net/tcp").ok()?;
+    uid_in_table(&table, local, peer)
+}
+
+fn uid_in_table(table: &str, local: SocketAddr, peer: SocketAddr) -> Option<u32> {
+    let hex = |addr: SocketAddr| match addr.ip() {
+        IpAddr::V4(v4) => Some(format!("{:08X}:{:04X}", u32::from_ne_bytes(v4.octets()), addr.port())),
+        IpAddr::V6(_) => None,
+    };
+    let (theirs, ours) = (hex(peer)?, hex(local)?);
+    table.lines().skip(1).find_map(|line| {
+        let fields: Vec<&str> = line.split_whitespace().collect();
+        (fields.len() > 7 && fields[1] == theirs && fields[2] == ours).then(|| fields[7].parse().ok()).flatten()
+    })
 }
 
 #[derive(Debug, PartialEq)]
@@ -662,7 +792,7 @@ async fn reply(conn: &mut TcpStream, code: u16, words: &str) {
 }
 
 async fn handle(mut conn: TcpStream, bot: String, proxy: Arc<Proxy>, client: Client) {
-    let Ok(Some((head, rest))) = tokio::time::timeout(Duration::from_secs(30), read_head(&mut conn)).await else {
+    let Ok(Some((head, rest))) = tokio::time::timeout(HEAD_TIME, read_head(&mut conn)).await else {
         return;
     };
     let (host, port, first) = match parse(&head) {
@@ -681,9 +811,13 @@ async fn handle(mut conn: TcpStream, bot: String, proxy: Arc<Proxy>, client: Cli
     };
     let mut ws = match open_tunnel(&client, &bot, &host, port, &proxy).await {
         Ok(ws) => ws,
-        Err(words) => {
+        Err((words, gone)) => {
             proxy.note(&bot, Some(words.clone()));
-            return reply(&mut conn, 502, &words).await;
+            reply(&mut conn, 502, &words).await;
+            if gone {
+                drop_proxy(&bot, Some(&proxy)); // the hub says the bot has no exit here any more
+            }
+            return;
         }
     };
     proxy.note(&bot, None);
@@ -713,20 +847,32 @@ fn closed_words(exit: &str, reason: &str) -> String {
 
 /// Ask the hub for a tunnel to `host:port` through the bot's exit and join it. Any refusal is the error, in words
 /// that name the exit; there is no other way out.
-async fn open_tunnel(client: &Client, bot: &str, host: &str, port: u16, proxy: &Proxy) -> Result<Socket, String> {
+/// The error says, too, whether the hub said the bot has no exit on this computer any more (its proxy then stops).
+async fn open_tunnel(
+    client: &Client,
+    bot: &str,
+    host: &str,
+    port: u16,
+    proxy: &Proxy,
+) -> Result<Socket, (String, bool)> {
     let mut once = client.clone();
     once.retries = 0; // a refusal is the answer, and the browser is waiting
     let grant = once
         .post("runners/me/browser-exit/tunnels", &json!({"bot": bot, "host": host, "port": port}), None)
         .await
         .map_err(|e| {
+            let gone = e.code == "browser_exit_none" || e.detail == "This bot is not on this computer";
             // The hub's own refusals already name the exit; anything else (the hub unreachable) gets the name here.
             if e.code.starts_with("browser_exit") {
-                e.detail
+                (e.detail, gone)
             } else {
-                format!("can't reach {} through the hub: {}", proxy.exit.lock().unwrap(), e.detail)
+                (format!("can't reach {} through the hub: {}", proxy.exit.lock().unwrap(), e.detail), gone)
             }
         })?;
+    open_granted(client, host, proxy, &grant).await.map_err(|words| (words, false))
+}
+
+async fn open_granted(client: &Client, host: &str, proxy: &Proxy, grant: &Value) -> Result<Socket, String> {
     let exit = Some(text_of(&grant["exit"]["name"]))
         .filter(|n| !n.is_empty())
         .unwrap_or_else(|| proxy.exit.lock().unwrap().clone());
@@ -941,8 +1087,7 @@ mod tests {
     async fn when_the_exit_is_offline_the_browser_gets_a_502_naming_it_and_nothing_goes_direct() {
         let hub = refusing_hub().await;
         let client = Client::new(&hub, "runner-token", 5, 3).unwrap();
-        let proxy =
-            Arc::new(Proxy { port: 0, exit: Mutex::new("Cara's MacBook".into()), last_error: Mutex::new(None) });
+        let proxy = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         tokio::spawn(serve_proxy(listener, "ops".into(), proxy.clone(), client));
@@ -973,5 +1118,127 @@ mod tests {
             answer.contains("Browsing through Cara's MacBook. Last refusal: Cara's MacBook is offline"),
             "{answer}"
         );
+    }
+
+    #[test]
+    fn under_isolation_only_the_turns_own_users_get_in_and_only_while_the_turn_lasts() {
+        let proxy = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
+        assert!(proxy.admits(None, false), "without isolation every process is the runner's user");
+        assert!(!proxy.admits(Some(10100), true));
+        assert!(!proxy.admits(None, true), "an owner that can't be found is refused");
+        let mut first = Admission { proxy: proxy.clone(), leased: Vec::new(), url: String::new() };
+        let mut second = Admission { proxy: proxy.clone(), leased: Vec::new(), url: String::new() };
+        first.allow(10100);
+        second.allow(10100);
+        second.allow_always(1001);
+        assert!(proxy.admits(Some(10100), true) && proxy.admits(Some(1001), true));
+        assert!(!proxy.admits(Some(10101), true), "another turn user is another bot's");
+        drop(first);
+        assert!(proxy.admits(Some(10100), true), "the second turn still runs as it");
+        drop(second);
+        assert!(!proxy.admits(Some(10100), true));
+        assert!(proxy.admits(Some(1001), true), "the shared bot user stays");
+    }
+
+    #[test]
+    fn the_peer_is_the_line_whose_local_end_is_the_browser_and_remote_end_the_proxy() {
+        // /proc/net/tcp on a little-endian machine: 127.0.0.1:47100 (proxy) and 127.0.0.1:51000 (browser).
+        let table = "  sl  local_address rem_address   st tx_queue rx_queue tr tm->when retrnsmt   uid  timeout inode
+   0: 0100007F:B7FC 00000000:0000 0A 00000000:00000000 00:00000000 00000000  1000        0 1 1 0000000000000000 100 0 0 10 0
+   1: 0100007F:B7FC 0100007F:C738 01 00000000:00000000 00:00000000 00000000  1000        0 2 1 0000000000000000 20 4 30 10 -1
+   2: 0100007F:C738 0100007F:B7FC 01 00000000:00000000 00:00000000 00000000 10100        0 3 1 0000000000000000 20 4 30 10 -1
+";
+        let proxy: SocketAddr = "127.0.0.1:47100".parse().unwrap();
+        let browser: SocketAddr = "127.0.0.1:51000".parse().unwrap();
+        if cfg!(target_endian = "little") {
+            assert_eq!(uid_in_table(table, proxy, browser), Some(10100));
+        }
+        assert_eq!(uid_in_table(table, proxy, "127.0.0.1:51001".parse().unwrap()), None);
+        assert_eq!(uid_in_table(table, "[::1]:47100".parse().unwrap(), "[::1]:51000".parse().unwrap()), None);
+    }
+
+    #[tokio::test]
+    async fn a_claimed_turn_without_an_exit_stops_the_proxy_and_a_watchers_run_leaves_it() {
+        let proxy = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
+        proxies().lock().unwrap().insert("ops-watch".into(), proxy.clone());
+        assert!(turn_proxy("ops-watch", &json!({"kind": "watch"})).await.unwrap().is_none());
+        assert!(proxies().lock().unwrap().contains_key("ops-watch"));
+        drop_proxy("ops-watch", Some(&Arc::new(Proxy::new(0, "x".into()))));
+        assert!(proxies().lock().unwrap().contains_key("ops-watch"), "another proxy's refusal doesn't stop this one");
+        assert!(turn_proxy("ops-watch", &json!({"browser_exit": null})).await.unwrap().is_none());
+        assert!(!proxies().lock().unwrap().contains_key("ops-watch"));
+    }
+
+    /// scripts/browser-exit run against a stand-in browser that prints the arguments it got.
+    #[cfg(unix)]
+    #[test]
+    fn the_browser_wrapper_gives_the_bot_its_own_profile_and_refuses_a_browser_that_would_skip_the_proxy() {
+        use std::os::unix::fs::{symlink, PermissionsExt};
+        use std::process::Command;
+        let root = std::env::temp_dir().join(format!("tico-exit-wrapper-{}", uuid::Uuid::new_v4()));
+        let (bin, home) = (root.join("bin"), root.join("home"));
+        std::fs::create_dir_all(&bin).unwrap();
+        std::fs::create_dir_all(&home).unwrap();
+        let fake = bin.join("google-chrome");
+        std::fs::write(&fake, "#!/bin/sh\nfor a in \"$@\"; do echo \"$a\"; done\n").unwrap();
+        std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let shims = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../scripts/browser-exit");
+        let proxy = "http://127.0.0.1:21001";
+        let run = |args: &[&str], proxy: Option<&str>| {
+            let mut cmd = Command::new(shims.join("google-chrome"));
+            cmd.args(args)
+                .env("PATH", format!("{}:{}:/usr/bin:/bin", shims.display(), bin.display()))
+                .env("HOME", &home)
+                .env("HUB_BOT", "ops")
+                .env_remove("TICO_BROWSER_PROXY");
+            if let Some(p) = proxy {
+                cmd.env("TICO_BROWSER_PROXY", p);
+            }
+            let out = cmd.output().unwrap();
+            (out.status.success(), String::from_utf8_lossy(&out.stdout).lines().map(String::from).collect::<Vec<_>>())
+        };
+        let profile = home.join(".tico/browser-exit/ops");
+        let own = format!("--user-data-dir={}", profile.display());
+        let flag = format!("--proxy-server={proxy}");
+
+        let (ok, args) = run(&["--new-window"], Some(proxy));
+        assert!(ok);
+        assert_eq!(
+            args,
+            ["--new-window", own.as_str(), flag.as_str(), "--force-webrtc-ip-handling-policy=disable_non_proxied_udp"]
+        );
+        let theirs = format!("--user-data-dir={}", root.join("kept").display());
+        let (ok, args) = run(&[&theirs, "--proxy-bypass-list=<-loopback>"], Some(proxy));
+        assert!(ok && args[0] == theirs && args.iter().filter(|a| a.starts_with("--user-data-dir")).count() == 1);
+        for skip in [
+            "--no-proxy-server",
+            "--proxy-server=socks5://10.0.0.8:1080",
+            "--proxy-pac-url=http://x/p.pac",
+            "--proxy-auto-detect",
+            "--proxy-bypass-list=*",
+        ] {
+            assert!(!run(&[skip], Some(proxy)).0, "{skip}");
+        }
+        assert!(!run(&[], None).0, "no proxy, no browser");
+
+        // A Chrome already open on the profile takes the launch: only one started through this proxy may.
+        let host = String::from_utf8(Command::new("uname").arg("-n").output().unwrap().stdout).unwrap();
+        let lock = profile.join("SingletonLock");
+        let mut plain = Command::new("sleep").arg("30").spawn().unwrap();
+        symlink(format!("{}-{}", host.trim(), plain.id()), &lock).unwrap();
+        assert!(!run(&[], Some(proxy)).0, "a browser without the proxy holds the profile");
+        let mut through = Command::new("sh").args(["-c", "sleep 30; :", "sh", flag.as_str()]).spawn().unwrap();
+        std::fs::remove_file(&lock).unwrap();
+        symlink(format!("{}-{}", host.trim(), through.id()), &lock).unwrap();
+        assert!(run(&[], Some(proxy)).0, "a browser started through this proxy holds it");
+        assert!(!run(&[], Some("http://127.0.0.1:21002")).0, "but not through another bot's proxy");
+        let _ = plain.kill();
+        let _ = through.kill();
+        let _ = plain.wait();
+        let _ = through.wait();
+        std::fs::remove_file(&lock).unwrap();
+        symlink(format!("{}-{}", host.trim(), plain.id()), &lock).unwrap();
+        assert!(run(&[], Some(proxy)).0, "a lock left by a browser that exited is stale");
+        let _ = std::fs::remove_dir_all(&root);
     }
 }
