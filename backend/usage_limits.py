@@ -12,11 +12,20 @@ on a ChatGPT or Claude sign-in are flat cost, so their API-equivalent counts onl
   100%  the bot takes no new job until the period turns over or the limit is raised: the job stays queued and the bot
         reads "Paused: over its hourly limit". A run already going finishes.
 
-The hour is the UTC clock hour, the day the UTC day, the week starts Monday 00:00 UTC and the month is the UTC calendar
-month.
+A Finance budget that refuses at its limit (`decline`) on a bot's AI services path is one more limit: at its cutoff
+every bot it covers is held the same way and reads "Paused: AI services budget reached" (scope `budget`, no amounts,
+since who reads a paused bot may not see the budget). Video production is not one: a run need not make images, so its
+cutoff refuses new images instead. Caps and budgets both stay; whichever is met first holds.
+
+The window is the UTC half hour (`per_30m`): it replaces the hour for every new limit, and an hour limit set before
+stays in force. The day is the UTC day, the week starts
+Monday 00:00 UTC and the month is the UTC calendar month. Over a window the bot takes no new turn and resumes when the
+window ends.
 """
 
 import json
+import logging
+import math
 from datetime import datetime, timedelta, timezone
 
 from .store import H
@@ -24,9 +33,11 @@ from .store import H
 KEY = "usage_limits"                       # the company default, in registry_metadata
 WARN = 80
 MAX_USD = 10_000_000
-PERIODS = (("hourly", "hour"), ("daily", "day"), ("weekly", "week"), ("monthly", "month"))
+PERIODS = (("per_30m", "30m"), ("hourly", "hour"), ("daily", "day"), ("weekly", "week"), ("monthly", "month"))
 KEYS = tuple(name + "_usd" for name, _ in PERIODS)
 COMPANY = "company"                        # the pool every bot is in
+# How a period reads in a sentence (the key is what the data calls it).
+WORDS = {"per_30m": "30-minute", "hourly": "hourly", "daily": "daily", "weekly": "weekly", "monthly": "monthly"}
 
 SCHEMA = (
     "CREATE TABLE IF NOT EXISTS usage_pools (scope TEXT PRIMARY KEY, hourly_usd REAL, daily_usd REAL, "
@@ -35,12 +46,30 @@ SCHEMA = (
 
 
 def ensure(c):
-    """The hourly and weekly columns on a bot's own limits and the pools table; safe to run on any database."""
+    """The 30-minute, hourly and weekly columns on a bot's own limits and the pools table; safe to run on any database."""
     from .hubdb import add_column
-    for column in ("hourly_usd", "weekly_usd"):
+    for column in ("hourly_usd", "weekly_usd", "per_30m_usd"):
         add_column(c, "usage_limits", column, "REAL")
     for statement in SCHEMA:
         c.execute(statement)
+    add_column(c, "usage_pools", "per_30m_usd", "REAL")
+
+
+def half(value):
+    """An hour's limit as the half hour that replaces it: half of it, rounded up to the next $0.10. The sustained rate is
+    the same, in the window that replaces the hour."""
+    return round(math.ceil(round(float(value) / 2 * 10, 6)) / 10, 6)
+
+
+def periods(c):
+    """The windows that apply: every one, the 30-minute one and the hour (kept for limits set before it) included."""
+    return PERIODS
+
+
+def shown(c, caps):
+    """A caps dict with every window's key; one out of force would show as None."""
+    live = {name + "_usd" for name, _ in periods(c)}
+    return {key: (caps[key] if key in live else None) for key in KEYS}
 
 
 class Default(dict):
@@ -85,13 +114,24 @@ def own(c, bot):
     return _caps(one(c, OWN_SQL, (bot,)))
 
 
+def prime_own(c, bots):
+    """Every bot's own limits read in one statement, for a page that asks for many bots in one snapshot."""
+    from .read_cache import prime
+    found = {row["bot"]: row for row in c.execute("SELECT * FROM usage_limits")}
+    prime(c, OWN_SQL, {(bot,): found.get(bot) for bot in bots})
+
+
 def effective(c, bot, default=None):
     """Each period's cap in USD or None, and where each came from: `bot`, `company` or None."""
     default = default if default is not None else company(c)
     mine = own(c, bot)
     out, source = {}, {}
+    live = {name for name, _ in periods(c)}
     for name, _ in PERIODS:
         key = name + "_usd"
+        if name not in live:
+            out[key], source[name] = None, None
+            continue
         out[key] = mine[key] if mine[key] is not None else default[key]
         source[name] = "bot" if mine[key] is not None else "company" if default[key] is not None else None
     return out, source
@@ -155,10 +195,10 @@ def save_pool(c, scope, caps, actor):
     if not any(caps.values()):
         c.execute("DELETE FROM usage_pools WHERE scope=?", (scope,))
         return
-    c.execute("INSERT INTO usage_pools(scope, hourly_usd, daily_usd, weekly_usd, monthly_usd, updated, updated_by) "
-              "VALUES(?,?,?,?,?,?,?) ON CONFLICT(scope) DO UPDATE SET hourly_usd=excluded.hourly_usd, "
-              "daily_usd=excluded.daily_usd, weekly_usd=excluded.weekly_usd, monthly_usd=excluded.monthly_usd, "
-              "updated=excluded.updated, updated_by=excluded.updated_by",
+    marks = ",".join("?" * len(KEYS))
+    c.execute(f"INSERT INTO usage_pools(scope, {', '.join(KEYS)}, updated, updated_by) VALUES(?,{marks},?,?) "
+              "ON CONFLICT(scope) DO UPDATE SET " + ", ".join(f"{key}=excluded.{key}" for key in KEYS) +
+              ", updated=excluded.updated, updated_by=excluded.updated_by",
               (scope, *(caps[key] for key in KEYS), H.now(), actor))
 
 
@@ -185,12 +225,14 @@ def scopes_of(c, bot, default=None):
 
 
 def members(c, scope, default=None):
-    """The bots a pool covers."""
-    _, chains = groups(c, default)
-    if scope == COMPANY:
-        return set(chains)
-    gid = scope.split(":", 1)[1]
-    return {bot for bot, chain in chains.items() if gid in chain}
+    """The bots a pool covers. Kept for the pass when `default` carries a memo: a page of 200 bots asks once a pool."""
+    memo = default.memo if isinstance(default, Default) else {}
+    key = ("members", scope)
+    if key not in memo:
+        _, chains = groups(c, default)
+        gid = scope.split(":", 1)[1] if scope != COMPANY else None
+        memo[key] = frozenset(chains) if gid is None else frozenset(bot for bot, chain in chains.items() if gid in chain)
+    return memo[key]
 
 
 def label(c, scope, default=None):
@@ -207,12 +249,15 @@ def bounds(at=None):
     """The current period's key and its [from, to) timestamps: {hourly: (key, from, to), daily: ..., weekly: ..., monthly: ...}."""
     at = at or datetime.now(timezone.utc)
     hour = at.replace(minute=0, second=0, microsecond=0)
+    half_hour = at.replace(minute=30 if at.minute >= 30 else 0, second=0, microsecond=0)
     day = at.strftime("%Y-%m-%d")
     monday = (at - timedelta(days=at.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
     year, week, _ = at.isocalendar()
     first = at.replace(day=1)
     following = first.replace(year=first.year + (first.month == 12), month=first.month % 12 + 1)
-    return {"hourly": (hour.strftime("%Y-%m-%dT%H"), hour.strftime("%Y-%m-%dT%H:00:00"),
+    return {"per_30m": (half_hour.strftime("%Y-%m-%dT%H:%M"), half_hour.strftime("%Y-%m-%dT%H:%M:00"),
+                        (half_hour + timedelta(minutes=30)).strftime("%Y-%m-%dT%H:%M:00")),
+            "hourly": (hour.strftime("%Y-%m-%dT%H"), hour.strftime("%Y-%m-%dT%H:00:00"),
                        (hour + timedelta(hours=1)).strftime("%Y-%m-%dT%H:00:00")),
             "daily": (day, day + "T00:00:00", (at + timedelta(days=1)).strftime("%Y-%m-%dT00:00:00")),
             "weekly": (f"{year}-W{week:02d}", monday.strftime("%Y-%m-%dT00:00:00"),
@@ -246,9 +291,21 @@ def pool_spent(c, scope, start, end, subscription, default=None):
 
 
 def pool_state(c, scope, at=None, default=None):
-    """A pool's caps, what its bots have spent in each period with a cap, and `blocked` (the period) when one is met."""
+    """A pool's caps, what its bots have spent in each period with a cap, and `blocked` (the period) when one is met.
+    Read now (`at` None), it is kept for the pass: every bot in the pool asks for it."""
     default = default if default is not None else company(c)
-    caps = pools(c, default).get(scope) or pool(c, scope)
+    memo = default.memo if at is None and isinstance(default, Default) else None
+    key = ("pool_state", scope)
+    if memo is not None and key in memo:
+        return dict(memo[key])
+    result = _pool_state(c, scope, at, default)
+    if memo is not None:
+        memo[key] = dict(result)
+    return result
+
+
+def _pool_state(c, scope, at, default):
+    caps = shown(c, pools(c, default).get(scope) or pool(c, scope))
     when = bounds(at)
     result = {**caps, "percent": 0, "blocked": None}
     for name, label_ in PERIODS:
@@ -263,6 +320,20 @@ def pool_state(c, scope, at=None, default=None):
         if amount >= cap and not result["blocked"]:
             result["blocked"] = name
     return result
+
+
+def spent_now(c, bot=None, scope=None, at=None, default=None):
+    """What a bot, or a pool's bots together, has spent so far in each window in force, capped or not:
+    {"30m": usd, "hour": usd, "day": usd, ...}. Budget adds these up the org chart."""
+    default = default if default is not None else company(c)
+    when, subscription = bounds(at), default["count_subscription"]
+    out = {}
+    for name, label_ in periods(c):
+        _, start, end = when[name]
+        amount = pool_spent(c, scope, start, end, subscription, default) if scope else \
+            spent(c, bot, start, end, subscription, default)
+        out[label_] = round(amount, 6)
+    return out
 
 
 def state(c, bot, at=None, default=None):
@@ -294,7 +365,33 @@ def state(c, bot, at=None, default=None):
                 result["blocked_by"] = {"scope": scope, "name": label(c, scope, default), "period": period,
                                         "spent": found[label_ + "_spent"], "limit": found[period + "_usd"]}
                 break
+    if not result["blocked"]:
+        cut = budget_cutoff(c, bot, at, default)
+        if cut:
+            result["blocked"] = cut["period"]
+            result["blocked_by"] = cut
     return result
+
+
+def budget_cutoff(c, bot, at=None, default=None):
+    """The Finance budget at its cutoff that holds the bot: {scope: budget, name, period, budget_id, until}, else None.
+    One pass over many bots reads the budgets once (the memo on `default`). A fault in Finance holds no bot."""
+    memo = default.memo if at is None and isinstance(default, Default) else None
+    try:
+        if memo is not None and "finance_cutoffs" in memo:
+            cuts = memo["finance_cutoffs"]
+        else:
+            from .finance import reads as finance_reads
+            cuts = finance_reads.cutoffs(c, at.strftime("%Y-%m-%dT%H:%M:%S.%fZ") if at else None)
+            if memo is not None:
+                memo["finance_cutoffs"] = cuts
+        cut = cuts.of(bot)
+    except Exception:
+        logging.getLogger(__name__).exception("Reading Finance budget cutoffs failed")
+        return None
+    if cut is None:
+        return None
+    return {"scope": "budget", "name": cut.name, "period": cut.period, "budget_id": cut.budget_id, "until": cut.until}
 
 
 def blocked(c, bot, at=None, default=None):
@@ -305,23 +402,31 @@ def blocked(c, bot, at=None, default=None):
 def why(met):
     """The words on a paused bot, from `over`'s answer (or a bare period, for the bot's own limit)."""
     met = met if isinstance(met, dict) else {"period": met, "scope": "bot"}
+    word = WORDS.get(met["period"], met["period"])
+    if met.get("scope") == "budget":
+        return f"Paused: {met['name']} budget reached"
     if met.get("scope", "bot") == "bot":
-        return f"Paused: over its {met['period']} limit"
-    return f"Paused: {met['name']} is over its {met['period']} limit"
+        return f"Paused: over its {word} limit"
+    return f"Paused: {met['name']} is over its {word} limit"
 
 
 def over(c, bot, at=None, default=None):
     """The limit a bot is held by, for the pages and the hub tools: {period, spent, limit, until, scope, name}, else
-    None. `scope` is `bot`, `company` or `group:<id>`; `name` names a pool; `until` is when the period turns over (UTC)."""
+    None. `scope` is `bot`, `company`, `group:<id>` or `budget` (a Finance budget at its cutoff, with no amounts);
+    `name` names a pool or budget; `until` is when the period turns over (UTC; "" for a one-time budget)."""
     found = state(c, bot, at, default)
     met = found["blocked_by"]
     if not met:
         return None
+    if met["scope"] == "budget":
+        return dict(met)
     return {**met, "until": bounds(at)[met["period"]][2] + "Z"}
 
 
 def resets(period, until):
     """When a period turns over, as a person reads it."""
+    if period == "per_30m":
+        return f"{until:%H:%M} UTC"
     if period == "hourly":
         return f"{until:%H}:00 UTC"
     if period == "daily":
@@ -339,11 +444,16 @@ def warning(c, actor, at=None):
     if not met:
         return None
     name = (H.bot(c, bot) or {}).get("display_name") or bot
+    if met["scope"] == "budget" and not met["until"]:
+        return f"{name} is waiting: the {met['name']} budget is used up; it starts again when a person raises it."
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
+    if met["scope"] == "budget":
+        return (f"{name} is waiting: the {met['name']} budget is used up for this period; it starts again on "
+                f"{reset} or when a person raises the budget.")
     if met["scope"] == "bot":
-        return (f"{name} is over its {met['period']} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}); "
+        return (f"{name} is over its {WORDS.get(met['period'], met['period'])} limit (${met['spent']:,.2f} of ${met['limit']:,.2f}); "
                 f"it starts again at {reset} or when a person raises the limit.")
-    return (f"{name} is waiting: {met['name']} is over its {met['period']} limit; "
+    return (f"{name} is waiting: {met['name']} is over its {WORDS.get(met['period'], met['period'])} limit; "
             f"it starts again at {reset} or when a person raises the limit.")
 
 
@@ -366,7 +476,7 @@ def after_run(c, bot, owner_email="", at=None):
     limits, _ = effective(c, bot, default)
     checks = [(bot, limits, lambda amount_of: amount_of(bot))]
     for scope in scopes_of(c, bot, default):
-        checks.append(("@" + scope, pools(c, default)[scope], lambda amount_of, s=scope: sum(amount_of(b) for b in members(c, s, default))))
+        checks.append(("@" + scope, shown(c, pools(c, default)[scope]), lambda amount_of, s=scope: sum(amount_of(b) for b in members(c, s, default))))
     when = bounds(at)
     for who, caps, total in checks:
         for name, _ in PERIODS:
@@ -406,8 +516,9 @@ def notify(c, bot, level, label_, amount, cap, owner_email=""):
     person = recipients(c, bot, owner_email)
     name = (H.bot(c, bot) or {}).get("display_name") or bot
     money = f"${amount:,.2f} of ${cap:,.2f}"
-    text = (f"{name} is at {level}% of its {label_} limit ({money}, estimated)." if level < 100 else
-            f"{name} reached its {label_} limit ({money}, estimated) and takes no new work until it resets or the limit is raised.")
+    word = WORDS.get(label_, label_)
+    text = (f"{name} is at {level}% of its {word} limit ({money}, estimated)." if level < 100 else
+            f"{name} reached its {word} limit ({money}, estimated) and takes no new work until it resets or the limit is raised.")
     if person:
         H.say(c, H.KEEPER, H.human_actor(person["id"]), text, kind="notice")
     H.event(c, H.KEEPER, "usage.limit", H.bot_actor(bot), {"level": level, "period": label_, "spent": round(amount, 4), "limit": cap})
@@ -418,8 +529,9 @@ def notify_pool(c, scope, level, label_, amount, cap, owner_email="", default=No
     person = recipients(c, None, owner_email)
     name = label(c, scope, default)
     money = f"${amount:,.2f} of ${cap:,.2f}"
-    text = (f"{name[0].upper() + name[1:]} is at {level}% of its {label_} limit ({money}, estimated)." if level < 100 else
-            f"{name[0].upper() + name[1:]} reached its {label_} limit ({money}, estimated); its bots take no new work "
+    word = WORDS.get(label_, label_)
+    text = (f"{name[0].upper() + name[1:]} is at {level}% of its {word} limit ({money}, estimated)." if level < 100 else
+            f"{name[0].upper() + name[1:]} reached its {word} limit ({money}, estimated); its bots take no new work "
             "until it resets or the limit is raised.")
     if person:
         H.say(c, H.KEEPER, H.human_actor(person["id"]), text, kind="notice")

@@ -302,11 +302,14 @@ function taskBoardDrop(state, d) {
     ...(moving && step.status === 'done' && t.status !== 'done' ? {status: 'done'} : {})};
   const fields = {...(moving ? {step_id: stepId, step, status: t.status === 'waiting' && !BOARD_HIDDEN.has(step.status) ? 'waiting' : step.status} : {}),
     ...(rank != null ? {step_rank: rank} : {})};
-  if (moving && step.name === 'Blocked') {
+  if (moving && step.status === 'waiting') {
     void taskBlockedReason(t, d.card.querySelector('[data-open-task]')).then(reason => {
       if (reason !== null && TASKS_ST === state) taskBoardSave(state, t, {...body, note: reason}, fields, 'Not moved');
     });
-  } else taskBoardSave(state, t, body, fields, 'Not moved');
+  } else {
+    taskBoardSave(state, t, body, fields, 'Not moved');
+    if (body.status === 'done') taskDoneMotion(d.key);   // the card, now in its done column, draws its check
+  }
   return true;
 }
 // A card's change (a move, a new owner) drawn at once, before the server answers; a refusal puts it back and says why.

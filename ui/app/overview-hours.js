@@ -17,8 +17,11 @@ async function overviewHoursLoad() {
   state.hoursLoading = true; state.hoursAt = Date.now();
   try {
     const data = await get('/v2/overview/bot-hours');
-    if (OVERVIEW_PAGE === state) { state.hours = data; overviewHoursDraw(); }
-  } catch {} // The card stays as it was; the next refresh asks again.
+    S.lastRead.hours = data;
+    if (OVERVIEW_PAGE === state && !sameData(data, state.hours)) { state.hours = data; overviewHoursDraw(); }
+  } catch { // The card stays as it was (a first visit's empty card goes away); the next refresh asks again.
+    if (OVERVIEW_PAGE === state && !state.hours) $('#overview-hours').hidden = true;
+  }
   finally { state.hoursLoading = false; }
 }
 function overviewHoursMaybe() {
@@ -51,9 +54,16 @@ function overviewHoursChart(weeks) {
   <div class="ovh-tip" role="status" hidden></div>`;
 }
 
+// Before its first answer the card holds a line's place, so the campus below does not jump when it lands; a return
+// visit draws the last answer at once (S.lastRead.hours) and the read that follows redraws it only if it changed.
 function overviewHoursDraw() {
-  const el = OVERVIEW_PAGE && $('#overview-hours'), d = OVERVIEW_PAGE?.hours;
-  if (!el || !d) return;
+  const el = OVERVIEW_PAGE && $('#overview-hours');
+  if (!el) return;
+  const d = OVERVIEW_PAGE.hours ||= S.lastRead.hours;
+  if (!d) {
+    el.innerHTML = '<span class="ovh-title">Bot hours vs human hours</span><p class="ovh-head" aria-hidden="true">&nbsp;</p>';
+    return;
+  }
   const last = d.last_7_days || {}, weeks = (d.weeks || []).filter(w => w.ratio != null);
   let body, plot = false;
   if (!d.first_run) {

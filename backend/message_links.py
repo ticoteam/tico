@@ -48,9 +48,12 @@ SCHEMA = (
     "DELETE FROM message_links_seen WHERE message_id=OLD.id; END",
     "CREATE INDEX IF NOT EXISTS conversations_task ON conversations(task_id) WHERE task_id IS NOT NULL",
     # The few run events that name tasks (task_privacy.RUN_TASK_EVENTS_SQL), read on every task page: here, with
-    # the links, so it never depends on the start-up index on all events.
-    "CREATE INDEX IF NOT EXISTS events_run_task ON events(action, target) "
+    # the links, so it never depends on the start-up index on all events. Covering their detail: a run's provenance
+    # reads them per run (1.4M a day on Tico Team), and `candidates` searches every one's detail (2.1 s on TIDY when
+    # each was a table row). It replaces events_run_task (action, target), dropped here on every start.
+    "CREATE INDEX IF NOT EXISTS events_run_detail ON events(action, target, detail_json) "
     "WHERE action IN ('task.next-run.carried','attempt.input.moved')",
+    "DROP INDEX IF EXISTS events_run_task",
 )
 
 

@@ -23,19 +23,27 @@ Fail open: Off, no decision model, rehearsal install, the month's spend cap, the
 within `DEADLINE` seconds, a malformed answer, or an answer the outcome depends on under its threshold all let the
 item through as before. Each call is one `judge.call` row (label, model, tokens, latency, cost, the answers and the
 outcome); never the item's text. Each gated item is one `ask_ingest_items` row (ids, outcome and reason; never text).
+
+Bounded: at most `CONCURRENCY` calls run at once in this process (`call_slots.Calls`, a pool of its own apart
+from the rule checks'). With every slot in use, or the breaker open after repeated failures, the item fails open
+at once (`busy`, `breaker`) and no call is made, so no `judge.call` row is written. A call still running at
+`DEADLINE` is cut off there (`J.within`) and keeps its slot until it really ends.
 """
 
 import json
 import logging
 import threading
+import weakref
 
 from clients import judge as J
+from .call_slots import NEUTRAL, REFUSED, Calls
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
 from .store import H
 
 LOG = logging.getLogger("tico.ask_ingest")
 QUESTION_SET = "person-ask-ingest"
 DEADLINE = 10
+CONCURRENCY = 8               # calls at once, per process; the rule checks have their own pool
 MAX_ITEMS = 100               # the person's open items offered as `covered` options, newest first
 MAX_TEXT = 1500               # the item's text the model sees
 MAX_CRITERIA, MAX_CRITERION = 10, 200
@@ -129,9 +137,9 @@ def save(c, actor, person, body):
 # ---- who is gated, and the person's load ------------------------------------------------------------------------
 
 def gated(who, assistant_bot=""):
-    """Whether this caller's write is gated: a bot writing as itself. A person, their Assistant acting for them
+    """Gate a bot writing as itself or through BotOps. A person, their Assistant acting for them
     (`via`), BotOps acting for a person and the keeper are not."""
-    return (who.role == "bot" and not who.via and str(who.actor).startswith("bot:")
+    return (who.role == "bot" and who.via in (None, "", "botops") and str(who.actor).startswith("bot:")
             and H.actor_id(who.actor) != assistant_bot)
 
 
@@ -178,24 +186,53 @@ def manager_of(c, bot_actor):
 
 # ---- the call ---------------------------------------------------------------------------------------------------
 
-def _ask(engine, state, questions, label):
-    """The engine's answer within DEADLINE seconds: (result, None), (None, error code) or (None, 'timeout')."""
+_CALLS, _CALLS_LOCK = weakref.WeakKeyDictionary(), threading.Lock()
+
+
+def calls_for(store):
+    """The store's ask ingest pool, `CONCURRENCY` slots (`call_slots.Calls`); the rule checks' pool is apart."""
+    with _CALLS_LOCK:
+        calls = _CALLS.get(store)
+        if calls is None:
+            calls = _CALLS[store] = Calls(CONCURRENCY, "Ask ingest")
+        return calls
+
+
+def _ask(calls, engine, state, questions, label):
+    """The engine's answer within DEADLINE seconds: (result, None), or (None, error code): `timeout`, and `busy` or
+    `breaker` at once, asking nothing. The deadline is the call's own too (`J.within`), so an abandoned call stops at
+    it, and its slot ends with it."""
+    refused, probe = calls.admit()
+    if refused:
+        return None, refused
     box = {}
 
     def work():
         try:
-            box["result"] = engine(state, questions, label)
+            with J.within(DEADLINE):
+                box["result"] = engine(state, questions, label)
         except J.JudgeError as exc:
             box["error"] = exc.code
         except Exception as exc:    # a fake, a provider bug: the write never breaks on it
             LOG.warning("Ask ingest call failed: %s", type(exc).__name__)
             box["error"] = "error"
+        finally:
+            calls.slots.release()
     worker = threading.Thread(target=work, name="ask-ingest", daemon=True)
-    worker.start()
+    try:
+        worker.start()
+    except RuntimeError:                    # no thread to be had: the slot goes back and the item fails open
+        calls.slots.release()
+        calls.done(None, probe)
+        return None, "busy"
     worker.join(DEADLINE)
     if worker.is_alive():
+        calls.done(False, probe)
         return None, "timeout"
-    return box.get("result"), box.get("error")
+    error = box.get("error")
+    answered = error is None and box.get("result") is not None
+    calls.done(None if error in NEUTRAL else answered, probe)
+    return box.get("result"), error
 
 
 def _bot_line(c, actor):
@@ -216,7 +253,9 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
         questions["covered"] = J.with_options(qset["questions"]["covered"], {name: t for name, (_, t) in items.items()})
     state = {"item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
              "asker": asker, "person": person_name}
-    result, error = _ask(engine, state, questions, qset["label"])
+    result, error = _ask(calls_for(store), engine, state, questions, qset["label"])
+    if error in REFUSED:
+        return None, None, error            # no call was made: no judge.call row, and the day's count is kept
     if result is not None and not isinstance(result, dict):
         result, error = None, "shape"
     answers = None
@@ -240,6 +279,7 @@ def preflight(store, primary, who, target, title, text, kind="task"):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
     call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
+    verdict = None
     try:
         if not target or not gated(who, store.settings.assistant_bot):
             return None
@@ -255,8 +295,8 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             try:
                 qset = J.load_set(QUESTION_SET)
             except J.JudgeError as exc:
-                LOG.warning("Ask ingest is off: %s", exc.detail)
-                return None
+                LOG.warning("Ask ingest question set failed: %s", exc.code)
+                return {**verdict, "error": exc.code or "error"}
             engine = server_engine(store, c, primary)
             if engine is None:
                 # No decision model at all is Decide off: nothing to record. The month's cap is a failure kept.
@@ -267,10 +307,12 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
-        return {**verdict, "answers": answers, "items": {n: i for n, (i, _) in items.items()},
-                "criteria": _criteria(own), "call": call, "error": error}
+        verdict.update(answers=answers, call=call, error=error)
+        return {**verdict, "items": {n: i for n, (i, _) in items.items()}, "criteria": _criteria(own)}
     except Exception as exc:          # the gate never stops the write
         LOG.warning("Ask ingest preflight failed: %s", type(exc).__name__)
+        if verdict is not None:
+            return {**verdict, "error": (exc.code if isinstance(exc, J.JudgeError) else None) or "error"}
         return None
 
 
@@ -439,7 +481,7 @@ def record(c, verdict, decided, ref, message_id=None):
 def on_reply(c, actor, task_id, text):
     """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
     to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
-    message. The CEO Bot's merge (backend/ceo_merge.py) relays the same way for its own merged items."""
+    message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:

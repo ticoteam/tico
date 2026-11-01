@@ -463,6 +463,71 @@ def _default_hub_get(path):
 HUB_GET = _default_hub_get
 
 
+# One try at the org rule check: the server's longest check deadline (backend/org_rule_check.py DEADLINES, 15 s at
+# High) plus a margin for the write around it. A server that has not answered by then has let the check go.
+RULE_CHECK_TIMEOUT = 20
+
+
+class HubFailed(Exception):
+    """Tico was asked and gave no usable answer. `reason`: forbidden (the token is not this bot's), http_<status>,
+    unavailable (timed out or unreachable) or error."""
+
+    def __init__(self, reason, status=0):
+        super().__init__(reason)
+        self.reason, self.status = reason, status
+
+
+def _default_hub_post(path, body, key=None):
+    """One Tico POST, one try within RULE_CHECK_TIMEOUT, `key` its Idempotency-Key. Tests replace `HUB_POST`. None
+    means no cloud credential (outside a turn); a request Tico refused or did not answer raises HubFailed."""
+    url, token = os.environ.get("HUB_API_URL"), os.environ.get("HUB_TOKEN")
+    if not url or not token:
+        return None
+    from clients.tico import APIError, Client
+    try:
+        return Client(url, token, timeout=RULE_CHECK_TIMEOUT, retries=0).post(path, body, key=key)
+    except APIError as exc:
+        reason = "forbidden" if exc.status == 403 else f"http_{exc.status}" if exc.status else \
+            "unavailable" if exc.code == "unavailable" else "error"
+        raise HubFailed(reason, status=exc.status) from None
+    except Exception:
+        raise HubFailed("error") from None
+
+
+HUB_POST = _default_hub_post
+
+
+def rule_check(slug, to, cc, subject, body, key=None):
+    """The org rule check of a mail before it is sent (backend/org_rule_check.py, `POST /api/v2/bots/{bot}/mail-check`):
+    {"outcome": "pass" | "held" | "warn" | "unchecked" | "not_checked", ...}. None when there is no Tico to ask.
+    A check that failed (refused, timed out, a server error) lets the send go on, as every other failure of the check
+    lets an output through, but never quietly: it comes back {"outcome": "unchecked", "failed": reason}, for the send
+    to log and answer with. `key`, a UUID, is the check's id (its Idempotency-Key): a send after a failed check is
+    reported by it later (`report_misses`), and Tico counts it once, whether its route counted it already or never
+    saw it."""
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check", {"to": list(to or []), "cc": list(cc or []),
+                                                      "subject": subject or "", "body": body or ""}, key=key)
+    except HubFailed as exc:
+        import sys
+        print(f"mail: the org rule check failed ({exc.reason}); this send goes out unchecked", file=sys.stderr)
+        return {"outcome": "unchecked", "failed": exc.reason}
+    return answer if isinstance(answer, dict) else None
+
+
+def report_misses(slug, ids):
+    """Tell Tico of sends after a failed check (`POST /api/v2/bots/{bot}/mail-check/misses`), by their checks' ids:
+    it counts each once, however often it hears of it. The ids Tico took (a 2xx), to forget; [] when it did not
+    answer or is a release without the route (404, 405), and they wait for the next time."""
+    if not ids:
+        return []
+    try:
+        answer = HUB_POST(f"bots/{slug}/mail-check/misses", {"ids": list(ids)})
+    except HubFailed:
+        return []
+    return list(ids) if isinstance(answer, dict) else []
+
+
 def _hub_row(kind, n):
     row = HUB_GET(f"{kind}/{n}")
     return row if isinstance(row, dict) and row.get("id") else None
@@ -551,7 +616,7 @@ def approval_check(number, to=(), cc=(), thread_id="", repo=HUB_REPO, slug="", a
 
 
 def exact_message_check(number, to=(), cc=(), slug="", attachments=None, draft="", body=None):
-    """The only per-message yes for a bot whose switch says `per_message` (the CEO Bot), shaped like `approval_check`.
+    """The only per-message yes for a bot whose switch says `per_message` (the Strategy Bot), shaped like `approval_check`.
 
     It is a Tico `send` approval that `_hub_approval_check` clears for this message: approved, unspent, the payload's
     To and Cc exactly this message's outside addresses, its `body_sha256` this text, and, with files, this draft and
@@ -798,7 +863,7 @@ def switch(slug, manifest=None):
     out = {"on": False, "forward_to": [], "source": "none", "asks": asks, "asks_forward": asks_forward}
     row = _server_row(slug)
     out["read"] = row is not None
-    # Set for the CEO Bot (backend/mail_settings.py): each outside message needs its own exact Tico send approval.
+    # Set for the Strategy Bot (backend/mail_settings.py): each outside message needs its own exact Tico send approval.
     out["per_message"] = str((row or {}).get("per_message") or "")
     out["onboarding"] = bool((row or {}).get("onboarding"))
     hint = SETTING_HINT.format(slug=slug)
@@ -815,7 +880,7 @@ def switch(slug, manifest=None):
     out["detail"] = (f"{'on' if out['on'] else 'off'} in Tico, set by {who}"
                      + ("" if out["on"] else "; " + hint))
     if out["per_message"]:
-        # The CEO Bot (backend/mail_settings.py): no forward targets, and the switch a person sets covers mail inside
+        # The Strategy Bot (backend/mail_settings.py): no forward targets, and the switch a person sets covers mail inside
         # the company only (`internal_send`); `outbound_send` reads off for a connector from before that rule.
         out["on"] = bool(row.get("internal_send")) and not out["onboarding"]
         out["forward_to"] = []
@@ -978,7 +1043,7 @@ def check_send(pol, slug, mailbox, to, cc=(), attachments=(), thread_id="",
 
     ext = externals(pol, to)
     ext_cc = externals(pol, cc)
-    # A bot whose switch says `per_message` (the CEO Bot) sends outside only under a Tico send approval for this exact
+    # A bot whose switch says `per_message` (the Strategy Bot) sends outside only under a Tico send approval for this exact
     # message: no owner message, Issue, allowance, forward target or thread sender stands in for it.
     exact = bool(sw.get("per_message") and (ext or ext_cc))
     # One read of the approval Issue for the whole chain. `full` means it names every external

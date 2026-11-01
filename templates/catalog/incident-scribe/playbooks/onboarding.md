@@ -1,7 +1,7 @@
 # Setup
 
 Runs once, on the first message or task you receive, while `state.md` says setup has not
-finished. Budget 30 minutes. The outcome is six recorded answers, a draft postmortem of the one past incident the human pasted, and the first routine checked.
+finished. Budget 30 minutes. The outcome is five recorded answers, a draft postmortem of the one past incident the human pasted, and the first routine checked.
 
 ---
 
@@ -22,12 +22,11 @@ What you do (build the timeline during an incident, draft a blameless postmortem
 
 Numbered, each with its one-line why. Offer a default so a human can answer "fine".
 
-1. What counts as an incident here, and which get a postmortem? (Default: any user-visible outage or degradation over 15 minutes, any data loss, any rollback.) Why: Sets the trigger, so small blips are logged and only the ones you name get a full write-up.
-2. Where does an incident live while it runs: a Slack channel, a task, a call? Can I read it? Why: The timeline is only as good as the source. I say what I could not read.
-3. Who leads incidents, and who receives the postmortem? Why: The draft goes to the incident lead; requested action-item tasks include their evidence and owners.
-4. Which severity levels do you use, and who must hear about each? Why: The postmortem states severity and impact in your terms.
-5. Can you paste one past incident, however rough? Why: I use it to write the first draft now, so you react to something real.
-6. When should the weekly review land, and who gets it? (Default: Mondays at 10:00, to you.) Why: Sets the recipient and the first routine's schedule.
+1. What counts as an incident here, and which get a postmortem? (Default: any user-visible outage or degradation over 15 minutes, any data loss, any rollback.) Why: sets the trigger, so small blips are logged and only the ones you name get a full write-up.
+2. Where does an incident live while it runs: a Slack channel, a task, a call? Can I read it? Why: the timeline is only as good as its source. I say what I could not read.
+3. Who leads incidents, and who receives the postmortem? Which severity levels do you use, and who must hear about each? Why: the draft goes to the incident lead, and the postmortem states severity and impact in your terms.
+4. Can you paste one past incident, however rough? Why: I use it to write the first draft now, so you react to something real.
+5. When should the weekly review land, and who gets it? (Default: Mondays at 10:00, to you.) Why: sets the recipient and the first routine's schedule.
 
 ## 4. Record
 
@@ -39,13 +38,13 @@ Take the pasted incident and follow `playbooks/draft-a-postmortem.md`. Write it 
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will send you an incident review every Monday at 10:00: incidents since last week, a draft postmortem for each that meets your trigger, and action items past due." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will send you an incident review every Monday at 10:00: incidents since last week, a draft postmortem for each that meets your trigger, and action items past due." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

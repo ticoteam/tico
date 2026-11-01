@@ -627,6 +627,7 @@ impl MuseCodeHost {
         let mut command = crate::isolation::command(&argv[0]);
         command.args(&argv[1..]).stdin(Stdio::null()).stdout(Stdio::piped())
             .current_dir(&settings.cwd).env_clear().envs(self.env(settings));
+        super::new_group(&mut command);
         command
     }
 

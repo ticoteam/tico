@@ -1,8 +1,9 @@
-# The default guide: what the CEO Bot asks while it drafts a strategy with the owner (backend/strategy.py `guides`).
+# The default guide: what the Strategy Bot asks while it drafts a strategy with the owner
+# (backend/strategy.py `guides`).
 # A guide changes the questions and the word for bets, never the stored shape: every strategy has the summary, the
 # vision, the bets and the four sections (serve, sell, know, not), plus any extra section the owner adds.
 #
-# Each question is one idea. `claim` is what the CEO Bot fills in from what it already knows (the website, the
+# Each question is one idea. `claim` is what the Strategy Bot fills in from what it already knows (the website, the
 # market graph, earlier answers) and puts to the owner to keep, edit or strike; `ask` is the open question it falls
 # back on when it knows nothing yet. `section` is where the answer lands; `bets` means it becomes a bet.
 id: default

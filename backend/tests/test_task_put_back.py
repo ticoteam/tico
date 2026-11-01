@@ -189,7 +189,7 @@ def test_put_back_from_blocked_keeps_queue_destination_and_hold(api, monkeypatch
         if release == 'manual':
             assert result['status'] == 'open' and result['step']['name'] == 'On Deck'
         else:
-            assert result['status'] == 'waiting' and result['step']['name'] == 'Blocked'
+            assert result['status'] == 'waiting' and result['step']['name'] == 'In Progress'
             resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))
             assert resume['name'] == 'On Deck' and row['blocked_from_status'] == 'open'
             if release == 'remove':
@@ -226,7 +226,7 @@ def test_auto_start_back_off_on_engineering_board_keeps_queue_resume_without_a_t
         counts = [c.execute('SELECT count(*) FROM ' + table).fetchone()[0] for table in ('jobs', 'turns')]
     post(api, 'tasks/' + task['id'] + '/relations', {'kind': 'blocked_by', 'task': blocker['id']})
     result = get(api, 'tasks/' + task['id'])['task']
-    assert result['status'] == 'waiting' and result['step']['name'] == 'Blocked'
+    assert result['status'] == 'waiting' and result['step']['name'] == 'On Deck'
     with api.app.state.store.read() as c:
         row = H.task(c, task['id'])
         resume = H._one(c, 'SELECT name FROM task_steps WHERE id=?', (row['blocked_from_step'],))

@@ -1,0 +1,16 @@
+{
+  "employees": [
+    {"name": "coo", "display_name": "Assistant", "org_parent": "", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "botops", "display_name": "BotOps", "org_parent": "", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "librarian", "display_name": "Librarian", "org_parent": "", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "goal-manager", "display_name": "CEO Bot", "org_parent": "p:ana", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "eng-lead", "display_name": "Engineering Lead", "org_parent": "p:ana", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "builder", "display_name": "Builder", "org_parent": "b:eng-lead", "team": "eng", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "release", "display_name": "Release Manager", "org_parent": "p:ana", "host": "keeper", "status": "active", "can_chat": true},
+    {"name": "mail-sorter", "display_name": "Mail Sorter", "org_parent": "", "helper": true, "host": "keeper", "status": "active", "can_chat": true}
+  ],
+  "humans": {
+    "people": [{"id": "ana", "name": "Ana Silva", "org_parent": ""}],
+    "org_groups": [{"id": "eng", "name": "Engineering", "parent": "", "org_parent": "", "order": 0}]
+  }
+}

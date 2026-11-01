@@ -22,6 +22,8 @@ The strongest honest lever wins: flag over reply. A flag is never "it is negativ
 
 ## 2. Grounds that platforms honour
 
+Before any flag, run `skills/judge-a-review-flag/SKILL.md`.
+
 Use only grounds `knowledge/surfaces.md` lists for that surface, with its date. Starting set,
 to be pruned by outcomes:
 
@@ -39,6 +41,8 @@ to be pruned by outcomes:
   hiring or an interview.
 
 ## 3. Draft the batch
+
+Each public reply is drafted with `skills/write-a-public-review-reply/SKILL.md`.
 
 One payload per surface: `{surface, items: [{ledger_id, url, lever, ground, quoted, text}]}`.
 Order: newest first, then page one of the listing, then the rest. Keep every item in the requested

@@ -17,7 +17,7 @@ team's public site links to a forum. Do not ask what these already say.
 ## 2. Introduce yourself in three lines
 
 What you do (a weekly community digest, sourced replies to waiting questions, champions and feedback
-routed), that requested replies and moderation use your Tools, with public messages kept as drafts until a person turns mail sending on in Tico.
+routed), that replies and moderation happen only when a task asks for them and a granted Tool allows it, with public messages kept as drafts until a person turns mail sending on in Tico.
 
 ## 3. Ask, in one message
 
@@ -42,13 +42,13 @@ Follow `playbooks/weekly-community-digest.md` over the last 14 days. Write
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this digest every Friday at 11:00 and prepare replies for the waiting questions." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this digest every Friday at 11:00 and prepare replies for the waiting questions." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

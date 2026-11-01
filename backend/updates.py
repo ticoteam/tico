@@ -122,6 +122,12 @@ def kind_for(day):
     return "weekly" if datetime.fromisoformat(day).weekday() == 4 else "daily"
 
 
+def effective_kind(kind, slides, day=None):
+    """The kind `post` stores: the one asked for, else a week in review when it has slides, else the day's own. A daily
+    keeps its bullets and drops any slides; a week in review is its slides alone."""
+    return kind or ("weekly" if slides else kind_for(day or today()))
+
+
 def settings(c, bot):
     row = c.execute("SELECT daily, weekly FROM update_settings WHERE bot=?", (bot,)).fetchone()
     return {"daily": bool(row["daily"]) if row else True, "weekly": bool(row["weekly"]) if row else True}
@@ -149,7 +155,7 @@ def direct_reports(c, author, chart=None):
     from . import goals as G
     roster, entries, archived = chart or _chart(c)
     return [a if H.actor_kind(a) == "human" else H.actor_id(a)
-            for a in G.reports_of(author_actor(author), roster, entries, archived)]
+            for a in G.reports_of(author_actor(author), roster, entries, archived, True)]
 
 
 def depths(c, slugs):
@@ -157,13 +163,13 @@ def depths(c, slugs):
     post through the queue), so the deepest are asked first."""
     from . import people as P
     roster, entries, archived = _chart(c)
-    out = {}
+    out, bare = {}, True
     for slug in slugs:
-        n, parent, seen = 0, P.org_parent("bot", slug, roster, entries, archived), set()
+        n, parent, seen = 0, P.org_parent("bot", slug, roster, entries, archived, bare), set()
         while parent.startswith("b:") and parent not in seen:
             seen.add(parent)
             n += 1
-            parent = P.org_parent("bot", parent[2:], roster, entries, archived)
+            parent = P.org_parent("bot", parent[2:], roster, entries, archived, bare)
         out[slug] = n
     return out
 
@@ -189,7 +195,7 @@ def visible_authors(c, auth, who, mine=False, scope=None):
                     or (not is_person(slug) and not operators.get(slug) and who.role == "owner")}
     if scope == "direct":
         archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
-        reports = G.reports_of(who.actor, views.roster(c), views.entries(c), archived)
+        reports = G.reports_of(who.actor, views.roster(c), views.entries(c), archived, True)
         readable &= {a if H.actor_kind(a) == "human" else H.actor_id(a) for a in reports}
     return readable
 
@@ -331,6 +337,9 @@ def ensure_schema(c):
     H.add_column(c, "updates", "drafted_by", "TEXT")
     H.add_column(c, "updates", "edited_by", "TEXT")
     H.add_column(c, "updates", "inputs_json", "TEXT")
+    # `source_json`: the automation run that posted it (`post_update`, backend/automation_actions.py); a post by hand
+    # clears it. Shown as `source` only when set.
+    H.add_column(c, "updates", "source_json", "TEXT")
     # `meetings`: a person's draft written with meeting summaries in its facts, or from a report's update that was,
     # is read only by a meeting reader (`meeting_reader`). A draft from before the column cannot say what it used,
     # so every one already there counts as having used them.
@@ -652,15 +661,9 @@ def writer_for(c, settings, store=None, vault=None):
 
 
 def drafter(c, settings, author, assistant):
-    """Whose draft a person's update is labelled: their Assistant's, and for the owner the CEO Bot's, which is the
-    owner's Assistant (backend/assistant.py). The draft is written the same way for both."""
-    from . import access, ceo_bot
-    from .assistant import ceo_on
-    if not is_person(author) or not ceo_on(c):
-        return assistant
-    human = H.human(c, H.actor_id(author)) or {}
-    owner = access.load_owner(c, settings)["email"]
-    return ceo_bot.SLUG if owner and str(human.get("email") or "").strip().lower() == owner else assistant
+    """Whose draft a person's update is labelled: their Assistant's, the owner's included (backend/assistant.py: one
+    Assistant for everyone)."""
+    return assistant
 
 
 def write_draft(store, author, write, assistant):
@@ -801,7 +804,8 @@ def redo(c, kind, day, bots=None, managers=False):
     if bots and managers:
         from . import goals as G
         roster, entries, archived = _chart(c)
-        above = {H.actor_id(a) for slug in chosen for a in G.above(H.bot_actor(slug), roster, entries, archived)
+        bare = True
+        above = {H.actor_id(a) for slug in chosen for a in G.above(H.bot_actor(slug), roster, entries, archived, bare)
                  if H.actor_kind(a) == "bot"}
         chosen += [r["slug"] for r in rows if r["slug"] in above and r["slug"] not in chosen]
     depth = depths(c, chosen)
@@ -926,6 +930,9 @@ def _decode(row):
     if "inputs_json" in item:
         inputs = item.pop("inputs_json")
         item["inputs"] = json.loads(inputs) if inputs else []
+    source = item.pop("source_json", None)
+    if source:
+        item["source"] = json.loads(source)
     return item
 
 
@@ -985,7 +992,7 @@ def check_day(c, bot, day):
 
 
 def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
-         meetings=False, reader=True):
+         meetings=False, reader=True, source=None, warning=""):
     """Store an update by `bot` (a bot slug or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
@@ -993,9 +1000,12 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     lands over or beside words the person wrote or edited that day, in either kind. `meetings` flags a draft
     written from meeting summaries (`draft_facts`); an edit keeps the draft's flag, their own words clear it.
     `reader` is whether the person posting is a meeting reader (`meeting_reader`): one who is not was never shown a
-    flagged draft, so what they post over it is their own words, and their reply links no flagged input."""
+    flagged draft, so what they post over it is their own words, and their reply links no flagged input. `source` is
+    the automation run posting it ({automation, run, task}); any other post clears it. `warning` is an org rule's warn
+    line (org_rule_check), put before the update once its own words pass the writing checks: a week in review's goal,
+    a daily's bullets, never linted itself."""
     day = day or today()
-    kind = kind or ("weekly" if slides else kind_for(day))
+    kind = effective_kind(kind, slides, day)
     if kind not in KINDS:
         raise Problem("kind", "An update is daily or weekly", 422)
     stored = None
@@ -1007,6 +1017,8 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         if missing:
             raise H.Refused("lint", _slides_message(missing + style), "normal")
         problem = _style(_slides_message(style))
+        if warning:
+            slides = {**slides, "goal": warning + "\n\n" + slides["goal"]}
         stored = json.dumps({**slides, "tracked": kpi_snapshot(c, bot)})
         body = slides_body(slides)
         headline = slides["goal"][:200]
@@ -1015,6 +1027,8 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         if not body:
             raise H.Refused("lint", lint(body, kind), "normal")
         problem = _style(lint(body, kind))
+        if warning:
+            body = warning + "\n\n" + body
         first = body.splitlines()[0]
         headline = MD_LINK.sub(r"\1", re.sub(r"^\s*[-*•]\s+", "", first))[:200]
     now = H.now()
@@ -1025,6 +1039,7 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
     if inputs is None:
         inputs = [u["id"] for u in team_updates(c, bot, kind, day)[0]]
     inputs_json = json.dumps(list(inputs)) if inputs else None
+    source_json = json.dumps(source, sort_keys=True) if source else None
     if drafted_by:
         draft, edited, flagged = drafted_by, None, int(bool(meetings))
     elif existing and existing["drafted_by"] and not replace_draft and (reader or not existing["meetings"]):
@@ -1033,15 +1048,16 @@ def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs
         draft, edited, flagged = None, None, 0
     if existing:
         c.execute("UPDATE updates SET headline=?, body=?, slides_json=?, updated=?, drafted_by=?, edited_by=?, "
-                  "inputs_json=?, meetings=? WHERE id=?",
-                  (headline, body, stored, now, draft, edited, inputs_json, flagged, existing["id"]))
+                  "inputs_json=?, meetings=?, source_json=? WHERE id=?",
+                  (headline, body, stored, now, draft, edited, inputs_json, flagged, source_json, existing["id"]))
         c.execute("DELETE FROM update_reads WHERE update_id=?", (existing["id"],))   # changed: unread again
         uid = existing["id"]
     else:
         uid = H.new_id()
         c.execute("INSERT INTO updates(id,bot,kind,day,headline,body,slides_json,created,updated,drafted_by,edited_by,"
-                  "inputs_json,meetings) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                  (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged))
+                  "inputs_json,meetings,source_json) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                  (uid, bot, kind, day, headline, body, stored, now, now, draft, edited, inputs_json, flagged,
+                   source_json))
         # A new latest logical day supersedes updates this reader previously restored. A backdated
         # redo must not revoke a restore: there is already a newer day, and this post did not
         # supersede it. Removing just restore overrides keeps manual archives intact. Same-day
@@ -1070,11 +1086,12 @@ def purge_rejected(c):
     """Delete stored updates the linter would refuse now and ask their bots again (rejected updates are
     deleted and redone). Runs when the hub
     starts; the linter refuses new ones at the door. Each bot goes to the back of its day's queue."""
+    from . import org_rule_check
     removed = []
     # A week in review with slides was checked as slides; an older bullet one keeps the bullet rules.
     # Only when the shape is refused: a post accepted with a warning stays.
     for row in c.execute("SELECT * FROM updates WHERE slides_json IS NULL").fetchall() if H.STYLE_LINT == "refuse" else ():
-        if not lint(row["body"], row["kind"]):
+        if not lint(org_rule_check.unwarned(row["body"]), row["kind"]):
             continue
         c.execute("DELETE FROM update_reads WHERE update_id=?", (row["id"],))
         c.execute("DELETE FROM update_archive_overrides WHERE update_id=?", (row["id"],))
@@ -1221,17 +1238,26 @@ def count_unread(c, actor, readable, kind=None, meetings=False):
                      (actor, actor, H.shift(H.now(), days=-14), *values, *([kind] if kind else []))).fetchone()[0]
 
 
+def off_tree():
+    """The built-in bots the Updates tree leaves out: the Assistant's helpers (BotOps, the Strategy Bot, the
+    Librarian), the Task Manager and the Bookkeeper. Nobody talks to them and they are not on the org chart."""
+    from . import assistant, bookkeeper, task_manager
+    return frozenset((*assistant.HELPERS, task_manager.SLUG, bookkeeper.SLUG))
+
+
 def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
     """One day's updates nested by the org chart, for the Updates page: each person and bot the
     caller may read, its update or none, and the ones below it. `scope` below starts at the caller
     (the default when someone reports to them), all at the top of the chart. Only direct reports
     are `direct`, the one level that alerts; `unread` counts just those. Archived updates are left out as
     in the Inbox, so an explicit past `day` shows only that day's cards a newer day has not replaced.
-    Without `meetings` (`meeting_reader`), an update flagged `meetings` is left off its node, as in the feed."""
+    Without `meetings` (`meeting_reader`), an update flagged `meetings` is left off its node, as in the feed.
+    The built-ins off the org chart that work behind the Assistant (`OFF_TREE`) get no node, so no empty row; their
+    reports hang from the next node up, and an update they did post stays in the feed (List, Archive)."""
     from . import people as P
     from . import report_order
     roster, entries, archived = _chart(c)
-    view = P.org_view(roster, entries, archived)
+    view = P.org_view(roster, entries, archived, bare_people=True)
     me = ("p:" if H.actor_kind(actor) == "human" else "b:") + H.actor_id(actor)
     parent_of, nodes = {}, {}
     names = {r["slug"]: r["display_name"] or r["slug"] for r in c.execute("SELECT slug, display_name FROM bots")}
@@ -1241,9 +1267,10 @@ def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
         parent_of["p:" + p["id"]] = p["org_parent"]
         if H.human_actor(p["id"]) in readable:
             nodes["p:" + p["id"]] = {"key": "p:" + p["id"], "author": H.human_actor(p["id"]), "name": p["name"] or p["id"]}
+    hidden = off_tree()
     for b in view["bots"]:
         parent_of["b:" + b["id"]] = b["org_parent"]
-        if b["id"] in readable:
+        if b["id"] in readable and b["id"] not in hidden:
             nodes["b:" + b["id"]] = {"key": "b:" + b["id"], "author": b["id"], "name": names.get(b["id"]) or b["id"]}
     authors = [n["author"] for n in nodes.values()]
     marks = ",".join("?" * len(authors)) or "''"

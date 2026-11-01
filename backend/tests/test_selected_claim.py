@@ -65,7 +65,7 @@ def test_selected_claim_classifies_one_bot_as_unrelated_queue_grows(api, monkeyp
 
 
 @pytest.mark.parametrize('change', ['held', 'assignment', 'readiness', 'lane'])
-def test_selected_claim_rechecks_changes_after_read_without_taking_another_job(api, monkeypatch, change):
+def test_selected_claim_rechecks_changes_after_read_and_takes_the_next_job(api, monkeypatch, change):
     machine = runner(api)
     for bot in ('ops', 'finance'):
         assign(api, machine, bot)
@@ -77,7 +77,8 @@ def test_selected_claim_rechecks_changes_after_read_without_taking_another_job(a
 
     def changes_after_read(c, who, body, target, **kwargs):
         row = candidate(c, who, body, target, **kwargs)
-        if kwargs.get('job_id') is None and row is not None:
+        # The change happens once, between the read and the claim's write (the read's own pick, not the claim's).
+        if kwargs.get('job_id') is None and row is not None and not selected:
             selected.append(row['id'])
             with store.transaction() as writer:
                 if change == 'held':
@@ -98,8 +99,9 @@ def test_selected_claim_rechecks_changes_after_read_without_taking_another_job(a
         return row
 
     monkeypatch.setattr(engine, 'candidate', changes_after_read)
-    assert claim(api, machine) is None
+    # The changed selection is not handed out; the claim drops it and takes the next eligible job in the same call.
+    turn = claim(api, machine)
     assert selected == [first['id']]
+    assert turn is not None and turn['bot'] == 'finance', turn
     with store.read() as c:
-        assert not c.execute("SELECT 1 FROM attempts WHERE bot='finance'").fetchone()
         assert c.execute('SELECT state FROM jobs WHERE id=?', (first['id'],)).fetchone()[0] == 'queued'

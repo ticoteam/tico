@@ -55,18 +55,18 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
       if (p === '/') return reply(html, 'text/html');
       if (p === '/api/v2/me' && expired) return identity();
       if (p === '/api/me' || p === '/api/v2/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-      if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: keeper ? 'keeper' : 'local', status: 'active', can_chat: true, schedules: []}]);
+      if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: keeper ? 'keeper' : 'local', status: 'active', can_chat: true, schedules: []}]);
       if (p === '/api/issues') return json([]);
-      if (p === '/api/employees/botops/conversation') return json({runs: []});
+      if (p === '/api/employees/sales/conversation') return json({runs: []});
       if (p === '/api/v2/conversations') return json({conversations: url.searchParams.get('chat_with')
-        ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
+        ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
       if (p.endsWith('/snapshot')) return json({messages: delivered, execution: null});
       if (p === '/api/v2/events' || p.endsWith('/watch')) {
         response.writeHead(200, {'Content-Type': 'text/event-stream'});
         response.write('event: ready\ndata: {"seq":0}\n\n');
         return;
       }
-      if (p === (keeper ? '/api/v2/chat/botops' : '/api/employees/botops/chat')) {
+      if (p === (keeper ? '/api/v2/chat/sales' : '/api/employees/sales/chat')) {
         const text = keeper ? JSON.parse(body).text : body.match(/name="text"\r\n\r\n([^]*?)\r\n--/)[1];
         posts.push({text, method: request.method});
         if (posts.length === 1) {
@@ -85,7 +85,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve); });
   const origin = 'http://127.0.0.1:' + server.address().port;
   const box = page.locator('#chat-composer textarea'), send = page.locator('#chat-composer .p-send');
-  const stored = () => page.evaluate(() => ({draft: chatDrafts().botops, otherDraft: chatDrafts().other,
+  const stored = () => page.evaluate(() => ({draft: chatDrafts().sales, otherDraft: chatDrafts().other,
     fields: JSON.parse(sessionStorage.getItem(SESSION_RETURN) || 'null')?.fields || []}));
   const frames = () => page.evaluate(() => new Promise(done => requestAnimationFrame(() => requestAnimationFrame(done))));
   const readsSettled = async () => {
@@ -105,7 +105,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   // A loaded conversation can precede its stream subscription. Navigating again while WebKit is
   // still opening that connection reports a cancelled request as an access-control page error.
   const ready = () => page.waitForFunction(keeper => {
-    if (!SESSION.seen || !(keeper ? typeof V2C !== 'undefined' && V2C?.loaded : typeof CONV !== 'undefined' && CONV?.slug === 'botops')
+    if (!SESSION.seen || !(keeper ? typeof V2C !== 'undefined' && V2C?.loaded : typeof CONV !== 'undefined' && CONV?.slug === 'sales')
       || !liveConnected() || LIVE.es?.readyState !== EventSource.OPEN) return false;
     const subscribed = new URL(LIVE.es.url), expected = new URL(liveUrl(), location.href);
     // The ready event advances the cursor; only a change of subscription requires a new connection.
@@ -115,7 +115,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
   const idle = () => page.waitForFunction(() => !BOT_PILL.sending && !document.querySelector('#chat-composer .p-send').disabled);
   const text = '  Keep this draft through sign-in  ';
   try {
-    await page.goto(origin + '/#/bot/botops');
+    await page.goto(origin + '/#/bot/sales');
     await ready();
     await box.fill(text);
     await page.evaluate(() => localStorage.setItem(CHAT_DRAFTS, JSON.stringify({...chatDrafts(), other: 'Another bot draft'})));
@@ -152,7 +152,7 @@ async function scenario(browser, mode, edit, keeper = true, editedBefore = false
     await page.waitForURL('**/auth/login**');
     expired = false;
     await page.click('#return');
-    await page.waitForURL(origin + '/#/bot/botops');
+    await page.waitForURL(origin + '/#/bot/sales');
     await ready();
     await readsSettled();
     assert.equal(await box.inputValue(), text, 'return restores the draft');

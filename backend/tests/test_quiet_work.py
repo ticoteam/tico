@@ -42,7 +42,10 @@ def finish(api, r, attempt, outcome="completed"):
 
 
 def shown(api, task):
-    return get(api, "tasks/" + task["id"])["task"]
+    got = get(api, "tasks/" + task["id"])["task"]
+    # `quiet` is the field's older name, still sent for one release.
+    assert got.get("quiet") == got.get("deferred")
+    return got
 
 
 def own_jobs(api, task):
@@ -55,17 +58,19 @@ def own_jobs(api, task):
 def test_a_run_that_leaves_it_hands_it_to_the_next_run(api):
     r = setup(api)
     task = later(api)
-    assert shown(api, task)["quiet"]["state"] == "eligible"
+    assert shown(api, task)["deferred"]["state"] == "eligible"
+    listed = next(t for t in get(api, "tasks?owner=ops")["tasks"] if t["id"] == task["id"])
+    assert listed["deferred"]["state"] == "eligible" and listed["quiet"] == listed["deferred"], "the board's rows too"
     first = wake(api, r)
     assert [t["id"] for t in first["next_run"]] == [task["id"]]
-    assert "hub task defer " + task["id"] in first["next_run"][0]["if_not_now"], "the run is told how to say not now"
-    during = shown(api, task)["quiet"]
+    assert "hub task later " + task["id"] in first["next_run"][0]["if_not_now"], "the run is told how to say not now"
+    during = shown(api, task)["deferred"]
     assert during["state"] == "delivered" and during["run"] == first["id"] and during["running"] is True
     assert during["at"], "and when it was handed over"
     finish(api, r, first)
     after = shown(api, task)
     assert after["next_run_waiting"] is True, "not worked and nothing stored: it is not silently taken"
-    assert after["quiet"]["state"] == "eligible" and after["quiet"]["returned_from"] == first["id"]
+    assert after["deferred"]["state"] == "eligible" and after["deferred"]["returned_from"] == first["id"]
     second = wake(api, r, "Anything else?")
     assert [t["id"] for t in second["next_run"]] == [task["id"]], "the next run carries it again"
 
@@ -79,7 +84,7 @@ def test_a_run_that_worked_it_does_not_carry_it_again(api):
     finish(api, r, first)
     after = shown(api, task)
     assert after["next_run_waiting"] is False
-    assert after["quiet"]["state"] == "delivered" and after["quiet"]["worked"] is True
+    assert after["deferred"]["state"] == "delivered" and after["deferred"]["worked"] is True
     assert wake(api, r, "Anything else?")["next_run"] == [], "worked: not re-carried"
 
 
@@ -90,7 +95,7 @@ def test_a_step_move_or_an_explicit_handled_counts_as_worked(api):
     with api.app.state.store.transaction() as c:
         Q.defer(c, "bot:ops", task["id"], handled=True)
     finish(api, r, first)
-    assert shown(api, task)["quiet"]["worked"] is True
+    assert shown(api, task)["deferred"]["worked"] is True
     assert wake(api, r, "Anything else?")["next_run"] == []
 
 
@@ -107,7 +112,7 @@ def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
                                                                  "head": {"sha": "a1"}, "mergeable": True}})
         assert c.execute("SELECT updated FROM task_links WHERE task_id=?", (task["id"],)).fetchone()[0]
     finish(api, r, first)
-    assert shown(api, task)["quiet"]["state"] == "eligible", "metadata only: handed back"
+    assert shown(api, task)["deferred"]["state"] == "eligible", "metadata only: handed back"
     second = wake(api, r, "Anything else?")
     assert [t["id"] for t in second["next_run"]] == [task["id"]]
     with api.app.state.store.transaction() as c:
@@ -115,7 +120,7 @@ def test_a_pull_request_refreshed_is_not_work_and_one_pushed_to_is(api):
                            "pull_request": {"html_url": url, "state": "open", "head": {"sha": "b2"}}})
     finish(api, r, second)
     after = shown(api, task)
-    assert after["quiet"]["state"] == "delivered" and after["quiet"]["worked"] is True, "a push is work"
+    assert after["deferred"]["state"] == "delivered" and after["deferred"]["worked"] is True, "a push is work"
     assert wake(api, r, "And now?")["next_run"] == []
 
 
@@ -132,7 +137,7 @@ def test_handled_drops_a_condition_stored_earlier(api):
         Q.defer(c, "bot:ops", task["id"], handled=True)
     finish(api, r, first)
     held = shown(api, task)
-    assert "resume" not in held["quiet"] and held["quiet"]["worked"] is True
+    assert "resume" not in held["deferred"] and held["deferred"]["worked"] is True
     with api.app.state.store.transaction() as c:
         H.task_update(c, "bot:ops", blocker["id"], status="done", note="Reviewed.")
     assert own_jobs(api, task) == 0, "the former condition does not fire"
@@ -151,9 +156,9 @@ def test_deferred_until_a_task_is_done_runs_once_when_it_is(api):
     finish(api, r, first)
     held = shown(api, task)
     assert held["next_run_waiting"] is False, "the condition holds it"
-    assert held["quiet"]["state"] == "delivered" and held["quiet"]["run"] == first["id"]
-    assert held["quiet"]["resume"]["kind"] == "task" and held["quiet"]["resume"]["task"] == blocker["id"]
-    assert held["quiet"]["words"] == "Picked up again after Dev 241 review is done."
+    assert held["deferred"]["state"] == "delivered" and held["deferred"]["run"] == first["id"]
+    assert held["deferred"]["resume"]["kind"] == "task" and held["deferred"]["resume"]["task"] == blocker["id"]
+    assert held["deferred"]["words"] == "Picked up again after Dev 241 review is done."
     assert wake(api, r, "Anything else?")["next_run"] == [], "not carried while it waits"
     with api.app.state.store.transaction() as c:
         c.execute("UPDATE jobs SET state='completed' WHERE state IN ('queued','leased','running')")
@@ -165,7 +170,7 @@ def test_deferred_until_a_task_is_done_runs_once_when_it_is(api):
         H.task_update(c, "bot:ops", blocker["id"], status="done", note="Reviewed.")
     assert own_jobs(api, task) == 1, "one run of its own"
     resumed = shown(api, task)
-    assert resumed["next_run"] is False and resumed["quiet"]["state"] == "queued"
+    assert resumed["next_run"] is False and resumed["deferred"]["state"] == "queued"
     with api.app.state.store.transaction() as c:
         H.task_close(c, "human:ana", blocker["id"])
     assert own_jobs(api, task) == 1, "and only one"
@@ -182,7 +187,7 @@ def test_deferred_to_a_time_runs_once_then(api):
     with api.app.state.store.transaction() as c:
         Q.defer(c, "bot:ops", task["id"], at=at)
     finish(api, r, first)
-    assert shown(api, task)["quiet"]["resume"]["until"] == at
+    assert shown(api, task)["deferred"]["resume"]["until"] == at
     with api.app.state.store.transaction() as c:
         assert Q.due(c, H.now()) == [], "not before its time"
         assert Q.due(c, H.shift(at, seconds=1)) == [task["id"]]
@@ -196,7 +201,7 @@ def test_next_run_puts_it_back_at_once(api):
     first = wake(api, r)
     with api.app.state.store.transaction() as c:
         Q.defer(c, "bot:ops", task["id"], next_run=True)
-    assert shown(api, task)["quiet"]["state"] == "eligible"
+    assert shown(api, task)["deferred"]["state"] == "eligible"
     finish(api, r, first)
     assert [t["id"] for t in wake(api, r, "Anything else?")["next_run"]] == [task["id"]]
 
@@ -206,7 +211,7 @@ def test_a_person_defers_through_the_api_and_wrong_asks_are_refused(api):
     blocker = post(api, "tasks", {"owner": "ops", "title": "Dev 241 review", "body": "Review it."})
     task = later(api)
     got = post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
-    assert got["quiet"]["resume"]["task"] == blocker["id"] and got["next_run_waiting"] is False
+    assert got["deferred"]["resume"]["task"] == blocker["id"] and got["next_run_waiting"] is False
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"], "next_run": True}, expected=422)
     post(api, f"tasks/{task['id']}/defer", {"at": "2020-01-01T00:00:00Z"}, expected=422)
     post(api, f"tasks/{blocker['id']}/defer", {"next_run": True}, expected=422)   # not a quiet task
@@ -225,7 +230,7 @@ def test_run_now_drops_a_stored_condition(api):
     task = later(api)
     post(api, f"tasks/{task['id']}/defer", {"after": blocker["id"]})
     got = post(api, f"tasks/{task['id']}/run-now", {})["task"]
-    assert "resume_json" not in got and got["quiet"]["state"] == "queued"
+    assert "resume_json" not in got and got["deferred"]["state"] == "queued"
 
 
 def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
@@ -240,7 +245,7 @@ def test_health_names_a_task_handed_over_two_hours_ago_and_not_worked(api):
         found = health_monitor._quiet_work_checks(c)
         assert [f["key"] for f in found] == [f"quiet_unworked:ops:{task['id']}"]
         assert "ops" in found[0]["title"] and task["id"][:8] in found[0]["detail"]
-        assert "hub task defer " + task["id"] in found[0]["fix"]
+        assert "hub task later " + task["id"] in found[0]["fix"]
         Q.defer(c, "bot:ops", task["id"], at=H.shift(H.now(), hours=1))
         assert health_monitor._quiet_work_checks(c) == [], "a stored condition is not a finding"
 

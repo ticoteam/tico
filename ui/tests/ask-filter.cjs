@@ -88,6 +88,10 @@ async function shot(target, name) {
     await card.locator('input[name="budget"]').fill('15');
     await card.locator('textarea[name="criteria"]').fill('Strategy and positioning\nPricing');
     await shot(page.locator('#set-ask-filter-card'), 'ask-filter-settings');
+    // The save reloads the settings and repaints the card, day field included (today by default): mark this paint's
+    // field, so the replay below fills the repainted one (it passed only while today was the day it fills).
+    const DAY = '#set-ask-filter .ask-filter-replay input[name="day"]';
+    await page.evaluate(sel => { document.querySelector(sel).dataset.beforeSave = '1'; }, DAY);
     await card.locator('button[type="submit"]').click();
     for (let i = 0; i < 50 && !saved.length; i++) await page.waitForTimeout(20);
     assert.deepEqual(saved, [{mode: 'on', budget: 15, chores_budget: 5, criteria: ['Strategy and positioning', 'Pricing'], team: false}]);
@@ -104,7 +108,8 @@ async function shot(target, name) {
         {items: [{kind: 'loose', ref: 'm-1', title: 'Verify the cleanup ran', asker: 'bot:ops', asker_name: 'Ops', created: ago(200), load: 16, would: 'sent_back', reason: 'own_work'}], next_offset: null, total: 2}];
       return route.fulfill({contentType: 'application/json', body: JSON.stringify(pages[body.offset ? 1 : 0])});
     });
-    await page.locator('#set-ask-filter .ask-filter-replay input[name="day"]').fill('2026-10-27');
+    await page.waitForFunction(sel => { const day = document.querySelector(sel); return day && !day.dataset.beforeSave; }, DAY);
+    await page.locator(DAY).fill('2026-10-27');
     await page.locator('#set-ask-filter .ask-filter-replay button[type="submit"]').click();
     await page.waitForFunction(() => document.querySelectorAll('#set-ask-filter .ask-filter-replay-rows .tl-filtered-row').length === 2);
     assert.deepEqual(replays.map(r => [r.date, r.offset]), [['2026-10-27', 0], ['2026-10-27', 1]]);

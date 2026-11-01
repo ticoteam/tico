@@ -1,9 +1,14 @@
 /* ui/styles/search.css — Search dialog.
    The cascade runs in the order index.html links these files; keep rules in order. */
-/* Search: one dialog for the sidebar control and the phone's bottom-nav slot. */
-#search-open{width:100%;display:flex;align-items:center;gap:9px;padding:7px 10px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
+/* Search: one dialog for the sidebar control and the phone's bottom-nav slot. In the sidebar it is an icon at the end
+   of the Ask row (ask.css); where Ask is away it is the whole row, words and ⌘K. */
+#search-open{flex:none;align-self:stretch;width:44px;min-height:34px;display:flex;align-items:center;justify-content:center;gap:9px;padding:0;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:var(--t-base);text-align:left;cursor:pointer}
 #search-open:hover{background:var(--surface2)}
+#search-open:hover .nav-icon{color:var(--ink)}
 #search-open kbd{margin-left:auto;font:var(--t-xs) var(--sans);color:var(--muted);border:1px solid var(--line);border-radius:4px;padding:0 4px;line-height:16px}
+#search-open>:not(.nav-icon){display:none}
+#ask-row[hidden]+#search-open{flex:1;width:auto;height:auto;justify-content:flex-start;padding:7px 10px}
+#ask-row[hidden]+#search-open>*{display:revert}
 .search-modal{width:min(560px,calc(100vw - 32px));margin-top:12vh}
 .search-box{display:flex;align-items:center;gap:8px;padding:10px 12px;border-bottom:1px solid var(--line)}
 .search-box .nav-icon{color:var(--muted)}
@@ -17,7 +22,7 @@
 .search-results .search-empty{color:var(--muted);cursor:default;font-size:var(--t-base)}
 .search-results .search-empty:hover{background:none}
 @media (max-width:760px){#search-open{display:none}#topbar{padding:0 12px}#topbar:not(:has(#app-nudge:not([hidden]))){display:none}#app-nudge{margin-top:12px}.search-modal{margin-top:6vh}}
-.tmodal-title{font-size:var(--t-md);font-weight:600;margin:8px 16px 4px;line-height:1.3}
+.tmodal-title{font-size:var(--t-md);font-weight:600;margin:8px 16px 4px;line-height:var(--lh-tight);letter-spacing:var(--track-snug)}
 .tmodal-body{padding:8px 16px 16px;font-size:var(--t-base);overflow:auto;max-height:calc(86vh - 90px)}
 .tmodal-body .q{white-space:pre-wrap;background:var(--surface2);padding:8px 10px;border-radius:6px;max-height:50vh;overflow:auto;margin-bottom:8px}
 .q.md{white-space:normal;font-size:var(--t-md);max-width:none}
@@ -33,7 +38,7 @@
 .task-outcome .row{display:flex;gap:8px;justify-content:flex-end}
 .task-ask{background:var(--wait-bg);border:1px solid color-mix(in srgb, var(--wait) 45%, var(--line));border-radius:8px;padding:10px 12px;margin:4px 0 12px}
 .task-ask .lbl{color:var(--wait-ink);margin-bottom:4px}
-.task-ask-body{font-size:var(--t-lg);line-height:1.35;font-weight:600;white-space:pre-wrap}
+.task-ask-body{font-size:var(--t-lg);line-height:var(--lh);font-weight:600;white-space:pre-wrap;letter-spacing:var(--track-tight)}
 .task-orig{margin:8px 0}
 .task-orig>summary{cursor:pointer;color:var(--muted);font-size:var(--t-sm);padding:4px 0}
 .task-orig>summary:hover{color:var(--ink)}

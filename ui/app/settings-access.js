@@ -25,7 +25,7 @@ function settingsPanelShow(panel) {
 // itself and the humans it reports up to always have all three.
 const ACCESS_LEVELS = [
   ['see', 'See', 'the bot in the team chart and lists: its name, role, who owns it and who it reports to'],
-  ['read', 'Read', 'its work: tasks, updates, files, status, run log and routines'],
+  ['read', 'Read', 'its work: tasks, updates, files, status, run log and automations'],
   ['write', 'Write', 'send it messages, tasks, notes and comments'],
 ];
 const ACCESS_PRESETS = [
@@ -107,7 +107,7 @@ async function settingsEditBotOwners(slug, {stage} = {}) {
 // per-message approval and its forward targets. Held in Tico and set by a person who manages the bot; bot.yaml only asks.
 function mailSettingText(m) {
   if (!m.set) return 'Off: no one has turned it on';
-  // The CEO Bot: its switch covers mail inside the company; each outside email needs a yes for that message.
+  // The Strategy Bot: its switch covers mail inside the company; each outside email needs a yes for that message.
   if (m.per_message) return `${m.internal_send ? 'On' : 'Off'} inside the company · each outside email needs your yes`;
   return m.outbound_send ? `On${m.forward_to.length ? ` · forwards to ${m.forward_to.join(', ')}` : ''}` : 'Off';
 }

@@ -125,6 +125,31 @@ def test_recovery_is_fifo_across_computers_and_new_requests_cannot_jump_waiters(
     assert claim(api, other, 'doc-updater') is not None
 
 
+def test_a_cloud_machine_being_stopped_does_not_hold_other_computers_behind_its_waiter(api):
+    """The oldest waiter's computer is a cloud machine reserved for a stop (backend/cloud_machines.py `held`): it
+    takes no turn, so the next computer's waiter goes instead of every computer waiting on it."""
+    import time
+    one_person(api)
+    machine = waiters(api, n=99, running=1)
+    independent(api, machine)
+    other = runner(api, label='Other synthetic computer')
+    assign(api, other, 'doc-updater')
+    ready(api, other, ['doc-updater'])
+    post(api, 'chat/doc-updater', {'text': 'Younger synthetic request'})
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE jobs SET created=? WHERE bot='finance' AND state='queued'", (H.shift(H.now(), minutes=-2),))
+        c.execute("UPDATE jobs SET created=? WHERE bot='doc-updater' AND state='queued'", (H.shift(H.now(), minutes=-1),))
+    assert claim(api, other, 'doc-updater') is None
+    assert claim(api, machine, 'finance') is None
+    age_claim(machine)
+    with api.app.state.store.transaction() as c:
+        c.execute("UPDATE attempts SET state='completed' WHERE id='attempt-99'")
+        c.execute("UPDATE jobs SET state='completed' WHERE attempt_id='attempt-99'")
+        c.execute("INSERT INTO cloud_machines(bot,runner_id,state,stop_until) VALUES('finance',?,'running',?)",
+                  (machine['runner_id'], time.time() + 60))
+    assert claim(api, other, 'doc-updater') is not None
+
+
 def test_recovery_does_not_hold_other_computers_behind_a_lane_busy_only_on_its_runner(api):
     """A lane the attempts table does not show (a worker whose lease lapsed) is known only from the runner's
     claims. Claims during the stop must keep it, or recovery waits on a job its own computer will not take."""

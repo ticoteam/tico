@@ -1,0 +1,12 @@
+{
+ "answer": {
+  "error": {
+   "code": "stale_lease",
+   "detail": "Execution ownership expired; stop this attempt",
+   "retryable": false
+  }
+ },
+ "endpoint": "renew",
+ "request": {},
+ "status": 409
+}

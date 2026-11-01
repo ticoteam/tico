@@ -2,28 +2,29 @@
 watched against the numbers and the market.
 
 - The page is one row at a time in `strategy_versions`: a summary (400 characters, what every bot reads on every run),
-  the vision (400 characters; the Goals page reads it from here), four fixed sections (`serve`, `sell`, `know`, `not`)
+  the vision (400 characters, kept but not shown on the Strategy page; the Goals page reads it from here and falls
+  back to the summary), four fixed sections (`serve`, `sell`, `know`, `not`)
   plus any extra ones the owner adds (`extra: {key: {title, body}}`), and a snapshot of the bets. Exactly one row is
   the `draft` (`n` NULL); publishing stamps it `n` (1, 2, 3...), snapshots every bet that is not retired, and opens a
   fresh draft copied from it. The draft carries a `revision`: a write against an older one answers 409, so two
   editors never overwrite each other silently.
 - Bets (`strategy_bets`) are the spine: a statement that could turn out wrong, why, what it rules out, what would show
   it is wrong (`wrong_if`: a KPI crossing a threshold, a market thesis changing, or a sentence with a check date), the
-  market ids it rests on (`cites`), and a status (proposed, active, retired). An active bet has a `rules_out` and a
-  `wrong_if`, and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
+  market ids it rests on (`cites`), and a status (proposed, active, retired). `rules_out` and `wrong_if` are optional
+  (the fit check watches a bet only when it has a `wrong_if`), and at most 7 are active. Goals and groups link to a bet (`goals.bet_id`, a group's `bet_id`); a retired
   bet keeps its goals.
-- The default guide (`strategy_guides/default.yaml`) is the questions the CEO Bot drafts a first strategy with. The
+- The default guide (`strategy_guides/default.yaml`) is the questions the Strategy Bot drafts a first strategy with. The
   exercises run against a strategy are lenses (backend/lenses.py).
 - Every change is a `strategy_events` row with the old and new values, like `market_events`.
 - Publishing emits `strategy.published`, puts `/strategy/summary` in every run's context from the next run
   (backend/learned.py `for_turn`, runner-rs/src/prompt.rs), and files one Decide card for the owner when a bet with
   goals was retired or rewritten (`strategy_realign`, decided through the goal proposals).
 - `watch` is the fit check: each active bet of the published version is checked against its wrong-if from the KPI
-  status pass, from each KPI reading and from each market write. A trip files one task for the CEO Bot per bet per
+  status pass, from each KPI reading and from each market write. A trip files one task for the Strategy Bot per bet per
   version, at every level.
 
 Who may: everyone signed in reads the published version; only the owner, on their own click, sees and writes the
-draft and the bets and publishes (backend/goal_routes.py `company_editor`). A bot, the CEO Bot included, proposes
+draft and the bets and publishes (backend/goal_routes.py `company_editor`). A bot, the Strategy Bot included, proposes
 (`goal_proposals` kind `strategy_draft`) and the owner confirms; a confirmed proposal writes the draft, never publishes.
 
 Unversioned and idempotent (`ensure`), like the company profile: an older release never reads the tables or the
@@ -245,11 +246,12 @@ def bets(c, status=None):
 
 def vision(c, editor=False):
     """The one vision: the draft's for the owner, the published one for everyone else. Before the first publish the
-    draft's is the team's vision for everyone, as it was before Strategy: a team that never publishes keeps it."""
+    draft's is the team's vision for everyone, as it was before Strategy: a team that never publishes keeps it. The
+    Strategy page shows only the summary, so an empty vision is the summary."""
     row = None if editor else \
-        H._one(c, "SELECT vision FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1")
-    row = row or H._one(c, "SELECT vision FROM strategy_versions WHERE status='draft'")
-    return (row or {}).get("vision") or ""
+        H._one(c, "SELECT vision, summary FROM strategy_versions WHERE status='published' ORDER BY n DESC LIMIT 1")
+    row = row or H._one(c, "SELECT vision, summary FROM strategy_versions WHERE status='draft'") or {}
+    return row.get("vision") or " ".join(str(row.get("summary") or "").split())
 
 
 def website(c):
@@ -449,10 +451,12 @@ def update_draft(c, actor, revision=None, guide_id=None, summary=None, vision=No
         return row
     _bump(c, actor, row, changes)
     _event(c, actor, "draft", {"old": {k: row[k] for k in changes}, "new": changes})
-    if "vision" in changes and not current(c):
+    if ("vision" in changes or "summary" in changes) and not current(c):
         # Before the first publish the draft's vision is the team's (vision()), so its history goes beside the
         # description's (GET /company/history); after it, an unpublished vision stays the owner's until publish.
-        _vision_event(c, actor, row["vision"], changes["vision"])
+        # The summary stands in for an empty vision, so a summary change moves it too.
+        if "vision" in changes:
+            _vision_event(c, actor, row["vision"], changes["vision"])
         sync_vision(c)
     H.event(c, actor, "strategy.draft", "", {"fields": sorted(changes)})
     return draft(c)
@@ -536,13 +540,9 @@ def _cites(c, actor, value):
 
 
 def _may_be(c, actor, row, bet_id=None):
-    """The rules a bet's new state must keep: active only with what it rules out and what would show it wrong, at
-    most ACTIVE_MAX active and LIVE_MAX not retired."""
+    """The rules a bet's new state must keep: at most ACTIVE_MAX active and LIVE_MAX not retired. What it rules out
+    and what would show it wrong are optional; the fit check watches only a bet that has a wrong-if."""
     if row["status"] == "active":
-        if not row["rules_out"]:
-            H.refuse(c, actor, "lint", "an active bet says what it rules out (rules_out)")
-        if not row["wrong_if"]:
-            H.refuse(c, actor, "lint", "an active bet says what would show it is wrong (wrong_if)")
         active = c.execute("SELECT count(*) FROM strategy_bets WHERE status='active' AND id<>?",
                            (bet_id or "",)).fetchone()[0]
         if active >= ACTIVE_MAX:
@@ -630,7 +630,7 @@ def update_bet(c, actor, bet_id, statement=None, why=None, rules_out=None, wrong
     return bet(c, bet_id), _bet_revision(c, actor, revision)
 
 
-# ----------------------------------------------------------------------------- the CEO Bot's proposal
+# ----------------------------------------------------------------------------- the Strategy Bot's proposal
 def proposal_error(c, payload):
     """What is wrong with a `strategy_draft` goal proposal (backend/goals.py), in a sentence, or None. The payload is
     partial: {summary?, vision?, sections?, bets?: [{id?, statement, why?, rules_out?, wrong_if?, cites?, status?}],
@@ -706,16 +706,15 @@ def _snapshot(row):
 def publish(c, actor, note="", revision=None):
     """Stamp the draft as version n with every bet that is not retired, open a fresh draft, emit `strategy.published`,
     and file the realignment card when bets with goals were retired or rewritten. The owner's own call (the route
-    checks). Refused without an active bet (which has rules_out and wrong_if) and a "What we won't do", or when
-    nothing changed since the last version."""
+    checks). Refused without an active bet and a "What we won't do", or when nothing changed since the last
+    version."""
     H._writer(c, actor)
     row = draft(c)
     _check_revision(c, row, revision)
     note = _clean(c, actor, note, NOTE_MAX, "note", one_line=True)
     snapshot = [_snapshot(b) for b in bets(c) if b["status"] != "retired"]
-    if not any(b["status"] == "active" and b["rules_out"] and b["wrong_if"] for b in snapshot):
-        H.refuse(c, actor, "lint", "publish with at least one active bet that says what it rules out and what would "
-                                   "show it is wrong")
+    if not any(b["status"] == "active" for b in snapshot):
+        H.refuse(c, actor, "lint", "publish with at least one active bet")
     if not row["sections"]["not"].strip():
         H.refuse(c, actor, "lint", "write \"What we won't do\" before publishing: a strategy with no trade-offs is a "
                                    "description")
@@ -740,9 +739,6 @@ def publish(c, actor, note="", revision=None):
     _event(c, actor, "published", {"n": n, "note": note})
     H.event(c, actor, "strategy.publish", f"v{n}", {"n": n})
     published = version(c, n)
-    from . import routines
-    routines.emit(c, EVENT, f"v{n}", {"n": n, "note": note, "published_by": actor}, title=f"Strategy v{n}",
-                  content=summary_text(c, published))
     H.hook(c, "strategy.published", f"v{n}", lambda: {"version": n, "note": note, "published_by": actor}, actor, revision=0)
     if last:
         realign(c, actor, last, published)
@@ -776,7 +772,7 @@ def _realign_goals(c, before, after):
 def realign(c, owner, before, after):
     """One Decide card for the owner after a publish that retired or rewrote bets with live goals: a
     `strategy_realign` proposal listing each goal with retire goal / move to another bet / keep, filed as a task in
-    the owner's queue at every level and outside the CEO Bot's daily room. Returns the proposal or None."""
+    the owner's queue at every level and outside the Strategy Bot's daily room. Returns the proposal or None."""
     from . import goals as G
     goals = _realign_goals(c, before, after)
     if not goals:
@@ -791,8 +787,8 @@ def realign(c, owner, before, after):
 
 
 def file_card(c, owner, proposal):
-    """The task that asks the owner to decide `proposal`, tracked like the CEO Bot's asks (backend/goal_asks.py) so
-    it closes once decided. Filed now, whatever the CEO Bot's level and its room today."""
+    """The task that asks the owner to decide `proposal`, tracked like the Strategy Bot's asks (backend/goal_asks.py) so
+    it closes once decided. Filed now, whatever the Strategy Bot's level and its room today."""
     from . import goal_asks as GA
     from . import goals as G
     if c.execute("SELECT 1 FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal["id"],)).fetchone():
@@ -800,20 +796,20 @@ def file_card(c, owner, proposal):
     requester = G.AUTO_ACTOR if GA.manager_ready(c) else H.KEEPER
     title, body = GA._ask({"kind": "proposal", "proposal": proposal})
     # A realign card is urgent (goal_asks.urgent): past the daily cap, so publishing never rolls back on it.
-    made = H.task_create(c, requester, title, body, owner, lint=False, lane="company", capped=False)
+    made = H.task_create(c, requester, title, body, owner, lint=False, lane="company")
     c.execute("INSERT INTO goal_asks (kind, ref, owner, task_id, created) VALUES ('proposal',?,?,?,?)",
               (proposal["id"], owner, made["id"], H.now()))
     return made
 
 
 def settle_card(c, actor, proposal_id, note):
-    """A decided strategy card closes its task now, whether or not the CEO Bot's pass runs on this install."""
+    """A decided strategy card closes its task now, whether or not the Strategy Bot's pass runs on this install."""
     row = H._one(c, "SELECT * FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
     if not row:
         return
     task = H.task(c, row["task_id"])
     if task and task["status"] in H.LIVE_STATUSES:
-        from .ceo_acts import upkeep
+        from .strategy_acts import upkeep
         with upkeep():
             H.task_close(c, actor, task["id"], note=note, quiet=True)
     c.execute("DELETE FROM goal_asks WHERE kind='proposal' AND ref=?", (proposal_id,))
@@ -921,9 +917,9 @@ def _evidence(c, item, published, today):
 def watch(c, kpi_id=None, market_id=None, today=None):
     """The fit check: each active bet of the published version against its wrong-if. `kpi_id` or `market_id` limits
     it to the bets that name that id (a reading, a market write); neither checks every bet (the KPI status pass).
-    A trip is one `bet_tripped` event and one task for the CEO Bot per bet per version, whatever its level; nothing
-    while the owner has its regular checks off or there is no CEO Bot. Returns the tripped bet ids."""
-    from . import ceo_bot
+    A trip is one `bet_tripped` event and one task for the Strategy Bot per bet per version, whatever its level; nothing
+    while the owner has its regular checks off or there is no Strategy Bot. Returns the tripped bet ids."""
+    from . import strategy_bot
     from . import goal_asks as GA
     from . import goals as G
     from .batch_work import isolated
@@ -934,7 +930,7 @@ def watch(c, kpi_id=None, market_id=None, today=None):
     if scope and f'"{scope}"' not in row["bets"]:      # most writes name nothing a bet cites: skip the parse
         return []
     active = [b for b in loads(row["bets"], []) if b.get("status") == "active" and b.get("wrong_if")]
-    if not active or not ceo_bot.checks(c) or not GA.manager_ready(c):
+    if not active or not strategy_bot.checks(c) or not GA.manager_ready(c):
         return []
     done = {r[0] for r in c.execute("SELECT json_extract(payload,'$.bet_id') FROM strategy_events WHERE kind=? AND "
                                     "json_extract(payload,'$.n')=?", (TRIPPED, row["n"]))}
@@ -979,7 +975,7 @@ def install(app, store, auth, mutate):
         auth.domain(who)
 
     def editor(c, who):
-        """The owner on their own click; a bot, the CEO Bot included, proposes and the owner confirms."""
+        """The owner on their own click; a bot, the Strategy Bot included, proposes and the owner confirms."""
         auth.domain(who)
         if goal_routes.company_editor(who):
             return
@@ -1087,7 +1083,7 @@ def install(app, store, auth, mutate):
 
     @app.get("/api/v2/strategy/guides")
     def strategy_guides(request: Request):
-        """Deprecated: the CEO Bot's drafting questions, the default guide only. The exercises run against a strategy
-        are lenses (GET /lenses)."""
+        """Deprecated: the Strategy Bot's drafting questions, the default guide only. The exercises run against a
+        strategy are lenses (GET /lenses)."""
         reader(request.state.identity)
         return listed_guides()

@@ -211,5 +211,8 @@ uvloop==0.23.0 ; sys_platform != "win32"
     # via
     #   -c requirements.txt
     #   -r requirements.in
-websockets==15.0.1
-    # via -r requirements-dev.in
+websockets==16.1.1
+    # via
+    #   -c requirements.txt
+    #   -r requirements-dev.in
+    #   -r requirements.in

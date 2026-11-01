@@ -82,7 +82,12 @@ files:
 ```
 
 Documents, images, video, audio, csv, tsv, json, yaml, md, html, pdf and office files can be published.
-Automatic file publishing keeps its 25 MiB cap. Task attachments use the server upload limit
+Every kind but video and audio is capped at 25 MB. `hub file publish` and `hub file import` take video and audio up to
+the server's upload limit (`TICO_UPLOAD_MAX_BYTES`, 2 GiB by default). They stream from disk with a raw body and a
+Content-Length, never as base64, and the server hashes the bytes as they arrive. A video or audio file must start with
+the container its extension names, or it is refused. Older servers do not advertise `features.file_media_stream`: they
+take video and audio only up to 25 MB, and the client refuses a larger one before it reads it.
+Automatic file publishing (the runner's) keeps its 25 MiB cap. Task attachments use the server upload limit
 (2 GiB by default; 10 MB on older servers).
 A `.env`, anything with a credential-like name, a symbolic link, a file with more than one hard link, and any path that resolves outside
 the checkout is refused. Uploads go through a durable outbox in the runner's own state with an
@@ -112,7 +117,10 @@ A file inherits the visibility of where it came from:
   to its participants and to the team owner, who can open direct chats. Personal Assistant rooms are the exception:
   only their human sees them, the owner included. In a shared bot room, only its members do. Anyone else does not learn a file name, a count, a version or an
   activity entry from it, on the bot's page or anywhere else;
-- **bot-wide**: anyone with **Read** permission on the bot ([See, Read and Write](permissions.md)). **See** alone lets them reach the bot's page, not read its files.
+- **bot-wide**: anyone with **Read** permission on the bot ([See, Read and Write](permissions.md)). **See** alone lets them reach the bot's page, not read its files;
+- **pinned wider**: a page a person pinned to the Dashboard or a team page is also readable by that place's audience
+  ([Overview](overview.md)). A bot's own pins never widen, and a private task's file is never pinned there. Each pin and
+  unpin is in the file's activity (`pinned`, `unpinned`, with the place).
 
 The check applies to every list row, the total, metadata, activity, versions and every download.
 
@@ -131,10 +139,56 @@ activity, with the visible `total`), `POST /api/v2/files/uploads`, `/links`, `/i
 It returns `content`, `published`, `updated` and `source`; `published: false` means the Computer has not reported content yet.
 It never substitutes the bot's description for its Instructions.
 `docs/custom-frontend.md` and `examples/custom-frontend` show a bot's Files in a frontend of your own.
+Pages, Library › Files, search and deleting for good are below and in [Pages](pages.md).
+
+## Library › Files
+
+**Library › Files** lists every file the viewer may see, across all bots and whoever added it: bots' files and
+[pages](pages.md), task and chat attachments, people's uploads, links and imports. Each row passes the same check as
+the bot's page, so a file you may not read adds no row, name or count.
+
+- **Filters:** kind (Pages, Documents, Images, Data, Video and audio, Other), bot, team (its bots' files and the
+  files on tasks its bots and people own, nested teams included), task, date, pinned and archived. They ride in the
+  address (`#/library/files?kind=page&bot=…`). On a phone they scroll sideways.
+- **Rows:** title, kind, bot, last updated, and where a page is pinned. A page opens full size; another stored file
+  opens in the file viewer; a link opens at its provider.
+- **Paging:** newest activity first, 50 rows at a time, each answer capped in bytes, with no total.
+
+`GET /api/v2/files?kind=&bot=&team=&task=&since=&until=&pinned=&archived=&limit=&cursor=`.
+
+## Search
+
+Search finds files by title and text: Markdown and plain text as they are, HTML as its visible text (never its
+scripts or styles), and CSV or TSV by its header and first 50 rows. PDFs and office files are found by title. The
+ranking follows [Docs](docs.md#search): title first, then text, each hit with an excerpt. Every hit passes the same
+visibility check as a list row.
+
+Tico indexes a version when it is published. A file from before this release is indexed in the background, a few
+hundred at a time; until then only its title is found.
+
+`GET /api/v2/files/search?q=&limit=`, `hub file search "<words>"`, file hits in the search box (⌘K), and the
+Librarian, which searches files beside the docs.
+
+## Deleting a file for good
+
+For a file that holds something it shouldn't. **Only the owner** deletes a file for good: **Delete for good** in a
+page's menu, `DELETE /api/v2/files/{id}`, or `hub file delete ID` with an owner token. BotOps asks the owner to
+confirm first.
+
+- Every version's bytes leave every place Tico stored them: this server, the company's bucket and its earlier
+  places, and Tico file hosting. Bytes anything else still uses stay: another file, a task or chat attachment, a
+  meeting's recording, market evidence, the team icon. Bytes this server wrote in the last two minutes (the same
+  bytes, uploaded again) go on a later pass, within a few minutes.
+- Its search text, page settings and pins go.
+- One row stays, titled **Deleted file**, and its activity records who deleted it, when and how many versions,
+  without the name or the content. Publishing the same path again makes a new file.
+- The backup (`TICO_BACKUP_URL`) keeps its copy: files there are only ever added. Remove them there by hand if they
+  must go.
 
 ## Retention
 
-Versions are immutable and kept unless you stop [Tico file hosting](#tico-file-hosting) and its retention period ends.
+Versions are immutable and kept unless you stop [Tico file hosting](#tico-file-hosting) and its retention period ends,
+or the owner [deletes the file for good](#deleting-a-file-for-good).
 The owner or a bot administrator removes a file from the bot's page (`PATCH /api/v2/files/{id}` with `archived: true`). That hides the row
 and keeps the bytes; the file returns when the bot publishes a changed version. A bot cannot remove a file.
 
@@ -142,13 +196,15 @@ and keeps the bytes; the file returns when the bot publishes a changed version. 
 
 ### Prepared file-distribution edge
 
-`infra/files-edge/template.py` renders an **edge-only, disabled** CloudFormation template to stdout;
-it never calls AWS. This is preparation for managed file hosting, not an available storage option.
-The stand-up still requires the owner's cost approval, private bucket and bucket policy, certificate,
-logging and broker provisioning, HQ key synchronization and DNS. Do not create or deploy AWS resources
-before that approval. The template takes `FilesDomain`, `CertificateArn` and `BucketRegionalDomainName`;
-it creates the distribution, OAC, key store, functions and response policies. Its OAC needs a bucket
-policy restricted to this distribution's ARN. Keep Block Public Access on; never grant public reads.
+`infra/files-edge/template.py` renders an **edge-only** CloudFormation template to stdout; it never
+calls AWS. The stand-up supplies the private bucket and bucket policy, certificate, log bucket, broker
+provisioning, HQ key synchronization and DNS. The template takes `FilesDomain`, `CertificateArn` and
+`BucketRegionalDomainName`; it creates the distribution, OAC, key store, functions and response policies.
+The distribution stays **disabled** unless `Enabled=true` is passed: enable it only once the bucket policy
+and certificate are in place. `LogBucketDomainName` (`<bucket>.s3.amazonaws.com`, ACLs enabled, as CloudFront
+standard logs require) and `LogPrefix` (default `cloudfront/`) turn on the standard logs HQ meters delivery
+from. Its OAC needs a bucket policy restricted to this distribution's ARN. Keep Block Public Access on;
+never grant public reads.
 
 The v1 edge contract is:
 
@@ -285,8 +341,12 @@ be started again to copy what remains.
 
 Files in Tico storage are reachable only through short-lived signed links. Tico checks access on every request,
 private-task files stay private, and there is no public listing. Pictures, video and audio open inline from the
-company's files address. For self-hosted companies using file hosting, web pages and SVG files show as **Open**
-cards that open the file viewer. Full inline pages and SVG are a separate change.
+company's files address. Web pages and SVG files show inline from it too, so a Mac or local install with no
+[visual address](visuals.md#self-hosting) of its own still shows them in conversations and on pages: Tico stores a
+cleaned copy beside each one (`/visuals/…`, as described above) and, after checking the reader, sends their browser
+to a four-minute link to it. A page stored before file hosting was turned on stays an **Open** card until **Move
+existing files** copies it. While credits are out or hosting is stopped, a page that already has its copy still
+shows inline; a new one is an **Open** card.
 
 When the owner stops file hosting on the Gateway page, new files go back to the company's own storage: its bucket,
 or the server's storage if it has no bucket. **Download all files** offers a ZIP export of every file and version
@@ -422,6 +482,22 @@ The version's author can edit its note or question through
 ask/answer messages, so their text remains readable by older Computers.
 See [Files, versions and questions](tasks.md#files-versions-and-questions) for the CLI, MCP
 and answer contracts.
+
+### Approved versions
+
+`hub file approved <path|FILE[@N]> [--by human|bot:SLUG|any]` (MCP `hub_file_approved`,
+`GET /api/v2/file-approvals?file=&version=` or `?path=&digest=`, plus `&by=`) says whether that exact version is
+approved. It prints `{approved, by, at, task, question}` and exits 0 when approved, 1 when not (the answer says
+`"approved": false`), 2 on bad input. A failed call also exits 1 or 2, with an error answer instead: read the answer,
+not only the code. A path is the bot's own file, matched by the sha256 of its bytes now. By default only a person's
+verdict counts (an answer to a [file review](tasks.md#reviewing-files)); `--by` names whose verdicts count instead. The
+newest matching verdict on that version decides (Request changes after Approve means not approved), a new version is
+never approved by an older one's review, and a deleted task's verdicts stop counting.
+
+`hub file review <path|FILE[@N]> --approve|--changes --task <task> [--note TEXT]` (MCP `hub_file_review`,
+`POST /api/v2/file-reviews`) gives a verdict directly, for a company where a bot moves a stage: a bot reviews another
+bot's file on a task it can read, when it can open the file. A bot never reviews its own bot's file (403). A person
+may use it too; Decide is the usual way.
 
 Upload retries verify their idempotency receipt before writing bytes to durable storage.
 Multipart retries still parse and hash the incoming bytes to reject changed content, using

@@ -264,33 +264,38 @@ def test_graph_and_entity_pages_are_bounded_and_focus_works_beyond_the_first_pag
 
 
 def test_the_daily_curate_pass_is_skipped_when_it_has_nothing_to_read(api):
-    """No new insight and no Listening for the Librarian on a weekday: no task. An insight brings it back."""
+    """No new insight and no Listening for the Librarian on a weekday: no task, the skip on record as
+    `automation.skipped`. An insight brings it back."""
+    import backend.routines as routines
     from backend.scheduler import Scheduler
     _librarian(api)
     store = api.app.state.store
     with store.transaction() as c:
         M.ensure_curator(c)
-        c.execute("UPDATE schedules SET next_due=? WHERE bot='librarian' AND routine_key='curate-the-market'",
-                  ("2026-10-12T00:00:00.000000Z",))
+        aid = routines.row(c, "librarian:curate-the-market")["automation"]       # the routine is its automation now
+        c.execute("UPDATE automations SET next_due=? WHERE id=?", ("2026-10-12T00:00:00.000000Z", aid))
     tick = lambda at: Scheduler(store, api.app.state.execution).tick(at)
     tick(datetime(2026, 10, 13, 12, 0, tzinfo=timezone.utc))            # Tuesday, 05:00 in Los Angeles
     with store.read() as c:
         assert not c.execute("SELECT 1 FROM tasks WHERE owner='bot:librarian'").fetchone()
-        assert c.execute("SELECT outcome FROM schedule_occurrences").fetchone()[0] == "skipped"
-    runs = get(api, "routines/librarian:curate-the-market/occurrences")["occurrences"]
-    assert [(r["outcome"], r["task_id"], "Listening" in r["reason"]) for r in runs] == [("skipped", None, True)]
+        assert not c.execute("SELECT 1 FROM automation_runs WHERE automation_id=?", (aid,)).fetchone()
+        skipped = [json.loads(r[0]) for r in c.execute(
+            "SELECT detail_json FROM events WHERE action='automation.skipped' AND target=?", (aid,))]
+    assert [("Listening" in d["reason"], d["at"]) for d in skipped] == [(True, "2026-10-12T00:00:00.000000Z")]
     with store.transaction() as c:
         c.execute("INSERT INTO market_insights(id,reported_by,reported_at,kind) VALUES('i1','bot:ops',?,'pricing')",
                   (H.now(),))
     tick(datetime(2026, 10, 14, 12, 0, tzinfo=timezone.utc))
     with store.read() as c:
         assert c.execute("SELECT title FROM tasks WHERE owner='bot:librarian'").fetchone()[0] == "Curate the market"
-    # A team that rewrote the routine's text gave it other work: it runs with nothing new to curate.
+    # A team that rewrote the automation's words gave it other work: it runs with nothing new to curate.
     with store.transaction() as c:
         c.execute("UPDATE market_insights SET status='applied'")
         c.execute("UPDATE tasks SET status='done' WHERE owner='bot:librarian'")
-        c.execute("UPDATE schedules SET playbook='Curate the market, then tidy the glossary.' "
-                  "WHERE routine_key='curate-the-market'")
+    flow = get(api, f"automations/{aid}")
+    steps = [{**step, "prompt": "Curate the market, then tidy the glossary."} for step in flow["steps"]]
+    r = api.patch(f"/api/v2/automations/{aid}", json={"steps": steps}, headers=headers())
+    assert r.status_code == 200, r.text
     tick(datetime(2026, 10, 15, 12, 0, tzinfo=timezone.utc))
     with store.read() as c:
         assert c.execute("SELECT count(*) FROM tasks WHERE owner='bot:librarian'").fetchone()[0] == 2

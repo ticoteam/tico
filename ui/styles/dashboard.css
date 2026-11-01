@@ -1,0 +1,119 @@
+/* Overview › Dashboard and team pages (ui/app/dashboard.js): a grid of pins in sixths on a computer (small a third,
+   medium a half, large the row), halves on a narrow screen, one column on a phone. The bot sidebar's card and page widgets reuse the card bodies. */
+#main.dash-layout{max-width:none;padding:0}
+.dash{display:flex;flex-direction:column;min-height:100%}
+.dash-head{display:flex;align-items:center;gap:8px;padding:8px 28px;min-height:48px;flex-wrap:wrap}
+.dash-head h1{margin:0;font-size:var(--t-lg);font-weight:600}
+.dash-head h1:empty{display:none}
+.dash-head .spacer{flex:1}
+.dash-actions{display:flex;gap:4px;flex-wrap:wrap}
+.dash-actions[hidden]{display:none}
+.dash-actions button{display:inline-flex;align-items:center;gap:4px}
+.dash-actions .nav-icon{font-size:16px;width:16px;height:16px}
+.dash-actions button{gap:6px}
+.dash-error{margin:0 28px 8px}
+.dash-grid{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:12px;padding:0 28px 24px}
+/* A card redrawn with new numbers lays out only the grid, never the page around it; its menus are not clipped (layout only). */
+.dash-grid{contain:layout}
+.dash-grid>.empty,.dash-grid>.skel{grid-column:1/-1}
+.dash-pin{grid-column:span 3;min-width:0;border:1px solid var(--line);border-radius:10px;background:var(--surface);display:flex;flex-direction:column}
+.dash-pin[data-size=small]{grid-column:span 2}
+.dash-pin[data-size=large]{grid-column:1/-1}
+.dash-pin.dragging{opacity:.6;outline:2px dashed var(--ink);outline-offset:2px}
+.dash-pin-head{position:relative;display:flex;align-items:center;gap:6px;padding:8px 10px 0 12px;min-height:32px}
+.dash-pin-head h2{margin:0;font-size:var(--t-base);font-weight:600;color:var(--ink);min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-pin-head h2 .muted{font-weight:500}
+.dash-pin-head .spacer{flex:1}
+.dash-plus{font-size:16px;line-height:var(--lh-none)}
+.dash-grip{flex:none;display:inline-grid;place-items:center;width:22px;height:22px;margin-left:-6px;padding:0;border:0;background:transparent;color:var(--muted);cursor:grab;touch-action:none;border-radius:5px}
+.dash-grip:hover,.dash-grip:focus-visible{background:var(--surface2);color:var(--ink)}
+.dash-more{flex:none;display:inline-grid;place-items:center;width:28px;height:28px;padding:0;border:0;border-radius:6px;background:transparent;color:var(--muted)}
+.dash-more:hover,.dash-more[aria-expanded=true]{background:var(--surface2);color:var(--ink)}
+.dash-more .nav-icon{font-size:18px;width:18px;height:18px}
+.dash-menu{position:absolute;right:8px;top:36px;z-index:5;display:flex;flex-direction:column;min-width:140px;padding:4px;border:1px solid var(--line);border-radius:8px;background:var(--bg);box-shadow:0 6px 24px rgba(0,0,0,.2)}
+.dash-menu button{all:unset;box-sizing:border-box;padding:6px 10px;border-radius:5px;font-size:var(--t-base);color:var(--ink);cursor:pointer}
+.dash-menu button:hover,.dash-menu button:focus-visible{background:var(--surface2)}
+.dash-menu button[aria-checked=true]{font-weight:600}
+.dash-menu button[aria-checked=true]::after{content:" ✓";color:var(--ink)}
+.dash-menu .danger{color:var(--fail)}
+.dash-pin-body{padding:8px 12px 12px;min-width:0}
+.dash-pin[data-size=small] .dash-pin-body{max-height:240px;overflow:auto}
+.dash-pin[data-size=medium] .dash-pin-body{max-height:420px;overflow:auto}
+.dash-pin-body>iframe,.dash-pin-body>.page-card{max-width:100%}
+
+/* card bodies (also in a bot's sidebar) */
+.dash-none{margin:4px 0;font-size:var(--t-sm)}
+.dash-big{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;color:inherit;text-decoration:none}
+a.dash-big:hover strong{text-decoration:underline}
+.dash-big strong{font-size:var(--t-2xl);font-weight:600;line-height:var(--lh-display);font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
+.dash-big strong small{font-size:var(--t-base);font-weight:500;color:var(--muted)}
+.dash-big .muted{font-size:var(--t-sm)}
+.dash-bad{color:var(--fail)}
+.dash-stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:8px}
+.dash-stat{display:flex;flex-direction:column;gap:2px;padding:8px;border-radius:8px;background:var(--surface2);color:inherit;text-decoration:none;min-width:0}
+.dash-stat:hover{text-decoration:none;outline:1px solid var(--line)}
+.dash-stat strong{font-size:var(--t-xl);font-weight:600;font-variant-numeric:tabular-nums;letter-spacing:var(--track-tight)}
+.dash-stat span{font-size:var(--t-sm);color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.dash-pin[data-size=small] .dash-stats,.bot-pin .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+.dash-bars{display:block;width:100%;height:72px;margin-top:10px}
+.dash-bars rect{fill:color-mix(in srgb,var(--accent) 45%,transparent)}
+.dash-bars rect.now{fill:var(--accent)}
+.dash-spark{display:block;width:100%;height:40px;margin-top:8px;overflow:visible}
+.dash-spark polyline{fill:none;stroke:var(--accent);stroke-width:2;vector-effect:non-scaling-stroke;stroke-linejoin:round;stroke-linecap:round}
+.dash-meter{height:8px;margin-top:10px;border-radius:4px;background:var(--surface2);overflow:hidden}
+.dash-meter span{display:block;height:100%;background:var(--accent)}
+.dash-meter.hot span{background:var(--fail)}
+.dash-list{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:2px;font-size:var(--t-base)}
+.dash-list li{display:flex;align-items:baseline;gap:6px;min-width:0;padding:3px 0}
+.dash-list li>a{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-list li>.muted{flex:none;margin-left:auto;font-size:var(--t-sm)}
+.dash-dot{flex:none;width:7px;height:7px;border-radius:50%;background:var(--muted);align-self:center}
+.dash-dot.ok{background:var(--g7)}
+.dash-dot.bad{background:var(--fail)}
+.dash-page-link{display:flex;align-items:flex-start;gap:8px;padding:8px;border-radius:8px;background:var(--surface2);color:inherit;text-decoration:none}
+.dash-page-link:hover{text-decoration:none;outline:1px solid var(--line)}
+.dash-page-link>span:last-child{display:flex;flex-direction:column;min-width:0}
+.dash-page-link strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-page-link .muted{font-size:var(--t-sm)}
+
+/* forms */
+.dash-dialog{width:min(480px,calc(100vw - 32px))}
+.dash-form{display:flex;flex-direction:column;gap:10px;padding:14px 16px;overflow:auto}
+.dash-form label{display:flex;flex-direction:column;gap:4px;font-size:var(--t-sm);color:var(--muted)}
+.dash-form :is(input:not([type=checkbox],[type=radio]),select){width:100%;box-sizing:border-box}
+.dash-fields{display:flex;flex-direction:column;gap:10px}
+.dash-pick{border:0;margin:0;padding:0;display:flex;flex-direction:column;gap:2px;max-height:280px;overflow:auto}
+.dash-pick legend{letter-spacing:var(--track-caps);text-transform:uppercase;color:var(--muted);padding:6px 0 4px;font-size:var(--t-label);font-weight:600}
+.dash-form label.dash-pick-row{flex-direction:row;align-items:center;gap:8px;padding:5px 4px;border-radius:6px;color:var(--ink);font-size:var(--t-base)}
+.dash-pick-row:hover{background:var(--surface2)}
+.dash-pick-row>span{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.dash-pick-row .muted{font-size:var(--t-sm)}
+.dash-chosen[hidden]{display:none}
+.dash-form-foot{display:flex;align-items:center;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+.dash-form-foot .spacer{flex:1}
+
+/* Campus keeps its own full-height layout; the tabs sit in its first row. */
+.overview-tabs{flex:none;display:flex;align-items:center;gap:8px;padding:8px 28px;border-bottom:1px solid var(--line);background:var(--surface)}
+.overview-tabs h1{margin:0;font-size:var(--t-lg);font-weight:600}
+
+/* the bot sidebar's card and page widgets */
+.bot-pin{padding:8px 12px 12px}
+.bot-pin .dash-big strong{font-size:var(--t-xl)}
+.bot-pin>.rail-h{margin:0 0 6px}
+.bot-w-x{display:none}
+.editing>.bot-w>.bot-w-bar .bot-w-x{display:inline-grid}
+
+@media(max-width:1100px){
+  .dash-pin[data-size=small]{grid-column:span 3}
+  .dash-pin[data-size=medium]{grid-column:1/-1}
+}
+@media(max-width:760px){
+  .dash-head{padding:10px 12px}
+  .dash-grid{grid-template-columns:minmax(0,1fr);padding:0 12px 24px;gap:10px}
+  .dash-pin,.dash-pin[data-size]{grid-column:1/-1}
+  .dash-error{margin:0 16px 8px}
+  .dash-stats{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .dash-more{width:40px;height:40px}
+  .dash-grip{width:32px;height:32px}
+  .overview-tabs{padding:10px 12px}
+}

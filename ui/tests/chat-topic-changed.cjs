@@ -15,8 +15,8 @@ async function run(browser, viewport) {
   page.on('pageerror', e => errors.push(e.message));
   const at = n => new Date(Date.UTC(2026, 9, 18, 12, n)).toISOString();
   const earlier = [
-    {id: 'a1', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: 'Fix the login redirect bug', created: at(0)},
-    {id: 'a2', from_actor: 'bot:botops', to_actor: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created: at(1)},
+    {id: 'a1', from_actor: 'human:ana', to_actor: 'bot:sales', kind: 'say', body: 'Fix the login redirect bug', created: at(0)},
+    {id: 'a2', from_actor: 'bot:sales', to_actor: 'human:ana', kind: 'say', in_reply_to: 'a1', body: 'Done.', created: at(1)},
   ];
   let server = earlier.slice();
   await page.route('**/*', async route => {
@@ -28,22 +28,22 @@ async function run(browser, viewport) {
     if (p.endsWith('.js')) return route.fulfill({contentType: 'application/javascript', body: ''});
     if (p === '/') return route.fulfill({contentType: 'text/html', body: html});
     if (p === '/api/me') return json({id: 'ana', name: 'Ana', role: 'owner', cloud: true});
-    if (p === '/api/employees') return json([{name: 'botops', display_name: 'BotOps', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
+    if (p === '/api/employees') return json([{name: 'sales', display_name: 'Sales', host: 'keeper', status: 'active', can_chat: true, schedules: []}]);
     if (p === '/api/issues') return json([]);
     if (p === '/api/v2/conversations')
-      return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:botops']}] : []});
+      return json({conversations: url.searchParams.get('chat_with') ? [{id: 'c1', kind: 'chat', scope: 'personal', participants: ['human:ana', 'bot:sales']}] : []});
     if (p.endsWith('/snapshot')) return json({messages: server.slice(), execution: null});
     if (p.endsWith('/watch')) return route.fulfill({contentType: 'text/event-stream', body: ': fixture\n\n'});
-    if (p === '/api/v2/chat/botops') {
+    if (p === '/api/v2/chat/sales') {
       const text = route.request().postDataJSON().text;
-      const message = {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:botops', kind: 'say', body: text, created: at(9),
+      const message = {id: 'm1', from_actor: 'human:ana', to_actor: 'bot:sales', kind: 'say', body: text, created: at(9),
                        conversation_id: 'c1', refs: {topic_changed: true}};
       server = [...server, message];
       return json({conversation: {id: 'c1'}, message});
     }
     return json(unrouted(p));
   });
-  await page.goto('https://tico-ui.test/#/bot/botops');
+  await page.goto('https://tico-ui.test/#/bot/sales');
   const box = page.locator('#chat-composer textarea');
   await box.waitFor();
   await page.waitForFunction(() => V2C?.loaded);

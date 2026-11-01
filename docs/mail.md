@@ -69,7 +69,7 @@ Gmail and mailbox tokens; [calendar Tools](#calendar) have separate access rules
 on a two-user Docker runner. The owner can deliberately
 turn on `org_read: true` to include reports' mail; only then does `--all-mailboxes` include them.
 The Inbox Manager starts with one disabled weekday 07:30 Routine in America/Los_Angeles; Setup
-switches it on. Change its timezone in **Settings → Rules** for your team.
+switches it on. Change its time zone on its automation in **Automations**.
 
 And the record:
 
@@ -613,10 +613,10 @@ hub bot mail <slug> --from-bot-yaml                  # take exactly what bot.yam
 
 The API is `GET` and `POST /api/v2/bots/<slug>/mail-settings` (`{"outbound_send": true, "forward_to": [...]}`).
 
-The CEO Bot is the exception: sending outside the company stays the owner's at every level. Its switch covers mail to
+The Strategy Bot is the exception: sending outside the company stays the owner's at every level. Its switch covers mail to
 people in the company only, it has no forward addresses, and each email with anyone outside on To or Cc needs a Tico
 send approval for that exact message: an approval Issue or a message telling it to send does not count
-([What stays yours](ceo-bot.md#what-stays-yours)).
+([What stays yours](strategy-bot.md#what-stays-yours)).
 
 `outbound_send` and `forward_to` in the bot's `bot.yaml` are only a request. Anything that can push to the bot's
 repository can write them, so they never turn sending on by themselves: with no value in Tico, sending needs an

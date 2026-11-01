@@ -1,10 +1,12 @@
-// The Strategy section (ui/strategy-page.js) against a stand-in for GET /api/v2/strategy and its writes (fixtures only,
-// the Acme example): the owner reads the draft with its bets (Why, Rules out, Wrong if in plain words, goals, health),
-// the four fixed sections and an extra one, edits the summary in place with the draft's revision, and is told when the
-// draft changed elsewhere (409); Publish stays off with its reason until one bet is active with Rules out and Wrong if
-// and What we won't do is written, and a bet chosen Active without them stays Proposed; a member reads only the
-// published version; old #/market links land on the Market tab keeping their query; the Goals page's Bet picker saves
-// bet_id and its chip opens the bet; the team chart's group Bet picker saves the group's bet_id.
+// The Strategy section (ui/strategy-page.js) against a stand-in for GET /api/v2/strategy, the market cards' reads and
+// all their writes (fixtures only, the Acme example): the owner reads the draft as cards (the summary on top, no vision;
+// Where we play beside the bets; Competitors beside Related news; the four fixed sections and an extra one), edits the
+// summary and each bet's statement in place with the draft's revision, adds a bet with + Bet (active), removes one with
+// × and restores it, moves one by its number (arrow keys or a drag), and is told when the draft changed elsewhere (409);
+// a click on a segment makes it Us, then Next, then neither, × removes one and one can be added by name; competitors are
+// removed and added by name or site; Publish stays off with its reason until one bet is active and What we won't do is
+// written; a member reads only the published version; old #/market links land on the Market tab keeping their query;
+// the Goals page's Bet picker saves bet_id and its chip opens the bet; a team group's row has no Bet flag.
 // TICO_SCREENSHOT_DIR=<dir> saves review screenshots (desktop in both themes, and a phone).
 const {chromium} = require('playwright');
 const assert = require('node:assert/strict');
@@ -27,7 +29,7 @@ const PHONE = {width: 390, height: 844}, DESKTOP = {width: 1440, height: 900};
 
 const bot = (name, display_name, org_parent, over) => ({name, display_name, org_parent, host: 'keeper', status: 'active', can_chat: true, ...over});
 const bots = [bot('coo', 'Assistant', ''), bot('botops', 'BotOps', ''), bot('librarian', 'Librarian', ''),
-  bot('goal-manager', 'CEO Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
+  bot('goal-manager', 'Strategy Bot', 'p:ana', {reports_to: ''}), bot('cmo', 'Head of Marketing', 'b:goal-manager', {reports_to: ''})];
 const kpis = [{id: 'k-margin', name: 'Gross margin per job', unit: '%'}, {id: 'k-jobs', name: 'Jobs per week', unit: ''}];
 const bets = () => [
   {id: 'b-price', statement: 'Price at half the market and still make money, because bots do the office work.',
@@ -48,6 +50,18 @@ const sections = {
   not: 'No one-off deep cleans, no custom quotes, no phone line.',
   extra: {brand: {title: 'Brand', body: 'Plain, on time, half the price.'}},
 };
+const B = 1e9;
+const seg = (id, name, parent, usd, over = {}) => ({id: 'segment/' + id, name, parent: parent ? 'segment/' + parent : null, depth: parent ? 2 : 1,
+  summary: '', size: null, rolled_usd: usd ? {spend_usd: usd, low_usd: usd * 0.7, high_usd: usd * 1.3} : null, estimates: [], players: [],
+  self: false, next: false, ...over});
+const market = () => ({definition: {root: 'segment/cleaning'}, segments: [seg('homes', 'Home cleaning', null, 4 * B, {self: true}),
+  seg('offices', 'Office cleaning', null, 3 * B), seg('medical', 'Medical offices', 'offices', 1 * B), seg('moveout', 'Move-out cleans', null, 0)],
+  rivals: [{id: 'company/cleanco', name: 'CleanCo', url: 'https://cleanco.example'}, {id: 'company/sparkle', name: 'Sparkle', url: ''}],
+  recent: [{item_id: 'li-1', source: 'reddit', url: 'https://reddit.example/r/austin/1', author: 'kim', published_at: '2026-10-20T08:00:00Z',
+    text: 'Anyone know a cleaner in Austin that does weekly?', destinations: ['sales'], at: '2026-10-20T09:00:00Z'}],
+  insights: [{id: 'mi-1', kind: 'other', about: 'Listening: hot', claim: 'CleanCo raises prices 20%', source_url: 'https://news.example/cleanco',
+    status: 'new', reported_at: '2026-10-18T10:00:00Z'}, {id: 'mi-2', kind: 'other', about: 'Pricing', claim: 'Not a listening post',
+    source_url: 'https://x.example', status: 'new', reported_at: '2026-10-19T10:00:00Z'}]});
 const v1 = {id: 'v-1', n: 1, status: 'published', guide: 'default',
   summary: 'Acme cleans homes and small offices in Austin at about half the usual price. Bots handle booking, scheduling and billing, so the price holds.',
   vision: 'Every home in Austin cleaned by Acme.', sections, bets: bets().filter(b => b.id !== 'b-weekly'), note: 'First version', revision: 7,
@@ -69,6 +83,7 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     {id: 'g-cmo', title: 'Sign 5 property managers', owner: 'bot:cmo', parent_id: 'g-top', status: 'red', status_source: 'auto', rank: 0, kpis: [], why: '', bet_id: null},
     ...more];
   const groups = [{id: 'ops', name: 'Operations', parent: '', bet_id: null}];
+  const mk = market();
   const strategy = () => ({...(role === 'owner' ? {draft: st.draft} : {}), current: st.current, bets: role === 'owner' ? st.bets : st.current?.bets || [],
     label: 'Bets', label_one: 'Bet', may_edit: role === 'owner',
     website: 'https://acme.example', goals_by_bet: {'b-price': [{id: 'g-top', title: 'Margin per job ≥ 30%', owner: 'company', status: 'green'},
@@ -131,6 +146,41 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     if (goal && method === 'POST') { const body = req.postDataJSON(); sent.push(['POST', '/goals/' + goal[1], body]); Object.assign(goals.find(g => g.id === goal[1]), body); return json({goal: goals.find(g => g.id === goal[1])}); }
     const group = p.match(/^\/api\/v2\/groups\/([^/]+)$/);
     if (group && method === 'PATCH') { const body = req.postDataJSON(); sent.push(['PATCH', '/groups/' + group[1], body]); Object.assign(groups.find(g => g.id === group[1]), body); return json({group: groups.find(g => g.id === group[1])}); }
+    // The market cards: the spend tree, the competitors, and what Listening found.
+    if (p.startsWith('/api/v2/market/') && method !== 'GET') {
+      const body = req.postDataJSON();
+      sent.push([method, p, body]);
+      if (role !== 'owner') return json({error: {code: 'forbidden', detail: 'Only the owner'}}, 403);
+      if (p === '/api/v2/market/segments/target') {
+        const g = mk.segments.find(x => x.id === body.id);
+        for (const x of mk.segments) { if (body.target === 'ours') x.self = x === g; if (body.target === 'next') x.next = x === g; }
+        if (body.target === 'none') { g.self = false; g.next = false; }
+        if (body.target === 'ours') g.next = false;
+        if (body.target === 'next') g.self = false;
+        return json({id: body.id, ours: body.target === 'ours', next: body.target === 'next'});
+      }
+      if (p === '/api/v2/market/segments/remove') {
+        const g = mk.segments.find(x => x.id === body.id);
+        mk.segments = mk.segments.filter(x => x !== g).map(x => (x.parent === g.id ? {...x, parent: g.parent, depth: 1} : x));
+        return json({id: body.id, removed: true});
+      }
+      if (p === '/api/v2/market/segments') {
+        const made = seg(body.name.toLowerCase().replace(/[^a-z0-9]+/g, '-'), body.name, null, 0);
+        if (mk.segments.some(x => x.id === made.id)) return json({error: {code: 'exists', detail: 'exists'}}, 409);
+        mk.segments.push(made); return json({segment: made});
+      }
+      if (p === '/api/v2/market/competitors') {
+        const host = /\./.test(body.name) ? body.name.replace(/^https?:\/\/(www\.)?/, '').split('/')[0].toLowerCase() : '';
+        const made = {id: 'company/' + (host || body.name.toLowerCase()), name: host || body.name, url: host ? 'https://' + host : ''};
+        mk.rivals = [...mk.rivals, made].sort((a, b) => a.name.localeCompare(b.name)); return json({competitor: made});
+      }
+      if (p === '/api/v2/market/competitors/remove') { mk.rivals = mk.rivals.filter(x => x.id !== body.id); return json({id: body.id, removed: true}); }
+    }
+    if (p === '/api/v2/market/spend') return json({definition: mk.definition, year: 2026, dimension: 'offering', basis: 'product',
+      total: {spend_usd: 7 * B, low_usd: 5 * B, high_usd: 9 * B}, segments: mk.segments});
+    if (p === '/api/v2/market/competitors') return json({competitors: mk.rivals});
+    if (p === '/api/v2/listening/stats') return role === 'owner' ? json({daily: [], recent: mk.recent}) : json({error: {code: 'forbidden', detail: 'no'}}, 403);
+    if (p === '/api/v2/market/insights') return role === 'owner' ? json({insights: mk.insights}) : json({error: {code: 'forbidden', detail: 'no'}}, 403);
     if (p === '/api/v2/market/graph') return json({entities: [], edges: []});
     if (p === '/api/v2/market/entities') return json({entities: [], total: 0});
     if (p === '/api/company-docs') return json({documents: []});
@@ -138,14 +188,15 @@ async function open(browser, {role = 'owner', route = '#/strategy', viewport = D
     return json(unrouted(p));
   });
   await page.goto('http://tico-ui.test/' + route);
-  return {page, errors, sent, st};
+  return {page, errors, sent, st, mk};
 }
 const sectionTitles = page => page.locator('[data-section] .strat-sec-head .strat-k').allInnerTexts();
 
 (async () => {
   const browser = await chromium.launch({channel: process.env.TICO_BROWSER_CHANNEL ?? 'chrome', headless: true});
   try {
-    // The owner reads the draft: summary, the Bets in plain words, the four sections in their order and the extra one.
+    // The owner reads the draft as cards: the summary on top (no vision), the bets as statements with their goals and
+    // health, the four sections in their order and the extra one.
     {
       const {page, errors, sent, st} = await open(browser);
       const summary = page.locator('[data-strat-field="summary"]');
@@ -155,22 +206,26 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await page.locator('#side [data-nav="strategy"]').getAttribute('aria-current'), 'page');
       assert.match(await page.locator('.strat-meta').innerText(), /^v1 · published \d+ Oct( \d{4})? by Ana · Draft differs from v1$/);
       assert.equal(await page.locator('[data-strat-framework], .strat-fw').count(), 0, 'no framework picker');
+      assert.equal(await page.locator('[data-strat-field="vision"], .strat-toc').count(), 0, 'one line on top: no vision, no contents');
+      assert.doesNotMatch(await page.locator('#strat-body').innerText(), /Every home in Austin|Rules out|Wrong if|Watching/);
+      assert.equal(await summary.getAttribute('placeholder'), 'Your strategy in one sentence');
       assert.equal(await page.locator('#strat-bets-h').innerText(), 'BETS');
+      assert.deepEqual(await page.locator('.strat-memo .strat-card-head .strat-k').allInnerTexts(), ['WHERE WE PLAY', 'BETS', 'COMPETITORS', 'RELATED NEWS']);
       const first = page.locator('li[data-bet="b-price"]');
-      assert.match(await first.innerText(), /Price at half the market[\s\S]*Why[\s\S]*40% below CleanCo[\s\S]*Rules out[\s\S]*Premium add-ons/);
-      assert.match(await first.locator('[data-bet-wrong]').innerText(), /^Wrong if\s*Gross margin per job below 25% · check by 31 Jan( 2027)?$/);
+      assert.equal(await first.locator('[data-bet-st]').inputValue(), bets()[0].statement);
       assert.deepEqual(await first.locator('.strat-goals .gdot').evaluateAll(dots => dots.map(d => [...d.classList].find(c => c !== 'gdot'))), ['green', 'yellow']);
       assert.equal(await first.locator('.strat-goals a').first().getAttribute('href'), '#/goals/g-top');
       assert.equal(await first.locator('[data-bet-health]').getAttribute('data-bet-health'), 'green');
       assert.equal(await page.locator('li[data-bet="b-offices"] [data-bet-health]').getAttribute('data-bet-health'), 'red');
-      assert.match(await page.locator('li[data-bet="b-offices"] [data-bet-wrong]').innerText(), /Fewer than 5 managers signed · check by 1 Feb/);
       assert.equal(await page.locator('li[data-bet="b-weekly"] .strat-pill').innerText(), 'Proposed');
-      assert.match(await page.locator('li[data-bet="b-weekly"] [data-bet-wrong]').innerText(), /Not yet measurable/);
       assert.equal(await page.locator('.strat-retired li[data-bet="b-old"]').count(), 1, 'retired bets sit apart');
       assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", "WHAT WE WON'T DO", 'BRAND']);
       assert.equal(await page.locator('[data-section="serve"] .strat-md strong').innerText(), 'small offices', 'sections are markdown');
       assert.equal(await page.locator('[data-bet-add]').getAttribute('aria-label'), 'Add Bet');
+      assert.equal(await page.locator('[data-bet-add]').innerText(), '+ Bet');
       assert.equal(await page.locator('[data-strat-publish]').isEnabled(), true, 'the Acme draft may be published');
+      await page.locator('#strat-where .strat-map').waitFor();
+      await page.locator('#strat-news .strat-posts').waitFor();
       await shot(page, 'desktop');
       // The summary saves on Enter, as a partial draft with its revision.
       await summary.fill('Acme cleans homes at half the price.');
@@ -222,50 +277,39 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       const drawer = page.locator('#strat-versions[open]');
       await drawer.locator('[data-sv-open="1"]').click();
       await drawer.locator('.strat-sv-sec').first().waitFor();
-      assert.match(await drawer.innerText(), /v1 · First version[\s\S]*Every home in Austin[\s\S]*WHAT WE WON'T DO[\s\S]*BRAND/);
+      assert.match(await drawer.innerText(), /v1 · First version[\s\S]*Acme cleans homes[\s\S]*WHAT WE WON'T DO[\s\S]*BRAND/);
+      assert.doesNotMatch(await drawer.innerText(), /Every home in Austin/, 'no vision in a version either');
       assert.equal(await drawer.locator('select, textarea, [data-sv-compare]').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Nothing publishable yet: Publish is off with its reason, and a bet chosen Active without Rules out stays Proposed.
+    // Nothing publishable yet: Publish is off with its reason; the Proposed pill makes a bet active, Rules out and
+    // Wrong if or not.
     {
       const {page, errors, sent} = await open(browser, {fresh: true});
       await page.locator('li[data-bet="b-price"]').waitFor();
       assert.equal(await page.locator('[data-strat-status]').innerText(), 'Not published');
       const publish = page.locator('[data-strat-publish]');
       assert.equal(await publish.isDisabled(), true);
-      assert.equal(await page.locator('[data-strat-why-not]').innerText(), 'Needs an active bet with Rules out and Wrong if');
-      assert.match(await page.locator('li[data-bet="b-price"] [data-bet-wrong]').innerText(), /Not yet measurable/);
-      await page.locator('li[data-bet="b-price"] [data-bet-edit]').click();
-      const form = page.locator('[data-bet-form="b-price"]');
-      await form.locator('select[name="status"]').selectOption('active');
-      assert.equal(await form.locator('select[name="status"]').inputValue(), 'proposed', 'stays Proposed');
-      assert.equal(await form.locator('[data-bet-why-not]').innerText(), 'An active bet needs Rules out and Wrong if');
-      // With Rules out and a KPI Wrong if, Active holds.
-      await form.locator('textarea[name="rules_out"]').fill('Premium add-ons, custom quotes.');
-      await form.locator('select[name="status"]').selectOption('active');
-      assert.equal(await form.locator('select[name="status"]').inputValue(), 'proposed');
-      assert.equal(await form.locator('[data-bet-why-not]').innerText(), 'An active bet needs Wrong if');
-      await form.locator('select[name="wrong_kind"]').selectOption('kpi');
-      assert.equal(await form.locator('[data-wrong-kind="kpi"]').isVisible(), true);
-      assert.equal(await form.locator('[data-wrong-kind="text"]').isVisible(), false);
-      assert.deepEqual(await form.locator('select[name="kpi_id"] option').allInnerTexts(), ['KPI…', 'Gross margin per job', 'Jobs per week']);
-      await form.locator('select[name="kpi_id"]').selectOption('k-margin');
-      await form.locator('input[name="threshold"]').fill('25');
-      await form.locator('input[name="check_by"]').fill('2027-01-31');
-      await form.locator('select[name="status"]').selectOption('active');
-      assert.equal(await form.locator('select[name="status"]').inputValue(), 'active');
-      assert.equal(await form.locator('[data-bet-why-not]').isVisible(), false);
-      await shot(page, 'bet-form');
+      // Why it is off is a (?) beside Publish, not a line of helper text.
+      assert.equal(await page.locator('[data-strat-why-not]').getAttribute('aria-label'), 'Needs an active bet');
+      assert.equal(await page.locator('[data-strat-why-not]').innerText(), '?');
+      assert.doesNotMatch(await page.locator('#main').innerText(), /Needs an active bet/, 'no helper line');
+      await page.locator('[data-strat-why-not]').focus();
+      assert.equal(await page.locator('[data-strat-why-not] [role="tooltip"]').isVisible(), true, 'the words show on focus');
+      const pop = await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox();
+      assert.ok(pop.y >= 0 && pop.x >= 0 && pop.x + pop.width <= DESKTOP.width, 'the words open on screen');
+      await shot(page, 'publish-off', ['dark']);
       await page.setViewportSize(PHONE);
-      await form.scrollIntoViewIfNeeded();
-      await shot(page, 'bet-form-phone', ['dark']);
+      await page.locator('[data-strat-why-not]').focus();
+      const phonePop = await page.locator('[data-strat-why-not] [role="tooltip"]').boundingBox();
+      assert.ok(phonePop.x >= 0 && phonePop.x + phonePop.width <= PHONE.width, 'the words open on a phone screen');
+      await shot(page, 'publish-off-phone', ['dark']);
       await page.setViewportSize(DESKTOP);
-      await form.locator('button[type="submit"]').click();
-      await form.waitFor({state: 'detached'});
-      assert.deepEqual(sent.find(x => x[1] === '/bets/b-price'), ['POST', '/bets/b-price', {rules_out: 'Premium add-ons, custom quotes.',
-        wrong_if: {kind: 'kpi', kpi_id: 'k-margin', direction: 'below', threshold: 25, check_by: '2027-01-31'}, status: 'active', revision: 1}]);
-      await page.locator('[data-strat-why-not]', {hasText: "Needs What we won't do"}).waitFor();
+      await page.locator('li[data-bet="b-price"] [data-bet-activate]').click();
+      await page.locator('li[data-bet="b-price"].strat-active').waitFor();
+      assert.deepEqual(sent.find(x => x[1] === '/bets/b-price'), ['POST', '/bets/b-price', {status: 'active', revision: 1}]);
+      await page.locator(`[data-strat-why-not][aria-label="Needs What we won't do"]`).waitFor();
       assert.equal(await publish.isDisabled(), true);
       await page.locator('[data-section="not"] [data-section-edit]').click();
       await page.locator('[data-section-form] textarea').fill('No deep cleans.');
@@ -275,17 +319,104 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A sentence wrong-if saved with no Check by gets one 90 days out: the server refuses it without a date.
+    // The bets: a statement edited in place, + Bet adds an active one (an empty one goes), × retires one with an Undo,
+    // Restore brings one back.
     {
-      const {page, errors, sent} = await open(browser);
-      await page.locator('li[data-bet="b-weekly"] [data-bet-edit]').click();
-      const form = page.locator('[data-bet-form="b-weekly"]');
-      await form.locator('input[name="wrong_text"]').fill('Weekly churn above 10%');
-      await form.locator('button[type="submit"]').click();
-      await form.waitFor({state: 'detached'});
-      const {wrong_if} = sent.find(x => x[1] === '/bets/b-weekly')[2];
-      assert.equal(wrong_if.text, 'Weekly churn above 10%');
-      assert.equal(wrong_if.check_by, new Date(Date.now() + 90 * 864e5).toISOString().slice(0, 10));
+      const {page, errors, sent, st} = await open(browser);
+      const price = page.locator('li[data-bet="b-price"] [data-bet-st]');
+      await price.waitFor();
+      await price.fill('Price at half the market.');
+      await price.press('Enter');
+      await page.waitForFunction(() => document.querySelector('li[data-bet="b-price"] [data-bet-st]')?.defaultValue === 'Price at half the market.');
+      assert.deepEqual(sent.filter(x => x[1].startsWith('/bets')), [['POST', '/bets/b-price', {statement: 'Price at half the market.', revision: 7}]]);
+      // Emptied, it keeps its words; nothing is sent.
+      await price.fill('');
+      await price.press('Enter');
+      assert.equal(await price.inputValue(), 'Price at half the market.');
+      await page.locator('[data-bet-add]').click();
+      const fresh = page.locator('[data-bet-new] [data-bet-st]');
+      assert.equal(await page.evaluate(() => document.activeElement?.closest('[data-bet-new]') !== null), true, 'the new row has the focus');
+      await fresh.press('Escape');
+      await page.locator('[data-bet-new]').waitFor({state: 'detached'});
+      await page.locator('[data-bet-add]').click();
+      await fresh.fill('Win offices through managers.');
+      await fresh.press('Enter');
+      await page.locator('li[data-bet="b-new"]').waitFor();
+      assert.deepEqual(sent.filter(x => x[1] === '/bets').map(x => x[2]), [{statement: 'Win offices through managers.', status: 'active', revision: 8}]);
+      assert.equal(await page.locator('li[data-bet="b-new"] .strat-bet-n').innerText(), '4');
+      // × retires it; Undo puts its status back.
+      await page.locator('li[data-bet="b-offices"]').hover();
+      await page.locator('li[data-bet="b-offices"] [data-bet-x]').click();
+      await page.locator('.strat-retired li[data-bet="b-offices"]').waitFor({state: 'attached'});
+      assert.deepEqual(sent.filter(x => x[1] === '/bets/b-offices').at(-1)[2], {status: 'retired', revision: 9});
+      await page.locator('.toast', {hasText: 'Removed bet'}).getByRole('button', {name: 'Undo'}).click();
+      await page.locator('#strat-bets-ol li[data-bet="b-offices"]').waitFor();
+      assert.deepEqual(sent.filter(x => x[1] === '/bets/b-offices').at(-1)[2], {status: 'active', revision: 10});
+      // Restore: a retired bet comes back active while there is room.
+      await page.locator('.strat-retired summary').click();
+      await page.locator('.strat-retired li[data-bet="b-old"] [data-bet-restore]').click();
+      await page.locator('#strat-bets-ol li[data-bet="b-old"]').waitFor();
+      assert.deepEqual(sent.filter(x => x[1] === '/bets/b-old').at(-1)[2], {status: 'active', revision: 11});
+      assert.equal(st.bets.find(b => b.id === 'b-old').status, 'active');
+      assert.deepEqual(errors, []);
+      await page.close();
+    }
+    // Where we play: a click makes a segment Us, then Next, then neither (one of each); × removes one, its parts move up;
+    // one is added by name. Competitors: × removes one, one is added by its site. Related news: hot first, links out.
+    {
+      const {page, errors, sent, mk} = await open(browser);
+      const where = page.locator('#strat-where');
+      await where.locator('.strat-map').waitFor();
+      const tile = id => where.locator(`[data-seg="segment/${id}"]`);
+      assert.equal(await where.locator('.strat-hint').innerText(), 'Click to target');
+      assert.equal(await tile('homes').getAttribute('aria-pressed'), 'true');
+      assert.match(await tile('homes').innerText(), /^Us\s*Home cleaning\s*\$4B/);
+      assert.equal(await where.locator('.strat-tm-plain [data-seg="segment/moveout"]').count(), 1, 'an unsized segment is a plain tile');
+      assert.equal(await where.locator('.strat-cap').innerText(), 'About $7B a year');
+      await tile('offices').click();
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/offices"]')?.classList.contains('ours'));
+      assert.equal(await tile('homes').getAttribute('aria-pressed'), 'false', 'one Us');
+      await tile('offices').click();
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/offices"]')?.classList.contains('next'));
+      await tile('offices').click();
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/offices"]')?.getAttribute('aria-pressed') === 'false');
+      await tile('homes').focus();
+      await page.keyboard.press('Enter');
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/homes"]')?.classList.contains('ours'));
+      for (let i = 0; i < 100 && sent.filter(x => x[1] === '/api/v2/market/segments/target').length < 4; i++) await page.waitForTimeout(20);
+      assert.deepEqual(sent.filter(x => x[1] === '/api/v2/market/segments/target').map(x => [x[2].id, x[2].target]),
+        [['segment/offices', 'ours'], ['segment/offices', 'next'], ['segment/offices', 'none'], ['segment/homes', 'ours']]);
+      await tile('offices').hover();
+      await tile('offices').locator('[data-seg-x]').click();
+      await tile('offices').waitFor({state: 'detached'});
+      await page.waitForFunction(() => document.querySelector('#strat-where [data-seg="segment/medical"]'));
+      assert.deepEqual(sent.find(x => x[1] === '/api/v2/market/segments/remove'), ['POST', '/api/v2/market/segments/remove', {id: 'segment/offices'}]);
+      assert.equal(mk.segments.find(x => x.id === 'segment/medical').parent, null, 'its part moved up');
+      const addSeg = where.locator('[data-add="seg"] input');
+      await addSeg.fill('Window cleaning');
+      await addSeg.press('Enter');
+      await tile('window-cleaning').waitFor();
+      assert.deepEqual(sent.find(x => x[1] === '/api/v2/market/segments')[2], {name: 'Window cleaning'});
+      const rivals = page.locator('#strat-rivals');
+      assert.deepEqual(await rivals.locator('.strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle']);
+      assert.equal(await rivals.locator('.strat-chip a').getAttribute('href'), 'https://cleanco.example');
+      assert.equal(await rivals.locator('.strat-chip a').getAttribute('target'), '_blank');
+      await rivals.locator('[data-rival="company/sparkle"]').hover();
+      await rivals.locator('[data-rival="company/sparkle"] [data-rival-x]').click();
+      await rivals.locator('[data-rival="company/sparkle"]').waitFor({state: 'detached'});
+      const addRival = rivals.locator('[data-add="rival"] input');
+      assert.equal(await addRival.getAttribute('placeholder'), 'Add a competitor or its site');
+      await addRival.fill('https://www.maidpro.example/austin');
+      await addRival.press('Enter');
+      await rivals.locator('[data-rival="company/maidpro.example"]').waitFor();
+      assert.deepEqual(await rivals.locator('.strat-chip').allInnerTexts(), ['CleanCo', 'maidpro.example']);
+      assert.deepEqual(sent.filter(x => x[1].startsWith('/api/v2/market/competitors')).map(x => [x[1], x[2]]),
+        [['/api/v2/market/competitors/remove', {id: 'company/sparkle'}], ['/api/v2/market/competitors', {name: 'https://www.maidpro.example/austin'}]]);
+      const news = page.locator('#strat-news .strat-posts li');
+      assert.equal(await news.count(), 2, 'listening posts only');
+      assert.match(await news.first().innerText(), /^Hot\s*CleanCo raises prices 20%\s*news\.example · 18 Oct/);
+      assert.equal(await news.first().locator('a').getAttribute('href'), 'https://news.example/cleanco');
+      assert.match(await news.nth(1).innerText(), /Anyone know a cleaner in Austin[\s\S]*Reddit · 20 Oct/);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -298,6 +429,11 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal(await page.locator('li[data-bet="b-weekly"]').count(), 0, 'a proposed bet is not in the published version');
       assert.equal(await page.locator('.strat-retired').count(), 0);
       assert.doesNotMatch(await page.locator('.strat-meta').innerText(), /Draft|Not published/);
+      // The market cards read only: no ×, no add rows, no tile to click; no news for one who is not routed any.
+      await page.locator('#strat-where .strat-map').waitFor();
+      await page.locator('#strat-news .strat-none-s').waitFor();
+      assert.equal(await page.locator('.strat-x, .strat-addrow, .strat-tm.pick, .strat-hint').count(), 0);
+      assert.deepEqual(await page.locator('#strat-rivals .strat-chip').allInnerTexts(), ['CleanCo', 'Sparkle']);
       assert.deepEqual(await sectionTitles(page), ['WHO WE SERVE', 'WHAT WE SELL, AND FOR HOW MUCH', "WHAT WE KNOW THAT OTHERS DON'T", "WHAT WE WON'T DO", 'BRAND']);
       assert.deepEqual(errors, []);
       await page.close();
@@ -306,7 +442,8 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
     {
       const {page, errors} = await open(browser, {viewport: PHONE});
       await page.locator('li[data-bet="b-price"]').waitFor();
-      assert.equal(await page.locator('.strat-toc').isVisible(), false);
+      await page.locator('#strat-where .strat-map').waitFor();
+      await page.locator('#strat-news .strat-posts').waitFor();
       assert.ok(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth && $('#main').scrollWidth <= $('#main').clientWidth), 'no horizontal scroll');
       await shot(page, 'phone', ['dark']);
       assert.deepEqual(errors, []);
@@ -321,13 +458,13 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Goals: one Strategy line at the top; the goal editor's Bet picker saves bet_id; the bet's chip opens it on Strategy.
+    // Goals: no Strategy line at the top (Strategy is the tab beside it); the goal editor's Bet picker saves bet_id; the
+    // bet's chip opens it on Strategy.
     {
       const {page, errors, sent} = await open(browser, {route: '#/goals'});
       await page.locator('#goal-tree .gt-row').first().waitFor();
-      assert.match(await page.locator('#goal-strategy').innerText(), /^Strategy v1\s*·?\s*Acme cleans homes/);
-      assert.equal(await page.locator('#goal-strategy').getAttribute('href'), '#/strategy');
-      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]').first().click();
+      assert.equal(await page.locator('#goal-strategy').count(), 0);
+      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
       const panel = page.locator('#goal-panel[open]');
       await panel.locator('[data-gp-edit="g-cmo"]').click();
       const picker = panel.locator('select[name="bet"]');
@@ -347,35 +484,19 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // The team chart: the owner gives a group a bet from the flag on its row.
+    // The team chart: a group's row has add, rename and delete, and no Bet flag, for the owner too.
     {
-      const {page, errors, sent} = await open(browser);
+      const {page, errors} = await open(browser);
       const row = page.locator('#tree li.org-group > .noderow', {hasText: 'Operations'});
       await row.waitFor();
       await row.hover();
-      await row.locator('[data-group-bet="ops"]').click();
-      const select = page.locator('#tree [data-group-bet-select="ops"]');
-      await select.waitFor();
-      assert.equal(await page.locator('#tree .org-bet-f > span').innerText(), 'Bet');
-      assert.deepEqual(await select.locator('option').allInnerTexts(), ['None', bets()[0].statement, bets()[1].statement]);
-      await shot(page, 'group-picker');
-      if (shots) {
-        await page.setViewportSize(PHONE);
-        await page.evaluate(() => setDrawer(true));
-        await select.scrollIntoViewIfNeeded();
-        await shot(page, 'group-picker-phone', ['dark']);
-        await page.evaluate(() => setDrawer(false));
-        await page.setViewportSize(DESKTOP);
-      }
-      await select.selectOption('b-price');
-      await select.waitFor({state: 'detached'});
-      assert.deepEqual(sent.find(x => x[1] === '/groups/ops'), ['PATCH', '/groups/ops', {bet_id: 'b-price'}]);
-      await row.hover();
-      assert.match(await row.locator('[data-group-bet="ops"]').getAttribute('class'), /\bon\b/, 'the flag stays lit');
+      await row.locator('[data-group-rename="ops"]').waitFor();
+      assert.equal(await page.locator('[data-group-bet], .org-bet-pop').count(), 0);
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // A strategy change from the CEO Bot in Needs you: who suggests it and why, each change as Now / Proposed against the
+    // A strategy change from the Strategy Bot in Needs you: who suggests it and why, each change as Now / Proposed
+    // against the
     // draft, then "Add to draft" / "No, leave it" with the line that nothing is published (Dev 533).
     {
       const proposal = {id: 'p-draft', kind: 'strategy_draft', goal_id: null, kpi_id: null, status: 'pending', proposed_by: 'bot:goal-manager',
@@ -389,7 +510,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       await card.waitFor();
       const flat = t => t.replace(/\s+/g, ' ').trim();
       assert.equal(flat(await card.locator('.kpi-prop-head').innerText()),
-        'CEO Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
+        'Strategy Bot suggests a change to your strategy because Bet 1 may be wrong: Margin per job fell to 22% for two months. Open Strategy');
       assert.equal(await card.locator('.strat-prop-open').getAttribute('href'), '#/strategy');
       // The vision it proposes is the draft's already: no row for it.
       assert.deepEqual(await card.locator('.strat-prop-list > li').allInnerTexts().then(rows => rows.map(flat)), [
@@ -429,7 +550,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.equal((await rename.locator('.strat-prop-list').innerText()).replace(/\s+/g, ' ').trim(), 'Positioning · Title Now Brand Proposed Positioning');
       assert.deepEqual(await rename.locator('.kpi-prop-do button').allInnerTexts(), ['Add to draft', 'No, leave it']);
       await lens.waitFor();
-      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^CEO Bot suggests a change to your strategy from the Blue Ocean lens/);
+      assert.match(await lens.locator('.kpi-prop-head').innerText(), /^Strategy Bot suggests a change to your strategy from the Blue Ocean lens/);
       const values = lens.locator('.prop-np-v');
       const tall = () => values.evaluateAll(els => els.map(el => el.scrollHeight > el.clientHeight + 1));
       // The draft's own text is short, so only Proposed is cut; both are clamped to four lines until Show all.
@@ -466,7 +587,7 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       const old = {id: 'g-old', title: 'Win the office park', owner: 'bot:cmo', parent_id: null, status: 'green', status_source: 'auto', rank: 1, kpis: [], why: '', bet_id: 'b-gone'};
       const {page, errors, sent} = await open(browser, {route: '#/goals', more: [old]});
       await page.locator('#goal-tree .gt-row').first().waitFor();
-      await page.locator('#goal-tree .gt-row', {hasText: 'Win the office park'}).click();
+      await page.locator('#goal-tree .gt-row[data-owner="bot:cmo"]:not(.gt-cont) .gt-name').click();
       const panel = page.locator('#goal-panel[open]');
       await panel.locator('[data-gp-edit="g-old"]').click();
       const picker = panel.locator('select[name="bet"]');
@@ -479,13 +600,29 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
       assert.deepEqual(errors, []);
       await page.close();
     }
-    // Moving a bet saves each changed rank with the revision the last save answered.
+    // Moving a bet by its number: arrow keys, or a drag. Each changed rank is saved with the revision the last save
+    // answered.
     {
       const {page, errors, sent} = await open(browser);
-      await page.locator('li[data-bet="b-offices"] [data-bet-up]').click();
-      await page.waitForFunction(() => document.querySelector('ol.strat-bets li[data-bet]')?.dataset.bet === 'b-offices');
+      await page.locator('li[data-bet="b-offices"] [data-bet-drag]').focus();
+      await page.keyboard.press('ArrowUp');
+      await page.waitForFunction(() => document.querySelector('#strat-bets-ol li[data-bet]')?.dataset.bet === 'b-offices');
       assert.deepEqual(sent.filter(x => x[1].startsWith('/bets/')), [['POST', '/bets/b-offices', {rank: 0, revision: 7}],
         ['POST', '/bets/b-price', {rank: 1, revision: 8}]]);
+      const order = () => page.locator('#strat-bets-ol li[data-bet]').evaluateAll(lis => lis.map(li => li.dataset.bet));
+      // Dragged from first to last.
+      const from = await page.locator('li[data-bet="b-offices"] [data-bet-drag]').boundingBox();
+      const to = await page.locator('li[data-bet="b-weekly"]').boundingBox();
+      await page.mouse.move(from.x + from.width / 2, from.y + from.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(from.x + from.width / 2, to.y + to.height - 2, {steps: 6});
+      await page.mouse.up();
+      await page.waitForFunction(() => [...document.querySelectorAll('#strat-bets-ol li[data-bet]')].at(-1)?.dataset.bet === 'b-offices' && !document.querySelector('.strat-bet.dragging'));
+      await page.waitForFunction(() => document.querySelectorAll('#strat-bets-ol li[data-bet]').length === 3);
+      assert.deepEqual(await order(), ['b-price', 'b-weekly', 'b-offices']);
+      for (let i = 0; i < 100 && sent.filter(x => x[1].startsWith('/bets/')).length < 5; i++) await page.waitForTimeout(20);
+      assert.deepEqual(sent.filter(x => x[1].startsWith('/bets/')).slice(2).map(x => [x[1], x[2].rank]),
+        [['/bets/b-price', 0], ['/bets/b-weekly', 1], ['/bets/b-offices', 2]]);
       assert.deepEqual(errors, []);
       await page.close();
     }
@@ -554,14 +691,6 @@ const sectionTitles = page => page.locator('[data-section] .strat-sec-head .stra
         assert.deepEqual(old.errors, []);
         await old.page.close();
       }
-    }
-    // A member has no Bet flag on a group.
-    {
-      const {page, errors} = await open(browser, {role: 'member'});
-      await page.locator('.strat-summary').waitFor();
-      assert.equal(await page.locator('[data-group-bet]').count(), 0);
-      assert.deepEqual(errors, []);
-      await page.close();
     }
     console.log('strategy: ok');
   } finally {

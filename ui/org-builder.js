@@ -150,7 +150,7 @@ function obChartHTML(state, big) {
   const cols = big ? obCols(state, depts.length) : 1, rows = [];
   for (let i = 0; i < depts.length; i += cols) rows.push(depts.slice(i, i + cols));
   return `<div class="oc${big ? ' oc-big' : ''}" style="--cols:${cols}">
-      <div class="oc-top"><div class="oc-node oc-ceo" data-oc-ceo>${personAvatar(me, 28)}<span class="oc-text"><strong>${esc(me.name || 'You')}</strong><small>CEO</small></span></div></div>
+      <div class="oc-top"><div class="oc-node oc-owner" data-oc-owner>${personAvatar(me, 28)}<span class="oc-text"><strong>${esc(me.name || 'You')}</strong><small>CEO</small></span></div></div>
       ${rows.length ? `<div class="oc-rows">${rows.map(row => `<div class="oc-row" style="--k:${row.length}">${row.map(id => obDeptNodeHTML(state, id, big)).join('')}</div>`).join('')}</div>`
         : '<p class="oc-empty">Groups appear here.</p>'}
     </div>`;
@@ -261,7 +261,7 @@ function obHelpersHTML(state) {
     const on = cat.picked.has(card.slug);
     return `<div class="ob-helper${on ? ' on' : ''}" data-ob-helper-row="${esc(card.slug)}"><label class="ob-helper-toggle">${obAvatar(card.slug, card, 28)}
         <span class="ob-helper-name">${esc(catalogName(cat, card))}<small id="ob-helper-desc-${esc(card.slug)}">${esc(card.template === 'health-monitor'
-          ? 'Checks this install and asks BotOps to fix setup problems.' : card.template === 'inbox'
+          ? 'Checks this install and gets setup problems fixed.' : card.template === 'inbox'
             ? 'Reads one person’s mailbox and prepares an email brief.' : card.summary)}</small></span>
         <input type="checkbox" role="switch" data-ob-helper="${esc(card.slug)}" aria-describedby="ob-helper-desc-${esc(card.slug)}" ${on ? 'checked' : ''}></label>
       ${on && card.template === 'inbox' ? obMailboxHTML(state, card.slug) : ''}</div>`;

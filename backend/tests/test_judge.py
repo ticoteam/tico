@@ -107,6 +107,26 @@ def test_the_server_asks_typesafe_once_and_briefly():
     assert seen == [B.JEV_TIMEOUT] and B.JEV_TIMEOUT <= 10
 
 
+def test_a_callers_level_reaches_the_steps_that_take_one_and_prices_their_model():
+    from clients import judge as J
+    seen = []
+
+    def gateway(state, questions, label=None, level=None):
+        seen.append(("gateway", level))
+        raise J.JudgeError("down", "Gateway down", retryable=True)
+    gateway.current_model, gateway.level = (lambda: J.decide_model("low")), (lambda: "low")
+
+    def company(state, questions, label=None):   # takes no level: asked as before
+        seen.append(("company", None))
+        return {"answers": {}}
+
+    chain = B.ordered([gateway, company])
+    chain({"team": "Acme"}, QUESTIONS, level="high")
+    assert seen == [("gateway", "high"), ("company", None)]
+    assert B.step_models([gateway, company], level="high")[0] == J.decide_model("high")
+    assert B.step_models([gateway, company])[0] == J.decide_model("low")
+
+
 def test_the_daily_cap_is_a_setting_per_role(api):
     engine = fake(api)
     api.app.state.store.settings.decisions_daily_calls_owner = 1

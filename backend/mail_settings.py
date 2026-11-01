@@ -12,7 +12,7 @@ Each bot's computer reports what its bot.yaml asks (`mail_request` in the readin
 runner-rs/src/declared_access.rs); Health raises an alert when it asks for more than a person approved, and a person may
 take exactly that request with `from_request` once they have read it.
 
-The CEO Bot never sends outside the company without a person's yes for that message, at any level (backend/ceo_acts.py
+The Strategy Bot never sends outside the company without a person's yes for that message, at any level (backend/strategy_acts.py
 `PERSON_ONLY`, "send"): it has no forward targets, and its mail connector takes neither the sender of a thread it
 answers, nor an allowance, nor an Issue or an owner's message, for an outside address: only a Tico send approval for the
 exact message (`per_message`). A person may still turn its sending on for mail inside the company, which reads as
@@ -82,11 +82,11 @@ def unapproved(setting, request):
 
 
 def per_message(c, bot):
-    """Why `bot` sends nothing outside without a yes for each message, whatever is stored, or None: the CEO Bot."""
-    from . import ceo_bot
-    if bot != ceo_bot.SLUG:
+    """Why `bot` sends nothing outside without a yes for each message, whatever is stored, or None: the Strategy Bot."""
+    from . import strategy_bot
+    if bot != strategy_bot.SLUG:
         return None
-    return (f"the {ceo_bot.name(c)} sends nothing outside the company without the owner's yes for each message, at "
+    return (f"the {strategy_bot.name(c)} sends nothing outside the company without the owner's yes for each message, at "
             "every level: request a Tico send approval for the exact message")
 
 

@@ -121,8 +121,8 @@ def test_a_refused_botops_write_names_the_person_and_the_place_not_go_ahead(api,
     assert "hub bot mail ops --send" in r.json()["error"]["detail"]
 
 
-def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
-    """Sending outside the company stays the owner's at every level (docs/ceo-bot.md, "What stays yours"). The CEO Bot
+def test_the_strategy_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
+    """Sending outside the company stays the owner's at every level (docs/strategy-bot.md, "What stays yours"). The Strategy Bot
     has no forward targets, whatever a person stored for it, and nobody can add one; its mail connector takes neither a
     forward target nor the sender of the thread it answers without a send approval for that exact message, an outside
     address beside a colleague on To needs one too, and one only on Cc is refused. Mail inside the company follows the switch a person
@@ -132,9 +132,9 @@ def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
     import hashlib
 
     from backend.store import H
-    from backend.tests.test_company import bot, with_ceo_bot
+    from backend.tests.test_company import bot, with_strategy_bot
     from connectors.mail import policy as pl
-    ceo, ops = with_ceo_bot(api), bot(api, "ops")
+    ceo, ops = with_strategy_bot(api), bot(api, "ops")
     sender, forward, body = "ava@creator.example", "me@personal.example", "Thanks, we have it.\n"
     colleague, lead = "ben@acme.example", "cy@acme.example"
     with api.app.state.store.transaction() as c:          # a person turned sending on for both, as before this rule
@@ -185,8 +185,8 @@ def test_the_ceo_bot_sends_nothing_outside_without_a_yes_for_that_message(api):
         pl.SERVER_GET, pl.HUB_GET = saved
 
 
-def test_only_an_exact_unspent_tico_send_approval_sends_the_ceo_bots_outside_mail(api):
-    """The CEO Bot's outside message goes only under a Tico send approval that names it exactly: approved, unspent, its
+def test_only_an_exact_unspent_tico_send_approval_sends_the_strategy_bots_outside_mail(api):
+    """The Strategy Bot's outside message goes only under a Tico send approval that names it exactly: approved, unspent, its
     To and Cc, and its text's sha256. The owner's message telling it to send and a closed approval Issue bind neither the
     recipients and the text nor a single use, so neither lifts its switch, though both still lift another bot's.
     The server setting is the API's own answer; the approval, message and Issue reads are stubbed. Synthetic addresses;
@@ -194,9 +194,9 @@ def test_only_an_exact_unspent_tico_send_approval_sends_the_ceo_bots_outside_mai
     import hashlib
     import json
 
-    from backend.tests.test_company import bot, with_ceo_bot
+    from backend.tests.test_company import bot, with_strategy_bot
     from connectors.mail import policy as pl
-    ceo, ops = with_ceo_bot(api), bot(api, "ops")
+    ceo, ops = with_strategy_bot(api), bot(api, "ops")
     seen = setting(api, ceo, bot="goal-manager")
     assert (seen["outbound_send"], seen["forward_to"], bool(seen["per_message"])) == (False, [], True), seen
     assert setting(api, ops)["outbound_send"] is False                       # another bot, its switch off too

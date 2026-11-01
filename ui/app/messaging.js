@@ -51,20 +51,13 @@ function messagingEvidence(data) {
   events.sort((a, b) => b.at - a.at);
   return events.length ? events.slice(0, 70).map(e => e.html).join('') : '<div class="empty">No synced messages for these sources yet.</div>';
 }
+// The Slack checks this bot ran; its schedules and other triggers are automations (#/automations, searched by its name).
 function messagingRuns(data) {
-  const routines = (data.routines || []).map(r => `<div class="msg-run">
-    <div class="msg-run-top"><strong>${esc(r.title)}</strong><span class="spacer"></span><span class="pill">${r.enabled ? 'Active' : 'Paused'}</span></div>
-    <div class="msg-run-meta"><span>${esc(cadenceZoned(r).replace(/^./, c => c.toUpperCase()))}</span><span>Last ${r.last_fired ? esc(ago(r.last_fired)) : 'never'}</span><span>Next ${r.next_due && r.active ? esc(fmt(r.next_due)) : '—'}</span></div>
-    ${data.bot.can_manage ? `<div class="row" style="gap:6px;margin-top:8px"><button class="ghost" type="button" data-msg-toggle="${esc(r.id)}" data-msg-enabled="${r.enabled ? '1' : '0'}">${r.enabled ? 'Pause' : 'Resume'}</button>${r.kind === 'cron' && r.active ? `<button class="ghost" type="button" data-msg-run="${esc(r.id)}">Run now</button>` : ''}</div>` : ''}
-    <details><summary>Instructions and ${r.occurrences?.length || 0} recent runs</summary><pre class="mail-body">${esc(r.text || '')}</pre>
-      ${(r.occurrences || []).map(o => `<div class="msg-run-occ">${esc(o.occurrence)} · ${esc(o.status || o.outcome)}${o.exit ? ' · ' + esc(o.exit) : ''}${o.task_id ? ` · <a href="#/task/${encodeURIComponent(o.task_id)}">Task</a>` : ''}</div>`).join('') || '<div class="muted">No runs recorded.</div>'}</details>
-  </div>`).join('');
-  const digests = (data.slack_digests || []).map(d => `<div class="msg-run">
+  return (data.slack_digests || []).map(d => `<div class="msg-run">
     <div class="msg-run-top"><strong>Slack channel check</strong><span class="spacer"></span><span class="muted">${esc(ago(d.created))}</span></div>
     <div class="msg-run-meta"><span>${esc(d.channels.join(' · '))}</span><span>${d.count} message${d.count === 1 ? '' : 's'}</span>${d.skipped ? `<span>${d.skipped} skipped in high volume</span>` : ''}<span>${esc(d.attempt?.state || 'Queued')}</span></div>
     <button class="ghost" type="button" data-msg-digest="${esc(d.id)}" style="margin-top:8px">View messages reviewed</button>
   </div>`).join('');
-  return routines + digests || '<div class="empty">No routine runs recorded yet.</div>';
 }
 function messagingDetail(data) {
   const b = data.bot, state = messagingParams();
@@ -74,20 +67,21 @@ function messagingDetail(data) {
     ? `<div class="msg-source-picker"><select id="msg-source-select" aria-label="Choose a messaging source"><option value="">All ${b.sources.length} sources</option>${b.sources.map(s => `<option value="${esc(s.id)}"${state.source === s.id ? ' selected' : ''}>${s.kind === 'email' ? 'Email' : 'Slack'} · ${esc(s.name)}</option>`).join('')}</select><details><summary>Show all sources</summary><div class="msg-sources" aria-label="Sources covered by ${esc(b.name)}">${sources}</div></details></div>`
     : `<div class="msg-sources" aria-label="Sources covered by ${esc(b.name)}">${sources}</div>`;
   const shownSources = state.source ? b.sources.filter(s => s.id === state.source) : b.sources.length > 8 ? [] : b.sources;
+  const checks = messagingRuns(data);
   $('#msg-detail').innerHTML = `<div class="msg-workspace">
     <div class="msg-config">
       <div class="msg-detail-head"><div><h1>${esc(b.name)}</h1><div class="muted">${esc(b.description || b.bot)}</div></div>
-        <div class="msg-actions"><a class="ghost" href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>${b.can_manage && ['active', 'paused'].includes(b.state) ? `<button class="ghost" type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : ''}</div></div>
+        <div class="msg-actions"><a class="ghost" href="${AUTOMATIONS}?q=${encodeURIComponent(b.name)}" data-msg-automations>Automations</a><a class="ghost" href="#/bot/${encodeURIComponent(b.bot)}">Bot settings</a>${b.can_manage && ['active', 'paused'].includes(b.state) ? `<button class="ghost" type="button" data-msg-pause="${esc(b.bot)}">${b.state === 'active' ? 'Pause bot' : 'Resume bot'}</button>` : ''}</div></div>
       ${sourceControl}
       <section class="msg-panel" aria-labelledby="msg-instructions-title">
         <div class="msg-panel-title"><h2 id="msg-instructions-title">Instructions</h2><div class="muted">${data.instructions.published ? 'Published by its computer' + (data.instructions.updated ? ' · ' + ago(data.instructions.updated) : '') : 'Published summary; its instructions have not been reported yet'}</div></div>
         <div class="msg-panel-body">
-          <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span><strong>${b.routine_count}</strong> routine${b.routine_count === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.slack_interval_minutes ? `Slack every ${b.slack_interval_minutes} minutes when new` : 'not scheduled'}</strong></span></div>
+          <div class="msg-facts"><span><strong>${b.sources.length}</strong> source${b.sources.length === 1 ? '' : 's'}</span><span>Last run <strong>${b.last_run ? esc(ago(b.last_run)) : 'not recorded'}</strong></span><span>Next <strong>${b.next_run ? esc(fmt(b.next_run)) : b.slack_interval_minutes ? `Slack every ${b.slack_interval_minutes} minutes when new` : 'not scheduled'}</strong></span></div>
           ${shownSources.length ? `<div class="msg-facts" style="margin-top:10px">${shownSources.map(s => `<span>${esc(s.name)}${s.kind === 'email' ? ` · ${s.error ? 'sync error' : s.synced_at ? 'synced ' + ago(s.synced_at) : 'not synced'}` : ` · ${s.post ? 'can post' : 'reads only'}`}</span>`).join('')}</div>` : ''}
           <pre>${esc(data.instructions.content || 'No instructions have been published.')}</pre>
         </div>
       </section>
-      <section class="msg-section msg-scheduled"><h2>Routines</h2>${messagingRuns(data)}</section>
+      ${checks ? `<section class="msg-section msg-scheduled"><h2>Slack checks</h2>${checks}</section>` : ''}
     </div>
     <section class="msg-example-inbox" aria-labelledby="msg-examples-title">
       <header class="msg-example-head"><h2 id="msg-examples-title">Example messages</h2></header>
@@ -140,23 +134,14 @@ async function pageMessaging() {
       const slack = ev.target.closest('[data-msg-slack]'); if (slack) { messagingOpenSlack(bot, slack.dataset.msgChannel, slack.dataset.msgSlack); return; }
       const digest = ev.target.closest('[data-msg-digest]'); if (digest) { messagingOpenDigest(bot, digest.dataset.msgDigest); return; }
       const pause = ev.target.closest('[data-msg-pause]');
-      const toggle = ev.target.closest('[data-msg-toggle]');
-      const run = ev.target.closest('[data-msg-run]');
-      if (!pause && !toggle && !run) return;
-      ev.target.disabled = true;
+      if (!pause) return;
+      pause.disabled = true;
       try {
-        if (pause) {
-          const current = MESSAGING_LIST.bots.find(b => b.bot === bot);
-          await post(`/v2/bots/${encodeURIComponent(bot)}/definition`, {status: current.state === 'active' ? 'paused' : 'active', expected_revision: current.revision});
-          MESSAGING_LIST = null;
-        } else if (toggle) await post(`/v2/routines/${encodeURIComponent(toggle.dataset.msgToggle)}`, {enabled: toggle.dataset.msgEnabled !== '1'});
-        else {
-          const result = await post(`/v2/routines/${encodeURIComponent(run.dataset.msgRun)}/run`, {});
-          toast('Run queued as a task');
-          if (result.task_id) location.hash = '#/task/' + encodeURIComponent(result.task_id);
-        }
-        if (!run) pageMessaging();
-      } catch (e) { toast(e.message, true); ev.target.disabled = false; }
+        const current = MESSAGING_LIST.bots.find(b => b.bot === bot);
+        await post(`/v2/bots/${encodeURIComponent(bot)}/definition`, {status: current.state === 'active' ? 'paused' : 'active', expected_revision: current.revision});
+        MESSAGING_LIST = null;
+        pageMessaging();
+      } catch (e) { toast(e.message, true); pause.disabled = false; }
     };
     $('#msg-detail').onchange = ev => {
       if (ev.target.id === 'msg-source-select') messagingGo({source: ev.target.value});

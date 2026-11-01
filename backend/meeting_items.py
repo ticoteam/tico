@@ -313,6 +313,7 @@ def record_push(c, who, rid, iid, ref):
 def install_meeting_items(app, store, mutate, task_create):
     settings = store.settings
 
+    @app.get("/api/v2/meetings/{rid}/items")
     @app.get("/api/meetings/{rid}/items")
     def items(request: Request, rid: str):
         who = request.state.identity
@@ -320,6 +321,7 @@ def install_meeting_items(app, store, mutate, task_create):
         with store.read() as c:
             return listing(c, who, rid)
 
+    @app.get("/api/v2/meetings/{rid}/comments")
     @app.get("/api/meetings/{rid}/comments")
     def thread(request: Request, rid: str):
         who = request.state.identity
@@ -328,6 +330,7 @@ def install_meeting_items(app, store, mutate, task_create):
             media.authorized(c, who, rid)
             return {"id": rid, "comments": comments(c, rid)}
 
+    @app.post("/api/v2/meetings/{rid}/comments")
     @app.post("/api/meetings/{rid}/comments")
     def say(request: Request, rid: str, body: CommentCreate):
         who = request.state.identity
@@ -337,6 +340,7 @@ def install_meeting_items(app, store, mutate, task_create):
             return {"comment": comment(c, record, who, body)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/meetings/{rid}/items")
     @app.post("/api/meetings/{rid}/items")
     def create(request: Request, rid: str, body: ItemCreate):
         who = request.state.identity
@@ -346,6 +350,7 @@ def install_meeting_items(app, store, mutate, task_create):
             return {"item": add(c, record, who.actor, body)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/meetings/{rid}/items/{iid}")
     @app.post("/api/meetings/{rid}/items/{iid}")
     def change(request: Request, rid: str, iid: str, body: ItemEdit):
         who = request.state.identity
@@ -355,6 +360,7 @@ def install_meeting_items(app, store, mutate, task_create):
             return {"item": edit(c, rid, who.actor, iid, body)}
         return mutate(request, body, work)
 
+    @app.post("/api/v2/meetings/{rid}/items/{iid}/push")
     @app.post("/api/meetings/{rid}/items/{iid}/push")
     def push(request: Request, rid: str, iid: str, body: ItemPush):
         who = request.state.identity

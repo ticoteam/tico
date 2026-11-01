@@ -1,11 +1,41 @@
 # Computers
 
-A computer runs your bots. Each one signs in to the AI tools its bots use (Codex, Claude Code and others), and
-**Settings → Computers** shows every computer, the logins and keys it runs on, and how much of each plan is left.
-To add a computer, see [Install](install.md#add-computers-to-run-your-bots). Below the computers, **Models** holds the
-team-wide model settings: the models choice, which providers are on, the default model, **Fall back when a plan runs
-out**, **Check model** and the [Tico AI Gateway](ai-gateway.md) key. The owner changes them; everyone else sees them.
-These used to be a separate AI providers tab, and Subscriptions before that; old links to either open Computers.
+A computer runs your bots. **Settings → Computers** lists every computer: its bots, which subscription Claude Code and
+Codex use there, the other AI tools' logins, and what it is doing now. To add a computer, click **Add computer** or see
+[Install](install.md#add-computers-to-run-your-bots).
+
+**Settings → Models** holds the company's model settings:
+
+- **Subscriptions**: the company's Claude and ChatGPT plans and API keys, each given to the computers that use it.
+- **Tico Gateway**: one switch, **Use when a computer has no subscription, or a plan runs out**. The
+  [Tico AI Gateway](ai-gateway.md) key, address and spend are under **Advanced**.
+- **Defaults**: **Default model**, **Decisions**, **Meeting model**, **Fall back when a plan runs out** and **Check model**.
+- **Limits**: the [company turn levels](#change-the-company-turn-levels).
+
+Owners and admins change subscriptions and limits; the owner changes the Gateway and defaults; everyone else sees them.
+Old links to AI providers, Subscriptions or the Models card on Computers open Models.
+
+## Subscriptions
+
+A subscription is a login or key the company saves once and gives to computers. A bot doesn't pick one: it runs on its
+computer, and a run uses, in order, that computer's subscription for the run's AI tool, the login signed in on the
+computer, then Tico Gateway when it is on. Otherwise the run waits.
+
+1. Open **Settings → Models** and click **Add subscription**.
+2. Pick the **Kind**: **Claude plan** (paste the token from `claude setup-token`), **ChatGPT plan** (paste Codex's
+   `auth.json`), or an Anthropic or OpenAI API key.
+3. Enter a **Name**, such as *Claude Max*, and click **Save**.
+4. Open **Settings → Computers** and pick the subscription in the computer's **Claude Code** or **Codex** column.
+
+Switching a computer's subscription stops that tool's running tasks on that computer and starts them again, and every
+session of that tool there starts fresh. When tasks are running, Tico asks first and says how many. Removing a
+subscription does the same on each computer that had it. A computer on an older Tico says **Needs update** instead of a
+picker until it updates.
+
+Each row shows how many computers use it and its usage: the share of the 5-hour or weekly window used, or an API key's
+cost this month. **Reconnect** means the saved login stopped working; paste a new one from the row's menu. A new value
+restarts the running tasks on each computer that has the subscription, as a switch does, so no run goes on with the
+old one. The page asks first and says how many.
 
 Tico model turns on the current Docker runner each use a separate temporary OS user. Other bots on the computer
 cannot read the turn's live environment, open file descriptors or private temporary files, or use its Gateway
@@ -95,23 +125,23 @@ The company-limit message does not confirm that an automatic repair has run.
 
 You must be the owner or an admin. The server rejects changes from anyone else.
 
-![Settings with Computers selected and Company turn levels showing warning 40, stop 100, four people, company thresholds 160 and 400, and Save turn levels](images/settings-company-turn-levels-desktop-light.png)
+![Settings, Models, Limits card with Warn at 40 and Stop at 100 runs per person, 3 people · 18 of 300 in use, and Save](images/settings-models-limits-desktop-light.png)
 
-Example owner/admin view of **Settings → Computers → Company turn levels**, using synthetic data: four people and no turns in use.
+Example owner/admin view of **Settings → Models → Limits**, using synthetic data.
 
-1. Open **Settings → Computers**.
-2. Find **Company turn levels**.
-3. Enter **Warning level per person**.
-4. Enter **Stop level per person**.
-5. Click **Save turn levels**.
+1. Open **Settings → Models**.
+2. Find **Limits**.
+3. Enter **Warn at** (runs per person).
+4. Enter **Stop at** (runs per person).
+5. Click **Save**.
 
 Both values must be whole numbers from **1** to **10,000**, and warning must not exceed stop.
-For example, enter **45** and **110** for four people. After saving, the confirmation shows warning at **180** and stop at **440** company turns.
-The card shows the current people count, company thresholds and turns in use.
+For example, enter **45** and **110** for four people. After saving, the card shows **Warn at 180 · stop at 440 company runs**.
+Before a save, it shows the people count and runs in use against the company stop level.
 
 Saved values apply to the current company count. Lowering stop to or below that count holds new turns; running turns continue.
 Raising stop above the count lets eligible waiting work resume. Raising warning above the count resolves an active warning incident.
-To restore the defaults, enter **40** and **100** and click **Save turn levels** again.
+To restore the defaults, enter **40** and **100** and click **Save** again.
 
 If saving fails, read the error beside the button and correct the values before trying again.
 If the card is missing, ask an owner or admin to change the levels.
@@ -158,10 +188,41 @@ listed computers** ([Shared keys](#api-keys-on-a-computer)).
 
 ### Which connection a bot runs on
 
-Every bot runs its tool on its computer's login for that tool (a key it is given counts as that login). Neither a bot
-nor a group chooses one. The bot editor shows it under the model as "Runs on *tool* · Computer's login on *computer*".
-To put a bot on a different account, move it to a computer signed in to that account. When a plan runs out, a bot can
-move to its fallback model; that is set in Models and per bot ([How it works](how-it-works.md)), not here.
+A bot runs its tool with its computer's subscription for that tool, if the computer was given one
+([Company subscriptions](#company-subscriptions)), else the computer's own login for that tool (a key it is given counts
+as that login), else the Tico AI Gateway when the company's models choice allows it; with none, the turn waits. To put
+a bot on a different account, give its computer another subscription or move the bot to another computer. When a plan
+runs out, a bot can move to its fallback model; that is set in Models and per bot ([How it works](how-it-works.md)),
+not here.
+
+### Company subscriptions
+
+A **subscription** is one of the company's model logins or keys, saved once in Tico rather than on a computer: a
+Claude setup-token (from `claude setup-token`), a ChatGPT login (the `auth.json` from a computer where `codex login` is
+signed in, usually `~/.codex/auth.json`), or an Anthropic or OpenAI API key. It belongs to the company; the list says
+who added it. Owners and admins add, rename, reconnect and remove them in **Settings > Models**; anyone who sees that
+page sees the list (name, kind, status, computers, usage), never a value.
+
+Give a computer at most one subscription per tool (Claude Code, Codex). One subscription can be given to many
+computers. Every bot on that computer then runs that tool on it.
+
+- Giving, switching or taking off a computer's subscription, reconnecting it, or removing one in use, restarts that tool there: its
+  running turns stop and go back in the queue (a turn that may already have acted outside Tico is held for review
+  instead), and every session of that tool on that computer starts fresh. The page asks first and says how many.
+- It works on any computer it is given to, a new cloud machine included: nobody signs in there. The turn reads it from
+  Tico with its own run token, next to its credentials; it is never written into the bot's repository. A Claude token
+  or Anthropic key is set in that turn's environment. A ChatGPT login or OpenAI key gets a Codex home of its own on
+  that computer; its `auth.json` is there only while a turn on it runs, and when Codex refreshes the login there, the
+  refreshed login is sent back to Tico. Each token in it is masked in what the turn leaves.
+- A usage limit met on a subscription holds it on every computer it is given to until the reset. Meanwhile it is
+  passed over: turns there run on the computer's own login, else the Gateway under the company's models choice,
+  else wait.
+- If the provider refuses it, it shows **Needs reconnect** and is passed over (the computer's own login, then the
+  Gateway) until someone pastes a new value with **Reconnect**. The computer's own login is left alone.
+- A computer on an older runner does not take subscriptions; its bots run as before until it updates.
+
+One computer is one trust group ([SECURITY.md](../SECURITY.md#bots-on-one-computer-share-a-trust-boundary-on-purpose)):
+while a turn runs on a subscription, another bot's turn on the same computer could read it.
 
 ### Bots sharing one ChatGPT sign-in run side by side
 
@@ -178,26 +239,17 @@ fresh 100%. An API key has no plan, so it shows "No plan usage (API key)". Detai
 
 ## The computers list
 
-Each row shows only:
+One row per computer. On a phone the table scrolls sideways inside its card.
 
 | Column | What it shows |
 |---|---|
-| **Computer** | Its name. |
-| **Tico** | Its Tico version, with **Update** when an update is waiting. |
-| **Operator** | The person who runs it. |
-| **Bots** | How many bots run on it, and the first few names. |
-| **AI tools** | One chip per connection: the tool, a thin bar and "N%" left. Hover or tap for "N% left · resets *day time* · as of *age*". With no reading yet, the chip shows the tool name only. |
-| **Status** | Online, or offline · last seen *when*. |
+| **Computer** | A status dot (hover for online, or offline · last seen *when*) and its name, with **Update** when an update is waiting and **Waiting** while a connection it was given is not reported yet. |
+| **Bots** | How many bots run on it. |
+| **Claude Code**, **Codex** | A picker: the company's subscriptions for that tool, then **Signed in here** when the computer has its own login, else **Gateway** (or **None** with the Gateway off). Owners and admins change it. |
+| Other AI tools | One chip per connection the computer reports, under that tool's column: its state (**Signed in**, **Sign in**, **Signed out**, or a problem such as **Expired**), then a thin bar and "N%" left when there is a reading. A small **red dot** means bots depend on it and it needs attention. A click opens the computer's pop-up. |
+| **Now** | What it is doing: for example **1 running · 55 queued**, **idle**, **asleep** (a cloud computer stopped to save) or **offline**. The full queue line, with wait reasons, is in its pop-up. |
 
-A chip exists only for a connection that was added: Codex signed in gives one Codex chip, and nothing for Claude
-Code. A small **red dot** on a chip means bots depend on it and it needs attention (signed out, or its
-login or key was rejected); a healthy chip has no badge. Other states:
-
-- **No AI connection** with a red dot: the computer has no connection, and its bots can't run until one is added.
-- **Waiting for *computer***: a connection was added and the computer has not reported it yet.
-- An offline computer's chips keep their last reading; hover shows how old it is.
-
-**Show revoked computers (N)** above the list shows computers that were revoked. **No computers yet** means none is
+**Show revoked (N)** under the list shows computers that were revoked. **No computers yet** means none is
 registered: choose **Add computer**.
 
 ## A computer's pop-up
@@ -210,11 +262,12 @@ Click a row to open its pop-up. Its sections, top to bottom:
    **Add key**, **Replace key** and **Clear key** for a key. **Add connection** at the end opens its own pop-up to sign
    in an installed tool or add a key.
 2. **Screen**: an on/off switch, then **View** or **Control** when enabled (Beta). Enabling a screen that needs setup reveals the runner command, as described in [Install](install.md#screen).
-3. **Bots on this computer**: each bot with the connection it actually runs on, read-only. **Assign on the Bots page**
-   opens Settings → Bots, where a bot's computer is chosen.
+3. **Bots on this computer**: each bot, read-only, with a red pill when its connection has a problem. **Assign on the
+   Bots page** opens Settings → Bots, where a bot's computer is chosen.
 4. **Versions and updates**: Tico, the OS and runner, each AI tool's version with **Installed** and **Enabled**, and
    **Installation and updates**.
-5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Performance diagnostics** and
+5. **Settings**: **Keep for inbox bots only**, **Accepts members' bots** (admins), **Turns at once** (owners and admins:
+   empty is the computer's own capacity, 1 to 256 otherwise), **Performance diagnostics** and
    **Performance**, and **Revoke computer** at the bottom.
 
 When the computer is offline, the pop-up says "Computer is offline" and its sign-in, usage refresh, screen and update
@@ -246,7 +299,7 @@ Choose **Subscription** when you pay for a plan, such as ChatGPT or Claude:
 
 Choose **API key** when you pay the provider for each use:
 
-- There is no weekly allowance to run out. The chip shows only the tool's name, with no "% left"; its line in the
+- There is no weekly allowance to run out. The chip shows only its state, with no "% left"; its line in the
   pop-up reads "No plan usage (API key)". The provider bills each run.
 - Use it for a tool that has no subscription sign-in here (**Subscription** is greyed out), or when a plan's weekly
   limit is too small for your bots.
@@ -527,7 +580,7 @@ only).
 
 A current runner retries a rejected heartbeat without only the unsupported report: subscriptions, worktrees or repository clones. Other reports stay intact, and unrelated errors retain their original message. Invalid local profile names are omitted from reports. Provider sign-in probes are cached for one minute and refreshed after sign-in or a rejection. Turns and watcher
 scripts use the cached sign-in state without probing at every start. A probe timeout leaves sign-in unknown and allows a
-turn to try. A rejection affects only that runtime on that Computer. Completion and usage records include the profile
+turn to try. A rejection affects only that runtime on that Computer; on a runtime that signs each bot in with its own key (pi, the Gemini CLI), only the bot whose key was refused stops until its key or grants change or the recheck passes. Completion and usage records include the profile
 a turn ran in when it is a named one; empty profile fields are omitted.
 
 Each run pins its selected local profile directory before preparing the provider environment. Changes to the local default or a profile directory affect later runs, not an in-progress primary or fallback attempt. Environment, host setup, session reuse, usage and rejection attribution use the same binding; fallback still checks its runtime eligibility and known sign-in state. A run started on the unnamed operator login does not acquire a newly configured profile midway through execution. Changing a profile directory starts a separate provider session. The first run after upgrading to directory-bound session keys also starts a fresh provider session for named profiles; the Tico conversation remains intact. This pins the login slot, not the provider account inside it: avoid replacing credentials in a slot while it has active runs.

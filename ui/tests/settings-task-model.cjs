@@ -60,6 +60,10 @@ const {unrouted} = require('./support/routes.cjs');
           helper.keep_tasks_going = body.keep_tasks_going;
           return json({bot: 'helper', keep_tasks_going: body.keep_tasks_going, revision: ++helper.revision});
         }
+        if (what === 'turns-at-once') {
+          helper.turns_at_once = body.turns_at_once;
+          return json({bot: 'helper', turns_at_once: body.turns_at_once, revision: ++helper.revision});
+        }
         if (what === 'definition') {
           Object.assign(helper, {display_name: body.display_name, description: body.description});
           return json({name: 'helper', display_name: helper.display_name, revision: ++helper.revision});
@@ -274,6 +278,35 @@ const {unrouted} = require('./support/routes.cjs');
         assert.deepEqual(calls.map(c => c.what), ['definition', 'keep-tasks-going']);
         assert.deepEqual(calls[1].body, {keep_tasks_going: stored, expected_revision: before + 1});
         assert.equal(helper.keep_tasks_going, stored);
+        await openEditor();
+      }
+      // Turns at once saves the same way; a value out of range or not a whole number is named under its row
+      // and not sent.
+      const turns = editor.locator('[data-bot-turns-at-once]');
+      for (const [value, stored] of [['5', 5], ['', null]]) {
+        const before = helper.revision;
+        calls = [];
+        await turns.fill(value);
+        await turns.dispatchEvent('change');
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], 'held until Save bot');
+        await editor.locator('button[type=submit]').click();
+        await loaded(before + 2);
+        assert.deepEqual(calls.map(c => c.what), ['definition', 'turns-at-once']);
+        assert.deepEqual(calls[1].body, {turns_at_once: stored, expected_revision: before + 1});
+        assert.equal(helper.turns_at_once, stored);
+        await openEditor();
+      }
+      for (const value of ['300', '2.5']) {
+        calls = [];
+        await turns.fill(value);
+        await turns.dispatchEvent('change');
+        await editor.locator('[data-field-err]').first().waitFor();
+        await page.waitForTimeout(100);
+        assert.deepEqual(calls, [], `${value} is not posted`);
+        await turns.fill('');
+        await turns.dispatchEvent('change');
+        assert.equal(await editor.locator('[data-field-err]').count(), 0, 'the line clears once the value is valid');
         await openEditor();
       }
       assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth), true);
