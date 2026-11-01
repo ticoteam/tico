@@ -163,6 +163,23 @@ def test_a_bot_with_an_exit_waits_for_a_runner_that_browses_through_it(api, rela
     assert claim(api, server, "ops")["browser_exit"]["runner_id"] == caras["runner_id"]
 
 
+def test_the_heartbeat_names_the_bots_whose_proxies_the_runner_keeps(api, relay):
+    caras, server = laptop(api)
+    share(api, caras["runner_id"])
+
+    def kept():
+        return post(api, "runners/heartbeat", {"version": "test", "platform": "test"},
+                    token=server["token"])["browser_exit_bots"]
+    assert kept() == []
+    post(api, "bots/ops/browser-exit", {"runner_id": caras["runner_id"]})
+    assert kept() == ["ops"]
+    with api.app.state.store.read() as c:      # its runner was told to ask now
+        assert c.execute("SELECT 1 FROM changes WHERE topic='runner' AND kind='browser_exit' AND subject_id=?",
+                         (server["runner_id"],)).fetchone()
+    post(api, "bots/ops/browser-exit", {"runner_id": None})
+    assert kept() == []
+
+
 def test_every_tunnel_fails_closed_with_words_that_name_the_exit(api, relay):
     caras, server = laptop(api)
     rid = caras["runner_id"]

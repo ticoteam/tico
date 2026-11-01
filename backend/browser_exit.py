@@ -130,6 +130,14 @@ def bot_exits(c):
         "SELECT bot,runner_id FROM bot_browser_exits WHERE runner_id IS NOT NULL")}
 
 
+def bots_on(c, rid):
+    """The bots on this computer with an exit set: the heartbeat answer's `browser_exit_bots`, against which the runner
+    stops the proxies of every other bot (runner-rs/src/browser_exit.rs keep_proxies)."""
+    return [r[0] for r in c.execute(
+        "SELECT e.bot FROM bot_browser_exits e JOIN assignments a ON a.bot=e.bot WHERE a.runner_id=? "
+        "AND e.runner_id IS NOT NULL ORDER BY e.bot LIMIT 1000", (rid,))]
+
+
 def for_turn(c, bot):
     """What a claimed turn carries: the exit computer's id and name, or None. A set exit that no longer shares or was
     removed is still handed out, so the bot's browser fails with words that say so instead of going direct."""
@@ -348,6 +356,8 @@ def install(app, store, auth, mutate, execution, sessions):
                           "generation=generation+(runner_id IS NOT excluded.runner_id),set_by=excluded.set_by,"
                           "set_at=excluded.set_at", (bot, body.runner_id, who.actor, H.now()))
             H.event(c, who.actor, "bot.browser_exit", bot, {"runner_id": body.runner_id})
+            for (rid,) in c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchall():
+                changed(c, rid)             # its runner hears `browser_exit_bots` now
             return {"browser_exit": for_turn(c, bot)}
         result = mutate(request, body, work)
         if before and before[0] != body.runner_id:

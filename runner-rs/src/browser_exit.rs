@@ -565,6 +565,7 @@ struct Proxy {
     /// Connections open at once; the accept loop waits for room before taking another.
     room: Arc<Semaphore>,
     task: Mutex<Option<tokio::task::AbortHandle>>,
+    started: Instant,
 }
 
 const ALWAYS: usize = usize::MAX;
@@ -578,6 +579,7 @@ impl Proxy {
             users: Mutex::new(HashMap::new()),
             room: Arc::new(Semaphore::new(PROXY_CONNECTIONS)),
             task: Mutex::new(None),
+            started: Instant::now(),
         }
     }
 
@@ -650,6 +652,22 @@ fn drop_proxy(bot: &str, only: Option<&Arc<Proxy>>) {
         if let Some(task) = proxy.task.lock().unwrap().take() {
             task.abort();
         }
+    }
+}
+
+/// Stop the proxy of every bot the heartbeat doesn't name as having an exit here: its exit was cleared, or it moved to
+/// another computer, between turns. `asked` is when that heartbeat was sent: a proxy started since then came from a
+/// claim newer than the answer, and stays.
+pub fn keep_proxies(bots: &[String], asked: Instant) {
+    let gone: Vec<(String, Arc<Proxy>)> = proxies()
+        .lock()
+        .unwrap()
+        .iter()
+        .filter(|(bot, proxy)| proxy.started < asked && !bots.contains(bot))
+        .map(|(bot, proxy)| (bot.clone(), proxy.clone()))
+        .collect();
+    for (bot, proxy) in gone {
+        drop_proxy(&bot, Some(&proxy));
     }
 }
 
@@ -1236,6 +1254,35 @@ mod tests {
         assert!(proxies().lock().unwrap().contains_key("ops-watch"), "another proxy's refusal doesn't stop this one");
         assert!(turn_proxy("ops-watch", &json!({"browser_exit": null})).await.unwrap().is_none());
         assert!(!proxies().lock().unwrap().contains_key("ops-watch"));
+    }
+
+    #[tokio::test]
+    async fn the_heartbeat_stops_the_proxies_of_bots_without_an_exit_here_and_closes_their_ports() {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let moved = Arc::new(Proxy::new(port, "Cara's MacBook".into()));
+        let task = tokio::spawn(async move {
+            loop {
+                let _ = listener.accept().await;
+            }
+        });
+        *moved.task.lock().unwrap() = Some(task.abort_handle());
+        let kept = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
+        proxies().lock().unwrap().insert("gc-moved".into(), moved);
+        proxies().lock().unwrap().insert("gc-kept".into(), kept);
+        let asked = Instant::now();
+        let newer = Arc::new(Proxy::new(0, "Cara's MacBook".into()));
+        proxies().lock().unwrap().insert("gc-newer".into(), newer);
+        keep_proxies(&["gc-kept".into()], asked);
+        use std::collections::HashSet;
+        let left = proxies().lock().unwrap().keys().filter(|b| b.starts_with("gc-")).cloned().collect::<HashSet<_>>();
+        assert_eq!(
+            left,
+            HashSet::from(["gc-kept".to_string(), "gc-newer".to_string()]),
+            "a proxy newer than the ask stays"
+        );
+        let _ = task.await;
+        assert!(tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_err(), "its port is closed");
     }
 
     /// scripts/browser-exit run against a stand-in browser that prints the arguments it got.

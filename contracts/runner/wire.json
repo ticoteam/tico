@@ -52,6 +52,7 @@
         "worktree_actions_skipped": {"type": "integer", "minimum": 1},
         "performance": {"type": "boolean"},
         "browser_exit": {"type": "boolean", "x-note": "This computer's owner shares its internet with bots: the runner holds its exit link open (backend/browser_exit.py)."},
+        "browser_exit_bots": {"type": "array", "items": {"type": "string"}, "x-note": "The bots on this computer with a browser exit set (backend/browser_exit.py bots_on): the runner stops every other bot's proxy. Absent from older servers: the runner then keeps its proxies."},
         "turns_at_once": {"type": ["integer", "null"], "minimum": 1},
         "restart": {"const": true},
         "assignments": {"type": "array", "items": {"type": "object", "additionalProperties": true}}

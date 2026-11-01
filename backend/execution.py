@@ -2572,6 +2572,8 @@ class Execution:
                 # Whether this computer's owner shares its internet with bots: the runner holds its exit link open
                 # (backend/browser_exit.py).
                 "browser_exit": browser_exit.sharing(c, who.runner_id),
+                # The bots here with an exit set: the runner stops the proxies of the rest.
+                "browser_exit_bots": browser_exit.bots_on(c, who.runner_id),
                 # The owner's "Turns at once" (null: automatic). Only a runner with turns_at_once_v1 takes a raised one.
                 "turns_at_once": restart["turns_at_once"] if restart else None,
                 **({"worktree_actions_skipped": skipped} if skipped else {}),
