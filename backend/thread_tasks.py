@@ -46,7 +46,7 @@ def private(message, root):
 def task_body(c, message, row, base_url=""):
     author = message.get("from_actor") or ""
     name = lookup(c, {author}).get(author) or author.split(":", 1)[-1]
-    href = f"{base_url}/#/thread/{quote(row['id'], safe='')}"
+    href = f"{base_url}/#/thread/{quote(row['id'], safe='')}?m={quote(message['id'], safe='')}"
     text = str(message.get("body") or "")[:BODY_MAX]
     return f"{text}\n\nFrom {name} in [{row.get('subject') or 'a thread'}]({href})", href
 
@@ -54,7 +54,7 @@ def task_body(c, message, row, base_url=""):
 def install(app, store, auth, create_task, public_url=""):
     @app.post("/api/v2/threads/messages/{message_id}/task")
     def message_task(request: Request, message_id: str, body: MessageTask):
-        """A task from a message the viewer reads: its text and a link back, private unless the thread is company-wide."""
+        """A task from a message the viewer reads: its text and a link back to the message, private unless the thread is company-wide."""
         with store.read() as c:
             v = threads.viewer(auth, request.state.identity)
             message, row, root = source(c, v, message_id)

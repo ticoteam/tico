@@ -72,8 +72,7 @@ async function restrictPerson(hub) {
     await dana.getByText('Monday works.').waitFor({timeout: t(15000)});
 
     // Dana: a sub-thread's header shows under its message with the reply count, and opens the sub-thread on its own page.
-    // A sub-thread's header is titled by its parent's first line (threads contract), so it names the kickoff message.
-    const head = dana.locator('.th-subhead', {hasText: KICKOFF});
+    const head = dana.locator(`.th-msg:has-text("${KICKOFF}") + .th-subhead`);
     await head.waitFor({timeout: t(15000)});
     assert.match(await head.innerText(), /1 reply/, 'the sub-thread header counts its one reply');
     // The sub-thread's messages sit inline under it, indented; the header, or tapping one, opens it.

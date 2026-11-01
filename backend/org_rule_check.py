@@ -945,6 +945,9 @@ def view_hold(c, who, hold, role=None, summary=False, auth=None):
         return out
     text = stored.get("text") or ""
     out["text"] = text[:HOLD_TEXT_CHARS]
+    edited = (stored.get("replay") or {}).get("message_id") if hold["operation"] == "threads_edit" else None
+    if edited:
+        out["message_id"] = edited                 # the message a held edit would change: it stays under that message
     if len(text) > HOLD_TEXT_CHARS:
         out["text_cut"] = len(text)
     if reviewer:

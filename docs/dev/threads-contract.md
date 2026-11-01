@@ -205,7 +205,8 @@ Bots are AI employees: an internal bot reads what a person in the same seat read
 - **`legacy_audience='shared:<slug>'`**: readable by exactly today's live predicate, no more and no less:
   `rooms.shared_member(c, auth, actor, slug)` with bot Read for people; participants and the room's bot for an
   agent; a run's grant. Home readers outside it see one collapsed **Earlier messages** row (`{"id", "seq", "hidden":
-  true}` in a timeline; nothing on SSE).
+  true, "earlier": true}` in a timeline, consecutive ones as one; nothing on SSE). `thread.earlier` (`{"count"}`) on
+  the Home's root is the bot's manager's alone, whether or not they read that history.
 - **A migrated Home** (the bot's open shared room, `audience='home'` stored): everything new (`legacy_audience`
   NULL, any sub-thread) follows Home Read. An old reader without Home Read still opens the Home's root
   (`threads.legacy_reader_only`) but sees only that history: the timeline lists only legacy messages, `last_seq`
@@ -414,6 +415,8 @@ or reply to them). Otherwise today's cap (`UNSOLICITED_PER_DAY`) applies, counte
   `collapsed` row (§10); `GET /threads/{that thread}/timeline?cursor=<the row's cursor>` reads the rest. Every row passes
   the per-message check. Past `MAX_INLINE_ROWS`, `MAX_BRANCH_LEVELS` or the byte cap, a branch is its summary and a
   `collapsed` row. A hidden message's branch does not show. The queries follow the tree's depth, not its branches.
+- A row's `sub_thread.title` is a title someone gave that branch: `""` while the stored one is only its parent's first
+  line, then or before an edit. The opened thread's own `title` is always the stored one.
 - Read state: `thread_followers.last_read_seq` per (thread, reader); max wins (devices); it advances only for
   threads displayed, up to the last rendered message. A child never clears its siblings. The mark is one number, so a
   branch whose `collapsed` row says `unread` is not marked until that part is opened.
@@ -464,7 +467,9 @@ live shared-room rule as before.
   unread).
 - Homes for bots without a shared room, people and groups are created lazily (`threads.home`).
 - Managers of a bot with legacy history: `threads.open_earlier_messages(c, principal, slug)` clears
-  `legacy_audience` on that Home's messages (one notice offers it; UI comes later).
+  `legacy_audience` on that Home's messages. The 15-minute follow-ups job (`thread_followups.earlier_sweep`) tells each
+  manager once, in their DM with the bot (`refs.earlier_messages.thread_id`, never a wake), since the Home's readers
+  must not see it; the Home's menu and its Earlier messages row carry the same control.
 - The reader-set equality fixture asserts, per message, the same readers before and after, and again after a
   roster change.
 
@@ -551,7 +556,7 @@ Thread view (`threads.view(c, viewer, row)`):
 | `PUT/DELETE /api/v2/messages/{id}/reactions/{emoji}` | `threads.react(c, principal, message_id, emoji)` / `threads.unreact(...)` → `[{"emoji", "count", "actors"}]`; 404 when the message is unreadable, 422 for a bad emoji or past 50 distinct |
 
 Timeline messages: the existing message view plus `thread_id`, `root_id`, `seq`, `revision`, `origin_id`,
-`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), hidden rows as `{"id", "seq", "thread_id", "depth", "hidden": true}`, and a long branch's older part as
+`edited_at`, `deleted` (tombstone: no body), `reactions` (`threads.reactions(c, ids)`, when any), hidden rows as `{"id", "seq", "thread_id", "depth", "hidden": true}` (with `"earlier": true` for closed history, §2.3), and a long branch's older part as
 `{"id": "more:<thread id>", "thread_id", "depth", "collapsed": true, "count", "cursor", "unread"}`.
 `/api/v2/conversations/*` stay as aliases for one release. Every list is paged and byte-capped.
 

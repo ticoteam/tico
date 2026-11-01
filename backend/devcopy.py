@@ -134,7 +134,7 @@ KEEP = frozenset((
     "kpis", "learning_cursors",
     # Threads: the search index (its triggers follow the messages kept), and the digest and follow-up ledgers, which
     # stop the copy emailing or nudging again what the source already did.
-    "thread_digests", "thread_followups", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
+    "thread_digests", "thread_followups", "thread_earlier_notices", "learning_deliveries", "learning_items", "learning_runs", "learnings", "lens_runs", "learned_entries", "linked_docs", "listening_destinations",
     "listen_items", "listen_judgments", "listen_runs", "live_meeting_chat", "live_meeting_chat_routes",
     "live_meeting_access", "live_meeting_chunk_versions", "live_meeting_chunks", "live_meeting_events", "live_meeting_humans",
     "live_meeting_turns", "live_meeting_windows", "live_meetings", "mail_agent_instructions", "mail_messages",

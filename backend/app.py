@@ -2585,8 +2585,9 @@ def create_app(settings=None):
                                                 groups_hidden)
 
     def may_edit_person(c, who, pid):
-        """Yourself, or someone who reports up to you (backend/people.py `manages`)."""
-        return auth.manages(c, who, "person", pid)
+        """Manage on this person: the same rule `my_access.manage` shows and the Access card's editor asks."""
+        from . import teammate_access
+        return teammate_access.can(c, who, "manage", "human:" + pid, auth=auth)
 
     @app.post("/api/v2/people/{pid}")
     def person_update(request: Request, pid: str, body: M.PersonUpdate):

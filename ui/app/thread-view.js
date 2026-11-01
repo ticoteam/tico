@@ -32,7 +32,8 @@ function thvDraftSave(view) {
 // `opts`: {id} a thread, {home: actor} that teammate's Home, or {dm: actor} the viewer's DM with them (made on the
 // first message). {card: true} keeps the list to a box inside a page; {header: false} leaves out the title line, and
 // {header: 'compact'} keeps only its actions (call, Members, the thread menu), drawn into `actsHost` when given (a bar
-// the page owns). {focus: message id} shows that message.
+// the page owns). {compactEmpty: true} draws a Home with no messages as its composer alone, never a blank timeline, and
+// hides the card (`hideGone`) from a viewer who can't post either. {focus: message id} shows that message.
 function threadMount(host, opts = {}) {
   const view = {key: ++THV_N, host, opts, id: '', thread: null, breadcrumb: [], messages: [], next: null, state: 'loading',
                 readAt: 0, openSeq: 0, readSent: new Map(), marks: new Map(), pending: [], replyTo: '', editing: '',
@@ -130,7 +131,10 @@ async function thvHoldsLoad(view) {
     for (const s of mine) {
       const h = await get('/v2/rule-holds/' + encodeURIComponent(s.id), {fresh: true}).catch(() => null);
       if (!h || view.gone || view.pending.some(p => p.held?.id === h.id)) continue;
-      view.pending.push({key: 'p' + (++THV_N), text: h.text || '', files: [], lib: [], parent: '', depth: 0, state: 'held',
+      // A held edit stays under the message it would change; the message keeps its words until the edit goes through.
+      const of = h.operation === 'threads_edit' ? h.message_id || '' : '';
+      view.pending.push({key: 'p' + (++THV_N), text: h.text || '', files: [], lib: [], parent: '', editOf: of,
+                         depth: Number(view.messages.find(m => m.id === of)?.depth) || 0, state: 'held',
                          held: h, canSend: !!h.can_send, nonce: h.nonce || ''});
     }
     if (mine.length && !view.gone) thvDraw(view);
@@ -265,16 +269,15 @@ function thvHeadHTML(view) {
       ${threadMarkHTML(t, 22)}<h1 class="thv-title">${esc(threadTitle(t))}</h1>
       ${aud ? `<span class="thv-aud muted">${esc(aud)}</span>` : ''}<span class="spacer"></span>${thvActsHTML(view)}</div>`;
 }
-// A message the viewer may not read leaves no trace: no row, no gap. Only earlier shared history, which the Home
-// says it keeps, folds into one "Earlier messages" row.
+// A message the viewer may not read is one quiet row, never its words. Earlier shared history folds into one "Earlier
+// messages" row; two such rows meet where one page of it ends and the next begins.
 function thvRows(view) {
   const rows = [];
   for (const m of view.messages) {
     if (m.hidden) {
-      if (!(m.earlier || m.legacy)) continue;
-      const last = rows[rows.length - 1];
-      if (last?.fold && last.depth === (m.depth || 0)) { last.n++; continue; }
-      rows.push({fold: 'earlier', n: 1, depth: m.depth || 0, id: m.id});
+      const fold = m.earlier ? 'earlier' : 'hidden', last = rows[rows.length - 1];
+      if (last?.fold === fold && last.depth === (m.depth || 0)) { last.ids.push(m.id); continue; }
+      rows.push({fold, depth: m.depth || 0, id: m.id, ids: [m.id]});
       continue;
     }
     if (m.collapsed) { rows.push({more: m, id: m.id}); continue; }
@@ -337,18 +340,20 @@ function thvMsgHTML(view, m) {
   else if (m.refs?.action) body = `<div data-action-host="${esc(m.refs.action)}"><div class="asst-state">Loading the card…</div></div>`;
   // The Assistant's read-back of what it will approve is shown exactly as written, never formatted.
   else if (m.refs?.read_back) body = `<div class="th-body read-back" style="white-space:pre-line">${esc(m.body || '')}</div>`;
-  else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>`;
+  else body = `<div class="th-body md">${safeMd(m.body || '', {shortLinks: true})}</div>${
+    // The notice a bot's manager gets about its Home's closed history (backend/thread_followups.py).
+    m.refs?.earlier_messages?.thread_id && !m.deleted ? `<button type="button" class="ghost small th-earlier-open" data-th-earlier="${esc(m.refs.earlier_messages.thread_id)}">Open earlier messages to Read</button>` : ''}`;
   // What a bot's turn did, in the same muted rows a chat shows (ui/app/chat.js), and the runner's warnings.
   if (!m.deleted && view.editing !== m.id && String(m.from_actor || '').startsWith('bot:'))
     body += (m.refs?.warnings || []).map(w => `<div class="chat-warn">${esc(String(w).charAt(0).toUpperCase() + String(w).slice(1))}</div>`).join('')
       + v2RunHTML(m, view.run) + v2MessageCards(m);
-  // A sub-thread opens with one quiet header row (its title, replies and what is new) that opens it; the replies the
-  // timeline carries follow it, indented.
+  // A sub-thread opens with one quiet header row (its own title if it was given one, replies and what is new) that opens
+  // it; the replies the timeline carries follow it, indented.
   const st = m.sub_thread, n = Number(st?.count) || 0;
   const more = st?.id && !m.deleted ? `<a class="th-subhead" href="${threadHref(st.id)}" style="--d:${Math.min(depth + 1, THV_DEPTH_MAX)}">
-    <span class="th-subhead-title">${esc(st.title || v2Firstline(m.body || '') || 'Sub-thread')}</span>
+    ${st.title ? `<span class="th-subhead-title">${esc(st.title)}</span>` : ''}
     <span class="th-subhead-n">${n ? `${n} ${n === 1 ? 'reply' : 'replies'}` : 'No replies'}</span>${
-    st.unread ? `<span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
+    st.unread ? `<span aria-hidden="true">·</span><span class="th-more-new">${st.unread} new</span>` : ''}</a>` : '';
   return `<div class="${cls}" data-mid="${esc(m.id)}" data-message="${esc(m.id)}" data-tid="${esc(m.thread_id || view.id)}" data-seq="${esc(m.seq ?? '')}" style="--d:${depth}">
     <div class="th-av">${actorAvatar(connectAuthor(m), sub ? 20 : 28)}</div>
     <div class="th-main">${head}${body}${m.deleted ? '' : thvFilesHTML(m) + thvReactionsHTML(m)}</div>
@@ -356,13 +361,14 @@ function thvMsgHTML(view, m) {
   </div>${more}`;
 }
 function thvFoldHTML(view, row) {
-  const depth = thvDepth(view, row.depth), manage = !!view.thread?.me?.can_manage;
+  const depth = thvDepth(view, row.depth);
+  if (row.fold === 'hidden') return `<div class="th-fold th-notshown" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Not shown</span></div>`;
   return `<div class="th-fold th-earlier" style="--d:${depth}" data-mid="${esc(row.id)}"><span>Earlier messages</span>${
-    manage ? '<button type="button" class="linkish" data-th-earlier>Open earlier messages to Read</button>' : ''}</div>`;
+    view.thread?.earlier ? `<button type="button" class="linkish" data-th-earlier="${esc(view.id)}">Open earlier messages to Read</button>` : ''}</div>`;
 }
 function thvMoreHTML(view, m) {
   return `<button type="button" class="th-fold th-more" data-th-expand="${esc(m.id)}" data-mid="${esc(m.id)}" style="--d:${thvDepth(view, m.depth)}"><span>${esc(m.count)} more</span>${
-    m.unread ? '<span class="th-more-new">new</span>' : ''}</button>`;
+    m.unread ? '<span aria-hidden="true">·</span><span class="th-more-new">new</span>' : ''}</button>`;
 }
 function thvPendingHTML(view, p) {
   const depth = thvDepth(view, p.depth);
@@ -370,7 +376,7 @@ function thvPendingHTML(view, p) {
   if (p.state === 'held') {
     const h = p.held || {}, rules = (h.rules || []).map(r => `<div class="th-held-rule">${esc(r.text)}</div>`).join('');
     return `<div class="th-msg th-mine th-held" data-pending="${p.key}" style="--d:${depth}"><div class="th-av">${actorAvatar(myActor(), 28)}</div>
-      <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state">${h.outcome === 'escalated' ? 'Waiting for review' : 'Held'}</span></div>${text}${rules}
+      <div class="th-main"><div class="th-head"><span class="th-who">You</span><span class="th-state">${p.editOf ? 'Edit ' : ''}${h.outcome === 'escalated' ? (p.editOf ? 'waiting for review' : 'Waiting for review') : (p.editOf ? 'held' : 'Held')}</span></div>${text}${rules}
         <div class="th-held-acts"><button type="button" class="ghost small" data-held-edit>Edit</button>${
           p.canSend ? '<button type="button" class="ghost small" data-held-send>Send anyway</button>' : ''}<button type="button" class="ghost small" data-held-drop>Discard</button></div></div></div>`;
   }
@@ -388,7 +394,6 @@ function thvBranchEnd(view, id) {
   const at = view.messages.findIndex(m => m.id === id), d = Number(view.messages[at]?.depth) || 0;
   let end = at;
   while (at >= 0 && end + 1 < view.messages.length && (Number(view.messages[end + 1].depth) || 0) > d) end++;
-  while (end > at && view.messages[end].hidden) end--;
   return view.messages[end]?.id || '';
 }
 function thvListHTML(view) {
@@ -398,20 +403,22 @@ function thvListHTML(view) {
   const own = view.messages.filter(m => !m.hidden && !m.collapsed && (m.thread_id || view.id) === view.id).map(m => Number(m.depth) || 0);
   view.base = own.length ? Math.min(...own) : 0;
   const rows = thvRows(view), out = [];
-  // Each pending and held message sits where it will land: after its parent's sub-thread, or at the bottom.
-  const afterParent = new Map();
-  for (const p of view.pending) if (p.parent) {
-    const key = thvBranchEnd(view, p.parent);
-    if (key) afterParent.set(key, [...(afterParent.get(key) || []), p]);
+  // Each pending and held message sits where it will land: after its parent's sub-thread, or at the bottom. A pending or
+  // held edit sits under the message it would change, which keeps its words until the edit goes through.
+  const afterParent = new Map(), placed = new Set();
+  for (const p of view.pending) {
+    const key = p.editOf ? (view.messages.some(m => m.id === p.editOf) ? p.editOf : '') : p.parent ? thvBranchEnd(view, p.parent) : '';
+    if (key) { afterParent.set(key, [...(afterParent.get(key) || []), p]); placed.add(p); }
   }
   const replyAt = view.replyTo ? thvBranchEnd(view, view.replyTo) : '';
   for (const row of rows) {
     out.push(row.fold ? thvFoldHTML(view, row) : row.more ? thvMoreHTML(view, row.more) : thvMsgHTML(view, row.m));
-    const id = row.m?.id || row.id;
-    for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
-    if (replyAt && id === replyAt) out.push(thvReplyHTML(view, view.messages.find(m => m.id === view.replyTo)));
+    for (const id of row.ids || [row.m?.id || row.id]) {
+      for (const p of afterParent.get(id) || []) out.push(thvPendingHTML(view, p));
+      if (replyAt && id === replyAt) out.push(thvReplyHTML(view, view.messages.find(m => m.id === view.replyTo)));
+    }
   }
-  for (const p of view.pending) if (!p.parent) out.push(thvPendingHTML(view, p));
+  for (const p of view.pending) if (!placed.has(p)) out.push(thvPendingHTML(view, p));
   if (!out.length) out.push(`<div class="th-empty muted">${esc(view.opts.empty || 'No messages yet')}</div>`);
   return out.join('');
 }
@@ -423,6 +430,11 @@ function thvDraw(view, {stick = false} = {}) {
   if (head) { const h = thvHeadHTML(view); patchHTML(head, h); head.hidden = !h; }
   if (head === view.opts.actsHost) view.el.querySelector('.thv-head')?.setAttribute('hidden', '');
   const list = view.el.querySelector('.thv-list'), box = view.el.querySelector('.thv-scroll');
+  if (view.opts.compactEmpty) {
+    const blank = view.state === 'empty' && !view.pending.length, card = view.opts.hideGone === true ? view.host : view.opts.hideGone;
+    view.el.classList.toggle('thv-blank', blank);
+    if (card && ['empty', 'ready'].includes(view.state)) card.hidden = blank && !thvCanPost(view);
+  }
   const keep = stick || thvAtBottom(view);
   // Cards both trees share keep their node, as in a chat (ui/app/visual-cards.js).
   patchHTML(list, thvListHTML(view), visualSwap);
@@ -682,11 +694,8 @@ async function thvSend(view, {text, files = [], lib = [], parent = null}) {
       r = files.length ? await thvUpload(thvPath(tid).replace('/v2/', '/v2/uploads/') + '/messages', body, files)
         : await post(thvPath(tid) + '/messages', body);
     }
-    if (r?.held) {
-      p.state = 'held'; p.held = r.held;
-      if (r.held.id) get('/v2/rule-holds/' + encodeURIComponent(r.held.id), {fresh: true})
-        .then(h => { if (h?.can_send) { p.canSend = true; p.nonce = h.nonce || ''; thvDraw(view); } }).catch(() => {});
-    } else {
+    if (r?.held) thvHeld(view, p, r.held);
+    else {
       view.pending = view.pending.filter(x => x !== p);
       const m = r?.message || (r?.id && r?.seq !== undefined ? r : null);
       if (m) thvApplyMessage(view, {id: m.id, thread_id: m.thread_id, root_id: m.root_id, message: m, parent: parent?.id});
@@ -697,6 +706,28 @@ async function thvSend(view, {text, files = [], lib = [], parent = null}) {
     p.state = 'failed'; p.error = e.message;
   }
   thvDraw(view, {stick: !parent});
+}
+function thvHeld(view, p, held) {
+  p.state = 'held'; p.held = held;
+  if (held.id) get('/v2/rule-holds/' + encodeURIComponent(held.id), {fresh: true})
+    .then(h => { if (h?.can_send) { p.canSend = true; p.nonce = h.nonce || ''; thvDraw(view); } }).catch(() => {});
+}
+// An edit out: "Checking…" under the message while the rules check runs, then the edit in place, or a held row with Edit,
+// Discard and (when the server allows) Send anyway. The message keeps its words until the edit goes through.
+async function thvEditSend(view, m, text) {
+  const p = {key: 'p' + (++THV_N), text, files: [], lib: [], parent: '', editOf: m.id, depth: Number(m.depth) || 0, state: 'checking'};
+  view.pending.push(p); view.editing = '';
+  thvDraw(view);
+  try {
+    const r = await patch('/v2/messages/' + encodeURIComponent(m.id), {text});
+    if (r?.held) thvHeld(view, p, r.held);
+    else {
+      view.pending = view.pending.filter(x => x !== p);
+      const fresh = r?.message || r || {};
+      Object.assign(m, fresh, {body: fresh.body ?? text});
+    }
+  } catch (e) { p.state = 'failed'; p.error = e.message; }
+  thvDraw(view);
 }
 // Files go in one multipart request with the message (the server answers with the message, or a held verdict).
 async function thvUpload(path, body, files) {
@@ -742,7 +773,7 @@ async function thvClick(view, ev) {
   if (t.closest('[data-thv-menu]')) { threadMenuOpen(view, t.closest('[data-thv-menu]')); return; }
   if (t.closest('[data-th-earlier]')) {
     const b = t.closest('[data-th-earlier]'); b.disabled = true;
-    try { await post(thvPath(view.id) + '/open-earlier', {}); await thvRefresh(view); }
+    try { await threadEarlierOpen(view, b.dataset.thEarlier); }
     catch (e) { toast(e.message, true); b.disabled = false; }
     return;
   }
@@ -753,11 +784,7 @@ async function thvClick(view, ev) {
   if (t.closest('[data-th-edit-save]') && m) {
     const text = row.querySelector('.th-edit-text').value.trim();
     if (!text) return;
-    try {
-      const r = await patch('/v2/messages/' + encodeURIComponent(m.id), {text});
-      Object.assign(m, r?.message || r || {}, {body: (r?.message || r)?.body ?? text});
-      view.editing = ''; thvDraw(view);
-    } catch (e) { toast(e.message, true); }
+    await thvEditSend(view, m, text);
     return;
   }
   if (t.closest('[data-th-reply-cancel]')) { view.replyTo = ''; thvDraw(view); return; }
@@ -775,6 +802,14 @@ async function thvClick(view, ev) {
     if (p.held?.id && t.closest('[data-held-drop], [data-held-edit]'))
       post('/v2/rule-holds/' + encodeURIComponent(p.held.id) + '/withdraw', {}).catch(() => {});
     if (t.closest('[data-held-drop]')) { view.pending = view.pending.filter(x => x !== p); thvDraw(view); return; }
+    if (t.closest('[data-held-edit]') && p.editOf) {
+      view.pending = view.pending.filter(x => x !== p);
+      view.editing = p.editOf;
+      thvDraw(view);
+      const box = view.el.querySelector('.th-edit-text');
+      if (box) { box.value = p.text; box.focus(); }
+      return;
+    }
     if (t.closest('[data-held-edit]')) {
       view.pending = view.pending.filter(x => x !== p);
       if (p.parent) view.replyTo = p.parent;
@@ -822,7 +857,8 @@ function thvMsgMenu(view, m, button) {
   thvMenuClose();
   const can = thvCanPost(view), mine = thvMine(m), sayable = !m.kind || m.kind === 'say';
   const touch = matchMedia('(hover: none)').matches;   // a phone shows only ⋯, so Acknowledge is here
-  const items = [touch && ['ack', 'Acknowledge'], can && ['reply', 'Reply in sub-thread'], ['task', 'Make task'], mine && sayable && ['edit', 'Edit'], mine && ['delete', 'Delete']].filter(Boolean);
+  const editing = view.pending.some(p => p.editOf === m.id);   // one edit at a time: a held one has its own Edit
+  const items = [touch && ['ack', 'Acknowledge'], can && ['reply', 'Reply in sub-thread'], ['task', 'Make task'], mine && sayable && !editing && ['edit', 'Edit'], mine && ['delete', 'Delete']].filter(Boolean);
   thvMenuShow(button, items, async key => {
     if (key === 'ack') await thvReact(view, m, THV_ACK);
     else if (key === 'reply') {
@@ -842,7 +878,8 @@ let THV_MENU = null;
 function thvMenuShow(button, items, pick) {
   const menu = document.createElement('div');
   menu.className = 'p-menu thv-pop'; menu.setAttribute('role', 'menu');
-  menu.innerHTML = items.map(([k, label]) => `<button type="button" role="menuitem" data-k="${esc(k)}">${esc(label)}</button>`).join('');
+  // A third value makes a choice among radios: true on the one in force.
+  menu.innerHTML = items.map(([k, label, on]) => `<button type="button" role="${on === undefined ? 'menuitem' : 'menuitemradio'}"${on === undefined ? '' : ` aria-checked="${on}"`} data-k="${esc(k)}">${esc(label)}</button>`).join('');
   document.body.append(menu);
   const r = button.getBoundingClientRect();
   menu.style.top = Math.min(innerHeight - menu.offsetHeight - 8, r.bottom + 4) + 'px';

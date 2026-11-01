@@ -32,8 +32,9 @@ A thread's audience is one of these:
   Making a thread public changes its audience, so it needs no Write on the group.
 - Adding a person, bot or group needs **Write** on them. Removing someone needs the thread's owner or an admin.
 - A group added to a thread is resolved live: whoever leaves the group loses the thread.
-- A bot's earlier messages reach its Home readers only once a manager of the bot opens them
-  (`hub thread open-earlier <thread>`).
+- A bot's earlier messages reach its Home readers only once a manager of the bot opens them: **Open earlier messages to
+  Read** in the Home's menu or on the notice each manager gets in their DM with the bot, or
+  `hub thread open-earlier <thread>`. Until then readers see one **Earlier messages** row.
 - Sub-threads follow the audience of the thread they branch from.
 - Mentions and follows never give access. Naming someone outside the thread leaves a warning for the author, and
   nothing else happens until that person is added.

@@ -158,6 +158,12 @@ a.th-who:hover{text-decoration:underline}
 /* a person's or a team's Home */
 .home-card .thv-head{display:none}
 .home-card h2{margin:0 0 var(--s2)}
+.home-card-acts{margin-left:auto;min-width:0}
+.home-card-acts:empty{display:none}
+.thv-blank .thv-scroll{display:none}
+.th-earlier-open{margin-top:6px}
+.thv-pop [role="menuitemradio"][aria-checked="true"]{font-weight:600}
+.thv-pop [role="menuitemradio"][aria-checked="true"]::after{content:" ✓"}
 
 /* New thread and Members */
 .thd-members{display:flex;flex-direction:column;gap:6px}

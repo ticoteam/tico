@@ -79,6 +79,7 @@ function searchOpen() {
   if (!d.open) d.showModal();
   $('#search-input').focus();
 }
-$('#search-open').onclick = searchOpen;
+// In the phone's drawer it is More's Search row: the drawer gets out of the way first.
+$('#search-open').onclick = () => { if (document.body.classList.contains('drawer')) setDrawer(false); searchOpen(); };
 window.ticoSearch = searchOpen;            // the desktop app's View › Search… and tray item (app/src/main.rs)
 $('#mobile-search').onclick = searchOpen;

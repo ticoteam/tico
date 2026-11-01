@@ -10,6 +10,6 @@ def test_a_task_from_a_members_thread_message_is_private_with_a_link_back_and_a_
     message_id = thread["message"]["id"]
     task = post(api, f"threads/messages/{message_id}/task", {"title": "Ship pricing", "owner": "coo"}, token="ben-test")
     assert task["private"] is True
-    assert "Ship the pricing page Friday" in task["body"] and f"#/thread/{thread['id']}" in task["body"]
+    assert "Ship the pricing page Friday" in task["body"] and f"#/thread/{thread['id']}?m={message_id}" in task["body"]
     post(api, f"threads/messages/{message_id}/task", {"title": "Peek", "owner": "coo"}, token="cara-test", expected=404)
     post(api, "threads/messages/nope/task", {"title": "Missing", "owner": "coo"}, token="ben-test", expected=404)

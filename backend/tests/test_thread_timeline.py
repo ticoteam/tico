@@ -40,13 +40,30 @@ def test_each_message_is_followed_by_its_sub_thread_in_tree_order_with_its_depth
     assert row["One a i"]["thread_id"] == nested["thread_id"] != row["One a"]["thread_id"]
     assert row["One"]["sub_thread"]["id"] == row["One a"]["thread_id"] and row["One"]["sub_thread"]["count"] == 2
     assert row["One a"]["sub_thread"]["id"] == nested["thread_id"]
-    assert row["One"]["sub_thread"]["title"] == "One"
+    assert row["One"]["sub_thread"]["title"] == ""
 
     # A sub-thread opened on its own shows its own sub-threads the same way.
     opened = timeline(api, deep["thread_id"])
     assert bodies(opened["messages"]) == ["One a", "One a i", "One b"]
     assert [r["depth"] for r in opened["messages"]] == [1, 2, 1]
     assert [c["id"] for c in opened["breadcrumb"]] == [t["id"], deep["thread_id"]]
+
+
+def test_a_branch_carries_a_title_only_when_it_was_given_one(api):
+    t = new_thread(api)
+    first = say(api, t["id"], "**Which** vendor?")
+    second = say(api, t["id"], "Which price?")
+    sub = reply(api, t["id"], first["id"], "Acme")["thread_id"]
+    named = reply(api, t["id"], second["id"], "Forty")["thread_id"]
+    assert api.patch(f"/api/v2/threads/{named}", json={"title": "Pricing"}, headers=headers("ana-test")).status_code == 200
+    def titles():
+        return [r["sub_thread"]["title"] for r in timeline(api, t["id"])["messages"] if r.get("sub_thread")]
+    assert titles() == ["", "Pricing"]
+    # The stored title keeps the first line it was made from; an edit doesn't turn that into a title of its own.
+    edited = api.patch(f"/api/v2/messages/{first['id']}", json={"text": "Which supplier?"}, headers=headers("ana-test"))
+    assert edited.status_code == 200, edited.text
+    assert titles() == ["", "Pricing"]
+    assert timeline(api, sub)["thread"]["title"] == "Which vendor?"
 
 
 def test_pages_count_only_the_threads_own_messages(api):
@@ -126,3 +143,49 @@ def test_a_see_only_viewer_reads_no_branch_of_a_home(api):
     for tid in (home["id"], sub):
         assert api.get(f"/api/v2/threads/{tid}/timeline", headers=headers("cara-test")).status_code == 404
     assert bodies(timeline(api, home["id"])["messages"]) == ["Parent", "Reply"]
+
+
+def closed_home(api, slug="ops"):
+    """A migrated Home: its shared-room history keeps its old readers (ana, in the room); what is new follows Home Read."""
+    bot = "bot:" + slug
+    with api.app.state.store.transaction() as c:
+        room = H.open_conversation(c, "human:ana", ["human:ana", bot], kind="chat", subject="Ops room", scope="shared",
+                                   room_key=slug, allow_held=True)
+        for text in ("Old one", "Old two"):
+            H.say(c, "human:ana", bot, text, conversation_id=room["id"])
+        c.execute("UPDATE messages SET legacy_audience=?, restricted=1 WHERE conversation_id=?", ("shared:" + slug, room["id"]))
+        threads._store_shared_homes(c, slug)
+        threads.post(c, bot, room["id"], "New plan")
+    return room["id"]
+
+
+def test_closed_history_is_one_row_marked_earlier_and_only_a_manager_gets_the_count(api):
+    home = closed_home(api)
+    set_bot_access(api, "ops", {"people": ["cara"]}, {"people": ["cara"]}, {"people": []})
+
+    # Cara reads the Home and not its history: one row that says what it is, with no text and no count.
+    page = timeline(api, home, token="cara-test")
+    rows = page["messages"]
+    assert [r.get("hidden", False) for r in rows] == [True, False] and rows[0]["earlier"] is True
+    assert rows[0].keys() == {"id", "seq", "thread_id", "depth", "hidden", "earlier"} and "Old" not in str(rows)
+    assert "earlier" not in page["thread"]
+
+    # The owner manages the bot and reads the history; the control to open it is still theirs.
+    mine = timeline(api, home)
+    assert bodies(mine["messages"])[:2] == ["Old one", "Old two"]
+    assert mine["thread"]["earlier"] == {"count": 2}
+
+    opened = api.post(f"/api/v2/threads/{home}/open-earlier", headers=headers("ana-test"))
+    assert opened.status_code == 200 and opened.json()["messages"] == 2
+    assert bodies(timeline(api, home, token="cara-test")["messages"]) == ["Old one", "Old two", "New plan"]
+    assert "earlier" not in timeline(api, home)["thread"]
+
+
+def test_a_task_private_message_stays_a_plain_hidden_row_not_earlier(api):
+    t = new_thread(api, members=("human:ben",))
+    with api.app.state.store.transaction() as c:
+        secret = H.task_create(c, "human:ana", "Acme acquisition", "", "human:ana", private=True, lint=False)
+    posted = api.post(f"/api/v2/threads/{t['id']}/messages", json={"text": "Secret", "refs": {"task": secret["id"]}},
+                      headers=headers("ana-test"))
+    assert posted.status_code == 200, posted.text
+    assert "earlier" not in timeline(api, t["id"], token="ben-test")["messages"][0]
