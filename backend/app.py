@@ -7838,6 +7838,8 @@ def create_app(settings=None):
     install_bot_task_tabs(app, store, auth, mutate, settings, task_views)
     from .cards import install as install_cards
     install_cards(app, store, auth, mutate, settings, task_view)
+    from . import memory_tidy_cards
+    memory_tidy_cards.install(app, store, auth, mutate)
     turn_work.install(app, store, auth)
     from . import run_view
     run_view.install(app, store, auth)
