@@ -20,7 +20,7 @@ from backend.finance import qbo as QC
 from backend.finance import reads as FR
 from backend.finance.core.errors import NOT_AVAILABLE
 from backend.tests.test_finance_fixtures import AT, OWNER, account, act, books, finance_template, store  # noqa: F401
-from backend.tests.test_finance_mirror import _connection, _drain, _mirror
+from backend.tests.test_finance_mirror import LATER, _connection, _drain, _mirror
 
 FAKE = Path(__file__).resolve().parents[2] / "scripts" / "fake_quickbooks.py"
 WINDOW = ("2026-10-01", "2026-10-31")
@@ -150,3 +150,37 @@ def test_a_connected_book_backfills_from_quickbooks_and_its_pnl_reads_by_locatio
     queried = {str(call["query"].get("query", "")).split()[3] for call in calls
                if call["method"] == "GET" and "query" in call["query"] and "FROM" in call["query"].get("query", "")}
     assert {"Item", "Department", "Class"} <= queried
+
+
+def test_a_purchase_order_and_an_estimate_the_provider_holds_come_in_on_backfill_and_follow_its_changes(
+        books, fake_quickbooks):  # noqa: F811
+    """The orders QuickBooks holds are read in the backfill (a purchase order to its vendor, an estimate to its customer),
+    and an edit QuickBooks makes afterwards comes in on the change feed."""
+    _fake(fake_quickbooks, "POST", "/_fake/seed", SEED)
+    _fake(fake_quickbooks, "POST", "/_fake/seed", {
+        "PurchaseOrder": [{"Id": "80", "SyncToken": "0", "DocNumber": "PO-80", "TxnDate": "2026-10-10",
+                           "POStatus": "Open", "TotalAmt": 1000, "VendorRef": {"value": "60"},
+                           "DepartmentRef": {"value": "20"}, "Line": [{
+                               "Id": "1", "DetailType": "AccountBasedExpenseLineDetail", "Amount": 1000,
+                               "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "13"}}}]}],
+        "Estimate": [{"Id": "81", "SyncToken": "0", "DocNumber": "EST-81", "TxnDate": "2026-10-10",
+                      "TxnStatus": "Pending", "TotalAmt": 1000, "CustomerRef": {"value": "50"}, "Line": [{
+                          "Id": "1", "DetailType": "SalesItemLineDetail", "Amount": 1000,
+                          "SalesItemLineDetail": {"ItemRef": {"value": "40"}}}]}]})
+    client = QC.QuickBooks("1234567", lambda force: "local-token", base=fake_quickbooks)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, client, cid) == []
+    with books.read() as c:
+        assert tuple(c.execute("SELECT number, status FROM fin_purchase_orders").fetchone()) == ("PO-80", "approved")
+        assert c.execute("SELECT COUNT(*) FROM fin_po_lines").fetchone()[0] == 1
+        assert tuple(c.execute("SELECT number, status FROM fin_estimates").fetchone()) == ("EST-81", "sent")
+        assert c.execute("SELECT COUNT(*) FROM fin_estimate_lines").fetchone()[0] == 1
+    _fake(fake_quickbooks, "POST", "/_fake/change", {"PurchaseOrder": [{
+        "Id": "80", "SyncToken": "1", "DocNumber": "PO-80", "TxnDate": "2026-10-10", "POStatus": "Closed",
+        "TotalAmt": 1000, "VendorRef": {"value": "60"}, "DepartmentRef": {"value": "20"}, "Line": [{
+            "Id": "1", "DetailType": "AccountBasedExpenseLineDetail", "Amount": 1000,
+            "AccountBasedExpenseLineDetail": {"AccountRef": {"value": "13"}}}]}]})
+    assert _drain(books, client, cid, now=LATER) == []
+    with books.read() as c:
+            assert tuple(c.execute("SELECT status, closed_by FROM fin_purchase_orders").fetchone()) == ("closed", "hand")

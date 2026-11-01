@@ -51,12 +51,10 @@ REFUSED = ("bill_update", "bill_approve", "bill_schedule", "invoice_send",
            "payment_create", "payment_cancel", "recipient_add", "contact_create", "contact_update",
            "account_create", "account_update", "feed_match",
            # a purchase order's close and void are not written to the provider yet (its create is)
-           "po_close", "po_void",
-           # a job's edits are not written to the provider yet (its create is, through RECORD_KINDS)
-           "project_update")
+           "po_close", "po_void")
 
 Record = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension |
-M.Project
+M.Project | M.Order
           | M.Refused | M.Ext)
 DOC_TABLES = {"Bill": "fin_bills", "Invoice": "fin_invoices"}   # a document kind with a row of its own
 # A purchase order or estimate written to the provider first: its op's table, and the lines table its kind uses.
@@ -66,10 +64,12 @@ POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "V
 JOURNAL_KINDS = ("ManualJournal", "BankTransaction", "BankTransfer", "Overpayment", "Prepayment")   # posted as journals
 TABLE_OF = {"Account": "fin_accounts", "JournalEntry": "fin_entries", "CreditMemo": "fin_entries",
             "BillPayment": "fin_entries", "Payment": "fin_entries", "Bill": "fin_bills", "Invoice": "fin_invoices",
+            "PurchaseOrder": "fin_purchase_orders", "Estimate": "fin_estimates",
             "Item": "items", "Department": "locations", "Class": "fin_dimensions", "Project": "projects",
             **{kind: "fin_entries" for kind in POSTED + JOURNAL_KINDS}}
 GROUP_OF = {"Account": "accounts", "Vendor": "parties", "Customer": "parties", "Bill": "documents",
-            "Invoice": "documents", "CreditMemo": "documents", "BillPayment": "payments", "Payment": "payments",
+            "Invoice": "documents", "CreditMemo": "documents", "PurchaseOrder": "documents", "Estimate": "documents",
+            "BillPayment": "payments", "Payment": "payments",
             "JournalEntry": "entries", "Item": "records", "Department": "records", "Class": "records",
             "Project": "records", "TrackingOption": "records", **{kind: "entries" for kind in POSTED + JOURNAL_KINDS}}
 # A payment that only applies credit memos (no money in it) keeps its settlements as its ref's local id, comma-separated
@@ -128,7 +128,7 @@ def _group(r: Record) -> str:
         return "entries"
     if isinstance(r, M.Party):
         return "parties"
-    if isinstance(r, M.Document):
+    if isinstance(r, (M.Document, M.Order)):
         return "documents"
     if isinstance(r, M.Settlement):
         return "payments"
@@ -324,6 +324,8 @@ def _do(c: sqlite3.Connection, ctx: Ctx, cid: str, r: Record, at: str) -> None:
         _dimension(c, ctx, cid, r, at)
     elif isinstance(r, M.Project):
         _project(c, ctx, cid, r, at)
+    elif isinstance(r, M.Order):
+        _order(c, ctx, cid, r, at)
     elif isinstance(r, M.Refused):
         raise FinanceError(NOT_AVAILABLE, r.why)
     else:
@@ -452,11 +454,11 @@ def books_item_type(kind: str) -> str:
 
 
 def _item_kind(c: sqlite3.Connection, cid: str, i: M.Item) -> str:
-    """The kind an item keeps here. A Tico-only kind has no type in the books, so the books hold the item as a plain
-    one, and the kind stays in Tico while they do."""
+    """The kind an item keeps here. A Tico-only kind (a raw material or an assembly) is a mark on the item whatever type
+    the books hold it as, so an import keeps the mark a person set; the books' type is still what they hold."""
     local = _local_record(c, cid, "items", i.ext)
     row = RR.get(c, "items", local) if local else None
-    if row is not None and str(row["kind"]) in RC.TICO_ONLY_ITEM_KINDS and i.kind in PLAIN_ITEM_KINDS:
+    if row is not None and str(row["kind"]) in RC.TICO_ONLY_ITEM_KINDS:
         return str(row["kind"])
     return i.kind
 
@@ -471,6 +473,11 @@ def _item(c: sqlite3.Connection, ctx: Ctx, cid: str, i: M.Item, at: str) -> None
         "currency": ctx.book.base_currency,
         "income_account_id": _account_ref(c, cid, i.income), "expense_account_id": _account_ref(c, cid, i.expense),
         "asset_account_id": _account_ref(c, cid, i.asset), "archived_at": None if i.active else at}
+    # The description is the books' only when the provider has one; the quantity is read and never written back.
+    if i.description:
+        fields["description"] = i.description
+    if i.quantity:
+        fields.update({"quantity_on_hand": i.quantity, "quantity_synced_at": at})
     _record_write(c, cid, "items", i.ext, fields, at)
 
 
@@ -548,6 +555,12 @@ def _gone(c: sqlite3.Connection, ctx: Ctx, cid: str, ext: M.Ext, at: str) -> Non
             SL.update_account(c, replace(account, active=False), at)
     elif table in ("fin_bills", "fin_invoices"):
         _void(c, ctx, cid, table, local, ext.key, at)
+    elif table == "fin_purchase_orders":
+        SP.update(c, table, local, {"status": "void", "voided_at": at, "updated_at": at},
+                  "status IN ('draft','sent','approved')")
+    elif table == "fin_estimates":
+        SP.update(c, table, local, {"status": "declined", "decided_at": at, "updated_at": at},
+                  "status IN ('draft','sent')")
     elif table == "fin_dimensions":
         SC.class_set_active(c, local, False)
     elif table in RECORD_TABLES:
@@ -1643,7 +1656,8 @@ RECORD_COLUMNS = {
 # The fields a record keeps as Tico set them: the books hold no value for them, or hold a plain type that a Tico-only
 # item kind stands for. A recovered write applies them to the record it is recorded against.
 RECORD_LOCAL_FIELDS = {"item": ("kind", "unit"), "location": ("kind", "parent_id", "address"), "project": ()}
-RECORD_OPS = ("item.create", "item.update", "location.create", "location.update", "project.create")
+RECORD_OPS = ("item.create", "item.update", "location.create", "location.update", "project.create",
+              "project.update")
 ITEM_ACCOUNTS = (("income_account_id", "income"), ("expense_account_id", "expense"), ("asset_account_id", "asset"))
 
 
@@ -2702,6 +2716,65 @@ def _estimate_convert(ctx: Ctx, who: str, p: V.Payload) -> handlers.Plan:
     return handlers.Plan(K.default_gate(ctx.org, who, "invoice_create"),
                          f"Invoice estimate {est['number']} as one draft", apply,
                          facts=documents.doc_facts("invoice", customer, lines, ctx))
+
+
+def _order_lines(c: sqlite3.Connection, cid: str, o: M.Order) -> list[tuple[str, str | None, int, str, str]]:
+    """Each of an order's lines as (account, item, amount, description, tags as JSON), with the books' ids. A line with
+    no money is left out. Raises when a line names no account the books hold, or the lines miss the order's total."""
+    out: list[tuple[str, str | None, int, str, str]] = []
+    marks = _provider_marks(c, cid, [x.tags for x in o.lines])
+    for x, mark in zip(o.lines, marks, strict=True):
+        if x.amount < 0:
+            raise FinanceError(NOT_AVAILABLE, "a line has a negative amount, which this books cannot take in")
+        if x.amount == 0:
+            continue
+        if not x.account:
+            raise FinanceError(NOT_AVAILABLE, "a line names no account the books hold (its item has none)")
+        item = _mapped(c, cid, "items", x.item) if x.item else None
+        out.append((_mapped(c, cid, "fin_accounts", x.account), item, x.amount, x.description, SK.dump(mark)))
+    if sum(amount for _, _, amount, _, _ in out) != o.total:
+        raise FinanceError(NOT_AVAILABLE, "the lines do not add up to the total (discounts are not taken in yet)")
+    return out
+
+
+def _order(c: sqlite3.Connection, ctx: Ctx, cid: str, o: M.Order, at: str) -> None:
+    """A provider purchase order or estimate, kept as the provider holds it: its header and lines, with no entry (an
+    order moves no money). A newer revision replaces the lines, unless a bill has billed a purchase order's lines or an
+    invoice has been made from an estimate: then the lines cannot change under them, and the record waits."""
+    table = TABLE_OF[o.ext.kind]
+    if M.decide(_have(SX.ref(c, cid, table, o.ext.key)), o.ext) in (M.SAME, M.OLDER, M.GONE):
+        return
+    if not o.party:
+        raise FinanceError(NOT_AVAILABLE, "the order names no party")
+    purchase, line_kind = table == "fin_purchase_orders", "po" if table == "fin_purchase_orders" else "estimate"
+    party = _mapped(c, cid, "fin_contacts", o.party)
+    lines = _order_lines(c, cid, o)
+    head: dict[str, object] = {"book_id": ctx.book.id, "number": o.number, "currency": ctx.book.base_currency,
+                               "total": o.total, "memo": o.memo, "status": o.status, "updated_at": at}
+    if purchase:
+        closed = o.status == "closed"
+        head.update({"vendor_id": party, "po_date": o.day, "closed_by": "hand" if closed else "",
+                     "closed_at": at if closed else None})
+    else:
+        head.update({"customer_id": party, "estimate_date": o.day,
+                     "decided_at": at if o.status in ("accepted", "declined") else None})
+    local = _local_record(c, cid, table, o.ext)
+    if not local:
+        local = SL.new_id()
+        SP.insert(c, table, {"id": local, **head, "created_at": at, "created_by": SYSTEM})
+    else:
+        row = SP.get(c, table, local)
+        if (SP.billed_total(c, local) if purchase else row["invoice_id"]) and \
+                [(str(x["account_id"] or ""), str(x["item_id"] or ""), int(x["amount"])) for x in SP.lines(c, line_kind, local)] \
+                != [(a, i or "", n) for a, i, n, _, _ in lines]:
+            raise FinanceError(NOT_AVAILABLE, "its lines are billed or invoiced here, so QuickBooks cannot change them")
+        SP.update(c, table, local, head)
+        SP.delete_lines(c, line_kind, local)
+    SP.insert_lines(c, line_kind, local, [
+        {"account_id": account, "item_id": item, "amount": amount, "description": description, "tags_json": tags,
+         "created_at": at, "created_by": SYSTEM, **({} if purchase else {"taxable": None})}
+        for account, item, amount, description, tags in lines])
+    _bind(c, cid, table, local, o.ext, at)
 
 
 def _confirm_order(c: sqlite3.Connection, cid: str, op: str, local: Mapping[str, Any], sent: Sent, now: str) -> None:

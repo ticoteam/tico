@@ -248,6 +248,10 @@ def project_update(ctx: Ctx, who: str, p: V.Payload) -> Plan:
         raise FinanceError(NOT_FOUND, "no such project")
     project_id = str(old["id"])
     f = _shape(lambda: _project_fields(ctx, p, create=False))
+    if _mirrored(ctx):
+        mirror.record_in_provider(ctx, "projects", project_id)
+        if "customer_id" in f and not f["customer_id"]:
+            raise invalid("a job in a mirrored book sits under a customer")
 
     def apply(aid: str) -> Result:
         return _update(ctx, who, aid, "project.update", "projects", project_id, f, "project_id",

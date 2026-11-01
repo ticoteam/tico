@@ -642,7 +642,7 @@ def test_a_mirrored_item_keeps_the_accounts_the_provider_holds(books):
             _local(c, "Account:2", "fin_accounts")
 
 
-def test_renaming_an_imported_job_in_a_mirrored_book_is_refused_and_queues_nothing(books):
+def test_renaming_an_imported_job_in_a_mirrored_book_is_written_to_the_provider_before_the_books_change(books):
     fake = FakeBooks()
     _records(fake)
     cid = _connection(books)
@@ -651,12 +651,35 @@ def test_renaming_an_imported_job_in_a_mirrored_book_is_refused_and_queues_nothi
     with books.transaction() as c:
         job = _local(c, "Project:12", "projects")
         renamed = act(c, OWNER, "project_update", {"project_id": job, "name": "Kitchen remodel 2"})
-        assert renamed.status == "denied" and "mirror mode" in renamed.reason, renamed
-        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='project.update'").fetchone()[0] == 0
-    assert _drain(books, fake, cid, now=LATER) == []
-    assert [op for op, _, _ in fake.sent if op == "project.update"] == []
+        assert renamed.status == "committed", renamed
     with books.read() as c:
         assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel"
+    fake.replies.append(mirror.Sent(True, kind="Project", external_id="12", revision="2"))
+    assert _drain(books, fake, cid, now=LATER) == []
+    sent = [(op, body) for op, body, _ in fake.sent if op == "project.update"]
+    assert [(body["name"], body["ext"], body["revision"]) for _, body in sent] == \
+        [("Kitchen remodel 2", "Project:12", "1")]
+    with books.read() as c:
+        assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel 2"
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='Project:12'").fetchone()[0] == "2"
+
+
+def test_a_job_rename_the_provider_refuses_leaves_the_local_name_and_asks_the_owner(books):
+    """X9 for a job: the provider's refusal is the reason a person reads; the local job keeps its name until it is
+    accepted."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        job = _local(c, "Project:12", "projects")
+        act(c, OWNER, "project_update", {"project_id": job, "name": "Kitchen remodel 2"})
+    fake.replies.append(mirror.Sent(False, error="Customer name is in use", final=True))
+    assert any("Customer name is in use" in p for p in _drain(books, fake, cid, now=LATER))
+    with books.read() as c:
+        assert c.execute("SELECT name FROM projects WHERE id=?", (job,)).fetchone()[0] == "Kitchen remodel"
+        assert c.execute("SELECT status FROM fin_outbox WHERE op='project.update'").fetchone()[0] == "failed"
 
 
 def test_a_kind_change_across_the_item_type_the_books_hold_is_refused_and_one_inside_it_stays_here(books):
@@ -1684,3 +1707,37 @@ def test_an_order_the_provider_holds_that_cannot_be_linked_here_stays_failed_and
                                        (key,)).fetchone()
         assert status == "failed" and "could not be linked here" in last_error, (status, last_error)
         assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0
+
+
+def test_a_purchase_order_and_an_estimate_come_in_with_their_lines_and_follow_the_provider_on_the_change_feed(books):
+    """Orders are read in backfill and in the change feed: a purchase order's status and lines come in as the provider
+    holds them, no entry is posted for either, and a later revision replaces the lines."""
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    tags = (("location", "Department:3"),)
+    po = M.Order(M.Ext("PurchaseOrder", "40", "1"), "Vendor:9", "PO-40", "2026-10-05", 1500,
+                 (M.EntryLine("Account:2", 1500, item="Item:5", tags=tags, key="1"),), status="approved")
+    estimate = M.Order(M.Ext("Estimate", "41", "1"), "Customer:4", "EST-41", "2026-10-06", 9000,
+                       (M.EntryLine("Account:3", 9000, item="Item:5", key="2"),), status="sent")
+    fake.records["documents"] += [po, estimate]
+    assert _drain(books, fake, cid) == []
+    with books.read() as c:
+        row = c.execute("SELECT vendor_id, number, status, total, closed_by FROM fin_purchase_orders").fetchone()
+        assert tuple(row) == (_local(c, "Vendor:9", "fin_contacts"), "PO-40", "approved", 1500, "")
+        line = c.execute("SELECT account_id, item_id, amount, tags_json FROM fin_po_lines").fetchall()
+        assert [tuple(x)[1:3] for x in line] == [(_local(c, "Item:5", "items"), 1500)]
+        assert json.loads(line[0]["tags_json"]) == {"location": _local(c, "Department:3", "locations")}
+        est = c.execute("SELECT customer_id, status, total FROM fin_estimates").fetchone()
+        assert tuple(est) == (_local(c, "Customer:4", "fin_contacts"), "sent", 9000)
+        assert c.execute("SELECT COUNT(*) FROM fin_entries").fetchone()[0] == 0
+    closed = M.Order(M.Ext("PurchaseOrder", "40", "2"), "Vendor:9", "PO-40", "2026-10-05", 1800,
+                     (M.EntryLine("Account:2", 1800, item="Item:5", tags=tags, key="1"),), status="closed")
+    fake.changes.append(closed)
+    assert _drain(books, fake, cid, now=LATER) == []
+    with books.read() as c:
+        row = c.execute("SELECT status, closed_by, total FROM fin_purchase_orders").fetchone()
+        assert tuple(row) == ("closed", "hand", 1800)
+        assert [int(r[0]) for r in c.execute("SELECT amount FROM fin_po_lines")] == [1800]
+        assert c.execute("SELECT revision FROM fin_external_refs WHERE external_id='PurchaseOrder:40'").fetchone()[0] == "2"

@@ -43,7 +43,7 @@ TRANSACTIONS = {"bill.create": "Bill", "invoice.create": "Invoice", "journal.cre
 NAMED = {"item.create": ("Item", "Name"), "location.create": ("Department", "Name"),
          "project.create": ("Customer", "DisplayName")}
 # The provider kind a write's record is kept under when it differs from the QuickBooks entity (a job is a Project).
-SENT_AS = {"project.create": "Project"}
+SENT_AS = {"project.create": "Project", "project.update": "Project"}
 
 
 def _marker(key: str) -> str:
@@ -219,7 +219,7 @@ class QuickBooks:
         found: dict[str, Any] = Q.as_map(reply.body.get("QueryResponse")) or {}
         rows = Q.as_list(found.get(entity))
         items: dict[str, dict[str, str]] = {}
-        if entity in Q.DOCUMENTS or entity in Q.POSTED:
+        if entity in Q.DOCUMENTS or entity in Q.POSTED or entity in Q.ORDERS:
             known = self._item_accounts()
             if isinstance(known, str):
                 return Read(False, error=known)
@@ -418,8 +418,8 @@ def _write_of(op: str, body: Mapping[str, Any],
         return "Item", "item", Q.item_write(body, update=op.endswith("update")), {}
     if op in ("location.create", "location.update"):
         return "Department", "department", Q.location_write(body, update=op.endswith("update")), {}
-    if op == "project.create":
-        return "Customer", "customer", Q.job_write(body), {}
+    if op in ("project.create", "project.update"):
+        return "Customer", "customer", Q.job_write(body, update=op.endswith("update")), {}
     if op == "writeoff.create":
         return "CreditMemo", "creditmemo", Q.writeoff_body(body), {}
     if op == "credit.apply":

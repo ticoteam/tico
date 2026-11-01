@@ -16,11 +16,11 @@ MINOR_VERSION = "65"
 POSTED = ("Purchase", "Deposit", "Transfer", "SalesReceipt", "RefundReceipt", "VendorCredit")
 # Every QuickBooks entity the change feed reads.
 ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Bill", "Invoice", "CreditMemo", "BillPayment", "Payment",
-            *POSTED, "Item", "Department", "Class")
+            *POSTED, "Item", "Department", "Class", "PurchaseOrder", "Estimate")
 # The QuickBooks entities behind each backfill entity, in the order the books take them in (the mirror's ENTITIES).
 PAGES: dict[str, tuple[str, ...]] = {
     "accounts": ("Account",), "parties": ("Vendor", "Customer"), "records": ("Item", "Department", "Class"),
-    "documents": ("Bill", "Invoice", "CreditMemo"), "payments": ("BillPayment", "Payment"),
+    "documents": ("Bill", "Invoice", "CreditMemo", "PurchaseOrder", "Estimate"), "payments": ("BillPayment", "Payment"),
     "entries": ("JournalEntry", *POSTED)}
 # The entities a query reads with WHERE Active IN (true,false): QuickBooks reads only the active ones otherwise.
 ACTIVE_FILTERED = ("Account", "Vendor", "Customer", "Item", "Employee", "Department", "Class")
@@ -28,6 +28,10 @@ ACTIVE_FILTERED = ("Account", "Vendor", "Customer", "Item", "Employee", "Departm
 ITEM_KINDS = {"Service": "service", "Inventory": "inventory", "NonInventory": "non_inventory", "Group": "bundle",
               "Category": "category"}
 DOCUMENTS = ("Bill", "Invoice", "CreditMemo")
+# Purchase orders and estimates: documents with no entry. Each one's status as the books keep it, by QuickBooks' own.
+ORDERS = ("PurchaseOrder", "Estimate")
+ORDER_STATUS = {"PurchaseOrder": {"Open": "approved", "Closed": "closed"},
+                "Estimate": {"Pending": "sent", "Accepted": "accepted", "Rejected": "declined", "Closed": "accepted"}}
 PAYMENTS = ("BillPayment", "Payment")
 # A document line's detail. Its account is its own (a purchase on an account) or its item's: income for a sale, expense
 # for a purchase on an item.
@@ -54,7 +58,7 @@ _OUT: dict[tuple[str, str], str] = {("asset", "bank"): "Bank", ("income", "other
 _DEFAULT_OUT = {"asset": "Other Current Asset", "liability": "Other Current Liability", "equity": "Equity",
                 "income": "Income", "expense": "Expense"}
 Made = (M.ChartAccount | M.Party | M.Journal | M.Document | M.Settlement | M.Item | M.Location | M.Dimension | M.Project
-        | M.Ext | M.Refused)
+        | M.Order | M.Ext | M.Refused)
 
 
 def as_map(value: object) -> dict[str, Any] | None:
@@ -138,9 +142,19 @@ def _account_key(row: Mapping[str, Any], key: str) -> str:
     return f"Account:{value}" if value else ""
 
 
+def _quantity(value: object) -> str:
+    """QuickBooks' QtyOnHand as decimal text without trailing zeros; "" when it sends none (a plain item has none)."""
+    if value in (None, ""):
+        return ""
+    try:
+        return format(Decimal(str(value)).normalize(), "f")
+    except InvalidOperation:
+        return ""
+
+
 def item_record(row: dict[str, Any]) -> M.Item | None:
     """A QuickBooks Item as a product or service; None for an item type the books do not hold. Its price is its unit
-    price (none when QuickBooks keeps none)."""
+    price (none when QuickBooks keeps none). Its quantity on hand is read here only: nothing is written back to it."""
     ext = M.Ext("Item", _id(row.get("Id")), _id(row.get("SyncToken")))
     kind = ITEM_KINDS.get(_id(row.get("Type")))
     if kind is None:
@@ -148,7 +162,8 @@ def item_record(row: dict[str, Any]) -> M.Item | None:
     price = _units(row.get("UnitPrice")) if row.get("UnitPrice") not in (None, "") else None
     return M.Item(ext, name=_id(row.get("Name")), sku=_id(row.get("Sku")), kind=kind, price=price,
                   income=_account_key(row, "IncomeAccountRef"), expense=_account_key(row, "ExpenseAccountRef"),
-                  asset=_account_key(row, "AssetAccountRef"), active=_active(row))
+                  asset=_account_key(row, "AssetAccountRef"), active=_active(row),
+                  description=_id(row.get("Description")), quantity=_quantity(row.get("QtyOnHand")))
 
 
 def location_record(row: dict[str, Any]) -> M.Location:
@@ -264,6 +279,20 @@ def document_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[
                       control=f"Account:{control}" if control else "")
 
 
+def order_record(row: dict[str, Any], kind: str, items: Mapping[str, Mapping[str, str]]) -> M.Order:
+    """A QuickBooks PurchaseOrder (to a vendor) or Estimate (to a customer) as an order. Its lines are a bill's or an
+    invoice's: a purchase order's line posts to its item's expense account, an estimate's to its income account."""
+    ext = M.Ext(kind, _id(row.get("Id")), _id(row.get("SyncToken")))
+    purchase = kind == "PurchaseOrder"
+    party_value = _ref(row, "VendorRef" if purchase else "CustomerRef")
+    party = f"{'Vendor' if purchase else 'Customer'}:{party_value}" if party_value else ""
+    location = _ref(row, "DepartmentRef")
+    lines = tuple(x for x in (_doc_line(raw, items, location) for raw in as_list(row.get("Line"))) if x is not None)
+    status = ORDER_STATUS[kind].get(_id(row.get("POStatus" if purchase else "TxnStatus")), "")
+    return M.Order(ext, party=party, number=_id(row.get("DocNumber")), day=_id(row.get("TxnDate")),
+                   total=_units(row.get("TotalAmt")) or 0, lines=lines, memo=_memo(row), status=status)
+
+
 def settlement_record(row: dict[str, Any], kind: str) -> M.Settlement:
     """A QuickBooks BillPayment (paid to a vendor) or Payment (received from a customer): its money account, party,
     total, and what each line applies to a bill (BillPayment) or an invoice (Payment)."""
@@ -356,6 +385,8 @@ def _one(entity: str, row: dict[str, Any], items: Mapping[str, Mapping[str, str]
         made: Made = journal_record(row)
     elif entity in DOCUMENTS:
         made = document_record(row, entity, items)
+    elif entity in ORDERS:
+        made = order_record(row, entity, items)
     elif entity in PAYMENTS:
         made = settlement_record(row, entity)
     else:
@@ -757,10 +788,16 @@ def location_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str
     return {**out, **_head(body, "Department")} if update else out
 
 
-def job_write(body: Mapping[str, Any]) -> dict[str, Any]:
-    """A project as a QuickBooks job: a customer with Job set, under its parent customer (the one QuickBooks requires)."""
-    return {"DisplayName": str(body["name"])[:500], "Job": True, "Active": bool(body.get("active", True)),
-            "ParentRef": {"value": _keyed(body.get("customer"), "Customer")}}
+def job_write(body: Mapping[str, Any], *, update: bool = False) -> dict[str, Any]:
+    """A project as a QuickBooks job: a customer with Job set, under its parent customer (the one QuickBooks requires on
+    create). An update is sparse: it names the job's id and revision, and its parent only when the parent changed."""
+    out: dict[str, Any] = {"DisplayName": str(body["name"])[:500], "Job": True,
+                           "Active": bool(body.get("active", True))}
+    if body.get("customer") or not update:
+        out["ParentRef"] = {"value": _keyed(body.get("customer"), "Customer")}
+    if update:
+        return {**out, "Id": _keyed(body["ext"], "Project"), "SyncToken": str(body["revision"]), "sparse": True}
+    return out
 
 
 def writeoff_body(body: Mapping[str, Any]) -> dict[str, Any]:

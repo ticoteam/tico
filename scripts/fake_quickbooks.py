@@ -14,6 +14,7 @@ Control endpoints under /_fake/ are not QuickBooks':
 """
 import argparse
 import json
+import re
 import sys
 import threading
 from decimal import Decimal
@@ -21,9 +22,15 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlsplit
 
 ENTITIES = ("Account", "Vendor", "Customer", "JournalEntry", "Item", "Department", "Class", "PurchaseOrder", "Estimate",
-            "Invoice")
+            "Invoice", "Bill", "BillPayment", "Payment", "CreditMemo")
 CREATE = {"account": "Account", "vendor": "Vendor", "customer": "Customer", "journalentry": "JournalEntry",
-          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice"}
+          "purchaseorder": "PurchaseOrder", "estimate": "Estimate", "invoice": "Invoice", "item": "Item",
+          "department": "Department", "bill": "Bill", "billpayment": "BillPayment", "payment": "Payment",
+          "creditmemo": "CreditMemo"}
+# A query: the entity, its WHERE comparisons the fake applies (`Name = 'x'`, `Job = true`, `TxnDate = '...'`), and its
+# paging. `Active IN (true,false)` and any other clause the fake does not know is no filter.
+QUERY = re.compile(r"SELECT (COUNT\(\*\)|\*) FROM (\w+)(?: WHERE (.+?))?(?: STARTPOSITION (\d+))?(?: MAXRESULTS (\d+))?$")
+COMPARE = re.compile(r"(\w+) = ('(?:[^'\\]|\\.)*'|true|false)")
 LOCK = threading.Lock()
 STATE: dict[str, object] = {}
 
@@ -56,24 +63,42 @@ def _balanced(lines: object) -> bool:
     return total == 0
 
 
+def _holds(row: dict[str, object], where: str) -> bool:
+    """Whether a row meets every comparison in a WHERE clause (see COMPARE)."""
+    for field, raw in COMPARE.findall(where or ""):
+        have = str(row.get(field))
+        if raw in ("true", "false"):
+            if have.lower() != raw:
+                return False
+        elif have != raw[1:-1].replace("\\'", "'").replace("\\\\", "\\"):
+            return False
+    return True
+
+
 def query(sql: str) -> tuple[int, dict[str, object]]:
-    parts = sql.split()
-    entity = parts[3]
-    if parts[1] == "COUNT(*)":
-        return 200, {"QueryResponse": {"totalCount": len(_rows(entity))}}
-    start = int(parts[parts.index("STARTPOSITION") + 1]) if "STARTPOSITION" in parts else 1
-    size = int(parts[parts.index("MAXRESULTS") + 1]) if "MAXRESULTS" in parts else 1000
-    rows = _rows(entity)[start - 1:start - 1 + size]
+    found = QUERY.match(sql)
+    if found is None:
+        return _fault(f"the fake does not read this query: {sql}")
+    counted, entity, where, start_text, size_text = found.groups()
+    matches = [row for row in _rows(entity) if _holds(row, where or "")]
+    if counted.startswith("COUNT"):
+        return 200, {"QueryResponse": {"totalCount": len(matches)}}
+    start = int(start_text or 1)
+    size = int(size_text or 1000)
+    rows = matches[start - 1:start - 1 + size]
     return 200, {"QueryResponse": {entity: rows, "startPosition": start, "maxResults": len(rows)}}
 
 
 def cdc(entities: str) -> tuple[int, dict[str, object]]:
     wanted = [e for e in entities.split(",") if e]
     block: dict[str, object] = {e: [] for e in wanted}
+    kept = []
     for entity, row in STATE["changes"]:  # type: ignore[index,misc]
         if entity in wanted:
             block[entity].append(row)  # type: ignore[union-attr]
-    STATE["changes"] = []
+        else:
+            kept.append((entity, row))
+    STATE["changes"] = kept      # only the entities this answer carries are read; the others wait for their own read
     return 200, {"CDCResponse": [{"QueryResponse": [block]}]}
 
 
@@ -86,6 +111,8 @@ def create(path: str, body: dict[str, object], request_id: str, operation: str) 
         entity = CREATE.get(path)
         if entity is None:
             return 404, {"Fault": {"Error": [{"Message": "no such entity"}], "type": "ValidationFault"}}
+        if body.get("Id"):
+            return _update(entity, body)
         if entity == "JournalEntry" and not _balanced(body.get("Line")):
             return _fault("Journal entry does not balance")
         made = {**body, "Id": str(STATE["next_id"]), "SyncToken": "0"}
@@ -95,6 +122,19 @@ def create(path: str, body: dict[str, object], request_id: str, operation: str) 
     if request_id and answer[0] == 200:
         STATE["by_request"][request_id] = answer  # type: ignore[index]
     return answer
+
+
+def _update(entity: str, body: dict[str, object]) -> tuple[int, dict[str, object]]:
+    """A sparse update: the fields it names are set and the rest stay, and the row's SyncToken moves on. A stale token is
+    refused, as QuickBooks refuses a write made on an older copy of the record."""
+    for row in _rows(entity):
+        if str(row["Id"]) == str(body["Id"]):
+            if str(row.get("SyncToken")) != str(body.get("SyncToken")):
+                return _fault("Stale object: SyncToken does not match")
+            row.update({k: v for k, v in body.items() if k not in ("sparse", "SyncToken")})
+            row["SyncToken"] = str(int(str(row["SyncToken"])) + 1)
+            return 200, {entity: row}
+    return _fault("Object not found")
 
 
 def _delete(entry_id: str, token: str) -> tuple[int, dict[str, object]]:

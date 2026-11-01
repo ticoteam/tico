@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS items (
   unit TEXT NOT NULL DEFAULT '', price BIGINT, currency TEXT NOT NULL DEFAULT '',
   income_account_id TEXT REFERENCES fin_accounts(id), expense_account_id TEXT REFERENCES fin_accounts(id),
   asset_account_id TEXT REFERENCES fin_accounts(id), archived_at TEXT,
+  description TEXT NOT NULL DEFAULT '', quantity_on_hand TEXT, quantity_synced_at TEXT,
   created_at TEXT NOT NULL, created_by_id TEXT NOT NULL, updated_at TEXT, updated_by_id TEXT);
 
 CREATE TABLE IF NOT EXISTS projects (

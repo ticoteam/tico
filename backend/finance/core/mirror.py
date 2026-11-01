@@ -87,6 +87,8 @@ class Item:
     expense: str = ""       # the provider's key for the account a purchase posts to, "" for none
     asset: str = ""         # the provider's key for an inventory item's asset account, "" for none
     active: bool = True
+    description: str = ""   # the provider's description, "" when it has none (the books keep Tico's text then)
+    quantity: str = ""      # the provider's quantity on hand as decimal text, "" for an item it does not track
 
 
 @dataclass(frozen=True)
@@ -175,6 +177,21 @@ class Settlement:
     links: tuple[tuple[str, int], ...] = ()
     credits: tuple[tuple[str, int], ...] = ()    # a payment's applied credit memos ("CreditMemo:7", amount)
     currency: str = ""  # the provider's currency code; "" when the provider names none (the books' own)
+
+
+@dataclass(frozen=True)
+class Order:
+    """A provider purchase order or estimate: a document the books keep as an order. It posts no entry (it moves no
+    money). `status` is the books' own: approved | closed for a purchase order, sent | accepted | declined for an
+    estimate. Its lines are the provider's lines, on their accounts (the item's when a line names one)."""
+    ext: Ext
+    party: str          # the vendor or customer key ("Vendor:9", "Customer:4")
+    number: str
+    day: str
+    total: int          # minor units, positive
+    lines: tuple[EntryLine, ...]
+    memo: str = ""
+    status: str = ""
 
 
 @dataclass(frozen=True)
@@ -350,7 +367,11 @@ def decode(d: Mapping[str, Any]) -> Record:
         price = d.get("price")
         return Item(ext, str(d["name"]), str(d.get("sku", "")), str(d.get("kind", "service")),
                     None if price is None else int(price), str(d.get("income", "")), str(d.get("expense", "")),
-                    str(d.get("asset", "")), bool(d.get("active", True)))
+                    str(d.get("asset", "")), bool(d.get("active", True)), str(d.get("description", "")),
+                    str(d.get("quantity", "")))
+    if kind == "Order":
+        return Order(ext, str(d["party"]), str(d["number"]), str(d["day"]), int(d["total"]), _lines(d["lines"]),
+                     str(d.get("memo", "")), str(d.get("status", "")))
     if kind == "Location":
         return Location(ext, str(d["name"]), bool(d.get("active", True)))
     if kind == "Dimension":
