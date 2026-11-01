@@ -12,7 +12,13 @@ from . import profiles
 FOLLOWED = ("model", "runtime", "harness", "reasoning_effort", "compact_at",
             "session", "subtask_session", "task_goal", "review_model", "fallback",
             "task_model",
-            "max_run_minutes", "bot_contact", "private_tasks_default")
+            "max_run_minutes", "bot_contact", "private_tasks_default", "stateless")
+
+
+def _as_followed(original):
+    """The original's config as a branch takes it. FOLLOWED copies only what the original states, so an original that is
+    stateless by its template (hubdb.stateless) is marked stateless here, and its branches stay stateless too."""
+    return {**original, "stateless": True} if H.stateless(original) else original
 
 
 def _json(value):
@@ -47,6 +53,7 @@ def follow(c, bot, config, rows=None):
         original = declared(c, source)
     if not original:
         return config
+    original = _as_followed(original)
     merged = dict(config)
     for key in FOLLOWED:
         if key in original:
@@ -137,7 +144,7 @@ def add_copy(c, who, source, runner_id, settings_admin, execution, github_owner)
                   "host": "keeper", "tasks": "hub", "thread_mode": "personal",
                   "shared_from": source, "model_managed_by": "cloud"}
         profiles.apply(config, profiles.DOER, {})
-        config.update({key: original[key] for key in FOLLOWED if key in original})
+        config.update({key: value for key, value in _as_followed(original).items() if key in FOLLOWED})
         team = settings_admin._team(c, slug, config)
         now = H.now()
         c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "

@@ -197,7 +197,9 @@ pub fn session_key(attempt: &Value) -> String {
         _ if bot == "botops" => "task".into(),
         _ => String::new(),
     };
-    if mode == "bot" {
+    // A stateless bot's task keeps its own session even on `session: bot` (crate::continuity::stateless): the bot's shared
+    // thread is never one a task continues.
+    if mode == "bot" && !crate::continuity::stateless(config) {
         return "bot".into();
     }
     let task = &attempt["task"];
@@ -210,6 +212,12 @@ pub fn session_key(attempt: &Value) -> String {
         return format!("conversation:{conv}");
     }
     "bot".into()
+}
+
+/// A stateless bot's message with no task behind it (crate::continuity::stateless): a new session each time, none saved,
+/// and no process reused or kept. Decided by the task, not the session key, since `session: bot` keys every turn "bot".
+pub fn stateless_chat(attempt: &Value) -> bool {
+    crate::continuity::stateless(&attempt["config"]) && text_of(&attempt["task"]["id"]).is_empty()
 }
 
 /// The epoch that moves when this turn's thread is cleared, and the conversation it is recorded for: the bot's shared
@@ -1232,7 +1240,7 @@ impl Runner {
         // A stateless bot (Counsel) keeps nothing from one task to the next: a task resumes only its own session, and a
         // chat turn (no task) starts a new session each time and saves none (crate::continuity::stateless).
         let stateless = crate::continuity::stateless(&config);
-        let fresh_chat = stateless && !key.starts_with("task:");
+        let fresh_chat = stateless_chat(&attempt);
         let owner = format!("{bot}\n{key}");
         let effort = Some(text_of(&config["reasoning_effort"])).filter(|e| !e.is_empty());
         let model = Some(text_of(&config["model"])).filter(|m| !m.is_empty());
@@ -1329,7 +1337,8 @@ impl Runner {
                 // The user and relay this conversation's kept pi runs with (hosts/pi.rs Pool), when it has one.
                 // Only a turn that stays on the kept pi takes it: reclaim removes it from the pool, so any other turn
                 // would drop its lease. Left in the pool, idle eviction releases it the normal way.
-                let kept = if runtime == "pi" && session_runtime == runtime { self.pi.reclaim(&owner) } else { None };
+                // A fresh stateless chat turn reclaims no kept pi: it starts its own (crate::continuity::stateless).
+                let kept = if runtime == "pi" && session_runtime == runtime && !fresh_chat { self.pi.reclaim(&owner) } else { None };
                 if let Some(held) = kept {
                     (vault.turn_user, vault.relay) = (held.user, held.relay);
                 } else if crate::gateway_relay::separation() != crate::gateway_relay::Separation::TrustGroup {
@@ -1507,6 +1516,10 @@ impl Runner {
             }
             let made = if session_runtime != runtime {
                 let make = |home: &Path, _: &Env| AntigravityHost::new(home, vec!["agy".into()], tx.clone());
+                // A fresh stateless chat turn starts a new process, never the last one's (warm.rs discard).
+                if fresh_chat {
+                    self.warm.discard(&attempt).await;
+                }
                 let (warm, turn_env) = self.warm.acquire(&attempt, &env, make).await.map_err(Fail::runtime)?;
                 warm.attach(tx);
                 env = turn_env;
@@ -2145,21 +2158,22 @@ impl Runner {
                     let _ = h.interrupt(th, t).await;
                 }
             }
-            // A host that keeps its process between turns gives it back below, after a turn that completed.
-            let keeps = matches!(h, Host::Pi(_)) || persistent && matches!(h, Host::Antigravity(_));
+            // A host that keeps its process between turns gives it back below, after a turn that completed; a fresh
+            // stateless chat turn keeps none (crate::continuity::stateless).
+            let keeps = !fresh_chat && (matches!(h, Host::Pi(_)) || persistent && matches!(h, Host::Antigravity(_)));
             if !keeps || drove.outcome != "completed" {
                 h.stop().await;
             }
             if let Host::Antigravity(warm) = h {
                 // Its token file is blanked; only a turn that completed leaves the process running.
-                self.warm.release(warm, drove.outcome == "completed").await;
+                self.warm.release(warm, drove.outcome == "completed" && !fresh_chat).await;
             }
             if let Host::Pi(pi) = h {
                 // A primary pi on a leased user is kept with that user and its relay; a fallback's never is.
                 let held = if fallback.is_none() {
                     crate::hosts::pi::Held { user: vault.turn_user.take(), relay: vault.relay.take() }
                 } else { Default::default() };
-                let back = pi.release(drove.outcome == "completed", &owner, held).await;
+                let back = pi.release(drove.outcome == "completed" && !fresh_chat, &owner, held).await;
                 vault.turn_user = vault.turn_user.take().or(back.user);
                 vault.relay = vault.relay.take().or(back.relay);
             }
@@ -2670,6 +2684,21 @@ mod tests {
         };
         assert_eq!(session_key(&strategy_turn(json!({"session": "bot"}), "c-goals")), "bot");
         assert_eq!(session_key(&strategy_turn(json!({"session": "task"}), "c-owner")), "conversation:c-owner");
+    }
+
+    #[test]
+    fn a_stateless_chat_is_told_apart_by_its_task_not_its_session_key() {
+        let turn = |config: Value, task: Value| json!({"bot": "tico-counsel", "config": config, "task": task, "conversation": {"id": "c1"}});
+        let stateless = json!({"stateless": true});
+        let on_bot = json!({"stateless": true, "session": "bot"});
+        // A chat message has no task: a new session each time, none saved, no process reused.
+        assert!(stateless_chat(&turn(stateless, Value::Null)));
+        assert!(stateless_chat(&turn(on_bot.clone(), Value::Null)));
+        assert!(!stateless_chat(&turn(json!({}), Value::Null)), "an ordinary bot's chat is not stateless");
+        // A task turn is its own, even on `session: bot`, which keys every turn "bot": it never shares that thread.
+        assert!(!stateless_chat(&turn(on_bot.clone(), json!({"id": "t1"}))));
+        assert_eq!(session_key(&turn(on_bot.clone(), json!({"id": "t1"}))), "task:t1");
+        assert_eq!(session_key(&turn(on_bot, Value::Null)), "bot");
     }
 
     #[test]

@@ -678,5 +678,17 @@ mod tests {
         let ordinary = prompt(&attempt, &names, None, false);
         assert!(ordinary.contains("Read AGENT.md and state.md") && ordinary.contains("memory/learnings.md"), "{ordinary}");
         assert!(ordinary.contains("committed for you when the turn ends"), "{ordinary}");
+        // A shared stateless bot (a branch): the shared memory and lessons lines are not its; a sync problem still is.
+        let mut branch = attempt.clone();
+        branch["config"] = json!({"stateless": true, "shared": true});
+        branch["branch_sync_problem"] = json!("it diverged");
+        let text = prompt(&branch, &names, None, false);
+        for banned in ["Every branch reads and writes", "Save only lessons", "keeping both sides' lessons", "reading AGENT.md and memory"] {
+            assert!(!text.contains(banned), "{banned} is in a stateless shared prompt: {text}");
+        }
+        assert!(text.contains("could not sync with the original repository (it diverged)"), "{text}");
+        branch["config"] = json!({"shared": true});
+        let shared = prompt(&branch, &names, None, false);
+        assert!(shared.contains("Every branch reads and writes") && shared.contains("Save only lessons"), "{shared}");
     }
 }

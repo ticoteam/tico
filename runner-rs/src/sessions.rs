@@ -172,13 +172,25 @@ pub fn local_path(config: &crate::config::Config, bot: &str, bot_config: &Value)
 
 pub fn shared_lines(bot: &str, config: &Value, problem: &str) -> Vec<String> {
     let source = text_of(&config["shared_from"]);
-    let mut lines = vec!["Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string()];
+    // A stateless bot keeps no memory, so the shared memory and lessons lines are not its: it keeps its identity as a
+    // branch, and a sync problem is still its own to resolve (crate::continuity::stateless).
+    let stateless = crate::continuity::stateless(config);
+    let mut lines = Vec::new();
+    if !stateless {
+        lines.push("Other people run branches from this same repository. Every branch reads and writes the same AGENT.md, knowledge and memory. Follow those files on every computer.".to_string());
+    }
     if !source.is_empty() {
         lines.push(format!("You run as `{bot}`, a branch of `{source}`. Where your files name `{source}` as yourself, they mean you; use `{bot}` in hub commands about your own work."));
     }
-    lines.push("Save only lessons about the code, designs and work to the repository, never who asked or one person's preferences, messages or attachments. Commit lessons, then `git pull --rebase` and `git push`, keeping both sides' lessons on a conflict.".into());
+    if !stateless {
+        lines.push("Save only lessons about the code, designs and work to the repository, never who asked or one person's preferences, messages or attachments. Commit lessons, then `git pull --rebase` and `git push`, keeping both sides' lessons on a conflict.".into());
+    }
     if !problem.is_empty() {
-        lines.push(format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts keeping both sides' lessons, and push before reading AGENT.md and memory."));
+        lines.push(if stateless {
+            format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts, and push before doing the work.")
+        } else {
+            format!("Before anything else: the checkout could not sync with the original repository ({problem}). Commit or preserve unfinished changes, run `git pull --rebase`, resolve conflicts keeping both sides' lessons, and push before reading AGENT.md and memory.")
+        });
     }
     lines
 }
@@ -190,7 +202,7 @@ pub fn prompt_head(attempt: &Value, lines: &mut Vec<(Part, String)>) {
     let problem = text_of(&attempt["branch_sync_problem"]);
     if is_shared(config) {
         let shared = shared_lines(&text_of(&attempt["bot"]), config, &problem);
-        let last = shared.len() - 1;
+        let last = shared.len().saturating_sub(1);
         let mut head: Vec<(Part, String)> = shared
             .into_iter()
             .enumerate()

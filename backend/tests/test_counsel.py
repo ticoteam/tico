@@ -13,6 +13,7 @@ from backend import audit_log, counsel, screening
 from backend import assistant as A
 from backend import files as F
 from backend import org_rules as O
+from backend import shared_bots as SB
 from backend.auth import Identity
 from backend.blobs import register
 from backend.store import H
@@ -186,6 +187,15 @@ def test_counsel_has_no_credentials_and_sends_nothing(api):
     counsel_on(api)
     with api.app.state.store.read() as c:
         assert c.execute("SELECT COUNT(*) FROM credential_grants WHERE subject='bot:tico-counsel'").fetchone()[0] == 0
+
+
+def test_a_branch_of_a_stateless_bot_is_stateless_too():
+    branch = SB.follow(None, "counsel-acme", {"shared_from": "tico-counsel"},
+                       rows=lambda slug: {"config_json": json.dumps({"template": "tico-counsel", "shared": True}), "repo": "emp-counsel"})
+    assert branch["stateless"] is True
+    plain = SB.follow(None, "ops-acme", {"shared_from": "ops"},
+                      rows=lambda slug: {"config_json": json.dumps({"shared": True, "model": "m1"}), "repo": "emp-ops"})
+    assert "stateless" not in plain
 
 
 def test_counsel_is_stateless_by_its_template_and_an_explicit_flag_wins():
