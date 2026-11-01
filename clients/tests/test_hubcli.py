@@ -1092,3 +1092,28 @@ def test_thread_slack_resume_posts_to_the_link_resume_route(monkeypatch):
     monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
     remotecli.run(hubcli.parser().parse_args(["thread", "slack-resume", "L1"]))
     client.post.assert_called_once_with("slack/links/L1/resume", {}, key=None)
+
+
+def test_rules_withdraw_posts_an_empty_body_to_the_hold_withdraw_route(monkeypatch):
+    """`hub rules withdraw <hold-id>` runs `hub_rules_withdraw`: POST rule-holds/{id}/withdraw with an empty body."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.return_value = {"actor": "bot:ops"}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["rules", "withdraw", "h7"]))
+    client.post.assert_called_once_with("rule-holds/h7/withdraw", {}, key=None)
+
+
+def test_connection_list_reaches_the_connections_route_with_its_paging(monkeypatch):
+    """`hub connections list --limit 5 --cursor c2` runs `hub_connections_list`: GET connections with the page."""
+    from clients import remotecli
+    from unittest.mock import Mock
+    client = Mock()
+    client.get.side_effect = lambda path, **kw: {"actor": "bot:ops"} if path == "me" else {"items": [], "next": None}
+    monkeypatch.setenv("HUB_API_URL", "https://api.example.invalid")
+    monkeypatch.setattr(remotecli, "Client", lambda *a, **kw: client)
+    remotecli.run(hubcli.parser().parse_args(["connections", "list", "--limit", "5", "--cursor", "c2"]))
+    from unittest.mock import call
+    assert call("connections", limit=5, cursor="c2") in client.get.call_args_list

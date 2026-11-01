@@ -485,7 +485,7 @@ _PROPOSABLE_BOTOPS = [(m, re.compile(p)) for m, p in (
     ("PUT", r"/api/v2/inbound/inboxes/[^/]+/audience"),
 )]
 # An inbox is an email address in its path (`inboxes/ana@acme.example`): the one `@` a route may carry.
-_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:\-/]+)")
+_SHAPE = re.compile(r"/api/v2/(?:inboxes/[A-Za-z0-9_.+\-]+@[A-Za-z0-9.\-]+|[A-Za-z0-9_.:+\-/]+)")
 
 
 def normalize_path(path):

@@ -7357,6 +7357,13 @@ def rules_appeal(api, args):
     return api.post(f"rule-holds/{args['id']}/appeal", {"why": args.get("why") or ""}, key=_key(args))
 
 
+@tool("hub_rules_withdraw", "Take back your held write so you can edit it and send it again: the hold is kept and "
+      "nothing is sent. Only the author of the held write may withdraw it.",
+      {"id": _s("The hold's id, from the held answer")}, required=("id",), writes=True)
+def rules_withdraw(api, args):
+    return api.post(f"rule-holds/{args['id']}/withdraw", {}, key=_key(args))
+
+
 # ----------------------------------------------------------------------------- calls (Tico Meet: docs/meet.md)
 # A call belongs to a thread. Starting, joining, ending and attaching bots are people's acts; BotOps acts as the person it
 # works for, and the server refuses a bot on each of them. Every read checks the caller's access to the thread.
@@ -7518,7 +7525,7 @@ AUDIENCE = {
     # A bot's add is a suggestion; the Assistant's is an org rule the person asked for in their own chat, citing their words.
     "hub_rules_add": KINDS,
     # A bot checks its own drafts and appeals its own holds; a person's writes are never checked.
-    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS,
+    "hub_rules_check": BOTS, "hub_rules_appeal": BOTS, "hub_rules_withdraw": PEOPLE + BOTS,
     "hub_approval_decline": HUMANS_AND_ASSISTANT,         # only a person decides an approval
     "hub_approval_approve": HUMANS_AND_ASSISTANT,         # ... or their own Assistant, when they let it
     "hub_assistant_read": PEOPLE, "hub_assistant_send": PEOPLE,

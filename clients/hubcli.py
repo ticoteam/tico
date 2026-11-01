@@ -276,6 +276,7 @@ the server (`backend/hubdb.py`), never here. A command is its tool's name (clien
     hub rules check "<draft>" --to <teammate> [--as message|comment|task|assign]
                                            a bot checks a draft against its rules; sending it then costs no second check
     hub rules appeal <hold-id> "<why>"     a bot asks the reviewer to look at its held output
+    hub rules withdraw <hold-id>           take back your held write to edit it and send it again
     hub strategy show                      the published strategy, its bets with their goals and colour, the website
     hub strategy summary                   the text every run carries
     hub strategy versions [N]              published versions, newest first; N: that version whole
@@ -2076,6 +2077,9 @@ def parser():
     s.add_argument("id", help="the hold's id, from the held answer")
     s.add_argument("why", nargs="?", default="", help="why you think the rule does not apply")
     s.set_defaults(fn="rules appeal")
+    s = rules.add_parser("withdraw", help="take back your held write to edit it and send it again (nothing is sent)")
+    s.add_argument("id", help="the hold's id, from the held answer")
+    s.set_defaults(fn="rules withdraw")
     strategy = sub.add_parser("strategy", help="the team's strategy: its bets, the four sections, the versions").add_subparsers(dest="sub")
     s = strategy.add_parser("show", help="the published strategy, its bets and their goals; the owner also gets the draft")
     s.set_defaults(fn="strategy show")

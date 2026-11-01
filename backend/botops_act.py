@@ -269,6 +269,13 @@ DO = _routes(
     # or a token is left out: it hands the person's media token to BotOps, so it stays with the person.
     ("POST", rf"threads/{_S}/calls"), ("POST", rf"calls/{_S}/(end|leave|bots|action-items/retry)"),
     ("DELETE", rf"calls/{_S}/bots/{_S}"),
+    # Federation between installs: keys, peerings and who a shared thread reaches. The route checks the owner
+    # (backend/federation_routes.py `owner`), so a bot or a non-owner gets 403 there. Key and status responses carry no key.
+    ("POST", r"federation/keys"), ("POST", r"federation/keys/rotate"), ("POST", r"federation/peerings"),
+    ("POST", rf"federation/peerings/{_S}/(approve|pause|revoke)"),
+    ("POST", rf"federation/threads/{_S}/(installs|readers)"), ("DELETE", rf"federation/threads/{_S}/installs/{_S}"),
+    # Withdrawing a held write to edit and resend it: its author's own call (backend/org_rule_check.py).
+    ("POST", rf"rule-holds/{_S}/withdraw"),
     # Who reads an inbox: the route checks the person may change it.
     ("PUT", rf"inbound/inboxes/{_S}/audience"),
     ("POST", rf"credentials/{_S}/grants"), ("POST", rf"credentials/{_S}/grants/{_S}/revoke"),
