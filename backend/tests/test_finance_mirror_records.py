@@ -156,7 +156,8 @@ def test_a_bill_made_here_is_sent_with_its_location_class_job_and_item_and_booke
     assert _drain(books, fake, cid, now=LATER) == []
     body = _sent(fake, "bill.create")
     assert body["lines"] == [{"account": "Account:2", "amount": 1500, "description": "seats", "item": "Item:5",
-                              "location": "Department:3", "class": "7", "project": "Customer:12"}]
+                              "item_code": "Consulting", "location": "Department:3", "class": "7",
+                              "project": "Customer:12"}]
     out = Q.bill_body(body)
     assert out["DepartmentRef"] == {"value": "3"}
     assert out["Line"][0]["ItemBasedExpenseLineDetail"] == {
@@ -164,6 +165,42 @@ def test_a_bill_made_here_is_sent_with_its_location_class_job_and_item_and_booke
         "CustomerRef": {"value": "12"}}
     with books.read() as c:
         assert c.execute("SELECT COUNT(*) FROM fin_bills WHERE number='B-78'").fetchone()[0] == 1
+
+
+def test_a_quickbooks_revision_gives_a_bill_line_the_item_it_names_and_no_other(books):
+    fake = FakeBooks()
+    _records(fake)
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        made = act(c, OWNER, "bill_create", {
+            "vendor_id": _local(c, "Vendor:9", "fin_contacts"), "number": "B-79", "bill_date": "2026-10-05",
+            "due_date": "2026-11-05", "lines": [{"item_id": item, "amount": 1500, "description": "seats"}]})
+        assert made.status == "committed", made
+    fake.replies = [mirror.Sent(True, kind="Bill", external_id="77", revision="1", lines=("L1",))]
+    assert _drain(books, fake, cid, now=LATER) == []
+
+    def line_item() -> str | None:
+        with books.read() as c:
+            return c.execute("SELECT l.item_id FROM fin_bill_lines l JOIN fin_bills b ON b.id = l.bill_id "
+                             "WHERE b.number='B-79'").fetchone()[0]
+    assert line_item() == item
+    # QuickBooks revises the bill and its line still names the item: the line keeps it
+    fake.changes = [M.Document(M.Ext("Bill", "77", "2"), party="Vendor:9", number="B-79", day="2026-10-05",
+                               due="2026-11-05", total=1600,
+                               lines=(M.EntryLine("Account:2", 1600, description="seats", key="L1", item="Item:5"),))]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
+        assert c.execute("SELECT total FROM fin_bills WHERE number='B-79'").fetchone()[0] == 1600
+    assert line_item() == item
+    # a revision whose line names no item leaves the line with none: QuickBooks states the item of each line
+    fake.changes = [M.Document(M.Ext("Bill", "77", "3"), party="Vendor:9", number="B-79", day="2026-10-05",
+                               due="2026-11-05", total=1600,
+                               lines=(M.EntryLine("Account:2", 1600, description="seats", key="L1"),))]
+    assert _drain(books, fake, cid, now=LATER3) == []
+    assert line_item() is None
 
 
 def test_a_mirrored_sale_of_an_inventory_item_posts_its_income_and_no_cost_of_goods_sold(books):
@@ -305,7 +342,7 @@ def test_an_item_change_in_a_mirrored_book_leaves_the_row_as_it_was_until_the_pr
     assert _drain(books, fake, cid) == []
     with books.transaction() as c:
         item = _local(c, "Item:5", "items")
-        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.book"}).status == "committed"
+        assert act(c, OWNER, "right_grant", {"teammate": "human:dan", "right": "finance.records"}).status == "committed"
         # Dan sees the item's accounts, so a price change of his is asked of an admin rather than found missing.
         assert act(c, OWNER, "view_grant", {"subject": "human:dan", "what": "everything",
                                             "whose": "company"}).status == "committed"
@@ -546,8 +583,8 @@ def test_a_purchase_order_made_here_is_written_to_quickbooks_and_its_row_comes_i
         assert c.execute("SELECT COUNT(*) FROM fin_purchase_orders").fetchone()[0] == 0
     assert _drain(books, fake, cid, now=LATER) == []
     assert _sent(fake, "purchaseorder.create")["lines"] == [
-        {"account": "Account:2", "amount": 1500, "description": "seats", "item": "Item:5", "location": "Department:3",
-         "class": "7", "project": ""}]
+        {"account": "Account:2", "amount": 1500, "description": "seats", "item": "Item:5", "item_code": "Consulting",
+         "location": "Department:3", "class": "7", "project": ""}]
     with books.read() as c:
         assert tuple(c.execute("SELECT number, status, total FROM fin_purchase_orders").fetchone()) == \
             ("PO-78", "draft", 1500)
@@ -628,18 +665,53 @@ def test_a_mirrored_item_needs_a_price_and_keeps_the_price_the_provider_holds(bo
 def test_a_mirrored_item_keeps_the_accounts_the_provider_holds(books):
     fake = FakeBooks()
     _records(fake)
+    fake.records["accounts"].append(acct(4, "6200", "Travel"))
     cid = _connection(books)
     _mirror(books, cid)
     assert _drain(books, fake, cid) == []
     with books.transaction() as c:
         item = _local(c, "Item:5", "items")
+        travel = _local(c, "Account:4", "fin_accounts")
+        moved = act(c, OWNER, "item_update", {"item_id": item, "expense_account_id": travel})
         cleared = act(c, OWNER, "item_update", {"item_id": item, "expense_account_id": None})
-        assert (cleared.status, cleared.code) == ("failed", "invalid"), cleared
+        income_cleared = act(c, OWNER, "item_update", {"item_id": item, "income_account_id": None})
+        assert [(r.status, r.code) for r in (moved, cleared, income_cleared)] == [("failed", "invalid")] * 3, moved
+        assert "change them in the books" in moved.reason, moved
+        assert c.execute("SELECT COUNT(*) FROM fin_outbox WHERE op='item.update'").fetchone()[0] == 0
     assert _drain(books, fake, cid, now=LATER) == []
     assert [op for op, _, _ in fake.sent if op == "item.update"] == []
     with books.read() as c:
+        accounts = c.execute("SELECT income_account_id, expense_account_id FROM items WHERE id=?", (item,)).fetchone()
+        assert tuple(accounts) == (_local(c, "Account:3", "fin_accounts"), _local(c, "Account:2", "fin_accounts"))
+    # the provider's own change to the item's accounts still reaches the row
+    fake.changes = [M.Item(M.Ext("Item", "5", "2"), "Consulting", kind="service", price=15000, income="Account:3",
+                           expense="Account:4")]
+    assert _drain(books, fake, cid, now=LATER2) == []
+    with books.read() as c:
         assert c.execute("SELECT expense_account_id FROM items WHERE id=?", (item,)).fetchone()[0] == \
-            _local(c, "Account:2", "fin_accounts")
+            _local(c, "Account:4", "fin_accounts")
+
+
+def test_a_mirrored_item_keeps_the_sku_the_provider_holds_and_takes_another(books):
+    fake = FakeBooks()
+    _records(fake)
+    fake.records["records"][0] = M.Item(M.Ext("Item", "5", "1"), "Consulting", sku="CONS-1", kind="service",
+                                        price=15000, income="Account:3", expense="Account:2")
+    cid = _connection(books)
+    _mirror(books, cid)
+    assert _drain(books, fake, cid) == []
+    with books.transaction() as c:
+        item = _local(c, "Item:5", "items")
+        cleared = act(c, OWNER, "item_update", {"item_id": item, "sku": ""})
+        assert (cleared.status, cleared.code) == ("failed", "invalid"), cleared
+        assert c.execute("SELECT sku FROM items WHERE id=?", (item,)).fetchone()[0] == "CONS-1"
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert [op for op, _, _ in fake.sent if op == "item.update"] == []
+    with books.transaction() as c:
+        changed = act(c, OWNER, "item_update", {"item_id": item, "sku": "CONS-2"})
+        assert changed.status == "committed", changed
+    assert _drain(books, fake, cid, now=LATER) == []
+    assert _sent(fake, "item.update")["sku"] == "CONS-2"
 
 
 def test_renaming_an_imported_job_in_a_mirrored_book_is_refused_and_queues_nothing(books):

@@ -12,6 +12,7 @@ from typing import Any, cast
 
 from ..records import reads as RR
 from . import budgeting, limits, tab, tab_ap, tab_hooks, tab_money, usage
+from . import due_dates as DD
 from .tab_purchasing import estimate as estimate, estimates as estimates, order as order, orders as orders
 from . import closing as CL
 from . import context as _context
@@ -32,12 +33,14 @@ from .tax import sales_tax_csv as sales_tax_csv
 from .tax import sales_tax_report as sales_tax_report
 from .handlers import named_reason, private_scope, sees_budget, sees_scope, shows_numbers
 from .store import actions as SX
+from .store import ap as SAP
 from .store import access as SA
 from .store import banking as SK
 from .store import budgets as SB
 from .store import ledger as SL
 from .store import ap as SAP
 from .store import catalog as SC
+from .store import mirror as SM
 from .store import raw_totals as SR
 from .store import tico as ST
 
@@ -653,6 +656,25 @@ def spend_by(c: sqlite3.Connection, viewer: str, by: str, start: str | None = No
     s = _open(c, viewer, at)
     a, z = _window(start, end, s.ctx)
     return _grouped(s, a, z, by, account_id, team, None, top_n)
+
+
+def revenue_by_item(c: sqlite3.Connection, viewer: str, start: str | None = None, end: str | None = None, *,
+                    top_n: int = 10, at: str | None = None) -> Row:
+    """Revenue by item: the posted invoices' lines in the window, summed by the item each names; a line that names none
+    is Unattributed. Receivables only: a viewer without the receivables view is refused, as the aging report is. An
+    invoice with a line on a private account this viewer lacks full detail for is left out whole."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    if not tab_ap.sees_side(ctx, view, "invoice"):
+        raise denied("receivables are not in your view")
+    a, z = _window(start, end, ctx)
+    cut = tab.private_cut(ctx, view)
+    rows: list[Row] = []
+    for r in SAP.invoice_item_revenue(c, ctx.book.id, a.isoformat(), z.isoformat(), cut=cut):
+        key, label = (str(r["item_id"]), str(r["item_name"] or r["item_id"])) if r["item_id"] else (NONE, UNATTRIBUTED)
+        rows.append({"key": key, "label": label, "amount": int(r["amount"] or 0)})
+    return {"by": "item", "start": a.isoformat(), "end": z.isoformat(), "rows": _cap(rows, top_n),
+            "total": sum(int(str(r["amount"])) for r in rows), "view_version": view.version}
 
 
 # ------------------------------------------------------------------------------------------------ one line
@@ -1285,7 +1307,8 @@ def _uncategorized(s: _Seen, a: date, z: date, most: int, skip: int = 0) -> tupl
 
 
 # ------------------------------------------------------------------------------------------------ reports
-REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by")
+REPORTS = ("pnl", "pnl_by", "balance_sheet", "cash_flow", "budget_vs_actual", "ap_aging", "ar_aging", "spend_by",
+           "revenue_by_item")
 
 
 def _prior(a: date, z: date) -> tuple[date, date]:
@@ -1355,11 +1378,10 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
            period: str = "month", basis: str | None = None, compare: str | None = None, top_n: int = 20,
            by: str | None = None, at: str | None = None) -> Row:
     """One report (§7.1): pnl (accrual or cash), balance_sheet (as of `end`), cash_flow, budget_vs_actual, ap_aging,
-    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair) or
-    pnl_by
-    (`by` location|class|project or a pair). `compare=prior` adds the window before it. Payloads are capped: `top_n`
-    rows
-    and one "Other · n"."""
+    ar_aging, spend_by (`by` department|team|teammate|bot|person|vendor|account|location|class|project or a pair),
+    pnl_by (`by` location|class|project or a pair) or revenue_by_item (posted invoices by the item each line names;
+    receivables view). `compare=prior` adds the window before it. Payloads are capped: `top_n` rows and one
+    "Other · n"."""
     if kind not in REPORTS:
         raise invalid(f"a report is {'|'.join(REPORTS)}")
     if compare not in (None, "", "prior"):
@@ -1381,6 +1403,8 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
             return _cash_flow(c, viewer, p, q, period, at)
         if kind == "budget_vs_actual":
             return budget_vs_actual(c, viewer, p.isoformat(), q.isoformat(), period, limit=top, at=at)
+        if kind == "revenue_by_item":
+            return revenue_by_item(c, viewer, p.isoformat(), q.isoformat(), top_n=top, at=at)
         return spend_by(c, viewer, by or "vendor", p.isoformat(), q.isoformat(), top_n=top, at=at)
     out: Row = {"kind": kind, **one(a, z)}
     if compare == "prior":
@@ -1391,7 +1415,7 @@ def report(c: sqlite3.Connection, viewer: str, kind: str, *, start: str | None =
 
 # ------------------------------------------------------------------------------------------------ search
 SEARCH_KINDS = ("entry", "feed", "bill", "invoice", "contact", "rule", "card", "item", "location", "project", "po",
-              "estimate")
+              "estimate", "due_date")
 RECORD_KINDS = {"item": "items", "location": "locations", "project": "projects"}
 SEARCH_EACH = 10            # results per kind when no kind is named
 
@@ -1421,9 +1445,11 @@ def _search_rules(ctx: Ctx, viewer: str, q: str, filters: Mapping[str, object], 
         (str(page[-1]["id"]) if len(rows) > most else None)
 
 
-def _record_row(kind: str, r: Any) -> Row:
-    """A record as a search result: its name is the label, and its own type keeps its own field."""
-    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "archived_at": r["archived_at"]}
+def _record_row(kind: str, r: Any, source: str, as_of: str) -> Row:
+    """A record as a search result: its name is the label, and its own type keeps its own field. It names where it
+    came from and the time it was read, so an answer built on it can cite both."""
+    row: Row = {"kind": kind, "id": str(r["id"]), "label": str(r["name"]), "archived_at": r["archived_at"],
+                "source": source, "as_of": as_of}
     if kind == "item":
         row["item_kind"] = str(r["kind"])
         row["sku"] = str(r["sku"])
@@ -1441,10 +1467,30 @@ RECORD_PLURAL = {"location": "locations", "item": "items", "project": "projects"
 ITEM_ACCOUNTS = ("income_account_id", "expense_account_id", "asset_account_id")
 
 
-def _in_view_or_refuse(view: VW.View) -> None:
-    """Records are for viewers with a finance view at all, as the other reads are."""
-    if not view.sees_anything():
-        raise denied("records are not in your view")
+def _record_rows(c: sqlite3.Connection, ctx: Ctx, kind: str, rows: Sequence[Any]) -> list[Row]:
+    """Records as search rows, each with its source and the read time. A new searchable record kind adds its table to
+    RECORD_KINDS and its rows through here, so the rows keep the same shape."""
+    sources = SM.record_providers(c, RECORD_KINDS[kind], [str(r["id"]) for r in rows])
+    return [_record_row(kind, r, sources.get(str(r["id"]), "tico"), ctx.at) for r in rows]
+
+
+def _teammate(ctx: Ctx, viewer: str) -> bool:
+    """A teammate: a person on the roster, or a bot the company runs (org.bots holds only the bots not archived)."""
+    return ctx.org.is_person(viewer) or viewer in ctx.org.bots
+
+
+def _teammate_or_refuse(ctx: Ctx, viewer: str) -> None:
+    """Records are for teammates whatever their Finance view: names, addresses, customers and sale prices read for all
+    of them, while an item's accounts and the costs stay per view. A guest, who is not on the roster, and an unknown
+    actor read none of it."""
+    if not _teammate(ctx, viewer):
+        raise denied("records are for teammates")
+
+
+def _customer_names(ctx: Ctx, kind: str, rows: Sequence[Any]) -> dict[str, str]:
+    """The name of each customer the rows name, by contact id. An item names none."""
+    ids = sorted({str(r["customer_id"]) for r in rows if kind != "item" and r["customer_id"]})
+    return {cid: str(row["name"]) for cid, row in SAP.contacts(ctx.c, ids).items()}
 
 
 def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: object) -> bool:
@@ -1456,29 +1502,38 @@ def _account_shown(view: VW.View, accounts: Mapping[str, Account], account_id: o
     return account is not None and view.sees_account(account)
 
 
-def _record_out(kind: str, r: Any, accounts: Mapping[str, Account], view: VW.View) -> Row:
-    """A record as the records API shows it. An item's accounts show to the viewers who see them, and its price shows
-    to the viewers who see its income account: the price is what that account books."""
-    out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"]}
+def _customer_out(customer_id: object, names: Mapping[str, str]) -> Row:
+    """A record's customer by id and name, for every teammate: the customer's name is operational."""
+    key = str(customer_id) if customer_id else None
+    return {"customer_id": key, "customer_name": names.get(key) if key else None}
+
+
+def _record_out(ctx: Ctx, kind: str, r: Any, view: VW.View, source: str, names: Mapping[str, str]) -> Row:
+    """A record as the records API shows it, to a teammate: an item's sale price and description whatever the viewer's
+    Finance view; an item's accounts show to the viewers who see them. A location's or project's customer shows by id
+    and name. Only teammates reach this (see _teammate_or_refuse)."""
+    out: Row = {"id": str(r["id"]), "name": str(r["name"]), "archived_at": r["archived_at"], "source": source,
+                "as_of": ctx.at}
     if kind == "location":
         out.update(kind=str(r["kind"]), parent_id=r["parent_id"], address=json.loads(r["address"] or "{}"))
+        out.update(_customer_out(r["customer_id"], names))
     elif kind == "item":
-        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]))
-        if _account_shown(view, accounts, r["income_account_id"]):
-            out["price"] = r["price"]
-        out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, accounts, r[key])})
+        out.update(sku=str(r["sku"]), kind=str(r["kind"]), unit=str(r["unit"]), currency=str(r["currency"]),
+                   description=str(r["description"]), taxable=bool(r["taxable"]), price=r["price"])
+        out.update({key: r[key] for key in ITEM_ACCOUNTS if _account_shown(view, ctx.accounts, r[key])})
     else:
-        out.update(customer_id=r["customer_id"], status=str(r["status"]))
+        out.update(status=str(r["status"]))
+        out.update(_customer_out(r["customer_id"], names))
     return out
 
 
 def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archived: str = "hide",
             cursor: str | None = None, limit: int = 50, at: str | None = None) -> Row:
     """Locations, items or projects by name (an item also by sku), past `cursor`. `archived` is hide, only or all.
-    A viewer with no finance view is refused; an item's accounts and price are cut to what the viewer sees."""
+    A guest is refused; an item's accounts are cut to what the viewer sees."""
     ctx = load(c, at)
     view = ctx.view(viewer)
-    _in_view_or_refuse(view)
+    _teammate_or_refuse(ctx, viewer)
     parts = tab.decode_cursor(cursor)
     after = (parts[0], parts[1]) if len(parts) == 2 else None
     active = {"hide": True, "only": False, "all": None}[archived]
@@ -1486,18 +1541,75 @@ def records(c: sqlite3.Connection, viewer: str, *, kind: str, q: str = "", archi
     rows = RR.search(c, RECORD_TABLE[kind], (q or "").strip()[:100], active=active, after=after, most=most + 1)
     shown = rows[:most]
     nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
-    return {RECORD_PLURAL[kind]: [_record_out(kind, r, ctx.accounts, view) for r in shown], "next_cursor": nxt}
+    sources = SM.record_providers(c, RECORD_TABLE[kind], [str(r["id"]) for r in shown])
+    names = _customer_names(ctx, kind, shown)
+    return {RECORD_PLURAL[kind]: [_record_out(ctx, kind, r, view, sources.get(str(r["id"]), "tico"), names)
+                                  for r in shown], "next_cursor": nxt}
 
 
 def record(c: sqlite3.Connection, viewer: str, *, kind: str, record_id: str, at: str | None = None) -> Row:
     """One location, item or project, archived or not, by its id or an id it was merged under."""
     ctx = load(c, at)
     view = ctx.view(viewer)
-    _in_view_or_refuse(view)
+    _teammate_or_refuse(ctx, viewer)
     row = RR.get(c, RECORD_TABLE[kind], record_id)
     if row is None:
         raise FinanceError(NOT_FOUND, f"no such {kind}")
-    return {kind: _record_out(kind, row, ctx.accounts, view)}
+    source = SM.record_providers(c, RECORD_TABLE[kind], [str(row["id"])]).get(str(row["id"]), "tico")
+    return {kind: _record_out(ctx, kind, row, view, source, _customer_names(ctx, kind, [row]))}
+
+
+def customer_extras(c: sqlite3.Connection, viewer: str, customer_id: str, at: str | None = None) -> Row:
+    """What a customer panel adds beyond its contact, locations, estimates and invoices, by name. The equipment and
+    due dates of the customer's locations join the panel here; none are on this branch yet."""
+    return {}
+
+
+def customers(c: sqlite3.Connection, viewer: str, *, q: str = "", cursor: str | None = None, limit: int = 50,
+              at: str | None = None) -> Row:
+    """Active customers by name then id, for the picker: id and name only, to every teammate. `q` matches a name,
+    and an email too for a viewer of receivables; `next_cursor` pages."""
+    ctx = load(c, at)
+    _teammate_or_refuse(ctx, viewer)
+    parts = tab.decode_cursor(cursor)
+    after = (parts[0], parts[1]) if len(parts) == 2 else None
+    most = tab.page_size(limit)
+    by_email = tab_ap.sees_side(ctx, ctx.view(viewer), "invoice")
+    rows = SAP.contacts_page(c, book_id=ctx.book.id, kinds=("customer", "both"), q=(q or "").strip()[:100],
+                             active=True, after=after, most=most + 1, by_email=by_email)
+    shown = rows[:most]
+    nxt = tab.encode_cursor([str(shown[-1]["name"]), str(shown[-1]["id"])]) if len(rows) > most else None
+    return {"customers": [{"id": str(r["id"]), "name": str(r["name"])} for r in shown], "next_cursor": nxt}
+
+
+def customer_panel(c: sqlite3.Connection, viewer: str, contact_id: str, at: str | None = None) -> Row:
+    """A customer's panel: the contact, the active locations it is the customer of, its open estimates (draft or
+    sent) and its unpaid invoices. A teammate without the receivables view reads the contact by id and name and its
+    locations; its estimates and invoices are null. A missing contact, or one that is not a customer, is not_found."""
+    ctx = load(c, at)
+    view = ctx.view(viewer)
+    _teammate_or_refuse(ctx, viewer)
+    row = SAP.get(c, "fin_contacts", contact_id)
+    if row is None or str(row["book_id"]) != ctx.book.id or str(row["kind"]) not in ("customer", "both"):
+        raise FinanceError(NOT_FOUND, "no such customer")
+    locations = RR.at_customer(c, contact_id)
+    sources = SM.record_providers(c, "locations", [str(r["id"]) for r in locations])
+    names = _customer_names(ctx, "location", locations)
+    out: Row = {
+        "contact": {"id": str(row["id"]), "name": str(row["name"])},
+        "locations": [_record_out(ctx, "location", r, view, sources.get(str(r["id"]), "tico"), names)
+                      for r in locations],
+        "estimates": None,
+        "invoices": None,
+    }
+    if tab_ap.sees_side(ctx, view, "invoice"):
+        out["contact"] = tab_ap.contact_row(ctx, row, R.is_admin(ctx.org, viewer, ctx.rights(viewer)))
+        out["invoices"] = tab_ap.invoices(c, viewer, status="unpaid", customer_id=contact_id, at=at)
+        if R.has(ctx.org, viewer, R.AR, ctx.rights(viewer)):
+            drafts = estimates(c, viewer, status="draft", customer_id=contact_id, at=at)["estimates"]
+            sent = estimates(c, viewer, status="sent", customer_id=contact_id, at=at)["estimates"]
+            out["estimates"] = sorted([*drafts, *sent], key=lambda e: (str(e["date"]), str(e["id"])), reverse=True)
+    return {**out, **customer_extras(c, viewer, contact_id, at)}
 
 
 def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
@@ -1569,14 +1681,21 @@ def search(c: sqlite3.Connection, viewer: str, *, kind: str | None, q: str = "",
                 results += [{**r, "label": f"{r['nickname'] or r['holder']} ••{r['last4'] or ''}".strip()}
                             for r in cast(list[Row], found["cards"])]
                 nxt = cast(str | None, found["next"])
+            elif k == "due_date":
+                # Due dates page by name; `active=0` names the archived ones, the default is the live ones.
+                listed = DD.listing(c, viewer, q=text, archived="only" if _filter(f, "active") in ("0", "false")
+                                    else "hide", cursor=cursor, limit=most, at=at)
+                results += [cast(Row, {**r, "kind": "due_date", "label": r["name"]})
+                            for r in cast(list[Row], listed["due_dates"])]
+                nxt = cast(str | None, listed["next_cursor"])
             elif k in RECORD_KINDS:
-                _in_view_or_refuse(view)
+                _teammate_or_refuse(ctx, viewer)
                 parts = tab.decode_cursor(cursor)
                 active = _filter(f, "active")
                 rows = RR.search(c, RECORD_KINDS[k], text, active=None if active is None else
                                  active in ("1", "true", "True"), after=(parts[0], parts[1]) if len(parts) == 2
                                  else None, most=most)
-                results += [_record_row(k, r) for r in rows]
+                results += _record_rows(c, ctx, k, rows)
                 nxt = tab.encode_cursor([str(rows[-1]["name"]), str(rows[-1]["id"])]) \
                     if rows and len(rows) == most else None
             else:
