@@ -54,6 +54,7 @@ SENT = re.compile(r"sent=([0-9.]+)")
 TOKENS = ["ana-test", "ben-test", "cara-test"]          # the fixture's people; members of both threads
 DM_TOKENS = ["ana-test", "ben-test"]                    # the two people of the baseline's direct conversation
 # What the server times when BENCH_PROFILE=1: the write path, its fan-out and the stream's reads.
+PRIVATE_TAG = "private-only-"     # in every message of --identities' private thread
 SLOW_READ_SECONDS = 30     # how long the slow consumer may take over its backlog once it reads
 PROFILED = (("backend.threads", ("post", "deliver", "mentions", "audience_has", "_followers", "_insert_delivery",
                                  "_follow", "wake_mode", "thread_row", "can_post", "denial", "_outside", "view",
@@ -164,6 +165,7 @@ def serve():
         setattr(importlib.import_module(module), attr, type(getattr(importlib.import_module(module), attr))(value))
     with tempfile.TemporaryDirectory(prefix="threads-benchmark-") as directory:
         generator, server, thread, port, app = boot(directory)
+        seed_identities(app, int(os.environ.get("BENCH_IDENTITIES") or 0))
         profile = Profile(sys.modules["backend.store"]) if os.environ.get("BENCH_PROFILE") else None
         print(json.dumps({"port": port, "db": str(app.state.store.settings.db_path)}), flush=True)
         sys.stdin.read()                                   # the load generator closes stdin when the run ends
@@ -186,10 +188,44 @@ def call(conn, method, path, token, payload=None):
     return response.status, response.read()
 
 
+VIEWER_GROUPS = ("room", "room", "private", "outsider", "everything")
+
+
+def distinct_viewer(i):
+    """--identities: viewer `i`'s token and actor (each third a bot on an agent token) and its group: a member following
+    the room, a member following the private thread, an outsider following one of them (who must get nothing), or a
+    member of the room with a stream of everything it may read (who must never get the private thread)."""
+    name = f"viewer-{i:03d}"
+    return f"{name}-test", ("bot:" if i % 3 == 2 else "human:") + name, VIEWER_GROUPS[i % len(VIEWER_GROUPS)]
+
+
+def seed_identities(app, count):
+    """The server's side of --identities: people on the roster and bots with agent tokens, signing in by test token."""
+    from backend.auth import Identity
+    store, settings = app.state.store, app.state.auth.settings
+    with store.transaction() as c:
+        roster = json.loads(c.execute("SELECT value_json FROM registry_metadata WHERE key='people'").fetchone()[0])
+        for i in range(count):
+            token, actor, _ = distinct_viewer(i)
+            kind, name = actor.split(":")
+            if kind == "bot":
+                settings.test_identities[token] = Identity(actor, "bot", agent="test")
+                c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created) VALUES(?,?,'fake',?)",
+                          (name, name, H.now()))
+                c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
+                          (name, "test", "x-" + name, H.now(), "human:ana"))
+            else:
+                settings.test_identities[token] = Identity(actor, "human", f"{name}@acme.example")
+                c.execute("INSERT OR IGNORE INTO humans(id,name,email) VALUES(?,?,?)",
+                          (name, name, f"{name}@acme.example"))
+                roster["people"].append({"id": name, "email": f"{name}@acme.example"})
+        c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(roster),))
+
+
 def stream(port, token, query, state, started=None):
     """Read one live stream to its end: the ready time and seq, the latency of each of this run's messages, resets."""
     state.update({"ready": None, "ready_seq": None, "latencies": [], "ids": set(), "reset": False, "error": None,
-                  "status": None})
+                  "status": None, "private_seen": 0})
     try:
         conn = http.client.HTTPConnection("127.0.0.1", port, timeout=300)
         state["conn"] = conn
@@ -213,8 +249,10 @@ def stream(port, token, query, state, started=None):
             elif name == "messages":
                 data = json.loads(event.get("data") or "{}")
                 message = data.get("message") if isinstance(data.get("message"), dict) else data  # nested or flat
-                match = SENT.search(str(message.get("body") or ""))
+                body = str(message.get("body") or "")
+                match = SENT.search(body)
                 key = data.get("id") or message.get("id")
+                state["private_seen"] += PRIVATE_TAG in body
                 if match and key not in state["ids"]:
                     state["ids"].add(key)
                     state["latencies"].append(time.time() - float(match.group(1)))
@@ -306,7 +344,7 @@ class Readers:
     and in the writers' process their interpreter lock would be counted as the server's write and event latency."""
 
     PROCESSES = 6
-    FIELDS = ("ready", "ready_seq", "latencies", "reset", "error", "status")
+    FIELDS = ("ready", "ready_seq", "latencies", "reset", "error", "status", "private_seen")
 
     def __init__(self):
         context = multiprocessing.get_context("fork")     # before this process has threads
@@ -356,10 +394,17 @@ def scenario(args, port, db):
     def connect():
         return http.client.HTTPConnection("127.0.0.1", port, timeout=60)
 
+    distinct = [distinct_viewer(i) for i in range(args.identities)]
+    private = None
     if args.path == "threads":
+        extra = [actor for _, actor, group in distinct if group in ("room", "everything")]
         room = json.loads(call(connect(), "POST", "/api/v2/threads", "ana-test",
                                {"title": "Benchmark room", "audience": "members",
-                                "members": ["human:ben", "human:cara"]})[1])["id"]
+                                "members": ["human:ben", "human:cara", *extra]})[1])["id"]
+        if distinct:
+            private = json.loads(call(connect(), "POST", "/api/v2/threads", "ana-test", {
+                "title": "Private room", "audience": "members",
+                "members": [actor for _, actor, group in distinct if group == "private"]})[1])["id"]
         big = json.loads(call(connect(), "POST", "/api/v2/threads", "ana-test",
                               {"title": "Big room", "audience": "members",
                                "members": ["human:ben", "human:cara"]})[1])["id"]
@@ -373,8 +418,17 @@ def scenario(args, port, db):
         scope, post_path, people = f"?conversation={room}", f"/api/v2/conversations/{room}/messages", DM_TOKENS
         big_path = None
 
+    def opening(i):
+        """Viewer `i`'s token and query."""
+        if not distinct:
+            return people[i % len(people)], scope
+        token, _, group = distinct[i % len(distinct)]
+        if group == "outsider":                        # each outsider asks for one thread it is not in
+            return token, f"?thread={room if i % 10 == 3 else private}"
+        return token, {"room": scope, "private": f"?thread={private}", "everything": "?"}[group]
+
     readers = Readers()
-    viewer_keys = [readers.open(port, people[i % len(people)], scope) for i in range(args.viewers)]
+    viewer_keys = [readers.open(port, *opening(i)) for i in range(args.viewers)]
     deadline = time.time() + 60
     opened = {}
     while time.time() < deadline:
@@ -397,9 +451,17 @@ def scenario(args, port, db):
                      state, 0.0 if args.same_instant else i / len(room_writers)) for i, state in enumerate(room_writers)]
     if big_path:
         threads.append(start(writer, port, "ana-test", big_path, "big", args.seconds, args.rate, big_writer))
+    private_writer = {}
+    if private:
+        threads.append(start(writer, port, "ana-test", f"/api/v2/threads/{private}/messages", PRIVATE_TAG.rstrip("-"),
+                             args.seconds, args.rate, private_writer))
 
     time.sleep(args.seconds / 2)                       # a reconnect burst, halfway through the run
-    burst_keys = [readers.open(port, people[i % len(people)], f"{scope}&after={resume}") for i in range(args.burst)]
+    def reopening(i):
+        token, query = opening(i)
+        return token, f"{query}{'&' if len(query) > 1 else ''}after={resume}"
+
+    burst_keys = [readers.open(port, *reopening(i)) for i in range(args.burst)]
     for thread in threads:
         thread.join()
     stop.set()
@@ -420,7 +482,10 @@ def scenario(args, port, db):
             statuses[str(code)] = statuses.get(str(code), 0) + count
     write_ms = [x for w in room_writers for x in w.get("writes", [])]
     latencies = [x for v in viewers for x in v.get("latencies", [])]
-    per_viewer = [v["delivered"] for v in viewers]
+    groups = {}
+    for i, v in enumerate(viewers):
+        groups.setdefault(distinct[i % len(distinct)][2] if distinct else "room", []).append(v)
+    per_viewer = [v["delivered"] for name in ("room", "everything") for v in groups.get(name, [])]
     ready = [b["ready"] for b in burst if b.get("ready") is not None]
     deadline = time.time() + SLOW_READ_SECONDS
     while time.time() < deadline and not slow.get("closed") and not slow.get("error"):
@@ -434,6 +499,17 @@ def scenario(args, port, db):
         "big_thread_writes": None if not big_path else {
             "followers": args.followers, "statuses": big_writer.get("statuses", {}),
             "ms": summary(big_writer.get("writes", []))},
+        "distinct_viewers": None if not distinct else {
+            "identities": len(distinct), "people": sum(1 for _, actor, _ in distinct if actor.startswith("human:")),
+            "bots": sum(1 for _, actor, _ in distinct if actor.startswith("bot:")),
+            "private_posted": private_writer.get("ok", 0),
+            "private_members_delivered_min": min((v["delivered"] for v in groups.get("private", [])), default=0),
+            # Nothing of a thread reaches anyone outside it: these must be 0.
+            "outsiders_delivered": sum(v["delivered"] for v in groups.get("outsider", [])),
+            "private_seen_by_non_members": sum(v["private_seen"] for name in ("room", "everything", "outsider")
+                                               for v in groups.get(name, [])),
+            "burst_non_members_private_seen": sum(burst[i]["private_seen"] for i in range(len(burst))
+                                                  if distinct[i % len(distinct)][2] != "private")},
         "viewers": {"count": args.viewers, "errors": [v["error"] for v in viewers if v.get("error")],
                     "delivered_min": min(per_viewer) if per_viewer else 0,
                     "delivered_max": max(per_viewer) if per_viewer else 0, "expected_each": posted_ok,
@@ -458,6 +534,7 @@ def main():
     parser.add_argument("--rate", type=float, default=5.0)
     parser.add_argument("--followers", type=int, default=500)
     parser.add_argument("--burst", type=int, default=200)
+    parser.add_argument("--identities", type=int, default=0, help="this many distinct viewers, people and bots (threads only)")
     parser.add_argument("--same-instant", action="store_true", help="every writer posts at the start of its period")
     parser.add_argument("--output", type=Path)
     parser.add_argument("--serve", action="store_true", help=argparse.SUPPRESS)
@@ -472,7 +549,7 @@ def main():
     if os.environ.get("BENCH_SAMPLE"):             # Python 3.15+: which code holds the interpreter lock, sampled
         command[1:1] = ["-m", "profiling.sampling", "run", "-a", "--mode", "gil", "-r", "500", "--collapsed",
                         "-o", os.environ["BENCH_SAMPLE"]]
-    child = subprocess.Popen(command, cwd=str(ROOT),
+    child = subprocess.Popen(command, cwd=str(ROOT), env={**os.environ, "BENCH_IDENTITIES": str(args.identities)},
                              stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
     line = child.stdout.readline()
     while line and not line.startswith("{"):
