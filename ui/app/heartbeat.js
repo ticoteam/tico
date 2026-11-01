@@ -148,11 +148,12 @@ const stoppedChosen = run => run.decided || run.jobs?.find(job => job.decided)?.
 // this page's own click) was saved while the bot was busy.
 const stoppedWaits = run => !run.jobs || run.jobs.some(job => job.deferred !== false);
 // A bot's stopped runs, one short line each: the task, why it stopped (saying so when that was a restart or a limit,
-// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule (Chris, Oct 26).
-// Details opens that card (settings.js executionReview) with the evidence.
+// not a bug) and its own Try again / Don't retry, the safe pick first by the review card's rule.
+// The issue's title opens that card (settings.js executionReview) with the evidence.
+const RETRY_HINT = 'The bot checks what already happened first';
 function stoppedLines(issue, list) {
   if (!issue.runs?.length) return '';
-  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
+  const button = (run, i, decision, label, lead) => `<button type="button"${lead ? '' : ' class="ghost"'} data-run-decision="${decision}" data-run="${i}"${decision === 'resume' ? ` title="${RETRY_HINT}"` : ''}${run.decided || stoppedChosen(run) && stoppedChosen(run) !== decision ? ' disabled' : ''}>${label}</button>`;
   // When every run stopped the same routine way the card's own line already says it is not a bug.
   const shared = issue.runs.every(run => run.routine && run.cause === issue.runs[0].cause);
   const line = (run, i) => `<li class="stopped-line" data-run-row="${i}"${run.decided ? ` data-decided="${esc(run.decided)}"` : ''}>
@@ -162,11 +163,8 @@ function stoppedLines(issue, list) {
       : button(run, i, 'dismiss', 'Don’t retry', true) + button(run, i, 'resume', 'Try again')}</div>` : ''}
     <p class="stopped-result" data-result role="status" aria-live="polite">${run.decided ? esc(stoppedOutcome(run.decided, stoppedWaits(run))) : ''}</p></li>`;
   list.push(issue);
-  // Only while a risky line still offers Try again: not once it is decided or its saved requests chose Don't retry.
-  const risky = issue.can_review && issue.runs.some(run => !run.retry && !run.decided && stoppedChosen(run) !== 'dismiss');
   return `<ul class="stopped-lines" data-runs="${list.length - 1}">${issue.runs.map(line).join('')}</ul>
-    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more in Details.</p>` : ''}
-    ${risky ? '<p class="muted">Try again tells the bot to check what already happened first.</p>' : ''}`;
+    ${issue.more_runs ? `<p class="muted">And ${issue.more_runs} more</p>` : ''}`;
 }
 function bindStoppedLines(panel, list) {
   panel.querySelectorAll('[data-runs]').forEach(ul => {
@@ -178,14 +176,7 @@ function bindStoppedLines(panel, list) {
         buttons.forEach(b => b.disabled = true);
         result.classList.remove('err'); result.textContent = 'Saving choice…';
         try {
-          // A message folded into the run rides on it: one choice settles them all. A request already settled, by an
-          // earlier click that stopped partway or a choice saved while the bot was busy, is not sent again.
-          for (const job of run.jobs.filter(job => !job.decided)) {
-            const done = await reconcileStopped(job, decision);
-            job.decided = decision; job.deferred = !!done.deferred;
-          }
-          // Kept on the run itself, so Needs you closed and reopened before a refresh still shows the outcome.
-          run.decided = run.jobs.every(job => job.decided === decision) ? decision : 'mixed';
+          await decideRun(run, decision);
           li.dataset.decided = run.decided;
           result.textContent = stoppedOutcome(run.decided, stoppedWaits(run));
         } catch (e) {
@@ -198,16 +189,37 @@ function bindStoppedLines(panel, list) {
     });
   });
 }
+// Saves one run's choice on each of its requests. A message folded into the run rides on it, so one choice settles them
+// all; a request already settled (an earlier click that stopped partway, or a choice saved while the bot was busy) is
+// not sent again. The run keeps the outcome, so Needs you closed and reopened before a refresh still shows it.
+async function decideRun(run, decision) {
+  for (const job of run.jobs.filter(job => !job.decided)) {
+    const done = await reconcileStopped(job, decision);
+    job.decided = decision; job.deferred = !!done.deferred;
+  }
+  run.decided = run.jobs.every(job => job.decided === decision) ? decision : 'mixed';
+  return run.decided;
+}
+// A card is a title, at most one short line and at most two buttons. The title is the way to the details (the stopped
+// runs card, the bot, the computer, Health), so Details and Open bot are not buttons of their own; what the server
+// wrote in full stays on the title's tooltip.
+const needsTitle = (text, tag, tip = '') => `<${tag} class="needs-title"${tip ? ` title="${esc(tip)}"` : ''}><span>${esc(text)}</span><span class="nav-icon" aria-hidden="true">chevron_right</span></${tag.split(' ')[0]}>`;
+const needsTitleTag = issue => issue.kind === 'uncertain_work' && issue.bot ? `button type="button" data-execution-review="${esc(issue.bot)}"`
+  : issue.machine && !issue.bot ? 'a href="#/settings" data-gs-tab="devices"'
+  : issue.bot ? `a href="#/bot/${esc(issue.bot)}/more"` : 'a href="#/settings" data-gs-tab="health"';
 function needsYou() {
   document.querySelector('.needs-you')?.remove();
   const issues = (S.status?.health_issues || []).filter(needsPerson);
   const panel = document.createElement('section'); panel.className = 'needs-you';
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', 'Needs you');
   const stopped = [];
+  // Listed runs say it themselves, so their issue's own line goes; otherwise the line is the detail's first sentence.
+  const full = issue => [issue.detail, issue.action !== 'review' && issue.action].filter(Boolean).join(' ');
+  const line = issue => issue.runs?.length || !issue.detail ? '' : `<p>${esc(firstSentence(issue.detail))}</p>`;
   // The text and its lines take the full width; the actions sit under them, each as wide as its words.
-  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div><strong>${esc(issue.title)}</strong><p>${esc(issue.detail)}</p>${issue.action && issue.action !== 'review' ? `<p class="muted">${esc(issue.action)}</p>` : ''}${stoppedLines(issue, stopped)}</div>
-    <div class="issue-buttons">${issue.kind === 'uncertain_work' ? `<button class="ghost" data-execution-review="${esc(issue.bot)}">${issue.runs?.length ? 'Details' : 'Review now'}</button>` : ''}${runnerRestartButton(issue)}${issue.bot ? `<a class="ghost" href="#/bot/${esc(issue.bot)}/more">Open bot</a>` : ''}</div></div>`;
-  panel.innerHTML = `<header><h2>${issues.length === 1 ? 'One thing needs you' : `${issues.length} things need you`}</h2><button class="ghost" data-close aria-label="Close">Close</button></header>
+  const row = issue => `<div class="settings-issue" data-key="${esc(needsYouKey(issue))}"><div>${needsTitle(issue.title, needsTitleTag(issue), full(issue))}${line(issue)}${stoppedLines(issue, stopped)}</div>
+    <div class="issue-buttons">${runnerRestartButton(issue)}</div></div>`;
+  panel.innerHTML = `<header><h2></h2><button class="ghost" data-close aria-label="Close">Close</button></header>
     <div data-list>${issues.map(row).join('') || '<p>Nothing needs you right now.</p>'}</div>
     <div class="row"><button class="ghost" data-snooze>Snooze for an hour</button><a class="ghost" href="#/settings">Open Settings</a></div>`;
   const close = () => { needsYouRemember({seen: issues.map(needsYouKey)}); panel.remove(); };
@@ -219,6 +231,8 @@ function needsYou() {
   panel.querySelectorAll('a[href]').forEach(a => a.addEventListener('click', close));
   bindRunnerRestart(panel);
   bindStoppedLines(panel, stopped);
+  const n = panel.querySelectorAll('[data-list] > .settings-issue:not([hidden])').length;
+  panel.querySelector('h2').textContent = n === 1 ? 'One thing needs you' : `${n} things need you`;
   document.body.appendChild(panel);
   return panel;
 }
@@ -229,7 +243,6 @@ function renderAccount() {
   el.title = `Signed in as ${me.email}${me.local ? ' (local app)' : ''}`;
   el.querySelector('.account-email').textContent = me.email || 'Not signed in';
   renderAccountStatus();
-  $('#connect-agent').hidden = !settingsCanMakeTokens();
   renderInboxNav();
   renderNewVersion();
   renderDownloadLink();

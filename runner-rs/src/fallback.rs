@@ -36,6 +36,14 @@ pub fn configured(config: &Value) -> Option<Hop> {
     Some(Hop { runtime: crate::harness_tools::runtime_of(&harness), harness, model, reasoning_effort: effort, default: false })
 }
 
+/// `configured`, unless the hop's runtime refused this bot's sign-in within REJECT_RECHECK: a refused login would be
+/// refused again, so the turn does not go there (signin.rs refusal_key). A delivered subscription for the runtime
+/// (`subscribed`) brings its own credentials, so its runtime's refusal does not apply.
+pub fn configured_for(config: &Value, sign_in: &crate::signin::SignIn, profile: Option<&crate::profiles::Profile>,
+                      bot: &str, subscribed: impl Fn(&str) -> bool) -> Option<Hop> {
+    configured(config).filter(|hop| subscribed(&hop.runtime) || sign_in.rejection(&hop.runtime, profile, bot).is_none())
+}
+
 /// A different model on the spent login is no fallback. Ignore that named hop so the company's next provider
 /// can take the turn; with none ready the primary's limit stands. Per-bot keys have no shared login here.
 pub fn limited_config(config: &Value, profile: Option<&crate::profiles::Profile>) -> Value {
@@ -314,6 +322,13 @@ pub fn server_takes_turn_user() -> bool {
     SERVER_TURN_USER.load(std::sync::atomic::Ordering::Relaxed)
 }
 
+/// Whether the server takes the readiness document's `trust` (`readiness_trust`), as `data_problem`.
+static SERVER_TRUST: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub fn server_takes_trust() -> bool {
+    SERVER_TRUST.load(std::sync::atomic::Ordering::Relaxed)
+}
+
 /// Whether a config answer has been kept since start.
 pub fn config_seen() -> bool {
     CHOICES.lock().unwrap().is_some()
@@ -328,6 +343,7 @@ pub fn remember(config: &Value) {
     SERVER_DATA_PROBLEM.store(config["readiness_data_problem"] == true, std::sync::atomic::Ordering::Relaxed);
     SERVER_COMPUTER_LOGINS.store(config["computer_logins_v1"] == true, std::sync::atomic::Ordering::Relaxed);
     SERVER_TURN_USER.store(config["readiness_turn_user"] == true, std::sync::atomic::Ordering::Relaxed);
+    SERVER_TRUST.store(config["readiness_trust"] == true, std::sync::atomic::Ordering::Relaxed);
     let rows = config["fallback_models"].as_array().map(|r| r.iter().filter(|v| v.is_object()).cloned().collect()).unwrap_or_default();
     *CHOICES.lock().unwrap() = Some((Instant::now(), rows));
     // The server's saved holds on this computer's logins (backend/login_holds.py): after a restart this runner has
@@ -362,8 +378,9 @@ impl Runner {
     /// when the turn runs on one), not refused, not out of quota on that login (`out_of_quota`), and not turned off
     /// here by the owner. Read from the last readiness
     /// report, never probed mid-turn. A runtime signed in only by a key in the environment is left out: a turn's
-    /// environment carries only its own runtime's keys. A runtime that turns a key into a login needs none.
-    pub fn fallback_ready(&self, runtime: &str, profile: Option<&crate::profiles::Profile>) -> bool {
+    /// environment carries only its own runtime's keys. A runtime that turns a key into a login needs none. `bot` is
+    /// the bot asking: on a bot-keyed runtime only its own refused key makes the runtime not ready for it.
+    pub fn fallback_ready(&self, runtime: &str, profile: Option<&crate::profiles::Profile>, bot: &str) -> bool {
         if crate::harness_tools::shared().is_some_and(|t| t.lock().unwrap().chosen_off(runtime)) {
             return false; // the owner's "off" here holds even while a copy on PATH still answers
         }
@@ -376,7 +393,7 @@ impl Runner {
         }
         crate::util::truthy(row.get("installed"))
             && row["authenticated"] == "ready"
-            && self.sign_in.rejection(runtime, profile).is_none()
+            && self.sign_in.rejection(runtime, profile, bot).is_none()
             && login(runtime, "", profile).is_none_or(|l| !out_of_quota(&l, runtime, crate::util::epoch_s()))
             && (!crate::harness_tools::caps(runtime, "").api_key_login.is_empty() || self.sign_in.headless_secret(runtime).is_none())
     }
@@ -397,6 +414,33 @@ impl Hop {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_configured_fallback_its_runtime_refused_for_this_bot_is_not_taken() {
+        let dir = std::env::temp_dir().join(format!("tico-fallback-refused-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        let sign = crate::signin::SignIn::new(&dir);
+        let config = json!({"harness": "claude", "model": "m", "fallback": {"harness": "pi", "model": "kimi-k3"}});
+        sign.reject("pi", "401 invalid OPENROUTER_API_KEY", None, "fallback-alpha");
+        assert!(configured_for(&config, &sign, None, "fallback-alpha", |_| false).is_none());
+        assert_eq!(configured_for(&config, &sign, None, "fallback-beta", |_| false).unwrap().harness, "pi");
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn a_configured_fallback_a_delivered_subscription_covers_is_taken_despite_the_refusal() {
+        let dir = std::env::temp_dir().join(format!("tico-fallback-subscribed-{}", uuid::Uuid::new_v4().simple()));
+        std::fs::create_dir_all(dir.join("secrets")).unwrap();
+        let sign = crate::signin::SignIn::new(&dir);
+        // A Codex bot whose Claude computer login was refused; its Claude fallback is the only way it can run.
+        let config = json!({"harness": "codex", "model": "m", "fallback": {"harness": "claude", "model": "opus"}});
+        sign.reject("claude", "authentication_error: invalid x-api-key", None, "fallback-alpha");
+        assert!(configured_for(&config, &sign, None, "fallback-alpha", |_| false).is_none());
+        // The company's Claude subscription delivered to this computer brings its own login, so it is taken.
+        let taken = configured_for(&config, &sign, None, "fallback-alpha", |rt| rt == "claude").unwrap();
+        assert_eq!((taken.harness.as_str(), taken.runtime.as_str()), ("claude", "claude"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn the_fallback_needs_a_harness_and_a_model() {

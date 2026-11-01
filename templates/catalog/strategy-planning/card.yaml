@@ -8,7 +8,7 @@ pack: basics
 icon: strategy
 suggest: niche
 tags: [okrs, planning, quarterly, leadership, b2b]
-summary: "Writes next quarter's plan and OKRs from the goals, updates and meetings already in Tico, and grades last quarter, for the owner to sign off. It never sets or changes a goal."
+summary: "Writes next quarter's plan and OKRs from the goals, updates and meetings already in Tico, and grades last quarter, for the owner to sign off. It changes a goal only when asked."
 when: "A leadership team that wants a written quarterly plan without a month of planning meetings."
 pains:
   - "we have no written plan for next quarter"
@@ -21,8 +21,8 @@ owns:
   - "The mid-quarter check-in: what is on track, at risk or dropped, with a confidence score"
   - "The planning rules for this team (knowledge/rhythm.md); it reads the strategy's bets from the Strategy page and keeps no copy"
 never:
-  - "Create, change, recolour or close a goal or a KPI in Tico outside the requested work or Tools"
-  - "Assign an objective or a key result to a human or a team outside the requested work or Tools"
+  - "Create, change, recolour or close a goal or a KPI in Tico unless the task asks for it and a granted Tool allows it"
+  - "Assign an objective or a key result to a human or a team unless the task asks for it and a granted Tool allows it"
   - "Write a baseline, a target or a result it did not read in a dated source"
   - "Turn an activity ('run a webinar') into a key result"
 prerequisites:

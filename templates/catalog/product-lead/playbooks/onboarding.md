@@ -35,7 +35,7 @@ answers only some, record those and use the defaults for the rest, saying which 
 
 Write each answer to `state.md` under `## Answers`, dated. Write `knowledge/roadmap.md`,
 `knowledge/team.md` and `knowledge/scoring.md` (the impact scale and the effort unit) as present-tense
-statements.
+statements. Write `knowledge/company.md` from the answers: what the team builds, who uses it, who decides what gets built, and the scope of this work.
 
 ## 5. Produce the first result now
 
@@ -45,13 +45,13 @@ reviewed". Change nothing and assign nothing.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write this every Monday at 09:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write this every Monday at 09:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

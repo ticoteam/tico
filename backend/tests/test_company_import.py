@@ -16,16 +16,16 @@ from backend.store import H, Problem, encode
 from backend.tests.test_sample_company import OWNER_EMAIL, PEOPLE, SEED, environment, machine, rows, settings_for, signed_in
 
 
-def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "bookkeeping")):
+def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", "botops", "finance-lead", "accounts-payable")):
     draft = C.blank()
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
     draft["bots"] = [b for b in draft["bots"] if b["template"] in set(keep)]
     for bot in draft["bots"]:
-        bot["start"] = bot["template"] != "bookkeeping"
-        if bot["template"] == "bookkeeping":
-            bot["title"] = "Acme Bookkeeper"
+        bot["start"] = bot["template"] != "accounts-payable"
+        if bot["template"] == "accounts-payable":
+            bot["title"] = "Acme Payables"
             bot["routine"] = "Review the books each week"
         if reverse_builtins and bot["template"] == "coo":
             bot["reports_to"] = "botops"
@@ -34,8 +34,8 @@ def company_text(reverse_builtins=False, through_new_parent=False, keep=("coo", 
     return C.to_yaml(draft) + "models:\n  source: gateway\n  by_department:\n    finance: mid\n"
 
 
-BUILTINS = {"coo", "botops", "librarian", "goal-manager", "task-manager"}
-TWELVE = ("finance-lead", "controller", "bookkeeping", "billing", "ar-followup", "sales-lead", "sales", "sdr-research",
+BUILTINS = {"coo", "botops", "librarian", "goal-manager", "task-manager", "bookkeeper", "tico-counsel"}
+TWELVE = ("finance-lead", "controller", "payroll", "billing", "ar-followup", "sales-lead", "sales", "sdr-research",
           "marketing-lead", "content", "seo-visibility", "ops-manager")
 
 
@@ -86,8 +86,8 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
                for r in rows(api, "SELECT onboarding_state FROM bot_config"))
     # No BotOps setup task, repository or computer slot for any role.
     assert not rows(api, "SELECT id FROM tasks WHERE title LIKE 'Set up %'")
-    assert not rows(api, "SELECT bot FROM bot_config WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager')")
-    assert not rows(api, "SELECT bot FROM assignments WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager')")
+    assert not rows(api, "SELECT bot FROM bot_config WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager','bookkeeper','tico-counsel')")
+    assert not rows(api, "SELECT bot FROM assignments WHERE bot NOT IN ('coo','botops','librarian','goal-manager','task-manager','bookkeeper','tico-counsel')")
     machine(api)
     assert {r["bot"] for r in rows(api, "SELECT bot FROM assignments")} <= BUILTINS
     assert {r["slug"]: r["state"] for r in rows(api, "SELECT slug,state FROM bots")}["botops"] == "active"
@@ -96,7 +96,7 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
     seats = {s["id"]: s for s in org["seats"]}
     assert len(seats) == 12 and {s["stage"] for s in seats.values()} == {"recruiting"}
     by_title = {s["title"]: s for s in seats.values()}
-    assert by_title[titles["bookkeeping"]]["org_parent"] == "s:" + by_title[titles["controller"]]["id"]
+    assert by_title[titles["payroll"]]["org_parent"] == "s:" + by_title[titles["controller"]]["id"]
     assert by_title[titles["ops-manager"]]["org_parent"] == "b:coo"
     assert {b["id"]: b["stage"] for b in org["bots"]}["botops"] == "active"
     # The sidebar's chart reads the same seats.
@@ -107,13 +107,13 @@ def test_a_chosen_chart_of_12_roles_lays_out_12_recruiting_seats_and_only_the_bu
 def test_a_seat_with_no_template_yet_is_a_recruiting_seat_like_any_other_role(environment, monkeypatch):
     monkeypatch.setattr(C.draft, "OPEN_SEATS", {"controller"})  # every model seat has a template now
     api = environment()
-    text = company_text(keep=("coo", "botops", "finance-lead", "controller", "bookkeeping"))
+    text = company_text(keep=("coo", "botops", "finance-lead", "controller", "accounts-payable"))
     assert "no_bot_yet: true" in text
     preview = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": text}, headers=signed_in())
     assert preview.status_code == 200, preview.text
     summary = preview.json()
     assert {s["id"]: s["reports_to"] for s in summary["seats"]} == {
-        "finance-lead": "human:owner", "controller": "finance-lead", "bookkeeping": "controller"}
+        "finance-lead": "human:owner", "controller": "finance-lead", "accounts-payable": "controller"}
     assert "open_seats" not in summary["deferred"]
 
 
@@ -122,13 +122,13 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     draft = C.blank()
     draft["company"]["signals"] = ["sells_services"]
     draft = C.Turn(draft).finish()
-    keep = ("coo", "botops", "finance-lead", "bookkeeping", "controller")
+    keep = ("coo", "botops", "finance-lead", "accounts-payable", "controller")
     draft["bots"] = [b for b in draft["bots"] if b["template"] in keep]
     seat = {b["template"]: b["title"] for b in draft["bots"]}
     turn = C.Turn(draft)
     for name, args in (("company_set", {"name": "Acme Finance", "about": "We help small firms manage their books."}),
                        ("person_set", {"name": "me", "role": "Founder"}),
-                       ("seat_fill", {"seat": seat["bookkeeping"], "name": "Ana"}),
+                       ("seat_fill", {"seat": seat["accounts-payable"], "name": "Ana"}),
                        ("seat_fill", {"seat": seat["controller"], "name": "Ben"}),
                        ("goal_add", {"title": "Close the books by day 5", "owner": seat["controller"]}),
                        ("goal_add", {"title": "Clean ledgers", "owner": "Ana"})):
@@ -147,13 +147,13 @@ def test_people_who_hold_roles_are_kept_to_invite_and_the_seats_under_them_wait_
     assert [(s["id"], s["reports_to"], s.get("waits_on")) for s in summary["seats"]] == [
         ("finance-lead", "human:owner", "ana")]
     assert [(p["id"], p["name"], p["title"]) for p in summary["people"]] == [
-        ("ana", "Ana", seat["bookkeeping"]), ("ben", "Ben", seat["controller"])]
+        ("ana", "Ana", seat["accounts-payable"]), ("ben", "Ben", seat["controller"])]
     assert not {"open_seats", "coworkers"} & set(summary["deferred"])
     assert {g["title"]: g["owner"] for g in summary["goals"]} == {"Close the books by day 5": "company", "Clean ledgers": "company"}
     body["fingerprint"] = summary["fingerprint"]
     done = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
     assert done.status_code == 200, done.text
-    assert not rows(api, "SELECT slug FROM bots WHERE slug IN ('bookkeeping','controller','finance-lead')")
+    assert not rows(api, "SELECT slug FROM bots WHERE slug IN ('accounts-payable','controller','finance-lead')")
     finance = rows(api, "SELECT id,reports_to FROM seats")
     assert [r["reports_to"] for r in finance] == ["human:owner"]
     people = done.json()["company_import"]["people"]
@@ -233,14 +233,14 @@ def test_import_lays_out_the_chart_once_across_retry_and_runner_enrollment(envir
     assert done.status_code == 200, done.text
     assert done.json()["names"]["company_name"] == "Acme Finance"
     assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
-    assert seat_lines(api) == {"Head of Finance": "human:owner", "Acme Bookkeeper": "Head of Finance"}
+    assert seat_lines(api) == {"Head of Finance": "human:owner", "Acme Payables": "Head of Finance"}
     templates = rows(api, "SELECT json_extract(config_json,'$.template') AS template FROM bot_config")
     assert sum(r["template"] == "assistant" for r in templates) == 1
     assert sum(r["template"] == "botops" for r in templates) == 1
     assert "model_choices" in done.json()["company_import"]["deferred"]
     assert "routines" in done.json()["company_import"]["deferred"]
     # A seat's job description is its role's text from the template.
-    description = rows(api, "SELECT description FROM seats WHERE title='Acme Bookkeeper'")[0]["description"]
+    description = rows(api, "SELECT description FROM seats WHERE title='Acme Payables'")[0]["description"]
     assert description and "Owns:" in description
     saved = rows(api, "SELECT value_json FROM registry_metadata WHERE key='onboarding.company_file'")[0]
     assert '"finance":"mid"' in saved["value_json"]
@@ -257,7 +257,7 @@ def test_import_requires_owner_and_matching_preview_and_refuses_replacing_a_conf
     body = {"company_yaml": company_text(), "fingerprint": "0" * 64}
     refused = api.post("/api/v2/onboarding/company/import", json=body, headers=signed_in())
     assert refused.status_code == 409
-    assert not rows(api, "SELECT slug FROM bots WHERE slug='bookkeeping'")
+    assert not rows(api, "SELECT slug FROM bots WHERE slug='accounts-payable'")
     assert api.post("/api/v2/onboarding/company/import", json=body).status_code in (401, 403)
     api.app.state.store.settings.test_identities["helper-test"] = Identity("human:helper", "human",
                                                                           email="helper@sample.example")
@@ -279,16 +279,16 @@ def test_import_requires_owner_and_matching_preview_and_refuses_replacing_a_conf
 
 def test_import_never_replaces_an_existing_paused_employee(environment):
     api = environment()
-    config = {"name": "bookkeeping", "status": "paused", "instructions": "Keep the existing employee unchanged"}
+    config = {"name": "accounts-payable", "status": "paused", "instructions": "Keep the existing employee unchanged"}
     with api.app.state.store.transaction() as c:
-        H.sync_registry(c, {**SEED, "bookkeeping": config}, PEOPLE)
+        H.sync_registry(c, {**SEED, "accounts-payable": config}, PEOPLE)
         c.execute("INSERT INTO bot_config(bot,config_json,operator,repo) VALUES(?,?,?,?)",
-                  ("bookkeeping", encode(config), "owner", "emp-bookkeeping"))
-    original = rows(api, "SELECT config_json FROM bot_config WHERE bot='bookkeeping'")
+                  ("accounts-payable", encode(config), "owner", "emp-bookkeeping"))
+    original = rows(api, "SELECT config_json FROM bot_config WHERE bot='accounts-payable'")
     body = {"company_yaml": company_text()}
     body["fingerprint"] = api.post("/api/v2/setup/company/preview", json=body, headers=signed_in()).json()["fingerprint"]
     assert api.post("/api/v2/setup/company/import", json=body, headers=signed_in()).status_code == 409
-    assert rows(api, "SELECT config_json FROM bot_config WHERE bot='bookkeeping'") == original
+    assert rows(api, "SELECT config_json FROM bot_config WHERE bot='accounts-payable'") == original
 
 
 @pytest.mark.parametrize("through_new_parent", [False, True], ids=["reverse-builtins", "new-parent-chain"])
@@ -312,7 +312,7 @@ def test_install_bootstrap_lays_out_the_chosen_chart_once_and_never_falls_back_t
     with TestClient(create_app(settings)) as api:
         assert {r["slug"] for r in rows(api, "SELECT slug FROM bots")} == BUILTINS
         assert seat_lines(api) == {"Head of Finance": "botops" if through_new_parent else "human:owner",
-                                   "Acme Bookkeeper": "Head of Finance"}
+                                   "Acme Payables": "Head of Finance"}
         parents = {r["bot"]: r["reports_to"] for r in rows(api, "SELECT bot,reports_to FROM bot_config")}
         assert {b["id"]: parents[b["id"]] for b in preview["employees"]} == {
             b["id"]: b["reports_to"] for b in preview["employees"]}
@@ -351,7 +351,7 @@ def test_a_chosen_chart_that_fails_to_import_is_shown_to_the_owner_and_no_sample
     good = company_text()
     conflicting = C.from_yaml(good)
     conflicting["bots"] = [b for b in conflicting["bots"] if b["template"] != "coo"]
-    next(b for b in conflicting["bots"] if b["template"] == "bookkeeping")["id"] = "coo"   # the Assistant's own slug
+    next(b for b in conflicting["bots"] if b["template"] == "accounts-payable")["id"] = "coo"   # the Assistant's own slug
     settings.sample_company = True
     if broken.endswith("-file"):
         plan = tmp_path / "plan.b64"
@@ -445,7 +445,7 @@ def test_reserved_alias_cannot_replace_a_custom_named_assistant_now_or_later(env
     before = rows(api, "SELECT bot,config_json FROM bot_config ORDER BY bot")
     draft = C.from_yaml(company_text())
     draft["bots"] = [b for b in draft["bots"] if b["template"] != "coo"]
-    employee = next(b for b in draft["bots"] if b["template"] == "bookkeeping")
+    employee = next(b for b in draft["bots"] if b["template"] == "accounts-payable")
     employee["id"] = "coo"
     for start in (True, False):
         employee["start"] = start
@@ -476,7 +476,7 @@ def test_a_300_bot_company_file_imports_and_a_301_bot_file_is_refused_plainly(en
     imported = {r["bot"] for r in rows(api, "SELECT bot FROM bot_config")}
     assert all(e["id"] in imported for e in preview.json()["employees"])
     assert len(rows(api, "SELECT id FROM seats WHERE closed_at IS NULL")) == 300 - builtins
-    extra = "  - id: one-too-many\n    template: bookkeeping\n    title: One Too Many\n"
+    extra = "  - id: one-too-many\n    template: accounts-payable\n    title: One Too Many\n"
     over = text.replace("employees:\n", "employees:\n" + extra, 1)
     refused = api.post("/api/v2/onboarding/company/preview", json={"company_yaml": over}, headers=signed_in())
     assert refused.status_code == 422 and refused.json()["error"]["code"] == "company_file"
@@ -493,13 +493,13 @@ def goals_text(person=True):
          "deadline": "2027-01-31"},
         {"id": "g-close", "title": "Close every month's books in five days", "owner": "finance-lead",
          "measure": "Days to close the books", "unit": "days", "direction": "range", "min": 0, "max": 5},
-        {"id": "g-later", "title": "Answer every bookkeeping question", "owner": "bookkeeping", "measure": "",
+        {"id": "g-later", "title": "Answer every bookkeeping question", "owner": "accounts-payable", "measure": "",
          "unit": "", "direction": "up", "target": None, "baseline": None, "deadline": None},
         # Up, but its target is below its baseline: Tico refuses that target, and the import still lands the goal.
         {"id": "g-backwards", "title": "Grow referrals", "owner": "finance-lead", "measure": "Referrals a month",
          "unit": "", "direction": "up", "target": 5, "baseline": 9, "deadline": "2027-01-31"},
         # A blank title is allowed in the file, never on Goals.
-        {"id": "g-blank", "title": " ", "owner": "bookkeeping", "measure": "Questions answered", "unit": "",
+        {"id": "g-blank", "title": " ", "owner": "accounts-payable", "measure": "Questions answered", "unit": "",
          "direction": "up", "target": None, "baseline": None, "deadline": None}]
     return C.to_yaml(draft)
 
@@ -612,14 +612,14 @@ def renamed_assistant_goals_on_goals_page(api, owners):
     assert not rows(api, "SELECT id FROM goals WHERE owner IN ('bot:ace','bot:coo')")
 
 
-@pytest.mark.parametrize("count", [73, 300])
+@pytest.mark.parametrize("count", [72, 300])
 def test_a_full_plan_too_big_for_the_env_starts_the_server_from_its_file(tmp_path, monkeypatch, count):
     """AWS and SSH setup copy a packed plan to a file and TICO_COMPANY_FILE names it (compose.yaml)."""
     from backend.config import Settings
     from backend.tests.test_company_file import chart
     from clients.environments import seed_registry
 
-    draft = C.Turn(C.blank()).finish() if count == 73 else chart(count)
+    draft = C.Turn(C.blank()).finish() if count == 72 else chart(count)
     draft["company"].update(name="Acme Finance", about="We help small firms manage their books.")
     packed = starter.pack(C.to_yaml(draft), starter.MAX_PACKED)
     assert len(packed) > starter.ENV_PACKED
@@ -796,6 +796,9 @@ def test_a_strategy_block_imports_as_an_unconfirmed_draft_with_its_market_watche
                  (sizes["segment/bim"]["evidence_ids"],))
     assert cited == [{"source_url": "https://example.com/bim"}]
     assert '"next": true' in rows(api, "SELECT properties FROM market_entities WHERE id='segment/bim'")[0]["properties"]
+    # The Growth segments start as Where we play shows them.
+    assert {(r["segment_id"], r["status"]) for r in rows(api, "SELECT segment_id, status FROM growth_segments")} == {
+        ("segment/schedules", "serving"), ("segment/bim", "next")}
     # Rival sites are watched; the posts wait as new insights for the Librarian's curate.
     assert {(r["entity_id"], r["url"], r["kind"]) for r in rows(api, "SELECT * FROM market_watches WHERE active=1")} == {
         ("company/trestle", "https://example.com/trestle", "home"),
@@ -853,3 +856,55 @@ def test_an_address_with_a_user_name_never_lands_in_market_evidence_whatever_wro
     assert {r["entity_id"] for r in rows(api, "SELECT entity_id FROM market_watches")} == {"company/fieldcraft"}
     assert "segment/gc-suites" not in {r["segment_id"] for r in rows(api, "SELECT segment_id FROM market_sizes")}
     assert rows(api, "SELECT id FROM market_entities WHERE id='company/trestle'")       # the player still lands
+
+
+# A made-up company (Acme Build): two sales teams, a sales seat with no team, and one whose team is "sales" in lower
+# case.
+TEAM_SEATS = [
+    ("Lab Partnerships Manager", "sales", "Lab network"),
+    ("Lab Outreach Rep", "sdr-research", "Lab network"),
+    ("Biopharma Sales Lead", "sales-lead", "Biopharma accounts"),
+    ("Biopharma Account Executive", "sales", "Biopharma accounts"),
+    ("Renewals Manager", "account-manager", ""),
+    ("Inside Sales Rep", "sdr-research", "sales"),
+]
+
+
+def team_text():
+    """The services chart cut to the built-ins, with TEAM_SEATS added; the Assistant carries a team too."""
+    draft = C.blank()
+    draft["company"].update(name="Acme Build", about="We sell lab data to biopharma accounts.",
+                            signals=["sells_services"])
+    draft = C.Turn(draft).finish()
+    draft["bots"] = [b for b in draft["bots"] if b["template"] in ("coo", "botops")]
+    turn = C.Turn(draft)
+    for title, template, _ in TEAM_SEATS:
+        assert turn.apply("bot_add", {"template": template, "title": title, "reason": "Sells lab data."})["ok"], title
+    draft = turn.finish()
+    names = {title: team for title, _, team in TEAM_SEATS if team}
+    for bot in draft["bots"]:
+        if bot["title"] in names:
+            bot["team"] = names[bot["title"]]
+        elif bot["template"] == "coo":
+            bot["team"] = "Lab network"
+    return C.to_yaml(draft)
+
+
+def test_two_teams_in_one_department_import_as_two_groups_each_holding_its_own_seats(environment):
+    api = environment()
+    preview_and_import(api, team_text())
+    groups = api.get("/api/v2/groups", headers=signed_in()).json()
+    names = [g["name"] for g in groups]
+    by_id = {g["id"]: g["name"] for g in groups}
+    seats = rows(api, "SELECT title,team FROM seats WHERE closed_at IS NULL")
+    placed = {r["title"]: by_id.get(r["team"], "") for r in seats}
+    assert placed == {"Lab Partnerships Manager": "Lab network", "Lab Outreach Rep": "Lab network",
+                      "Biopharma Sales Lead": "Biopharma accounts", "Biopharma Account Executive": "Biopharma accounts",
+                      "Renewals Manager": "Sales", "Inside Sales Rep": "Sales"}
+    # One group per name, its id the name's slug, made in file order. A sales seat with no team stays in the Sales group,
+    # and a team written "sales" joins that same group instead of making a second one.
+    assert names.count("Lab network") == names.count("Biopharma accounts") == names.count("Sales") == 1
+    assert {"lab-network", "biopharma-accounts"} <= set(by_id)
+    assert names.index("Lab network") < names.index("Biopharma accounts")
+    # The Assistant and BotOps are built-ins: outside groups, whatever team the file gives them.
+    assert not [r for r in rows(api, "SELECT bot,team FROM bot_config WHERE bot IN ('coo','botops')") if r["team"]]

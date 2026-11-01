@@ -40,8 +40,9 @@ def _snoozed(c, actor):
     """Item keys the person said "later" to, still inside their window."""
     now = H.now()
     out = set()
-    for row in c.execute("SELECT target, detail_json FROM events WHERE actor=? AND action='batch.later' "
-                         "ORDER BY ts", (actor,)):
+    # The person's own rows (events_task_origin), not every person's in ts order (events_action_ts).
+    for row in c.execute("SELECT target, detail_json FROM events INDEXED BY events_task_origin WHERE actor=? "
+                         "AND action='batch.later' ORDER BY ts", (actor,)):
         until = (H._json(row["detail_json"], {}) or {}).get("until") or ""
         if until > now:
             out.add(row["target"])
@@ -473,6 +474,9 @@ def _apply_decide(c, auth, who, item, r):
                 raise Problem("forbidden", "Say yes to a support report in Tico itself", 403) from None
         verdict = "approved" if decision == "approve" else "declined"
         H.approval_decide(c, who.actor, ident, verdict, note=text[:2000])
+        if row["kind"] in ("finance", "spend"):
+            from .finance import actions as finance
+            finance.approval_decided(c, ident)                   # Finance acts on it in the same transaction
         return f"{verdict.capitalize()}: {item['title']}"
     row = auth.task(c, who, ident)
     if item["kind"] == "waiting" and decision in ("done", "answer"):

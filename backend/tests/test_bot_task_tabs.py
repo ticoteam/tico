@@ -19,7 +19,7 @@ DEFAULT[0]['conditions'] = [{'field': 'needs', 'value': 'you'}]
 DEFAULT[1]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['open', 'doing']}]
 DEFAULT[2]['conditions'] = [{'field': 'assigned_to', 'value': 'this_bot'}, {'field': 'status', 'value': ['waiting']},
                             {'field': 'waiting_on', 'value': 'not_me'}]
-WIDGETS = [{"id": w, "hidden": False, "height": None} for w in ("tasks", "updates", "files", "routines")]
+WIDGETS = [{"id": w, "hidden": False, "height": None} for w in ("tasks", "updates", "files")]
 PRODUCT = {"name": "product tasks", "show_count": True, "conditions": [{"field": "type", "value": ["general"]},
                                                                        {"field": "status", "value": ACTIVE}]}
 
@@ -68,7 +68,7 @@ def test_a_bot_starts_with_the_new_default_tabs_and_widgets(api):
 def test_a_layout_is_the_bots_and_changing_one_never_moves_anothers(api):
     layout = [DEFAULT[1], PRODUCT, {**DEFAULT[0], "name": "For you", "show_count": False}]
     widgets = [{"id": "files", "hidden": False, "height": 240}, {"id": "tasks", "hidden": False, "height": None},
-               {"id": "updates", "hidden": True, "height": None}, {"id": "routines", "hidden": False, "height": None}]
+               {"id": "updates", "hidden": True, "height": None}]
     saved = save(api, "ops", layout, widgets=widgets)
     assert saved["tabs"] == layout and saved["widgets"] == widgets and saved["updated_by"] == "human:ana"
     # Everyone who opens the bot sees the same sidebar: Cara, who cannot change it, too.
@@ -78,8 +78,11 @@ def test_a_layout_is_the_bots_and_changing_one_never_moves_anothers(api):
     assert save(api, "ops", [PRODUCT])["widgets"] == widgets
     assert tabs(api, "cpo")["tabs"] == DEFAULT and tabs(api, "cpo")["widgets"] == WIDGETS
     # A partial widget list keeps the rest after it, as they come by default.
+    assert [w["id"] for w in save(api, "cpo", DEFAULT, "ben-test", widgets=[{"id": "files"}])["widgets"]] == \
+        ["files", "tasks", "updates"]
+    # An old saved Routines widget is dropped: routines are automations.
     assert [w["id"] for w in save(api, "cpo", DEFAULT, "ben-test", widgets=[{"id": "routines"}])["widgets"]] == \
-        ["routines", "tasks", "updates", "files"]
+        ["tasks", "updates", "files"]
     # Back to the defaults, widgets and all.
     assert save(api, "ops", None)["tabs"] == DEFAULT
     assert tabs(api, "ops", "cara-test")["saved"] is False and tabs(api, "ops")["widgets"] == WIDGETS

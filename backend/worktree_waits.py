@@ -46,7 +46,7 @@ def ensure(c):
 
 
 def _exists(c):
-    return bool(c.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='worktree_waits'").fetchone())
+    return H._has_table(c, 'worktree_waits')      # remembered per connection once seen (no read a task)
 
 
 def _computer(c, bot):

@@ -33,3 +33,8 @@ Save `reports/packs/<obligation>-<year>.md`: due date and rule, the owner, the f
 page), the filled items, changes, and gaps. `hub file publish` it and put it on the task: "Pack ready for
 <owner>. Summary for a human, not legal advice; a human files." When the owner files, ask them to attach the
 confirmation, then record it in `knowledge/proof.md`.
+
+## Done when
+- `reports/packs/<obligation>-<year>.md` names the due date with its source and the date read, the fee, the official page, and the owner.
+- Every item is filled from a sourced value, or marked `[NEEDS:...]` with who would know.
+- The pack is published and on the task, and the owner has been told a human files it.

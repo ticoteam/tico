@@ -1,0 +1,34 @@
+{
+  "size": "16:9",
+  "fit": "fit",
+  "fps": 30,
+  "loudness": -14,
+  "clips": [
+    { "src": "media/motion-css.mp4", "in": 0, "out": 6 },
+    { "src": "media/recording.mp4", "fade": 0.5 },
+    { "src": "media/motion-timeline.mp4", "fade": 0.5 }
+  ],
+  "overlays": [
+    {
+      "src": "media/avatar.mp4",
+      "start": 6,
+      "duration": 6,
+      "x": "right",
+      "y": "bottom",
+      "width": 0.25,
+      "margin": 48
+    },
+    {
+      "image": "media/logo.png",
+      "start": 0,
+      "duration": 20,
+      "x": "left",
+      "y": "top",
+      "width": 180,
+      "margin": 40
+    }
+  ],
+  "captions": { "srt": "captions.srt" },
+  "voice": { "src": "media/voice.wav", "volume": 1.0 },
+  "music": { "src": "media/music.wav", "volume": 0.25, "fade_out": 2 }
+}

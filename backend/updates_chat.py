@@ -1,24 +1,23 @@
-"""The Updates chat (docs/assistant.md, docs/ceo-bot.md; spec: CEO Bot v3, section 10.8): a person's own chat bot beside
-the Updates page, the CEO Bot for the owner and the Assistant for everyone else.
+"""The Updates chat (docs/assistant.md, docs/strategy-bot.md; spec: Strategy Bot v3, section 10.8): a person's own chat
+bot beside the Updates page: their Assistant, the owner's included.
 
-- It is the same conversation as their menu tab: the page reads and posts through GET /api/v2/assistant and
-  POST /api/v2/assistant/messages, which say `place: "updates"` on the message (`refs.updates`). No new room, session,
-  spend type or cap: each question is one turn of that bot on the company's usual model path, and a reply is a chat
-  message, never a Needs you item, so it does not count toward the CEO Bot's 5 a day (backend/ceo_bot.py).
+- It is the same conversation as their menu tab: the page reads and posts through GET /api/v2/assistant and POST
+  /api/v2/assistant/messages, which say `place: "updates"` on the message (`refs.updates`). No new room, session, spend
+  type or cap: each question is one turn of that bot on the company's usual model path, and a reply is a chat message,
+  never a Needs you item, so it does not count toward the Strategy Bot's 5 a day (backend/strategy_bot.py).
 - What its turn is handed (`for_turn`, backend/execution.py; rendered by runner-rs/src/prompt.rs): only a turn the
   person started from the Updates chat, in their own chat, gets `updates`: the recent daily and weekly updates that
-  person may read, read now by the same rules as their Updates page (`updates.visible_authors`, the meetings flag),
-  less any update that links or names by id a task, chat or bot the turn may not open. The filter is on what the bot
-  is handed, not a rule in its prompt: an update it is not handed it cannot quote or link.
+  person may read, read now by the same rules as their Updates page (`updates.visible_authors`, the meetings flag), less
+  any update that links or names by id a task, chat or bot the turn may not open. The filter is on what the bot is
+  handed, not a rule in its prompt: an update it is not handed it cannot quote or link.
 - Each update comes with a default `rank`: affects a goal (its author has a live goal), then waits on you (its author
   waits on a task of yours, or it names you), then newest. The bot follows what the person taught it, and for the
-  CEO Bot the company layer, over that order (backend/learned.py).
-- Each update's `link` (`#/updates?kind=&day=&update=`) scrolls the page to that card and highlights it, switching
-  Daily or Weekly and the day as needed (ui/app/updates.js updGoTo).
-"""
+  owner the company layer, over that order (backend/learned.py).
+- Each update's `link` (`#/updates?kind=&day=&update=`) scrolls the page to that card and highlights it, switching Daily
+  or Weekly and the day as needed (ui/app/updates.js updGoTo)."""
 import re
 
-from . import ceo_bot, rooms
+from . import rooms
 from . import updates as U
 from .store import H, Problem
 
@@ -49,7 +48,7 @@ def from_updates(conversation, message):
 
 def _room_bot(settings, conversation, bot):
     key = (conversation or {}).get("room_key")
-    return (bot == ceo_bot.SLUG and key == rooms.CEO_ROOM) or (bot == settings.assistant_bot and key == rooms.ASSISTANT_ROOM)
+    return bot == settings.assistant_bot and key == rooms.ASSISTANT_ROOM
 
 
 def opens_all(c, auth, who, text, access=None):
@@ -184,9 +183,9 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
 
 def for_turn(c, auth, settings, conversation, bot, message, attempt_id="", at=None):
     """What a turn is handed about Updates: None unless the person sent this message from the Updates chat into their
-    own chat with their chat bot (the Assistant, or the CEO Bot in the owner's CEO Bot chat). Read as that person,
-    with exactly the rights their turn has (backend/auth.py chat_person), so a private task, chat or bot they may not
-    open never reaches the bot."""
+    own chat with their Assistant. Read as that
+    person, with exactly the rights their turn has (backend/auth.py chat_person), so a private task, chat or bot they
+    may not open never reaches the bot."""
     if not from_updates(conversation, message) or not _room_bot(settings, conversation, bot):
         return None
     who = auth.chat_person(c, conversation["owner_actor"], bot, attempt_id)

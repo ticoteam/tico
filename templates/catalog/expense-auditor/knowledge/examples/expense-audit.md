@@ -6,7 +6,7 @@ A sample of excellent output for a fictional team. Every name in it is a stand-i
 Sample output for Acme, a fictional studio-software team. Every person and amount is invented.
 Nothing has been approved, rejected or sent. Finance only.
 
-**Headline: 214 lines checked (18,930); 17 exceptions (1,642). Two need a decision: a duplicate
+**Headline: 214 lines checked (18,930); 12 exceptions (1,642). Two need a decision: a duplicate
 candidate (412) and a flight booked above the policy class (690).**
 
 ## Sources
@@ -24,7 +24,7 @@ candidate (412) and a flight booked above the policy class (690).**
 - **Missing receipts.** 3 card lines over 75, total 311 (rows 44, 61, 102). Rule: policy 1.3.
 
 ## Late claims
-- Tomas, claim CL-0921: 2 lines from 2026-07-12, 79 days old. Rule: submit within 60 days (policy 1.5).
+- Tomas, claim CL-0921: 2 lines from 2026-07-12, 79 days old, 191.00. Rule: submit within 60 days (policy 1.5).
 
 ## Could not read
 Card 7 (ending 2231) has no rows for September; check whether it was cancelled or the export missed it.

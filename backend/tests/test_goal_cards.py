@@ -1,8 +1,9 @@
-"""Goal suggestion cards say what yes does (spec "Clear CEO Bot suggestion cards", Dev 530): each proposal the page
+"""Goal suggestion cards say what yes does (spec "Clear Strategy Bot suggestion cards", Dev 530): each proposal the page
 draws carries `card`, what the server read to say it plainly (backend/goals.py card); an Add a KPI suggestion may be
-confirmed with the person's own target; and the CEO Bot's Needs you task uses the card's words, not "Confirm or reject"."""
+confirmed with the person's own target; and the Strategy Bot's Needs you task uses the card's words, not "Confirm or
+reject"."""
 
-from backend import ceo_bot
+from backend import strategy_bot
 from backend.tests.test_api import api, get, post  # noqa: F401
 from backend.tests.test_goal_asks import asks, goal_manager, sync
 from backend.tests.test_kpis import goal_with_kpi
@@ -100,7 +101,7 @@ def test_a_flag_confirmed_changes_nothing_else(api):
         before["title"], before["body"], before["status"], {k["name"]: k["link"] for k in before["kpis"]})
 
 
-def test_the_ceo_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_once(api):
+def test_the_strategy_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_once(api):
     goal_manager(api, level=2)
     goal, kpi = goal_with_kpi(api)
     other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
@@ -114,7 +115,7 @@ def test_the_ceo_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_once(
     sync(api)
     tasks = {a["ref"]: a for a in asks(api) if a["kind"] == "proposal"}
     assert {ref: tasks[ref]["title"] for ref in made if ref in tasks} == {ref: t for ref, t in made.items() if ref in tasks}
-    assert tasks, "the CEO Bot asked"
+    assert tasks, "the Strategy Bot asked"
     for task in tasks.values():
         assert "Confirm or reject" not in task["title"] + task["body"] and "existing KPI" not in task["body"]
         assert task["body"].endswith("Decide it under Needs you on the Goals page.")
@@ -132,14 +133,14 @@ def test_the_ceo_bots_task_uses_the_cards_words_and_an_old_one_is_reworded_once(
     assert next(a for a in asks(api) if a["ref"] == ref)["title"] == "My own words"     # a person's title stays
 
 
-def test_a_flags_task_says_what_the_ceo_bot_noticed(api):
+def test_a_flags_task_says_what_the_strategy_bot_noticed(api):
     goal_manager(api, level=2)
     goal, _ = goal_with_kpi(api)
     flag = propose(api, "flag", {"issue": "vague"}, goal["id"])
     sync(api)
     [task] = [a for a in asks(api) if a["ref"] == flag["id"]]
     with api.app.state.store.read() as c:
-        name = ceo_bot.name(c)
+        name = strategy_bot.name(c)
     assert task["title"] == f"The {name} noticed something on Raise activation"
 
 
@@ -150,7 +151,7 @@ def test_a_persons_target_replaces_the_one_proposed_and_none_clears_it(api):
     post(api, f"goal-proposals/{new['id']}/decide", {"decision": "confirm", "target": IMPROVE})
     link = links(api, goal["id"])["Weekly demos"]
     assert (link["target"], link["deadline"]) == (25, "2099-12-31")
-    # Reusing a measure, the person's "no target" clears the one the CEO Bot proposed.
+    # Reusing a measure, the person's "no target" clears the one the Strategy Bot proposed.
     other = post(api, "goals", {"title": "Keep customers", "owner": "ana"})["goal"]
     reuse = propose(api, "goal_kpi", {"kpi_id": kpi["id"], "target": IMPROVE}, other["id"])
     post(api, f"goal-proposals/{reuse['id']}/decide", {"decision": "confirm", "target": {"kind": "none"}})
@@ -233,7 +234,7 @@ def test_task_filing_skips_a_hidden_goal_when_its_decider_cannot_read_the_owner_
 
 
 def sync_reading(api):
-    """The CEO Bot's pass as the app runs it: told whose measures each person may read."""
+    """The Strategy Bot's pass as the app runs it: told whose measures each person may read."""
     from backend import goal_asks as GA
     with api.app.state.store.transaction() as c:
         return GA.sync(c, api.app.state.auth.owner_id(c), reads=GA.readers(c, api.app.state.auth))
@@ -260,7 +261,7 @@ def test_reusing_a_hidden_bots_measure_on_her_goal_neither_names_nor_describes_i
 
 
 def test_a_hidden_bots_measure_suggested_for_her_goal_stays_hidden_however_it_is_decided(api):
-    goal_manager(api, level=2)          # Needs you lists suggestions and the CEO Bot's tasks
+    goal_manager(api, level=2)          # Needs you lists suggestions and the Strategy Bot's tasks
     hidden, secret = inbox_measure(api)
     post(api, f"goals/{hidden['id']}/kpis/{secret['id']}", {"kind": "maintain", "max": 3})
     hers = post(api, "goals", {"title": "Keep customers", "owner": "cara"}, token="cara-test")["goal"]

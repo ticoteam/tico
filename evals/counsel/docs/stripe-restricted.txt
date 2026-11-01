@@ -1,0 +1,690 @@
+Prohibited and Restricted Businesses | Stripe
+
+ 8 sales reps available
+
+We're here to discuss your business needs.
+
+ Last updated: 2026-09-22
+
+We’ve made important updates to the list of restricted and prohibited businesses. Here’s what you need to know:
+
+ Clarified our stance on tobacco products in the United States.
+
+ Updated credit monitoring services from prohibited to supportable in the United States.
+
+Why this page exists
+
+Stripe builds economic infrastructure for the internet that enables businesses to accept payments and access other financial services. We want to make it easier for businesses of all kinds—from large enterprises to small businesses—to start, run, and grow. We aim for our platform to be broadly accessible, just like other forms of infrastructure, such as roads or telecommunications networks. 
+
+Crucially, in the area of political expression, we want to avoid becoming an arbiter of what speech is legitimate. At Stripe, we do not restrict access to our services based on political viewpoints or affiliation. 
+
+As a financial services company, we have to adhere to financial laws and regulations, as well as rules and policies set by our financial partners, such as card networks and banking partners. This means we aren’t able to support some businesses, even if we might desire to do so.
+
+For more information about why we can’t work with every business, please see this article about our business limitations.
+
+How to use this page
+
+This page provides information on the types of businesses, products, and industries that can’t use Stripe’s services. To use Stripe’s services, you must remain compliant with these rules and restrictions. For more information about why we can’t work with every business, please see this article about our business limitations.
+
+High-risk jurisdictions and persons
+
+Prohibited businesses
+
+Industries that can’t use Stripe, and products Stripe doesn’t support.
+
+Restricted businesses
+
+Industries and products that require additional due diligence.
+
+Jurisdiction-specific prohibited businesses
+
+Countries that have specific prohibitions. 
+
+Prohibited uses of Stripe products
+
+Stripe may never be used for certain activities, regardless of the industry.
+
+Prohibitions for Stripe Issuing products
+
+Prohibitions related to the use of issuing products.
+
+Stripe Capital restricted business types
+
+Restricted businesses for Stripe Capital Products
+
+If you have questions about prohibited and restricted businesses, you can contact us.
+
+High-Risk Jurisdictions and Persons
+
+Use of Stripe's services for any dealings, engagement, or sale of goods or services either directly or indirectly with the following are prohibited:
+
+High-risk jurisdictions
+
+Persons located in, resident in, or a citizen of, or products or services originating from jurisdictions that Stripe has determined for various reasons, including legal, contractual, and commercial reasons, to be prohibited, including, Cuba, Iran, North Korea, and Syria, and the Crimea, Donetsk, and Luhansk regions.
+
+High-risk persons
+
+Persons Stripe has determined for various reasons, including legal, contractual, and commercial reasons, to be prohibited, such as those individuals or entities named to a restricted person or party list of, or otherwise restricted by, the United States, United Kingdom, European Union, or United Nations, including the sanctions maintained by the US Office of Foreign Assets Control or the Denied Persons List or Entity List maintained by the US Department of Commerce.
+
+Additionally, it's prohibited to use Stripe's products and services to directly or indirectly:
+
+Prohibited services
+
+Export, re-export, sell, or supply accounting services; trust and corporate formation services; management consulting services; architecture services; engineering services; quantum computing services; information technology (IT) consultancy and design services; and IT-support services and cloud-based services for enterprise management software and design and manufacturing software to any person located in Russia. In the European Union and the United Kingdom, it is prohibited to use Stripe's products and services, directly or indirectly, to provide credit-rating services, market research and public relations services, advertising services, auditing services, or legal advisory services to any person located in Russia.
+
+Prohibited goods
+
+Deal in any goods prohibited by law for export to or import from Russia (for example, luxury goods, sensitive goods included in the Common High Priority Items List, enterprise management software and design software).
+
+Prohibited Businesses
+
+You must not use Stripe's services for any illegal activities or for the businesses or product types listed below. The types of businesses listed here are representative of prohibited categories, but this is not an exhaustive list. 
+
+Any illegal products and services
+
+ Illegal drugs, substances designed to mimic illegal drugs, including kava
+
+ Equipment and items intended to be used for making or using drugs
+
+ Fake references or ID-providing services
+
+ Telecommunications manipulation equipment, including jamming devices
+
+ Businesses that engage in, encourage, promote, or celebrate unlawful violence or physical harm to persons or property
+
+ Businesses that engage in, encourage, promote, or celebrate unlawful violence toward any group based on race, religion, disability, gender, sexual orientation, national origin, or any other immutable characteristic
+
+ Any other products or services that are in violation of law in the jurisdictions where your business is located or to which your business is targeted
+
+Adult content and services (see the FAQs for additional details)
+
+ Adult services, including prostitution, escorts, pay-per-view, sexual massages, fetish services, mail-order brides, and adult live-chat features
+
+ Adult video stores
+
+ Gentleman's clubs, topless bars, and strip clubs
+
+ Pornography and other mature audience content (including literature, imagery, and other media) designed for the purpose of sexual gratification
+
+ Any artificial-intelligence generated content that meets the above criteria
+
+Debt relief companies
+
+ Debt settlement, debt negotiation, and debt consolidation
+
+The following financial products and services
+
+ ATMs 
+
+ Check cashing
+
+ Debt collection agencies
+
+ Funded prop trading
+
+ Money orders and traveler's checks 
+
+ Payable-through accounts
+
+ Peer-to-peer money transmission
+
+ Selling bearer shares
+
+ Shell banks
+
+Gambling
+
+ Games of chance including gambling, internet gambling, casino games, sweepstakes and contests, and fantasy sports leagues with a monetary or material prize
+
+ Games of skill including video game and mobile game tournaments or competitions, darts, card games, and board games with a monetary or material prize
+
+ Payments of an entry or player fee that promise the entrant or player will win a prize of value
+
+ Sports forecasting or odds-making with a monetary or material prize
+
+ Lotteries
+
+ Bidding fee auctions
+
+Government services
+
+ Offering products and services by or on behalf of embassies and consulates
+
+ Offering government services without authorization or value-add 
+
+ Offering government services with misleading claims
+
+ Disbursement of government economic support, such as grants
+
+Identity services
+
+ Identity theft protection services including monitoring and recovery
+
+Illegal weapons, explosives, and dangerous materials
+
+ Illegal weapons and accessories
+
+ Improperly marked replicas of modern firearms, including toys
+
+ Pesticides requiring application by a certified professional
+
+ Incorrectly labeled research chemicals
+
+ Toxic, flammable, combustible, or radioactive materials
+
+ Unmailable goods, per the United States Postal Service
+
+Products and services that infringe on intellectual property rights
+
+ Sales or distribution of music, movies, software, or any other licensed materials without appropriate authorization
+
+ Counterfeit goods
+
+ Illegally imported or exported products
+
+ Unauthorized sale of brand-name or designer products or services
+
+ Any other products or services that directly infringe or facilitate infringement upon the trademark, patent, copyright, trade secrets, proprietary, or privacy rights of any third party
+
+The following legal services
+
+ Bankruptcy attorneys
+
+ Bail bonds
+
+ Law firms collecting funds for purposes other than legal service fee payment
+
+Lending and credit
+
+ Loan repayments with credit cards
+
+ Credit monitoring (supportable in the United States), credit repair, and counseling services
+
+Marijuana (see the FAQs for additional details)
+
+ Cannabis products 
+
+ Cannabis dispensaries and related businesses
+
+ CBD products with THC levels greater than the applicable local jurisdiction's legal limit, including CBD edibles
+
+ Hydroponic equipment and other cultivation or production equipment marketed for growing marijuana
+
+ Courses and information on cultivating marijuana
+
+Nutraceuticals and pseudo-pharmaceuticals
+
+ Pseudo-pharmaceuticals or nutraceuticals that are not safe or make harmful claims
+
+Nonfiat currency 
+
+ Cryptocurrency mining and staking
+
+ Initial coin offerings (ICOs)
+
+ Secondary NFT sales
+
+Travel
+
+ Commercial airlines and cruises
+
+ International (cross-border) charter and private airlines
+
+ Timeshare services
+
+Unfair, deceptive, or abusive acts or practices (acts or practices that contravene rules, laws, regulations, or guidance prescribed by the Federal Trade Commission, Consumer Financial Protection Bureau, or other local consumer regulatory bodies) 
+
+ Pyramid schemes
+
+ Multilevel marketing services offering commission or recruitment-based sales
+
+ "Get rich quick" schemes, including investment opportunities or other services that promise high rewards to mislead consumers; schemes that claim to offer high rewards for very little effort or up-front work; and sites that promise fast and easy money
+
+ Businesses that make outrageous claims, use deceptive testimonials, use high-pressure upselling, or use fake testimonials (with or without a written contract) 
+
+ Businesses offering unrealistic incentives or rewards as an inducement to purchase products or services 
+
+ No-value-added services, including the sale or resale of a service without added benefit to the buyer and resale of government offerings without authorization or added value
+
+ Sales of online traffic or engagement
+
+ Negative option marketing, negative option membership clubs, and reduced price trials with unclear or hidden pricing 
+
+ Telemarketing
+
+ Predatory mortgage consulting 
+
+ Predatory investment opportunities with no or low money down
+
+ Suspicious remote technical support
+
+ Door-to-door sales
+
+ Document falsification services
+
+ Any other businesses that Stripe considers unfair, deceptive, or predatory towards consumers
+
+Restricted Businesses
+
+Businesses in these categories require additional due diligence by Stripe in order to confirm our ability to support them. When you create your Stripe account, you will be asked to provide additional information (such as proof of relevant licenses or more details about your business model) to confirm your eligibility to use Stripe. Due to card network rules, requirements of financial partners, and our own compliance and legal obligations, if your business falls into one of the categories below, Stripe might not be able to grant approval for your business to use our products. If we do provide approval, note that the approval is specific to each service offer, and it may be modified or revoked by Stripe at any time per the terms of the Stripe Services Agreement.
+
+Read more about restricted businesses in our FAQs 
+
+The types of businesses listed below are representative of our restricted businesses but not exhaustive.
+
+Content creation platforms (see the FAQs for additional details)
+
+Platforms that host or distribute third-party content and enable content creators to:
+
+ Receive content-related tips and other payments in exchange for their content
+
+ Sell exclusive content or digital goods
+
+Note: Individual content creators on approved platforms (for example, connected accounts of an approved Stripe Connect user) and those directly distributing their own content (for example, on their own website) do not require preapproval. However, all content creators must comply with the Stripe Services Agreement and this Prohibited and Restricted Businesses list (which, for example, prohibits the sale of adult content and personal or peer-to-peer money transmission) and are subject to monitoring by Stripe to ensure compliance.
+
+Crowdfunding and fundraising (see the FAQs for additional details)
+
+ Fundraising conducted by nonprofits, charities, political organizations, and businesses offering a reward in return for donation
+
+ Crowdfunding platforms 
+
+ Equity crowdfunding (Limited availability: Please contact our sales team if you would like to work with Stripe. Note: Supported in Australia, Germany, France, Singapore, the United Kingdom, and the United States. Prohibited in all other countries.)
+
+ Charity sweepstakes and raffles for the explicit purpose of fundraising (Note: Supported in Australia, Brazil, Canada, Hong Kong, Ireland, Mexico, the United Kingdom, and the United States. Prohibited in all other countries.)
+
+ Organizations fundraising for a charitable purpose (Note: Supported in Australia, Canada, the United Kingdom, and the United States. Prohibited in all other countries.) 
+
+Dating
+
+Online dating and matchmaking services (Note: Specific prohibitions apply in India, United Arab Emirates, and Thailand; see Jurisdiction-specific prohibited businesses for more information.) 
+
+Cyberlockers
+
+ Cyberlocker and file-sharing services
+
+Regulated industries
+
+Cannabidiol (CBD) (see the FAQs for additional details)
+
+ CBD products containing only negligible amounts of THC, per local limits
+
+Cryptocurrency (Limited availability: Please contact our sales team if you would like to work with Stripe.)
+
+ Cryptocurrency (for example, Bitcoin, Ripple, Ethereum, Dogecoin, Cardano, etc.) exchanges and wallets. For crypto and NFT support and availability by region, please see crypto supportability. 
+
+Financial products and services (Please contact our sales team if you would like to work with Stripe.)
+
+ Investment and brokerage services, including real estate--based investments
+
+ Lending services, including real estate loans
+
+ Bank account funding
+
+ Buy now, pay later services
+
+ Money transmitters, remittances, currency exchange services, and other money service businesses
+
+ Mortgage consulting
+
+ Escrow services
+
+ Neobanks or challenger banks
+
+ Other financial services
+
+Legal firearms and other weapons (Limited availability: Please contact our sales team if you would like to work with Stripe. In countries where a firearm or weapon is illegal, we will continue to treat it as prohibited.)
+
+ Firearms, including rifles, shotguns, and pistols
+
+ Regulated firearm parts and accessories, such as suppressors
+
+ Other weapons not listed above (e.g., stun guns, swords not meant as replicas, pepper spray, machetes)
+
+Pharmaceuticals, medical devices, and telemedicine (see the FAQs for additional details)
+
+ Online pharmacies, including SaaS platforms
+
+ Card-not-present prescription-only products and pharmaceuticals
+
+ Prescription-only and regulated medical devices
+
+ Prescription delivery services
+
+ Telemedicine and telehealth services
+
+Tobacco
+
+ Tobacco products, including e-cigarettes, cigars, and e-liquid sold in accordance with applicable law (Note: In the United States, merchants selling electronic tobacco may only sell products authorized by the Food and Drug Administration—please refer to this list.)
+
+ Herbal and vitamin e-cigarettes and cigarettes
+
+ Production equipment specifically marketed for the production of tobacco products
+
+Nonfiat currency and stored value
+
+ First-party non-fungible tokens (NFTs) minting and sales, including marketplaces and SaaS platforms 
+
+ High-value goods, precious metals and stones
+
+ Sale of stored value or credits maintained, accepted, and issued by anyone other than the seller. Seller-maintained stored value or credits may be subject to limits.
+
+ Sale of in-game currency or game items, unless the business is the operator of the virtual world
+
+ Preloaded payment cards, gift cards, virtual credits, or other products and services in which a monetary value is stored within the item (digital or physical)
+
+Third-party agents
+
+ Payment facilitation and aggregation (including receiving settlement proceeds for goods or services that you did not provide, on behalf of one or multiple third-party sellers)
+
+Businesses that might pose elevated financial risk
+
+Travel
+
+ Travel reservation services and clubs
+
+ In-flight purchases
+
+ Domestic charter air travel (Limited availability: Please contact our sales team if you would like to work with Stripe.)
+
+To learn more about Stripe's approach to prohibited businesses and why some businesses aren't allowed to use Stripe's services, you can read our support page about business limitations.
+
+Jurisdiction-specific prohibited businesses
+
+Brazil
+
+Genital and nipple jewelry
+
+Genital prosthetics
+
+Sex accessories and lifelike sex toys
+
+Canada
+
+Alcohol (Restricted)
+
+Mortgage consulting
+
+India
+
+Airbags
+
+Alcohol
+
+Captive insurance companies
+
+Cash couriers
+
+Charities
+
+Chit funds
+
+Cross-border jewelry sales
+
+Currency exchange
+
+Currency transportation
+
+Dating and matchmaking services
+
+Gambling equipment
+
+Genital prosthetics
+
+High-value goods, precious metals and stones
+
+Junket operators
+
+Lobby groups and political organizations
+
+Mining and oil drilling and refining
+
+Non-profit organizations (NPO)
+
+Personal investment vehicles/companies
+
+Religious organizations
+
+Sex accessories and sex toys
+
+Trust service providers
+
+Unlicensed financial institutions
+
+Vehicle sales
+
+Indonesia
+
+(Prohibited = P, Restricted = R)
+Alcohol R
+Domestic charter air travel P
+Insurance R
+Live chat / streaming R
+Live stock R
+Packaged food and cosmetics R
+Pilgrimage / Umrah tour packages R
+Precious metals and jewelry R
+Products requiring national-standard certification R
+
+Japan
+
+Advisory services related to drop shipping and the resale of goods
+
+Animals
+
+C2C services outside of Stripe Connect
+
+Consultation and advisory or prediction services relating to online gaming or gambling
+
+Consultation or advisory services providing guidance, information or tools on how to profit through trading or investments in financial products or cryptocurrency or running a resale or dropshipping business
+
+Donations to individuals
+
+Fundraising for or financing of businesses that are listed above as prohibited or restricted
+
+Genital and nipple jewelry
+
+Genital prosthetics
+
+Health instruments
+
+Industrial waste disposal and garbage disposal devices and water purifiers
+
+International marriage brokerage businesses
+
+Mortgage consulting
+
+Private investigators or protection services 
+
+Psychic services and fortune tellers
+
+Sex accessories and lifelike sex toys
+
+Businesses without a “Commercial Disclosure” page on their website as required by the Specified Commercial Transactions Act (SCT)—for more information, see how to create and display a “Commerce Disclosure” 
+
+Malaysia
+
+Domestic charter air travel 
+
+Genital and nipple jewelry
+
+Genital prosthetics
+
+Matchmaking
+
+Sex accessories or sex toys
+
+Mexico
+
+Adoption agencies
+
+Cross-border currency exchange services
+
+Debt collection agencies
+
+Direct marketing travel
+
+Domestic charter air travel 
+
+Electronic cigarettes for card-not-present transactions
+
+Ephedrine
+
+Game console modification devices
+
+Genital and nipple jewelry
+
+Genital prosthetics
+
+HCG weight loss
+
+Investment services
+
+Lifelike sex toys
+
+Penny auctions
+
+Private investigators or protection services 
+
+Psychic services and fortune tellers
+
+Search engine optimization
+
+Telemedicine
+
+Singapore
+
+Domestic charter air travel 
+
+Genital and nipple jewelry
+
+Sale of ads for any products or services deemed illegal in Singapore—sales of products that facilitate payments to any of these products or services
+
+Sex accessories or sex toys
+
+Thailand
+
+(Prohibited = P, Restricted = R)
+
+Alcohol P
+
+Bodyguard services P
+
+Charities P
+
+Dating services P
+
+Domestic charter air travel R
+
+Food and cosmetics R
+
+Historical artifacts P
+
+Hotels, tour operators, and transportation services R
+
+Insurance R
+
+New vehicle sales P
+
+Private investigators or detective agencies P
+
+Psychic services and fortune tellers P
+
+Timeshares P
+
+Vehicle sales P
+
+Vitamins P
+
+United Arab Emirates
+
+Domestic charter air travel 
+
+Gambling equipment
+
+Genital prosthetics
+
+Historical artifacts, ivory products, prison-made products
+
+Private investigators or detective agencies
+
+Matchmaking services
+
+Sex accessories or sex toys
+
+United States
+
+Extended warranties
+
+Medical benefit packages not offered by a government or health insurance company
+
+Mortgage consulting
+
+Shipping brokers and freight forwarders, without prior authorization from Stripe
+
+Prohibited Uses of Stripe Products
+
+ Use of Stripe products with false, manipulated, inaccurate, or misleading information regarding your identity, business entity, the nature of the business, and any other information requested by Stripe 
+
+ If there are any changes to your personal and business information, you must notify Stripe immediately
+
+ Use of Stripe products to facilitate transactions on behalf of another undisclosed merchant or for products or services that weren't disclosed in the business's Stripe account application
+
+ Use of Stripe principally as a virtual terminal (for example, submitting card transactions by manually inputting card information)
+
+ Processing where there is no bona fide good or service sold, or donation accepted; card testing
+
+ Evasion of card network chargeback monitoring programs
+
+ Cross-border acquiring where the business address of the merchant is outside of the jurisdiction of the acquiring Stripe entity, unless permitted under the card network rules
+
+ Sharing cardholder information with another business for payment of cross-sell of products or services
+
+ Use of Stripe intellectual property without prior written consent from Stripe; use of the Stripe name or logo including use of Stripe trade or service marks inconsistent with the Stripe Marks Usage Terms , or in a manner that otherwise harms Stripe or the Stripe brand; any action that implies an untrue endorsement by, or affiliation, with Stripe
+
+Prohibitions for Stripe Issuing products
+
+You must not use Stripe Issuing for the following activities.
+
+Consumer use
+
+ Consumer use of Stripe Issuing is when an Issuing card is created to fully or partially enable payments for personal, family, or household use, including: 
+
+ Providing a payment method loaded with or that accesses consumer funds
+
+ Cards that disburse payroll or payouts
+
+ Any other uses that directly or indirectly enable payments using the consumer's funds
+
+International use
+
+When you sign up for Stripe Issuing, you share with Stripe the location of your business, the physical address of your beneficial owners, and the jurisdiction in which your business is registered. Stripe requires that the physical location of your business, its jurisdiction of registration, and the physical address of at least one of your beneficial owners all match. Furthermore, you must use Issuing cards primarily in the same jurisdiction.
+
+Lending use
+
+You can't use Stripe Issuing as a method to extend credit to your customers using your own funds, unless you have the appropriate licensing to do so and you have received express consent from Stripe to use Issuing for that purpose. 
+
+Other abusive use
+
+Any other abusive use of Stripe Issuing, including:
+
+ Using Issuing cards to abuse free-trial products at scale
+
+ Using Issuing cards to buy in-demand items or services with the sole intent to sell them for profit (for example, retail scalping)
+
+ Using Issuing cards for any other illegitimate purposes
+
+Noncompliance
+
+As a user of Stripe Issuing, you must comply with our US compliance guidelines (or see the EU- and UK-specific guidelines), and our compliance teams might ask you to update your marketing materials or aspects of your user experience. This helps to make sure that both you and Stripe continue to comply with federal, state, or any equivalent local or country-specific laws and regulations that govern the use of these financial products. Failure to comply within the requested time frames might result in the closure of your Stripe account. 
+
+Inactivity
+
+If there is inactivity on all cards associated with an account for a period of 12 consecutive months, Stripe automatically closes your Issuing account.
+
+Integration type
+
+If you plan to enable your customers to use Stripe Issuing for purposes of creating cards for your customers' employees or contractors, you must implement Stripe Issuing on Connect (for example, if you're a platform that wants to enable your customers to create cards for their employees to use for business travel or marketing expenses, you must create a Connect account for each of your customers). Please consult Stripe if you have any questions regarding the correct integration type for your business.
+
+Stripe Capital restricted business types
+
+Stripe Capital is currently not available to businesses that are not for-profit or operate in certain restricted industries, such as speculation-based industries, gambling, or religious institutions. Additional restrictions might apply to government and utility businesses.

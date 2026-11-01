@@ -19,7 +19,7 @@ friction for the third week (5 threads).**
   feature request thread. No date promised (do-not-say: roadmap).
 
 ## Needs an engineer
-- "Timezone of `starts_at` in the EU region": docs and code disagree. Proposed task to Tomas.
+- "Timezone of `starts_at` in the EU region": docs and code disagree. Proposed task to the SDK engineer.
 
 ## Friction (knowledge/friction-log.md)
 | Step | Threads (4 weeks) | Fix that would remove it | For |
@@ -29,7 +29,7 @@ friction for the third week (5 threads).**
 | Sandbox keys | 2 | one sentence on where to find them | Librarian (help centre) |
 
 ## Proposed sample
-- "Verify an Acme webhook in Python and Node": two files and a 6-step tutorial, about an hour. Reviewer: Tomas.
+- "Verify an Acme webhook in Python and Node": two files and a 6-step tutorial, about an hour. Reviewer: the SDK engineer.
 
 ## Could not read
 - The public chat server: invite link expired on 2026-09-27.

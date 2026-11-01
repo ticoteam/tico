@@ -7,11 +7,12 @@ and https on the ordinary ports, every address the name resolves to public (no l
 metadata address), each redirect checked again, 5 MB and 20 seconds a page, at most PAGES pages and BUDGET_S seconds
 in all, and no credential of the server's ever sent. Then one model call, with no runner: the writer the daily-update
 drafts use (backend/updates.py `writer_for`: the Tico AI Gateway, else the team's own provider with a server key), with
-the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the same). It answers a summary, a vision,
-the four sections and three bets the site implies, each with what it rules out and a suggested wrong-if.
+the shared prompt in backend/strategy_prompt.py (Tico HQ's setup page asks the same). It answers a summary, the four
+sections and three bets the site implies, each with what it rules out and a suggested wrong-if. It asks for no vision:
+`found` keeps `vision: ""` and the draft's vision is left as it is.
 
 What it writes, as the owner who started it, and never published:
-- the summary and vision, and each of the four sections, only where the draft's is empty; each section starts with
+- the summary, and each of the four sections, only where the draft's is empty; each section starts with
   the UNCONFIRMED line, which the owner deletes by keeping or editing the text;
 - each bet as `proposed`, its wrong-if a sentence with a check date CHECK_DAYS out.
 
@@ -311,7 +312,7 @@ def _clip(value, limit, one_line=False):
 
 def draft(write, job, pages):
     """{summary, vision, serve, sell, know, not, bets: [{statement, why, rules_out, wrong_if}]} from one model call,
-    clipped to what the draft takes."""
+    clipped to what the draft takes. The prompt asks for no vision, so `vision` is always ""."""
     user = json.dumps({"owner_words": job["text"], "website": job["url"],
                        "pages": [{"url": p["url"], "title": p.get("title") or "", "text": p["text"]}
                                  for p in pages if p.get("text")]}, ensure_ascii=False)
@@ -326,7 +327,7 @@ def draft(write, job, pages):
                      "wrong_if": _clip(item.get("wrong_if"), S.WRONG_TEXT_MAX, True)})
         if len(bets) == BETS:
             break
-    return {"summary": _clip(raw.get("summary"), S.SUMMARY_MAX, True), "vision": _clip(raw.get("vision"), S.VISION_MAX, True),
+    return {"summary": _clip(raw.get("summary"), S.SUMMARY_MAX, True), "vision": "",
             **{k: _clip(raw.get(k), SECTION_CHARS) for k in S.FIXED_KEYS}, "bets": bets}
 
 

@@ -36,7 +36,8 @@ def test_external_origin_does_not_enable_local_serving_and_marker_is_private_and
     assert hosts(config) == [APP] and config["admin"] == {"disabled": True}
     public = config["apps"]["http"]["servers"]["tico"]
     assert public["routes"][0]["handle"][0] == {
-        "handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}]}
+        "handler": "reverse_proxy", "upstreams": [{"dial": "server:8765"}],
+        "load_balancing": {"try_duration": "30s", "try_interval": "250ms"}}
     assert "logs" not in public and public["routes"][-1]["handle"][0]["status_code"] == 404
     base = copy.deepcopy(config)
     ready = base["apps"]["http"]["servers"].pop(assets.READY_SERVER)
@@ -49,6 +50,17 @@ def test_external_origin_does_not_enable_local_serving_and_marker_is_private_and
     # stricter asset-host rule must not disable those app-only installations.
     for domain in ("localhost", "127.0.0.1", "10.0.0.12"):
         assert hosts(assets.render(domain)) == [domain]
+
+
+def test_both_proxies_hold_a_request_through_a_server_restart_like_the_cell_router_and_never_answer_502():
+    from setup import cell
+    public = assets.render(APP, "https://" + VISUAL, RUNNER, serve_visuals=True)["apps"]["http"]["servers"]["tico"]
+    proxies = [handler for route in public["routes"] for handler in route["handle"] if handler["handler"] == "reverse_proxy"]
+    assert len(proxies) == 2
+    assert all(proxy["load_balancing"] == {"try_duration": cell.HOLD_FOR, "try_interval": cell.HOLD_EVERY} for proxy in proxies)
+    (errors,) = public["errors"]["routes"]
+    assert errors["handle"] == [{"handler": "static_response", "status_code": 503, "headers": {"Retry-After": ["5"]},
+                                 "body": cell.HOLD_BODY}]
 
 
 def test_literal_hosts_cannot_inject_config_or_share_the_visual_security_boundary():
@@ -191,7 +203,9 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
         def log_message(self, *args):
             pass
         def reply(self):
-            calls.append((self.command, self.path, {key.lower(): value for key, value in self.headers.items()}))
+            length = int(self.headers.get("Content-Length") or 0)
+            calls.append((self.command, self.path, {key.lower(): value for key, value in self.headers.items()},
+                          self.rfile.read(length) if length else b""))
             ranged = self.headers.get("Range") == "bytes=2-4"
             body = b"234" if ranged else b"0123456789"
             self.send_response(206 if ranged else 200)
@@ -226,14 +240,15 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
         for handler in route["handle"]:
             if handler["handler"] == "reverse_proxy":
                 handler["upstreams"] = [{"dial": "127.0.0.1:" + str(backend.server_port)}]
+                handler["load_balancing"]["try_duration"] = "1s"   # the hold, shorter than this client's timeout
     env = {**os.environ, "XDG_CONFIG_HOME": str(tmp_path / "config"), "XDG_DATA_HOME": str(tmp_path / "data")}
     path, logs = tmp_path / "caddy.json", tmp_path / "caddy.log"
     path.write_text(json.dumps(config))
     proc, stopped = None, False
-    def request(host, path="/", method="GET", headers=None, endpoint=port):
+    def request(host, path="/", method="GET", headers=None, endpoint=port, body=None):
         connection = http.client.HTTPConnection("127.0.0.1", endpoint, timeout=2)
         try:
-            connection.request(method, path, headers={"Host": host, **(headers or {})})
+            connection.request(method, path, body=body, headers={"Host": host, **(headers or {})})
             response = connection.getresponse()
             return response.status, {key.lower(): value for key, value in response.getheaders()}, response.read()
         finally:
@@ -281,15 +296,30 @@ def test_pinned_caddy_routes_exact_signed_reads_strips_auth_and_does_not_log_tok
                 assert request(VISUAL, SIGNED_PATH, method)[0] == 404
             assert request("unrelated.example", SIGNED_PATH)[0] == 404
             assert request(VISUAL, assets.READY_PATH)[0] == 404 and len(calls) == before
+            # A restart: a write sent while nothing listens is held, then answered by the server that comes back.
+            address = backend.server_address
             backend.shutdown()
             backend.server_close()
             stopped = True
-            # Failed proxy diagnostics used to include request.uri and Referer.
-            # Require an actual error log while proving both token carriers gone.
-            assert request(VISUAL, SIGNED_PATH, headers={"Referer": "https://" + VISUAL + SIGNED_PATH})[0] == 502
-            wait_for(lambda: '"logger":"http.log.error"' in logs.read_text())
+            held = {}
+            sender = threading.Thread(target=lambda: held.update(answer=request(APP, "/api/v2/tasks", "POST", body=b"held")))
+            sender.start()
+            time.sleep(.4)
+            backend = ThreadingHTTPServer(address, Backend)
+            thread = threading.Thread(target=backend.serve_forever, daemon=True)
+            thread.start()
+            stopped = False
+            sender.join(timeout=3)
+            assert held["answer"][0] == 200 and calls[-1][0] == "POST" and calls[-1][3] == b"held"
+            backend.shutdown()
+            backend.server_close()
+            stopped = True
+            # Down for longer than the hold: a plain 503 with Retry-After, never a 502.
+            # Failed proxy diagnostics used to include request.uri and Referer; neither token carrier is logged.
+            status, headers, body = request(VISUAL, SIGNED_PATH, headers={"Referer": "https://" + VISUAL + SIGNED_PATH})
+            assert (status, headers["retry-after"], body.decode()) == (503, "5", assets.HOLD_BODY)
             error_lines = [json.loads(line) for line in logs.read_text().splitlines() if '"logger":"http.log.error"' in line]
-            assert error_lines and all("request" not in line for line in error_lines)
+            assert all("request" not in line for line in error_lines)
             assert TOKEN not in logs.read_text() and SIGNED_PATH not in logs.read_text()
     finally:
         if proc is not None:

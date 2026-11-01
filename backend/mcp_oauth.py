@@ -150,7 +150,7 @@ def begin(c, settings, who, query):
     return grant, client["name"], urlsplit(redirect).hostname or ""
 
 
-def back(redirect, settings, **params):
+def back(redirect, settings, /, **params):
     """The agent's redirect URI with this answer added (and `iss`, RFC 9207)."""
     params = {k: v for k, v in params.items() if v}
     params["iss"] = issuer(settings)

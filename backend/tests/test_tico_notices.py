@@ -53,7 +53,9 @@ def test_a_relayed_notice_reaches_the_rules_once_and_shows_once_beside_latest(ap
     relay_for(api, hq)                                   # the first relay makes the built-in trigger and its rules
     listed = {t["id"]: t for t in get(api, "triggers")["triggers"]}
     assert listed["_tico"]["builtin"] is True and listed["_tico"]["relay"] is None and listed["_tico"]["url"] == ""
-    assert {r["id"] for r in get(api, "rules?scope_kind=team")["rules"]} >= {"tico-notice-security-wake", "tico-notice-billing-ask"}
+    with api.app.state.store.read() as c:
+        kept = {r[0] for r in c.execute("SELECT id FROM rules WHERE scope_kind='team' AND enabled=1")}
+    assert kept >= {"tico-notice-security-wake", "tico-notice-billing-ask"}
 
     send(hq)
     service(api).tick()
@@ -101,9 +103,6 @@ def test_nobody_posts_to_tico_directly_and_it_cannot_be_deleted_or_changed(api, 
     assert post(api, "triggers", {"name": "Tico"})["trigger"]["id"] == "tico"      # a user's own id, no clash
     post(api, "triggers", {"name": "x", "id": "_tico"}, expected=422)
     assert post(api, "triggers/_tico", {"keep_days": 3})["trigger"]["keep_days"] == 3
-    post(api, "rules/tico-notice-billing-ask/delete", {"expected_revision": 1}, expected=409)
-    rule = post(api, "rules/tico-notice-billing-ask", {"expected_revision": 1, "on": False})["rule"]
-    assert rule["enabled"] is False and rule["protected"] is True
 
 
 def test_a_delivery_naming_tico_from_another_relay_is_ignored(api, hq, judged):
@@ -152,15 +151,19 @@ def test_a_delivery_naming_the_tico_trigger_from_a_relay_hq_does_not_list_as_sys
     assert hq.paths().count("relays") >= 1               # HQ was asked before the delivery was dropped
 
 
-def test_a_routine_on_the_tico_trigger_fires_and_webhook_received_is_not_judged(api, hq, judged, monkeypatch):
+def test_an_automation_on_the_tico_trigger_fires_and_webhook_received_is_not_judged(api, hq, judged, monkeypatch):
     relay_for(api, hq)
-    routine = post(api, "bots/ops/routines", {"key": "notices", "title": "A notice", "on": "webhook._tico",
-                                              "text": "Read it."})["routine"]
+    aid = post(api, "automations", {"name": "A notice", "owner": "person:ana", "trigger": {"type": "webhook", "id": "_tico"},
+                                    "steps": [{"id": "read", "type": "bot_turn", "bot": "ops",
+                                               "prompt": "Read it. {{webhook.content}}"}]})["id"]
     seen = []
     real = rules.judge_event
     monkeypatch.setattr(rules, "judge_event", lambda c, event, ctx, **more: (seen.append(event), real(c, event, ctx, **more))[1])
     send(hq, "r1", kind="info")
     service(api).tick()
     assert seen == ["tico.notice"] and len(judged) == 1                        # judged once, as tico.notice only
-    tasks = [t for t in get(api, "tasks?owner=bot:ops")["tasks"] if t.get("routine_id") == routine["id"]]
-    assert len(tasks) == 1
+    api.app.state.store.automations.drain()
+    assert [r["trigger_ref"] for r in get(api, f"automations/{aid}/runs")["runs"]] == ["webhook:_tico:notice:r1"]
+    with api.app.state.store.read() as c:
+        tasks = c.execute("SELECT owner FROM tasks WHERE title='A notice'").fetchall()
+    assert [t[0] for t in tasks] == ["bot:ops"]

@@ -32,6 +32,11 @@ keeps the copy; in the bot's own checkout its next memory commit does. The move 
 pushed history has it; after that an edit or removal there stands. The runner reads and writes these files as the bot, never with its own rights, and skips a memory file
 that is a link. The old files are left in place, unread (`runner-rs/src/harness_memory.rs`).
 
+A stateless bot keeps no memory at all: Counsel, by its template (`hubdb.STATELESS_BY_TEMPLATE`), or any bot whose config
+says `stateless: true`. Nothing is copied into its checkout, its prompt says not to read or write `memory/`, `knowledge/`
+or `state.md`, its memory folders are not committed for it, and the nightly learnings skip it. Each task is judged from
+its own text (see [sessions](sessions.md)).
+
 ## Where it comes from
 
 Git is the record; the history is a view of it. The server holds no checkout, so the computer
@@ -74,7 +79,7 @@ server is upgraded; the runner retains those reports for retry.
 ## Nightly learning run
 
 Once a night, at or after 3:00 (Pacific, the same clock as daily updates; an owner or admin moves the time or
-switches it off in Settings > Rules), Tico reads the day's
+switches it off in Settings > System), Tico reads the day's
 activity once and hands each recipient what is relevant to it (`backend/learnings.py`). No bot reads
 Slack or mail for this itself.
 
@@ -97,7 +102,7 @@ reached, even partway through, the night sends nothing, shows "Skipped", and the
 night) answers, per item, whether it is
 learnable and, per recipient, whether it is relevant (`questions/learnings-route.json`). An item goes
 to every recipient scoring 0.6 or more, unless its learnable score is under 0.2; at most 40 items each,
-highest first. Recipients are the active bots other than BotOps, the Assistant and the CEO Bot,
+highest first. Recipients are the active bots other than BotOps, the Assistant and the Strategy Bot,
 plus the Librarian for how the company works and the market, that had a run in the last 24 hours. A bot
 synced in from another platform (Grok, Dots, Muse) never gets a run here, so it gets no packet.
 
@@ -114,7 +119,7 @@ open) and Market (its market changes then), each change with its source and diff
 only to readers who may read that bot. A packet's text shows only when the reader may read the source
 today (the chat, the task, the mailbox, the meeting); anything else is counted as private.
 
-- `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > Rules): tonight's run now; 409 when it is running or already ran.
+- `POST /api/v2/learnings/run` (owner or admin, the same as Run now on Nightly learnings in Settings > System): tonight's run now; 409 when it is running or already ran.
 - `GET /api/v2/learnings?before=&limit=`: nights, newest first.
 - `GET /api/v2/learnings/{id}`: one night's sections.
 - `GET /api/v2/learnings/{id}/packets/{bot}`: one recipient's packet.

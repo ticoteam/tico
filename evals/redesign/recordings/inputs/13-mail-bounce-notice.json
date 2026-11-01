@@ -1,0 +1,26 @@
+{
+  "id": "13-mail-bounce-notice",
+  "kind": "mail",
+  "questions": "mail-triage",
+  "level": "low",
+  "state": {
+    "mailbox": "dana@acme.example",
+    "from": "mailer-daemon@acme.example",
+    "from_name": "Mail Delivery System",
+    "to": "dana@acme.example",
+    "date": "2026-10-27T05:58:00Z",
+    "subject": "Undeliverable: Invoice 20391",
+    "snippet": "The message to the customer's billing address could not be delivered: 550 5.1.1 user unknown. The original message is attached.",
+    "unsubscribe": false,
+    "list_id": null,
+    "attachments": [
+      "returned-message.eml"
+    ],
+    "is_internal": false,
+    "is_calendar_invite": false,
+    "labels": [
+      "INBOX"
+    ]
+  },
+  "note": "An automatic delivery failure: nothing for the owner to decide, so archive or watch."
+}

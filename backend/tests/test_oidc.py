@@ -11,11 +11,13 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from types import SimpleNamespace
 from urllib.parse import parse_qs, urljoin, urlparse
 
+import httpx
 import jwt
 import pytest
 from cryptography.hazmat.primitives.asymmetric import rsa
 
-from backend import identity_proxy, oidc
+from backend import access as Access
+from backend import hubdb, identity_proxy, oidc, people_mirror
 from backend.config import Settings
 from backend.tests.test_api import api, post  # noqa: F401  (the api fixture)
 
@@ -48,6 +50,8 @@ class Provider:
         self.invite_endpoint = self.invite_redirect = None
         # It may also make accounts with a generated password (POST /oauth2/accounts): a list of (status, answer).
         self.accounts, self.account_calls = None, []
+        # It takes the sign-in list (backend/people_mirror.py): a list of (status, answer) to answer; None = not advertised.
+        self.people, self.people_calls = None, []
         self.keys = []
         self.rotate()
         provider = self
@@ -73,7 +77,9 @@ class Provider:
                                 **({"tico_invite_endpoint": provider.invite_endpoint or provider.issuer + "/oauth2/invite"}
                                    if provider.invites is not None else {}),
                                 **({"tico_accounts_endpoint": provider.issuer + "/oauth2/accounts"}
-                                   if provider.accounts is not None else {})})
+                                   if provider.accounts is not None else {}),
+                                **({"tico_people_endpoint": provider.issuer + "/oauth2/people"}
+                                   if provider.people is not None else {})})
                 elif path.endswith("/keys"):
                     provider.jwks_fetches += 1
                     self.reply({"keys": [provider.jwk(kid, key) for kid, key in provider.keys]})
@@ -91,6 +97,10 @@ class Provider:
                         self.send_header("Content-Length", "0")
                         return self.end_headers()
                     status, answer = provider.invites.pop(0)
+                    return self.reply(answer, status)
+                if urlparse(self.path).path.endswith("/oauth2/people"):
+                    provider.people_calls.append(one)
+                    status, answer = provider.people.pop(0)
                     return self.reply(answer, status)
                 if urlparse(self.path).path.endswith("/oauth2/accounts"):
                     provider.account_calls.append(one)
@@ -129,8 +139,10 @@ class Provider:
                 != entry["query"]["code_challenge"]):
             return {"error": "invalid_grant"}, 400
         now = int(time.time())
-        claims = {"iss": self.issuer, "aud": CLIENT, "sub": "subject-1", "iat": now, "exp": now + 300,
-                  "nonce": entry["query"]["nonce"], "email": "ben@acme.example", "email_verified": True}
+        email = entry["claims"].get("email", "ben@acme.example")
+        # One account per address, as a real issuer has: a sign-in on a new address is a new account unless a test says so.
+        claims = {"iss": self.issuer, "aud": CLIENT, "sub": "acct-" + email, "iat": now, "exp": now + 300,
+                  "nonce": entry["query"]["nonce"], "email": email, "email_verified": True}
         claims.update(entry["claims"])
         claims = {k: v for k, v in claims.items() if v is not None}
         kid, key = self.keys[0]
@@ -484,3 +496,242 @@ def test_startup_validation_names_the_problem(tmp_path, changes, message):
     with pytest.raises(RuntimeError, match=message):
         Settings(**{**base(tmp_path), **changes})
 
+
+def roster_email(auth, pid):
+    with auth.store.read() as c:
+        return c.execute("SELECT email FROM humans WHERE id=?", (pid,)).fetchone()["email"]
+
+
+def test_the_account_is_remembered_on_first_sign_in(signin):
+    signin.login(claims={"sub": "acct-ben"})
+    with signin.auth.store.read() as c:
+        row = c.execute("SELECT idp_issuer,idp_sub FROM humans WHERE id='ben'").fetchone()
+    assert row["idp_sub"] == "acct-ben" and row["idp_issuer"] == signin.fake.issuer
+
+
+def test_a_changed_address_signs_in_the_same_person_and_moves_the_email(signin):
+    signin.login(claims={"sub": "acct-ben"})
+    signin.api.cookies.clear()
+    done = signin.login(claims={"sub": "acct-ben", "email": "ben.new@acme.example"})
+    assert done.status_code == 302
+    assert me(signin.api).json()["actor"] == "human:ben"
+    assert roster_email(signin.auth, "ben") == "ben.new@acme.example"
+    with signin.auth.store.read() as c:
+        roster = next(p for p in Access._load_json(c, "people")["people"] if p["id"] == "ben")
+    assert roster["email"] == "ben.new@acme.example"
+
+
+def test_a_changed_address_already_held_by_someone_else_is_refused(signin):
+    signin.login(claims={"sub": "acct-ben"})
+    signin.api.cookies.clear()
+    refused = signin.login(claims={"sub": "acct-ben", "email": "cara@acme.example"})
+    assert refused.status_code == 403 and "not on" in refused.text
+    assert roster_email(signin.auth, "ben") == "ben@acme.example"
+    assert roster_email(signin.auth, "cara") == "cara@acme.example"
+
+
+def test_a_left_person_stays_out_when_their_account_comes_back_on_a_new_address(signin):
+    signin.login(claims={"sub": "acct-cara", "email": "cara@acme.example"})
+    post(signin.api, "people/cara", {"left": True})
+    signin.api.cookies.clear()
+    again = signin.login(claims={"sub": "acct-cara", "email": "cara.new@acme.example"})
+    assert again.status_code == 403
+    assert roster_email(signin.auth, "cara") == "cara@acme.example"
+
+
+def test_the_not_on_the_list_page_names_the_address_and_ends_the_old_session(signin):
+    signin.login()
+    assert len(signin.sessions()) == 1
+    refused = signin.login(claims={"email": "dan@other.example", "sub": "acct-dan"})
+    assert refused.status_code == 403
+    assert "dan@other.example" in refused.text and "Use another account" in refused.text
+    assert "/auth/login?prompt=select_account" in refused.text
+    assert signin.sessions() == [] and signin.api.cookies.get("tico_session") is None
+
+
+def _set_access(signin, **fields):
+    with signin.auth.store.transaction() as c:
+        Access._store(c, Access.ACCESS, {**Access._load_json(c, Access.ACCESS), **fields})
+
+
+def _set_owner(signin, **fields):
+    with signin.auth.store.transaction() as c:
+        Access._store(c, Access.OWNER, {**Access._load_json(c, Access.OWNER), **fields})
+
+
+def _humans_with(signin, email):
+    with signin.auth.store.read() as c:
+        return c.execute("SELECT id FROM humans WHERE lower(email)=?", (email,)).fetchall()
+
+
+def test_an_admitted_domain_address_joins_once_and_the_second_sign_in_is_the_same_person(signin):
+    _set_access(signin, allowed_domains=["acme.example"])
+    joined = signin.login(claims={"email": "dan@acme.example", "sub": "acct-dan"})
+    assert joined.status_code == 302
+    assert me(signin.api).json()["actor"] == "human:dan"
+    signin.api.cookies.clear()
+    again = signin.login(claims={"email": "dan@acme.example", "sub": "acct-dan"})
+    assert again.status_code == 302
+    assert me(signin.api).json()["actor"] == "human:dan"
+    assert len(_humans_with(signin, "dan@acme.example")) == 1
+    with signin.auth.store.read() as c:
+        row = c.execute("SELECT idp_issuer,idp_sub FROM humans WHERE id='dan'").fetchone()
+    assert row["idp_sub"] == "acct-dan" and row["idp_issuer"] == signin.fake.issuer
+
+
+def test_an_address_the_owner_does_not_admit_is_refused_and_not_added(signin):
+    _set_access(signin, allowed_domains=["acme.example"])
+    refused = signin.login(claims={"email": "dan@other.example", "sub": "acct-dan"})
+    assert refused.status_code == 403 and "dan@other.example" in refused.text
+    assert _humans_with(signin, "dan@other.example") == []
+    assert signin.sessions() == []
+
+
+def test_a_retired_address_never_joins_even_at_an_admitted_domain(signin):
+    _set_access(signin, allowed_domains=["acme.example"])
+    _set_owner(signin, retired=["old@acme.example"])
+    refused = signin.login(claims={"email": "old@acme.example", "sub": "acct-old"})
+    assert refused.status_code == 403
+    assert _humans_with(signin, "old@acme.example") == []
+    assert signin.sessions() == []
+
+
+def test_a_public_mail_domain_is_never_admitted_by_default_with_a_gmail_owner(signin):
+    # The owner signs in with gmail and nothing typed in Settings: no domain is allowed by default.
+    _set_owner(signin, email="ana@gmail.com")
+    with signin.auth.store.read() as c:
+        access = Access.load_access(c, signin.settings)
+        assert access["allowed_domains"] == [] and Access.home_domain("ana@gmail.com", []) == ""
+        assert not Access.admitted(access, "pat@gmail.com")
+    refused = signin.login(claims={"email": "pat@gmail.com", "sub": "acct-pat"})
+    assert refused.status_code == 403
+    assert _humans_with(signin, "pat@gmail.com") == [] and signin.sessions() == []
+
+
+@pytest.mark.parametrize("prompt,sent", [("select_account", "select_account"), ("login", "login"), ("consent", None)])
+def test_login_passes_only_the_two_prompts_to_the_provider(signin, prompt, sent):
+    began = signin.api.get("/auth/login", params={"prompt": prompt}, follow_redirects=False)
+    query = {k: v[0] for k, v in parse_qs(urlparse(began.headers["location"]).query).items()}
+    assert query.get("prompt") == sent
+
+
+def _roster_with_bot_and_sign_in_off(auth):
+    with auth.store.transaction() as c:
+        roster = Access._load_json(c, "people")
+        people = [dict(p) for p in roster["people"]]
+        for p in people:
+            if p["id"] == "cara":
+                p["sign_in"] = False
+        people.append({"id": "coo-bot", "email": "coo@acme.example", "bot": "coo"})
+        Access._save_roster(c, {**roster, "people": people})
+
+
+def test_the_people_list_goes_to_the_account_with_roles_and_no_bots(signin):
+    signin.fake.people = [(200, {"stored": 2})]
+    _roster_with_bot_and_sign_in_off(signin.auth)
+    reply = people_mirror.push_now(signin.auth)
+    assert reply == (200, {"stored": 2})
+    sent = json.loads(signin.fake.people_calls[0]["people"])
+    assert sent == [{"email": "ana@acme.example", "role": "owner"}, {"email": "ben@acme.example", "role": "admin"}]
+    assert signin.fake.people_calls[0]["client_secret"] == SECRET
+
+
+def test_an_odd_address_is_left_out_so_it_cannot_block_the_list(signin):
+    signin.fake.people = [(200, {"stored": 3})]
+    with signin.auth.store.transaction() as c:
+        roster = Access._load_json(c, "people")
+        Access._save_roster(c, {**roster, "people": [*roster["people"], {"id": "odd", "email": "odd name@acme.example"}]})
+    assert people_mirror.push_now(signin.auth) == (200, {"stored": 3})
+    sent = [row["email"] for row in json.loads(signin.fake.people_calls[-1]["people"])]
+    assert sent == ["ana@acme.example", "ben@acme.example", "cara@acme.example"]
+
+
+def test_the_account_id_never_leaves_the_database_layer(signin):
+    signin.login(claims={"sub": "acct-ben"})
+    with signin.auth.store.read() as c:
+        assert "idp_sub" in dict(c.execute("SELECT * FROM humans WHERE id='ben'").fetchone())
+        assert "idp_sub" not in hubdb.human(c, "ben") and "idp_issuer" not in hubdb.human(c, "ben")
+        assert all("idp_sub" not in row and "idp_issuer" not in row for row in hubdb.humans(c))
+
+
+def test_the_people_list_is_sent_only_when_the_account_advertises_it(signin):
+    assert people_mirror.push_now(signin.auth) is None
+    assert signin.fake.people_calls == []
+
+
+@pytest.mark.parametrize("where", ["admins", "allowed", "owner"])
+def test_a_move_onto_an_admin_owner_or_allowed_address_is_refused(signin, where):
+    signin.login(claims={"sub": "acct-cara"})
+    signin.api.cookies.clear()
+    if where == "owner":
+        _set_owner(signin, email="boss@acme.example")
+    else:
+        with signin.auth.store.read() as c:
+            current = Access.load_access(c, signin.settings)[where]
+        _set_access(signin, **{where: [*current, "boss@acme.example"]})
+    refused = signin.login(claims={"sub": "acct-cara", "email": "boss@acme.example"})
+    assert refused.status_code == 403 and "not on" in refused.text
+    assert roster_email(signin.auth, "cara") == "cara@acme.example"
+    assert _humans_with(signin, "boss@acme.example") == []
+    assert me(signin.api).status_code == 401
+
+
+def _set_sign_in(signin, pid, on):
+    with signin.auth.store.transaction() as c:
+        roster = Access._load_json(c, "people")
+        people = [{**p, "sign_in": on} if p["id"] == pid else p for p in roster["people"]]
+        Access._save_roster(c, {**roster, "people": people})
+
+
+def test_sign_in_off_stops_an_address_move_and_the_account_being_remembered(signin):
+    signin.login(claims={"sub": "acct-cara", "email": "cara@acme.example"})
+    _set_sign_in(signin, "cara", False)
+    signin.api.cookies.clear()
+    moved = signin.login(claims={"sub": "acct-cara", "email": "cara.new@acme.example"})
+    assert moved.status_code == 403
+    assert roster_email(signin.auth, "cara") == "cara@acme.example"
+    assert me(signin.api).status_code == 401
+    # A new account on the old address is not remembered either.
+    other = signin.login(claims={"sub": "acct-cara-2", "email": "cara@acme.example"})
+    assert other.status_code == 403
+    with signin.auth.store.read() as c:
+        row = c.execute("SELECT idp_sub FROM humans WHERE id='cara'").fetchone()
+    assert row["idp_sub"] == "acct-cara"
+
+
+@pytest.fixture
+def mirror(monkeypatch):
+    """The people mirror's state, reset for one test; any timer it armed is cancelled afterwards."""
+    monkeypatch.setattr(people_mirror, "_auth", None)
+    monkeypatch.setattr(people_mirror, "_timer", None)
+    monkeypatch.setattr(people_mirror, "_next_allowed", 0.0)
+    yield people_mirror
+    if people_mirror._timer is not None:
+        people_mirror._timer.cancel()
+
+
+def test_a_429_with_an_html_body_waits_for_the_retry_after_header(signin, mirror, monkeypatch):
+    signin.fake.people = []                       # the account advertises the endpoint (read before any sign-in)
+    signin.login()
+    monkeypatch.setattr(mirror, "_auth", signin.auth)
+    limited = httpx.Response(429, headers={"Retry-After": "120"}, content=b"<html>Too many requests</html>")
+    monkeypatch.setattr(oidc.httpx, "post", lambda *a, **k: limited)
+    mirror.send()
+    assert mirror._timer is not None and mirror._timer.interval == 120
+    assert mirror._next_allowed > 0
+
+
+def test_a_change_during_the_wait_does_not_send_early(signin, mirror, monkeypatch):
+    signin.fake.people = []                       # the account advertises the endpoint (read before any sign-in)
+    signin.login()
+    monkeypatch.setattr(mirror, "_auth", signin.auth)
+    monkeypatch.setattr(oidc.httpx, "post", lambda *a, **k: httpx.Response(429, json={"retry_after": 600}))
+    mirror.send()
+    sent = []
+    monkeypatch.setattr(mirror, "push_now", lambda *a, **k: sent.append(1))
+    mirror.changed()
+    mirror.send()                                 # the daily loop, or a timer, during the wait
+    assert sent == [] and mirror._timer.interval > mirror.DEBOUNCE_SECONDS * 3
+    monkeypatch.setattr(mirror, "_next_allowed", 0.0)
+    mirror.send()                                 # the wait is over: one send, with the newest list
+    assert sent == [1]

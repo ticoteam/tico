@@ -40,7 +40,7 @@ def who_to_ask(c, auth, settings, asker, e, target, to=""):
             who = auth.identity_for_actor(c, actor)
         except Problem:
             continue                                    # left the team
-        if settings_catalog.may(c, auth, who, e, target, settings):
+        if settings_catalog.may(c, auth, who, e, target):
             found.append(who)
     if not found:
         raise Problem("no_one", f"{_name(c, to) if to else 'No one else on the team'} may change {e.name}", 409)

@@ -1,0 +1,118 @@
+{
+ "answer": {
+  "attempt": {
+   "bot": "ops",
+   "bot_session_epoch": 0,
+   "browser_exit": null,
+   "chat_goal": null,
+   "computer_label": "Test Mac",
+   "computer_logins_v1": true,
+   "config": {
+    "model": "hermes-profile",
+    "name": "ops",
+    "repo_access_mode": "own",
+    "runtime": "fake",
+    "status": "active"
+   },
+   "conversation": {
+    "closed_at": null,
+    "created": "2026-01-01T00:00:00.000000Z",
+    "id": "00000000-0000-4000-8000-000000000003",
+    "kind": "chat",
+    "last_message_at": "2026-01-01T00:00:00.000000Z",
+    "owner_actor": "human:ana",
+    "participants": [
+     "human:ana",
+     "bot:ops"
+    ],
+    "participants_json": "[\"human:ana\", \"bot:ops\"]",
+    "room_key": "ops",
+    "scope": "personal",
+    "subject": "Chat with ops",
+    "task_id": null
+   },
+   "credential_vault": false,
+   "deferred": "",
+   "gateway": false,
+   "generation": 1,
+   "history": [
+    {
+     "answered_by": null,
+     "body": "Please summarize the current work.",
+     "conversation_id": "00000000-0000-4000-8000-000000000003",
+     "created": "2026-01-01T00:00:00.000000Z",
+     "deleted_at": null,
+     "delivered_at": null,
+     "edited_at": null,
+     "expires_at": null,
+     "from_actor": "human:ana",
+     "hidden_at": null,
+     "id": "00000000-0000-4000-8000-000000000002",
+     "in_reply_to": null,
+     "kind": "say",
+     "public": 0,
+     "read_at": null,
+     "refs": {
+      "rule": "person_message"
+     },
+     "refs_json": "{\"rule\": \"person_message\"}",
+     "superseded_at": null,
+     "to_actor": "bot:ops",
+     "wait_s": null
+    }
+   ],
+   "id": "00000000-0000-4000-8000-000000000001",
+   "job_id": "00000000-0000-4000-8000-000000000002",
+   "lane": "main",
+   "learned": null,
+   "lease_seconds": 90,
+   "lease_until": "2026-01-01T00:00:00.000000Z",
+   "login_class": "review",
+   "mailboxes": [],
+   "message": {
+    "answered_by": null,
+    "body": "Please summarize the current work.",
+    "conversation_id": "00000000-0000-4000-8000-000000000003",
+    "created": "2026-01-01T00:00:00.000000Z",
+    "deleted_at": null,
+    "delivered_at": null,
+    "edited_at": null,
+    "expires_at": null,
+    "from_actor": "human:ana",
+    "hidden_at": null,
+    "id": "00000000-0000-4000-8000-000000000002",
+    "in_reply_to": null,
+    "kind": "say",
+    "public": 0,
+    "read_at": null,
+    "refs": {
+     "rule": "person_message"
+    },
+    "refs_json": "{\"rule\": \"person_message\"}",
+    "superseded_at": null,
+    "to_actor": "bot:ops",
+    "wait_s": null
+   },
+   "next_run": [],
+   "notes": [],
+   "onboarding": "",
+   "principal": "human:ana",
+   "recovery": null,
+   "routine": null,
+   "session_epoch": 0,
+   "start_reservation_seconds": 180,
+   "task": null,
+   "token": "turn-token",
+   "updates": null,
+   "worktrees": []
+  }
+ },
+ "endpoint": "claim",
+ "request": {
+  "busy_bots": [],
+  "busy_lanes": [],
+  "next_run": true,
+  "start_places": true
+ },
+ "status": 200
+}

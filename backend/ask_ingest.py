@@ -23,19 +23,27 @@ Fail open: Off, no decision model, rehearsal install, the month's spend cap, the
 within `DEADLINE` seconds, a malformed answer, or an answer the outcome depends on under its threshold all let the
 item through as before. Each call is one `judge.call` row (label, model, tokens, latency, cost, the answers and the
 outcome); never the item's text. Each gated item is one `ask_ingest_items` row (ids, outcome and reason; never text).
+
+Bounded: at most `CONCURRENCY` calls run at once in this process (`call_slots.Calls`, a pool of its own apart
+from the rule checks'). With every slot in use, or the breaker open after repeated failures, the item fails open
+at once (`busy`, `breaker`) and no call is made, so no `judge.call` row is written. A call still running at
+`DEADLINE` is cut off there (`J.within`) and keeps its slot until it really ends.
 """
 
 import json
 import logging
 import threading
+import weakref
 
 from clients import judge as J
+from .call_slots import NEUTRAL, REFUSED, Calls
 from .judge import audit_detail, daily_cap, over_spend_cap, server_engine, used_today
-from .store import H
+from .store import H, Problem
 
 LOG = logging.getLogger("tico.ask_ingest")
 QUESTION_SET = "person-ask-ingest"
 DEADLINE = 10
+CONCURRENCY = 8               # calls at once, per process; the rule checks have their own pool
 MAX_ITEMS = 100               # the person's open items offered as `covered` options, newest first
 MAX_TEXT = 1500               # the item's text the model sees
 MAX_CRITERIA, MAX_CRITERION = 10, 200
@@ -55,6 +63,12 @@ DEFAULTS = {"mode": REHEARSAL, "budget": 10, "chores_budget": 5, "criteria": [
 THROUGH, HANDS, FYI, SENT_BACK, MERGED, FAILED_OPEN = "through", "hands", "fyi", "sent_back", "merged", "failed_open"
 OFF_PLATE = (FYI, SENT_BACK, MERGED)
 DECISION, CHORE, STATUS, OWN_WORK, SETUP = "decision", "chore", "status", "own_work", "setup"
+# A judged call with no item row carries a named reason, one `ask_ingest.unrecorded` event on the call: `joined` (a
+# blocker's repeat joined an open ask), `held` (the rule check held the write), `target` (sent to someone else than the
+# verdict's person), `not_applied` (the write did not put the item on the person), `folded` (a question folded into an
+# open one), `refused` (the write raised: a refusal), `error` (it raised otherwise). A replay's call is `replay`.
+UNRECORDED = "ask_ingest.unrecorded"
+REPLAY = "replay"
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS ask_ingest_settings(
@@ -129,9 +143,9 @@ def save(c, actor, person, body):
 # ---- who is gated, and the person's load ------------------------------------------------------------------------
 
 def gated(who, assistant_bot=""):
-    """Whether this caller's write is gated: a bot writing as itself. A person, their Assistant acting for them
+    """Gate a bot writing as itself or through BotOps. A person, their Assistant acting for them
     (`via`), BotOps acting for a person and the keeper are not."""
-    return (who.role == "bot" and not who.via and str(who.actor).startswith("bot:")
+    return (who.role == "bot" and who.via in (None, "", "botops") and str(who.actor).startswith("bot:")
             and H.actor_id(who.actor) != assistant_bot)
 
 
@@ -178,24 +192,53 @@ def manager_of(c, bot_actor):
 
 # ---- the call ---------------------------------------------------------------------------------------------------
 
-def _ask(engine, state, questions, label):
-    """The engine's answer within DEADLINE seconds: (result, None), (None, error code) or (None, 'timeout')."""
+_CALLS, _CALLS_LOCK = weakref.WeakKeyDictionary(), threading.Lock()
+
+
+def calls_for(store):
+    """The store's ask ingest pool, `CONCURRENCY` slots (`call_slots.Calls`); the rule checks' pool is apart."""
+    with _CALLS_LOCK:
+        calls = _CALLS.get(store)
+        if calls is None:
+            calls = _CALLS[store] = Calls(CONCURRENCY, "Ask ingest")
+        return calls
+
+
+def _ask(calls, engine, state, questions, label):
+    """The engine's answer within DEADLINE seconds: (result, None), or (None, error code): `timeout`, and `busy` or
+    `breaker` at once, asking nothing. The deadline is the call's own too (`J.within`), so an abandoned call stops at
+    it, and its slot ends with it."""
+    refused, probe = calls.admit()
+    if refused:
+        return None, refused
     box = {}
 
     def work():
         try:
-            box["result"] = engine(state, questions, label)
+            with J.within(DEADLINE):
+                box["result"] = engine(state, questions, label)
         except J.JudgeError as exc:
             box["error"] = exc.code
         except Exception as exc:    # a fake, a provider bug: the write never breaks on it
             LOG.warning("Ask ingest call failed: %s", type(exc).__name__)
             box["error"] = "error"
+        finally:
+            calls.slots.release()
     worker = threading.Thread(target=work, name="ask-ingest", daemon=True)
-    worker.start()
+    try:
+        worker.start()
+    except RuntimeError:                    # no thread to be had: the slot goes back and the item fails open
+        calls.slots.release()
+        calls.done(None, probe)
+        return None, "busy"
     worker.join(DEADLINE)
     if worker.is_alive():
+        calls.done(False, probe)
         return None, "timeout"
-    return box.get("result"), box.get("error")
+    error = box.get("error")
+    answered = error is None and box.get("result") is not None
+    calls.done(None if error in NEUTRAL else answered, probe)
+    return box.get("result"), error
 
 
 def _bot_line(c, actor):
@@ -216,7 +259,9 @@ def _judge(store, engine, qset, own, items, asker, person_name, title, text, kin
         questions["covered"] = J.with_options(qset["questions"]["covered"], {name: t for name, (_, t) in items.items()})
     state = {"item": {"title": str(title or "")[:300], "text": str(text or "")[:MAX_TEXT]},
              "asker": asker, "person": person_name}
-    result, error = _ask(engine, state, questions, qset["label"])
+    result, error = _ask(calls_for(store), engine, state, questions, qset["label"])
+    if error in REFUSED:
+        return None, None, error            # no call was made: no judge.call row, and the day's count is kept
     if result is not None and not isinstance(result, dict):
         result, error = None, "shape"
     answers = None
@@ -240,6 +285,7 @@ def preflight(store, primary, who, target, title, text, kind="task"):
     """Ask the set about one item for the person `target` names, outside any transaction. Returns the verdict
     `apply` reads: {person, asker, kind, mode, answers (typed values, None where under threshold), items, criteria,
     call, error}; None when the write is not gated (a person's, not to a person, mode Off). Never raises."""
+    verdict = None
     try:
         if not target or not gated(who, store.settings.assistant_bot):
             return None
@@ -247,16 +293,19 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             person = H.resolve_actor(c, target)
             if not person or not H.is_human(person) or not H.human(c, H.actor_id(person)):
                 return None
+            # The verdict exists before anything that can raise (the settings read included), so a failure after the
+            # person is known still lands a failed_open row (PR 1798's contract).
+            verdict = {"person": person, "asker": who.actor, "kind": kind, "mode": None, "answers": None,
+                       "items": {}, "criteria": {}, "call": None, "error": None}
             own = settings(c, person)
             if own["mode"] == OFF:
                 return None
-            verdict = {"person": person, "asker": who.actor, "kind": kind, "mode": own["mode"], "answers": None,
-                       "items": {}, "criteria": {}, "call": None, "error": None}
+            verdict["mode"] = own["mode"]
             try:
                 qset = J.load_set(QUESTION_SET)
             except J.JudgeError as exc:
-                LOG.warning("Ask ingest is off: %s", exc.detail)
-                return None
+                LOG.warning("Ask ingest question set failed: %s", exc.code)
+                return {**verdict, "error": exc.code or "error"}
             engine = server_engine(store, c, primary)
             if engine is None:
                 # No decision model at all is Decide off: nothing to record. The month's cap is a failure kept.
@@ -267,10 +316,12 @@ def preflight(store, primary, who, target, title, text, kind="task"):
             asker = _bot_line(c, who.actor)
             person_name = H.person_name(c, H.actor_id(person)) or H.actor_id(person)
         answers, call, error = _judge(store, engine, qset, own, items, asker, person_name, title, text, kind)
-        return {**verdict, "answers": answers, "items": {n: i for n, (i, _) in items.items()},
-                "criteria": _criteria(own), "call": call, "error": error}
+        verdict.update(answers=answers, call=call, error=error)
+        return {**verdict, "items": {n: i for n, (i, _) in items.items()}, "criteria": _criteria(own)}
     except Exception as exc:          # the gate never stops the write
         LOG.warning("Ask ingest preflight failed: %s", type(exc).__name__)
+        if verdict is not None:
+            return {**verdict, "error": (exc.code if isinstance(exc, J.JudgeError) else None) or "error"}
         return None
 
 
@@ -382,10 +433,20 @@ def apply(c, verdict):
     keep the item off the person's plate (mode On and sent back or FYI). The write then calls `record` with the
     item's id. Reads only."""
     person, asker = verdict["person"], verdict["asker"]
-    own = settings(c, person)          # the settings at this item, not at the call
-    decisions, chores = load(c, person)
-    if verdict.get("error"):
-        would, reason = FAILED_OPEN, verdict["error"]
+    try:
+        own = settings(c, person)          # the settings at this item, not at the call
+        decisions, chores = load(c, person)
+        error = verdict.get("error")
+    except Exception as exc:
+        # A read that fails inside the write does not stop the write: the item is a failed open, and it acts on no
+        # plate (the mode is the verdict's, or Rehearsal when even that is unknown).
+        LOG.warning("Ask ingest read failed inside the write: %s", type(exc).__name__)
+        own = {"mode": verdict.get("mode") or REHEARSAL, "budget": DEFAULTS["budget"],
+               "chores_budget": DEFAULTS["chores_budget"]}
+        decisions, chores = 0, 0
+        error = verdict.get("error") or "error"
+    if error:
+        would, reason = FAILED_OPEN, error
     else:
         would, reason = decide(verdict["answers"], own["budget"], own["chores_budget"], decisions, chores)
     mode = own["mode"]
@@ -436,10 +497,78 @@ def record(c, verdict, decided, ref, message_id=None):
                  "action": decided["outcome"] if decided["mode"] == ON else "rehearsal"})
 
 
+def skipped(c, verdict, why):
+    """A judged item that lands no row (a repeat that joined an open ask, a write held or sent elsewhere): its judge call
+    is named `why`, so the readout reconciles it. A verdict with no call judged nothing, so it needs no reason."""
+    if verdict and verdict.get("call"):
+        H.event(c, H.KEEPER, UNRECORDED, verdict["call"], {"label": QUESTION_SET, "why": why})
+
+
+def judged(store, verdicts, run):
+    """`run()`, the write these verdicts (one, a list, or None) were judged for. A write that raises lands no row, so each
+    of its calls is named: `refused` for a refusal (a Problem or a Refused), `error` otherwise. The naming is its own
+    transaction, so it outlives the write's rollback; the error then goes on as it was."""
+    try:
+        return run()
+    except Exception as exc:
+        why = "refused" if isinstance(exc, (Problem, H.Refused)) else "error"
+        judged_calls = [v for v in (verdicts if isinstance(verdicts, list) else [verdicts]) if v and v.get("call")]
+        if judged_calls:
+            with store.transaction() as c:
+                for verdict in judged_calls:
+                    skipped(c, verdict, why)
+        raise
+
+
+def _in_chunks(ids, size=500):
+    ids = list(ids)
+    for n in range(0, len(ids), size):
+        yield ids[n:n + size]
+
+
+def reconcile(c, start, end):
+    """The window's judge calls on the question set, each one accounted for: `landed` (an item row carries its call),
+    a named reason (`replay`, or the `ask_ingest.unrecorded` reason on it), or `unexplained` (neither: a gap to find).
+    `no_call` counts item rows the gate wrote with no call (busy, breaker, no decision model). By construction
+    calls == landed + sum(reasons) + unexplained."""
+    found = H._rows(c.execute("SELECT id, detail_json FROM events WHERE action='judge.call' AND target LIKE ? "
+                              "AND ts>=? AND ts<?", (f"{QUESTION_SET}@%", start, end)))
+    modes = {}
+    for row in found:
+        try:
+            modes[row["id"]] = (json.loads(row["detail_json"] or "{}") or {}).get("mode")
+        except (TypeError, ValueError, AttributeError):
+            modes[row["id"]] = None
+    rows, why = set(), {}
+    for chunk in _in_chunks(modes):
+        marks = ",".join("?" * len(chunk))
+        rows |= {r[0] for r in c.execute(f"SELECT call_id FROM ask_ingest_items WHERE call_id IN ({marks})", chunk)}
+        for r in c.execute(f"SELECT target, detail_json FROM events WHERE action=? AND target IN ({marks})",
+                           (UNRECORDED, *chunk)):
+            try:
+                why.setdefault(r[0], (json.loads(r[1] or "{}") or {}).get("why") or "unknown")
+            except (TypeError, ValueError, AttributeError):
+                why.setdefault(r[0], "unknown")
+    out = {"calls": len(modes), "landed": 0, "reasons": {}, "unexplained": 0, "no_call": c.execute(
+        "SELECT COUNT(*) FROM ask_ingest_items WHERE created>=? AND created<? AND call_id IS NULL",
+        (start, end)).fetchone()[0]}
+    for call_id, mode in modes.items():
+        if call_id in rows:
+            out["landed"] += 1
+            continue
+        named = why.get(call_id) or (REPLAY if mode == "replay" else None)
+        if named:
+            out["reasons"][named] = out["reasons"].get(named, 0) + 1
+        else:
+            out["unexplained"] += 1
+    out["reasons"] = dict(sorted(out["reasons"].items()))
+    return out
+
+
 def on_reply(c, actor, task_id, text):
     """A person's answer on an open item the gate merged repeats into (hubdb.task_comment, hubdb.answer): passed once
     to each bot that asked the same thing, on its own task (waking it) or, for a question outside any task, as a
-    message. The CEO Bot's merge (backend/ceo_merge.py) relays the same way for its own merged items."""
+    message. The Strategy Bot's merge (backend/strategy_merge.py) relays the same way for its own merged items."""
     if not H.is_human(actor) or not task_id or not str(text or "").strip():
         return
     try:

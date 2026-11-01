@@ -61,7 +61,7 @@ const SCENE = `export function createBuilding(data) {
     });
     // Opened by its address, the campus is drawn once the team has loaded (switching the hash earlier would draw it
     // before the roster arrives and draw it again after).
-    await page.goto('http://tico-ui.test/#/overview');
+    await page.goto('http://tico-ui.test/#/overview/campus');
     const frame = page.frameLocator('#overview-frame');
     await frame.locator('body[data-scene-ready]').waitFor();
     const scene = page.frames().find(f => f.url().includes('/overview/index.html'));

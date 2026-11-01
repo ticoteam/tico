@@ -124,6 +124,7 @@ def roster(c, settings, now=None):
 
     A packet is work only a bot that runs can do. A bot on an external agent's platform never gets a
     run here, and one that had no run in the last day would only stack nights up unread: neither gets one.
+    A stateless bot keeps nothing from one task to the next (hubdb.stateless), so a night's packet would be kept nowhere.
     """
     skip = {*HELPERS, settings.assistant_bot}
     since = utc(H.parse_ts(now or H.now()) - timedelta(hours=LOOKBACK_HOURS))
@@ -134,7 +135,8 @@ def roster(c, settings, now=None):
                          "LEFT JOIN bot_config bc ON bc.bot=b.slug WHERE b.state='active' "
                          "AND coalesce(json_extract(bc.config_json,'$.shared_from'),'')='' "
                          "AND coalesce(bc.onboarding_state,'') NOT IN " + PARKED_SQL + " ORDER BY b.slug"):
-        if row["slug"] in skip or row["slug"] not in ran or is_external(H._json(row["config_json"], {}) or {}):
+        config = H._json(row["config_json"], {}) or {}
+        if row["slug"] in skip or row["slug"] not in ran or is_external(config) or H.stateless(config):
             continue
         name = row["display_name"] or row["slug"]
         profile = LIBRARIAN_PROFILE if row["slug"] == LIBRARIAN else (

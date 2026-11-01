@@ -9,7 +9,8 @@ The trigger's own address keeps working in parallel.
 Notices from Tico Team ride the same queue (backend/tico_notices.py): HQ keeps a system relay for the built-in trigger
 `_tico`, so a Gateway key alone is enough to receive them. The loop then pulls every minute instead of every 15
 seconds. That relay is recorded only from HQ's list of relays (`system: true`, asked at most hourly, and at once when a
-delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked.
+delivery names a relay not recorded yet); a delivery naming `_tico` from any other relay is dropped and acked. Physical
+mail (backend/postal_mail.py) arrives on the same system relay with the trigger `_mail`, under the same rule.
 
 The pull follows the mail loop (backend/inbound.py): `wait=0`, a cursor kept here, an ack after the work is committed,
 off the scheduler thread. Every outcome of `receive` (accepted, duplicate, refused, rate_limited, not_found) is
@@ -34,6 +35,7 @@ import threading
 import time
 import urllib.parse
 from datetime import timezone
+from typing import Any
 
 import httpx
 from fastapi import Request
@@ -43,6 +45,8 @@ from clients.gateway import user_agent
 
 from . import gateway_connection as GC
 from . import hubdb as H
+from . import outbound_tls
+from . import postal_mail
 from . import tico_notices
 from .auth import validate_identity
 from .models import Contract, Empty
@@ -92,9 +96,10 @@ class Stop(Exception):
 class Failed(Exception):
     """HQ did not answer, or answered something this server cannot use. `code` is stable and holds no HQ text."""
 
-    def __init__(self, code, status=0, body=None):
+    def __init__(self, code: str, status: int = 0, body: object = None) -> None:
         super().__init__(code)
-        self.code, self.status, self.body = code, status, body or {}
+        self.code, self.status = code, status
+        self.body: object = body or {}
 
 
 # ----------------------------------------------------------------------------- state
@@ -160,17 +165,19 @@ def clean_wake_url(value):
 class Link:
     """One Gateway key and base URL, read once from the connection (backend/gateway_connection.py)."""
 
-    def __init__(self, key, base, fingerprint):
+    def __init__(self, key: str, base: str, fingerprint: str) -> None:
         self.key, self.base, self.fingerprint = key, base, fingerprint
 
-    def call(self, method, path, body=None, idempotency=None, *, area="hooks", transport=None, cap=MAX_ANSWER):
+    def call(self, method: str, path: str, body: object = None, idempotency: str | None = None, *,
+             area: str = "hooks", transport: object = None, cap: int = MAX_ANSWER) -> dict[str, Any]:
         """One call to `<base>/<area>/<path>`. `area` and `cap` let the sleep client (backend/sleep_idle.py) share the
         key, the pinned client settings and the answer cap; `transport` is a test's fake HQ."""
         headers = {"Authorization": "Bearer " + self.key, "User-Agent": user_agent(), "Accept-Encoding": "identity"}
         if idempotency:
             headers["Idempotency-Key"] = idempotency[:200]
         try:
-            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False) as client:
+            with httpx.Client(transport=transport or TRANSPORT, timeout=TIMEOUT, trust_env=False, follow_redirects=False,
+                              verify=outbound_tls.context(trust_env=False)) as client:
                 with client.stream(method, f"{self.base}/{area}/{path}", json=body, headers=headers) as response:
                     raw = bytearray()
                     for chunk in response.iter_bytes():
@@ -195,7 +202,7 @@ class Link:
         return answer
 
 
-def link_of(c, vault, settings):
+def link_of(c: Any, vault: Any, settings: Any) -> Link | None:
     """The Link for the connected key, or None. A base the key may not be sent to is no link."""
     key, base, _ = GC.target(c, vault, settings)
     if not key:
@@ -368,6 +375,18 @@ class HookRelay:
         headers = item.get("headers") if isinstance(item.get("headers"), dict) else {}
         headers = {str(k): str(v) for k, v in headers.items()}
         trigger_id, relay_id = str(item.get("trigger_id") or ""), str(item.get("relay_id") or "")
+        kick = False
+        if trigger_id == postal_mail.TRIGGER:
+            # A letter (backend/postal_mail.py) rides the system relay too and is only kept here: the download and the
+            # model calls run in the mail drain, never inside this transaction.
+            with self.store.transaction() as c:
+                if tico_notices.accepts(c, relay_id):
+                    kick = postal_mail.arrived(c, body, str(item.get("delivery_id") or ""))
+                save(c, cursor=seq)
+            mail = getattr(self.app.state, "postal_mail", None)
+            if kick and mail:
+                mail.kick()
+            return True
         with self.store.transaction() as c:
             # Only a trigger that has this live relay here is fed: HQ's word alone never reaches another trigger. The
             # one built-in exception is `_tico`, fed only from the system relay HQ's list named (`learn_notice_relay`).
@@ -397,9 +416,9 @@ class HookRelay:
         return H.human_actor(pid) if pid else None
 
     def unknown_system_relay(self, items):
-        """Whether a delivery in this page names `_tico` through a relay not recorded here."""
+        """Whether a delivery in this page names `_tico` or `_mail` through a relay not recorded here."""
         wanted = {str(i.get("relay_id") or "") for i in items
-                  if isinstance(i, dict) and i.get("trigger_id") == tico_notices.ID}
+                  if isinstance(i, dict) and i.get("trigger_id") in (tico_notices.ID, postal_mail.TRIGGER)}
         if not wanted:
             return False
         with self.store.read() as c:

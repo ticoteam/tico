@@ -68,3 +68,7 @@ The person turns the switch off, or changes the forward addresses, in the same p
   Never report "on" before it says so.
 - **The bot is not its person's message bot yet.** `hub health check` says so; link it as them
   (`playbooks/set-up-a-bot.md`, step 3).
+
+## Who turns it on
+Turning a bot on is the requester's to ask for. When they asked you to build it, take it live; when they only asked to look,
+report readiness. Sending stays off until they say.

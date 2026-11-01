@@ -1,4 +1,4 @@
-// Settings > Rules (ui/app/settings-recurring.js): one flat list above the wake rules and bot routines, no group headings, a search box
+// Settings > System (ui/app/settings-recurring.js): one flat list of Tico's own jobs, no group headings, a search box
 // that matches name, trigger, action and department; each row reads WHEN ... THEN ... with one department tag, its
 // schedule, last run in words (a failure in red with its reason), next run, and for a Decide job the route that answered,
 // a fallback in words and this month's spend. Housekeeping says Tico needs it. An owner or admin gets a switch, a
@@ -34,7 +34,7 @@ function system(role) {
     job('due_reminders', 'Due reminders', {schedule: 'Every 10 seconds', group: 'reminders', when: ['every 10 seconds'], then: ['tell a bot when one of its tasks reaches its due time']}),
     job('approval_expiry', 'Approval expiry', {group: 'reminders', then: ['take approvals and asks nobody will act on out of Needs you']}),
     job('stall_checks', 'Stall checks', {needed: true, schedule: 'Every minute', when: ['every minute']}),
-    job('stall_triage', 'Quiet task triage', ctl({ai: true, group: 'checks', records: false, schedule: 'When it happens',
+    job('stall_triage', 'Stalled task check', ctl({ai: true, group: 'checks', records: false, schedule: 'When it happens',
       when: ['a quiet task nothing has changed on'], then: ['set its wait, close it, or let one wake through']})),
     job('topic_fresh', 'Start fresh when the topic changes', {switch: true, can_change: admin, on: false, records: false, group: 'chat', schedule: 'When it happens',
       when: ['a message in a direct chat changes the topic'], then: ['start a fresh session, like Clear']}),
@@ -63,8 +63,7 @@ async function open(browser, role) {
       name: 'Ana', email: 'ana@example.com', cloud: true, registered: true, config});
     if (p === '/api/v2/config') return json(config);
     if (p === '/api/employees') return json([{name: 'ops', display_name: 'Ops', status: 'active'}]);
-    if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: [],
-      schedules: [{id: 's1', title: 'Weekly report', employee: 'ops', bot: 'ops', cron: '0 9 * * 1', active: true, next: soon}]});
+    if (p === '/api/status') return json({cloud: true, active: [], queued: [], recent_runs: [], keeper_alive: true, health_issues: []});
     if (p === '/api/v2/status') return json({bots: []});
     if (p === '/api/v2/models') return json({models: [], harnesses});
     if (p === '/api/v2/access') return json({rules: {}});
@@ -99,7 +98,7 @@ async function open(browser, role) {
   await page.goto('https://tico-ui.test/#/settings');
   await page.locator('#settings-tabs').waitFor();
   await page.locator('#settings-more summary').click();
-  await page.locator('[data-settings-tab="recurring"]').click();
+  await page.locator('[data-settings-tab="system"]').click();
   await page.locator('[data-system-routine="stale_review"]').waitFor();
   return {page, errors, asked, writes};
 }
@@ -116,9 +115,10 @@ const saved = async (page, writes, count, key) => {
   try {
     for (const role of ['owner', 'admin', 'member']) {
       const {page, errors, asked, writes} = await open(browser, role);
-      // One flat list above the bot routines: no group headings, a search box on top.
-      const headings = await page.locator('#settings-recurring h2:visible').allInnerTexts();
-      assert.deepEqual(headings.map(h => h.trim()), ['What Tico runs on its own', 'What wakes a bot', 'Bot routines'], role);
+      // One flat list, no wake rules or bot routines: no group headings, a search box on top.
+      const headings = await page.locator('#settings-system h2:visible').allInnerTexts();
+      assert.equal(headings[0].trim(), 'What Tico runs on its own', role);
+      assert.ok(!headings.some(h => /wakes|routines/i.test(h)), role + ': ' + headings);
       assert.equal(await page.locator('#set-system-routines h3').count(), 0, 'no group headings');
       assert.equal(await page.locator('#set-system-routines [data-sysr-search]').count(), 1);
       assert.equal(await page.locator('#set-system-routines [data-system-routine]').count(), 10);
@@ -148,7 +148,7 @@ const saved = async (page, writes, count, key) => {
       await search.fill('engineering');
       assert.equal((await shown()).length, 10);
       await search.fill('zzz');
-      assert.match(await page.locator('[data-sysr-none]').innerText(), /No routine matches/);
+      assert.match(await page.locator('[data-sysr-none]').innerText(), /No job matches/);
       await search.fill('');
       if (role === 'member') {
         // A member reads the list: no switch, schedule choice or Run now anywhere.
@@ -165,7 +165,7 @@ const saved = async (page, writes, count, key) => {
         assert.equal(await row(page, 'still_wanted').locator('[data-sysr-at]').inputValue(), '09:00');
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-on]').isChecked(), false);
         assert.equal(await row(page, 'topic_fresh').locator('[data-sysr-run]').count(), 0, 'a switch only');
-        // Quiet task triage runs on a happening: a switch, no schedule choice, no Run now (the server has nothing to run).
+        // Stalled task check runs on a happening: a switch, no schedule choice, no Run now (the server has nothing to run).
         assert.equal(await row(page, 'stall_triage').locator('[data-sysr-on]').count(), 1);
         assert.equal(await row(page, 'stall_triage').locator('[data-sysr-run], [data-sysr-preset]').count(), 0);
         // Health scan: the owner changes it; an admin reads it and is told why.
@@ -195,8 +195,6 @@ const saved = async (page, writes, count, key) => {
           {method: 'PUT', key: 'topic_fresh', body: {on: true}}, {method: 'POST', key: 'stale_review', body: {}},
           {method: 'PUT', key: 'still_wanted', body: {at: '10:30'}}]);
       }
-      // The bot routines are still listed below.
-      assert.match(await page.locator('#set-recurring').innerText(), /Weekly report/);
       assert.deepEqual(asked, ['GET']);
       assert.deepEqual(errors, []);
       await page.close();

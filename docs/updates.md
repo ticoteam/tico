@@ -8,7 +8,7 @@ updated never drags its computers ahead of it.
 
 ## What changed since your last look
 
-**What's new** in the sidebar and **Changelog** in the account menu show product changes you
+**What's new** in the sidebar (above Ask Tico, only while something is unread) and **Changelog** in the account menu show product changes you
 have not acknowledged. **Since last look** includes every unread release and team announcement;
 choose **All product updates** to browse history or **All activity** to include accessible bot outcomes.
 Search changes, expand a release's remaining bullets, or open its full release notes. Opening the
@@ -204,7 +204,15 @@ The server's `updater` service is pinned to the same release as the server (`TIC
 services that need a compose change reach existing installs. `.env` is never replaced (only its `TICO_TAG` line moves).
 The previous files are kept in `.bundle-previous/`. A download or checksum failure refuses the update before anything
 changes; a release that does not turn healthy is rolled back, image and bundle together. Slack and the front door are
-recreated from the new file when it changes them.
+recreated from the new file when it changes them. While the server restarts, the front door holds requests for up to
+30 seconds and then answers them normally ([Update](install.md#update)); with a tunnel that is the `hold` service, which
+an update leaves running. The update that adds `hold` also recreates cloudflared once, after `hold` is up and answering,
+so it reads its new route (`/tunnel/ingress.yml`); if `hold` cannot be pulled or does not answer, the update rolls back
+and cloudflared stays on its old route straight to the server.
+
+A cell company ([cell mode](cell.md#updates)) has no sidecar: the host's cell updater answers the same contract for it,
+so it has Update now too. It runs the cell's own `update` (no bundle to replace, since the company's `compose.yaml` is
+the core's); a release newer than the host's core runs with that release's own core, which the updater installs.
 
 Before anything changes, the updater also renders the compose files with the target tag (`docker compose config`) and
 refuses the update when `server`, or `slack` when it runs, would not get that release's image: an override that sets
@@ -213,6 +221,9 @@ release on `/healthz`; otherwise the update counts as unhealthy and is rolled ba
 
 `GET /api/v2/system/update` also says which release the server is `running`, the one it ran `previous`ly and a short
 `history`. The server writes these itself at startup, so they stay right after an update done outside the updater.
+
+A server update never waits for running bot turns. The turns it cuts are flagged as it starts and resume on their own
+after it, with no Needs you item ([how](how-it-works.md)).
 
 Before it switches the server image, the updater takes a consistent SQLite snapshot (`sqlite3` backup API, run in the
 server container) into `/data/snapshots/pre-update-<version>-<time>.sqlite` and keeps the last three. A new version can
@@ -254,7 +265,8 @@ follow the server.
 
 An install run with its own `compose.override.yaml` can use **Update now**. The override may keep its environment,
 volumes, entrypoint and the `cloudflared` command; it must not set `image:` for `server` or `slack`, or the updater
-refuses every update. Then in `.env`:
+refuses every update. A `cloudflared` command of its own should read `--config /tunnel/ingress.yml`, the route through
+`hold`; the older `/tunnel/cloudflared.yml` goes straight to the server and is no longer rewritten. Then in `.env`:
 
 ```
 COMPOSE_PROFILES=cloudflared,updater    # your existing profiles, plus updater
@@ -341,13 +353,39 @@ Automatic rollback covers a release that does not come up. To go back by choice:
 
 ## The built-in bots' instructions
 
-The Assistant, BotOps, the Librarian and the CEO Bot keep their instructions and playbooks in a repository on the computer that
+The Assistant, BotOps, the Librarian and the Strategy Bot keep their instructions and playbooks in a repository on the computer that
 runs them. When a release changes one of those files in its template (`AGENT.md`, `playbooks/`, `skills/`), the computer brings that file up
 before the bot's next run, once per start of the runner; a file the release did not change keeps whatever the bot improved since. What the
 bot had before is kept in the repository's history. The bot's own notes, knowledge, state and playbooks it wrote are never touched
 (`clients/catalog.py`, `refresh`).
 
 ## Coming from an older version
+
+### Moving to Automations (one time)
+
+This release runs routines and wake rules as Automations. The first start of v0.5.0 moves them by itself, once: each
+routine, wake rule, inbox, hourly spend limit and low turn budget becomes its Automations equivalent, one write per
+object, and a restart part way goes on where it stopped. What cannot move stays as it was and is listed once in a task
+for the owner; otherwise the owner gets one notice. The old tables keep their rows. No setting is needed. A new install,
+or one with nothing to move, does nothing extra.
+
+1. Before updating, see what will move, with the new release's image (the old one has no report). It reads a copy and
+   never writes to the database, so it can run beside the running server:
+
+   ```
+   TICO_TAG=vX.Y.Z docker compose pull server
+   TICO_TAG=vX.Y.Z docker compose run --rm --no-deps --entrypoint python server \
+     -m backend.redesign_migration report --db /data/hub.sqlite
+   ```
+
+   (A checkout: the same command from the new release's code, `--db` set to `TICO_DB` from its `server.env`.) It says
+   what the next start moves, and lists every routine, rule and system job, what each becomes, and anything that stays,
+   with the reason.
+2. Update as usual.
+3. After the start, check the log for `redesign cutover ...: N moved to automations`, run the report again (every
+   object shows `moved`, `runs as before`, `kept` or `unchanged`; none `pending`), and open Automations.
+
+To go back, restore the snapshot taken before the update and run v0.4.17 again ([Rolling back](#rolling-back)).
 
 ### You're on 0.2: update to get one-tap support
 

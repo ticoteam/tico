@@ -11,14 +11,29 @@ max_run_minutes: 45
 # the bot puts every draft on the task and drafts until a person turns mail sending on in Tico.
 outbound_send: false
 
-# The first routine is declared off (`enabled: false`) and switched on when a human starts the bot's setup
-# (Start setup, go-live). `hub bot create` seeds it once; from then on Tico's row is the routine (docs/routines.md).
+# Declared off. Setup switches on only the first routine; the onboarding playbook (step 6) switches on the two growth
+# routines with `hub automation update <id> --enable`. `hub bot create` seeds them once; from then on Tico's automations
+# are the routines (docs/routines.md).
 routines:
   - id: weekly-marketing-summary
     title: Weekly marketing summary
     cron: "0 14 * * 5"
     timezone: America/Los_Angeles     # set this to the team's own timezone
     template: playbooks/weekly-marketing-summary.md
+    labels: [priority:p2]
+    enabled: false
+  - id: weekly-growth-meeting
+    title: Weekly growth meeting
+    cron: "0 8 * * 1"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/weekly-meeting.md
+    labels: [priority:p2]
+    enabled: false
+  - id: monthly-growth-report
+    title: Monthly growth report
+    cron: "0 9 3 * *"
+    timezone: America/Los_Angeles     # set this to the team's own timezone
+    template: playbooks/monthly-report.md
     labels: [priority:p2]
     enabled: false
 

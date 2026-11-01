@@ -1,6 +1,6 @@
 # Starter bots
 
-There are 98 role templates: 96 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
+There are 99 role templates: 97 in nine groups (Sales, Marketing, Customer Support, Finance, Operations, Legal, HR,
 Product and Engineering) and a two-template Leadership extra, enough to staff a team of ten to two hundred humans. **Every
 template is a real role that does the work within its granted Tools.** Each is a job title a team would
 hire and put on its team chart (Sales Development Representative, Bookkeeper, Recruiter, Site Reliability Engineer), never a
@@ -28,7 +28,7 @@ Chief of Staff is no longer a default.
 | Group | Icon | Head | Templates | Goal |
 |---|---|---|---|---|
 | Sales | `handshake` | Sales Manager (`sales-lead`) | 8 | Turn interest into revenue |
-| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 13 | Be known by the customers you want |
+| Marketing | `campaign` | Head of Marketing (`marketing-lead`) | 14 | Be known by the customers you want |
 | Customer Support | `support_agent` | Head of Customer Support (`support-lead`) | 10 | Every customer helped and kept |
 | Finance | `account_balance` | Head of Finance (`finance-lead`) | 14 | Know where the money is |
 | Operations | `settings_suggest` | Operations Manager (`ops-manager`) | 13 | Run smoothly, nothing dropped |
@@ -44,13 +44,13 @@ covered, it proposes a specific worker template from its `team_templates` with t
 and only after the owner confirms asks BotOps to set it up (`hub task create --owner botops`). Heads never create bots
 themselves and never do their team's work.
 
-Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, CEO Bot) and message bots (Inbox Manager) have plain
+Roles are real job titles on the team chart; built-in bots (Assistant, BotOps, Librarian, Strategy Bot) and message bots (Inbox Manager) have plain
 function names and live outside it.
 
 The built-ins are not in any group and no template duplicates them: the Librarian owns the docs, the FAQ and the answers
 built from them (Support Agent asks it with `hub doc ask` and reports a missing or wrong doc to it as a task; HR Generalist and
 Benefits Administrator do the same for policy and plan questions; Technical Writer covers only READMEs and API docs in the
-product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the CEO Bot keeps the
+product repositories); BotOps creates and maintains bots; the Assistant is each human's own; and the Strategy Bot keeps the
 KPIs, so no template owns a KPI (Product Analyst and FP&A Analyst answer questions and explain numbers, they do not keep them).
 
 ## The templates
@@ -76,7 +76,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
-| `campaign` | `marketing-lead` | Head of Marketing (head) | A weekly marketing summary (red/amber/green per workstream, blockers, a six-week calendar, proposed priorities), routing proposals, and a hiring proposal when repeated work has no owner | default | Tico only; calendar, meetings and docs optional |
+| `campaign` | `marketing-lead` | Head of Marketing (head) | A weekly marketing summary (red/amber/green per workstream, blockers, a six-week calendar, proposed priorities), routing proposals, and a hiring proposal when repeated work has no owner. As the Growth Lead it proposes ideas, runs the weekly growth meeting and the monthly growth report ([Growth](growth.md)) | default | Tico only; calendar, meetings and docs optional |
 | `edit_note` | `content` | Content Marketer | A four-week content plan and one finished piece a week with short versions, drafted until outbound sending is on | default | Tico only |
 | `travel_explore` | `seo-visibility` | SEO Specialist | A weekly report on search and AI-answer visibility with three page fixes written ready to apply | common | Public web; search and AI-visibility exports optional |
 | `tag` | `listening` | Social Media Manager | Two weeks of draft social posts per account, and a weekday digest of public mentions, questions and competitor moves | common | Public web; social accounts named at setup |
@@ -88,6 +88,7 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 | `newspaper` | `pr` | PR Manager | A media list and coverage log, a weekly PR review, and per announcement a release, targeted pitches and a draft spokesperson briefing | niche | Public web |
 | `diversity_3` | `community` | Community Manager | A weekly community digest (response time, unanswered questions, champions, guideline flags, feedback routed) and draft sourced replies | niche | Public forum or community channels (read) |
 | `palette` | `brand` | Brand Manager | The brand book (voice, words, naming, visual rules), reviews of copy and assets against it, and a monthly consistency audit with three fixes | niche | Public web; an existing brand guide optional |
+| `play_arrow` | `video-producer` | Video Producer | One video at a time from an approved brief: script, storyboard, shots, cut and final, each stage approved in Tico before the next; nothing published without the owner's yes on the exact file | common | Tico only; brand guide and product docs optional; voice and avatar tools need their own grants |
 | `filter_alt` | `marketing-ops` | Marketing Operations Manager | A tracking convention, tagged links for every campaign, lead handoff rules, and a weekly check of tagging, lead sources and handoff delay with fixes and owners | niche | Tico only; CRM (read) and analytics exports optional |
 
 ### Customer Support
@@ -107,10 +108,12 @@ fill); `scripts/build-icon-font.py` adds every card's and group's icon to the su
 
 ### Finance
 
+The books themselves are kept by the built-in [Bookkeeper](bookkeeper.md), which every install has once Finance is set
+up. The `bookkeeping` template is retired: it is no longer offered, and bots already built from it keep running.
+
 | Icon | Template | Role | What it does | Suggest | Needs |
 |---|---|---|---|---|---|
 | `account_balance_wallet` | `finance-lead` | Head of Finance (head) | A weekly finance summary: cash today and the 13-week outlook against the minimum, close status, what is due in and out, the next 14 days of the finance calendar, decisions needed; routes finance work and proposes finance hires | default | Tico only; bank and accounting exports on a task; docs, email and calendar optional |
-| `menu_book` | `bookkeeping` | Bookkeeper | A category for every unsorted transaction, the missing-receipt list and the month-end close checklist run to done; read-only to the books | default | An exported transaction file on a task |
 | `request_quote` | `ar-followup` | Accounts Receivable Specialist | A weekly aging summary and a reminder ready for each overdue invoice, friendly first and firmer later, each drafted until outbound sending is on | common | An invoice aging export on a task |
 | `receipt_long` | `accounts-payable` | Accounts Payable Specialist | A bills register with each bill matched and checked for duplicates and changed bank details, and a proposed weekly payment run | common | Bills on a task; a bills mailbox optional |
 | `credit_card` | `expense-auditor` | Expense Auditor | A monthly audit of every expense report and card charge against the written policy (receipts, limits, duplicates, late claims), one section per approver | niche | A card or expense export on a task |

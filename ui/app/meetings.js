@@ -17,19 +17,21 @@ function meetStop() {
 async function pageNotes() {
   meetStop();
   const linked = new URLSearchParams(S.route.split('?')[1] || '');
+  if (linked.get('live')) return pageLiveMeetings(linked.get('live'));
   // New imports wait in Pending, so the page opens there when it has any; an empty Pending falls back to Shared.
   const state = MEET = {connectGranola: linked.get('connect') === 'granola', review: linked.get('meeting') || linked.get('recording') ? 'live' : 'pending', landing: true, checked: new Set(), pendingCount: 0, loadSeq: 0, filter: 'all', when: 'all', person: '', source: '', people: new Map(), selected: '', list: [], poll: 0,
     sourcesPoll: 0, items: {}, itemEdit: '', itemAdd: '', itemConfirm: '', itemDup: {},
     confirmDelete: '', editing: false, open: false};
   $('#main').innerHTML = `<div class="notes-head"><h1>Meetings</h1>
       <input type="search" id="notes-search" autocomplete="off" aria-label="Search meetings" placeholder="Search meetings">
-      <div class="notes-head-actions"><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
+      <div class="notes-head-actions"><button class="docs-ask" id="meet-ask" type="button" data-ask-open aria-label="Ask" title="Ask">${ldotHTML({state: 'still', size: 16})}<span class="docs-ask-word">Ask</span></button><button class="ghost" type="button" id="meet-live-now">Live now${betaPill('live_meetings')}</button>
       <button class="primary" type="button" id="notes-manual">Add notes</button></div></div>
     <div class="meet-review-bar"><div class="meet-review-tabs" role="tablist" aria-label="Meeting views">
       <button type="button" role="tab" data-review="live" aria-selected="false">Shared</button>
       <button type="button" role="tab" data-review="pending" aria-selected="false">Pending <span class="meet-pending-n" id="meet-pending-count"></span></button>
       <button type="button" role="tab" data-review="dismissed" aria-selected="false">Dismissed</button></div>
       <div class="meet-sources" id="meet-sources" hidden></div>
+      <a class="linkish" id="meet-recorder" href="${MEET_RECORDER_DMG}" aria-label="Get Tico Recorder for Mac" title="For Mac">Get Tico Recorder</a>
       <button class="linkish" type="button" id="meet-settings">Settings</button></div>
     <section class="meet-granola" id="meet-granola" aria-label="Granola" hidden></section>
     <div class="meet-review-help muted" id="meet-review-help" hidden></div>
@@ -94,7 +96,7 @@ async function pageNotes() {
 // Review stays personal until approval; counts are quiet and never enter Needs you.
 function meetPendingBadge(count) {
   for (const el of document.querySelectorAll('[data-meet-pending]')) {
-    el.textContent = count > 99 ? '99+' : String(count || ''); el.hidden = !count;
+    el.hidden = !count; countSet(el, count > 99 ? '99+' : String(count || ''));   // a new number ticks in (ui/app/motion.js)
     el.setAttribute('aria-label', `${count} pending meetings`);
   }
 }
@@ -191,6 +193,8 @@ async function meetSettingsOpen(state) {
 // The meeting sources Tico takes from, in the order they are offered. `logo` is a key in ui/tool-icons.js;
 // a source without one is drawn as its first two letters. Close is set up in its tool doc, the
 // rest in a dialog (ui/meeting-importers.js).
+// Tico Recorder for Mac: the newest release's disk image.
+const MEET_RECORDER_DMG = 'https://github.com/ticoteam/tico/releases/latest/download/Tico-Recorder.dmg';
 const MEET_SOURCES = [
   {id: 'granola', name: 'Granola'},
   {id: 'zoom', name: 'Zoom', logo: 'zoom'},
@@ -358,11 +362,10 @@ async function meetLoad(state, first) {
   else if (!state.selected) $('#notes-detail').innerHTML = '';
 }
 const meetFiltersOn = state => !!(state.person || state.source || state.filter !== 'all' || (state.when || 'all') !== 'all');
-// No meetings and nothing narrowing the list: offer both ways in.
-const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>' : `<div class="meet-blank"><h2>Connect a source or add a note</h2>
-    <div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div>
-    <div class="meet-or">or</div>
-    <button class="primary" type="button" data-add>Add notes</button></div>`;
+// No meetings and nothing narrowing the list: the sources, since the Add source menu is hidden until one is connected
+// (the header has Add notes).
+const meetEmptyHTML = state => meetConnected(state) ? '<div class="notes-empty">No shared meetings yet.</div>'
+  : `<div class="meet-blank"><div class="meet-tiles big" data-meet-tiles>${meetTilesHTML(state, true)}</div></div>`;
 const meetPill = r => r.delivery?.status === 'pending' ? '<span class="pill in-progress">sending</span>' : r.delivery?.status === 'error' ? '<span class="pill fail">delivery failed</span>' : r.status === 'error' ? '<span class="pill fail">failed</span>'
   : r.sent ? '<span class="pill ok">sent</span>' : '';
 const meetPeople = r => {
@@ -499,14 +502,13 @@ function meetList(state) {
         <div class="meet-main"><button class="note-title" type="button" data-rec="${esc(r.id)}">${esc(noteTitle(r))}</button><div class="meet-meta">${meta}</div></div>
         <div class="meet-side">${state.review === 'pending' ? `<button class="primary small" type="button" data-review-action="approve" data-send="auto" data-id="${esc(r.id)}" title="Share, then send to ${esc(assistantName())} to file its tasks">Share & send</button><button class="ghost small" type="button" data-review-action="dismiss" data-id="${esc(r.id)}">Dismiss</button>` : state.review === 'dismissed' ? `<button class="ghost small" type="button" data-review-action="restore" data-id="${esc(r.id)}">Restore</button>` : ''}${fail}${working ? `<span class="meet-state" title="${esc(working.bot)}">${working.spin ? '<i class="mg-spin" aria-hidden="true"></i>' : ''}${esc(working.word)}${working.bot ? ` <span class="muted">· ${esc(working.bot)}</span>` : ''}</span>` : ''}${meetMadeChips(r)}${proposed && state.review === 'live' && !working && !meetMade(r).length ? `<span class="meet-proposed muted">${proposed} proposed</span>` : ''}</div></li>`;
     }).join('')}</ul>`
-    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings. New imports wait here for your review.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
+    : state.empty ? meetEmptyHTML(state) : `<div class="notes-empty">${state.review === 'pending' && !state.query && !filtered ? 'No pending meetings.' : state.review === 'dismissed' && !state.query && !filtered ? 'No dismissed meetings.' : 'No meetings match.'}</div>`);
   el.querySelectorAll('[data-note-row]').forEach(b => b.onclick = event => {
     if (event.target.closest('[data-review-check], [data-review-action], a')) return;
     state.selected = b.dataset.noteRow; state.confirmDelete = ''; state.editing = false;
     meetShow(state, true); meetDetail(state, state.selected);
   });
   meetReviewWire(state, el); meetReviewBulk(state);
-  const add = el.querySelector('[data-add]'); if (add) add.onclick = () => meetNotesOpen(state);
   meetPaintTiles(state);
 }
 async function meetDetail(state, id) {
@@ -575,7 +577,7 @@ function meetPaint(state, rec) {
       ${state.editing
         ? `<input type="text" id="meet-title" aria-label="Title" value="${esc(rec.title || '')}" placeholder="Title">`
         : `<h2 id="meet-heading">${esc(noteTitle(rec))}</h2>`}
-      <div class="meta">${meta}</div>${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
+      <div class="meta">${meta}</div>${rec.client === 'tico-recorder' ? '<div class="meta">From Tico Recorder</div>' : ''}${!typed ? `<div class="meta">Participants: ${meetPeople(rec)}${leadLink}${mediaLink}${privateLink ? ` <span class="sep">·</span> ${privateLink}` : ''}</div>` : ''}
     </div>${meetPill(rec)}</div>
     ${rec.error ? `<div class="err" style="margin-top:12px">${esc(rec.error)}</div>` : ''}
     ${rec.warning ? `<div class="muted" style="font-size:12.5px;margin-top:8px">${esc(rec.warning)}</div>` : ''}

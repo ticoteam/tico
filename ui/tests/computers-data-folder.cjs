@@ -56,13 +56,13 @@ const {unrouted} = require('./support/routes.cjs');
     await row.waitFor();
 
     // The chip needs attention and its hover names the folder.
-    const chip = row.locator('.machine-chip:not(.machine-chip-add)');
+    const chip = row.locator('.machine-chip');
     assert.equal(await chip.count(), 1);
     assert.equal(await chip.locator('.machine-chip-dot').count(), 1, 'a red dot');
     assert.ok((await chip.getAttribute('title')).includes(folder), await chip.getAttribute('title'));
 
     // The pop-up names the folder on screen, with no sign-in or key offered for it.
-    await row.locator('.machine-facts').click();
+    await row.locator('.machine-name').click();
     const dialog = page.locator('#set-machines dialog.computer-detail[open]');
     await dialog.waitFor();
     const line = dialog.locator('[data-connection="own:musecode"]');
@@ -71,9 +71,8 @@ const {unrouted} = require('./support/routes.cjs');
     assert.doesNotMatch(await line.innerText(), /Couldn't check|Signed out|Sign in|Add key/);
     assert.equal(await line.locator('button.machine-signin, [data-model-login]:not([data-model-logout])').count(), 0);
     // The bot's own line says the folder problem, not "Signed out".
-    const bots = await dialog.innerText();
-    assert.ok(bots.includes(`Ops Runs on Muse Code · Computer's login ${problem}`) || /Runs on Muse Code[^\n]*can't save sessions/.test(bots), bots);
-    assert.doesNotMatch(bots, /Signed out/);
+    assert.equal(await dialog.locator('[data-detail-bot=ops] .pill').innerText(), problem);
+    assert.doesNotMatch(await dialog.innerText(), /Signed out/);
 
     // The same computer login in a retained named home: accepted profile-rich reports select that home too.
     box.readiness.computer_profile = 'work';

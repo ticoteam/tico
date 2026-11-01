@@ -1,5 +1,5 @@
 """Rules on events without a task (`rules.judge_event`), the wake_bot and send_webhook actions, and the catalog's
-reach into routines and the API."""
+listing. Rows are written as an older install has them: rules made today live in automations."""
 import json
 import sys
 import types
@@ -9,16 +9,21 @@ import pytest
 from backend import hubdb as H
 from backend import rules as R
 from backend.tests.test_api import api, get, post  # noqa: F401
-from backend.tests.test_routines import create as routine
 from backend.tests.test_wake_rules import jobs, setup
 
 CALL = {"trigger": "shop", "trigger_name": "Acme shop", "type": "order.created", "delivery": "d1",
         "payload": {"order": 42, "customer": {"name": "Buyer"}}, "via": "direct"}
 
 
-def rule(api, token="ben-test", expected=200, **body):
-    body = {"scope_kind": "team", "event": "webhook.received", "then": "wake", **body}
-    return post(api, "rules", body, token=token, expected=expected)
+def rule(api, by="human:ben", scope_kind="team", scope_id="", event="webhook.received", then="wake", when=None,
+         params=None):
+    """A row in the rules table, as the engine reads it."""
+    row = {"id": "rule_" + H.new_id()[:8], "scope_kind": scope_kind, "scope_id": scope_id, "event": event,
+           "when_json": json.dumps(when or {}), "then_outcome": then, "params_json": json.dumps(params or {}),
+           "created_by": by, "created": H.now(), "updated": H.now()}
+    with api.app.state.store.transaction() as c:
+        c.execute(f"INSERT INTO rules({','.join(row)}) VALUES({','.join('?' * len(row))})", list(row.values()))
+    return {"rule": {**row, "params": params or {}}}
 
 
 def wake_rule(api, bot="cpo", text="New {{type}}: order {{data.order}} from {{data.customer.name}}", **more):
@@ -167,47 +172,11 @@ def test_a_refused_or_missing_outgoing_webhook_is_reported_in_the_result(api, ho
     assert res["ok"] is False and res["detail"] == "Outgoing webhooks are not available"
 
 
-def test_send_webhook_is_written_only_by_someone_who_could_send(api):
-    setup(api)
-    body = {"scope_kind": "team", "event": "webhook.received", "then": "action",
-            "params": {"action": "send_webhook", "webhook": "crm", "type": "custom.x", "data": {}}}
-    post(api, "rules", body, token="cara-test", expected=403)
-    post(api, "rules", {**body, "params": {**body["params"], "type": "custom.*"}}, expected=422)
-    post(api, "rules", {**body, "params": {**body["params"], "data": "text"}}, expected=422)
-    assert "No webhook endpoint crm" in json.dumps(post(api, "rules", body, expected=422))      # saved only for a real one
-    hook = post(api, "webhooks", {"name": "crm", "url": "https://hooks.acme.example/crm", "events": ["custom.*"]})["webhook"]
-    assert post(api, "rules", {**body, "params": {**body["params"], "webhook": hook["id"]}})["rule"]["params"]["webhook"] == hook["id"]
-
-
 def test_a_woken_bot_is_told_where_to_read_the_rest_only_when_the_body_was_cut():
     values = {"type": "order.created"}
     call = {"trigger": "shop", "delivery": "d1", "content": "{...}"}
     assert "--part 2" not in R._wake_text({"text": "New {{type}}"}, values, call, "x")
     assert "hub trigger delivery shop d1 --part 2" in R._wake_text({"text": "New {{type}}"}, values, {**call, "cut": True}, "x")
-
-
-def test_wake_bot_needs_the_right_to_change_that_bot_and_a_known_bot(api):
-    setup(api)
-    post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "action",
-                        "params": {"action": "wake_bot", "bot": "nobody", "text": "x"}}, expected=404)
-    ok = {"scope_kind": "team", "event": "webhook.received", "then": "action",
-          "params": {"action": "wake_bot", "bot": "cpo", "text": "x"}}
-    post(api, "rules", ok, token="cara-test", expected=403)
-    assert post(api, "rules", ok, token="ben-test")["rule"]["id"]
-
-
-def test_rows_for_events_without_a_task_are_checked_when_written(api):
-    setup(api)
-    for bad in ({"when": {"tag": ["a"]}}, {"when": {"type": "a*b"}}):
-        post(api, "rules", {"scope_kind": "team", "event": "webhook.received", "then": "note", "params": {"bot": "cpo"},
-                            **bad}, expected=422)
-    for only_for_hooks in ("release.published", "health.finding"):                 # they have a source: a rule has no scope there
-        post(api, "rules", {"scope_kind": "team", "event": only_for_hooks, "then": "note", "params": {"bot": "cpo"}},
-             expected=422)
-    for good in ("webhook.received", "webhook.*"):
-        rule(api, event=good, then="note", params={"bot": "cpo"}, when={"type": "a*"} if good == "webhook.*" else {})
-    post(api, "rules", {"scope_kind": "team", "event": "status_or_relation", "then": "note", "when": {"trigger": "x"}},
-         expected=422)
 
 
 def test_wake_bot_also_runs_as_the_action_of_a_message_event_rule(api):
@@ -232,25 +201,9 @@ def test_the_ledger_forgets_a_delivery_after_thirty_days(api):
         assert R.prune_events(c) == 1
 
 
-def test_catalog_names_work_in_routines_and_the_listing_endpoint(api):
+def test_the_listing_endpoint_names_the_catalog(api):
     setup(api)
     out = get(api, "event-types")["items"]
     assert {"webhook.received", "task.done", "release.published"} <= {e["name"] for e in out}
     assert [e["name"] for e in get(api, "event-types?group=approval")["items"]] == [
         "approval.requested", "approval.decided", "approval.withdrawn"]
-    for n, name in enumerate(("release.published", "release_published", "meeting.ready", "recording.ready", "task.done")):
-        routine(api, "ops", dict(key=f"k{n}", on=name, title="Check", text="Check it."))
-    for n, name in enumerate(("custom.x", "task.nope")):
-        routine(api, "ops", dict(key=f"bad{n}", on=name, title="Check", text="Check it."), expected=422)
-
-
-def test_emit_reaches_a_routine_by_any_spelling_and_fires_once_per_event(api):
-    from backend import routines
-    setup(api)
-    routine(api, "ops", dict(key="notes", on="release.published", title="Notes", text="Write the notes."))
-    routine(api, "ops", dict(key="debrief", on="meeting.ready", title="Debrief", text="Debrief it."))
-    with api.app.state.store.transaction() as c:
-        assert len(routines.emit(c, "release_published", "v1.4.0", title="v1.4.0")) == 1
-        assert routines.emit(c, "release_published", "v1.4.0", title="v1.4.0") == []
-        assert len(routines.emit(c, "recording.ready", "m1", title="Weekly")) == 1
-        assert routines.emit(c, "meeting.ready", "m1", title="Weekly") == []

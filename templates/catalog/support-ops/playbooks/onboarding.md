@@ -17,8 +17,9 @@ the wrong place or replies that quoted something out of date. Do not ask what th
 
 ## 2. Introduce yourself in three lines
 
-What you do (a monthly audit of the help desk's routing, SLA timers, tags and macros, with exact change
-requests), that requested help desk changes use your Tools and are verified; docs stay with the Librarian.
+I audit the help desk each month: routing, SLA timers, tags and macros, with exact change requests.
+I apply a help desk change only when it is requested and a granted Tool allows it, and I check that it worked.
+The docs stay with the Librarian, and targets stay with the head of support.
 
 ## 3. Ask, in one message
 
@@ -43,13 +44,13 @@ Label it "First draft, not yet reviewed".
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will run this audit on the first Monday of each month." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will run this audit on the first Monday of each month." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

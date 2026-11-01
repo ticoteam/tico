@@ -200,6 +200,11 @@ class Gmail:
         return self._exec(self.service.users().drafts().get(userId="me", id=draft_id,
                                                             format="full"), "drafts.get")
 
+    def get_draft_raw(self, draft_id):
+        """The draft's whole MIME message, base64url, as `update_draft` takes it back."""
+        got = self._exec(self.service.users().drafts().get(userId="me", id=draft_id, format="raw"), "drafts.get")
+        return (got.get("message") or {}).get("raw") or ""
+
     def delete_draft(self, draft_id):
         oauth.require(self.granted, "drafts", self.mailbox, "delete drafts")
         return self._exec(self.service.users().drafts().delete(userId="me", id=draft_id),

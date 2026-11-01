@@ -8,6 +8,8 @@ CLIENT_BUILD_TIMEOUT = 5
 # A failed bucket-region lookup is not repeated for this long, so an S3 outage does not add the
 # lookup's timeouts to every download.
 REGION_RETRY = 300
+# Where an S3 call's own errors come from (`write_error`), besides OSError for the network.
+S3_MODULES = ("botocore", "boto3", "s3transfer", "urllib3")
 
 
 class Sources:
@@ -180,6 +182,9 @@ def write_error(exc, bucket, cleanup=False):
     known = {"AccessDenied", "InvalidAccessKeyId", "SignatureDoesNotMatch", "ExpiredToken", "InvalidToken",
              "NoSuchBucket", "AuthorizationHeaderMalformed", "RequestTimeTooSkewed", "SlowDown", "ServiceUnavailable"}
     reason = code if code in known else type(exc).__name__
+    if code is None and not isinstance(exc, OSError) and type(exc).__module__.split(".")[0] not in S3_MODULES:
+        # Not from S3 or the network to it (a busy database, a bug here): saying "S3" sends people to the wrong place.
+        return f"File storage failed on this server, not in S3: {reason} while using {bucket}"
     if cleanup and code == "AccessDenied":
         return f"S3 storage cleanup permission missing: s3:AbortMultipartUpload on {bucket}"
     if cleanup:

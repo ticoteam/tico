@@ -23,8 +23,8 @@ function botInstructionsMount(slug) {
   host.innerHTML = `<form class="bot-instructions-form">
     <label for="bot-instructions-changes">Request instruction changes</label>
     <textarea id="bot-instructions-changes" name="changes" required rows="6" aria-label="Instructions changes" placeholder="Describe what should change in this bot’s instructions"></textarea>
-    <p class="muted">BotOps applies your changes to AGENT.md on the bot’s computer and verifies the file.</p>
-    <div class="row"><button class="primary" type="submit">Send changes to BotOps</button><button class="ghost" type="reset">Cancel</button><span role="status" data-instructions-status></span></div>
+    <p class="muted">Sent through your Assistant: the changes are made to AGENT.md on the bot’s computer and the file is checked.</p>
+    <div class="row"><button class="primary" type="submit">Send changes</button><button class="ghost" type="reset">Cancel</button><span role="status" data-instructions-status></span></div>
   </form>`;
   const form = host.querySelector('form'), status = host.querySelector('[data-instructions-status]');
   form.onreset = () => { status.textContent = ''; };
@@ -34,19 +34,20 @@ function botInstructionsMount(slug) {
     const button = form.querySelector('[type=submit]');
     button.disabled = true; status.textContent = 'Sending…';
     try {
-      await post('/v2/chat/botops', {text: `Update the Instructions (AGENT.md) for ${bot.display_name} [${slug}]. Apply these changes and verify the file on its computer:\n\n${changes}`});
-      form.reset(); status.textContent = 'Changes sent to BotOps.';
+      await post('/v2/assistant/messages', {text: `Update the Instructions (AGENT.md) for ${bot.display_name} [${slug}]. Apply these changes and verify the file on its computer:\n\n${changes}`});
+      form.reset(); status.textContent = 'Changes sent.';
     } catch (error) { status.textContent = error.message; }
     finally { button.disabled = false; }
   };
 }
 async function botSettingsHistoryLoad(slug) {
-  const host = $('#bot-settings-history'); if (!host || S.me?.role !== 'owner') return;
+  // The server answers only the owner and the people who manage this bot; the card is drawn for those alone (bot-page.js).
+  const host = $('#bot-settings-history'); if (!host) return;
   try {
-    const history = await get('/v2/settings/history');
+    // The server keeps the page to this bot, so the newest changes on other bots cannot push its own out of it.
+    const history = await get(`/v2/settings/history?bot=${encodeURIComponent(slug)}`);
     if (BOT?.slug !== slug || !host.isConnected) return;
-    renderSettingsHistory(host, {changes: (history.changes || []).filter(c => c.bot === slug),
-      transitions: (history.transitions || []).filter(t => t.bot === slug)});
+    renderSettingsHistory(host, history, before => settingsHistoryOlder(before, slug));
   } catch (error) { if (host.isConnected) host.textContent = error.message; }
 }
 
@@ -59,7 +60,7 @@ function botInfoRefresh(slug) {
   const values = {
     Role: botRoleHTML(String(bot.role || bot.description || '').trim()),
     Humans: userChips(bot) || '<span class="muted">Nobody assigned</span>',
-    Computer: bot.machine ? `${esc(bot.machine.label || bot.machine.runner_id)} <span class="muted">· ${bot.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>',
+    Computer: cloudMachineOn(bot) ? cloudMachineComputerHTML(bot) : bot.machine ? `${esc(bot.machine.label || bot.machine.runner_id)} <span class="muted">· ${bot.online ? 'Online' : 'Offline'}</span>` : '<span class="muted">Not assigned</span>',
     Harness: esc(harnessWords(bot.harness || bot.runtime || bot.resolved_runtime) || 'Team default'),
     Model: !bot.agent ? esc(bot.model ? settingsChoiceLabel(bot.harness || bot.runtime, bot.model, bot.reasoning_effort || bot.effort) : settingsDefaultLabel(bot))
       + (bot.fallback ? `<span class="muted"> · fallback ${esc(settingsChoiceLabel(bot.fallback.harness, bot.fallback.model, bot.fallback.reasoning_effort || bot.fallback.effort))}</span>` : '') : null,

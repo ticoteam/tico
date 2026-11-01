@@ -25,6 +25,13 @@ pub fn retry_pause() -> Duration {
     Duration::from_secs(2)
 }
 
+/// Whether the bot keeps nothing from one task to the next (`stateless` in its config, set by the server:
+/// backend/hubdb.py stateless). Its turns resume no session of another task or of the chat, read and keep no memory/
+/// or state.md, and copy no harness memory into its repository.
+pub fn stateless(config: &Value) -> bool {
+    crate::util::truthy(config.get("stateless"))
+}
+
 /// How a turn's session began.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Session {
@@ -72,11 +79,13 @@ impl Session {
         !self.resumed && matches!(self.why, Some(NOT_FOUND | RESUME_FAILED | COMPACT_FAILED | INTERRUPTED))
     }
 
-    /// Told to the new thread, after the rest of its prompt (`checkpoint`: the prompt gives the task's).
-    pub fn prompt_note(&self, checkpoint: bool) -> Option<String> {
+    /// Told to the new thread, after the rest of its prompt (`checkpoint`: the prompt gives the task's; `stateless`: the
+    /// bot reads no memory or state, so it is pointed at the task alone).
+    pub fn prompt_note(&self, checkpoint: bool, stateless: bool) -> Option<String> {
         if !self.replaces() {
             return None;
         }
+        let read = if stateless { "Read the task" } else { "Read state.md and memory/" };
         let because = match self.why {
             Some(NOT_FOUND) => "was not on this computer",
             Some(COMPACT_FAILED) => "could not be compacted",
@@ -90,7 +99,7 @@ impl Session {
         };
         Some(format!(
             "New session: your previous session here {because}, so this turn starts a new one without its transcript; {seed}. \
-             Read state.md and memory/ before acting; `hub task show` and `hub conversation show` have anything older."
+             {read} before acting; `hub task show` and `hub conversation show` have anything older."
         ))
     }
 }
@@ -136,6 +145,29 @@ pub fn interrupted_key(thread: &str) -> String {
     format!("interrupted:{thread}")
 }
 
+/// The key under which the state keeps the digest of the standing lines this thread holds (crate::prompt::Built);
+/// empty while it may not hold them.
+pub fn standing_key(thread: &str) -> String {
+    format!("standing:{thread}")
+}
+
+/// The key under which the state keeps the id and digest of the task this thread holds, the same way.
+pub fn task_key(thread: &str) -> String {
+    format!("standing-task:{thread}")
+}
+
+/// The key under which the state keeps the size of this thread's context after its last completed turn.
+pub fn context_key(thread: &str) -> String {
+    format!("context:{thread}")
+}
+
+/// Whether a session whose last turn ended at `context` tokens has clear room before it compacts at `compact_at`
+/// (under 60% of it) with a prompt of `prompt` characters added, at four to a token. Unknown is no room.
+pub fn headroom(context: Option<i64>, prompt: usize, compact_at: &Value) -> bool {
+    let prompt = (prompt / 4) as i64;
+    context.is_some_and(|c| c > 0 && (c + prompt) * 10 < crate::hosts::compact_at(compact_at) * 6)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -154,12 +186,33 @@ mod tests {
 
     #[test]
     fn only_a_session_that_left_one_behind_gets_the_new_session_note() {
-        let n = Session::new(NOT_FOUND, None).prompt_note(true).unwrap();
+        let n = Session::new(NOT_FOUND, None).prompt_note(true, false).unwrap();
         assert!(n.starts_with("New session:") && n.contains("was not on this computer") && n.contains("where the task stood"), "{n}");
-        assert!(Session::new(COMPACT_FAILED, None).prompt_note(false).unwrap().contains("could not be compacted"));
+        assert!(n.contains("Read state.md and memory/ before acting"), "{n}");
+        assert!(Session::new(COMPACT_FAILED, None).prompt_note(false, false).unwrap().contains("could not be compacted"));
         for s in [Session::new(NONE_SAVED, None), Session::new(FALLBACK_SIDE, None), Session::resumed(), Session::compacted()] {
-            assert_eq!(s.prompt_note(true), None, "{s:?}");
+            assert_eq!(s.prompt_note(true, false), None, "{s:?}");
         }
+    }
+
+    #[test]
+    fn a_stateless_bot_is_never_told_to_read_memory_or_state() {
+        let n = Session::new(NOT_FOUND, None).prompt_note(true, true).unwrap();
+        assert!(n.contains("Read the task before acting") && !n.contains("memory") && !n.contains("state.md"), "{n}");
+        assert!(stateless(&json!({"stateless": true})));
+        assert!(!stateless(&json!({"stateless": false})) && !stateless(&json!({"harness": "claude"})));
+    }
+
+    #[test]
+    fn only_a_session_well_under_its_compact_at_has_room_for_a_short_prompt() {
+        assert!(headroom(Some(100_000), 0, &Value::Null), "under 60% of the 250k default");
+        assert!(!headroom(Some(150_000), 0, &Value::Null), "at 60%");
+        assert!(!headroom(Some(220_000), 0, &Value::Null));
+        assert!(!headroom(Some(40_000), 0, &json!(60_000)), "a bot's own Compact at");
+        assert!(headroom(Some(40_000), 0, &json!(100_000)));
+        assert!(!headroom(Some(100_000), 200_000, &Value::Null), "the prompt counts too: 100k + 50k is 60%");
+        assert!(headroom(Some(100_000), 100_000, &Value::Null));
+        assert!(!headroom(None, 0, &Value::Null) && !headroom(Some(0), 0, &Value::Null), "unknown usage is no room");
     }
 
     #[test]

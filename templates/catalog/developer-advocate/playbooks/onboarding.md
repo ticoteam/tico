@@ -44,13 +44,13 @@ reviewed". Post nothing.
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will write the pulse every Thursday at 10:00 with an answer ready for each question, with public posts kept as drafts until a person turns mail sending on in Tico." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will write the pulse every Thursday at 10:00 with an answer ready for each question, with public posts kept as drafts until a person turns mail sending on in Tico." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

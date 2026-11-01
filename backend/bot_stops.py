@@ -1,13 +1,15 @@
-"""The two ways Tico stops a bot that is failing or running away, and what every page says about them.
+"""The ways Tico stops a bot that is failing or running away, or one of its queued runs, and what every page says.
 
 - `run_backoff`: a bot whose runs keep failing within a minute waits between runs, then is held after five in a row;
   Tico tries one run of a held bot on its own at growing intervals and releases it when one completes.
 - `turn_budgets`: a bot that starts more runs in an hour or a day than its budget is held.
+- `claim_holds`: one queued run whose claim raised while preparing it is held by itself; the bot's other runs go on.
 
-A hold keeps the bot's queued work and starts none of it until a person releases the bot (one action, both holds) or,
-for a failed-runs hold, until Tico's own try completes. A person's chat message does not bypass a failed-runs hold (it
-goes with the next try); it does bypass a budget hold, which only stops work nobody asked for. This module is the one
-place the pages read: the status row (`overlay`), the warning beside a message or a task sent to a held bot
+A hold keeps the bot's queued work and starts none of it until a person releases the bot (one action, all three
+holds) or, for a failed-runs hold, until Tico's own try completes. A claim hold keeps only its run. A person's chat
+message does not bypass a failed-runs hold (it goes with the next try); it does bypass a budget hold, which only
+stops work nobody asked for. This module is the one place the pages read: the status row (`overlay`), the warning
+beside a message or a task sent to a held bot
 (`warning`), the "Saved - waiting" label (`queued_reason`), Health's reason (`reason`), and the Needs-you item both
 holds file for the bot's operator (`raise_item`, `close_item`).
 """
@@ -93,6 +95,9 @@ def close_item(c, task_id, note):
 
 
 def release(c, actor, bot):
-    """Release the bot from every stop it has: the failed-runs hold and its back-off, and the budget hold. Queued work
-    starts again. Answers what was cleared: {"run_hold": bool, "budget": bool}."""
-    return {"run_hold": run_backoff.release(c, actor, bot), "budget": turn_budgets.release(c, actor, bot)}
+    """Release the bot from every stop it has: the failed-runs hold and its back-off, the budget hold, and the jobs its
+    claim could not start (backend/claim_holds.py). Queued work starts again. Answers what was cleared:
+    {"run_hold": bool, "budget": bool, "claim": the number of jobs released}."""
+    from . import claim_holds
+    return {"run_hold": run_backoff.release(c, actor, bot), "budget": turn_budgets.release(c, actor, bot),
+            "claim": claim_holds.release(c, actor, bot)}

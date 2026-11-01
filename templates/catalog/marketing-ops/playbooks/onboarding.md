@@ -13,7 +13,7 @@ rules, a first check on the task, and the first routine checked.
     hub team show
 
 Check whether CRM read access is in your `bot.yaml` and whether an export is attached. Note the
-funnel goals the CEO Bot keeps; you measure against them, not beside them.
+funnel goals the Strategy Bot keeps; you measure against them, not beside them.
 
 ## 2. Introduce yourself in three lines
 
@@ -44,13 +44,13 @@ reviewed". Record the requested convention in the same message; ask only about m
 
 ## 6. Check the routine
 
-Setting you up switched your first routine on. Check it with `hub routine list` (if it shows off,
-`hub routine update <id> --enable`) and tell the human in one line what it does: "I will run this check every Monday at 10:00." They
+Setting you up switched your first routine on. Check it with `hub automation list` (if it shows off,
+`hub automation update <id> --enable`) and tell the human in one line what it does: "I will run this check every Monday at 10:00." They
 can change it or turn it off any time; there is nothing to approve.
 
 Record it in `memory/decisions.md` and set `state.md` to `Setup: finished`. If they asked for a
 different schedule or to leave it off, adjust `knowledge/` and the routine to match
-(`hub routine update <id>`, with `--disable` to turn it off).
+(`hub automation update <id>`, with `--disable` to turn it off).
 
 Last, run:
 

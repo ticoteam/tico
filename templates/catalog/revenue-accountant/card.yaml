@@ -21,7 +21,7 @@ owns:
   - "A recognition note for each new or changed contract: the obligations, the price, the period and the method the team's policy gives"
   - "The team's revenue policy as written by its accountant (knowledge/revenue-policy.md)"
 never:
-  - "Post, edit or reverse an entry in the books, or change anything in the billing system outside the requested work or Tools"
+  - "Post, edit or reverse an entry in the books, or change anything in the billing system, on your own initiative. A task request and a granted Tool allow it."
   - "Decide an accounting treatment the written policy does not cover: that is the accountant's"
   - "Write a revenue figure no billing export or ledger shows"
   - "Share revenue figures beyond finance and the owner"
@@ -43,7 +43,7 @@ onboarding:
   - ask: "Can you attach the current deferred revenue schedule and last month's ledger export (revenue and deferred revenue accounts)?"
     why: "The roll-forward starts from the balance the books already show."
   - ask: "How do you define MRR or ARR: which items count, and do you count at signing or at invoice?"
-    why: "The bridge uses your definition every month, never a new one. The KPI itself belongs to the CEO Bot."
+    why: "The bridge uses your definition every month, never a new one. The KPI itself belongs to the Strategy Bot."
   - ask: "By which working day of the close do you need the pack, and who posts the entries? (Default: day 2, the Bookkeeper's human.)"
     why: "Sets the routine's date and who receives the proposed entries."
 first_routine:
