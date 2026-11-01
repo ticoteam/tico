@@ -311,6 +311,18 @@ run('growth', ['org', 'toured'], async ({hub, browser, phone, tag}) => {
   assert.equal(await page.locator('dialog.gr-dlg [name="segment_id"]').inputValue(), segs.pms, `${tag}: + Month in the picked segment`);
   await page.locator('dialog.gr-dlg [data-close]').first().click();
 
+  // Go-to-market's channels show the segments each reaches, and its dialog changes them.
+  await go(page, '#/growth/gtm/channels');
+  await page.locator('[data-ch-segs="google-ads"] .gs-tag').first().waitFor({timeout: t(10000)});
+  assert.deepEqual(await page.locator('[data-ch-segs="google-ads"] .gs-tag').allInnerTexts(), ['Homeowners', 'Property managers'], `${tag}: Google Ads' segments`);
+  await page.locator('[data-ch-edit="referrals"]').click();
+  await page.locator(`dialog.gr-dlg [data-gs-pick] input[value="${segs.hosts}"]`).check();
+  await page.locator('dialog.gr-dlg [type=submit]').click();
+  await page.waitForFunction(() => document.querySelectorAll('[data-ch-segs="referrals"] .gs-tag').length === 2, null, {timeout: t(10000)})
+    .catch(async () => assert.fail(`${tag}: Referrals reaches Rental hosts (${await page.locator('.toast').allInnerTexts()})`));
+  await flat(page, `${tag}: Go-to-market channels`);
+  await snap(page, `${tag}-09d-gtm-channels-segments`);
+
   // The Idea panel: pick a segment, start a test, then a verdict.
   await go(page, '#/task/' + encodeURIComponent(ideaId));
   const panel = page.locator('[data-growth-idea]:not([hidden])');

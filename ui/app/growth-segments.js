@@ -60,7 +60,9 @@ function gsRow(s, d) {
     ${may ? `<td><button class="ghost small" type="button" data-gs-edit="${esc(s.id)}">Edit</button></td>` : ''}</tr>`;
 }
 function gsTable(list, d) {
-  return `<div class="gr-scroll"><table class="gr-t gs-t"><thead><tr><th scope="col">Segment</th>${d.may ? '<th scope="col">Status</th>' : ''}
+  // Fixed column widths, so the status groups' tables line up.
+  const cols = [['seg', 1], ['status', d.may], ['motion', 1], ['buyer', 1], ['deal', 1], ['chans', 1], ['ideas', 1], ['edit', d.may]].filter(c => c[1]);
+  return `<div class="gr-scroll"><table class="gr-t gs-t${d.may ? ' gs-may' : ''}"><colgroup>${cols.map(([c]) => `<col class="gs-c-${c}">`).join('')}</colgroup><thead><tr><th scope="col">Segment</th>${d.may ? '<th scope="col">Status</th>' : ''}
     <th scope="col">Motion</th><th scope="col">Buyer</th><th scope="col">Deal size</th><th scope="col">Channels</th><th scope="col" class="num">Ideas</th>
     ${d.may ? '<th scope="col"><span class="sr-only">Edit</span></th>' : ''}</tr></thead><tbody>${list.map(s => gsRow(s, d)).join('')}</tbody></table></div>`;
 }
