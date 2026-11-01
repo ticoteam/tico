@@ -408,7 +408,7 @@ def run(args, who=None):
         return hubtools.BY_NAME[tool_name(fn)]["fn"](client, fields)
     if args.cmd == "assistant":
         from clients import hubtools
-        if args.sub in ("read", "send"):
+        if args.sub in ("read", "send", "learn", "learned"):
             return via_tool(client, args)
         try:
             body = json.loads(args.body or "{}")

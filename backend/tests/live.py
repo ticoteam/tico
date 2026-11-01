@@ -8,6 +8,18 @@ import pytest
 import uvicorn
 
 
+def block_outside_network(monkeypatch, reason):
+    """External effects off: only loopback names resolve, so a command or tool that would reach a provider (Tico HQ,
+    a model gateway) fails as unreachable instead of sending anything."""
+    real = socket.getaddrinfo
+
+    def local_only(host, *args, **kwargs):
+        if host in ("localhost", "127.0.0.1", "::1"):
+            return real(host, *args, **kwargs)
+        raise socket.gaierror(-2, reason)
+    monkeypatch.setattr(socket, "getaddrinfo", local_only)
+
+
 @pytest.fixture
 def live(api):
     sock = socket.socket()

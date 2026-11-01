@@ -4244,7 +4244,7 @@ def agent_pair_decline(api, args):
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
        "description": "Omit to read, null for no limit, N for a cap"}}, ("bot",), writes=True)
 def bot_turns_at_once(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     bot = who.get(f"bots/{args['bot']}")
     if 'limit' not in args:
         return {"bot": args['bot'], "turns_at_once": bot.get('turns_at_once')}
@@ -4258,7 +4258,7 @@ def bot_turns_at_once(api, args):
       {"computer": _s("Computer id"), "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 256,
        "description": "Null for automatic, N for a count of turns at once"}}, ("computer", "limit"), writes=True)
 def computer_turns_at_once(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     return who.post(f"computers/{args['computer']}/turns-at-once", {"turns_at_once": args['limit']}, key=_key(args))
 
 
@@ -4271,7 +4271,7 @@ def computer_turns_at_once(api, args):
        "usage": {"type": "boolean", "description": "Also read the last 7 days of what went through it"}},
       ("computer",), writes=True)
 def computer_browser_exit(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     path = f"computers/{quote(str(args['computer']), safe='')}/browser-exit"
     if "sharing" in args:
         body = {"sharing": bool(args["sharing"])}
@@ -4292,7 +4292,7 @@ def computer_browser_exit(api, args):
       {"bot": _s("Bot slug"), "computer": {"type": ["string", "null"], "description": "Omit to read, a computer id "
        "from `choices`, or null for the bot's own internet"}}, ("bot",), writes=True)
 def bot_browser_exit(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     if "computer" in args:
         who.post(f"bots/{args['bot']}/browser-exit", {"runner_id": args["computer"]}, key=_key(args))
     return who.get(f"bots/{args['bot']}/browser-exit")
@@ -4303,7 +4303,7 @@ def bot_browser_exit(api, args):
       {"bot": _s("Bot slug"), "limit": {"type": ["integer", "null"], "minimum": 0, "maximum": 1000,
        "description": "Omit to read, null for unlimited, 0 for off, N for an active-task cap"}}, ("bot",), writes=True)
 def bot_keep_tasks_going(api, args):
-    who = api.on_behalf_of_requester()
+    who = _as_person(api)
     bot = who.get(f"bots/{args['bot']}")
     if 'limit' not in args:
         return {"bot": args['bot'], "keep_tasks_going": bot.get('keep_tasks_going'), "task_flow": bot.get('task_flow')}

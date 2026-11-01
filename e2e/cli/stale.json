@@ -1,0 +1,6 @@
+{
+  "routine": "templates still name `hub routine` (in botops playbooks, librarian and employee-repo bot.yaml); the CLI answers `hub automation`. Remove this entry when those references change.",
+  "and": "prose: `hub and ...` in templates/catalog/support/software/hq-tickets",
+  "app": "prose: `hub app` in templates/catalog/chief-of-staff/knowledge/status-practice.md",
+  "failing": "prose: `hub failing` in templates/catalog/video-producer/software/pipeline.py"
+}
