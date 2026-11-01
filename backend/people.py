@@ -30,6 +30,8 @@ DEFAULT_PERSON = {"id": "", "name": "", "email": "", "title": "",
                   "update_draft": True,
                   # Browser notifications for Needs you (off by default; the page asks the browser's permission).
                   "notify_browser": False,
+                  # Email digests of the threads they follow on digest (backend/thread_digest.py): on unless turned off.
+                  "email_digest": True,
                   "directory": "", "external_id": "", "directory_left": False,
                   # What a member may do (docs/permissions.md): create bots (on by default), and add people
                   # (None = the default: coworkers in the company's email domain may, others may not).
@@ -75,6 +77,7 @@ def _person(row):
             # The Assistant drafts their daily update unless they turn it off.
             "update_draft": row.get("update_draft") is not False,
             "notify_browser": row.get("notify_browser") is True,
+            "email_digest": row.get("email_digest") is not False,
             "slack_muted_bots": _list(row.get("slack_muted_bots")),
             "phone": _clean(row.get("phone")),
             "about": _clean(row.get("about")),
@@ -440,6 +443,7 @@ def profile(person_row):
             "notify_slack_bot_messages": p.get("notify_slack_bot_messages") is not False,
             "update_draft": p.get("update_draft") is not False,
             "notify_browser": p.get("notify_browser") is True,
+            "email_digest": p.get("email_digest") is not False,
             "slack_muted_bots": list(p.get("slack_muted_bots") or []),
             "phone": p.get("phone") or "",
             "about": p.get("about") or "",
