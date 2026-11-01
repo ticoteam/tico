@@ -432,8 +432,10 @@ def parse(ctx, place):
         return "dashboard", ""
     if kind == "team" and ident in ctx.groups:
         return kind, ident
-    if kind == "bot" and ident and H.bot(ctx.c, ident):
-        return kind, ident
+    if kind == "bot" and ident:
+        ident = (H.resolve_bot(ctx.c, ident) or {}).get("id", ident)
+        if H.bot(ctx.c, ident):
+            return kind, ident
     if kind == "task" and ident and H.task(ctx.c, ident):
         return kind, ident
     raise Problem("not_found", "No such place: places are dashboard, team:<group>, bot:<slug> and task:<id>", 404)

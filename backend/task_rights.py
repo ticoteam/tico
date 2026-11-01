@@ -17,7 +17,7 @@ def subjects(c, actor):
             return {actor}
         # Read only below (people.org_parent never changes them), so the snapshot's own copies are shared, not copied.
         roster, entries = views.roster(c, shared=True), views.entries(c, shared=True)
-        archived = {r['slug'] for r in H.bots(c) if r.get('state') == 'archived'}
+        archived = {r['id'] for r in H.bots(c) if r.get('state') == 'archived'}
         nodes = {**{'b:' + slug: ('bot', slug) for slug in entries if slug not in archived},
                  **{'p:' + p['id']: ('person', p['id']) for p in roster.get('people', [])}}
         me = ('b:' if H.is_bot(actor) else 'p:') + H.actor_id(actor)

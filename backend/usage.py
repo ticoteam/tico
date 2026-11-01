@@ -74,9 +74,9 @@ def spend(item):
 
 
 def own_bots(c, auth, who):
-    """The slugs `who` may see usage for: every bot for the owner and administrators, else the
+    """The bot ids `who` may see usage for: every bot for the owner and administrators, else the
     bots they run or own."""
-    slugs = {row["slug"] for row in H.bots(c)}
+    slugs = {row["id"] for row in H.bots(c)}
     if auth.bot_admin(who):
         return slugs
     pid = H.actor_id(who.actor)
@@ -277,7 +277,7 @@ def install(app, store, auth, mutate, settings):
             admin = bool(auth.bot_admin(who))
             from . import groups as G
             led = None if admin else G.led_groups(c, who.actor)
-            allowed = own_bots(c, auth, who) | ((led_bots(c, who) & {row["slug"] for row in H.bots(c)}) if led else set())
+            allowed = own_bots(c, auth, who) | ((led_bots(c, who) & {row["id"] for row in H.bots(c)}) if led else set())
             usage_limits.prime_own(c, allowed)
             pools = pool_views(c, default) if admin else pool_views(c, default, led) if led else None
             return {"default": default, "may_edit_default": admin, "pools": pools, "leads": sorted(led or ()),
@@ -329,8 +329,9 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
 
         def work(c):
-            default, allowed = save_limit(c, auth, who, bot, body)
-            return {"bot": bot, "limit": limit_view(c, who, bot, default, allowed)}
+            ref = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            default, allowed = save_limit(c, auth, who, ref, body)
+            return {"bot": ref, "limit": limit_view(c, who, ref, default, allowed)}
         return mutate(request, body, work)
 
     @app.get("/api/v2/usage")
@@ -349,9 +350,10 @@ def install(app, store, auth, mutate, settings):
             allowed = own_bots(c, auth, who)
             people, configs = views.roster(c), views.entries(c, settings.github_owner)
             depts = {slug: P.team_of(slug, configs, people) or "" for slug in allowed}
-            names = {row["slug"]: row["display_name"] or row["slug"] for row in H.bots(c)}
+            names = {row["id"]: row["display_name"] or row["slug"] for row in H.bots(c)}
             base = {"from": first.isoformat(), "to": last.isoformat(), "prices_as_of": providers.PRICES_AS_OF}
             if bot:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
                 if bot not in names or not auth.visible_bot(c, who, bot):
                     raise Problem("not_found", "Bot not found", 404)
                 if bot not in allowed:

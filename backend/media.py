@@ -351,7 +351,8 @@ def deliver(c, auth, who, rid, body, uploads):
     require_live(record)
     meta = record["metadata"]
     person = P.person(H.actor_id(who.actor), roster(c)) or {}
-    slug = body.slug if body.slug != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    chosen = body.slug if body.slug != "auto" else person.get("bot") or default_bot(c, auth.settings)
+    slug = (H.resolve_bot(c, chosen) or {}).get("id", chosen)
     auth.target(c, who, slug, need="write")
     previous = record["delivery"]
     if previous:
@@ -496,6 +497,8 @@ def install_media(app, store, auth, mutate, send_message, task_create, review_pr
     async def chat_upload(request: Request, bot: str):
         who = request.state.identity
         human_only(who)
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         body, uploads = await form(request, M.ChatCreate, blobs, store)
         def work(c):
             message = send_message(c, who, M.MessageCreate(to="bot:" + bot, text=body.text, refs=body.refs,

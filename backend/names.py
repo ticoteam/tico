@@ -58,8 +58,8 @@ def lookup(conn, ids):
             out["human:" + row[0]] = (row[1] or "").strip() or _title(row[0])
     for start in range(0, len(bots), 500):
         chunk = bots[start:start + 500]
-        for row in conn.execute("SELECT slug,display_name FROM bots WHERE slug IN (%s)" % ",".join("?" * len(chunk)), chunk):
-            out["bot:" + row[0]] = (row[1] or "").strip() or _title(row[0])
+        for row in conn.execute("SELECT id,slug,display_name FROM bots WHERE id IN (%s)" % ",".join("?" * len(chunk)), chunk):
+            out["bot:" + row[0]] = (row[2] or "").strip() or _title(row[1])
     return out
 
 

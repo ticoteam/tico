@@ -700,7 +700,7 @@ class Auth:
                 roster = views.roster(c, shared=True)
                 shared.update(
                     roster=roster, entries=views.entries(c, shared=True),
-                    archived={r["slug"] for r in H.bots(c) if r.get("state") == "archived"},
+                    archived={r["id"] for r in H.bots(c) if r.get("state") == "archived"},
                     parents={r["bot"]: r["reports_to"] or "" for r in read_cache.configs(c)},
                     bare=True)               # a bot's bare person id in reports_to is that person (people.py)
                 pid = H.actor_id(who.actor)
@@ -832,7 +832,7 @@ class Auth:
         if who.role != "human":
             return False
         from . import views
-        archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+        archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
         return P.manages(H.actor_id(who.actor), kind, ident, views.roster(c), views.entries(c), archived, True)
 
     def bot_admin(self, who):

@@ -385,7 +385,8 @@ def person_for(c, bot, *prefer):
 
 
 def _name(c, bot):
-    return (H.bot(c, bot) or {}).get("display_name") or bot
+    found = H.bot(c, bot) or {}
+    return found.get("display_name") or found.get("slug") or bot
 
 
 def model_ready(c, store, bot):
@@ -535,10 +536,11 @@ def deliver(store, auth, row, v, waited=False):
         if watcher and c.execute("SELECT 1 FROM watcher_items WHERE bot=? AND key=?", (row["bot"], row["key"])).fetchone():
             return None
         name = _name(c, row["bot"])
+        handle = (H.bot(c, row["bot"]) or {}).get("slug") or row["bot"]
         hold = waited or bool(v and v["action"] == "hold")
         person = person_for(c, row["bot"], row["person"]) if hold else None
         if person:
-            body = waited_body(row["bot"], name, row["body"]) if waited else held_body(v, row["bot"], name, row["body"])
+            body = waited_body(handle, name, row["body"]) if waited else held_body(v, handle, name, row["body"])
             task = _open_task(c, auth, row, v, person, held_title(row["title"]), body)
         else:
             if hold and not waited:
@@ -567,7 +569,7 @@ def deliver(store, auth, row, v, waited=False):
 def due(store, skip):
     """The oldest waiting item of an active bot not tried in this pass. A paused bot's items wait for `sweep`."""
     with store.read() as c:
-        for row in c.execute("SELECT p.* FROM screening_pending p JOIN bots b ON b.slug=p.bot AND b.state='active' "
+        for row in c.execute("SELECT p.* FROM screening_pending p JOIN bots b ON b.id=p.bot AND b.state='active' "
                              "ORDER BY p.created, p.source, p.bot, p.key"):
             if (row["source"], row["bot"], row["key"]) not in skip:
                 return dict(row)

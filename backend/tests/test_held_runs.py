@@ -14,8 +14,8 @@ TITLE = "Review ops's stopped runs held for a check"
 
 def botops(api):
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')",
-                  (H.FLEET_MAINTAINER,))
+        c.execute("INSERT OR IGNORE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')",
+                  (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
 
 
 def held(api):
@@ -193,7 +193,7 @@ def test_a_held_private_run_has_an_open_operator_review_when_botops_cannot_read_
         # Renamed after the review was filed, with another bot now under its old name: the title no longer leads to
         # ops, and the review still stays open while its run is held.
         c.execute("UPDATE bots SET display_name='Ops (renamed)' WHERE slug='ops'")
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('decoy', ?, 'active')", (display_name,))
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('decoy', 'decoy', ?, 'active')", (display_name,))
         H._settle_undiagnosed(c, H.task(c, existing['id']), 'BotOps cannot diagnose this run')
         assert H.task(c, existing['id'])['status'] == 'open'
         c.execute("DELETE FROM bots WHERE slug='decoy'")

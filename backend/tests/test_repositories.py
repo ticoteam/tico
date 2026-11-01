@@ -134,7 +134,7 @@ def test_modes_mixed_scopes_alias_and_default(api, gh):
     assert turn_token(api).json()['repositories'] == ['Acme/emp-cpo']
     put(api, 'repositories/settings', {'new_bot_default': 'all'})
     with api.app_state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,created) VALUES('new-test','Sam',?)", (H.now(),))
+        c.execute("INSERT INTO bots(id,slug,display_name,created) VALUES('new-test','new-test','Sam',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator,repo) VALUES('new-test','{}','t','ana','bot-new-test')")
         assert json.loads(c.execute("SELECT config_json FROM bot_config WHERE bot='new-test'").fetchone()[0])['repo_access_mode'] == 'all'
 

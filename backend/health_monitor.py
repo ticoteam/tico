@@ -381,7 +381,8 @@ def _check_hold_checks(c):
         if not tries or since > H.shift(now, hours=-CHECK_HELD_HOURS):
             continue
         hours = int((H.parse_ts(now) - H.parse_ts(since)).total_seconds() // 3600)
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         model = providers.RUNTIME_LABELS.get(check["runtime"], check["runtime"]) + (
             f" ({check['model']})" if check.get("model") else "")
         title = "a private task" if t["private"] else t["title"]
@@ -484,6 +485,7 @@ def _bot_checks(c, settings=None):
     record = providers.load(c, settings)
     company = providers.default_fallbacks(record)
     for bot, n in sorted(limited.items()):
+        label = (H.bot(c, bot) or {}).get("slug", bot)
         config = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
         declared = json.loads(config["config_json"] or "{}") if config and config["config_json"] else {}
         # The Gateway row counts only where the bot's computer can run it (a Mac skips it: runner-rs/src/fallback.rs).
@@ -495,16 +497,16 @@ def _bot_checks(c, settings=None):
         if login and models_preset.fallback_row(record) and record.get("auto_fallback") \
                 and not models_preset.runs_gateway(computer):
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
-                                f"{bot} stopped: its {login} login is used up",
-                                f"{bot} stopped: its {login} login is used up, and no computer here can run Tico "
+                                f"{label} stopped: its {login} login is used up",
+                                f"{label} stopped: its {login} login is used up, and no computer here can run Tico "
                                 f"Gateway work. {n} turn(s) stopped in the last 24 hours.",
                                 f"Sign in another {login} login, or add a Docker runner."))
         else:
             out.append(_finding("limited_no_fallback:" + bot, "limited_no_fallback", SETUP,
-                                f"{bot} stopped on a usage limit and has no fallback model",
-                                f"{n} turn(s) of {bot} stopped on a subscription or spend limit in the last 24 hours, "
+                                f"{label} stopped on a usage limit and has no fallback model",
+                                f"{n} turn(s) of {label} stopped on a subscription or spend limit in the last 24 hours, "
                                 "and the bot has no fallback model to finish them on.",
-                                f"BotOps: give {bot} a fallback model on another provider (Settings > Bots > {bot} > "
+                                f"BotOps: give {label} a fallback model on another provider (Settings > Bots > {label} > "
                                 "Fallback), or raise its limit if the team chose one."))
     for slug, name, count, what, oldest in health.unfinished_setup(c):
         out.append(_finding("stuck_setup:" + slug, "stuck_setup", SETUP, f"{name} has been stuck in setup since {oldest[:16]}",
@@ -534,10 +536,11 @@ def _bot_checks(c, settings=None):
             error = current_error(r["state"], json.loads(r["detail_json"] or "{}"))
             if error:
                 bot = H.actor_id(r["owner"])
+                label = (H.bot(c, bot) or {}).get("slug", bot)
                 digest = hashlib.sha256(error.encode()).hexdigest()[:8]
                 out.append(_finding(f"worktree_error:{bot}:{digest}", "worktree_error", SETUP,
-                                    f"A task worktree of {bot} failed",
-                                    f"{bot}: {error[:400]}",
+                                    f"A task worktree of {label} failed",
+                                    f"{label}: {error[:400]}",
                                     "BotOps: save any unique work in that worktree on a branch, then remove its link so "
                                     "the computer can make it again (docs/worktrees.md)."))
     out.extend(_quiet_work_checks(c))
@@ -565,7 +568,8 @@ def _profile_checks(c):
                f"BotOps: ask {name}'s owner what it should be doing; a Responder, Monitor or Lead profile may fit better."))}
     out = []
     for kind, bot, count in profiles.mismatches(c):
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         title, detail, fix = say[kind](name, count)
         out.append(_finding(f"{kind}:{bot}", kind, SETUP, title, detail, fix))
     return out
@@ -578,29 +582,32 @@ def _stop_checks(c):
     out = []
     for hold in run_backoff.held(c):
         bot, kind = hold["bot"], hold["error_class"] or run_backoff.OTHER
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"run_hold:{bot}", "run_hold", SETUP,
                             f"{name} was stopped after {hold['fails']} failed runs in a row",
                             f"{name}'s last {hold['fails']} runs each failed within a minute of starting, with "
                             f"{run_backoff.CLASS_WORDS.get(kind, run_backoff.CLASS_WORDS[run_backoff.OTHER])}. Held "
                             f"since {str(hold['held_at'])[:16]} UTC. Last error: {hold['error'] or 'none reported'}.",
-                            f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {bot}). "
+                            f"BotOps: read {name}'s last runs, fix the cause, then release it (hub bot release {row.get('slug', bot)}). "
                             "Tico also tries one run on its own at growing intervals and releases it when one completes. "
                             "Its queued work is kept.", subject=kind, severity=BAD))
     for hold in turn_budgets.held(c):
         bot = hold["bot"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"turn_budget:{bot}", "turn_budget", SETUP,
                             f"{name} was stopped: {hold['runs']} runs in the last {hold['window']}",
                             f"{name} started {hold['runs']} runs in the last {hold['window']}, over its budget of "
                             f"{hold['budget']}. Held since {str(hold['held_at'])[:16]} UTC. This looks like a runaway "
                             "loop, not normal work.",
                             f"BotOps: read {name}'s last runs for what keeps waking it, then release it "
-                            f"(hub bot release {bot}) or raise its budget (hub bot budget {bot} --{hold['window']} N).",
+                            f"(hub bot release {row.get('slug', bot)}) or raise its budget (hub bot budget {row.get('slug', bot)} --{hold['window']} N).",
                             subject=hold["window"], severity=BAD))
     for hold in claim_holds.held(c):
         bot = hold["bot"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_failed:{bot}", "claim_failed", SETUP,
                             f"Tico could not start {hold['jobs']} queued run{'s' if hold['jobs'] != 1 else ''} "
                             f"for {name}",
@@ -610,12 +617,13 @@ def _stop_checks(c):
                             "Each waits, then Tico tries it again on its own; the wait doubles with each failed try, "
                             "up to an hour. The server log has the traceback.",
                             f"BotOps: read the server log for the traceback and fix its cause. To retry the held runs "
-                            f"now, release {name} (hub bot release {bot}); one that fails again is held with a longer "
+                            f"now, release {name} (hub bot release {row.get('slug', bot)}); one that fails again is held with a longer "
                             "wait.",
                             severity=BAD))
     for failure in claim_holds.check_failures(c):
         bot, error = failure["bot"], failure["error"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"claim_check:{bot}", "claim_check", SETUP,
                             f"{name}'s claim check is failing: {error}",
                             f"Tico could not check {name}'s queued runs for a claim: the check raised {error} at "
@@ -642,7 +650,8 @@ def _session_checks(c):
                        f"WHERE started>=? AND session_kind='new' AND session_why IN ({marks}) "
                        f"GROUP BY bot HAVING count(*)>? ORDER BY n DESC, bot", (since, *SESSION_LOST, NEW_SESSIONS)):
         bot = r["bot"]
-        name = (H.bot(c, bot) or {}).get("display_name") or bot
+        row = H.bot(c, bot) or {}
+        name = row.get("display_name") or row.get("slug") or bot
         out.append(_finding(f"new_sessions:{bot}", "new_sessions", SETUP,
                             f"{name} keeps losing its session: {r['n']} new ones in a day",
                             f"{name} started {r['n']} new sessions in the last 24 hours because its old one could not be "
@@ -659,14 +668,15 @@ def _quiet_work_checks(c):
     out = []
     for item in quiet_work.stale(c):
         task, bot = item["task"], item["bot"]
+        label = (H.bot(c, bot) or {}).get("slug", bot)
         # A private task's title stays out of a finding other people read; its number or short id names it.
         name = quiet_work._task_name(task) if H.task_private(c, task) else f"{quiet_work._task_name(task)} {task['title']}"
         out.append(_finding(f"quiet_unworked:{bot}:{task['id']}", "quiet_unworked", SETUP,
-                            f"{bot} was handed a deferred task and has not worked it",
-                            f"{bot} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
+                            f"{label} was handed a deferred task and has not worked it",
+                            f"{label} was handed the next-run task {name} at {item['since'][:16]} UTC (run "
                             f"{str(item['run'] or '')[:8]}) and has not worked it since, with no time set to pick it "
                             "up again.",
-                            f"{bot}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
+                            f"{label}: work it, or say when to pick it up (hub task later {task['id']} --after <task> | "
                             "--at <time>). Anyone may press Run now on it to give it a run of its own."))
     return out
 
@@ -802,9 +812,9 @@ def _where(c, row):
     (diagnostics.bot_label, runner_label), so the Tico team can find the bot and computer in it without their names."""
     if row["check_id"] != "queue_idle":
         return ""
-    slug = row["key"].split(":", 1)[1]
-    bot = diagnostics.bot_label(c, slug)
-    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (slug,)).fetchone()
+    bot_id = row["key"].split(":", 1)[1]
+    bot = diagnostics.bot_label(c, bot_id)
+    place = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot_id,)).fetchone()
     computer = diagnostics.runner_label(c, place["runner_id"]) if place else None
     return f"{bot} on {computer}" if bot and computer else bot or ""
 

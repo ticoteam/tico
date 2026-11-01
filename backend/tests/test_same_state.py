@@ -310,7 +310,7 @@ def test_a_second_active_turn_keeps_status_retry_and_diagnostic_recovery(api, mo
         c.execute("DELETE FROM jobs WHERE id NOT IN (SELECT job_id FROM attempts)")
     post(api, f"attempts/{attempt['id']}/started", {"thread_id": "t1"}, token=r["token"])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         row = H.task(c, tid)
         assert row["status"] == "doing" and not row["next_run"]
         assert row["checkpoint_state"] == W.state_of(c, row)

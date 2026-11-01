@@ -119,7 +119,7 @@ def _ready(c):
 
 # ----------------------------------------------------------------------------------------------- the setting
 def members(raw):
-    """A step's pool as stored: a JSON list of bot slugs, or None for a step that is no check (no pool, or an empty one)."""
+    """A step's pool as stored: a JSON list of bot ids, or None for a step that is no check (no pool, or an empty one)."""
     if raw in (None, ""):
         return None
     value = H._json(raw, None) if isinstance(raw, str) else raw
@@ -143,6 +143,7 @@ def clean(c, actor, raw, existing):
         slugs = []
         for value in pool:
             slug = H.actor_id(str(value or "").strip())
+            slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
             if not slug or slug in slugs:
                 continue
             if not H.bot(c, slug):
@@ -169,8 +170,11 @@ def seed(c):
             continue
         given = {}
         for step, slugs in SEED.items():
-            have = [s for s in slugs if c.execute("SELECT 1 FROM bots WHERE slug=? AND coalesce(state,'')<>'archived'",
-                                                  (s,)).fetchone()]
+            have = []
+            for s in slugs:
+                found = c.execute("SELECT id FROM bots WHERE slug=? AND coalesce(state,'')<>'archived'", (s,)).fetchone()
+                if found:
+                    have.append(found[0])
             if have and c.execute("UPDATE task_steps SET check_pool=?,check_limit=coalesce(check_limit,?) "
                                   "WHERE type_id=? AND name=? AND check_pool IS NULL",
                                   (json.dumps(have), DEFAULT_LIMIT, ident, step)).rowcount:
@@ -208,8 +212,8 @@ def open_checks(c, slug):
 
 def online(c, slug):
     """Whether the bot can start a check now: active, not held, and on a computer seen in the last few minutes."""
-    row = c.execute("SELECT b.state, s.state AS status FROM bots b LEFT JOIN bot_status s ON s.bot=b.slug "
-                    "WHERE b.slug=?", (slug,)).fetchone()
+    row = c.execute("SELECT b.state, s.state AS status FROM bots b LEFT JOIN bot_status s ON s.bot=b.id "
+                    "WHERE b.id=?", (slug,)).fetchone()
     if not row or row["state"] != "active" or row["status"] in HELD:
         return False
     seen = c.execute("SELECT r.last_seen FROM assignments a JOIN runners r ON r.id=a.runner_id "
@@ -316,7 +320,7 @@ def candidate_details(c, slugs):
     from .usage_records import ran_on
     out = []
     for slug in dict.fromkeys(str(s) for s in slugs):
-        bot = c.execute("SELECT display_name FROM bots WHERE slug=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
+        bot = c.execute("SELECT display_name FROM bots WHERE id=? AND coalesce(state,'')<>'archived'", (slug,)).fetchone()
         if not bot:
             continue
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
@@ -374,7 +378,7 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
     company than the builder's (`builder_makers`) ahead of a bot of a company Tico can't name, and that ahead of a bot of
     the builder's company, which is still free when no other is, unless the step's `other_company` is `require`: then such a bot is never free for the ticket, nor is any
     bot while Tico cannot name the builder's company or the bot's. Then eligibility from `assess`, fewest open checks,
-    the longest idle (no turn yet counts as longest), then by name."""
+    the longest idle (no turn yet counts as longest), then by id."""
     from . import step_flow
     from .check_independence import assess
     excluded = set(exclude) | _earlier_reviewers(c, ticket, step)
@@ -393,7 +397,7 @@ def ranked(c, ticket, step, slugs, limit, exclude=()):
         if held >= limit:
             why.add("busy")
             continue
-        idle = (c.execute("SELECT last_turn_at FROM bots WHERE slug=?", (slug,)).fetchone() or [None])[0] or ""
+        idle = (c.execute("SELECT last_turn_at FROM bots WHERE id=?", (slug,)).fetchone() or [None])[0] or ""
         # Require needs both companies named and apart: a company Tico cannot name, or a run with a segment it cannot
         # name, may be the builder's.
         if required:
@@ -522,7 +526,8 @@ def _file(c, ticket, step, slug, title, heads, snapshots, why):
         H._task_event(c, ticket["id"], H.KEEPER, "check_not_filed", None, slug, f"{title}: {exc.detail}"[:500])
         return None
     c.execute("RELEASE check_pool_file")
-    H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {slug} ({why})")
+    label = (H.bot(c, slug) or {}).get("slug", slug)
+    H._task_event(c, ticket["id"], H.KEEPER, "check_filed", None, child["id"], f"{title} to {label} ({why})")
     return child
 
 

@@ -249,7 +249,7 @@ def delivered(c, runner_id):
     """The bots delivered through an app on this computer, for GET /api/v2/runners/me/app-delivery. `error`: this
     computer's Health holds an error for the bot's app, which the next clean read clears."""
     out, errors = [], _errors(c, runner_id)
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                          "WHERE b.state<>'archived' AND json_extract(bc.config_json,'$.app_delivery.computer')=? "
                          "ORDER BY bc.bot", (runner_id,)):
         config = H._json(row["config_json"], {}) or {}
@@ -263,6 +263,7 @@ def delivered(c, runner_id):
 
 def report(c, runner_id, slug, body):
     """Record what the app shows for `slug`, a bot delivered through this computer. {"after", "posted"}."""
+    slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
     config, operator = _config(c, slug)
     found = setting(config)
     if not found or found["computer"] != runner_id or not app_bot(config):
@@ -318,11 +319,11 @@ def health_problems(c, who, auth, online_ids):
     its readiness for the app. An administrator sees every computer; anyone else their own."""
     full = who.role == "owner" or auth.bot_admin(who)
     used = {}
-    for row in c.execute("SELECT bot,config_json FROM bot_config WHERE json_extract(config_json,'$.app_delivery.computer') "
-                         "IS NOT NULL"):
+    for row in c.execute("SELECT bc.bot,bc.config_json,b.slug FROM bot_config bc LEFT JOIN bots b ON b.id=bc.bot "
+                         "WHERE json_extract(bc.config_json,'$.app_delivery.computer') IS NOT NULL"):
         found = setting(H._json(row["config_json"], {}) or {})
         if found and found["computer"] in online_ids:
-            used.setdefault((found["computer"], found["app"]), []).append(row["bot"])
+            used.setdefault((found["computer"], found["app"]), []).append(row["slug"] or row["bot"])
     out = []
     for (runner_id, app), bots in sorted(used.items()):
         runner = c.execute("SELECT * FROM runners WHERE id=? AND revoked_at IS NULL", (runner_id,)).fetchone()

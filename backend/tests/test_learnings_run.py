@@ -9,7 +9,7 @@ def test_only_a_bot_that_ran_today_gets_a_packet_and_a_new_night_closes_its_unre
     machine, _, attempt = setup_attempt(api)               # ops ran today; finance and an external bot did not
     post(api, f"attempts/{attempt['id']}/started", {'thread_id': 'today'}, machine['token'])
     with store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('grok-designer','Designer','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('grok-designer','grok-designer','Designer','active')")
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('grok-designer','{\"harness\":\"grokbot\"}','ana')")
         team = L.roster(c, store.settings)
         assert set(team) == {"ops"}

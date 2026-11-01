@@ -385,13 +385,14 @@ def assign_message_bot(c, roster, row, body):
     it is an owner's or admin's word: a bot cannot claim a mailbox by describing itself in its own repository."""
     from . import inbox_isolation, routines
     bot = row.get("inbox_bot") if body.inbox_bot is None else P._clean(body.inbox_bot)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if bot:
         found = H.bot(c, bot)
         if not found or found["state"] == "archived":
             raise Problem("not_found", "That bot was not found", 404)
         other = next((p for p in roster["people"] if p["id"] != row["id"] and p.get("inbox_bot") == bot), None)
         if other:
-            raise Problem("conflict", f"{bot} is already {other['name'] or other['id']}'s message bot", 409)
+            raise Problem("conflict", f"{found['slug']} is already {other['name'] or other['id']}'s message bot", 409)
         row = {**row, "inbox_bot": bot}
         placed = c.execute("SELECT runner_id FROM assignments WHERE bot=?", (bot,)).fetchone()
         if placed:

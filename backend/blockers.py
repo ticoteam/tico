@@ -15,13 +15,13 @@ GONE = ("paused", "planned", "archived", "quarantined")
 
 
 def devops(c):
-    """The slug of the active DevOps bot, or None."""
+    """The id of the active DevOps bot, or None."""
     built = [r[0] for r in c.execute("SELECT bot FROM bot_config WHERE json_extract(config_json,'$.template')=? "
                                      "ORDER BY bot", (TEMPLATE,))] if H._has_table(c, "bot_config") else []
-    for slug in (*built, *SLUGS):
-        row = H.bot(c, slug)
+    for ident in (*built, *SLUGS):
+        row = H.resolve_bot(c, ident)
         if row and row.get("state") not in GONE:
-            return slug
+            return row["id"]
     return None
 
 
@@ -51,8 +51,8 @@ def route(c, key, title, body, about=None):
     open_task = H.task(c, (H._json(previous["detail_json"], {}) or {}).get("task")) if previous else None
     if open_task and open_task["status"] in H.ACTIVE_STATUSES:
         return open_task
-    slug = devops(c)
-    owner = H.bot_actor(slug) if slug else None
+    devops_id = devops(c)
+    owner = H.bot_actor(devops_id) if devops_id else None
     if not owner and about:
         manager = H.type_manager(c, about)
         owner = H.bot_actor(manager) if manager else None
@@ -62,7 +62,7 @@ def route(c, key, title, body, about=None):
                f"\n\nIt stopped task {about['id']} ({about['title'][:120]}).")
     text = body + stopped + \
         "\n\nThis is a permission or outage blocker, not a decision: fix the access or the service, then mark this done."
-    if not slug:
+    if not devops_id:
         text += " There is no active DevOps bot, so it came to the type's manager."
     made = H.task_create(c, H.KEEPER, title[:150], text, owner, deduplicate=False, lint=False,
                          private=True if hidden else None)

@@ -248,14 +248,15 @@ def main(argv=None):
         store = Store(Settings(db_path=args.database, registry_dir=registry_dir()))
         repo = repo_reference(args.repo)
         with store.transaction() as c:
-            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (args.bot,)).fetchone()
+            bot = (H.resolve_bot(c, args.bot) or {}).get("id", args.bot)
+            row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
             if not row:
                 raise SystemExit("Unknown bot: " + args.bot)
             config = {**json.loads(row["config_json"] or "{}"), "repo": repo}
             c.execute("UPDATE bot_config SET repo=?,config_json=?,revision=revision+1 WHERE bot=?",
-                      (repo, encode(config), args.bot))
-            H.event(c, H.KEEPER, "bot.repo_set", args.bot, {"repo": repo})
-        report = {"bot": args.bot, "repo": repo,
+                      (repo, encode(config), bot))
+            H.event(c, H.KEEPER, "bot.repo_set", bot, {"repo": repo})
+        report = {"bot": bot, "repo": repo,
                   "repo_url": repo_url(repo, store.settings.github_owner)}
     elif args.command == "delete-tasks":
         from .task_delete import delete_tasks

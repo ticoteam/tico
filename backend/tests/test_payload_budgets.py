@@ -47,7 +47,7 @@ def test_payloads_stay_under_their_budgets(api):
         # 60 bots at work, each with a status line as a busy team's are (focus, task, last result, counts).
         bot = dict(c.execute("SELECT * FROM bots WHERE slug='ops'").fetchone())
         c.executemany(f"INSERT INTO bots({','.join(bot)}) VALUES({','.join('?' * len(bot))})",
-                      [[f"bot-{i}" if k == "slug" else f"Bot {i}" if k == "display_name" else v for k, v in bot.items()]
+                      [[f"bot-{i}" if k in ("id", "slug") else f"Bot {i}" if k == "display_name" else v for k, v in bot.items()]
                        for i in range(53)])
         c.executemany("INSERT OR REPLACE INTO bot_status(bot,state,focus,task_id,since,last_turn_at,last_result,next_due,"
                       "open_tasks,needs_human,updated_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)",

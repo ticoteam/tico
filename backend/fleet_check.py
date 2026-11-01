@@ -32,25 +32,25 @@ def check(c, who, auth, settings):
     limits = usage_limits.company(c)
 
     def add(bot, kind, severity, text, fix):
-        issues.append({"bot": bot["slug"], "name": bot["display_name"] or bot["slug"], "kind": kind, "severity": severity,
+        issues.append({"bot": bot["id"], "name": bot["display_name"] or bot["slug"], "kind": kind, "severity": severity,
                        "text": text, "fix": fix})
 
     from .agents import external_harness
     from . import events, views
-    bots = c.execute("SELECT b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
-                     "JOIN bot_config bc ON bc.bot=b.slug WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
+    bots = c.execute("SELECT b.id,b.slug,b.display_name,b.state,b.created,bc.onboarding_state FROM bots b "
+                     "JOIN bot_config bc ON bc.bot=b.id WHERE b.state<>'archived' ORDER BY b.slug").fetchall()
     # The rows each bot's check reads, read once for every bot (a snapshot keeps them; the loop finds them there).
-    slugs = [bot["slug"] for bot in bots]
-    views.prime_machines(c, slugs)
-    events.prime_bot_rows(c, slugs)
-    usage_limits.prime_own(c, slugs)
+    ids = [bot["id"] for bot in bots]
+    views.prime_machines(c, ids)
+    events.prime_bot_rows(c, ids)
+    usage_limits.prime_own(c, ids)
     for bot in bots:
-        slug = bot["slug"]
-        if not (seen.get(slug) or {}).get("see"):
+        slug, bid = bot["slug"], bot["id"]
+        if not (seen.get(bid) or {}).get("see"):
             continue
-        state, where = bot["state"], assigned.get(slug)
+        state, where = bot["state"], assigned.get(bid)
         name = bot["display_name"] or slug
-        external = external_harness(c, slug)
+        external = external_harness(c, bid)
         if state == "quarantined":
             add(bot, "quarantined", HIGH, f"{name} is stopped: it did something it may not.", f"hub api POST /api/v2/bots/{slug}/quarantine/clear")
         elif state == "planned":
@@ -58,7 +58,7 @@ def check(c, who, auth, settings):
                 add(bot, "stuck_setup", MEDIUM, f"{name} is still being set up.", f"hub bot go-live {slug}")
         elif state == "paused":
             reason = (c.execute("SELECT reason FROM bot_status_history WHERE bot=? AND state='paused' ORDER BY since DESC LIMIT 1",
-                                (slug,)).fetchone() or {"reason": ""})["reason"] or ""
+                                (bid,)).fetchone() or {"reason": ""})["reason"] or ""
             if "limit" in reason.lower():
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: it went over a limit.", f"hub bot resume {slug}")
             else:
@@ -68,12 +68,12 @@ def check(c, who, auth, settings):
                 add(bot, "not_placed", HIGH, f"{name} is on, but no computer runs it.", f"hub bot place {slug}")
             elif where and where[0] not in online:
                 add(bot, "computer_offline", HIGH, f"{name} cannot run: its computer, {where[1]}, is offline.", "hub computer list")
-            if slug in lacking:
-                label, why = lacking[slug]
+            if bid in lacking:
+                label, why = lacking[bid]
                 unpublished = "not on GitHub" in why or "does not exist" in why
                 from .shared_bots import declared, source_of
-                branch = bool(source_of(declared(c, slug)))
-                _, clone = repository_fix(c, slug, label, settings.github_owner)
+                branch = bool(source_of(declared(c, bid)))
+                _, clone = repository_fix(c, bid, label, settings.github_owner)
                 add(bot, "repository_missing", HIGH, f"{name} cannot run on {label}: {why}",
                     f"hub bot repo-create {slug} --empty (or `hub bot place {slug}` back on the computer that held its repository)"
                     if unpublished and not branch else clone)
@@ -81,7 +81,7 @@ def check(c, who, auth, settings):
                 add(bot, "needs_setup", MEDIUM, f"{name} is waiting for its first setup with its owner.", f"hub bot go-live {slug}")
         if state == "active":
             try:
-                met = usage_limits.over(c, slug, default=limits)
+                met = usage_limits.over(c, bid, default=limits)
             except Exception:
                 met = None
             if met and met["scope"] == "bot":
@@ -94,13 +94,13 @@ def check(c, who, auth, settings):
                 where = "company" if met["scope"] == usage_limits.COMPANY else "groups/" + met["scope"].split(":", 1)[1]
                 add(bot, "paused_over_limit", HIGH, f"{name} is paused: {met['name']} reached its {met['period']} spending limit.",
                     f"hub api PUT usage/pools/{where} (a card: raising a limit is their click)")
-        if failed.get(slug):
-            n = failed[slug]
+        if failed.get(bid):
+            n = failed[bid]
             add(bot, "failing_runs", HIGH if n >= 3 else MEDIUM, f"{name} had {n} failed or expired attempt{'s' if n != 1 else ''} in the last 24 hours.",
                 f"hub run list {slug} --since 24h")
         if state in ("active", "paused"):
             try:
-                tools = bot_tools.listing(c, settings, slug)["tools"]
+                tools = bot_tools.listing(c, settings, bid)["tools"]
             except Exception:
                 tools = []
             for tool in tools:

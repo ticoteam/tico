@@ -106,7 +106,7 @@ def owner_unreachable(c, ctx):
     """Questions still open, and approvals still undecided, whose person or bot cannot be reached."""
     from .views import roster
     people = {p["id"]: p for p in roster(c).get("people") or []}
-    bots = {row["slug"]: row["state"] for row in c.execute("SELECT slug, state FROM bots")}
+    bots = {row["id"]: row["state"] for row in c.execute("SELECT id, state FROM bots")}
     found = []
     # Every open ask's addressee and every undecided approval is read: the reachability test is in Python, so a
     # LIMIT before it could leave an unreachable owner behind reachable ones.
@@ -129,9 +129,9 @@ def refused_again(c, ctx):
     per bot on refusals_actor_ts (actor, ts), so the cost follows the bots, not the refusal log's size."""
     since = _ago(ctx, hours=24)
     found = []
-    for (slug,) in c.execute("SELECT slug FROM bots ORDER BY slug LIMIT ?", (LIMIT,)).fetchall():
+    for bot_id, slug in c.execute("SELECT id, slug FROM bots ORDER BY slug LIMIT ?", (LIMIT,)).fetchall():
         for row in c.execute("SELECT rule, count(*) AS n FROM refusals WHERE actor=? AND ts>=? "
-                             "GROUP BY rule HAVING n>?", (f"bot:{slug}", since, REFUSALS_PER_DAY)).fetchall():
+                             "GROUP BY rule HAVING n>?", (f"bot:{bot_id}", since, REFUSALS_PER_DAY)).fetchall():
             found.append((row["n"], f"bot:{slug} {row['rule']} ({row['n']}x)"))
     return [text for _, text in sorted(found, reverse=True)][:LIMIT]
 

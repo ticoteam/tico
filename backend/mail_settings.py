@@ -126,7 +126,7 @@ def alerts(c):
     """[(bot, what it asks beyond the server value)] for every bot whose bot.yaml asks for more than a person approved."""
     out, saved, documents = [], {r["bot"]: r for r in c.execute("SELECT * FROM bot_mail_settings")}, {}
     # One read of each table and one parse a computer, not three statements and a parse for every bot.
-    for row in c.execute("SELECT a.bot,r.id runner,r.readiness_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.bot,r.id runner,r.readiness_json FROM assignments a JOIN bots b ON b.id=a.bot "
                          "LEFT JOIN runners r ON r.id=a.runner_id AND r.revoked_at IS NULL "
                          "WHERE b.state<>'archived' ORDER BY a.bot"):
         if row["runner"] is None:
@@ -156,6 +156,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if who.actor != "bot:" + bot:
                 if who.role not in ("owner", "human"):
                     raise Problem("forbidden", "Only the bot itself or a person reads its mail setting", 403)
@@ -176,4 +177,6 @@ def install(app, store, auth, mutate):
         """Turn a bot's sending without approval on or off, or change its forward targets: a person only."""
         who = request.state.identity
         require_person(who, bot)
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         return mutate(request, body, lambda c: update(c, auth, who, bot, body))

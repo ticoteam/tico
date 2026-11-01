@@ -720,12 +720,12 @@ class Gateway:
         configs = entries(c)
         blocked = self.blocked(c, person) if person is not None else set()
         out = []
-        for row in c.execute("SELECT slug,display_name FROM bots WHERE state='active' ORDER BY slug LIMIT ?", (MAX_BOTS,)):
-            if row["slug"] in blocked:
+        for row in c.execute("SELECT id,slug,display_name FROM bots WHERE state='active' ORDER BY slug LIMIT ?", (MAX_BOTS,)):
+            if row["id"] in blocked:
                 continue
-            config = configs.get(row["slug"]) or {}
-            out.append({"slug": row["slug"], "name": row["display_name"] or row["slug"],
-                        "team": P.team_of(row["slug"], configs, people),
+            config = configs.get(row["id"]) or {}
+            out.append({"id": row["id"], "slug": row["slug"], "name": row["display_name"] or row["slug"],
+                        "team": P.team_of(row["id"], configs, people),
                         "description": str(config.get("description") or "")[:400],
                         "reports_to": config.get("reports_to")})
         return out
@@ -772,7 +772,7 @@ class Gateway:
         for bot in fleet:
             manager = f" It reports to {bot['reports_to']}." if bot.get("reports_to") else ""
             team = f" ({bot['team']} team)" if bot.get("team") else ""
-            out["bot:" + bot["slug"]] = {"type": "noul", "instructions":
+            out["bot:" + bot["id"]] = {"type": "noul", "instructions":
                 f"This message should be handled by {bot['name']}{team}: {bot['description'] or 'no description'}.{manager}"}
         out.update(JUDGE_SET["questions"])
         return out
@@ -854,7 +854,7 @@ class Gateway:
                 return round(max(0.0, min(1.0, float((answers.get(key) or {}).get("noul") or 0))), 3)
             except (TypeError, ValueError):
                 return 0.0
-        scores = {bot["slug"]: noul("bot:" + bot["slug"]) for bot in fleet}
+        scores = {bot["id"]: noul("bot:" + bot["id"]) for bot in fleet}
         decision = {"routed_by": "judge", "model": self.last_model or JUDGE_MODEL, "label": JUDGE_LABEL, "scores": scores, "asks": noul("asks"),
                     "reply_to_last": noul("reply_to_last"), "names_bot": noul("names_bot"),
                     "thresholds": {"route": self.settings.slack_route_threshold, "ask": self.settings.slack_ask_threshold,
@@ -865,7 +865,7 @@ class Gateway:
         if decision["asks"] < self.settings.slack_ask_threshold:
             # Decide picks who gets a person's message, never whether anyone does: one it reads as asking for
             # nothing goes to the assistant (or BotOps), and is only recorded when neither is running.
-            asker = self.fallback_bot([bot["slug"] for bot in fleet])
+            asker = self.fallback_bot([bot["id"] for bot in fleet])
             decision["fallback"] = bool(asker)
             if asker:
                 decision["reason"] = "asks for nothing by the decision model's reading; " + (
@@ -881,7 +881,7 @@ class Gateway:
             chosen = chosen[:self.settings.slack_max_recipients]
         if not chosen:
             decision["fallback"] = True
-            asker = self.fallback_bot([bot["slug"] for bot in fleet])
+            asker = self.fallback_bot([bot["id"] for bot in fleet])
             if asker:
                 decision["reason"] = "no bot at threshold; " + ("the assistant" if asker == self.settings.assistant_bot
                                                                else asker) + " asks"
@@ -901,7 +901,7 @@ class Gateway:
     def default_decision(self, fleet, budget=False, spend=False):
         """No decision model, the sender's daily cap is used, or the team's monthly decision spend is at its cap:
         everything goes to the fallback bot and says so."""
-        asker = self.fallback_bot([bot["slug"] for bot in fleet])
+        asker = self.fallback_bot([bot["id"] for bot in fleet])
         why = ("the sender's daily decision budget is used" if budget else
                "the team's monthly decision spend cap is reached" if spend else "no decisions key configured")
         return {"routed_by": "budget" if budget else "spend_cap" if spend else "default", "model": None, "scores": {}, "asks": None,
@@ -979,8 +979,8 @@ class Gateway:
                               **({"held": held} if (held := H.held_note(c, "bot:" + bot)) else {})})
         if not delivered and not decision["fallback"] and decision["dropped"]:
             # Everyone the decision model chose is unreachable: the assistant gets it, with the reasons on it.
-            asker = self.fallback_bot([r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='active'")
-                                       if r["slug"] not in blocked])
+            asker = self.fallback_bot([r["id"] for r in c.execute("SELECT id FROM bots WHERE state='active'")
+                                       if r["id"] not in blocked])
             if asker:
                 decision["fallback"] = True
                 decision["reason"] = "every recipient was dropped; " + ("the assistant" if asker == self.settings.assistant_bot
@@ -1139,7 +1139,9 @@ class Gateway:
         Slack within the day. Not any Slack message ever: a bot's unprompted messages land in its
         newest open chat with the person, which is often one they once started from Slack."""
         person = P.person(row["to_actor"][6:], people) or {}
-        if person.get("notify_slack_bot_messages") is not False and bot not in (person.get("slack_muted_bots") or []):
+        # The muted list names bots by slug or id: compare ids, as `bot` is one.
+        muted = {(H.resolve_bot(c, m) or {}).get("id", m) for m in (person.get("slack_muted_bots") or [])}
+        if person.get("notify_slack_bot_messages") is not False and bot not in muted:
             return False
         last = c.execute(
             "SELECT created, json_extract(refs_json,'$.slack.event_id') AS slack FROM messages "
@@ -1351,7 +1353,7 @@ class Gateway:
             return {"text": slack_escape(str(post["text"])[:POST_CHARS]) + seen + "\n<" + slack_escape(url) + "|Open task>",
                     "username": None, "icon_emoji": None, "icon_url": None}
         bot = H.bot(c, post["bot"]) or {}
-        name = bot.get("display_name") or post["bot"]
+        name = bot.get("display_name") or bot.get("slug") or post["bot"]
         config = (entries(c).get(post["bot"]) or {})
         text = str(post["text"] or "").strip()
         if len(text) > POST_CHARS:
@@ -1622,7 +1624,7 @@ class Gateway:
         """Every reader gets what is unread in its channels, once, and its cursors move with it."""
         channels = self.readable()
         with self.store.read() as c:
-            active = {r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='active'")}
+            active = {r["id"] for r in c.execute("SELECT id FROM bots WHERE state='active'")}
         by_reader = {}
         for cid, entry in channels.items():
             for reader in entry["readers"]:

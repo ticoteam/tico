@@ -71,7 +71,7 @@ def _catalog(c, who, auth, settings):
     covered_mail, covered_slack = set(), set()
     readable = auth.bot_accesses(c, who)
     for row in H.bots(c):
-        bot = row["slug"]
+        bot = row["id"]
         if row["state"] == "archived" or not readable.get(bot, auth.FULL)["read"]:
             continue
         config_row = c.execute("SELECT config_json,description,operator,revision FROM bot_config WHERE bot=?",
@@ -88,7 +88,7 @@ def _catalog(c, who, auth, settings):
         turn = c.execute("SELECT max(coalesce(finished,started)) FROM turns WHERE bot=?", (bot,)).fetchone()[0]
         last = max(fired + ([latest_digest[bot]] if bot in latest_digest else []) + ([turn] if turn else []), default=None)
         status = H.status(c, bot) or {}
-        bots.append({"bot": bot, "name": row["display_name"] or bot,
+        bots.append({"bot": bot, "name": row["display_name"] or row["slug"],
                      "description": (config_row["description"] if config_row else "") or config.get("role") or "",
                      "state": row["state"], "focus": status.get("focus") or "",
                      "last_result": status.get("last_result") or "",
@@ -145,6 +145,7 @@ def install_messaging(app, store, auth):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             catalog = _catalog(c, who, auth, store.settings)
             found = next((row for row in catalog["bots"] if row["bot"] == bot), None)
             if not found:
@@ -215,6 +216,7 @@ def install_messaging(app, store, auth):
         if who.role != "owner":
             raise Problem("forbidden", "Slack channel history is available only to the owner", 403)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             channels = SC.channel_map(c, store.settings)
         if not channel or bot not in (channels.get(channel) or {}).get("readers", []):
             raise Problem("forbidden", "This bot does not read this channel", 403)
@@ -239,6 +241,7 @@ def install_messaging(app, store, auth):
         if who.role != "owner":
             raise Problem("forbidden", "Slack channel history is available only to the owner", 403)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             channels = SC.channel_map(c, store.settings)
         covered = {cid for cid, entry in channels.items() if bot in entry["readers"]}
         with store.read() as c:

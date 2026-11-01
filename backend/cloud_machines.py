@@ -379,7 +379,7 @@ def label_for(c, key):
     if key == SHARED:
         return "Shared cloud machine"
     found = H.bot(c, key)
-    return f"{(found or {}).get('display_name') or key} (cloud)"[:100]
+    return f"{(found or {}).get('display_name') or (found or {}).get('slug') or key} (cloud)"[:100]
 
 
 def sizes(c):
@@ -1224,8 +1224,9 @@ def health(c, settings=None):
     stuck = sorted(bot for bot, machine in homes(c).items() if machine["problem"])
     if not stuck:
         return None
+    names = [(H.bot(c, bot) or {}).get("slug") or bot for bot in stuck[:5]]
     return {"status": "warn", "summary": f"{len(stuck)} bot{'s' if len(stuck) != 1 else ''} waiting on a cloud machine "
-                                         f"that did not start: {', '.join(stuck[:5])}"}
+                                         f"that did not start: {', '.join(names)}"}
 
 
 # ----------------------------------------------------------------------------- routes
@@ -1313,12 +1314,13 @@ def install(app, settings, store, auth, execution, mutate):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
-            _known(c, bot)
+            bot = _known(c, bot)
             hq = service.hq(c)
         return remove(store, hq, who, auth, bot)
 
 
 def _known(c, bot):
-    if not H.bot(c, bot):
+    found = H.resolve_bot(c, bot)
+    if not found:
         raise Problem("not_found", "No such bot", 404)
-    return bot
+    return found["id"]

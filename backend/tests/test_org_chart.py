@@ -61,7 +61,7 @@ def test_botops_applies_a_persons_bot_change_as_that_person(api):
                  {"id": "ben", "email": "ben@acme.example", "name": "Ben", "reports_to": "ana"},
                  {"id": "cara", "email": "cara@acme.example", "name": "Cara", "reports_to": "ana"}])
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES('botops','BotOps','active')")
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES('botops','botops','BotOps','active')")
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('botops',?, 'ana')",
                   (encode({"name": "botops", "runtime": "fake", "status": "active"}),))
     _, _, botops = setup_attempt(api, "botops")

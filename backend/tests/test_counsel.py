@@ -28,7 +28,7 @@ CONTRACT = ("Acme Vendor Terms\n\n4. Messaging\n\nCustomer messages must include
 def counsel_on(api):
     """Counsel is built in and active, as onboarding makes it: a bot row, a config, and its own token."""
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('tico-counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
         c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('tico-counsel','{}','','ana')")
     as_bot(api, "tico-counsel", "counsel-test")
 
@@ -569,7 +569,7 @@ def test_another_bot_cannot_cite_a_file_it_cannot_read(api):
     file_id, _ = store_file(api, CONTRACT)
     read_document(api, file_id)
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('scout', 'Scout', 'active')")
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('scout', 'scout', 'Scout', 'active')")
         c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('scout','{}','','ana')")
     as_bot(api, "scout", "scout-test")
     r = api.post("/api/v2/rules", headers=headers("scout-test"), json={
@@ -1268,7 +1268,7 @@ def test_a_stateless_bots_task_keeps_its_own_session_lane_and_checkpoint_even_on
     gives the turn its task's lane, links its session and accepts its checkpoint, as the runner keys it."""
     from backend.tests.test_api import assign, claim, runner
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES('tico-counsel', 'Counsel', 'active')")
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES('tico-counsel', 'tico-counsel', 'Counsel', 'active')")
         c.execute("INSERT OR REPLACE INTO bot_config(bot,config_json,team,operator) VALUES('tico-counsel', ?, '', 'ana')",
                   (json.dumps({"template": "tico-counsel", "session": "bot"}),))
         task = H.task_create(c, "human:ana", "Read the synthetic contract", "Use only fixture text.",

@@ -104,14 +104,14 @@ def built_in(settings):
 def own_bots(c, settings):
     """Bots the company added, as opposed to the ones built in."""
     bootstrap = built_in(settings)
-    return [row["slug"] for row in c.execute("SELECT slug FROM bots WHERE state!='archived' ORDER BY slug")
-            if row["slug"] not in bootstrap]
+    return [row["id"] for row in c.execute("SELECT id FROM bots WHERE state!='archived' ORDER BY slug")
+            if row["id"] not in bootstrap]
 
 
 def _next_bot(c, settings):
     """The starter bot to onboard next: Onboarding (`needs_setup`), in the order first run put them, which
-    puts the team's first bot first. Returns (slug, name, why), or None when nothing is waiting."""
-    rows = c.execute("SELECT bc.bot,b.display_name,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    puts the team's first bot first. Returns (id, name, why), or None when nothing is waiting."""
+    rows = c.execute("SELECT bc.bot,b.display_name,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state IN " + PARKED_SQL + " AND b.state!='archived'").fetchall()
     if not rows:
         return None
@@ -125,7 +125,7 @@ def _next_bot(c, settings):
 def _first_output(c):
     """A starter bot has been onboarded: its onboarding is complete and a person has seen its first
     result. The bot says so itself (`hub bot setup-done`), so this is what the database records."""
-    return c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    return c.execute("SELECT bc.bot FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                      "WHERE bc.onboarding_state='onboarded' AND b.state!='archived' LIMIT 1").fetchone()
 
 

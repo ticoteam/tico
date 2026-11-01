@@ -81,7 +81,8 @@ def save(c, actor, changes):
         after["times"] = sorted(dict.fromkeys(times))
     for field in ("bot", "writer"):
         if changes.get(field) is not None:
-            slug = H.actor_id(str(changes[field]).strip()) if str(changes[field]).strip() else ""
+            value = H.actor_id(str(changes[field]).strip())
+            slug = (H.resolve_bot(c, value) or {}).get("id", value) if value else ""
             if slug and not (H.bot(c, slug) or {}).get("state") == "active":
                 raise Problem("invalid", f"No active bot {slug}", 422)
             after[field] = slug
@@ -94,7 +95,7 @@ def save(c, actor, changes):
 
 def _with_template(c, template):
     return [r[0] for r in c.execute(
-        "SELECT b.slug FROM bots b JOIN bot_config bc ON bc.bot=b.slug WHERE b.state='active' "
+        "SELECT b.id FROM bots b JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
         "AND json_extract(bc.config_json,'$.template')=? ORDER BY b.slug", (template,))]
 
 

@@ -47,7 +47,11 @@ def clean(c, actor, raw):
         else:
             if not who.startswith(("bot:", "human:")):
                 who = "bot:" + who
-            known = H.bot(c, H.actor_id(who)) if who.startswith("bot:") else H.human(c, H.actor_id(who))
+            if who.startswith("bot:"):
+                known = H.resolve_bot(c, H.actor_id(who))
+                who = "bot:" + known["id"] if known else who
+            else:
+                known = H.human(c, H.actor_id(who))
             if not known:
                 H.refuse(c, actor, "not-found", f"{who} is nobody a step's backlog can notify")
         if who not in out:
@@ -65,8 +69,9 @@ def _targets(c, rule, row, owner):
     for who in rule["notify"]:
         if who == "manager":
             # A manager that works from its exceptions list reads the backlog there, not as a notice.
-            slug = H.type_manager(c, row)
-            who = H.bot_actor(slug) if slug and not reads_list(c, slug) else ""
+            # task_types.manager holds the manager's slug (roadmap_flow.LEGACY_MANAGERS); its actor is the bot's id.
+            found = H.resolve_bot(c, H.type_manager(c, row)) or {}
+            who = H.bot_actor(found["id"]) if found and not reads_list(c, found["id"]) else ""
         elif who == "owner":
             who = owner if per_owner(rule) else ""
         elif who == "owner_manager":

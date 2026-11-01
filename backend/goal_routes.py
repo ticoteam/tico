@@ -71,7 +71,7 @@ _readable_goals = readable_goals          # install's closures of the same name 
 
 def org_shape(c):
     roster, entries = views.roster(c), views.entries(c)
-    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     return roster, entries, archived
 
 
@@ -199,7 +199,7 @@ def install(app, store, auth, mutate, settings):
             elif H.is_bot(owner):
                 bot = H.bot(c, H.actor_id(owner)) or {}
                 names[owner] = {"kind": "bot", "id": H.actor_id(owner),
-                                "name": bot.get("display_name") or H.actor_id(owner),
+                                "name": bot.get("display_name") or bot.get("slug") or H.actor_id(owner),
                                 "status": H.status_live(c, H.actor_id(owner))}
             else:
                 human = H.human(c, H.actor_id(owner)) or {}
@@ -248,8 +248,8 @@ def install(app, store, auth, mutate, settings):
         if p["kind"] != "goal_kpi":
             return False
         used = K.kpi(c, pl["kpi_id"]) if pl.get("kpi_id") else None
-        named = str(pl.get("owner") or "")
-        return bool(used and used["owner"] in hidden) or bool(named) and (named in hidden or "bot:" + named in hidden)
+        named = H.resolve_actor(c, str(pl.get("owner") or "")) or ""
+        return bool(used and used["owner"] in hidden) or bool(named) and named in hidden
 
     def reason_view(c, who, p, hidden):
         """A suggestion as this reader may read its reason: none from a bot they may not read (a note typed with a yes
@@ -280,8 +280,8 @@ def install(app, store, auth, mutate, settings):
                 readers.append(auth.identity_for_actor(c, H.human_actor(person["id"])))
             except Problem:
                 continue                    # no longer on the roster: reads nothing
-        readers += [Identity(H.bot_actor(b["slug"]), "bot") for b in H.bots(c)
-                    if H.bot_actor(b["slug"]) != G.AUTO_ACTOR]
+        readers += [Identity(H.bot_actor(b["id"]), "bot") for b in H.bots(c)
+                    if H.bot_actor(b["id"]) != G.AUTO_ACTOR]
         for reader in readers:
             access = auth.bot_accesses(c, reader, [s for s in (slug, goal_bot) if s])
             if (not goal_bot or access[goal_bot]["read"]) and not access[slug]["read"]:
@@ -290,9 +290,10 @@ def install(app, store, auth, mutate, settings):
 
     def refuse_exposed(c, goal_row, kpi_owner):
         if exposes(c, goal_row["owner"], kpi_owner):
-            raise Problem("forbidden", f"That KPI is {H.actor_id(kpi_owner)}'s, and some who read this goal may not "
+            name = (H.bot(c, H.actor_id(kpi_owner)) or {}).get("slug") or H.actor_id(kpi_owner)
+            raise Problem("forbidden", f"That KPI is {name}'s, and some who read this goal may not "
                           "read it: a goal shows its KPIs to everyone who reads it. Use it on a goal of "
-                          f"{H.actor_id(kpi_owner)}'s, or a KPI everyone may read", 403)
+                          f"{name}'s, or a KPI everyone may read", 403)
 
     def hidden_names(c, hidden):
         marks = ",".join("?" * len(hidden))
@@ -1224,6 +1225,7 @@ def install(app, store, auth, mutate, settings):
         auth.domain(who)
         with store.read() as c:
             if auto_for:
+                auto_for = (H.resolve_bot(c, auto_for) or {}).get("id", auto_for)
                 auth.require_read(c, who, auto_for)
                 return {"kpis": botkpis.for_bot(c, auto_for)}
             hidden = hidden_owners(c, who)
@@ -1356,6 +1358,7 @@ def install(app, store, auth, mutate, settings):
         who = request.state.identity
         auth.domain(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)

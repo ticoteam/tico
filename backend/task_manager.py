@@ -259,8 +259,8 @@ def _held(c):
         if not bot or bot["state"] != "active":
             continue
         detail = str(row["reason"] or "").strip()
-        out.append(_item("held", None, f"{row['bot']} is {why}" + (f" ({detail[:120]})" if detail else ""),
-                         f"hub task create --owner botops --title \"Look at the held bot {row['bot']}\" "
+        out.append(_item("held", None, f"{bot['slug']} is {why}" + (f" ({detail[:120]})" if detail else ""),
+                         f"hub task create --owner botops --title \"Look at the held bot {bot['slug']}\" "
                          f"--body \"It is held; check its last runs, then release it (hub bot release) or raise its budget.\"",
                          owner="bot:" + row["bot"], stamp=str(row["held_at"])))
     return out
@@ -271,15 +271,16 @@ def _owner_review(c, at):
     gap = H.shift(at, seconds=-OWNER_REVIEW_MINUTES * 60)
     try:
         rows = c.execute(
-            "SELECT j.bot, count(*) AS n, min(coalesce(a.finished, j.created)) AS since FROM jobs j "
+            "SELECT j.bot, (SELECT slug FROM bots WHERE id=j.bot) AS slug, count(*) AS n, "
+            "min(coalesce(a.finished, j.created)) AS since FROM jobs j "
             "LEFT JOIN attempts a ON a.id=j.attempt_id LEFT JOIN job_recovery r ON r.job_id=j.id AND r.attempt_id=j.attempt_id "
             "WHERE j.state='uncertain' AND j.attempt_id IS NOT NULL AND r.job_id IS NULL "
             "AND coalesce(a.finished, j.created)<=? GROUP BY j.bot", (gap,)).fetchall()
     except sqlite3.Error:
         return []
-    return [_item("owner_review", None, f"{r['n']} interrupted run{'s' if r['n'] != 1 else ''} of {r['bot']} "
+    return [_item("owner_review", None, f"{r['n']} interrupted run{'s' if r['n'] != 1 else ''} of {r['slug']} "
                   f"waiting for its owner's review since {str(r['since'])[:16]} UTC; its tasks and routines wait meanwhile",
-                  f"hub task create --owner botops --title \"Review the interrupted runs of {r['bot']}\" "
+                  f"hub task create --owner botops --title \"Review the interrupted runs of {r['slug']}\" "
                   f"--body \"Resume or dismiss them after checking what already happened.\"",
                   owner="bot:" + r["bot"], stamp=f"{r['n']}") for r in rows]
 

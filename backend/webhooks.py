@@ -420,7 +420,7 @@ class FilterIn(Contract):
 
 def clean_filter(c, filt):
     """The stored form of a filter: only the lists that hold something, each name once, in the same spelling the
-    events carry (bots as `bot:<slug>`, task types by id). An unknown department or task type is refused."""
+    events carry (bots as `bot:<id>`, task types by id). An unknown department or task type is refused."""
     if not filt:
         return {}
     out = {}
@@ -434,7 +434,8 @@ def clean_filter(c, filt):
                 raise Problem("webhook", f"{item} is not a department", 422)
         out["departments"] = list(dict.fromkeys(filt.departments))
     if filt.bots:
-        out["bots"] = list(dict.fromkeys(b if b.startswith("bot:") else H.bot_actor(b) for b in filt.bots if b.strip()))
+        named = [b.removeprefix("bot:") for b in filt.bots if b.strip()]
+        out["bots"] = list(dict.fromkeys(H.bot_actor((H.resolve_bot(c, b) or {}).get("id", b)) for b in named))
     if filt.task_types:
         ids = []
         for item in filt.task_types:

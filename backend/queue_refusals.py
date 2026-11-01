@@ -33,7 +33,7 @@ def targets(c):
                   {r[0][len(KEY):] for r in c.execute("SELECT key FROM registry_metadata WHERE key LIKE ?", (KEY + '%',))})
 
 
-CURRENT_SQL = ("SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.slug=a.bot "
+CURRENT_SQL = ("SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.id=a.bot "
                "WHERE a.bot=? AND b.state='active'")
 
 
@@ -84,8 +84,8 @@ def apply(c, change):
     bot, previous, value = change
     if state(c, bot) != previous:
         return                         # a newer scheduler pass already refreshed this observation
-    if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.slug=j.bot "
-                               "JOIN assignments a ON a.bot=b.slug WHERE j.id=? AND j.bot=? "
+    if value and not c.execute("SELECT 1 FROM jobs j JOIN bots b ON b.id=j.bot "
+                               "JOIN assignments a ON a.bot=b.id WHERE j.id=? AND j.bot=? "
                                "AND j.state='queued' AND j.held=0 AND b.state='active' AND a.runner_id=?",
                                (value['job'], bot, value['runner_id'])).fetchone():
         value = {}
@@ -115,7 +115,7 @@ def _prime(c, bots):
     found = {}
     for part in H.chunks(bots):
         found.update((row['bot'], row) for row in c.execute(
-            "SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.slug=a.bot "
+            "SELECT a.bot,a.runner_id,b.display_name FROM assignments a JOIN bots b ON b.id=a.bot "
             f"WHERE a.bot IN ({','.join('?' * len(part))}) AND b.state='active'", part))
     prime(c, CURRENT_SQL, {(bot,): found.get(bot) for bot in bots})
     return E._queue_suspects(c, [job for bot in bots if bot in found for job in rows(c, E.queued_jobs_sql(), (bot,))])

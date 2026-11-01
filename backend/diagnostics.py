@@ -286,9 +286,9 @@ def _lines(lines, keep):
 
 
 def bot_label(c, slug):
-    """The label a bundle built now gives the bot `slug` (`bot-N`, as `Redactor` numbers the bots), or None."""
-    slugs = sorted(b["slug"] for b in H.bots(c))
-    return "bot-%d" % (slugs.index(slug) + 1) if slug in slugs else None
+    """The label a bundle built now gives the bot with id `slug` (`bot-N`, as `Redactor` numbers the bots, by slug), or None."""
+    ids = [b["id"] for b in sorted(H.bots(c), key=lambda b: b["slug"])]
+    return "bot-%d" % (ids.index(slug) + 1) if slug in ids else None
 
 
 RUNNERS_SQL = "SELECT id,label,last_seen,version,platform,readiness_json FROM runners WHERE revoked_at IS NULL ORDER BY id"
@@ -331,7 +331,7 @@ def _runner_rows(c, fleet, online_ids):
 
 
 def _performance(c, hours):
-    """Each computer's performance window, labelled like `_runner_rows` (`runner-N`) and with bots as `bot:<slug>`,
+    """Each computer's performance window, labelled like `_runner_rows` (`runner-N`) and with bots as `bot:<id>`,
     which the redactor turns into `bot-N`. Ten-minute points for a day or two, hourly ones beyond."""
     from . import performance
     out = []
@@ -364,7 +364,7 @@ def build(store, settings, auth, who, census, github=None, config=None, performa
     result = _update_result()
     with store.read() as c:
         people = roster(c)
-        bot_rows = [(b["slug"], [b.get("display_name")]) for b in H.bots(c)]
+        bot_rows = [(b["slug"], [b.get("display_name"), b["id"]]) for b in H.bots(c)]     # the id: `bot:<id>` in the bundle
         humans = [((p or {}).get("id") or "", [(p or {}).get("name"), (p or {}).get("email")]) for p in people.get("people") or []]
         redactor = Redactor(_domains(settings, people), bot_rows, humans)
         config = config or onboarding.config_view(c, settings, who)

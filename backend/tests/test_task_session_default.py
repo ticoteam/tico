@@ -47,7 +47,7 @@ def test_a_retired_assignment_hands_its_task_back_awake_but_waits_out_a_running_
     machine = runner(api)
     task = post(api, "tasks", {"owner": "ops", "title": "Assigned work", "body": "Keep going."})
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state,created) VALUES('ops-a1','Ops A1','active',?)", (H.now(),))
+        c.execute("INSERT INTO bots(id,slug,display_name,state,created) VALUES('ops-a1','ops-a1','Ops A1','active',?)", (H.now(),))
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('ops-a1',?,'ana')",
                   (json.dumps({"assignment_branch": True, "shared_from": "ops"}),))
         c.execute("UPDATE tasks SET owner='bot:ops-a1',status='doing' WHERE id=?", (task["id"],))

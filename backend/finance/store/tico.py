@@ -48,8 +48,8 @@ def owner_person(c: sqlite3.Connection, fallback: str = "") -> str:
 
 
 def _actor(value: str, bots: set[str]) -> str:
-    """A reports-to or lead reference as an actor: `bot:x`/`human:x` kept, `person:x` is a human, a bare slug of a
-    bot is that bot, anything else a person id."""
+    """A reports-to or lead reference as an actor: `bot:x`/`human:x` kept, `person:x` is a human, a bare bot id
+    is that bot, anything else a person id."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -70,7 +70,7 @@ def org(c: sqlite3.Connection, owner: str) -> Org:
     doc = _metadata(c, "people")
     roster = cast(dict[str, Any], P.load(doc if isinstance(doc, dict) else {"people": []}))
     configs: dict[str, dict[str, Any]] = {}
-    archived = {str(r[0]) for r in c.execute("SELECT slug FROM bots WHERE state='archived'")}
+    archived = {str(r[0]) for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
     for row in c.execute("SELECT bot, config_json, reports_to FROM bot_config"):
         if str(row[0]) in archived:
             continue
@@ -147,7 +147,7 @@ def known_actor(c: sqlite3.Connection, actor: str) -> bool:
     if kind == "human":
         return c.execute("SELECT 1 FROM humans WHERE id=?", (ident,)).fetchone() is not None
     if kind == "bot":
-        return c.execute("SELECT 1 FROM bots WHERE slug=?", (ident,)).fetchone() is not None
+        return c.execute("SELECT 1 FROM bots WHERE id=?", (ident,)).fetchone() is not None
     return False
 
 
@@ -177,7 +177,7 @@ def _video(models: Sequence[str], p: str = "") -> tuple[str, list[str]]:
 
 def gateway_run_costs(c: sqlite3.Connection, after: str, through: str,
                       video_models: Sequence[str] = ()) -> dict[tuple[str, str], str]:
-    """{(bot slug, `ai` | `video`): USD as decimal text} for Gateway-billed runs that finished in (after, through]; a
+    """{(bot id, `ai` | `video`): USD as decimal text} for Gateway-billed runs that finished in (after, through]; a
     segment on an image model counts on `video`."""
     video, params = _video(video_models)
     rows = c.execute(f"SELECT bot, CASE WHEN {video} THEN 'video' ELSE 'ai' END, "

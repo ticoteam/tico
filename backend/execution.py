@@ -1537,6 +1537,7 @@ def clear_limits(c, settings, actor, bot):
     """Try now: lift the usage-limit cooldown for the bot and for every bot limited on the same
     runtime on the same computer, since they share the subscription a person has just renewed.
     Returns how many bots it cleared."""
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     def runtime(slug):
         row = c.execute("SELECT config_json FROM bot_config WHERE bot=?", (slug,)).fetchone()
         return providers.bot_choice(c, settings, json.loads(row[0]) if row and row[0] else {})[0]
@@ -1615,9 +1616,10 @@ def stranded(c, settings, bot, source_id, target_id):
         return ""
     target, _ = _reported(c, target_id, bot)
     repository = bot_repository(c, settings, bot) or "its repository"
-    return (f"{bot}'s history exists only on {source}: {repository} is not on GitHub yet, so {target} could not fetch "
+    label = (H.bot(c, bot) or {}).get("slug", bot)
+    return (f"{label}'s history exists only on {source}: {repository} is not on GitHub yet, so {target} could not fetch "
             f"it and the bot would stop running. Create it as an empty private repository on GitHub "
-            f"(`hub bot repo-create {bot} --empty`, or by hand); {source} then publishes it, and the bot can move")
+            f"(`hub bot repo-create {label} --empty`, or by hand); {source} then publishes it, and the bot can move")
 
 
 def forget_report(c, runner_id, bot):
@@ -2584,7 +2586,7 @@ class Execution:
         # The environment owner hosts any bot; every other operator hosts only their own.
         owner = self.auth.owner_id(c)
         rows = c.execute("SELECT a.*,b.state,bc.config_json,bc.operator,bc.onboarding_state FROM assignments a "
-                         "JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
+                         "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                          "WHERE a.runner_id=? ORDER BY a.bot", (who.runner_id,)).fetchall()
         result = []
         from .views import roster
@@ -2618,6 +2620,7 @@ class Execution:
         return result
 
     def assign(self, c, who, bot, body):
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         from .shared_bots import check_runner
         check_runner(c, bot, body.runner_id)
         if not (self.auth.operator(c, who, bot) or self.auth.bot_manager(c, who, bot)):
@@ -2997,7 +3000,7 @@ class Execution:
         queued = ("a.bot=(SELECT bot FROM jobs WHERE id=? AND state='queued' AND held=0)" if job_id is not None else
                   "EXISTS(SELECT 1 FROM jobs j WHERE j.bot=a.bot AND j.state='queued' AND j.held=0)")
         for row in c.execute(f"SELECT a.bot,bc.config_json,{DRAINING_SQL} draining FROM assignments a "
-                             "JOIN bots b ON b.slug=a.bot JOIN bot_config bc ON bc.bot=a.bot "
+                             "JOIN bots b ON b.id=a.bot JOIN bot_config bc ON bc.bot=a.bot "
                              "WHERE a.runner_id=? AND b.state='active' AND (? IS NULL OR a.bot=?) "
                              f"AND {queued}",
                              (who.runner_id, body.bot, body.bot, *((job_id,) if job_id is not None else ()))).fetchall():
@@ -4049,6 +4052,7 @@ class Execution:
         With `redirect`, the caller's own message still queued in a conversation that turn works in is
         claimed first once it ends, so the next turn starts with it in the same session (Stop and redirect,
         for a harness that cannot take input mid-turn)."""
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         if not H.bot(c, bot):
             raise Problem("not_found", "Unknown bot", 404)
         if not (self.auth.operator(c, who, bot) or self.auth.bot_manager(c, who, bot)):
@@ -4646,7 +4650,7 @@ class Execution:
                         # run, which only the private task's own parties can read, and the person
                         # who expected the reply is told, with nothing from the task named.
                         if H.is_human(target):
-                            H._write_message(c, H.KEEPER, target, f"{row['bot']} finished, but its reply drew on "
+                            H._write_message(c, H.KEEPER, target, f"{(H.bot(c, row['bot']) or {}).get('slug', row['bot'])} finished, but its reply drew on "
                                              "a private task you can't read, so it was not posted here.",
                                              conv, "notice", {"withheld": {"bot": row["bot"]}}, None, None)
                     # The org rule check's verdict (backend/org_rule_check.py), whether the reply is posted now or
@@ -5242,6 +5246,7 @@ class Execution:
         return who.actor == "bot:botops" or self.auth.operator(c, who, bot)
 
     def review_jobs(self, c, who, bot):
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         if not self.reviewer(c, who, bot):
             raise Problem("forbidden", "Only this bot's operator can review interrupted work", 403)
         jobs = []
@@ -5373,7 +5378,7 @@ class Execution:
                          (bot,)).fetchone():
             for task in c.execute("SELECT id FROM tasks WHERE owner=? AND title=? "
                                   "AND status IN ('open','doing','waiting','review','ready')",
-                                  (H.bot_actor(H.FLEET_MAINTAINER), f"Review {bot}'s stopped runs held for a check")).fetchall():
+                                  (H.bot_actor(H.FLEET_MAINTAINER), H.HELD_REVIEW_TITLE.format(bot=(H.bot(c, bot) or {}).get("slug", bot)))).fetchall():
                 H.task_update(c, H.KEEPER, task['id'], status='done', quiet=True,
                               note='Recovery decisions saved. Tico applies deferred choices when the lane frees.')
 
@@ -5418,8 +5423,8 @@ class Execution:
         for row in c.execute(
                 # From the unassigned bots to their queued jobs (jobs_queue), not from every message.
                 "SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j CROSS JOIN messages m "
-                "WHERE NOT EXISTS(SELECT 1 FROM assignments a WHERE a.bot=b.slug) "
-                "AND j.bot=b.slug AND j.state='queued' AND m.id=j.message_id AND m.kind='notice' "
+                "WHERE NOT EXISTS(SELECT 1 FROM assignments a WHERE a.bot=b.id) "
+                "AND j.bot=b.id AND j.state='queued' AND m.id=j.message_id AND m.kind='notice' "
                 "ORDER BY j.created DESC, j.id DESC").fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
                 # A chat room carries notices for many tasks: one kept per task, not per room.
@@ -5437,7 +5442,7 @@ class Execution:
                         {"reason": "Bot has no machine; a newer notice about the same task stays queued"})
         # An archived bot never runs again: its queued jobs only sit there. The
         # messages stay in its conversations; the job is let go.
-        for row in c.execute("SELECT j.id FROM jobs j JOIN bots b ON b.slug=j.bot "
+        for row in c.execute("SELECT j.id FROM jobs j JOIN bots b ON b.id=j.bot "
                              "WHERE j.state='queued' AND b.state='archived'").fetchall():
             with isolated(c, "hold_unrunnable", row["id"]):
                 c.execute("UPDATE jobs SET state='cancelled' WHERE id=?", (row["id"],))
@@ -5474,7 +5479,7 @@ class Execution:
         dropped = []
         # From the bots to their queued jobs (jobs_queue), not from every job ever run.
         for row in c.execute("SELECT j.id,j.bot,j.message_id FROM bots b CROSS JOIN jobs j "
-                             "WHERE j.bot=b.slug AND j.state='queued'" +
+                             "WHERE j.bot=b.id AND j.state='queued'" +
                              (" AND j.id IN (" + ",".join("?" * len(job_ids)) + ")" if job_ids else "") +
                              " ORDER BY j.created,j.id", job_ids or ()).fetchall():
             with isolated(c, "drop_unreadable", row["id"]):
@@ -5503,23 +5508,23 @@ class Execution:
         now = H.now()
         cutoff, horizon = H.shift(now, seconds=-DEPLOY_DRAIN_MAX), H.shift(now, days=-7)
         released = []
-        for row in c.execute("SELECT b.slug FROM bots b JOIN bot_control ctl ON ctl.bot=b.slug "
+        for row in c.execute("SELECT b.id FROM bots b JOIN bot_control ctl ON ctl.bot=b.id "
                              "WHERE ctl.draining=1 AND b.state='active' ORDER BY b.slug").fetchall():
-            with isolated(c, "release_deploy_drains", row["slug"]):
+            with isolated(c, "release_deploy_drains", row["id"]):
                 drained = c.execute("SELECT ts, detail_json FROM events WHERE actor='system:deploy' AND action='bot.drain' "
-                                    "AND target=? ORDER BY ts DESC LIMIT 1", (row['slug'],)).fetchone()
+                                    "AND target=? ORDER BY ts DESC LIMIT 1", (row['id'],)).fetchone()
                 if not drained or drained['ts'] > cutoff or drained['ts'] < horizon:
                     continue
                 if c.execute("SELECT 1 FROM events WHERE actor>='human:' AND actor<'human;' "
                              "AND action IN ('bot.drain','bot.pause','bot.resume') AND target=? AND ts>=? LIMIT 1",
-                             (row['slug'], drained['ts'])).fetchone():
+                             (row['id'], drained['ts'])).fetchone():
                     continue
-                c.execute("UPDATE bot_control SET draining=0 WHERE bot=?", (row['slug'],))
-                c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row['slug'],))
+                c.execute("UPDATE bot_control SET draining=0 WHERE bot=?", (row['id'],))
+                c.execute("UPDATE bot_config SET revision=revision+1 WHERE bot=?", (row['id'],))
                 release = (json.loads(drained['detail_json'] or '{}') or {}).get('release')
-                H.event(c, H.KEEPER, 'operator.deployment-undrain', row['slug'],
+                H.event(c, H.KEEPER, 'operator.deployment-undrain', row['id'],
                         {'release': release, 'reason': 'stale deploy drain', 'drained_at': drained['ts']})
-                released.append(row['slug'])
+                released.append(row['id'])
         for key, value in c.execute("SELECT key, value_json FROM registry_metadata "
                                     "WHERE key LIKE 'deployment-drain:%'").fetchall():
             with isolated(c, "release_deploy_drains", key):
@@ -5834,7 +5839,8 @@ class Execution:
         maintainer = H.FLEET_MAINTAINER
         if row['bot'] == maintainer or not H.bot(c, maintainer):
             return
-        title = H.HELD_REVIEW_TITLE.format(bot=row['bot'])
+        label = (H.bot(c, row['bot']) or {}).get('slug', row['bot'])
+        title = H.HELD_REVIEW_TITLE.format(bot=label)
         did = reason or (f"used {', '.join(acted)}" if acted else "ran on a host that does not report its tool calls")
         about = f" on the task \"{task['title']}\" (owner {owner_name(c, task['owner'])})" if task else ""
         review = c.execute("SELECT id,body,status FROM tasks WHERE title=? AND owner=? "
@@ -5857,7 +5863,7 @@ class Execution:
                 return
             try:
                 H.task_comment(c, H.KEEPER, review['id'],
-                               f"Another run of {row['bot']}{about} (job {row['id']}) stopped after it {did}, so Tico "
+                               f"Another run of {label}{about} (job {row['id']}) stopped after it {did}, so Tico "
                                "holds it too. Review it with the others: check what already happened, then resume or "
                                f"dismiss it with POST jobs/{row['id']}/reconcile.")
             except H.Refused:
@@ -5874,9 +5880,9 @@ class Execution:
         # the conversation they came from.
         try:
             H.task_create(c, H.KEEPER, title,
-                          f"A run of {row['bot']}{about} (job {row['id']}) stopped after it {did}, so Tico holds it "
+                          f"A run of {label}{about} (job {row['id']}) stopped after it {did}, so Tico holds it "
                           f"rather than repeat a possible outside action.{still}\n"
-                          f"Read GET bots/{row['bot']}/execution-review (the request, its tool calls and saved output), check what "
+                          f"Read GET bots/{label}/execution-review (the request, its tool calls and saved output), check what "
                           "already happened, then resume or dismiss each held run with POST jobs/<id>/reconcile. "
                           "The review is done once all choices are saved; Tico applies deferred choices when the lane frees.",
                           H.bot_actor(maintainer))
@@ -5892,14 +5898,14 @@ class Execution:
         owner = 'human:' + operator if operator else None
         if not owner or not H._actor_exists(c, owner):
             return
-        display_name = bot.get('display_name') or row['bot']
+        display_name = bot.get('display_name') or bot.get('slug') or row['bot']
         title = H.HELD_OPERATOR_REVIEW_TITLE.format(display_name=display_name)
         tasks = c.execute("SELECT id,body FROM tasks WHERE title=? AND owner=? AND status IN "
                           "('open','doing','waiting','review','ready') ORDER BY created", (title, owner)).fetchall()
         boundary = ("Tico cannot show BotOps this interrupted run because only the bot's owner or operator can inspect "
                     "interrupted-run details. BotOps has made no recovery decision. Review the run through the bot's "
                     "interrupted-run review and choose only after checking what already happened.")
-        named = H.HELD_OPERATOR_REVIEW_BOT.format(slug=row['bot'])
+        named = H.HELD_OPERATOR_REVIEW_BOT.format(slug=bot.get('slug') or row['bot'])
         if tasks:
             existing = tasks[0]
             missing = [part for part in (boundary, named) if part not in str(existing['body'] or '')]
@@ -5923,7 +5929,8 @@ class Execution:
         maintainer = H.FLEET_MAINTAINER
         if row['bot'] == maintainer or not H.bot(c, maintainer):
             return
-        title = f"Find why {row['bot']}'s runs keep stopping"
+        label = (H.bot(c, row['bot']) or {}).get('slug', row['bot'])
+        title = f"Find why {label}'s runs keep stopping"
         if c.execute("SELECT 1 FROM tasks WHERE title=? AND status IN ('open','doing','waiting','review','ready')",
                      (title,)).fetchone():
             return

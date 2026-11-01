@@ -274,7 +274,7 @@ def test_manager_chain_and_editing_person_can_supply_no_ci_receipt(api, author):
     with api.app.state.store.transaction() as c:
         for slug, parent in [('cpo', 'cmo'), ('cmo', 'boss')]:
             c.execute('UPDATE bot_config SET reports_to=? WHERE bot=?', (parent, slug))
-        c.execute("INSERT INTO bots(slug,state) VALUES('boss','active')")
+        c.execute("INSERT INTO bots(id,slug,state) VALUES('boss','boss','active')")
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES('boss','{}','ana')")
         if author == 'outsider':
             c.execute("UPDATE bot_config SET reports_to=NULL WHERE bot='cpo'")

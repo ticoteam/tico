@@ -767,7 +767,8 @@ def hire(auth, onboarding, c, who, seat_id, body):
     from .onboarding import BOTOPS
     row = c.execute("SELECT * FROM seats WHERE id=?", (seat_id,)).fetchone()
     if row and row["filled_by"]:
-        name = (H.bot(c, row["filled_by"]) or {}).get("display_name") or row["filled_by"]
+        filled = H.bot(c, row["filled_by"]) or {}
+        name = filled.get("display_name") or filled.get("slug") or row["filled_by"]
         raise Problem("filled", f"This seat is already filled by {name}", 409)
     row = lifecycle.seat(c, seat_id)
     _may_hire(auth, c, who, row)
@@ -800,10 +801,11 @@ def hire(auth, onboarding, c, who, seat_id, body):
         repo="bot-" + slug, thread_mode="personal", reports_to=row["reports_to"] or None,
         shared=bool(card.get("shared")), template=card["template"], model=model, effort=effort,
         owners=[H.actor_id(who.actor)], runner_id=body.runner_id or None))
+    bot_id = H.resolve_bot(c, slug)["id"]
     if stand_in:
-        onboarding._follow_default(c, slug)
+        onboarding._follow_default(c, bot_id)
         model = ""
-    setup_task = onboard(c, who, onboarding, row, card, slug, name=name, description=description,
+    setup_task = onboard(c, who, onboarding, row, card, bot_id, name=name, description=description,
                          instructions=instructions, rendered=rendered, answers=record["answers"], model=model)
     return {"slug": slug, "name": name, "seat": seat_id, "stage": lifecycle.ONBOARDING, "reports_to": row["reports_to"],
             "template": card["template"], "model": model, "setup_task_id": setup_task,

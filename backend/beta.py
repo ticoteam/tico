@@ -23,7 +23,7 @@ def _rows(c, sql, args=()):
 
 def _bot_harness(c, harnesses):
     marks = ",".join("?" * len(harnesses))
-    return _rows(c, "SELECT 1 FROM bot_config b JOIN bots ON bots.slug=b.bot WHERE bots.state!='archived' AND "
+    return _rows(c, "SELECT 1 FROM bot_config b JOIN bots ON bots.id=b.bot WHERE bots.state!='archived' AND "
                     f"json_extract(b.config_json,'$.harness') IN ({marks}) LIMIT 1", tuple(harnesses))
 
 

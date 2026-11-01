@@ -361,7 +361,8 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
     undo)."""
     from . import strategy_acts as CA
     from .store import Problem, encode
-    CA.gate(c, who.actor, "cost", f"change how {bot} wakes and what tasks it takes")
+    label = (H.bot(c, bot) or {}).get("slug") or bot
+    CA.gate(c, who.actor, "cost", f"change how {label} wakes and what tasks it takes")
     admin._manager(c, who, bot, botops=True)
     config = admin._config(c, bot)
     if config["revision"] != body.expected_revision:
@@ -378,7 +379,7 @@ def set_profile(admin, c, who, bot, body, undo_change_id=None):
     if prior == CUSTOM and name != CUSTOM:
         dropped = materialised(c, bot)
         if dropped and not body.confirm_drop_rules:
-            raise Problem("conflict", f"{bot} has {dropped} wake rule{'s' if dropped != 1 else ''} of its own from the "
+            raise Problem("conflict", f"{label} has {dropped} wake rule{'s' if dropped != 1 else ''} of its own from the "
                           "Custom profile; they are deleted when it changes profile. Send confirm_drop_rules to go on", 409)
         drop_materialised(c, bot)
     if name == CUSTOM:
@@ -453,7 +454,8 @@ def default_for(c, slug, declared):
 
 def _owns_dev_tickets(c, slug):
     """Whether the bot owns a task of the engineering board's type (Dev tickets, found by role or name)."""
-    for (type_id,) in c.execute("SELECT DISTINCT type_id FROM tasks WHERE owner=?", ("bot:" + slug,)).fetchall():
+    for (type_id,) in c.execute("SELECT DISTINCT type_id FROM tasks WHERE owner='bot:'||(SELECT id FROM bots WHERE slug=?)",
+                                (slug,)).fetchall():
         kind = H.type_get(c, type_id) or {}
         if kind.get("role") == "engineering" or kind.get("name") == "Dev tickets":
             return True
@@ -467,21 +469,21 @@ def migrate(c):
     from . import rules
     from .store import encode
     told = {}
-    for row in c.execute("SELECT bc.bot,bc.config_json,bc.operator,bc.bot_owners_json,b.state,b.display_name FROM bot_config bc "
-                         "JOIN bots b ON b.slug=bc.bot ORDER BY bc.bot").fetchall():
+    for row in c.execute("SELECT bc.bot,bc.config_json,bc.operator,bc.bot_owners_json,b.state,b.slug,b.display_name FROM bot_config bc "
+                         "JOIN bots b ON b.id=bc.bot ORDER BY bc.bot").fetchall():
         declared = H._json(row["config_json"], {}) or {}
         if not isinstance(declared, dict) or name_of(declared):
             continue
-        slug = row["bot"]
+        slug = row["slug"]          # the name a profile is given by (default_for matches it)
         try:
             name, options, source = default_for(c, slug, declared)
         except Exception:  # noqa: BLE001 - a start never fails on a guess about one bot: it is a Doer
             name, options, source = DOER, {}, None
         apply(declared, name, options)
-        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), slug))
+        c.execute("UPDATE bot_config SET config_json=?,revision=revision+1 WHERE bot=?", (encode(declared), row["bot"]))
         if name == CUSTOM and source and rules.PROFILE_RULES.get(source):
-            materialise(c, slug, source)
-        H.event(c, H.KEEPER, "bot.profile_migrated", slug, {"profile": name, "options": options})
+            materialise(c, row["bot"], source)
+        H.event(c, H.KEEPER, "bot.profile_migrated", row["bot"], {"profile": name, "options": options})
         if row["state"] == "archived":
             continue
         owner = row["operator"] or next(iter(_owner_ids(row["bot_owners_json"])), "") or H.default_human(c)
@@ -512,7 +514,7 @@ def mismatches(c):
     with tasks queued, a doer whose runs for a week all did nothing. [(kind, bot, count)]."""
     out = []
     since = H.shift(H.now(), days=-IDLE_DAYS)
-    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    for row in c.execute("SELECT bc.bot,bc.config_json FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                          "WHERE b.state='active' ORDER BY bc.bot").fetchall():
         declared = H._json(row["config_json"], {}) or {}
         name, bot = name_of(declared), row["bot"]
@@ -530,7 +532,7 @@ def mismatches(c):
         elif name == DOER:
             seen = c.execute("SELECT count(*) AS n, sum(coalesce(did_nothing,0)=1) AS idle FROM turns WHERE bot=? "
                              "AND started>? AND finished IS NOT NULL", (bot, since)).fetchone()
-            created = c.execute("SELECT created FROM bots WHERE slug=?", (bot,)).fetchone()
+            created = c.execute("SELECT created FROM bots WHERE id=?", (bot,)).fetchone()
             if (seen["n"] >= IDLE_MIN_RUNS and seen["idle"] == seen["n"]
                     and not (created and created[0] and created[0] > since)):
                 out.append(("doer_idle", bot, seen["n"]))
@@ -559,6 +561,7 @@ def install(app, store, auth, mutate, settings_admin):
         """The bot's profile and the values it runs on."""
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             seeing(c, who, bot)
             return view(c, bot, settings_admin._config(c, bot))
 
@@ -566,6 +569,8 @@ def install(app, store, auth, mutate, settings_admin):
     def bot_profile_set(request: Request, bot: str, body: BotProfile):
         """Set the bot's profile; the revision you read must still be current (409 version_conflict otherwise)."""
         who = request.state.identity
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
 
         def work(c):
             seeing(c, who, bot)

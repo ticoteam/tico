@@ -795,7 +795,7 @@ def runtimes_needed(c, settings):
     record = load(c, settings)
     wanted = wanted_runtimes(record)
     need = {}
-    for row in c.execute("SELECT a.runner_id, bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.runner_id, bc.config_json FROM assignments a JOIN bots b ON b.id=a.bot "
                          "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
         try:
             config = json.loads(row["config_json"] or "{}")

@@ -187,13 +187,15 @@ def _stuck(c, out, rows, children, at, reader):
             if not done:
                 out.add(subject, "stuck", f"no check filed at {label['step']} and none waiting", start, **extra)
             elif done["ended"] <= cutoff:
+                owner = (H.bot(c, label["owner"]) or {}).get("slug") or label["owner"]
                 out.add(subject, "stuck", f"{done['title']} finished and the ticket has not moved on "
-                        f"(owner {label['owner']})", done["ended"], **extra)
+                        f"(owner {owner})", done["ended"], **extra)
             continue
         last = max(x for x in (start, (newest or {}).get("finished") or (newest or {}).get("created")) if x)
         if last > cutoff or _waits(c, item, at):
             continue
         who = (check or label)["owner"]
+        who = (H.bot(c, who) or {}).get("slug") or who
         out.add(subject, "stuck", f"no run for {STUCK_MINUTES} minutes" + (f" on {check['title']}" if check else "")
                 + f" (owner {who})", last, **extra)
 
@@ -238,8 +240,9 @@ def _slots(c, out, typ, rows):
                            and after < position.get(r.get("step_id"), after) < before),
                           key=lambda r: r.get("updated") or "")
             if len(mine) > slots:
-                out.add("bot:" + slug, "slots", f"{slug} holds {len(mine)} tickets, over its {slots} slots at "
-                        f"{step['name']}", mine[slots].get("updated") or step.get("updated") or H.now(), bot=slug)
+                name = (H.bot(c, slug) or {}).get("slug") or slug
+                out.add("bot:" + slug, "slots", f"{name} holds {len(mine)} tickets, over its {slots} slots at "
+                        f"{step['name']}", mine[slots].get("updated") or step.get("updated") or H.now(), bot=name)
         backlog = flow.get("backlog") or {}
         here = by_step.get(step["id"]) or []
         over = backlog.get("over")
@@ -276,16 +279,17 @@ def _outages(c, out, typ, rows, at):
         out.add("service:github", "outage", f"GitHub cannot be read at a review move; Tico retries {len(held)} "
                 "ticket(s) every few minutes", since, tickets=held[:50])
     for slug in _pool_bots(c, typ):
-        row = c.execute("SELECT b.state, s.state AS status, s.updated_at FROM bots b LEFT JOIN bot_status s "
-                        "ON s.bot=b.slug WHERE b.slug=?", (slug,)).fetchone()
+        row = c.execute("SELECT b.slug, b.state, s.state AS status, s.updated_at FROM bots b LEFT JOIN bot_status s "
+                        "ON s.bot=b.id WHERE b.id=?", (slug,)).fetchone()
         if not row or row["state"] != "active":
             continue            # a paused or archived bot is someone's choice, not an outage
         if row["status"] in BOT_HELD:
-            out.add("bot:" + slug, "outage", f"{slug} is {row['status']}", row["updated_at"] or at, bot=slug)
+            out.add("bot:" + slug, "outage", f"{row['slug']} is {row['status']}", row["updated_at"] or at,
+                    bot=row["slug"])
         elif not check_pools.online(c, slug):
             seen = c.execute("SELECT max(r.last_seen) FROM assignments a JOIN runners r ON r.id=a.runner_id "
                              "WHERE a.bot=? AND r.revoked_at IS NULL", (slug,)).fetchone()[0]
-            out.add("bot:" + slug, "outage", f"{slug}'s computer is offline", seen or at, bot=slug)
+            out.add("bot:" + slug, "outage", f"{row['slug']}'s computer is offline", seen or at, bot=row["slug"])
 
 
 def _refusals(c, out, rows, at):
@@ -395,7 +399,7 @@ def deliver(c, at=None):
     woke = []
     for typ in H._rows(c.execute("SELECT * FROM task_types WHERE role=? AND manager IS NOT NULL ORDER BY id",
                                  (ENGINEERING,))):
-        slug = typ["manager"]
+        slug = (H.resolve_bot(c, typ["manager"]) or {}).get("id", typ["manager"])
         if not reads_list(c, slug):
             continue
         entries = build(c, typ, at=at, reader=H.bot_actor(slug))

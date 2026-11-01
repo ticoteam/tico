@@ -71,7 +71,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
         scope += " AND t.id>?"
         params.append(after)
     if manager_actor:
-        scope += " AND b.slug IN (SELECT bot FROM bot_config WHERE reports_to IN (?,?))"
+        scope += " AND b.id IN (SELECT bot FROM bot_config WHERE reports_to IN (?,?))"
         params.extend((manager_actor, H.actor_id(manager_actor)))
     # One page bounds Python wait/provenance work, including pages with no eligible wake.
     # The scheduler persists the last inspected id, so held/started rows cannot starve later work.
@@ -79,7 +79,7 @@ def candidates(c, at=None, task_ids=None, recorded=None, *, after="", scanned=No
     # Checked per candidate task (a key lookup), so the reader's rule keeps its own column names. As
     # `t.id IN (SELECT id FROM tasks WHERE ...)` SQLite listed every task the rule allows first: 55 ms a call on TIDY.
     visibility = f" AND EXISTS(SELECT 1 FROM tasks v WHERE v.id=t.id AND ({visible}))" if visible != "1" else ""
-    rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug "
+    rows = H._rows(c.execute("SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.id "
                                  "WHERE t.status='open' AND b.state IN ('active','paused','quarantined') AND t.created<=? "
                                  + scope + visibility + " ORDER BY t.id LIMIT ?",
                                  (*params, SCAN_LIMIT)))

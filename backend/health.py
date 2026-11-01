@@ -67,7 +67,7 @@ def _queue_items(rows, full, bot_reader):
             continue  # Capacity is an explained queue, never a "no more slots" alert to a bot.
         oldest = row.get("oldest_queued", row["oldest"])
         minutes = max(0, quiet_minutes(oldest))
-        command = "hub run list " + shlex.quote(row["bot"])
+        command = "hub run list " + shlex.quote(row["slug"])
         fixes = [row["fix"]] if full and row.get("fix") else []
         if bot_reader:
             fixes = [_fix(command, "#/bot/" + row["bot"])]
@@ -76,7 +76,7 @@ def _queue_items(rows, full, bot_reader):
                if row["reason"] == "quarantined" else row["why"])
         items.append({"bot": row["bot"], "name": row["name"], "queued": row["queued"], "dead": row.get("dead", 0),
                       "held": row.get("held", 0), "oldest": oldest, "oldest_minutes": minutes, "reason": row["reason"],
-                      "text": f"{row['name'][:120]} ({row['bot']}): {_queue_words(row, minutes)}; {why}",
+                      "text": f"{row['name'][:120]} ({row['slug']}): {_queue_words(row, minutes)}; {why}",
                       "fixes": fixes,
                       "fix": command if bot_reader else (row.get("fix") or {}).get("label", "")})
     return items
@@ -113,7 +113,7 @@ def _login_dependencies(c, settings):
     from .harnesses import harness_caps, normalize_fallback, resolve_harness
     from .shared_bots import follow
     record, found = providers.load(c, settings), {}
-    for row in c.execute("SELECT a.runner_id,a.bot,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.runner_id,a.bot,bc.config_json FROM assignments a JOIN bots b ON b.id=a.bot "
                          "AND b.state='active' LEFT JOIN bot_config bc ON bc.bot=a.bot"):
         config = providers.fill(record, follow(c, row['bot'], H._json(row['config_json'], {}) or {}))
         fallback = normalize_fallback(config.get('fallback')) or {}
@@ -234,7 +234,7 @@ def _reported(c, prefix, limit=200):
     """(bot, the rest of the line) for each readiness warning starting with `prefix` from the computer hosting the bot."""
     out = []
     hosting = {(a["bot"], a["runner_id"]) for a in c.execute(
-        "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived'")}
+        "SELECT a.bot,a.runner_id FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state<>'archived'")}
     for r in c.execute("SELECT id,readiness_json FROM runners WHERE revoked_at IS NULL"):
         for bot, row in ((readiness_document(r["readiness_json"]).get("bots")) or {}).items():
             if (bot, r["id"]) not in hosting:
@@ -258,7 +258,7 @@ def harness_denies(c, settings):
         except Exception:
             continue
         row = c.execute("SELECT repo,config_json FROM bot_config WHERE bot=?", (bot,)).fetchone()
-        own = str(repo_of((row["repo"] if row else "") or "bot-" + bot, "owner") or "").split("/")[-1].lower()
+        own = str(repo_of((row["repo"] if row else "") or "bot-" + (H.bot(c, bot) or {}).get("slug", bot), "owner") or "").split("/")[-1].lower()
         mode = H._json(row["config_json"] if row else None, {}).get("repo_access_mode", "own")
         github = [t for t in tools if str(t.get("service") or "").lower() in ("github", "github-app")
                   and t.get("id") != "repo" and "own repository" not in str(t.get("detail") or "")
@@ -299,7 +299,7 @@ def _missing_tool_credentials(c, online_ids):
     from .bot_tools import granted, service_name
     out = set()
     for row in c.execute("SELECT a.bot,r.id,r.label,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
-                         "JOIN bots b ON b.slug=a.bot WHERE b.state<>'archived' AND r.revoked_at IS NULL"):
+                         "JOIN bots b ON b.id=a.bot WHERE b.state<>'archived' AND r.revoked_at IS NULL"):
         if row["id"] not in online_ids:
             continue
         report = (readiness_document(row["readiness_json"]).get("bots") or {}).get(row["bot"]) or {}
@@ -329,7 +329,7 @@ def missing_repositories(c, online_ids):
     `why` is the runner's own sentence naming the cause (not on GitHub, GitHub refused, a clone failed)."""
     out = []
     for r in c.execute("SELECT a.bot,r.id,r.label,r.readiness_json FROM assignments a JOIN runners r ON r.id=a.runner_id "
-                       "JOIN bots b ON b.slug=a.bot WHERE b.state='active' AND r.revoked_at IS NULL ORDER BY a.bot"):
+                       "JOIN bots b ON b.id=a.bot WHERE b.state='active' AND r.revoked_at IS NULL ORDER BY a.bot"):
         report = (readiness_document(r["readiness_json"]).get("bots") or {}).get(r["bot"])
         if r["id"] in online_ids and isinstance(report, dict) and report.get("repository_present") is False:
             why = next((p for p in report.get("problems") or [] if "repositor" in p.lower()), "Missing bot repository")
@@ -423,7 +423,8 @@ def repository_fix(c, bot, label, github_owner=""):
     config = follow(c, bot, declared(c, bot))
     source = config.get("shared_from") or bot
     row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (source,)).fetchone()
-    repo = str((row["repo"] if row else "") or config.get("repo") or "emp-" + source)
+    repo = str((row["repo"] if row else "") or config.get("repo")
+               or "emp-" + ((config.get("name") if source == bot else (H.bot(c, source) or {}).get("slug")) or source))
     app = c.execute("SELECT org FROM github_app WHERE id='app'").fetchone()
     address = repo_url(repo, (app["org"] if app else "") or github_owner) or config.get("repo_url") or repo
     repository = str(address).rstrip("/").removesuffix(".git").removeprefix("https://github.com/")
@@ -493,7 +494,7 @@ def silent_computers(c, minutes=SILENT_MINUTES):
     rows = c.execute(
         f"SELECT r.id, r.label, r.operator, r.last_seen, sum(CASE WHEN NOT ({unfenced_sql()}) THEN 1 ELSE 0 END) dead, "
         "count(j.id) n, group_concat(DISTINCT a.bot) bots "
-        "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.slug=a.bot AND b.state='active' "
+        "FROM runners r JOIN assignments a ON a.runner_id=r.id JOIN bots b ON b.id=a.bot AND b.state='active' "
         "JOIN jobs j ON j.bot=a.bot AND j.state='queued' AND j.held=0 "
         "LEFT JOIN messages m ON m.id=j.message_id LEFT JOIN conversations cv ON cv.id=m.conversation_id "
         "WHERE r.revoked_at IS NULL AND r.last_seen < ? GROUP BY r.id ORDER BY r.last_seen",
@@ -544,7 +545,7 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # `queued` can start, `dead` waits behind an interrupted run nobody reviewed, `held` waits on purpose
     # (backend/wake_presets.py). Which bots are looked at is every job the claim reads, held ones never: Pipeline counts a
     # held job behind an interrupted run as dead, and work held on purpose is not stuck.
-    split = pipeline_stats.queue_counts(c, [r["slug"] for r in c.execute("SELECT slug FROM bots")])
+    split = pipeline_stats.queue_counts(c, [r["id"] for r in c.execute("SELECT id FROM bots")])
     queued = {r["bot"]: (r["n"], r["oldest"]) for r in c.execute(
         "SELECT bot, count(*) n, min(created) oldest FROM jobs WHERE state='queued' AND held=0 GROUP BY bot")}
     asked = {r["bot"]: r["oldest"] for r in c.execute(
@@ -608,12 +609,12 @@ def _waiting(c, online_ids, settings=None, limits=None):
     # Bots on a cloud machine (backend/cloud_machines.py): one stopped for want of work is not offline.
     from .cloud_machines import homes
     on_cloud = homes(c)
-    for bot in c.execute("SELECT slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
-        slug = bot["slug"]
+    for bot in c.execute("SELECT id,slug,display_name,state FROM bots WHERE state IN ('active','paused','quarantined') ORDER BY slug"):
+        slug = bot["id"]
         count, oldest = queued.get(slug, (0, None))
         where = assigned.get(slug)
         shown = split.get(slug, {})
-        row = {"bot": slug, "name": bot["display_name"] or slug, "queued": shown.get("queued", 0),
+        row = {"bot": slug, "slug": bot["slug"], "name": bot["display_name"] or bot["slug"], "queued": shown.get("queued", 0),
                "dead": shown.get("dead", 0), "held": shown.get("held", 0),
                "oldest": shown.get("oldest_queued_at") or shown.get("oldest_dead_at"),
                "computer": where[1] if where else ""}
@@ -718,21 +719,21 @@ def company_import_failed(c):
 
 
 def unfinished_setup(c):
-    """Active bots still onboarding whose held work is older than SETUP_HOLD_MINUTES: [(slug, name, count, what, oldest)].
+    """Active bots still onboarding whose held work is older than SETUP_HOLD_MINUTES: [(id, name, count, what, oldest)].
     An onboarding bot takes no task and no notice until a person marks its onboarding complete, so its watchers' tasks
     pile up out of sight."""
     from .statuses import PARKED_SQL
-    parked = c.execute("SELECT b.slug,b.display_name FROM bot_config bc JOIN bots b ON b.slug=bc.bot "
+    parked = c.execute("SELECT b.id,b.slug,b.display_name FROM bot_config bc JOIN bots b ON b.id=bc.bot "
                        f"WHERE bc.onboarding_state IN {PARKED_SQL} AND b.state='active' ORDER BY b.slug").fetchall()
     cutoff, out = H.shift(H.now(), minutes=-SETUP_HOLD_MINUTES), []
     for row in parked:      # few bots are ever parked; each is two indexed reads
         tasks = c.execute("SELECT count(*) n, min(created) oldest FROM tasks WHERE owner=? AND status IN ('open','doing','ready')",
-                          ("bot:" + row["slug"],)).fetchone()
+                          ("bot:" + row["id"],)).fetchone()
         notices = c.execute("SELECT count(*) n, min(created) oldest FROM jobs WHERE bot=? AND state='queued'",
-                            (row["slug"],)).fetchone()
+                            (row["id"],)).fetchone()
         count, what, oldest = (tasks["n"], "task", tasks["oldest"]) if tasks["n"] else (notices["n"], "notice", notices["oldest"])
         if count and oldest < cutoff:
-            out.append((row["slug"], row["display_name"] or row["slug"], count, what, oldest))
+            out.append((row["id"], row["display_name"] or row["slug"], count, what, oldest))
     return out
 
 
@@ -833,7 +834,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
     if not rows:
         return []
     computers = _movable(c, who, online_ids) if full else []
-    configured = {r["slug"]: r["runtime"] or "" for r in c.execute("SELECT slug,runtime FROM bots")}
+    configured = {r["id"]: r["runtime"] or "" for r in c.execute("SELECT id,runtime FROM bots")}
     out = []
     for row in rows:
         label, reason = row["computer"], row["reason"]
@@ -904,7 +905,7 @@ def _stuck(c, rows, online_ids, who, full, auth=None):
                              for item in queue_reasons)
         if move:
             fix = {**_fix(f"Move to {move['label']}"), "move": {"bot": row["bot"], "runner_id": move["id"], "computer": move["label"]}}
-        out.append({key: row[key] for key in ("bot", "name", "queued", "oldest", "computer", "reason")}
+        out.append({key: row[key] for key in ("bot", "slug", "name", "queued", "oldest", "computer", "reason")}
                    | {"dead": row.get("dead", 0), "held": row.get("held", 0),
                        "why": text if reason == "quarantined" else text[:320], "fix": fix if full else None,
                        **({"queue_reasons": queue_reasons} if queue_reasons else {}),
@@ -916,7 +917,7 @@ def holding_turns(c, attempts):
     """The running turns a computer due an update waits for, oldest first: which bot, since when and, unless private,
     which task, so a person can tell a real job from a turn that only waits on something elsewhere (TK-SHNKOY4E)."""
     from .task_privacy import attempt_tasks
-    names = {r["slug"]: r["display_name"] or r["slug"] for r in c.execute("SELECT slug,display_name FROM bots")}
+    names = {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id,slug,display_name FROM bots")}
     out = []
     for a in attempts:
         ids = sorted(attempt_tasks(c, a["id"]))
@@ -1009,8 +1010,8 @@ def _token_heavy(c, threshold):
 
 
 def _bot_name(c, bot):
-    row = c.execute("SELECT display_name FROM bots WHERE slug=?", (bot,)).fetchone()
-    return (row["display_name"] if row else "") or bot
+    row = c.execute("SELECT display_name,slug FROM bots WHERE id=?", (bot,)).fetchone()
+    return (row["display_name"] or row["slug"]) if row else bot
 
 
 def _tokens_words(n):
@@ -1062,7 +1063,7 @@ def _github_repo_create(c, github):
                "Let BotOps create repositories (turn on Administration for the app, then accept it for the organisation), "
                "or create each bot's repository yourself as an empty private repository.")
     if named:
-        summary += " Waiting: " + ", ".join((waiting[bot].get("repository") or bot) for bot in named[:3]) \
+        summary += " Waiting: " + ", ".join((waiting[bot].get("repository") or _bot_name(c, bot)) for bot in named[:3]) \
                    + ("." if len(named) <= 3 else f"; and {len(named) - 3} more.")
     return _check("github_repo_create", "GitHub can't create bot repositories", "warn", summary,
                   [_fix("Let BotOps create repositories", fix["permissions_url"]),
@@ -1587,7 +1588,7 @@ def _prime_claims(c):
     from .read_cache import cache, prime_rows
     if cache(c) is None:
         return
-    slugs = [row[0] for row in c.execute("SELECT slug FROM bots")]
+    slugs = [row[0] for row in c.execute("SELECT id FROM bots")]
     prime_bot_rows(c, slugs)
     keys = [GATEWAY_WAIT + slug for slug in slugs]
     found = {}
@@ -1751,7 +1752,7 @@ def view(c, who, settings, auth, github, config):
         asking = [(bot, extra) for bot, extra in asking if auth.bot_manager(c, who, bot)]
     if asking:
         checks.append(_check("mail_sending", "Mail sending", "warn",
-                             "; ".join(alert_text(bot, extra) for bot, extra in asking[:3])
+                             "; ".join(alert_text(_bot_name(c, bot), extra) for bot, extra in asking[:3])
                              + ("." if len(asking) <= 3 else f"; and {len(asking) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots"),
                               _fix("How", "https://github.com/ticoteam/tico/blob/main/docs/mail.md#turning-sending-on")]))
@@ -1761,7 +1762,7 @@ def view(c, who, settings, auth, github, config):
     pending = waiting_go_lives(c, who, auth, full)
     if pending:
         checks.append(_check("go_live_waiting", "Going live", "info",
-                             "; ".join(f"{bot} is waiting for {computer} to get its repository (since {since})"
+                             "; ".join(f"{_bot_name(c, bot)} is waiting for {computer} to get its repository (since {since})"
                                        for bot, computer, since in pending[:3])
                              + ("" if len(pending) <= 3 else f"; and {len(pending) - 3} more")
                              + f". Tico turns each on when its computer has the repository; after {EXPIRY_DAYS} days "
@@ -1770,13 +1771,13 @@ def view(c, who, settings, auth, github, config):
     unpublished = _unpublished(c) if full else []
     if unpublished:
         checks.append(_check("publish", "Bot history", "warn",
-                             "Some bots' history is not on GitHub yet: " + "; ".join(f"{bot} ({why})" for bot, why in unpublished[:3])
+                             "Some bots' history is not on GitHub yet: " + "; ".join(f"{_bot_name(c, bot)} ({why})" for bot, why in unpublished[:3])
                              + ("." if len(unpublished) <= 3 else f"; and {len(unpublished) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots")]))
     denied = _reported(c, DENIED_WARNING) if full else []
     if denied:
         checks.append(_check("claude_denies", "Claude Code permissions", "warn",
-                             "; ".join(f"{bot}: {DENIED_WARNING}{rest}" for bot, rest in denied[:3])
+                             "; ".join(f"{_bot_name(c, bot)}: {DENIED_WARNING}{rest}" for bot, rest in denied[:3])
                              + ("." if len(denied) <= 3 else f"; and {len(denied) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots")]))
     if full:
@@ -1805,10 +1806,10 @@ def view(c, who, settings, auth, github, config):
                 bot = H.actor_id(row['owner'])
                 usage[bot] = usage.get(bot, 0) + detail.get('size_mb', 0)
                 if error := current_error(row['state'], detail):
-                    errors.append(bot + ': ' + error)
+                    errors.append(_bot_name(c, bot) + ': ' + error)
             if usage:
                 checks.append(_check('worktrees', 'Task worktrees', 'warn' if errors else 'ok',
-                                     '; '.join(errors[:3]) if errors else '; '.join(f'{bot}: {size:g} MB' for bot, size in sorted(usage.items())),
+                                     '; '.join(errors[:3]) if errors else '; '.join(f'{_bot_name(c, bot)}: {size:g} MB' for bot, size in sorted(usage.items())),
                                      [_fix('Open tasks', '#/tasks')]))
             # A task waiting for room for a worktree is waiting, not failing (backend/worktree_waits.py). Named by bot
             # and repository only: a private task's title is not everyone's.
@@ -1854,7 +1855,7 @@ def view(c, who, settings, auth, github, config):
                              [_fix("Open Credentials", "#/credentials"), _fix("Open Computers", "#/settings", "devices")]))
     if full and (reserved := reserved_credentials(c)):
         checks.append(_check("reserved_credentials", "Credential names", "warn",
-                             "Bots run without these credentials, because Tico keeps their variable names for itself: " + "; ".join(f"{name} ({env}) for {bot}" for name, env, bot in reserved[:5])
+                             "Bots run without these credentials, because Tico keeps their variable names for itself: " + "; ".join(f"{name} ({env}) for {_bot_name(c, bot)}" for name, env, bot in reserved[:5])
                              + ("." if len(reserved) <= 5 else f"; and {len(reserved) - 5} more.")
                              + " Give each a variable name that does not start with TICO_, DYLD_ or LD_.",
                              [_fix("Open Credentials", "#/credentials")]))
@@ -1862,7 +1863,7 @@ def view(c, who, settings, auth, github, config):
     if lacking:
         checks.append(_check("repositories", "Bot repositories", "bad",
                              "Bots cannot run because their computer has no repository for them: "
-                             + "; ".join(f"{bot} on {label}: {why}. {repository_fix(c, bot, label, settings.github_owner)[1]}"
+                             + "; ".join(f"{_bot_name(c, bot)} on {label}: {why}. {repository_fix(c, bot, label, settings.github_owner)[1]}"
                                          for bot, label, why in lacking[:3])
                              + ("." if len(lacking) <= 3 else f"; and {len(lacking) - 3} more."),
                              [_fix("Open bots", "#/settings", "bots")]))
@@ -2091,7 +2092,7 @@ def view(c, who, settings, auth, github, config):
 
     if full and (stuck := watchers.problems(c, online_ids)):
         checks.append(_check("watchers", "Watchers", "warn",
-                             "; ".join(f"{bot}/{name} {why}" for bot, name, why in stuck[:3])
+                             "; ".join(f"{_bot_name(c, bot)}/{name} {why}" for bot, name, why in stuck[:3])
                              + ("." if len(stuck) <= 3 else f"; and {len(stuck) - 3} more."),
                              [_fix("Open Runs", "#/settings", "runs")]))
     if full and (mixed := inbox_isolation.violations(c, roster(c))):
@@ -2105,7 +2106,7 @@ def view(c, who, settings, auth, github, config):
     if beside:
         checks.append(_check("member_bots", "Members' bots", "warn",
                              "Bots members created run on a computer that holds keys every bot there receives "
-                             "(secrets/_shared.env): " + "; ".join(f"{label}: {', '.join(bots[:3])}" for label, bots in beside[:3])
+                             "(secrets/_shared.env): " + "; ".join(f"{label}: {', '.join(_bot_name(c, b) for b in bots[:3])}" for label, bots in beside[:3])
                              + ". A member's bot instructions could ask a run for them. Move those bots to a computer "
                              "with no shared keys and open only that one to members' bots (Settings > Computers).",
                              [_fix("Open Computers", "#/settings", "devices")]))

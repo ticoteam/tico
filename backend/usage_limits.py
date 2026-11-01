@@ -443,7 +443,8 @@ def warning(c, actor, at=None):
     met = over(c, bot, at)
     if not met:
         return None
-    name = (H.bot(c, bot) or {}).get("display_name") or bot
+    found = H.bot(c, bot) or {}
+    name = found.get("display_name") or found.get("slug") or bot
     if met["scope"] == "budget" and not met["until"]:
         return f"{name} is waiting: the {met['name']} budget is used up; it starts again when a person raises it."
     reset = resets(met["period"], datetime.fromisoformat(met["until"][:-1]))
@@ -514,7 +515,8 @@ def recipients(c, bot, owner_email=""):
 
 def notify(c, bot, level, label_, amount, cap, owner_email=""):
     person = recipients(c, bot, owner_email)
-    name = (H.bot(c, bot) or {}).get("display_name") or bot
+    found = H.bot(c, bot) or {}
+    name = found.get("display_name") or found.get("slug") or bot
     money = f"${amount:,.2f} of ${cap:,.2f}"
     word = WORDS.get(label_, label_)
     text = (f"{name} is at {level}% of its {word} limit ({money}, estimated)." if level < 100 else

@@ -77,6 +77,8 @@ def create_url(org, name=""):
 
 def fixes(c, row, slug=""):
     """The two ways out, as links: create the repository (prefilled), or let BotOps create repositories."""
+    if slug:
+        slug = (H.resolve_bot(c, slug) or {}).get("slug", slug)     # a bot's repository is named for its slug
     name = "bot-" + slug.removeprefix("emp-") if slug else ""
     return {"repository": f"{row['org']}/{name}" if name else "",
             "create_url": create_url(row["org"], name), "permissions_url": permissions_url(c, row)}
@@ -99,6 +101,7 @@ def _body(found):
 def raise_item(c, bot, row, owner_id, template=""):
     """One Needs-you task per waiting bot, for `owner_id` (the owner, else an Admin). A repeated attempt finds the
     open one and returns it. With nobody who can change the app, no task is filed and Health's alert stands."""
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)     # the waits are keyed by the bot's id, not the slug it was asked by
     found = fixes(c, row, bot)
     every = waits(c)
     current = every.get(bot) or {}
@@ -164,11 +167,12 @@ def resume(service):
 
 def _resume_one(service, row, allowed, bot, wait):
     with service.store.read() as c:
-        state = (H.bot(c, bot) or {}).get("state")
+        found = H.bot(c, bot) or {}
+    state = found.get("state")
     if state in (None, "archived"):
         _finish(service.store, bot, wait, "The bot was archived; nothing was created.")
         return "archived"
-    repository = wait.get("repository") or f"{row['org']}/bot-{bot}"
+    repository = wait.get("repository") or f"{row['org']}/bot-{found['slug']}"
     how = None
     try:
         service.mint([repository], {"metadata": "read"}, diagnose=False)

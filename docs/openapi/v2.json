@@ -7390,7 +7390,7 @@
     },
     "/api/v2/events": {
       "get": {
-        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
+        "summary": "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids",
         "operationId": "streamEvents",
         "parameters": [
           {
@@ -19538,7 +19538,7 @@
     },
     "/api/v2/org/order/{manager}": {
       "get": {
-        "summary": "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the chart's order",
+        "summary": "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the chart's order",
         "operationId": "getReportOrder",
         "parameters": [
           {
@@ -20228,7 +20228,7 @@
     },
     "/api/v2/places/{place}": {
       "get": {
-        "summary": "A place's pins in order (dashboard, team:<group>, bot:<slug>, task:<id>), each card with what it shows the caller; unreadable pages are left out",
+        "summary": "A place's pins in order (dashboard, team:<group>, bot:<id>, task:<id>), each card with what it shows the caller; unreadable pages are left out",
         "operationId": "getPlace",
         "parameters": [
           {
@@ -30612,7 +30612,7 @@
     },
     "/api/v2/usage": {
       "get": {
-        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<slug> is that bot's daily series and top routines instead",
+        "summary": "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead",
         "operationId": "getUsage",
         "parameters": [
           {

@@ -75,7 +75,7 @@ def test_who_matches_a_group_a_nested_group_a_person_all_bots_and_a_later_bot(ap
     assert everyone_bots in matched(api, "bot:finance")
     # A bot made after the rule is covered by all_bots, with no edit to the rule.
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('late-bot', 'Late', 'active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('late-bot', 'late-bot', 'Late', 'active')")
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator) VALUES('late-bot','{}','', 'ana')")
     as_bot(api, "late-bot", "late-test")
     assert everyone_bots in matched(api, "bot:late-bot")
@@ -246,7 +246,7 @@ def test_a_bot_with_no_team_of_its_own_is_in_its_managers_group(api):
     org(api)
     support = rule(api, {"kind": "internal", "text": "Log every refund.", "who": {"groups": ["support"]}})["id"]
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug, display_name, state) VALUES('intern', 'Intern', 'active')")
+        c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES('intern', 'intern', 'Intern', 'active')")
         c.execute("INSERT INTO bot_config(bot,config_json,team,operator,reports_to) VALUES('intern','{}','','ana','finance')")
     assert support in matched(api, "bot:intern")
 

@@ -81,7 +81,7 @@ def _live(alias="r"):
     marks = ",".join("?" * len(H.ACTIVE_STATUSES))
     return (f"{alias}.fixed_at IS NULL AND EXISTS(SELECT 1 FROM tasks t WHERE t.id={alias}.task_id "
             f"AND t.owner={alias}.owner AND t.status IN ({marks})) AND NOT EXISTS(SELECT 1 FROM bots b "
-            f"WHERE b.slug={alias}.bot AND b.state='archived')"), tuple(H.ACTIVE_STATUSES)
+            f"WHERE b.id={alias}.bot AND b.state='archived')"), tuple(H.ACTIVE_STATUSES)
 
 
 def person_for(c, settings, bot, task=None):

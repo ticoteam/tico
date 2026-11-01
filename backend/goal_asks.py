@@ -38,7 +38,7 @@ WHY_REF = "goals"                                     # one bundled Why ask per 
 
 
 def _org(conn):
-    archived = {row["slug"] for row in H.bots(conn) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(conn) if row.get("state") == "archived"}
     return views.roster(conn), views.entries(conn), archived, True
 
 

@@ -345,6 +345,7 @@ def report(c, auth, who, *, type=None, owner=None, label=None, updated_since=Non
     truncated = len(rows) > TASK_CAP
     rows = rows[:TASK_CAP]
     steps, loose = steps_report(c, typ, rows, now)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     bots = readable_bots(c, auth, who, bot) if not bot or H.bot(c, bot) else []
     if bot and not bots:
         raise Problem("not_found", "Bot not found", 404)      # unknown, or not one whose runs the caller may read

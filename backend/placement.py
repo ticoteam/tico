@@ -22,7 +22,7 @@ def candidates(c, auth, bot):
     operator, owner, member = config["operator"], auth.owner_id(c), auth.member_bot(c, bot)
     online = {r["id"] for r in _online_runners(c)}
     load = {r["runner_id"]: r["n"] for r in c.execute(
-        "SELECT a.runner_id, count(*) n FROM assignments a JOIN bots b ON b.slug=a.bot WHERE b.state='active' "
+        "SELECT a.runner_id, count(*) n FROM assignments a JOIN bots b ON b.id=a.bot WHERE b.state='active' "
         "GROUP BY a.runner_id")}
     def takes(r):
         # A member's bot: its member's computer, or one opened to members' bots. Any other: its operator's or the owner's.
@@ -69,13 +69,13 @@ def auto_place(c, execution, bot, by=""):
 
 def sweep(c, execution):
     """Place the active bots that still have no computer (one arrived, a runner came back). Cheap when there are none."""
-    rows = c.execute("SELECT b.slug FROM bots b JOIN bot_config bc ON bc.bot=b.slug LEFT JOIN assignments a ON a.bot=b.slug "
+    rows = c.execute("SELECT b.id, b.slug FROM bots b JOIN bot_config bc ON bc.bot=b.id LEFT JOIN assignments a ON a.bot=b.id "
                      "WHERE b.state='active' AND a.bot IS NULL ORDER BY b.slug LIMIT ?", (SWEEP_LIMIT,)).fetchall()
     from .batch_work import isolated
     result = []
     for row in rows:
         with isolated(c, "placement", row["slug"]):
-            placed = auto_place(c, execution, row["slug"])
+            placed = auto_place(c, execution, row["id"])
             if placed:
                 result.append((row["slug"], placed))
     return result

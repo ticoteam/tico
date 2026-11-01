@@ -160,7 +160,7 @@ STABLE = [
     ("/api/v2/groups/{gid}", "delete", "Team chart", "deleteGroup",
      "Remove a group; the groups and teammates in it move up to its parent (owners and admins)", None),
     ("/api/v2/org/order/{manager}", "get", "Team chart", "getReportOrder",
-     "A manager's direct reports (a bot's slug or a human's id), humans and the bots the caller can see, in the "
+     "A manager's direct reports (a bot's id or slug, or a human's id), humans and the bots the caller can see, in the "
      "chart's order", "ReportOrderView"),
     ("/api/v2/org/order/{manager}", "put", "Team chart", "setReportOrder",
      "Put a manager's reports in this order; the ones left out keep their places (whoever may put reports under "
@@ -299,7 +299,7 @@ STABLE = [
      "Ask the bots again for a past day's update in the current shape: the owner", None),
     ("/api/v2/events", "get", "Live events", "streamEvents",
      "Server-sent events: tasks, messages, runs, bots and Needs you as they change. topics=<comma list> (default all), "
-     "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<slugs> narrows runs and bots, "
+     "after=<change number> resumes, conversation=<ids> narrows messages and runs, bot=<bot ids or slugs> narrows runs and bots, "
      "task=<ids> and party=<actors> narrow tasks to those and to the ones those actors own or asked for, needs=changes sends Needs you as changed ids", None),
     ("/api/v2/needs-you", "get", "Needs you", "getNeedsYou",
      "What waits on the caller, with its `version` and `count`; count=true for the number alone, version=<held> "
@@ -574,7 +574,7 @@ STABLE = [
     ("/api/v2/usage", "get", "Usage", "getUsage",
      "Estimated spend over from..to (UTC dates, default the last 7 days), grouped by bot (default), day, routine, harness, model, effort or subscription, "
      "filterable by those run dimensions and department (__unknown__ selects missing values). The owner and bot administrators see every bot; anyone else sees the bots they run "
-     "or own. ?bot=<slug> is that bot's daily series and top routines instead", "Usage"),
+     "or own. ?bot=<bot id or slug> is that bot's daily series and top routines instead", "Usage"),
     ("/api/v2/usage/limits", "get", "Usage", "getUsageLimits",
      "The team default limit and each bot's hourly, daily, weekly and monthly limits with this period's spend, for the bots "
      "the caller may see usage for; for the owner and bot administrators also the team's and each group's combined limits (a "
@@ -2208,7 +2208,7 @@ TAGS['Cards and pins'] = ("Tico's built-in cards and where pages and cards are p
                           "sidebars and tasks (docs/overview.md). A card shows each reader only what they may see.")
 STABLE.extend([
     ('/api/v2/places/{place}', 'get', 'Cards and pins', 'getPlace', 'A place\'s pins in order (dashboard, team:<group>, '
-     'bot:<slug>, task:<id>), each card with what it shows the caller; unreadable pages are left out', 'Place'),
+     'bot:<id>, task:<id>), each card with what it shows the caller; unreadable pages are left out', 'Place'),
     ('/api/v2/places/{place}', 'put', 'Cards and pins', 'savePlace', 'Save a Dashboard or team page (its default cards '
      'become pins) and a team page\'s audience', 'Place'),
     ('/api/v2/places/{place}/order', 'post', 'Cards and pins', 'orderPlace', 'Put every pin at a place in this order', 'Place'),

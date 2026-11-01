@@ -239,7 +239,7 @@ TRIGGERS = [
     ("changes_bot_status_update", "UPDATE", "bot_status",
      _changed("state", "focus", "task_id", "since", "last_result", "next_due", "open_tasks", "needs_human"),
      _row("bots", "status", "NEW.bot", bot="NEW.bot")),
-    ("changes_bots_update", "UPDATE", "bots", _changed("state"), _row("bots", "state", "NEW.slug", bot="NEW.slug")),
+    ("changes_bots_update", "UPDATE", "bots", _changed("state"), _row("bots", "state", "NEW.id", bot="NEW.id")),
     ("changes_bot_control_insert", "INSERT", "bot_control", None, _row("bots", "control", "NEW.bot", bot="NEW.bot")),
     ("changes_bot_control_update", "UPDATE", "bot_control", None, _row("bots", "control", "NEW.bot", bot="NEW.bot")),
     ("changes_bot_control_delete", "DELETE", "bot_control", None, _row("bots", "control", "OLD.bot", bot="OLD.bot")),
@@ -259,7 +259,7 @@ TRIGGERS = [
 # A runner used to ask a dozen endpoints on timers whether anything was new for it, and almost
 # every answer was no. The same log now carries `runner` rows: one per computer a write concerns,
 # its id as the subject, naming which of the computer's reads to repeat. A row carries a kind and
-# at most a bot slug (or, for `screen_open`, the session's id), never a value (`GET /api/v2/runners/me/events`,
+# at most a bot id (or, for `screen_open`, the session's id), never a value (`GET /api/v2/runners/me/events`,
 # runner-rs/src/events.rs).
 RUNNER_KINDS = ("work", "assignments", "credentials", "config", "repositories", "worktrees", "restart",
                 "logins", "harness_actions", "credential_imports", "subscription_refresh", "screen_open",
@@ -293,7 +293,7 @@ RUNNER_TRIGGERS = [
     ("changes_runner_jobs_released", "UPDATE", "jobs", "NEW.state='queued' AND OLD.held=1 AND NEW.held=0",
      _bot_runner("work", "NEW.bot")),
     ("changes_runner_bots_update", "UPDATE", "bots", _changed("state"),
-     _bot_runner("work", "NEW.slug") + _bot_runner("assignments", "NEW.slug")),
+     _bot_runner("work", "NEW.id") + _bot_runner("assignments", "NEW.id")),
     ("changes_runner_bot_control_update", "UPDATE", "bot_control", None, _bot_runner("work", "NEW.bot")),
     # A usage limit lifted (its reset passed, or Try now): the held jobs are claimable again.
     ("changes_runner_bot_status_update", "UPDATE", "bot_status", "OLD.state='limited' AND NEW.state IS NOT 'limited'",
@@ -646,7 +646,7 @@ def prime_bot_rows(c, slugs):
     for part in H.chunks(sorted({H.actor_id(s) for s in slugs if s})):
         marks = ",".join("?" * len(part))
         for table, column, statement in (("bot_status", "bot", "SELECT * FROM bot_status WHERE bot=?"),
-                                         ("bots", "slug", "SELECT * FROM bots WHERE slug=?"),
+                                         ("bots", "id", "SELECT * FROM bots WHERE id=?"),
                                          ("usage_limits", "bot", usage_limits.OWN_SQL),
                                          ("run_backoff", "bot", run_backoff.GET_SQL),
                                          ("bot_budget", "bot", turn_budgets.GET_SQL),
@@ -1001,6 +1001,7 @@ def read(c, auth, who, after, *, topics=TOPICS, conversations=(), bots=(), tasks
             clauses.append("(topic NOT IN ('messages','runs') OR conversation_id IN (%s))" % ",".join("?" * len(conversations)))
             args += list(conversations)
         if bots:
+            bots = [(H.resolve_bot(c, ref) or {}).get("id", ref) for ref in bots]
             clauses.append("(topic NOT IN ('runs','bots') OR bot IN (%s))" % ",".join("?" * len(bots)))
             args += list(bots)
         if tasks and not parties:       # a party's tasks are known only from the task (_tasks)

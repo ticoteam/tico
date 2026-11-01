@@ -1189,7 +1189,7 @@ def status_tasks(c, match, args):
 
 def status_inputs(c, bots):
     """What `status` reads for each of many bots, one query per kind per 500 bots:
-    {slug: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
+    {bot id: {"tasks": [...], "approvals": [...], "asks": [...]}}, to pass to `status` as keywords."""
     snapshot(c)
     out = {bot: {"tasks": [], "approvals": [], "asks": []} for bot in bots}
     for part in H.chunks(out):
@@ -1265,7 +1265,7 @@ def job_count(c, who, bot, states=("queued",)):
 
 
 def job_counts(c, who, bots, states=("queued",)):
-    """`job_count` for many bots, reading their jobs in one query per 500 bots: {slug: count}.
+    """`job_count` for many bots, reading their jobs in one query per 500 bots: {bot id: count}.
     Each job is still checked on its own."""
     snapshot(c)
     out = dict.fromkeys(bots, 0)

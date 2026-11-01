@@ -439,6 +439,8 @@ class Vault:
                 and self.auth.bot_manager(c, who, H.actor_id(subject)))
 
     def grant_authority(self, c, who, cid, subject):
+        if subject.startswith('bot:'):
+            subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
         if subject == COMPUTERS:
             require_admin(c, who, self.admins)
             return None
@@ -450,7 +452,7 @@ class Vault:
             if self.manages_bot(c, who, subject):
                 return None
             raise Problem('forbidden', 'You can share a credential you added only with bots you own or manage. '
-                          + ask_admin_detail(c, self.admins, f'give it to {H.actor_id(subject)}'), 403)
+                          + ask_admin_detail(c, self.admins, f'give it to {(H.bot(c, H.actor_id(subject)) or {}).get("slug") or H.actor_id(subject)}'), 403)
         parent = effective_grant(c,cid,who.actor) if who.role in ('human','owner') else None
         bot = c.execute('SELECT operator,bot_owners_json FROM bot_config WHERE bot=?', (H.actor_id(subject),)).fetchone() if subject.startswith('bot:') else None
         # A bot's owners (its creator and co-owners, and its operator) attach credentials they hold themselves.
@@ -474,6 +476,8 @@ class Vault:
 
     def grant(self, c, who, cid, subject):
         row=self.row(c,cid)
+        if subject.startswith('bot:'):
+            subject = 'bot:' + (H.resolve_bot(c, subject) or {}).get('id', H.actor_id(subject))
         parent = self.grant_authority(c,who,cid,subject)
         inferred = model_env(row['name'], row['kind'], row['env'])
         if inferred and not row['env']:
@@ -489,7 +493,7 @@ class Vault:
         elif subject.startswith('human:'):
             exists=c.execute('SELECT 1 FROM humans WHERE id=?',(H.actor_id(subject),)).fetchone()
         elif subject.startswith('bot:'):
-            exists=c.execute('SELECT 1 FROM bots WHERE slug=?',(H.actor_id(subject),)).fetchone()
+            exists=c.execute('SELECT 1 FROM bots WHERE id=?',(H.actor_id(subject),)).fetchone()
         else:
             exists=None
         if not exists:
@@ -504,7 +508,7 @@ class Vault:
             for other in c.execute('SELECT id,name FROM credentials WHERE env=? AND id!=? AND ciphertext IS NOT NULL',(row['env'],cid)):
                 held=effective_grant(c,other['id'],subject)
                 if held:
-                    bot=H.actor_id(subject)
+                    bot=(H.bot(c,H.actor_id(subject)) or {}).get('slug') or H.actor_id(subject)
                     ask='' if self.may_revoke(c,who,other['id'],held) else ' '+ask_admin_detail(
                         c,self.admins,f"take {other['name']} away from {bot}")
                     raise Problem('env_in_use',f"{bot} already gets {row['env']} from the credential {other['name']}, and a run "
@@ -567,7 +571,7 @@ def last_used(c,cid):
     row=c.execute('SELECT at,bot FROM credential_uses WHERE credential_id=? ORDER BY at DESC LIMIT 1',(cid,)).fetchone()
     if not row:
         return {'last_used':None,'last_used_by':''}
-    return {'last_used':row['at'],'last_used_by':row['bot'] or ''}
+    return {'last_used':row['at'],'last_used_by':(H.bot(c,row['bot']) or {}).get('slug') or row['bot'] or ''}
 
 
 def install_credentials(app,store,delegate=None,propose=None):
@@ -606,21 +610,23 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         with store.transaction() as c:
             migration_runner(c,who)
-            if not c.execute('SELECT 1 FROM assignments WHERE runner_id=? AND bot=?',(who.runner_id,body.bot)).fetchone():
+            bot=(H.resolve_bot(c,body.bot) or {}).get('id',body.bot)
+            if not c.execute('SELECT 1 FROM assignments WHERE runner_id=? AND bot=?',(who.runner_id,bot)).fetchone():
                 raise Problem('forbidden','That bot is not on this Computer',403)
             pending=json.loads(c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(FILE_MIGRATION,)).fetchone()[0])
             row=c.execute('SELECT value_json FROM registry_metadata WHERE key=?',(HUB_MIGRATION,)).fetchone()
             hub_pending=json.loads(row[0]) if row else []
-            if body.bot not in pending and body.bot not in hub_pending:
+            if bot not in pending and bot not in hub_pending:
                 return {'migrated':True}
-            first=body.bot in pending
+            first=bot in pending
             supports_hub=runner_versions.at_least(c,who.runner_id,'0.2.31')
             if not first and not supports_hub:
                 return {'migrated':False,'min_runner':'0.2.31'}
-            if first and not supports_hub and body.bot not in hub_pending:
-                hub_pending.append(body.bot)
+            if first and not supports_hub and bot not in hub_pending:
+                hub_pending.append(bot)
                 c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
-            subject='bot:'+body.bot
+            subject='bot:'+bot
+            label=(H.bot(c,bot) or {}).get('slug') or bot
             for item in body.credentials:
                 if item.env.startswith('HUB_') and not supports_hub:
                     continue
@@ -636,15 +642,15 @@ def install_credentials(app,store,delegate=None,propose=None):
                 ciphertext,nonce=vault.cipher.encrypt(c,cid,item.value.get_secret_value())
                 c.execute('INSERT INTO credentials(id,name,kind,env,preview,ciphertext,nonce,source,created,updated,updated_by) '
                           'VALUES(?,?,?,?,?,?,?,?,?,?,?)',
-                          (cid,f'{item.env} ({body.bot})',item.kind,item.env,'••••••',ciphertext,nonce,'Computer migration',now,now,who.actor))
+                          (cid,f'{item.env} ({label})',item.kind,item.env,'••••••',ciphertext,nonce,'Computer migration',now,now,who.actor))
                 c.execute('INSERT INTO credential_grants(id,credential_id,subject,granted_by,created) VALUES(?,?,?,?,?)',
                           (gid,cid,subject,who.actor,now))
-                H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':body.bot,'grant':gid})
+                H.event(c,who.actor,'credential.migrated',cid,{'env':item.env,'bot':bot,'grant':gid})
             if first:
-                pending.remove(body.bot)
+                pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(pending),FILE_MIGRATION))
-            if body.bot in hub_pending and supports_hub:
-                hub_pending.remove(body.bot)
+            if bot in hub_pending and supports_hub:
+                hub_pending.remove(bot)
                 c.execute('UPDATE registry_metadata SET value_json=? WHERE key=?',(encode(hub_pending),HUB_MIGRATION))
             return {'migrated':True}
 
@@ -685,7 +691,7 @@ def install_credentials(app,store,delegate=None,propose=None):
                                 if effective_grant(c,row['id'],g['subject']) and (admin or mine or g['subject']==who.actor or g['granted_by']==who.actor)]
                 rows.append(item)
             people=[dict(r) for r in c.execute('SELECT id,name,email FROM humans ORDER BY name')] if admin else []
-            bots=[dict(r) for r in c.execute('SELECT b.slug AS id,b.display_name AS name,bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.slug ORDER BY b.display_name')
+            bots=[dict(r) for r in c.execute('SELECT b.id AS id,b.slug AS slug,b.display_name AS name,bc.operator FROM bots b JOIN bot_config bc ON bc.bot=b.id ORDER BY b.display_name')
                   if admin or r['operator']==H.actor_id(who.actor) or (added and vault.manages_bot(c,who,'bot:'+r['id']))]
             # The computers a model key is shared with by name (Settings > Computers, "Shared with"), named on its grants.
             computers=[dict(r) for r in c.execute("SELECT id,label FROM runners ORDER BY lower(label),id")] if admin else []
@@ -800,12 +806,13 @@ def install_credentials(app,store,delegate=None,propose=None):
         who=request.state.identity
         def placed(c):
             migration_runner(c,who)
-            if not c.execute('SELECT 1 FROM assignments a JOIN bots b ON b.slug=a.bot '
+            if not c.execute('SELECT 1 FROM assignments a JOIN bots b ON b.id=a.bot '
                              'WHERE a.runner_id=? AND a.bot=? AND b.state=\'active\'',(who.runner_id,bot)).fetchone():
                 raise Problem('forbidden','That active bot is not on this Computer',403)
         # Most watchers hold no credential: answer those from a read, so the poll never queues for the write lock.
         # Sending a value records it, so that and its checks run in one write transaction, as before.
         with store.read_transaction() as c:
+            bot=(H.resolve_bot(c,bot) or {}).get('id',bot)
             placed(c)
             held=granted(c,'bot:'+bot)
             if not any(row['id'] in held for row in c.execute(

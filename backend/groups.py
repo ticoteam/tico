@@ -44,7 +44,7 @@ def _configs(c):
 
 
 def _archived(c):
-    return {row["slug"] for row in c.execute("SELECT slug FROM bots WHERE state='archived'")}
+    return {row["id"] for row in c.execute("SELECT id FROM bots WHERE state='archived'")}
 
 
 def slug_of(text):
@@ -62,7 +62,7 @@ def outside(settings, slug, config, helpers=None):
 
 
 def rows(roster, employees, archived=(), can_see=None, leads=False):
-    """Every group in roster order: id, name, parent, and its `people` (ids) and `bots` (slugs)."""
+    """Every group in roster order: id, name, parent, and its `people` (ids) and `bots` (ids)."""
     people, bots = {}, {}
     for person in P.visible_people(roster):
         if person.get("team"):
@@ -151,7 +151,9 @@ def _place(c, roster, gid, people, bots):
 
 def _apply_members(c, settings, roster, gid, add, remove):
     configs = _configs(c)
-    _check_members(c, settings, roster, configs, add.people, add.bots)
+    add_bots = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in add.bots]
+    remove_bots = [(H.resolve_bot(c, slug) or {}).get("id", slug) for slug in remove.bots]
+    _check_members(c, settings, roster, configs, add.people, add_bots)
     people = list(roster["people"])
     changed = []
     for i, person in enumerate(people):
@@ -160,11 +162,11 @@ def _apply_members(c, settings, roster, gid, add, remove):
             people[i] = {**person, "team": ""}
             changed.append(people[i])
             _follow(c, "person:" + person["id"], gid, "")
-    for slug in remove.bots:
+    for slug in remove_bots:
         if P.team_of(slug, configs, roster) == gid and slug in configs:
             _set_bot(c, slug, "")
     roster = {**roster, "people": people}
-    people, moved = _place(c, roster, gid, add.people, add.bots)
+    people, moved = _place(c, roster, gid, add.people, add_bots)
     return people, changed + moved
 
 
@@ -215,7 +217,7 @@ def _led_add(c, who, gid, roster, people=(), bots=()):
     if gid not in led:
         return False
     configs = _configs(c)
-    homes = [P.team_of(slug, configs, roster) for slug in bots] + \
+    homes = [P.team_of((H.resolve_bot(c, slug) or {}).get("id", slug), configs, roster) for slug in bots] + \
         [(P.person(pid, roster) or {}).get("team") for pid in people]
     return all(home in led for home in homes)
 
@@ -270,8 +272,8 @@ def _next_order(groups):
     return max((group["order"] for group in groups.values()), default=-1) + 1
 
 
-def _lead_ref(value):
-    """A group's lead as CONTRACT §3 writes it: `bot:<slug>` or `person:<id>`; "" for none."""
+def _lead_ref(c, value):
+    """A group's lead as CONTRACT §3 writes it: `bot:<id>` or `person:<id>`; "" for none."""
     text = str(value or "").strip()
     if not text:
         return ""
@@ -279,11 +281,13 @@ def _lead_ref(value):
     kind = "person" if kind == "human" else kind
     if kind not in ("bot", "person") or not ident:
         raise Problem("validation", "The lead is bot:<slug> or person:<id>", 422)
+    if kind == "bot":
+        ident = (H.resolve_bot(c, ident) or {}).get("id", ident)
     return f"{kind}:{ident}"
 
 
 def is_member(ref, gid, roster, configs):
-    """Whether a teammate ref (`bot:<slug>`, `person:<id>`) is in the group `gid` itself."""
+    """Whether a teammate ref (`bot:<id>`, `person:<id>`) is in the group `gid` itself."""
     kind, _, ident = str(ref or "").partition(":")
     if kind == "bot":
         return ident in configs and P.team_of(ident, configs, roster) == gid
@@ -349,7 +353,7 @@ def create(c, auth, settings, who, body, via=None):
                    "order": _next_order(groups)}
     _set_bet(c, who, groups[gid], body.bet_id)
     if body.lead:
-        groups[gid]["lead"] = _lead_ref(body.lead)
+        groups[gid]["lead"] = _lead_ref(c, body.lead)
     people, changed = _apply_members(c, settings, roster, gid, body.add, M.GroupMembers())
     roster = _finish(c, roster, people, changed)
     _lead_check(c, roster, _configs(c), gid, groups[gid].get("lead", ""))
@@ -379,7 +383,7 @@ def update(c, auth, settings, who, gid, body, via=None):
         group["name"] = body.name.strip()
     _set_bet(c, who, group, body.bet_id)
     if body.lead is not None:
-        group["lead"] = _lead_ref(body.lead)
+        group["lead"] = _lead_ref(c, body.lead)
     if _named(groups, group["name"], group["parent"], skip=gid):
         raise Problem("conflict", "There is already a group with that name there", 409)
     people, changed = _apply_members(c, settings, roster, gid, body.add, body.remove)

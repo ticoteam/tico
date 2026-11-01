@@ -27,7 +27,7 @@ def picks(c, settings=None):
     """The Gateway picks the active bots use, most used first."""
     record = providers.load(c, settings)
     counts = {}
-    for row in c.execute("SELECT b.slug, bc.config_json FROM bots b JOIN bot_config bc ON bc.bot=b.slug "
+    for row in c.execute("SELECT b.slug, bc.config_json FROM bots b JOIN bot_config bc ON bc.bot=b.id "
                          "WHERE b.state<>'archived'"):
         try:
             config = json.loads(row["config_json"] or "{}")

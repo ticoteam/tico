@@ -148,7 +148,7 @@ GRANTED = {
                round(100.0 * sum(error) / count(*), 1) AS error_pct,
                CAST(round(avg(ms)) AS INTEGER) AS avg_ms, max(ms) AS max_ms
         FROM (SELECT date(ts, '-6 days', 'weekday 1') AS week,
-                     CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT slug FROM {bots})
+                     CASE WHEN actor LIKE 'bot:%' AND substr(actor, 5) IN (SELECT id FROM {bots})
                           THEN substr(actor, 5) END AS bot,
                      CASE WHEN target IN {tool_names} THEN target ELSE 'other' END AS tool,
                      coalesce(json_extract(detail_json, '$.error'), 0) <> 0 AS error,
@@ -258,7 +258,7 @@ def guarded(c, auth, who, inner, function, columns=None):
                          f"WHERE attempt_id={q(who.attempt_id)}) "
                          "OR (kind='task' AND task_id IS NOT NULL AND task_id IN (SELECT id FROM tasks))")
     else:
-        visible = [row["slug"] for row in H.bots(c) if row["slug"] not in hidden]
+        visible = [row["id"] for row in H.bots(c) if row["id"] not in hidden]
         member = rooms.shared_member_bots(c, auth, who.actor, visible)
         shared = [slug for slug in visible if slug in member]
         room_bot = ("COALESCE(NULLIF(substr(room_key,1,instr(room_key||':',':')-1),''),"
@@ -327,7 +327,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         events = mine
     else:
         events = (f"actor={me} OR target IN (SELECT id FROM tasks) OR target IN (SELECT id FROM conversations) "
-                  "OR target IN (SELECT slug FROM bots) OR target IN (SELECT 'bot:'||slug FROM bots)")
+                  "OR target IN (SELECT id FROM bots) OR target IN (SELECT 'bot:'||id FROM bots)")
     # Imported drafts do not enter company search, exports or the audit feed.
     meetings = f"({meetings}) AND review_state='live'"
     events = (f"({events}) AND target NOT IN (SELECT id FROM {inner('meetings')} "
@@ -346,7 +346,7 @@ def guarded(c, auth, who, inner, function, columns=None):
         "message_assets": by_message,
         "approvals": ("(task_id IS NULL OR " + by_task + ") AND " + by_message + " AND (" +
                       ("1" if owner else f"requested_by={me} OR message_id IN (SELECT id FROM messages WHERE to_actor={me})") + ")"),
-        "bots": bots_visible("slug"),
+        "bots": bots_visible("id"),
         "bot_status": bots_visible("bot"), "bot_status_history": bots_visible("bot"),
         "schedules": bots_visible("bot"), "bot_config": bots_visible("bot"), "bot_control": bots_visible("bot"),
         "bot_transitions": bots_visible("bot"), "assignments": bots_visible("bot"),

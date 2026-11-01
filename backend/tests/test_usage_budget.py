@@ -56,8 +56,8 @@ def big_org(api, first, last, groups_=8):
         c.execute("UPDATE registry_metadata SET value_json=? WHERE key='people'", (json.dumps(people),))
         for n in range(first, last):
             slug = f"acme-bot-{n:03d}"
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                      "VALUES(?,?,?,?,?,'','keeper','active',?)", (slug, slug, "fake", "m", "", H.now()))
+            c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                      "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
             c.execute("INSERT INTO bot_config(bot,config_json,operator,team) VALUES(?,?,?,?)",
                       (slug, encode({"name": slug}), "ana", teams[n % len(teams)]))
             c.execute("INSERT INTO turns(id,bot,started,finished,est_cost_usd,billing) VALUES(?,?,?,?,?,?)",

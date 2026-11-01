@@ -19,7 +19,7 @@ sensitive so it can take a while."
   their sparklines, frozen when it posts, so an old week shows that week's numbers. `body` keeps a
   plain-markdown copy for places that show one block of text.
 - An owner can ask every bot to redo a past day (`redo`), and a redone request is sent like a new one.
-- People post in the same shape. An update's author (the `bot` column) is a bot slug, or `human:<id>`
+- People post in the same shape. An update's author (the `bot` column) is a bot id, or `human:<id>`
   for a person, the key `reports_to` already uses. `drafted_by` is the bot that wrote a draft the
   author has not replaced, `edited_by` the author once they changed it, and `inputs_json` the
   reports' updates it was written from.
@@ -145,12 +145,12 @@ def set_settings(c, bot, daily=None, weekly=None):
 # ----------------------------------------------------------------------------- the org chart
 def _chart(c):
     from . import views
-    archived = {r["slug"] for r in c.execute("SELECT slug FROM bots WHERE state='archived'")}
+    archived = {r["id"] for r in c.execute("SELECT id FROM bots WHERE state='archived'")}
     return views.roster(c), views.entries(c), archived
 
 
 def direct_reports(c, author, chart=None):
-    """The authors one level below this one on the org chart: bot slugs and `human:<id>`. `chart` is
+    """The authors one level below this one on the org chart: bot ids and `human:<id>`. `chart` is
     `_chart(c)` when the caller already read it (the queue reads it once a step, not once a report)."""
     from . import goals as G
     roster, entries, archived = chart or _chart(c)
@@ -194,7 +194,7 @@ def visible_authors(c, auth, who, mine=False, scope=None):
         readable = {slug for slug in readable if slug == who.actor or operators.get(slug) == pid
                     or (not is_person(slug) and not operators.get(slug) and who.role == "owner")}
     if scope == "direct":
-        archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+        archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
         reports = G.reports_of(who.actor, views.roster(c), views.entries(c), archived, True)
         readable &= {a if H.actor_kind(a) == "human" else H.actor_id(a) for a in reports}
     return readable
@@ -272,7 +272,8 @@ def _label(c, author):
         from . import people as P
         p = P.person(author[6:], _chart(c)[0])
         return (p or {}).get("name") or author[6:]
-    return ((H.bot(c, author) or {}).get("display_name") or author)
+    bot = H.bot(c, author) or {}
+    return bot.get("display_name") or bot.get("slug") or author
 
 
 # ----------------------------------------------------------------------------- the queue
@@ -283,15 +284,15 @@ def build_queue(c, day, kind, assistant=None):
     if c.execute("SELECT 1 FROM update_queue WHERE day=? LIMIT 1", (day,)).fetchone():
         return 0
     rows = c.execute(
-        "SELECT b.slug, (SELECT max(u.created) FROM updates u WHERE u.bot=b.slug) last_update, "
-        "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.slug) last_turn "
-        "FROM bots b LEFT JOIN update_settings us ON us.bot=b.slug "
+        "SELECT b.id, b.slug, (SELECT max(u.created) FROM updates u WHERE u.bot=b.id) last_update, "
+        "(SELECT last_turn_at FROM bot_status s WHERE s.bot=b.id) last_turn "
+        "FROM bots b LEFT JOIN update_settings us ON us.bot=b.id "
         "WHERE b.state='active' AND coalesce(us." + ("daily" if kind == "daily" else "weekly") + ",1)=1").fetchall()
-    depth = depths(c, [r["slug"] for r in rows])
-    order = sorted(rows, key=lambda r: (-depth[r["slug"]], r["last_update"] or "", r["last_turn"] or "", r["slug"]))
+    depth = depths(c, [r["id"] for r in rows])
+    order = sorted(rows, key=lambda r: (-depth[r["id"]], r["last_update"] or "", r["last_turn"] or "", r["slug"]))
     for rank, row in enumerate(order):
         c.execute("INSERT INTO update_queue(id,bot,kind,day,rank,state) VALUES(?,?,?,?,?,'queued')",
-                  (H.new_id(), row["slug"], kind, day, rank))
+                  (H.new_id(), row["id"], kind, day, rank))
     people = drafted_people(c) if assistant and (H.bot(c, assistant) or {}).get("state") == "active" else []
     depth = person_depths(c, people)
     people.sort(key=lambda a: (-depth[a], a))
@@ -746,7 +747,7 @@ def dispatch(c, at=None, assistant=None):
         return None
     # Today's requests first, then any redo of a past day an owner asked for.
     chart = None
-    for row in c.execute("SELECT q.* FROM update_queue q JOIN bots b ON b.slug=q.bot WHERE q.state='queued' "
+    for row in c.execute("SELECT q.* FROM update_queue q JOIN bots b ON b.id=q.bot WHERE q.state='queued' "
                          "AND (q.day=? OR q.redo=1) ORDER BY q.day=? DESC, q.rank", (day, day)).fetchall():
         bot = H.bot(c, row["bot"]) or {}
         if bot.get("state") != "active":
@@ -795,10 +796,11 @@ def redo(c, kind, day, bots=None, managers=False):
         raise Problem("day", "day is YYYY-MM-DD", 422)
     if when.isoformat() > today():
         raise Problem("day", "A redo is for today or an earlier day", 422)
-    rows = c.execute("SELECT b.slug FROM bots b LEFT JOIN update_settings us ON us.bot=b.slug WHERE b.state='active' "
+    rows = c.execute("SELECT b.id FROM bots b LEFT JOIN update_settings us ON us.bot=b.id WHERE b.state='active' "
                      "AND coalesce(us." + kind + ",1)=1 ORDER BY b.slug").fetchall()
-    chosen = [r["slug"] for r in rows if not bots or r["slug"] in bots]
-    unknown = sorted(set(bots or ()) - set(chosen))
+    ids = {b: (H.resolve_bot(c, b) or {}).get("id", b) for b in bots or ()}
+    chosen = [r["id"] for r in rows if not bots or r["id"] in ids.values()]
+    unknown = sorted(b for b, bid in ids.items() if bid not in chosen)
     if unknown:
         raise Problem("bot", "Not an active bot with its " + kind + " update on: " + ", ".join(unknown), 422)
     if bots and managers:
@@ -807,7 +809,7 @@ def redo(c, kind, day, bots=None, managers=False):
         bare = True
         above = {H.actor_id(a) for slug in chosen for a in G.above(H.bot_actor(slug), roster, entries, archived, bare)
                  if H.actor_kind(a) == "bot"}
-        chosen += [r["slug"] for r in rows if r["slug"] in above and r["slug"] not in chosen]
+        chosen += [r["id"] for r in rows if r["id"] in above and r["id"] not in chosen]
     depth = depths(c, chosen)
     chosen.sort(key=lambda slug: -depth[slug])
     last = c.execute("SELECT coalesce(max(rank), 0) FROM update_queue").fetchone()[0]
@@ -993,7 +995,7 @@ def check_day(c, bot, day):
 
 def post(c, bot, body, kind=None, day=None, slides=None, drafted_by=None, inputs=None, replace_draft=False,
          meetings=False, reader=True, source=None, warning=""):
-    """Store an update by `bot` (a bot slug or `human:<id>`). A daily is its bullets; a week in review
+    """Store an update by `bot` (a bot id or `human:<id>`). A daily is its bullets; a week in review
     is its slides, with the goal KPIs added, and a markdown copy in `body`. `headline` keeps one line,
     for places that show one (MCP summaries). `drafted_by` posts a draft for a person; the person
     posting over it is an edit of that draft, or with `replace_draft` their own words. A draft never
@@ -1164,7 +1166,7 @@ def thread(c, uid):
 
 
 def _only(bots, column="u.bot"):
-    """The SQL for "updates of these bots" (`bots` is the slugs the caller may read), so pages and
+    """The SQL for "updates of these bots" (`bots` is the ids the caller may read), so pages and
     counts are cut in the query and a hidden bot's updates leave no gap or number behind."""
     return f"{column} IN ({','.join('?' * len(bots))})", list(bots)
 
@@ -1186,6 +1188,7 @@ def listing(c, actor, readable, kind=None, bot=None, unread=False, before=None, 
     if kind:
         where.append("u.kind=?"); args.append(kind)
     if bot:
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         where.append("u.bot=?"); args.append(bot)
     is_archived = _is_archived_sql()
     if unread:
@@ -1260,7 +1263,7 @@ def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
     view = P.org_view(roster, entries, archived, bare_people=True)
     me = ("p:" if H.actor_kind(actor) == "human" else "b:") + H.actor_id(actor)
     parent_of, nodes = {}, {}
-    names = {r["slug"]: r["display_name"] or r["slug"] for r in c.execute("SELECT slug, display_name FROM bots")}
+    names = {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id, slug, display_name FROM bots")}
     for g in view["org_groups"]:
         parent_of["g:" + g["id"]] = g["org_parent"]
     for p in view["people"]:
@@ -1319,7 +1322,7 @@ def tree(c, actor, readable, kind, day=None, scope=None, meetings=False):
 
 
 def author_of(actor):
-    """The author key an actor posts as: `human:<id>` for a person, the slug for a bot."""
+    """The author key an actor posts as: `human:<id>` for a person, the id for a bot."""
     return actor if H.actor_kind(actor) == "human" else H.actor_id(actor)
 
 

@@ -210,6 +210,8 @@ def approved(c, auth, who, fid=None, version=None, path=None, digest=None, by="h
     from .files import file_visible
     if not BY.fullmatch(by or ""):
         raise Problem("validation", "--by is human, any or bot:SLUG", 422)
+    if by.startswith("bot:"):
+        by = H.bot_actor((H.resolve_bot(c, by) or {}).get("id", by[4:]))
     if fid:
         row = c.execute("SELECT * FROM bot_files WHERE id=?", (fid,)).fetchone()
         if not row or not file_visible(c, auth, who, row, {}):

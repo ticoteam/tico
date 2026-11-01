@@ -119,7 +119,7 @@ def finance_bot(c):
     """The active Finance bot (the first of FINANCE_TEMPLATES that exists), or None."""
     marks = ",".join("?" * len(FINANCE_TEMPLATES))
     rows = c.execute("SELECT bc.bot, json_extract(bc.config_json,'$.template') AS template FROM bot_config bc "
-                     f"JOIN bots b ON b.slug=bc.bot WHERE json_extract(bc.config_json,'$.template') IN ({marks}) "
+                     f"JOIN bots b ON b.id=bc.bot WHERE json_extract(bc.config_json,'$.template') IN ({marks}) "
                      "AND b.state='active' ORDER BY bc.bot", FINANCE_TEMPLATES).fetchall()
     rows = sorted(rows, key=lambda r: FINANCE_TEMPLATES.index(r["template"]))
     return rows[0]["bot"] if rows else None

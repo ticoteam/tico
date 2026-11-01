@@ -41,7 +41,7 @@ def old_message_bot(api, slug, instructions="", tools=None, template="inbox"):
     if tools:
         config["tools"] = tools
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT INTO bots(slug,display_name,state) VALUES(?,?,'active')", (slug, slug))
+        c.execute("INSERT INTO bots(id,slug,display_name,state) VALUES(?,?,?,'active')", (slug, slug, slug))
         c.execute("INSERT INTO bot_config(bot,config_json,operator) VALUES(?,?,'ana')", (slug, encode(config)))
 
 

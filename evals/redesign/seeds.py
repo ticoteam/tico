@@ -208,7 +208,7 @@ def counsel(world):
     from backend.store import H
     from .harness import DANA, DANA_ID
     with world.store.transaction() as c:
-        c.execute("INSERT OR REPLACE INTO bots(slug, display_name, state) VALUES(?, 'Counsel', 'active')", (H.COUNSEL,))
+        c.execute("INSERT OR REPLACE INTO bots(id, slug, display_name, state) VALUES(?, ?, 'Counsel', 'active')", (H.COUNSEL, H.COUNSEL))
         c.execute("INSERT OR REPLACE INTO bot_config(bot, config_json, team, operator) VALUES(?, '{}', '', ?)",
                   (H.COUNSEL, DANA_ID))
         c.execute("INSERT OR REPLACE INTO agents(bot, harness, token_hash, created, created_by) VALUES(?,?,?,?,?)",

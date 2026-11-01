@@ -46,8 +46,8 @@ def as_bot(api, slug):
     from backend.store import H
     api.app.state.auth.settings.test_identities[slug + "-test"] = Identity("bot:" + slug, "bot", agent="test")
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,runtime,created) VALUES(?,?,'fake',?)",
-                  (slug, slug, H.now()))
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,runtime,created) VALUES(?,?,?,'fake',?)",
+                  (slug, slug, slug, H.now()))
         c.execute("INSERT INTO agents(bot,harness,token_hash,created,created_by) VALUES(?,?,?,?,?)",
                   (slug, "test", "x-" + slug, H.now(), "human:ana"))
     return slug + "-test"

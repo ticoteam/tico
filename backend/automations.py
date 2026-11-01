@@ -352,7 +352,7 @@ class Chart:
         from . import views
         self.c = c
         self.roster, self.employees = views.roster(c), views.entries(c)
-        self.archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+        self.archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
         self.groups = self.roster.get("org_groups") or {}
         self.bare = True                           # a bare person id in reports_to (backend/people.py org_parent)
 
@@ -476,9 +476,9 @@ def _stamp_blocked(c, auth, who, flow, before=None):
     nothing is approved, as for a draft, so every stamp counts."""
     kept = _stamps(before) if before else set()
     for _, bot, *_ in sorted(_stamps(flow) - kept, key=str):
-        slug = H.actor_id(bot or "")
-        if not task_run_models.may_set(c, auth, who, slug):
-            return slug
+        ident = H.actor_id(bot or "")
+        if not task_run_models.may_set(c, auth, who, ident):
+            return (H.bot(c, ident) or {}).get("slug") or ident     # the name the refusal shows
     return None
 
 
@@ -613,6 +613,7 @@ def may_tell(c, owner, bot, assistant_bot=None):
     owner itself), a bot in a group the owner leads or one nested under it, or (a person's own) the Assistant."""
     from . import automation_actions as AA
     bot = AA.R._slug(bot)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     found = H.bot(c, bot) if bot else None
     if not found:
         return False
@@ -1430,6 +1431,7 @@ def _reply_audience(c, auto, args, values):
         return org_rule_check.mail_recipients(c, _reply_addresses(values))
     out = [str(message.get("from") or "").replace("person:", "human:")]
     bot = A.R._slug(args.get("bot")) or A._owner_bot(c, auto)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if bot:
         from . import rooms
         if rooms.thread_mode(c, bot) == rooms.SHARED:
@@ -1461,7 +1463,8 @@ def _rule_audience(c, auto, do, args, values):
     if do in ("assign", "label", "note") and task:
         out += [task["owner"], task["requester"]]
     if do in ("note", "wake_bot") and args.get("bot"):
-        out.append("bot:" + str(args["bot"]).removeprefix("bot:"))
+        bot = str(args["bot"]).removeprefix("bot:")
+        out.append("bot:" + (H.resolve_bot(c, bot) or {}).get("id", bot))
     if do == "wake_bot" and not args.get("bot") and A._owner_bot(c, auto):
         out.append("bot:" + A._owner_bot(c, auto))
     return sorted({a for a in out if a and a not in ("human:", "bot:")})
@@ -1607,6 +1610,9 @@ class HubServices:
         if do == "create_task":
             owner = str(args.get("owner") or "")
             bot = owner[4:] if owner.startswith("bot:") else "" if ":" in owner else owner
+            if bot:
+                with self.hub.store.read() as c:
+                    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             found = self._screened(bot, ctx["values"]) if bot else None
             if found and found["action"] != "pass":
                 args = self._screened_task(found, bot, args, ctx["values"])
@@ -1711,6 +1717,9 @@ class HubServices:
         first: at `hold` the turn is not started and its prompt is a held task for a person (`held` in the answer)."""
         cap = (self.flow.get("spend_cap") or {}).get("per_30m")
         bot = who[4:] if who.startswith("bot:") else ""
+        if bot:
+            with self.hub.store.read() as c:
+                bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         found = self._screened(bot, ctx["values"])
         person = None
         if found and found["action"] == "hold":

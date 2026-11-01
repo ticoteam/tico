@@ -2,7 +2,7 @@
 
 A step's flow may say `assign: {"pool": [bot slugs], "slots": n}` (backend/step_flow.py). A ticket at that step that
 no bot of the pool owns yet goes, on each scheduler pass, to the pool bot with the fewest tickets in hand on that type
-(ties: the fewest open tickets of any kind, then the slug), when it has a free slot. A ticket in hand is one the bot
+(ties: the fewest open tickets of any kind, then the id), when it has a free slot. A ticket in hand is one the bot
 owns past the assigning step and before the type's merged step: work, checks waiting, fixes. Only active bots with
 free slots, completed onboarding and a profile that accepts the ticket take it; otherwise the ticket waits for
 the next pass, oldest first.
@@ -23,6 +23,7 @@ def clean(c, actor, raw):
     pool = []
     for value in raw.get("pool") or []:
         slug = H.actor_id(str(value or "").strip())
+        slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
         if not slug or slug in pool:
             continue
         if not H.bot(c, slug):
@@ -37,7 +38,7 @@ def clean(c, actor, raw):
 
 
 def _available(c, slug):
-    found = c.execute("SELECT coalesce(state,'') FROM bots WHERE slug=?", (slug,)).fetchone()
+    found = c.execute("SELECT coalesce(state,'') FROM bots WHERE id=?", (slug,)).fetchone()
     return bool(found) and found[0] == "active" and not H._onboarding(c, slug)
 
 
@@ -90,9 +91,10 @@ def allocate(c, at=None):
             if not free:
                 continue
             slug = min(free)[2]
+            label = (H.bot(c, slug) or {}).get("slug", slug)
             H.task_update(c, H.KEEPER, ticket_id, owner="bot:" + slug,
-                          note=f"Tico gave this to {slug}: the least busy of the {step['name']} pool "
+                          note=f"Tico gave this to {label}: the least busy of the {step['name']} pool "
                                f"({min(free)[0]} of {rule['slots']} slots in use).")
             H._task_event(c, ticket_id, H.KEEPER, "allocated", owner, "bot:" + slug, step["name"])
-            given.append((ticket_id, slug))
+            given.append((ticket_id, label))
     return given

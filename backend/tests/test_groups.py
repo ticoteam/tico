@@ -38,8 +38,8 @@ def add_bots(c, **bots):
     """{slug: (config, reports_to)}: bots straight into the database."""
     for slug, (config, reports_to) in bots.items():
         if not H.bot(c, slug):
-            c.execute("INSERT INTO bots(slug,display_name,runtime,model,effort,cwd,host,state,created) "
-                      "VALUES(?,?,?,?,?,'','keeper','active',?)", (slug, slug, "fake", "m", "", H.now()))
+            c.execute("INSERT INTO bots(id,slug,display_name,runtime,model,effort,cwd,host,state,created) "
+                      "VALUES(?,?,?,?,?,?,'','keeper','active',?)", (slug, slug, slug, "fake", "m", "", H.now()))
         c.execute("DELETE FROM bot_config WHERE bot=?", (slug,))
         c.execute("INSERT INTO bot_config(bot,config_json,operator,reports_to) VALUES(?,?,?,?)",
                   (slug, encode({"name": slug, **config}), "ana", reports_to))

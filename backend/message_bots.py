@@ -133,8 +133,8 @@ def backfill(c, actor="keeper"):
     found = c.execute("SELECT value_json FROM registry_metadata WHERE key=?", (DONE,)).fetchone()
     done = set(json.loads(found[0])) if found else set()
     wanted = []
-    for row in c.execute("SELECT b.slug FROM bots b WHERE b.state<>'archived' ORDER BY b.slug"):
-        bot = row["slug"]
+    for row in c.execute("SELECT b.id FROM bots b WHERE b.state<>'archived' ORDER BY b.slug"):
+        bot = row["id"]
         config = _config(c, bot)
         if bot in taken or bot in done or not is_message_bot(config):
             continue

@@ -214,7 +214,8 @@ def _ctx(c):
     return {
         "roster": roster, "configs": configs, "people": roster.get("people") or [],
         "groups": {gid: g.get("name") or gid for gid, g in (roster.get("org_groups") or {}).items()},
-        "bots": {r["slug"]: r["display_name"] or r["slug"] for r in c.execute("SELECT slug, display_name FROM bots")},
+        "bots": {r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id, slug, display_name FROM bots")},
+        "bot_slugs": {r["slug"]: r["id"] for r in c.execute("SELECT id, slug FROM bots")},
         "sources": {r["id"]: {"id": r["id"], "name": r["name"], "kind": r["kind"]}
                     for r in c.execute("SELECT * FROM rule_sources")},
     }
@@ -258,7 +259,8 @@ def _find_person(ctx, text):
 
 def _find_bot(ctx, text):
     t = text.casefold()
-    return _one_hit([slug for slug, name in ctx["bots"].items() if slug == text or str(name).casefold() == t],
+    return _one_hit([ident for ident, name in ctx["bots"].items()
+                     if ident == text or ctx["bot_slugs"].get(text) == ident or str(name).casefold() == t],
                     text, "bot")
 
 
@@ -327,7 +329,7 @@ def scope_in(c, value, *, flags):
 
 
 def owner_actor(c, value):
-    """A due date's owner as an actor: `bot:<slug>` or `human:<id>`, given by id or name."""
+    """A due date's owner as an actor: `bot:<id>` or `human:<id>`, given by id or name."""
     text = str(value or "").strip()
     if not text:
         raise Problem("validation", "Say who owns the due date", 422)
@@ -336,7 +338,7 @@ def owner_actor(c, value):
 
 
 def who_key(c, actor, ctx=None):
-    """A teammate as the matcher reads it: its bot slug or person id, and the groups it is in (nested ones too)."""
+    """A teammate as the matcher reads it: its bot id or person id, and the groups it is in (nested ones too)."""
     ctx = ctx or _ctx(c)
     roster, configs = ctx["roster"], ctx["configs"]
     kind, _, ident = str(actor or "").partition(":")
@@ -969,6 +971,7 @@ def _list_rules(c, auth, who, args):
     elif args.get("bot"):
         bot = _strip(args["bot"], "bot:")
     if bot:
+        bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         if bot not in ctx["bots"]:
             raise Problem("not_found", f"Unknown bot: {bot}", 404)
         auth.require_see(c, who, bot)
@@ -1332,6 +1335,7 @@ def install(app, store, auth, mutate):
         who = request.state.identity
         cursors = {"internal": internal_cursor, "external": external_cursor}
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             return bot_rules(c, auth, who, bot, cursors, _limit(limit, BOT_LIST_MAX, BOT_LIST_MAX))
 
 

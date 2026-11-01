@@ -105,15 +105,17 @@ def load(onboarding, c, who):
     for slug in record["selected"]:
         onboarding.onboarded(c, who, slug, arm=False)
     owner = H.actor_id(who.actor)
+    # The bots exist now: their ids (new bots get their own, not their slug) are the actors that own goals and tasks.
+    ids = {slug: (H.resolve_bot(c, slug) or {}).get("id", slug) for slug in set(slugs.values())}
     goals = {}
     for goal in draft["goals"]:
-        made = G.create(c, who.actor, ours(goal["title"]), "bot:" + slugs[goal["owner"]], body=name + "'s goal.")
+        made = G.create(c, who.actor, ours(goal["title"]), "bot:" + ids[slugs[goal["owner"]]], body=name + "'s goal.")
         goals.setdefault(goal["owner"], made["id"])
     tasks = []
     for bot_id, row in extra.items():
         for task in row["tasks"]:
             body = ours(task["body"].rstrip() + ASK.format(what=task["approve"], owner=owner))
-            made = H.task_create(c, who.actor, ours(task["title"]), body, "bot:" + slugs[bot_id], allow_planned=True,
+            made = H.task_create(c, who.actor, ours(task["title"]), body, "bot:" + ids[slugs[bot_id]], allow_planned=True,
                                  goal_id=goals.get(bot_id))
             tasks.append(made["id"])
     record = O.load(c)

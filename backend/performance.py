@@ -633,4 +633,5 @@ def install(app, store, auth, mutate, execution):
             runner = named(c, rid)
             return {"computer": {"id": runner["id"], "label": runner["label"]}, **listing(runner),
                     "may_switch": may_switch(auth, who, runner),
-                    **view(c, runner["id"], hours, access=auth.bot_accesses(c, who))}
+                    **view(c, runner["id"], hours, label=lambda b: (H.bot(c, b) or {}).get("slug") or b,
+                           access=auth.bot_accesses(c, who))}

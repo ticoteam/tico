@@ -412,7 +412,7 @@ def test_a_stopped_run_that_used_tools_is_held_until_reviewed(api):
     assert 'Nothing was archived yet; run it again.' in again['message']['body']
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
-            c.execute("INSERT INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')", (H.FLEET_MAINTAINER,))
+            c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')", (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
     post(api, f"attempts/{again['id']}/started", {'thread_id': 'stopped-again'}, machine['token'])
     post(api, f"attempts/{again['id']}/events", {'events': [{'seq': 1, 'kind': 'tool', 'payload': {'name': 'shell'}}]},
          machine['token'])
@@ -773,7 +773,7 @@ def test_a_run_that_used_a_tool_that_writes_waits_and_its_review_lists_the_calls
     from backend.store import H
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
-            c.execute("INSERT INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')", (H.FLEET_MAINTAINER,))
+            c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')", (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
     aged(api, attempt['id'])
     assert sweep(api) == [] and sweep(api) == [] and job_state(api, attempt['job_id']) == 'uncertain'
     with api.app.state.store.read() as c:
@@ -841,7 +841,7 @@ def test_a_held_run_on_a_private_task_is_not_handed_to_botops(api):
     from backend.store import H
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
-            c.execute("INSERT INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')", (H.FLEET_MAINTAINER,))
+            c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')", (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
     machine = runner(api, 'ana')
     assign(api, machine, 'ops')
     ready(api, machine, ['ops'])
@@ -1990,8 +1990,8 @@ def test_auto_reconcile_defers_only_for_the_live_work_identity_that_matches(api,
 def add_recovery_reviewer(api):
     from backend.store import H
     with api.app.state.store.transaction() as c:
-        c.execute("INSERT OR IGNORE INTO bots(slug,display_name,state) VALUES(?, 'BotOps', 'active')",
-                  (H.FLEET_MAINTAINER,))
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,display_name,state) VALUES(?, ?, 'BotOps', 'active')",
+                  (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
 
 
 def test_restart_after_shell_resumes_on_next_scheduler_tick_with_cut_time(api, monkeypatch):

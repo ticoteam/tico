@@ -55,14 +55,14 @@ CREATE TABLE IF NOT EXISTS preferences(actor TEXT NOT NULL, key TEXT NOT NULL, v
 CREATE TABLE IF NOT EXISTS registry_metadata(key TEXT PRIMARY KEY, value_json TEXT NOT NULL);
 -- repo holds a bare name, owner/name, or a full https URL; see store.repo_url.
 CREATE TABLE IF NOT EXISTS bot_config(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), config_json TEXT NOT NULL, team TEXT,
+ bot TEXT PRIMARY KEY REFERENCES bots(id), config_json TEXT NOT NULL, team TEXT,
  operator TEXT NOT NULL, owner_ids_json TEXT, revision INTEGER NOT NULL DEFAULT 1,
  description TEXT NOT NULL DEFAULT '', reports_to TEXT, repo TEXT NOT NULL DEFAULT '',
  thread_mode TEXT, definition_updated TEXT,
  definition_updated_by TEXT, goals TEXT NOT NULL DEFAULT '');
-CREATE TABLE IF NOT EXISTS bot_control(bot TEXT PRIMARY KEY REFERENCES bots(slug), draining INTEGER NOT NULL DEFAULT 0);
+CREATE TABLE IF NOT EXISTS bot_control(bot TEXT PRIMARY KEY REFERENCES bots(id), draining INTEGER NOT NULL DEFAULT 0);
 CREATE TABLE IF NOT EXISTS bot_transitions(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(slug), kind TEXT NOT NULL,
+ id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), kind TEXT NOT NULL,
  target_json TEXT NOT NULL, requested_by TEXT NOT NULL, expected_revision INTEGER NOT NULL,
  expected_generation INTEGER NOT NULL DEFAULT 0, state TEXT NOT NULL,
  undo_change_id TEXT REFERENCES settings_changes(id),
@@ -75,7 +75,7 @@ CREATE TABLE IF NOT EXISTS bot_transition_checkpoints(
  checkpoint_json TEXT, error TEXT,
  PRIMARY KEY(transition_id,conversation_id));
 CREATE TABLE IF NOT EXISTS settings_changes(
- id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(slug), field TEXT NOT NULL,
+ id TEXT PRIMARY KEY, bot TEXT NOT NULL REFERENCES bots(id), field TEXT NOT NULL,
  before_json TEXT NOT NULL, after_json TEXT NOT NULL, actor TEXT NOT NULL,
  transition_id TEXT REFERENCES bot_transitions(id), created TEXT NOT NULL,
  undone_by TEXT, undone_at TEXT);
@@ -88,17 +88,17 @@ CREATE TABLE IF NOT EXISTS session_epochs(
 -- Moved by every clear or reset of one bot: a bot's direct chats share its one `bot` thread
 -- (clients/sessions.py), so one chat's Clear must reach the next turn of any of them.
 CREATE TABLE IF NOT EXISTS bot_session_epochs(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
+ bot TEXT PRIMARY KEY REFERENCES bots(id), epoch INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL);
 -- Current provider thread for one bot+runtime+model. Local files hold the real
 -- context; this pointer lets a runner try resume, then fall back to a Hub pack.
 CREATE TABLE IF NOT EXISTS bot_sessions(
- bot TEXT NOT NULL REFERENCES bots(slug), runtime TEXT NOT NULL, model TEXT NOT NULL,
+ bot TEXT NOT NULL REFERENCES bots(id), runtime TEXT NOT NULL, model TEXT NOT NULL,
  thread_id TEXT NOT NULL, runner_id TEXT REFERENCES runners(id),
  tokens_in INTEGER NOT NULL DEFAULT 0, updated TEXT NOT NULL,
  PRIMARY KEY(bot, runtime, model));
 -- One external agent per bot (docs/hermes-agents.md): the credential hash and the last heartbeat.
 CREATE TABLE IF NOT EXISTS agents(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), harness TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
+ bot TEXT PRIMARY KEY REFERENCES bots(id), harness TEXT NOT NULL, token_hash TEXT NOT NULL UNIQUE,
  created TEXT NOT NULL, created_by TEXT NOT NULL, last_seen TEXT, version TEXT, platform TEXT,
  model TEXT NOT NULL DEFAULT '', provider TEXT NOT NULL DEFAULT '', profile TEXT NOT NULL DEFAULT '',
  detail TEXT NOT NULL DEFAULT '', revoked_at TEXT, revoked_by TEXT);
@@ -184,11 +184,11 @@ CREATE TABLE IF NOT EXISTS oidc_codes(
  code_hash TEXT PRIMARY KEY, human TEXT NOT NULL REFERENCES humans(id), email TEXT NOT NULL,
  challenge TEXT NOT NULL, origin TEXT NOT NULL, expires_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS assignments(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), runner_id TEXT NOT NULL REFERENCES runners(id),
+ bot TEXT PRIMARY KEY REFERENCES bots(id), runner_id TEXT NOT NULL REFERENCES runners(id),
  generation INTEGER NOT NULL, updated TEXT NOT NULL, updated_by TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS jobs(
  id TEXT PRIMARY KEY, message_id TEXT NOT NULL UNIQUE REFERENCES messages(id),
- bot TEXT NOT NULL REFERENCES bots(slug), state TEXT NOT NULL DEFAULT 'queued',
+ bot TEXT NOT NULL REFERENCES bots(id), state TEXT NOT NULL DEFAULT 'queued',
  created TEXT NOT NULL, attempt_id TEXT);
 CREATE INDEX IF NOT EXISTS jobs_queue ON jobs(bot,state,created);
 CREATE TABLE IF NOT EXISTS job_recovery(
@@ -270,10 +270,10 @@ CREATE TABLE IF NOT EXISTS mail_mailboxes(
  address TEXT PRIMARY KEY, person_id TEXT, runner_id TEXT, synced_at TEXT,
  message_count INTEGER NOT NULL DEFAULT 0, oldest_epoch INTEGER, newest_epoch INTEGER, error TEXT);
 CREATE TABLE IF NOT EXISTS mail_agent_instructions(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), content TEXT NOT NULL,
+ bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS bot_agent_instructions(
- bot TEXT PRIMARY KEY REFERENCES bots(slug), content TEXT NOT NULL,
+ bot TEXT PRIMARY KEY REFERENCES bots(id), content TEXT NOT NULL,
  runner_id TEXT NOT NULL, updated TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS mail_messages(
  mailbox TEXT NOT NULL, msg_id TEXT NOT NULL, thread_id TEXT NOT NULL DEFAULT '',
@@ -2312,7 +2312,7 @@ class Store:
                         # A finished attempt can replay its receipt without a live bot lease, but
                         # the computer must still own that generation and the bot must still see it.
                         hosted = c.execute("SELECT a.bot FROM attempts a JOIN assignments x ON x.bot=a.bot "
-                                           "JOIN bots b ON b.slug=a.bot WHERE a.id=? AND a.runner_id=? "
+                                           "JOIN bots b ON b.id=a.bot WHERE a.id=? AND a.runner_id=? "
                                            "AND x.runner_id=? AND x.generation=a.generation AND b.state='active'",
                                            (aid, identity.runner_id, identity.runner_id)).fetchone()
                         if not hosted:

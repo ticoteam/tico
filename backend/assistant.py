@@ -597,7 +597,8 @@ def describe(c, method, path, body):
     """A one-line, server-derived description of what confirming would do (never the bot's words), and
     for a task update the exact field changes."""
     def bot(slug):
-        return (H.bot(c, slug) or {}).get("display_name") or slug
+        row = H.bot(c, slug) or {}
+        return row.get("display_name") or row.get("slug") or slug
 
     def who(actor):
         a = str(actor or "")
@@ -1056,7 +1057,7 @@ def action_view(row, c=None):
         # which reads the mode word as English, only under the card's Details.
         if not view["description"] or re.match(r"(GET|POST|PUT|PATCH|DELETE) /", view["description"]):
             from .repositories import plain_request
-            view["description"] = plain_request((H.bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
+            view["description"] = plain_request((H.resolve_bot(c, m.group(1)) or {}).get("display_name") or m.group(1), view["body"])
         if OLD_REPO_SUMMARY.match(view["summary"] or ""):
             view["original_summary"], view["summary"] = view["summary"], ""
     return view
@@ -1269,12 +1270,12 @@ async def search_all(api, arg, bots, limit=4):
         found = []
 
         async def one(bot):
-            data = await api.get(f"bots/{bot['slug']}/files", limit=50) or {}
+            data = await api.get(f"bots/{bot['id']}/files", limit=50) or {}
             for f in data.get("files") or []:
                 if matches(f.get("title"), f.get("name")):
                     op = f.get("open") or {}
                     href = op.get("url") if op.get("type") == "external" and str(op.get("url", "")).startswith("https://") \
-                        else "#/bot/" + quote(bot["slug"], safe="")
+                        else "#/bot/" + quote(bot["id"], safe="")
                     found.append({"title": f.get("title") or f.get("name"), "href": href, "note": bot["name"]})
         await asyncio.gather(*(one(b) for b in bots[:25]))
         return found[:limit]
@@ -1347,9 +1348,9 @@ async def fast_bot_today(api, who, bots, slug):
     if not bot:
         return None, []
     since = H.shift(H.now(), hours=-24)
-    updates = await api.get("updates", bot=slug, limit=10) or {}
+    updates = await api.get("updates", bot=bot["id"], limit=10) or {}
     recent = [u for u in updates.get("updates") or [] if str(u.get("created") or "") >= since]
-    tasks = await api.get("tasks", owner=slug, limit=100) or {}
+    tasks = await api.get("tasks", owner=bot["id"], limit=100) or {}
     touched = [t for t in tasks.get("tasks") or [] if str(t.get("updated") or "") >= since]
     lines, links = [], []
     for u in recent[:3]:
@@ -1357,7 +1358,7 @@ async def fast_bot_today(api, who, bots, slug):
     for t in touched[:6]:
         lines.append(f"- {link(t['title'], _task_href(t))} ({t.get('status')})")
         links.append({"title": t["title"], "href": _task_href(t), "kind": "task"})
-    href = "#/bot/" + quote(slug, safe="")
+    href = "#/bot/" + quote(bot["id"], safe="")
     links.append({"title": bot["name"], "href": href, "kind": "bots"})
     if not lines:
         return f"{link(bot['name'], href)} has posted no update and touched no task in the last 24 hours.", links
@@ -1508,8 +1509,8 @@ def install(app, store, auth, mutate, onboarding):
 
     def bots_for(c, who):
         access = auth.bot_accesses(c, who)
-        return [{"slug": r["slug"], "name": r["display_name"] or r["slug"]} for r in H.bots(c)
-                if r["state"] not in ("archived",) and access.get(r["slug"], auth.FULL)["see"]]
+        return [{"id": r["id"], "slug": r["slug"], "name": r["display_name"] or r["slug"]} for r in H.bots(c)
+                if r["state"] not in ("archived",) and access.get(r["id"], auth.FULL)["see"]]
 
     def view(c, who, room):
         from .views import conversation_snapshot

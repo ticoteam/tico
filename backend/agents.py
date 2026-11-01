@@ -273,6 +273,7 @@ def approve_pairing(c, who, manager, code, bot):
     if not record["token_key"]:
         # Asked for before this release, which seals the credential for the profile: no key to seal it with.
         raise Problem("not_found", "That code was made before Tico was updated. Run the pair command again for a new one", 404)
+    bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
     if not H.bot(c, bot):
         raise Problem("not_found", "Bot not found", 404)
     manager(c, who, bot)
@@ -285,7 +286,7 @@ def approve_pairing(c, who, manager, code, bot):
     if state not in ("planned", "active"):
         raise Problem("bot_state", "This bot is " + state + "; make it planned or active first", 409)
     if state == "planned":
-        c.execute("UPDATE bots SET state='active' WHERE slug=?", (bot,))
+        c.execute("UPDATE bots SET state='active' WHERE id=?", (bot,))
         c.execute("UPDATE bot_config SET config_json=json_set(config_json,'$.status','active'),revision=revision+1 WHERE bot=?", (bot,))
         H.event(c, who.actor, "bot.activated", bot)
     issued = issue_credential(c, who, bot)
@@ -323,7 +324,7 @@ def still_reporting(c, bot):
 def listing(c, who, auth):
     """Every external agent this person may see, for Settings."""
     from . import read_cache
-    rows = list(c.execute("SELECT a.*,b.display_name FROM agents a JOIN bots b ON b.slug=a.bot ORDER BY a.bot"))
+    rows = list(c.execute("SELECT a.*,b.display_name FROM agents a JOIN bots b ON b.id=a.bot ORDER BY a.bot"))
     slugs = [r["bot"] for r in rows]
     # One access pass and one config read for the whole list (operations embeds this on every load).
     access = auth.bot_accesses(c, who, slugs) if slugs else {}

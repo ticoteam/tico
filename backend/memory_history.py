@@ -133,7 +133,7 @@ def commit_base(c, bot, github_owner=""):
     A branch writes its original's repository, so the original's is the one."""
     root = source_of(declared(c, bot)) or bot
     row = c.execute("SELECT repo FROM bot_config WHERE bot=?", (root,)).fetchone()
-    base = repo_url((row["repo"] if row else "") or "emp-" + root, github_owner)
+    base = repo_url((row["repo"] if row else "") or "emp-" + (H.bot(c, root) or {}).get("slug", root), github_owner)
     return base.removesuffix(".git") if base.startswith("https://github.com/") else ""
 
 
@@ -182,7 +182,7 @@ def install_memory_history(app, store, auth, mutate):
         who = request.state.identity
         if who.role != "runner":
             raise Problem("forbidden", "Only the computer running a bot reports its memory history", 403)
-        return mutate(request, body, lambda c: {"recorded": record(c, who, bot, body)})
+        return mutate(request, body, lambda c: {"recorded": record(c, who, (H.resolve_bot(c, bot) or {}).get("id", bot), body)})
 
     @app.get("/api/v2/bots/{bot}/memory")
     def history(request: Request, bot: str, before: str = "", limit: int = PAGE, include_documents: bool = True):
@@ -190,6 +190,7 @@ def install_memory_history(app, store, auth, mutate):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
@@ -216,6 +217,8 @@ def install_memory_history(app, store, auth, mutate):
     def seen(request: Request, bot: str, body: M.Empty):
         """The reader opened the history: later reports count as unseen."""
         who = request.state.identity
+        with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
         def work(c):
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)

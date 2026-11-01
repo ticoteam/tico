@@ -120,7 +120,7 @@ def unquoted(body):
 
 # ----------------------------------------------------------------------------- recipients
 def roster(c, settings, now=None):
-    """{slug: {name, profile}}: the active bots that learn, the Librarian among them.
+    """{id: {name, profile}}: the active bots that learn, the Librarian among them.
 
     A packet is work only a bot that runs can do. A bot on an external agent's platform never gets a
     run here, and one that had no run in the last day would only stack nights up unread: neither gets one.
@@ -130,24 +130,24 @@ def roster(c, settings, now=None):
     since = utc(H.parse_ts(now or H.now()) - timedelta(hours=LOOKBACK_HOURS))
     ran = {r[0] for r in c.execute("SELECT DISTINCT bot FROM attempts WHERE started>=?", (since,))}
     out = {}
-    for row in c.execute("SELECT b.slug,b.display_name,coalesce(bc.description,'') AS description,"
+    for row in c.execute("SELECT b.id,b.slug,b.display_name,coalesce(bc.description,'') AS description,"
                          "coalesce(bc.config_json,'{}') AS config_json FROM bots b "
-                         "LEFT JOIN bot_config bc ON bc.bot=b.slug WHERE b.state='active' "
+                         "LEFT JOIN bot_config bc ON bc.bot=b.id WHERE b.state='active' "
                          "AND coalesce(json_extract(bc.config_json,'$.shared_from'),'')='' "
                          "AND coalesce(bc.onboarding_state,'') NOT IN " + PARKED_SQL + " ORDER BY b.slug"):
         config = H._json(row["config_json"], {}) or {}
-        if row["slug"] in skip or row["slug"] not in ran or is_external(config) or H.stateless(config):
+        if row["id"] in skip or row["id"] not in ran or is_external(config) or H.stateless(config):
             continue
         name = row["display_name"] or row["slug"]
-        profile = LIBRARIAN_PROFILE if row["slug"] == LIBRARIAN else (
+        profile = LIBRARIAN_PROFILE if row["id"] == LIBRARIAN else (
             f"{name}: {row['description']}" if row["description"].strip() else name)
-        out[row["slug"]] = {"name": name, "profile": profile}
+        out[row["id"]] = {"name": name, "profile": profile}
     return out
 
 
 def names(c):
     people = {"human:" + r["id"]: r["name"] or r["id"] for r in c.execute("SELECT id,name FROM humans")}
-    bots = {"bot:" + r["slug"]: r["display_name"] or r["slug"] for r in c.execute("SELECT slug,display_name FROM bots")}
+    bots = {"bot:" + r["id"]: r["display_name"] or r["slug"] for r in c.execute("SELECT id,slug,display_name FROM bots")}
     return {**people, **bots, H.KEEPER: "Tico"}
 
 
@@ -310,7 +310,7 @@ def question_set(settings):
 
 
 def score(engine, qset, item, team):
-    """(learnable, {slug: relevance}) for one item, asking only about the recipients it may reach."""
+    """(learnable, {id: relevance}) for one item, asking only about the recipients it may reach."""
     audience = [s for s in team if item["audience"] is None or s in item["audience"]]
     if not audience:
         return None, {}
@@ -347,7 +347,7 @@ def route(engine, qset, items, team):
 
 
 def packets(items, qset):
-    """{slug: [item, ...]}: every recipient at or over the relevance bar, unless the item is noise."""
+    """{id: [item, ...]}: every recipient at or over the relevance bar, unless the item is noise."""
     bar, floor = qset["thresholds"].get("relevant", 0.6), qset["thresholds"].get("noise", 0.2)
     cap = int(qset["thresholds"].get("per_recipient", PER_RECIPIENT))
     out = {}
@@ -417,7 +417,7 @@ def dispatch(c, run_id, night, items, chosen, team, detail):
         superseded(c, slug, night)
         c.execute("SAVEPOINT learning_delivery")
         try:
-            task = H.task_create(c, H.KEEPER, title, packet_body(slug, rows, team, run_id), "bot:" + slug,
+            task = H.task_create(c, H.KEEPER, title, packet_body(slug, rows, team, run_id), H.bot_actor(slug),
                                  deduplicate=False, lint=False, private=True)
         except H.Refused as exc:
             c.execute("ROLLBACK TO learning_delivery")
@@ -801,6 +801,7 @@ def install(app, store, auth, mutate):
         human_only(who)
         with store.read() as c:
             row = one(c, run_id)
+            slug = (H.resolve_bot(c, slug) or {}).get("id", slug)
             if not H.bot(c, slug):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, slug)

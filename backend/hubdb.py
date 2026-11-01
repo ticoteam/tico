@@ -184,7 +184,7 @@ NOTICE_DAYS = 14                # how long a notice stays in the inbox
 # ----------------------------------------------------------------------------- schema
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS bots (
-  slug TEXT PRIMARY KEY, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
+  id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE, display_name TEXT, runtime TEXT, model TEXT, effort TEXT,
   cwd TEXT, host TEXT DEFAULT 'dispatcher', thread_id TEXT, token_hash TEXT,
   state TEXT DEFAULT 'active', created TEXT, last_turn_at TEXT);
 
@@ -950,6 +950,39 @@ ALTER TABLE kpis ADD COLUMN loop_step INTEGER;
 """
 
 
+# Stable bot ids (migrate_bot_ids): the table rebuild runs in Python, then this script adds the principals table and the
+# triggers. A bot's id never changes and its slug is a label that may; no slug may name another bot's id, so a lookup
+# by id or slug is never ambiguous. A principal is an actor string's identity: `human:<id>`, `bot:<bot id>`, a system
+# actor. Its rows are kept with their humans and bots, and a deleted one keeps its row with deleted_at set.
+BOT_IDS_SCHEMA = """
+CREATE TABLE IF NOT EXISTS principals (
+  id TEXT PRIMARY KEY, kind TEXT NOT NULL CHECK(kind IN ('human','bot','agent','service','system')), deleted_at TEXT);
+CREATE TRIGGER IF NOT EXISTS bots_id_permanent BEFORE UPDATE OF id ON bots BEGIN
+  SELECT RAISE(ABORT, 'a bot id never changes; rename the slug instead'); END;
+CREATE TRIGGER IF NOT EXISTS bots_identity_insert BEFORE INSERT ON bots
+WHEN EXISTS (SELECT 1 FROM bots WHERE id=NEW.slug) OR EXISTS (SELECT 1 FROM bots WHERE slug=NEW.id) BEGIN
+  SELECT RAISE(ABORT, 'a bot slug cannot name another bot id, and a bot id cannot name another bot slug'); END;
+CREATE TRIGGER IF NOT EXISTS bots_identity_slug BEFORE UPDATE OF slug ON bots
+WHEN EXISTS (SELECT 1 FROM bots WHERE id=NEW.slug AND id<>OLD.id) BEGIN
+  SELECT RAISE(ABORT, 'a bot slug cannot name another bot id'); END;
+CREATE TRIGGER IF NOT EXISTS principals_human_insert AFTER INSERT ON humans BEGIN
+  INSERT INTO principals(id, kind, deleted_at) VALUES('human:' || NEW.id, 'human', NULL)
+  ON CONFLICT(id) DO UPDATE SET kind='human', deleted_at=NULL; END;
+CREATE TRIGGER IF NOT EXISTS principals_human_delete AFTER DELETE ON humans BEGIN
+  UPDATE principals SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id='human:' || OLD.id; END;
+CREATE TRIGGER IF NOT EXISTS principals_bot_insert AFTER INSERT ON bots BEGIN
+  INSERT INTO principals(id, kind, deleted_at) VALUES('bot:' || NEW.id, 'bot', NULL)
+  ON CONFLICT(id) DO UPDATE SET kind='bot', deleted_at=NULL; END;
+CREATE TRIGGER IF NOT EXISTS principals_bot_delete AFTER DELETE ON bots BEGIN
+  UPDATE principals SET deleted_at=strftime('%Y-%m-%dT%H:%M:%fZ','now') WHERE id='bot:' || OLD.id; END;
+"""
+
+# Actors the code writes that are not people, bots or services. Each gets a `system` principal on upgrade.
+SYSTEM_ACTORS = (KEEPER, "system:company", "system:deploy", "system:finance", "system:gateway", "system:hosting",
+                 "system:storage")
+# The step that rebuilds bots and its slug references (migrate_bot_ids). Its index in MIGRATIONS is the last one.
+BOT_IDS_VERSION = 71
+
 MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes user_version from i
               MEETING_BRAIN_SCHEMA, MEETING_COMMENTS_SCHEMA,  # to i+1; append, never edit
               GOALS_SCHEMA, RECORDING_SOURCES_SCHEMA, MARKET_SCHEMA,
@@ -971,7 +1004,8 @@ MIGRATIONS = [SCHEMA, MEETING_SCHEMA, MEETING_ITEMS_SCHEMA,   # index i takes us
               RULE_TASK_TABLES_SCHEMA, TASK_RUN_MODELS_SCHEMA, LIVE_MEETINGS_CLIENT_SCHEMA,
               LIVE_MEETINGS_MODEL_SCHEMA, LIVE_MEETING_BOT_CONVERSATION_SCHEMA, LIVE_MEETING_TURN_RETRY_SCHEMA,
               POSTAL_MAIL_SCHEMA, POSTAL_MAIL_V2_SCHEMA, POSTAL_MAIL_V3_SCHEMA, TRIGGERS_CONSUMER_SCHEMA,
-              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA]
+              GROWTH_SCHEMA, BROWSER_EXITS_SCHEMA, BOT_IDS_SCHEMA]
+assert len(MIGRATIONS) == BOT_IDS_VERSION + 1, "BOT_IDS_VERSION must index the last migration"
 
 
 class Refused(Exception):
@@ -1012,7 +1046,18 @@ def new_id():
     return str(uuid.uuid4())
 
 
+def uuid7():
+    """A UUIDv7 (RFC 9562): the Unix time in milliseconds, then random bits, so ids sort by creation time."""
+    value = bytearray(os.urandom(16))
+    value[0:6] = int(datetime.now(timezone.utc).timestamp() * 1000).to_bytes(6, "big")
+    value[6] = (value[6] & 0x0F) | 0x70
+    value[8] = (value[8] & 0x3F) | 0x80
+    return str(uuid.UUID(bytes=bytes(value)))
+
+
 def bot_actor(slug):
+    """The actor string for a bot. Pass its id: the actor is `bot:<id>`, which is the bot's slug only for a bot whose
+    id is its slug."""
     return f"bot:{str(slug).strip()}"
 
 
@@ -1320,6 +1365,120 @@ def _keep_old_strategy_tables(conn):
         raise
 
 
+def _slug_references(conn):
+    """The tables with a foreign key into bots(slug). Each moves to bots(id), with the same values."""
+    names = [row[0] for row in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name")]
+    return [name for name in names
+            if any(fk[2] == "bots" and (fk[4] or "").lower() == "slug"
+                   for fk in conn.execute(f'PRAGMA foreign_key_list("{name}")'))]
+
+
+def _as_rebuild(create, table):
+    """A table's CREATE TABLE statement under its temporary name, `<table>__rebuild`."""
+    statement, n = re.subn(r'^CREATE TABLE\s+(?:IF NOT EXISTS\s+)?"?' + re.escape(table) + r'"?\s*\(',
+                           f'CREATE TABLE "{table}__rebuild" (', create, count=1, flags=re.I)
+    if n != 1:
+        raise RuntimeError(f"{table}: unexpected CREATE TABLE text; the bot id migration cannot rebuild it")
+    return statement
+
+
+def _rebuild(conn, table, create, columns, copied):
+    """Replace `table` with `create` (its statement under the temporary name) and copy every row across. This is the
+    order SQLite documents for changing a table (https://sqlite.org/lang_altertable.html). Its indexes and triggers
+    are created again from their saved text, since dropping the table removes them.
+
+    The caller turns foreign keys off, so the drop removes no rows that refer to the table, and legacy_alter_table on:
+    with it off, the rename refuses while a trigger on another table names the table that is dropped for a moment."""
+    kept = [row[0] for row in conn.execute(
+        "SELECT sql FROM sqlite_master WHERE tbl_name=? AND type IN ('index','trigger') AND sql IS NOT NULL "
+        "ORDER BY type, name", (table,))]
+    temp = f'"{table}__rebuild"'
+    conn.execute(create)
+    conn.execute(f'INSERT INTO {temp} ({columns}) SELECT {copied} FROM "{table}"')
+    conn.execute(f'DROP TABLE "{table}"')
+    conn.execute(f'ALTER TABLE {temp} RENAME TO "{table}"')
+    for statement in kept:
+        conn.execute(statement)
+
+
+def migrate_bot_ids(conn):
+    """Stable bot ids (BOT_IDS_SCHEMA). `bots` gains `id`, the primary key, and `slug` becomes a unique label. For every
+    existing bot id = slug, which freezes the current name as its id: no stored actor string, foreign key value,
+    history row or queued payload changes. Every table that referenced bots(slug) references bots(id) instead.
+    Runs inside the migration's transaction, with foreign keys off (migrate sets that before BEGIN)."""
+    prior = conn.execute("PRAGMA legacy_alter_table").fetchone()[0]
+    conn.execute("PRAGMA legacy_alter_table=ON")
+    try:
+        children = _slug_references(conn)
+        # Rows that already break a foreign key are not this step's to fix; it must not add any.
+        before = {name: len(conn.execute(f'PRAGMA foreign_key_check("{name}")').fetchall()) for name in children}
+        if "id" not in {row[1] for row in conn.execute("PRAGMA table_info(bots)")}:
+            create = _as_rebuild(conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name='bots'")
+                                 .fetchone()[0], "bots")
+            create, n = re.subn(r"\bslug TEXT PRIMARY KEY\b", "id TEXT PRIMARY KEY NOT NULL, slug TEXT NOT NULL UNIQUE",
+                                create, count=1)
+            if n != 1:
+                raise RuntimeError("bots: unexpected definition; the bot id migration cannot rebuild it")
+            others = [row[1] for row in conn.execute("PRAGMA table_info(bots)") if row[1] != "slug"]
+            _rebuild(conn, "bots", create, ", ".join(f'"{c}"' for c in ["id", "slug", *others]),
+                     ", ".join(f'"{c}"' for c in ["slug", "slug", *others]))
+        for table in children:
+            create, n = re.subn(r'REFERENCES\s+"?bots"?\s*\(\s*"?slug"?\s*\)', "REFERENCES bots(id)",
+                                _as_rebuild(conn.execute("SELECT sql FROM sqlite_master WHERE type='table' AND name=?",
+                                                         (table,)).fetchone()[0], table), flags=re.I)
+            if not n:
+                raise RuntimeError(f"{table}: no reference to bots(slug) to move")
+            columns = ", ".join(f'"{row[1]}"' for row in conn.execute(f'PRAGMA table_info("{table}")'))
+            _rebuild(conn, table, create, columns, columns)
+        for table in children:
+            if any((fk[4] or "").lower() != "id" for fk in conn.execute(f'PRAGMA foreign_key_list("{table}")')
+                   if fk[2] == "bots"):
+                raise RuntimeError(f"{table}: a foreign key still names bots(slug)")
+            violations = len(conn.execute(f'PRAGMA foreign_key_check("{table}")').fetchall())
+            if violations > before[table]:
+                raise RuntimeError(f"{table}: {violations - before[table]} foreign keys do not resolve to bots(id)")
+        _apply(conn, MIGRATIONS[BOT_IDS_VERSION])
+        # The principals that exist before the triggers do: the people, the bots, and the system actors the code writes.
+        conn.execute("INSERT INTO principals(id, kind, deleted_at) SELECT 'human:' || id, 'human', NULL FROM humans "
+                     "WHERE TRUE ON CONFLICT(id) DO NOTHING")
+        conn.execute("INSERT INTO principals(id, kind, deleted_at) SELECT 'bot:' || id, 'bot', NULL FROM bots "
+                     "WHERE TRUE ON CONFLICT(id) DO NOTHING")
+        for actor in SYSTEM_ACTORS:
+            conn.execute("INSERT INTO principals(id, kind, deleted_at) VALUES(?, 'system', NULL) "
+                         "ON CONFLICT(id) DO NOTHING", (actor,))
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='service_keys'").fetchone():
+            conn.execute("INSERT INTO principals(id, kind, deleted_at) SELECT 'service:' || id, 'service', NULL "
+                         "FROM service_keys WHERE TRUE ON CONFLICT(id) DO NOTHING")
+    finally:
+        conn.execute(f"PRAGMA legacy_alter_table={prior}")
+
+
+def _run_migration(conn, i):
+    """Migration `i` as one transaction with its version bump (migrate)."""
+    from .flight import begin
+    done = begin(conn)
+    try:
+        if i == 23:
+            migrate_task_privacy(conn)
+        elif i == 30:
+            TR.migrate(conn)
+        elif i == 39:
+            _apply(conn, MIGRATIONS[i])
+            RT.backfill(conn)
+        elif i == BOT_IDS_VERSION:
+            migrate_bot_ids(conn)
+        else:
+            _apply(conn, MIGRATIONS[i])
+        conn.execute(f"PRAGMA user_version={i + 1}")
+        conn.execute("COMMIT")
+    except Exception:
+        conn.execute("ROLLBACK")
+        raise
+    finally:
+        done()
+
+
 def migrate(conn, adopt_legacy=False):
     """Apply every migration the file has not seen, by `PRAGMA user_version`.
 
@@ -1331,26 +1490,15 @@ def migrate(conn, adopt_legacy=False):
     if version == 0 and not adopt_legacy:
         _refuse_foreign(conn)
     _sync_strategy_tables(conn)
-    from .flight import begin
     for i in range(version, len(MIGRATIONS)):
-        done = begin(conn)
+        # SQLite changes foreign keys only outside a transaction, so the bot id rebuild turns them off before BEGIN.
+        if i == BOT_IDS_VERSION:
+            conn.execute("PRAGMA foreign_keys=OFF")
         try:
-            if i == 23:
-                migrate_task_privacy(conn)
-            elif i == 30:
-                TR.migrate(conn)
-            elif i == 39:
-                _apply(conn, MIGRATIONS[i])
-                RT.backfill(conn)
-            else:
-                _apply(conn, MIGRATIONS[i])
-            conn.execute(f"PRAGMA user_version={i + 1}")
-            conn.execute("COMMIT")
-        except Exception:
-            conn.execute("ROLLBACK")
-            raise
+            _run_migration(conn, i)
         finally:
-            done()
+            if i == BOT_IDS_VERSION:
+                conn.execute("PRAGMA foreign_keys=ON")
     _keep_old_strategy_tables(conn)
     ensure_market_reads(conn)
     # Cloud added explicit room scopes after the original local schema. Keep old local
@@ -2387,7 +2535,7 @@ def own_repos(conn, actor):
     slug = actor_id(actor)
     config = follow(conn, slug, declared(conn, slug))
     row = _one(conn, "SELECT repo FROM bot_config WHERE bot=?", (slug,))
-    repo = config.get("repo") or (row["repo"] if row else "") or "emp-" + slug
+    repo = config.get("repo") or (row["repo"] if row else "") or "emp-" + (config.get("name") or slug)
     return (str(repo).rstrip("/").rsplit("/", 1)[-1].removesuffix(".git").lower(),)
 
 
@@ -2613,9 +2761,9 @@ def lift_cooled_quarantines(conn, cooldown=QUARANTINE_COOLDOWN_S):
     started over. Runs from the scheduler's tick. Returns the bots let out."""
     cutoff = shift(now(), seconds=-cooldown)
     lifted = []
-    for row in _rows(conn.execute("SELECT slug FROM bots WHERE state='quarantined'")):
-        with isolated(conn, "lift_cooled_quarantines", row["slug"]):
-            slug = row["slug"]
+    for row in _rows(conn.execute("SELECT id FROM bots WHERE state='quarantined'")):
+        with isolated(conn, "lift_cooled_quarantines", row["id"]):
+            slug = row["id"]
             since = _one(conn, "SELECT max(ts) AS ts FROM events WHERE action='quarantine' AND target=?",
                          (bot_actor(slug),))
             if quarantine_is_escape(conn, slug) or not since or not since["ts"] or since["ts"] > cutoff:
@@ -2629,7 +2777,7 @@ def quarantine(conn, slug, reason, context=None, refusal=None):
     """Rule 8's stop: the bot writes nothing more until a human sets it active again. `context` is the
     refusal that stopped it, for the person who reviews it (`quarantine_review`); `refusal` ({rule, detail})
     is the last refused write of a refusal-count quarantine, for the bot when it is back."""
-    conn.execute("UPDATE bots SET state='quarantined' WHERE slug=?", (slug,))
+    conn.execute("UPDATE bots SET state='quarantined' WHERE id=?", (slug,))
     event(conn, KEEPER, "quarantine", bot_actor(slug), {"reason": reason, **({"review": context} if context else {}),
                                                          **({"refusal": refusal} if refusal else {})})
     # The status line people read says what the check matched, not the rule's own words.
@@ -2673,7 +2821,7 @@ def issue_token(conn, slug):
     if not row:
         raise Refused("not-found", f"no bot {slug}")
     token = secrets.token_urlsafe(32)
-    conn.execute("UPDATE bots SET token_hash=? WHERE slug=?", (token_hash(token), slug))
+    conn.execute("UPDATE bots SET token_hash=? WHERE id=?", (token_hash(token), row["id"]))
     event(conn, KEEPER, "token.issue", bot_actor(slug))
     return token
 
@@ -2721,10 +2869,15 @@ def resolve_actor(conn, value):
     raw = str(value or "").strip()
     if not raw:
         return None
+    if actor_kind(raw) == "bot":
+        # `bot:<id>` or `bot:<slug>`: the same bot either way (resolve_bot takes both)
+        found = resolve_bot(conn, actor_id(raw))
+        return bot_actor(found["id"]) if found else None
     if actor_kind(raw):
         return raw if _actor_exists(conn, raw) else None
-    if bot(conn, raw):
-        return bot_actor(raw)
+    found = resolve_bot(conn, raw)
+    if found:
+        return bot_actor(found["id"])
     if human(conn, raw):
         return human_actor(raw)
     return None
@@ -2814,8 +2967,8 @@ def task_taking_refusal(conn, actor, target, title=None, parent=None, routine=Fa
     if not is_bot(target) or not _has_table(conn, "bot_config"):
         return
     from .harnesses import SYNCED_HARNESSES, resolve_harness
-    row = _one(conn, "SELECT b.display_name,bc.config_json FROM bots b JOIN bot_config bc ON bc.bot=b.slug "
-                     "WHERE b.slug=?", (actor_id(target),))
+    row = _one(conn, "SELECT b.display_name,bc.config_json FROM bots b JOIN bot_config bc ON bc.bot=b.id "
+                     "WHERE b.id=?", (actor_id(target),))
     if row and resolve_harness(_json(row["config_json"], {}) or {}) in SYNCED_HARNESSES:
         name = row["display_name"] or actor_id(target)
         return ("external-bot", f"{name} works on another platform and only syncs its chat here, so it "
@@ -2911,16 +3064,19 @@ def sync_registry(conn, employees, people):
                "cwd": str(e.get("dir") or e.get("cwd") or repo_dir(ROOT, slug)),
                "host": str(e.get("host") or "dispatcher"),
                "state": state, "created": ts}
-        have = bot(conn, slug)
+        have = resolve_bot(conn, slug)
         if have is None:
+            # a registry bot's id is its slug: its actor string is the one the code already builds from it
+            row["id"] = slug
             conn.execute(
-                "INSERT INTO bots (slug, display_name, runtime, model, effort, cwd, host, state, created) "
-                "VALUES (:slug, :display_name, :runtime, :model, :effort, :cwd, :host, :state, :created)", row)
+                "INSERT INTO bots (id, slug, display_name, runtime, model, effort, cwd, host, state, created) "
+                "VALUES (:id, :slug, :display_name, :runtime, :model, :effort, :cwd, :host, :state, :created)", row)
         else:
             # never lower a state a human set, and never touch the token or the thread
+            row["id"] = have["id"]
             row["state"] = "quarantined" if have.get("state") == "quarantined" else state
             conn.execute("UPDATE bots SET display_name=:display_name, runtime=:runtime, model=:model, "
-                         "effort=:effort, cwd=:cwd, host=:host, state=:state WHERE slug=:slug", row)
+                         "effort=:effort, cwd=:cwd, host=:host, state=:state WHERE id=:id", row)
     doc = people if isinstance(people, dict) else {"people": people or []}
     for p in (doc.get("people") or []):
         p = p if isinstance(p, dict) else {}
@@ -3733,6 +3889,16 @@ PRIVATE_BY_TEMPLATE = ("general-counsel", "tico-counsel")
 # The built-in Counsel's slug (backend/counsel.py): reserved under Tico's own name, so a company's own bot named
 # "counsel" (a legal team's, say) is never taken for it.
 COUNSEL = "tico-counsel"
+# Bots the product names in code and refers to by slug (the built-in helpers and the assistant). Their id is their
+# slug, so that the actor string the code builds from the constant, `bot:<slug>`, is still the bot's actor. A bot a
+# person creates gets a UUIDv7 id (new_bot_id).
+PRODUCT_BOT_SLUGS = frozenset({FLEET_MAINTAINER, COUNSEL, "librarian", "goal-manager", "task-manager", "health-monitor",
+                               "bookkeeper", "doc-updater", "support", "coo", "market-analyst", "listening", "cpo"})
+
+
+def new_bot_id(slug):
+    """The id a new bot is created with: its slug for a product bot (PRODUCT_BOT_SLUGS), else a UUIDv7."""
+    return slug if slug in PRODUCT_BOT_SLUGS else uuid7()
 
 
 
@@ -5558,8 +5724,8 @@ def bot_handles(conn, row):
     """The @names that reach the bots on the task (names_a_bot): each one's slug and name."""
     handles = []
     for a in task_bots(conn, row):
-        name = (bot(conn, actor_id(a)) or {}).get("name")
-        handles += [actor_id(a)] + ([name] if name else [])
+        found = bot(conn, actor_id(a)) or {}
+        handles += [found.get("slug") or actor_id(a)] + ([found["name"]] if found.get("name") else [])
     return handles
 
 
@@ -5574,8 +5740,8 @@ def filer_handles(conn, row):
     handles = []
     for a in dict.fromkeys([row["requester"], task_origin(conn, row)]):
         if is_bot(a):
-            name = (bot(conn, actor_id(a)) or {}).get("name")
-            handles += [actor_id(a)] + ([name] if name else [])
+            found = bot(conn, actor_id(a)) or {}
+            handles += [found.get("slug") or actor_id(a)] + ([found["name"]] if found.get("name") else [])
     return handles
 
 
@@ -5587,7 +5753,8 @@ def _mentions_bot(conn, text, actor):
     """`text` names the bot `actor` with an @, by slug (@product-manager) or by name (@Product Manager)."""
     slug = actor_id(actor)
     row = bot(conn, slug) or {}
-    return any(_at(text, n) for n in [slug] + ([row["name"]] if row.get("name") else []))
+    handle = row.get("slug") or slug      # the @name people type is the slug, never the id
+    return any(_at(text, n) for n in [handle] + ([row["name"]] if row.get("name") else []))
 
 
 def mentioned_people(conn, text, row, author):
@@ -7764,7 +7931,7 @@ def stuck_tasks(conn, hours=STUCK_HOURS, hidden=()):
     at = now()
     cutoff = shift(at, seconds=-hours * 3600)
     rows = _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
+        "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.id WHERE b.state='active' "
         "AND (t.status IN ('open','doing','ready') AND coalesce(t.next_run,0)=0 AND t.updated<? "
         f"OR t.status IN ({','.join(repr(x) for x in ACTIVE_STATUSES)}) AND t.updated<? "
         "AND EXISTS (SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
@@ -7865,7 +8032,7 @@ def stalled_tasks(conn, at=None, task_ids=None, queued_here=None):
     by its own quiet subtasks (own_stuck_blockers) counts too, even `waiting`, and carries `own_blockers`."""
     at = at or now()
     rows = _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
+        "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.id WHERE b.state='active' "
         "AND (t.status IN ('open','doing') OR t.status='waiting' AND EXISTS "
         "(SELECT 1 FROM task_relations r WHERE r.to_task=t.id AND r.kind='blocks')) "
         "AND t.updated<?" +
@@ -7936,7 +8103,7 @@ def spot_check_tasks(conn, at=None, task_ids=None):
     if not _has_table(conn, "attempts"):
         return []
     rows = _rows(conn.execute(
-        "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.slug WHERE b.state='active' "
+        "SELECT t.* FROM tasks t JOIN bots b ON t.owner='bot:'||b.id WHERE b.state='active' "
         "AND t.status IN ('open','doing') AND coalesce(t.private,1)=0 AND t.updated<?" +
         (" AND t.id IN (" + ",".join("?" * len(task_ids)) + ")" if task_ids else "") + " ORDER BY t.updated",
         (shift(at, seconds=-SPOT_CHECK_MINUTES * 60), *(task_ids or ()))))
@@ -8130,10 +8297,15 @@ def held_review_bot(conn, row):
             slug = named.group(1)
         else:
             display_name = title[len(owner_prefix):-len(owner_suffix)]
-            bot = conn.execute("SELECT slug FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
-            slug = bot["slug"] if bot else None
+            bot = conn.execute("SELECT id FROM bots WHERE display_name=? LIMIT 1", (display_name,)).fetchone()
+            slug = bot["id"] if bot else None
         if not slug:
             return None
+    # the title and the body name the bot by slug (or, for a bot made before ids, the same value): resolve it to its id
+    found = resolve_bot(conn, slug)
+    if found is None:
+        return None
+    slug = found["id"]
     held = conn.execute("SELECT 1 FROM jobs j WHERE j.bot=? AND j.state='uncertain' AND NOT EXISTS("
                         "SELECT 1 FROM job_recovery r WHERE r.job_id=j.id AND r.attempt_id=j.attempt_id) LIMIT 1",
                         (slug,)).fetchone()
@@ -8772,10 +8944,10 @@ def status_set(conn, actor, bot_slug, state=None, focus=None, task_id=None, reas
                       ts, reason, actor))
     live = state
     if state == "active":
-        conn.execute("UPDATE bots SET state='active' WHERE slug=?", (slug,))
+        conn.execute("UPDATE bots SET state='active' WHERE id=?", (slug,))
         live = "idle"
     elif state in ("paused", "quarantined"):
-        conn.execute("UPDATE bots SET state=? WHERE slug=?", (state, slug))
+        conn.execute("UPDATE bots SET state=? WHERE id=?", (state, slug))
     row = {"bot": slug,
            "state": live if live is not None else (old or {}).get("state") or "idle",
            "focus": focus if focus is not None else (old or {}).get("focus") or "",
@@ -8807,7 +8979,7 @@ def status_result(conn, actor, bot_slug, last_result=None, last_turn_at=None, ne
             conn.execute(f"UPDATE bot_status SET {field}=?, updated_at=? WHERE bot=?",
                          (value, now(), slug))
     if last_turn_at:
-        conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (last_turn_at, slug))
+        conn.execute("UPDATE bots SET last_turn_at=? WHERE id=?", (last_turn_at, slug))
     return status(conn, slug)
 
 
@@ -8983,7 +9155,7 @@ def turn_finish(conn, actor, turn_id, exit_code="ok", summary=None, usage=None, 
                           "turn_id": turn_id, "position": position})
     row = _one(conn, "SELECT * FROM turns WHERE id=?", (turn_id,))
     if row:
-        conn.execute("UPDATE bots SET last_turn_at=? WHERE slug=?", (ts, row["bot"]))
+        conn.execute("UPDATE bots SET last_turn_at=? WHERE id=?", (ts, row["bot"]))
         conn.execute("UPDATE bot_status SET last_turn_at=?, updated_at=? WHERE bot=?",
                      (ts, ts, row["bot"]))
     from . import run_diagnostics
@@ -9019,8 +9191,34 @@ def prune_deltas(conn, before=None):
 
 
 # ----------------------------------------------------------------------------- reads
-def bot(conn, slug):
-    return _one(conn, "SELECT * FROM bots WHERE slug=?", (actor_id(slug),))
+def bot(conn, bot_id):
+    """The bot with this id: an actor's id, or a foreign key's value. Never a slug: a person's or a client's input
+    goes through resolve_bot, which accepts either."""
+    return _one(conn, "SELECT * FROM bots WHERE id=?", (actor_id(bot_id),))
+
+
+def resolve_bot(conn, ref):
+    """The bot a person or a client named, by id or by slug (a route, a field, a command argument), or None.
+    No slug can name another bot's id (bots_identity_insert), so at most one row can match."""
+    value = str(ref or "").strip()
+    if value.startswith("bot:"):
+        value = value[4:]
+    if not value:
+        return None
+    return _one(conn, "SELECT * FROM bots WHERE id=? OR slug=?", (value, value))
+
+
+def rename_bot(conn, bot_id, new_slug):
+    """Give a bot a new slug. Only the label changes: its id, and so every actor string, reference and history row
+    that names it, stays as it was. A slug may not name another bot's id (bots_identity_slug)."""
+    slug = str(new_slug or "").strip()
+    row = bot(conn, bot_id)
+    if row is None:
+        raise ValueError(f"no bot {bot_id!r}")
+    if not slug:
+        raise ValueError("a bot needs a slug")
+    conn.execute("UPDATE bots SET slug=? WHERE id=?", (slug, row["id"]))
+    return bot(conn, row["id"])
 
 
 def bots(conn, host=None, state=None):

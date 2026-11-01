@@ -20,7 +20,7 @@ def store(tmp_path):
     s.initialize(seed_market=False)
     with s.transaction() as c:
         c.execute("INSERT OR IGNORE INTO humans(id,name) VALUES('ana','Ana'),('ben','Ben')")
-        c.execute("INSERT OR IGNORE INTO bots(slug,state) VALUES('ops','active')")
+        c.execute("INSERT OR IGNORE INTO bots(id,slug,state) VALUES('ops','ops','active')")
         c.execute("INSERT INTO runners(id,label,operator,token_hash,created) VALUES('r1','r','ana','h','t')")
     return s
 

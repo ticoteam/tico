@@ -186,7 +186,7 @@ def assignments_by_runner(c):
     if values is not None and "views.assignments_by_runner" in values:
         return values["views.assignments_by_runner"]
     ordered, active = {}, {}
-    for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.slug=a.bot "
+    for row in c.execute("SELECT a.runner_id, a.bot, b.state FROM assignments a JOIN bots b ON b.id=a.bot "
                          "ORDER BY a.bot"):
         ordered.setdefault(row["runner_id"], []).append(row["bot"])
         if row["state"] != "archived":
@@ -274,7 +274,7 @@ def seat_parents(c, settings, auth, who):
     there still hangs a seat under a closed seat where that seat answered to."""
     from . import strategy_bot
     r, configs = roster(c), entries(c)
-    archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+    archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
     chart = strategy_bot.chart_entries(c, settings, r, configs, archived, hidden=strategy_bot.hidden_for(c, who))
     access = auth.bot_accesses(c, who)
     return {seat["id"]: seat["org_parent"] for seat in lifecycle.chart_seats(
@@ -288,7 +288,7 @@ def _entries(c, github_owner=""):
         config = follow(c, row["bot"], json.loads(row["config_json"]))
         if row["onboarding_state"]:
             config["onboarding_state"] = row["onboarding_state"]
-        repo = config.get("repo") or row["repo"] or ("emp-" + row["bot"])
+        repo = config.get("repo") or row["repo"] or ("emp-" + (config.get("name") or row["bot"]))
         config.update({"description": row["description"] or "", "reports_to": row["reports_to"],
                        "repo": repo, "repo_url": repo_url(repo, github_owner)})
         if row["thread_mode"]:
@@ -488,17 +488,17 @@ def operation_issues(c, who, auth):
     offline = {}    # runner_id -> {label, since, bots: [display names], queued}
     readable = auth.bot_accesses(c, who)
     bots = H.bots(c)
-    shown = [b["slug"] for b in bots if readable.get(b["slug"], auth.FULL)["read"]]
+    shown = [b["id"] for b in bots if readable.get(b["id"], auth.FULL)["read"]]
     status_inputs = privacy.status_inputs(c, shown)
     # Each bot's computer, status and queue read together, not a few queries per bot.
     prime_machines(c, shown)
-    queues = pipeline_stats.job_queues(c, who, [b["slug"] for b in bots if b["slug"] in status_inputs
+    queues = pipeline_stats.job_queues(c, who, [b["id"] for b in bots if b["id"] in status_inputs
                                                 and b["state"] != "archived"])
     # Every stopped run of every bot that has one, read together: its checks below read each bot's runs from here.
     from .execution import prime_readable_held
     prime_readable_held(c, who, auth, [slug for slug, found in queues.items() if found["uncertain"]])
     for bot in bots:
-        slug = bot["slug"]
+        slug = bot["id"]
         if not readable.get(slug, auth.FULL)["read"]:
             continue
         if bot["state"] == "archived":
@@ -1502,7 +1502,7 @@ def recent_bots(c, auth, who, since, limit, needs):
                           "ORDER BY updated DESC LIMIT 5", (actor, me, me, actor)).fetchall()
         current = H.task(c, status["task_id"]) if status.get("task_id") else None
         out.append({
-            "bot": slug, "name": bot.get("display_name") or slug, "last_interaction": last,
+            "bot": slug, "name": bot.get("display_name") or bot.get("slug") or slug, "last_interaction": last,
             "status": {"state": status.get("state") or bot.get("state"), "focus": status.get("focus") or "",
                        "since": status.get("since"), "working_on": (current or {}).get("title"),
                        "last_turn_at": status.get("last_turn_at")},
@@ -1903,7 +1903,7 @@ def fleet_snapshot(c, auth, identity, task_view):
     principal = auth.tico_principal(c, identity)
     access = auth.bot_accesses(c, principal)
     bot_rows = H.bots(c)
-    allowed = {row["slug"] for row in bot_rows if access.get(row["slug"], auth.FULL)["write"]}
+    allowed = {row["id"] for row in bot_rows if access.get(row["id"], auth.FULL)["write"]}
     task_rows = [dict(t) for t in c.execute(f"SELECT {privacy.STATUS_TASK_COLUMNS} FROM tasks WHERE {privacy.STATUS_TASKS_SQL}")]
     bot_tasks = {}
     for task in task_rows:
@@ -1927,12 +1927,12 @@ def fleet_snapshot(c, auth, identity, task_view):
             "WHERE state IN ('leased','running') AND lease_until>? ORDER BY created DESC", (now,)):
         live_by_bot.setdefault(row["bot"], []).append(row)
     # machine() / presence used to re-SELECT assignment+agent rows once per readable bot; Health already primes.
-    shown = [row["slug"] for row in bot_rows
-             if row["slug"] in allowed and access.get(row["slug"], auth.FULL)["read"]]
+    shown = [row["id"] for row in bot_rows
+             if row["id"] in allowed and access.get(row["id"], auth.FULL)["read"]]
     prime_machines(c, shown)
     bots = []
     for row in bot_rows:
-        slug = row["slug"]
+        slug = row["id"]
         if slug not in allowed:
             continue
         if not access.get(slug, auth.FULL)["read"]:
@@ -2020,7 +2020,7 @@ def install_views(app, store, auth, mutate, task_view):
     def employee_rows(c, who):
         people, configs = roster(c), entries(c, store.settings.github_owner)
         bots = H.bots(c)
-        archived = {row["slug"] for row in bots if row.get("state") == "archived"}
+        archived = {row["id"] for row in bots if row.get("state") == "archived"}
         registries = {r["bot"]: r for r in read_cache.configs(c)}
         from .browser_exit import bot_exits
         exits = bot_exits(c)               # the computer each bot browses through, when one is set
@@ -2033,7 +2033,7 @@ def install_views(app, store, auth, mutate, task_view):
         cloud_rows = cloud_machines.rows(c) if cloud_machines.offered(c, store.settings) else None
         # Each bot's last finished run, one turns_bot_finished seek per bot rather than a sort of every run there is.
         latest_run = {slug: tid for slug, tid in c.execute(
-            "SELECT b.slug,(SELECT t.id FROM turns t WHERE t.bot=b.slug AND t.finished IS NOT NULL "
+            "SELECT b.id,(SELECT t.id FROM turns t WHERE t.bot=b.id AND t.finished IS NOT NULL "
             "ORDER BY t.finished DESC,t.id DESC LIMIT 1) FROM bots b") if tid}
         from .usage_records import ran_on
         run_views = ran_on(c, list(latest_run.values()))
@@ -2048,8 +2048,8 @@ def install_views(app, store, auth, mutate, task_view):
         access = auth.bot_accesses(c, who)
         # What the loop reads per bot, read for every bot at once: its computer, its open and doing tasks, and its
         # declared configuration from the rows above.
-        shown = [bot["slug"] for bot in bots if bot.get("state") != "archived"
-                 and access.get(bot["slug"], auth.FULL)["see"]]
+        shown = [bot["id"] for bot in bots if bot.get("state") != "archived"
+                 and access.get(bot["id"], auth.FULL)["see"]]
         prime_machines(c, [slug for slug in shown if access.get(slug, auth.FULL)["read"]])
         open_tasks = {}
         read_now = [slug for slug in shown if access.get(slug, auth.FULL)["read"]]
@@ -2088,7 +2088,7 @@ def install_views(app, store, auth, mutate, task_view):
         from .task_manager import Chart
         departments = Chart(c, store.settings)         # the Gateway department a bot's model picker starts from
         for bot in bots:
-            slug = bot["slug"]
+            slug = bot["id"]
             level = access.get(slug, auth.FULL)
             if bot.get("state") == "archived" or not level["see"]:
                 continue
@@ -2108,7 +2108,7 @@ def install_views(app, store, auth, mutate, task_view):
                 reports = (configs.get(slug, {}) or {}).get("reports_to") or ""
                 if reports and not str(reports).startswith("human:") and not access.get(reports, auth.FULL)["see"]:
                     reports = ""
-                rows.append({"name": slug, "display_name": bot["display_name"], "state": bot["state"],
+                rows.append({"name": bot["slug"], "display_name": bot["display_name"], "state": bot["state"],
                              "status": bot["state"], "description": (configs.get(slug, {}) or {}).get("description") or "",
                              "reports_to": reports, "my_access": level, **policy,
                              "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
@@ -2146,7 +2146,7 @@ def install_views(app, store, auth, mutate, task_view):
                          "latest_runtime_model": latest_model if show_latest else "",
                          "latest_runtime_provider": providers.PROVIDER_BY_ID.get(latest_family, {}).get("label")
                          if show_latest and latest_family else "Unknown provider" if show_latest else "",
-                         "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": slug, "display_name": bot["display_name"],
+                         "model_source": "" if not resolved_runtime else "bot" if own else "company", "name": bot["slug"], "display_name": bot["display_name"],
                          "state": bot["state"], "status": bot["state"],
                          "private_tasks_default": H.private_tasks_default(c, "bot:" + slug, declared),
                          "host": "keeper", "tasks": "hub", "has_repo": location["ready"],
@@ -2192,10 +2192,10 @@ def install_views(app, store, auth, mutate, task_view):
             person = P.person(H.actor_id(who.actor), r) or {}
             # Sign-in needs chat choices, not every bot's routines, machine and setup state.
             access = auth.bot_accesses(c, who)
-            bots = [row["slug"] for row in H.bots(c)
-                    if row["state"] != "archived" and row["slug"] not in (store.settings.assistant_bot, STRATEGY_BOT)
-                    and access.get(row["slug"], auth.FULL)["see"]
-                    and access.get(row["slug"], auth.FULL)["write"]]
+            bots = [row["id"] for row in H.bots(c)
+                    if row["state"] != "archived" and row["id"] not in (store.settings.assistant_bot, STRATEGY_BOT)
+                    and access.get(row["id"], auth.FULL)["see"]
+                    and access.get(row["id"], auth.FULL)["write"]]
             from .credentials import administrator, can_open
             from .onboarding import config_view
             from .mail import can_access
@@ -2238,7 +2238,7 @@ def install_views(app, store, auth, mutate, task_view):
         with store.read() as c:
             r, configs = roster(c), entries(c)
             from . import people_photos
-            archived = {row["slug"] for row in H.bots(c) if row.get("state") == "archived"}
+            archived = {row["id"] for row in H.bots(c) if row.get("state") == "archived"}
             bare = True                    # a bot's bare person id in reports_to is that person (backend/people.py)
             view = P.org_view(r, configs, archived, bare_people=bare)
             # The Strategy Bot switch hangs the Heads' groups under it on the chart (backend/strategy_bot.py).
@@ -2621,6 +2621,7 @@ def install_views(app, store, auth, mutate, task_view):
     def bot_instructions(request: Request, bot: str):
         who = request.state.identity
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
@@ -2636,6 +2637,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             if not H.bot(c, bot):
                 raise Problem("not_found", "Bot not found", 404)
             auth.require_read(c, who, bot)
@@ -2666,6 +2668,7 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         with store.read() as c:
+            bot = (H.resolve_bot(c, bot) or {}).get("id", bot)
             rows = list(reversed(visible_turns(c, who, bot, limit=100)))
             turns = []
             for turn, message in rows:
@@ -2780,6 +2783,8 @@ def install_views(app, store, auth, mutate, task_view):
             conv = auth.conversation(c, who, task["conversation_id"])
         message = None
         if text is not None:
+            if expected_recipient:
+                expected_recipient = (H.resolve_bot(c, expected_recipient) or {}).get("id", expected_recipient)
             if expected_recipient and expected_recipient != slug:
                 raise Problem("recipient_changed", "Task ownership changed; refresh before sending", 409)
             if not slug:
@@ -2794,7 +2799,7 @@ def install_views(app, store, auth, mutate, task_view):
                       (tid, "bot:" + slug, who.actor, message["id"], H.shift(H.now(), hours=24)))
         tagged = [m for m in (privacy.page(c, who, conv["id"])["messages"] if conv else [])
                   if H.message_task_id(m) == tid]
-        recipient = {"slug": slug, "name": bot.get("display_name") or slug, "can_chat": allowed} if slug else None
+        recipient = {"slug": slug, "name": bot.get("display_name") or bot.get("slug") or slug, "can_chat": allowed} if slug else None
         return {"bot": slug, "recipient": recipient, "conversation": conv, "message": message, "messages": tagged}
 
     @app.get("/api/v2/tasks/{tid}/chat")
@@ -2811,13 +2816,14 @@ def install_views(app, store, auth, mutate, task_view):
         who = request.state.identity
         human_only(who)
         def work(c):
-            require_chat(c, auth, who, bot)
-            conv = direct_chat(c, who.actor, bot)
+            bot_id = (H.resolve_bot(c, bot) or {}).get("id", bot)
+            require_chat(c, auth, who, bot_id)
+            conv = direct_chat(c, who.actor, bot_id)
             if not conv:
                 return {"cleared": True}
             if chat_running(c, conv["id"]):
                 raise Problem("busy", "Wait for this conversation's current turn to finish", 409)
-            clear_chat_session(c, auth.settings, who.actor, bot, conv["id"])
+            clear_chat_session(c, auth.settings, who.actor, bot_id, conv["id"])
             return {"cleared": True, "conversation_id": conv["id"]}
         return mutate(request, body, work)
 
@@ -2864,7 +2870,7 @@ def runnable_choices(c, who, auth, settings):
     # computer, shared by its bots) and each bot's config are read once here, not once per check.
     for row in c.execute("SELECT bot,runner_id FROM assignments").fetchall():
         read_cache.prime(c, PLACED_SQL, {(row["bot"],): read_cache.one(c, RUNNER_SQL, (row["runner_id"],))})
-    rows = c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.slug=a.bot "
+    rows = c.execute("SELECT a.bot,b.runtime,bc.config_json FROM assignments a JOIN bots b ON b.id=a.bot "
                      "LEFT JOIN bot_config bc ON bc.bot=a.bot WHERE b.state<>'archived' ORDER BY a.bot").fetchall()
     read_cache.prime(c, CONFIG_SQL, {(row["bot"],): row for row in rows})
     for row in rows:

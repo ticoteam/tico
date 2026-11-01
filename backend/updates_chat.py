@@ -60,6 +60,7 @@ def opens_all(c, auth, who, text, access=None):
     for kind, ref in LINKS.findall(text or ""):
         kind = kind.lower()
         if kind == "bot":
+            ref = (H.resolve_bot(c, ref) or {}).get("id", ref)
             if ref in access and not access[ref]["read"]:
                 return False
         elif kind in ("task", "tasks"):
@@ -80,7 +81,7 @@ def opens_all(c, auth, who, text, access=None):
     hidden_bots = {slug for slug, level in access.items() if not level["read"]}
     if hidden_bots:
         marks = ",".join("?" * len(hidden_bots))
-        for row in c.execute(f"SELECT slug, display_name FROM bots WHERE slug IN ({marks})", sorted(hidden_bots)):
+        for row in c.execute(f"SELECT slug, display_name FROM bots WHERE id IN ({marks})", sorted(hidden_bots)):
             if _mentions(text, row["slug"]) or _mentions(text, row["display_name"]):
                 return False
     visible = auth.task_sql(c, who)
@@ -158,8 +159,8 @@ def recent(c, auth, who, at=None, *, bot=None, attempt_id=""):
     person = H.human(c, H.actor_id(who.actor)) or {}
     first = str(person.get("name") or "").split()[:1]
     named = re.compile(r"\b" + re.escape(first[0]) + r"\b", re.I) if first and len(first[0]) > 1 else None
-    names = {r["slug"]: r["display_name"] or r["slug"] for r in c.execute(
-        f"SELECT slug, display_name FROM bots WHERE slug IN ({marks})", authors)}
+    names = {r["id"]: r["display_name"] or r["slug"] for r in c.execute(
+        f"SELECT id, slug, display_name FROM bots WHERE id IN ({marks})", authors)}
     people = {}
     for a in authors:
         if U.is_person(a):

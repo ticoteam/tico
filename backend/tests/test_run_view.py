@@ -377,7 +377,7 @@ def botops_decides(api, job_id, attempt_id, decision, note, at):
     from backend.auth import Identity
     with api.app.state.store.transaction() as c:
         if not H.bot(c, H.FLEET_MAINTAINER):
-            c.execute("INSERT INTO bots(slug, display_name, state) VALUES(?, 'BotOps', 'active')", (H.FLEET_MAINTAINER,))
+            c.execute("INSERT INTO bots(id, slug, display_name, state) VALUES(?, ?, 'BotOps', 'active')", (H.FLEET_MAINTAINER, H.FLEET_MAINTAINER))
         api.app.state.execution.reconcile_job(c, Identity("bot:" + H.FLEET_MAINTAINER, "bot"), job_id, SimpleNamespace(
             attempt_id=attempt_id, decision=decision, note=note, acknowledge_uncertain_effects=True))
         c.execute("UPDATE job_recovery SET created=? WHERE job_id=?", (at, job_id))
