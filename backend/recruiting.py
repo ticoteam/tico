@@ -3,10 +3,11 @@
 A Recruiting seat (backend/lifecycle.py) is filled in three steps, the same from the org chart and from the Team plus
 menu's Post a job, which creates the seat first:
 
-1. **Post it.** `draft` writes a job description from the title at once, on this server: the catalog card whose name
-     and tags best fit the title, as one line from its summary, what it owns and the tools it works in. With
-     `redraft` and a Gemini key, one model call rewrites that text in under five seconds; without either, the composed
-     text is the answer. Nothing is stored until the person posts the job (`POST /v2/seats`), and anyone who may change
+1. **Post it.** `draft` writes a job description from the title at once, on this server: the catalog card that is
+     the job the title names (its name shares a word of work with the title, never only "Engineer" or "Manager"), as
+     one line from its summary, what it owns and the tools it works in. With `redraft` and a Gemini key, one model call
+     rewrites that text in under five seconds; without either, the composed text is the answer. When no card is the
+     job, that one call writes the description from the title alone, or the box stays empty. Nothing is stored until the person posts the job (`POST /v2/seats`), and anyone who may change
      the seat edits it later (lifecycle `_may_place`).
 2. **Recruit.** `candidates` answers at once, on this server, from the template catalog: up to eight Tico templates,
      the best fit to the seat's title and job description first, each with one line, what it does on day one, what it
@@ -16,6 +17,7 @@ menu's Post a job, which creates the seat first:
      repository comes only after that: a starter's computer builds it from the bot's definition, any other template's
      BotOps does on the "Set up" task it gets now. The seat is then closed, filled by that bot."""
 import json
+import re
 import socket
 import threading
 import time
@@ -45,6 +47,22 @@ BUILT_IN_TOOLS = frozenset({"hub", "docs", "web"})
 # Words of rank, not of the work: "Support lead" and "Engineering lead" share no job.
 RANKS = frozenset(stem for word in ("lead", "head", "manager", "senior", "junior", "chief", "director", "specialist",
                                     "associate", "officer") for stem, _ in R._words(word))
+# Words naming a kind of job, not its work, as written: "Rust engineer" and "QA Engineer" share no work, and neither do
+# "Data analyst" and "Pricing Analyst". "Engineering" is a field of work and stays.
+ROLE_WORDS = frozenset("""engineer engineers developer developers analyst analysts coordinator coordinators administrator
+administrators agent agents assistant assistants rep reps representative representatives generalist generalists
+consultant consultants writer writers designer designers producer producers accountant accountants""".split())
+
+
+def _name_words(text):
+    """(stem, word) for each word of a job's name, two letters and up: "QA", "HR" and "UX" name the work."""
+    words = re.findall(r"[a-z0-9]+", str(text or "").lower().replace("'", ""))
+    return [(R._stem(word), word) for word in words if len(word) > 1 and word not in R.STOP_WORDS]
+
+
+def _work(title):
+    """The stems of the title's words of work: not of rank, not a kind of job."""
+    return {stem for stem, word in _name_words(title) if word not in ROLE_WORDS} - RANKS
 
 
 # ------------------------------------------------------------------ the seat as the recruiting page shows it
@@ -82,19 +100,25 @@ def _tool(tool):
 
 
 def _best_card(cards, title, team=""):
-    """The catalog card whose name and tags best fit the title, or None when nothing does. A card in the department
-    the seat's group is named for wins a tie."""
-    words = R._words(title)
-    if not words:
+    """The catalog card that is the job the title names, or None when none is: its name must share a word of work with
+    the title ("Support" in "Customer support lead", not "Engineer" in "Rust engineer", nor a tag like "software" on
+    the Product Manager). Among those, the one whose name and tags fit best; a card in the department the seat's group
+    is named for wins a tie."""
+    words, work = R._words(title), _work(title)
+    if not work:
         return None
     common = R._common(cards)
     group = str(team or "").strip().lower()
     best = None
+    stems = {stem for stem, _ in _name_words(title)} - RANKS
     for card in cards:
-        score, _ = R._match(card, words, common)
-        score += 3 * len(R._stems(card["name"]) & R._stems(title) - RANKS)
-        if not score:
+        name = {stem for stem, _ in _name_words(card["name"])}
+        shared = len(name & work)
+        if not shared:
             continue
+        score, _ = R._match(card, words, common)
+        # More of the title in the name wins first: "Security Engineer", not "Security and Compliance Analyst".
+        score = (shared, len(name & stems), score)
         key = (score, card["department"] == group, -len(card["name"]), card["template"])
         if best is None or key > best[0]:
             best = (key, card)
@@ -151,10 +175,18 @@ def _rewrite_call(text, title, boss, deadline):
     left = deadline - time.monotonic()
     if left <= 0:
         raise TimeoutError("the key came too late")
-    prompt = (f"Rewrite this job description for the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
-              + ". Keep its shape: one opening line, then \"What you'll do\" with three to five short bullets "
-              "starting with \"- \", then one \"Works in:\" line. Plain words, under 150 words, no other headings, and "
-              "never name a template, a model or a vendor. Answer with the text only.\n\n" + text)
+    role = f"the role \"{title}\"" + (f", reporting to {boss}" if boss else "")
+    rules = ("Plain words, under 150 words, no other headings, and never name a template, a model or a vendor. Answer "
+             "with the text only.")
+    if text:
+        prompt = (f"Rewrite this job description for {role}. Keep its shape: one opening line, then \"What you'll do\" "
+                  "with three to five short bullets starting with \"- \", then one \"Works in:\" line. " + rules
+                  + "\n\n" + text)
+    else:
+        # No template is this job: written from the title alone, in the same shape less the tools, which nobody named.
+        prompt = (f"Write a job description for an AI teammate in {role}. Its shape: one opening line saying what it "
+                  "owns, then \"What you'll do\" with three to five short bullets starting with \"- \", each a concrete "
+                  "piece of work it delivers. " + rules)
     body = {"contents": [{"role": "user", "parts": [{"text": prompt}]}]}
     request = Request(f"https://generativelanguage.googleapis.com/v1beta/models/{REWRITE_MODEL}:generateContent",
                       data=json.dumps(body).encode(), headers={"Content-Type": "application/json", "x-goog-api-key": secret})
@@ -232,16 +264,22 @@ def _rewrite(text, title, boss):
 
 
 def draft(onboarding, title, team="", boss="", redraft=False):
-    """A job description for a seat not posted yet, in well under a second: composed from the catalog card that best
-    fits the title (`source` "catalog"), or "" when none does (`source` "none"). `redraft` asks the model to rewrite
-    the composed text once (`source` "model"); with no key, a slow or failed call, or in a rehearsal or demo (which
-    never reach a model or read a key), the composed text stands."""
+    """A job description for a seat not posted yet: composed in well under a second from the catalog card that is the
+    job the title names (`source` "catalog"). `redraft` asks the model to rewrite the composed text once (`source`
+    "model"); with no key, a slow or failed call, or in a rehearsal or demo (which never reach a model or read a key),
+    the composed text stands. When no card is the job, the model writes one from the title within the same bound
+    (`source` "model"), else "" (`source` "none")."""
     _, cards = _recruitable(onboarding)
     card = _best_card(cards, str(title or "")[:lifecycle.TITLE_MAX], team)
+    offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
     if not card:
+        # Another job's description is no draft ("Rust engineer" is not the QA Engineer): the model writes one from the
+        # title, under the same bound, or the box stays empty for the person's own words.
+        written = "" if offline else _rewrite("", str(title).strip()[:lifecycle.TITLE_MAX], boss)
+        if len(written) >= 40:
+            return {"description": written[:lifecycle.DESCRIPTION_MAX], "source": "model"}
         return {"description": "", "source": "none"}
     text = compose(card)
-    offline = getattr(onboarding.settings, "rehearsal", False) or getattr(onboarding.settings, "demo", False)
     if redraft and not offline:
         rewritten = _rewrite(text, str(title).strip()[:lifecycle.TITLE_MAX], boss)
         if len(rewritten) >= 40:
@@ -294,7 +332,8 @@ def _needs(raw):
 
 def candidates(auth, onboarding, c, who, seat_id):
     """Recruit: up to eight Tico templates for the seat, strong matches first, then good ones, each tier best first.
-    `match` is "strong" when the template's name shares a word of the work with the title (not one of rank), "good"
+    `match` is "strong" when the template's name shares a word of the work with the title (not one of rank or a kind
+    of job: `_work`), "good"
     when its tags, name or summary fit the title or job description at all, else "". Deterministic and local: the same
     seat gives the same list, and nothing leaves this server."""
     row = lifecycle.seat(c, seat_id)
@@ -310,7 +349,7 @@ def candidates(auth, onboarding, c, who, seat_id):
     for card in cards:
         score, _ = R._match(card, words, common)
         named, _ = R._match(card, title, common)
-        shared = len(R._stems(card["name"]) & R._stems(row["title"]) - RANKS)
+        shared = len({stem for stem, _ in _name_words(card["name"])} & _work(row["title"]))
         score += 2 * named + 3 * shared
         match = "strong" if shared else "good" if score > 0 else ""
         scored.append((("strong", "good", "").index(match), -score, {"default": 0, "common": 1}.get(card["suggest"], 2),
